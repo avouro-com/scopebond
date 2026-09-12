@@ -1,0 +1,31 @@
+name: Publish
+
+# Deliberate, manual publish of versioned packages to npm (uses the NPM_TOKEN
+# secret). Run from the Actions tab (or `gh workflow run publish.yml`) after the
+# versions are bumped (via a changeset + `pnpm version:packages`). Publishes only
+# packages whose version isn't already on npm; @scopebond/gateway is `private` and
+# is never published by this.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Publish (changeset)
+        run: pnpm exec changeset publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

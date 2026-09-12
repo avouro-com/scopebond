@@ -1,0 +1,27 @@
+name: Bug report
+description: Report a defect in Scopebond
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not include secrets or private data.**
+        For vulnerabilities, use the security advisory flow instead (see SECURITY.md).
+  - type: input
+    id: package
+    attributes:
+      label: Package / version
+      placeholder: "e.g. gateway @ commit abc1234"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true

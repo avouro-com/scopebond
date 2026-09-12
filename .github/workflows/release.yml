@@ -1,0 +1,42 @@
+name: Release
+
+# Versioning automation (safe by default — never auto-publishes). On push to main
+# with pending changesets, opens/updates a "Version packages" PR that bumps versions
+# and writes changelogs. With no changesets, this is a clean no-op.
+#
+# PUBLISHING is a deliberate step, kept off CI so nothing (especially 0.0.0) is ever
+# auto-published. When you're ready to publish (see RELEASING.md): merge the Version
+# PR, then either run `pnpm release` locally, or add a `publish: pnpm release` input
+# to the step below (with NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}) to enable
+# publish-on-merge. Publishing needs the NPM_TOKEN secret.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: changesets/action@v1
+        with:
+          version: pnpm version:packages
+          commit: "chore: version packages"
+          title: "Version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

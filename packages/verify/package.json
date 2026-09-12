@@ -1,0 +1,48 @@
+{
+  "name": "@scopebond/verify",
+  "version": "0.1.0",
+  "description": "scopebond-verify — the deterministic verdict library: violates(policy, receipts, claimed). The moat-bearing reference implementation.",
+  "license": "Apache-2.0",
+  "author": "Avouro LLC",
+  "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/verify#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avouro-com/scopebond.git",
+    "directory": "packages/verify"
+  },
+  "bugs": {
+    "url": "https://github.com/avouro-com/scopebond/issues"
+  },
+  "keywords": [
+    "scopebond",
+    "verify",
+    "policy",
+    "ai-agents",
+    "verdict",
+    "receipts"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "dist/violates.js",
+  "types": "dist/violates.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/violates.d.ts",
+      "default": "./dist/violates.js"
+    }
+  },
+  "files": [
+    "dist",
+    "vectors"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@scopebond/examples",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@scopebond/gateway": "workspace:*",
+    "@scopebond/sdk": "workspace:*"
+  }
+}

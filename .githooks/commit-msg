@@ -1,0 +1,3 @@
+#!/bin/sh
+# Scan the commit message for private codenames, secrets, and private-doc markers.
+exec node "$(git rev-parse --show-toplevel)/scripts/oss-gate.mjs" --message "$1"

@@ -1,0 +1,28 @@
+name: OSS Guard
+
+# The hard gate for merges. Make this a REQUIRED status check in branch
+# protection for `main` so no pull request can merge unless it passes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: content + secret gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run OSS content & secret gate
+        run: node scripts/oss-gate.mjs --tree
+      - name: Enforce core-package dependency boundary (ADR-008)
+        run: node scripts/deps-allowlist.mjs

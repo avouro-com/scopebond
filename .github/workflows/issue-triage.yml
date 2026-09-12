@@ -1,0 +1,34 @@
+name: Issue Triage (agent)
+
+# Automated first-pass triage of new issues against SCOPE.md: verdict comment +
+# labels; routes scope-expanding issues to a maintainer. Uses whichever LLM key is
+# set (ANTHROPIC_API_KEY or DEEPSEEK_TOKEN); no-ops if neither is set.
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
+    steps:
+      - id: gate
+        run: echo "enabled=${{ env.ANTHROPIC_API_KEY != '' || env.DEEPSEEK_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - if: steps.gate.outputs.enabled == 'true'
+        run: node scripts/agent-review.mjs issue
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,44 @@
+name: Scope Review (agent)
+
+# Automated first-pass review of each PR against SCOPE.md. Posts a verdict comment
+# + label; routes OUT-OF-SCOPE to a maintainer (never auto-closes). Uses whichever
+# LLM key is set (ANTHROPIC_API_KEY → Claude, or DEEPSEEK_TOKEN → DeepSeek); no-ops
+# if neither is set.
+#
+# Security: uses pull_request_target so the job has a write token and secrets, but
+# it checks out the TRUSTED base (our SCOPE.md + script) and reads the PR diff via
+# the API — it never checks out or executes the PR's code.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: scope-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scope-review:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
+    steps:
+      - id: gate
+        run: echo "enabled=${{ env.ANTHROPIC_API_KEY != '' || env.DEEPSEEK_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4          # base ref (trusted); do NOT check out PR head
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - if: steps.gate.outputs.enabled == 'true'
+        run: node scripts/agent-review.mjs pr
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
