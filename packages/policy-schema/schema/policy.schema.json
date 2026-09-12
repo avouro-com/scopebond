@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scopebond.com/schema/policy-1.0.json",
+  "title": "Scopebond policy document (vocabulary v1)",
+  "description": "Closed schema: unknown clause types or fields make a policy invalid (POLICY_VOCABULARY.md §6). Amounts are integers in the asset's declared decimals; windows are ISO-8601 durations; times are UTC.",
+  "type": "object",
+  "required": ["vocabulary_version", "policy_id", "version", "clauses"],
+  "additionalProperties": false,
+  "properties": {
+    "vocabulary_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "assets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["decimals"],
+        "additionalProperties": false,
+        "properties": { "decimals": { "type": "integer", "minimum": 0, "maximum": 18 } }
+      }
+    },
+    "policy_id": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "agent_id": { "type": "string" },
+    "clauses": { "type": "array", "items": { "$ref": "#/$defs/clause" } }
+  },
+  "$defs": {
+    "mode": { "enum": ["enforce", "monitor", "require_approval"] },
+    "duration": { "type": "string", "pattern": "^P" },
+    "clauseBase": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string" },
+        "mode": { "$ref": "#/$defs/mode" },
+        "description": { "type": "string" }
+      }
+    },
+    "clause": {
+      "allOf": [{ "$ref": "#/$defs/clauseBase" }],
+      "oneOf": [
+        { "$ref": "#/$defs/spend_limit" },
+        { "$ref": "#/$defs/rate_limit" },
+        { "$ref": "#/$defs/address_allowlist" },
+        { "$ref": "#/$defs/address_denylist" },
+        { "$ref": "#/$defs/contract_allowlist" },
+        { "$ref": "#/$defs/endpoint_allowlist" },
+        { "$ref": "#/$defs/endpoint_denylist" },
+        { "$ref": "#/$defs/action_allowlist" },
+        { "$ref": "#/$defs/time_window" },
+        { "$ref": "#/$defs/require_approval" },
+        { "$ref": "#/$defs/sequence" },
+        { "$ref": "#/$defs/oracle_condition" },
+        { "$ref": "#/$defs/key_policy" }
+      ]
+    },
+    "spend_limit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "asset"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "spend_limit" },
+        "asset": { "type": "string" },
+        "max_per_action": { "type": "integer", "minimum": 0 },
+        "max_per_window": { "type": "integer", "minimum": 0 },
+        "window": { "$ref": "#/$defs/duration" },
+        "scope": { "enum": ["principal", "global"] }
+      }
+    },
+    "rate_limit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "action_types", "max_count", "window"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "rate_limit" },
+        "action_types": { "type": "array", "items": { "type": "string" } },
+        "max_count": { "type": "integer", "minimum": 0 },
+        "window": { "$ref": "#/$defs/duration" },
+        "scope": { "enum": ["principal", "global"] }
+      }
+    },
+    "address_allowlist": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "addresses"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "address_allowlist" },
+        "addresses": { "type": "array", "items": { "type": "string" } },
+        "chain_ids": { "type": "array", "items": { "type": "integer" } }
+      }
+    },
+    "address_denylist": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "addresses"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "address_denylist" },
+        "addresses": { "type": "array", "items": { "type": "string" } },
+        "chain_ids": { "type": "array", "items": { "type": "integer" } },
+        "best_effort": { "type": "boolean" }
+      }
+    },
+    "contract_allowlist": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "contracts"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "contract_allowlist" },
+        "contracts": { "type": "array", "items": { "type": "string" } },
+        "selectors": { "type": "array", "items": { "type": "string" } },
+        "chain_ids": { "type": "array", "items": { "type": "integer" } }
+      }
+    },
+    "endpoint_allowlist": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "hosts"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "endpoint_allowlist" },
+        "hosts": { "type": "array", "items": { "type": "string" } },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "methods": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "endpoint_denylist": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "hosts"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "endpoint_denylist" },
+        "hosts": { "type": "array", "items": { "type": "string" } },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "methods": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "action_allowlist": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "action_types"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "action_allowlist" },
+        "action_types": { "type": "array", "items": { "type": "string" } },
+        "param_bounds": { "type": "object" }
+      }
+    },
+    "time_window": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "start", "end"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "time_window" },
+        "days": { "type": "array", "items": { "type": "string" } },
+        "start": { "type": "string" },
+        "end": { "type": "string" },
+        "timezone": { "const": "UTC" }
+      }
+    },
+    "require_approval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "action_types", "approvers"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "require_approval" },
+        "action_types": { "type": "array", "items": { "type": "string" } },
+        "approvers": { "type": "array", "items": { "type": "string" } },
+        "min_approvals": { "type": "integer", "minimum": 1 },
+        "timeout": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "sequence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "first_action_types", "then_action_types"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "sequence" },
+        "first_action_types": { "type": "array", "items": { "type": "string" } },
+        "then_action_types": { "type": "array", "items": { "type": "string" } },
+        "min_gap": { "$ref": "#/$defs/duration" },
+        "forbidden_within": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "oracle_condition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "oracle_id", "predicate", "best_effort"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "oracle_condition" },
+        "oracle_id": { "type": "string" },
+        "predicate": { "type": "string" },
+        "best_effort": { "const": true }
+      }
+    },
+    "key_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "active_keys"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "key_policy" },
+        "active_keys": { "type": "array", "items": { "type": "string" } },
+        "rotation_delay": { "$ref": "#/$defs/duration" },
+        "max_key_age": { "$ref": "#/$defs/duration" }
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "@scopebond/policy-schema",
+  "version": "0.1.0",
+  "description": "Scopebond policy vocabulary — JSON Schema for the policy document and the scopebond:receipt envelope, plus test vectors.",
+  "license": "Apache-2.0",
+  "author": "Avouro LLC",
+  "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/policy-schema#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avouro-com/scopebond.git",
+    "directory": "packages/policy-schema"
+  },
+  "bugs": {
+    "url": "https://github.com/avouro-com/scopebond/issues"
+  },
+  "keywords": [
+    "scopebond",
+    "policy",
+    "json-schema",
+    "ai-agents",
+    "receipts"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./policy.schema.json": "./schema/policy.schema.json",
+    "./receipt.schema.json": "./schema/receipt.schema.json"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "vectors"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
