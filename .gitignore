@@ -17,6 +17,12 @@ coverage/
 *.pem
 *.key
 
+# local gateway runtime artifacts (attester key is covered by *.key above)
+*.db
+*.db-journal
+*.sqlite
+scopebond-receipts.jsonl
+
 # private design docs must never live in this public repo.
 # (Belt-and-suspenders: the oss-gate also blocks these paths and their content.)
 /docs/
