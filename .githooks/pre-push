@@ -1,0 +1,3 @@
+#!/bin/sh
+# Hard gate: re-scan the whole tree before any push (defence in depth).
+exec node "$(git rev-parse --show-toplevel)/scripts/oss-gate.mjs" --tree

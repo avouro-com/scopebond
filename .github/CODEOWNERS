@@ -1,0 +1,9 @@
+# Owners. `@avouro-com/maintainers` must exist as a team in the avouro-com org
+# (add yourself as the sole member for now), or replace with your @username.
+* @avouro-com/maintainers
+
+# The gate and CI config are protected — extra scrutiny required.
+/scripts/oss-gate.mjs @avouro-com/maintainers
+/scripts/deps-allowlist.mjs @avouro-com/maintainers
+/.github/ @avouro-com/maintainers
+/.githooks/ @avouro-com/maintainers

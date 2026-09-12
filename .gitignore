@@ -1,0 +1,36 @@
+# dependencies / build
+node_modules/
+dist/
+build/
+.wrangler/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# env & secrets — never commit
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+*.pem
+*.key
+
+# private design docs must never live in this public repo.
+# (Belt-and-suspenders: the oss-gate also blocks these paths and their content.)
+/docs/
+/CLAUDE.md
+/AGENTS.private.md
+/changelog/
+
+# local tooling
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# scratch
+tmp/

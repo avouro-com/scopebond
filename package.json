@@ -1,0 +1,19 @@
+{
+  "name": "scopebond",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Scopebond — open-source trust infrastructure for AI agents with delegated authority: a policy-enforcement gateway (prevent, prove) and a collateral registry (pay).",
+  "license": "Apache-2.0",
+  "homepage": "https://scopebond.com",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "gate": "node scripts/oss-gate.mjs --tree",
+    "gate:staged": "node scripts/oss-gate.mjs --staged",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "prepare": "git config core.hooksPath .githooks || true"
+  }
+}

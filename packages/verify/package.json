@@ -1,0 +1,18 @@
+{
+  "name": "@scopebond/verify",
+  "version": "0.0.0",
+  "description": "scopebond-verify — the deterministic verdict library: violates(policy, receipts, claimed). The moat-bearing reference implementation (D27).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/violates.mjs",
+  "exports": {
+    ".": "./src/violates.mjs"
+  },
+  "files": ["src"],
+  "scripts": {
+    "test": "node --test"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

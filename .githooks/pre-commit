@@ -1,0 +1,4 @@
+#!/bin/sh
+# Hard gate: block committing anything that doesn't belong in the public OSS repo.
+# Installed via `git config core.hooksPath .githooks` (done by `pnpm install`).
+exec node "$(git rev-parse --show-toplevel)/scripts/oss-gate.mjs" --staged

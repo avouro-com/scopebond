@@ -1,0 +1,23 @@
+{
+  "vocabulary_version": "1.0",
+  "assets": { "USDC": { "decimals": 2 } },
+  "policy_id": "acme-payments-agent",
+  "version": 3,
+  "agent_id": "erc8004:8453:1234",
+  "clauses": [
+    { "id": "tx-cap", "type": "spend_limit", "mode": "enforce",
+      "asset": "USDC", "max_per_action": 1000000, "scope": "principal",
+      "description": "No single payment above $10,000" },
+    { "id": "daily-cap", "type": "spend_limit", "mode": "monitor",
+      "asset": "USDC", "max_per_window": 5000000, "window": "P1D", "scope": "global",
+      "description": "No more than $50,000 per day across all customers" },
+    { "id": "vendors", "type": "endpoint_allowlist", "mode": "enforce",
+      "hosts": ["api.payments.example"], "paths": ["/v1/payouts"], "methods": ["POST"] },
+    { "id": "big-payouts", "type": "require_approval", "mode": "require_approval",
+      "action_types": ["payout.create"], "approvers": ["key:ops-lead"], "min_approvals": 1, "timeout": "PT4H" },
+    { "id": "no-beneficiary-then-pay", "type": "sequence", "mode": "monitor",
+      "first_action_types": ["beneficiary.update"], "then_action_types": ["payout.create"], "forbidden_within": "PT30M" },
+    { "id": "keys", "type": "key_policy",
+      "active_keys": ["key:agent-prod-2026-09"], "rotation_delay": "PT24H" }
+  ]
+}

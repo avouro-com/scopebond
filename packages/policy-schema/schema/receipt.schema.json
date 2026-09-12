@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scopebond.com/schema/receipt-1.0.json",
+  "title": "scopebond:receipt (ACTA envelope)",
+  "description": "A countersigned receipt in the ACTA signed-receipt envelope (flat {payload, signature}, RFC 8785 canonicalization) carrying Scopebond's fields in the namespaced type scopebond:receipt (POLICY_VOCABULARY.md §10; ADR-006). The countersignature attests occurrence and content, not compliance.",
+  "type": "object",
+  "required": ["payload", "signature"],
+  "additionalProperties": false,
+  "properties": {
+    "payload": {
+      "type": "object",
+      "required": ["type", "intent", "policy_hash", "policy_version", "verifier_version", "realtime_result", "executed", "attester", "timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "scopebond:receipt" },
+        "intent": {
+          "type": "object",
+          "description": "The action the agent signed (the ACTA payload_digest source).",
+          "required": ["action_type"],
+          "properties": {
+            "action_type": { "type": "string" },
+            "asset": { "type": "string" },
+            "amount": { "type": "integer", "minimum": 0 },
+            "params": { "type": "object" }
+          }
+        },
+        "intent_hash": { "type": "string", "description": "ACTA action_ref = hash of the signed intent." },
+        "policy_hash": { "type": "string", "description": "ACTA policy_digest = the registered policy hash." },
+        "policy_version": { "type": "integer", "minimum": 1 },
+        "verifier_version": { "type": "string" },
+        "realtime_result": { "enum": ["allow", "deny", "approved", "timeout"] },
+        "executed": { "type": "boolean" },
+        "execution_ref": { "type": "string", "description": "tx hash, HTTP response digest, or resource receipt ID." },
+        "approval": {
+          "type": "object",
+          "description": "Present for require_approval clauses.",
+          "properties": {
+            "approver": { "type": "string" },
+            "intent_hash": { "type": "string" }
+          }
+        },
+        "attester": {
+          "type": "object",
+          "required": ["kind", "kid"],
+          "properties": {
+            "kind": { "enum": ["gateway", "module", "resource"] },
+            "kid": { "type": "string" }
+          }
+        },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["alg", "sig"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "enum": ["Ed25519", "ES256", "secp256k1", "EIP-712"] },
+        "sig": { "type": "string" }
+      }
+    }
+  }
+}

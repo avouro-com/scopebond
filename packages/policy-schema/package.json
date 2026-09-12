@@ -1,0 +1,20 @@
+{
+  "name": "@scopebond/policy-schema",
+  "version": "0.0.0",
+  "description": "Scopebond policy vocabulary — JSON Schema for the policy document and the scopebond:receipt envelope, plus test vectors.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./policy.schema.json": "./schema/policy.schema.json",
+    "./receipt.schema.json": "./schema/receipt.schema.json"
+  },
+  "files": ["src", "schema", "vectors"],
+  "scripts": {
+    "test": "node --test"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
