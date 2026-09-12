@@ -3,8 +3,8 @@ name: Publish
 # Deliberate, manual publish of versioned packages to npm (uses the NPM_TOKEN
 # secret). Run from the Actions tab (or `gh workflow run publish.yml`) after the
 # versions are bumped (via a changeset + `pnpm version:packages`). Publishes only
-# packages whose version isn't already on npm; @scopebond/gateway is `private` and
-# is never published by this.
+# packages whose version isn't already on npm. `sdk` and `examples` are `private`
+# and are never published by this.
 
 on:
   workflow_dispatch: {}
