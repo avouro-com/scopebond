@@ -1,7 +1,6 @@
 // @scopebond/verify — the deterministic verdict library.
 //
-// violates(policy, receipts, claimed, opts) → { violated, clause_id, explanation,
-//   inputs_hash, undetermined? }  (POLICY_VOCABULARY.md §7)
+// violates(policy, receipts, claimed, opts) → Verdict  (POLICY_VOCABULARY.md §7)
 //
 // Invariants:
 //   - Pure & deterministic: no network, no wall-clock. The evaluation timestamp
@@ -21,37 +20,103 @@
 
 import { createHash } from "node:crypto";
 
-const norm = (r) => (r && r.payload ? r.payload : r) || {};
-const ms = (isoTs) => Date.parse(isoTs);
+export type Mode = "enforce" | "monitor" | "require_approval";
+
+export interface Clause {
+  id: string;
+  type: string;
+  mode?: Mode;
+  description?: string;
+  [key: string]: unknown;
+}
+
+export interface Policy {
+  clauses?: Clause[];
+  [key: string]: unknown;
+}
+
+export interface Intent {
+  action_type?: string;
+  asset?: string;
+  amount?: number;
+  params?: Record<string, unknown>;
+}
+
+export interface Approval {
+  approver?: string;
+  intent_hash?: string;
+}
+
+export interface Receipt {
+  intent?: Intent;
+  executed?: boolean;
+  realtime_result?: string;
+  approval?: Approval;
+  intent_hash?: string;
+  timestamp?: string;
+  attester?: { kind?: string; kid?: string };
+  /** ACTA envelope: a receipt may be wrapped as { payload, signature }. */
+  payload?: Receipt;
+  [key: string]: unknown;
+}
+
+export interface Verdict {
+  violated: boolean;
+  clause_id: string | null;
+  explanation: string;
+  inputs_hash: string;
+  undetermined?: boolean;
+}
+
+export interface Options {
+  /** Evaluation timestamp (ISO). Defaults to the claimed receipt's timestamp. */
+  at?: string;
+  /** For `global`-scope clauses: whether every gateway's receipts are present. */
+  gatewaysComplete?: boolean;
+}
+
+type AnyClause = Clause & Record<string, any>;
+
+const norm = (r: unknown): Receipt => {
+  const rec = r as Receipt | undefined;
+  return (rec && rec.payload ? rec.payload : rec) || {};
+};
+const ms = (isoTs: string | undefined): number => Date.parse(isoTs ?? "");
 
 // Minimal ISO-8601 duration → milliseconds (days/hours/minutes/seconds).
-export function durationToMs(d) {
+export function durationToMs(d: string): number {
   const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(d || "");
   if (!m) throw new Error(`unsupported duration: ${d}`);
-  const [, dd, hh, mm, ss] = m.map((x) => (x ? Number(x) : 0));
+  const [, dd, hh, mm, ss] = m.map((x) => (x ? Number(x) : 0)) as number[];
   return ((dd * 24 + hh) * 60 + mm) * 60 * 1000 + ss * 1000;
 }
 
 // Stable JSON for the inputs hash. (RFC 8785 JCS is the exact target; this is a
 // deterministic sorted-key serialization sufficient for reproducibility here.)
-function canonical(v) {
+function canonical(v: unknown): string {
   if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
   if (v && typeof v === "object") {
-    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonical(v[k])).join(",") + "}";
+    const obj = v as Record<string, unknown>;
+    return "{" + Object.keys(obj).sort().map((k) => JSON.stringify(k) + ":" + canonical(obj[k])).join(",") + "}";
   }
   return JSON.stringify(v);
 }
-function inputsHash(policy, receipts, claimed, at) {
+function inputsHash(policy: Policy, receipts: Receipt[], claimed: Receipt, at: string | undefined): string {
   return createHash("sha256").update(canonical({ policy, receipts, claimed, at })).digest("hex");
 }
 
-function verdict(violated, clause_id, explanation, hash, extra = {}) {
+function verdict(
+  violated: boolean, clause_id: string | null, explanation: string,
+  hash: string, extra: Partial<Verdict> = {},
+): Verdict {
   return { violated, clause_id, explanation, inputs_hash: hash, ...extra };
 }
 
-export function violates(policy, receipts, claimed, opts = {}) {
+export function violates(
+  policy: Policy, receipts: Receipt[] | undefined, claimed: Receipt, opts: Options = {},
+): Verdict {
   const c = norm(claimed);
-  const rs = (receipts || []).map(norm);
+  const rs = (receipts ?? []).map(norm);
   const at = opts.at ? ms(opts.at) : ms(c.timestamp);
   const hash = inputsHash(policy, rs, c, opts.at ?? c.timestamp);
 
@@ -60,14 +125,14 @@ export function violates(policy, receipts, claimed, opts = {}) {
 
   // Executed receipts in the window ending at `at`, deduped by intent_hash.
   const executed = [...rs, c].filter((r) => r.executed === true);
-  const dedup = new Map();
+  const dedup = new Map<string, Receipt>();
   for (const r of executed) dedup.set(r.intent_hash ?? JSON.stringify(r.intent) + r.timestamp, r);
   const executedUnique = [...dedup.values()];
-  const inWindow = (r, windowMs) => { const t = ms(r.timestamp); return t <= at && t > at - windowMs; };
+  const inWindow = (r: Receipt, windowMs: number): boolean => { const t = ms(r.timestamp); return t <= at && t > at - windowMs; };
 
-  let undetermined = null;
+  let undetermined: string | null = null;
 
-  for (const clause of policy.clauses || []) {
+  for (const clause of (policy.clauses ?? []) as AnyClause[]) {
     const t = clause.type;
 
     if (t === "spend_limit") {
@@ -94,7 +159,7 @@ export function violates(policy, receipts, claimed, opts = {}) {
       if (clause.scope === "global" && opts.gatewaysComplete === false) { undetermined = clause.id; continue; }
       const w = durationToMs(clause.window);
       const count = executedUnique.filter(
-        (r) => clause.action_types.includes(r.intent?.action_type) && inWindow(r, w)
+        (r) => clause.action_types.includes(r.intent?.action_type) && inWindow(r, w),
       ).length;
       if (count > clause.max_count) {
         return verdict(true, clause.id, `count ${count} exceeds max_count ${clause.max_count}`, hash);
@@ -114,7 +179,7 @@ export function violates(policy, receipts, claimed, opts = {}) {
         const gap = durationToMs(clause.forbidden_within);
         const prior = executedUnique.find(
           (r) => r !== c && clause.first_action_types.includes(r.intent?.action_type) &&
-                 at - ms(r.timestamp) < gap && ms(r.timestamp) <= at
+                 at - ms(r.timestamp) < gap && ms(r.timestamp) <= at,
         );
         if (prior) return verdict(true, clause.id, `then-action within ${clause.forbidden_within} of a first-action`, hash);
       }
@@ -122,7 +187,7 @@ export function violates(policy, receipts, claimed, opts = {}) {
 
     else if (t === "time_window") {
       const d = new Date(at);
-      const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCHours() >= 0 ? d.getUTCDay() : d.getUTCDay()];
+      const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()];
       const hhmm = d.toISOString().slice(11, 16);
       const dayOk = !clause.days || clause.days.length === 0 || clause.days.includes(day);
       const timeOk = hhmm >= clause.start && hhmm <= clause.end;

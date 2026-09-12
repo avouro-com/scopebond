@@ -15,9 +15,15 @@
     "node": ">=20"
   },
   "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
     "gate": "node scripts/oss-gate.mjs --tree",
     "gate:staged": "node scripts/oss-gate.mjs --staged",
     "hooks:install": "git config core.hooksPath .githooks",
     "prepare": "git config core.hooksPath .githooks || true"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.0"
   }
 }

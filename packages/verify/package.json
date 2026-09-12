@@ -10,13 +10,16 @@
   "keywords": ["scopebond", "verify", "policy", "ai-agents", "verdict", "receipts"],
   "engines": { "node": ">=20" },
   "type": "module",
-  "main": "src/violates.mjs",
+  "main": "dist/violates.js",
+  "types": "dist/violates.d.ts",
   "exports": {
-    ".": "./src/violates.mjs"
+    ".": { "types": "./dist/violates.d.ts", "default": "./dist/violates.js" }
   },
-  "files": ["src"],
+  "files": ["dist"],
   "scripts": {
-    "test": "node --test"
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public"

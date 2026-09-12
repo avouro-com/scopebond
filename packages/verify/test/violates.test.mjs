@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { violates, durationToMs } from "../src/violates.mjs";
+import { violates, durationToMs } from "../dist/violates.js";
 
 const rcpt = (o) => ({
   intent: o.intent, executed: o.executed ?? true, realtime_result: o.rr ?? "allow",

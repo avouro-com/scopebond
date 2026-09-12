@@ -25,5 +25,5 @@ the full vector suite shared with `@scopebond/verify`.
 ## Test
 
 ```
-node --test
+pnpm test   # tsc build, then node --test
 ```

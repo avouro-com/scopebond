@@ -10,15 +10,18 @@
   "keywords": ["scopebond", "policy", "json-schema", "ai-agents", "receipts"],
   "engines": { "node": ">=20" },
   "type": "module",
-  "main": "src/index.mjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.mjs",
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
     "./policy.schema.json": "./schema/policy.schema.json",
     "./receipt.schema.json": "./schema/receipt.schema.json"
   },
-  "files": ["src", "schema", "vectors"],
+  "files": ["dist", "schema", "vectors"],
   "scripts": {
-    "test": "node --test"
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public"

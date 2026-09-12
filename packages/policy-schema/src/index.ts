@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const load = (rel) => JSON.parse(readFileSync(join(here, rel), "utf8"));
+const load = (rel: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(join(here, rel), "utf8")) as Record<string, unknown>;
 
 export const policySchema = load("../schema/policy.schema.json");
 export const receiptSchema = load("../schema/receipt.schema.json");
@@ -19,11 +20,15 @@ export const CLAUSE_TYPES = [
   "address_allowlist", "address_denylist", "contract_allowlist",
   "endpoint_allowlist", "endpoint_denylist", "action_allowlist",
   "time_window", "require_approval", "sequence", "oracle_condition", "key_policy",
-];
+] as const;
 
-export const CLAUSE_MODES = ["enforce", "monitor", "require_approval"];
+export const CLAUSE_MODES = ["enforce", "monitor", "require_approval"] as const;
 
-export const REALTIME_RESULTS = ["allow", "deny", "approved", "timeout"];
+export const REALTIME_RESULTS = ["allow", "deny", "approved", "timeout"] as const;
 
 // The coverage buckets a policy resolves into (POLICY_VOCABULARY.md §4).
-export const COVERAGE_BUCKETS = ["prevented", "covered", "refused"];
+export const COVERAGE_BUCKETS = ["prevented", "covered", "refused"] as const;
+
+export type ClauseType = (typeof CLAUSE_TYPES)[number];
+export type ClauseMode = (typeof CLAUSE_MODES)[number];
+export type RealtimeResult = (typeof REALTIME_RESULTS)[number];

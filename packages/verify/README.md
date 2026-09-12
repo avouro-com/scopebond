@@ -39,10 +39,14 @@ const v = violates(policy, receipts, claimed, { at, gatewaysComplete });
   deterministic sorted-key serialization).
 - The full **conformance vector suite** (§11): every clause type and mode with a
   prevented, covered, refused, and ambiguity case, shared with `@scopebond/policy-schema`.
-- TypeScript types (this slice ships typed JSDoc-friendly ESM).
+
+## Types
+
+Written in TypeScript; ships `.d.ts`. Public types: `Policy`, `Clause`, `Receipt`,
+`Intent`, `Approval`, `Verdict`, `Options`.
 
 ## Test
 
 ```
-node --test
+pnpm test   # tsc build, then node --test
 ```

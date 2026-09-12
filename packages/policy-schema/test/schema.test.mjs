@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { policySchema, receiptSchema, CLAUSE_TYPES, CLAUSE_MODES, VOCABULARY_VERSION } from "../src/index.mjs";
+import { policySchema, receiptSchema, CLAUSE_TYPES, CLAUSE_MODES, VOCABULARY_VERSION } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const example = JSON.parse(readFileSync(join(here, "../vectors/example-policy.json"), "utf8"));
