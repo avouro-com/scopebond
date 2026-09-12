@@ -94,6 +94,13 @@ export function createGateway(config: GatewayConfig): Gateway {
   app.post("/v1/resume", (c) => { state.killed = false; return c.json({ killed: false }); });
   app.get("/v1/receipts", async (c) => c.json({ receipts: await store.list() }));
 
+  // The attester's public key, so a receipt holder can independently verify
+  // signatures (see verifyReceipt). JWKS is the standard discovery form.
+  app.get("/v1/attester", (c) => c.json({
+    kid: attester.kid, alg: "Ed25519", public_key_pem: attester.publicKeyPem, jwk: attester.publicKeyJwk,
+  }));
+  app.get("/.well-known/jwks.json", (c) => c.json({ keys: [attester.publicKeyJwk] }));
+
   app.post("/v1/evaluate", async (c) => {
     let body: ActionRequest;
     try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
