@@ -1,0 +1,18 @@
+# Deploy config for the live demo gateway (try.scopebond.com).
+# Account IDs are not secret; the Cloudflare API token is a GitHub Actions secret.
+name = "scopebond-demo-gateway"
+main = "worker.ts"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "18478c6c136993fe92314dcd59ed8818"
+
+# KV holds the persistent attester key and the receipt log.
+# The deploy workflow fills in `id` (created idempotently) before `wrangler deploy`.
+[[kv_namespaces]]
+binding = "RECEIPTS"
+id = "PLACEHOLDER_KV_ID"
+
+# Serve the Worker on its own subdomain (custom_domain provisions DNS + cert).
+[[routes]]
+pattern = "try.scopebond.com"
+custom_domain = true

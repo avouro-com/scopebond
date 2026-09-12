@@ -6,7 +6,13 @@ export { evaluate } from "./engine.js";
 export type { Decision } from "./engine.js";
 export {
   MemoryReceiptStore, createAttester, attesterFromPrivateKeyPem, verifyReceipt,
-  buildReceipt, canonical, sha256, intentHash,
+  buildReceipt, canonical, sha256, intentHash, ed25519JwkToSpkiPem, deriveKid,
 } from "./receipts.js";
 export type { ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification } from "./receipts.js";
 export { handleMcp } from "./mcp.js";
+
+// Edge (Cloudflare Workers) support — WebCrypto attester + KV store. Edge-safe.
+export { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
+export type { Ed25519Jwk } from "./webcrypto.js";
+export { KvReceiptStore, loadOrCreateKvAttester, createWorkerGateway } from "./workers.js";
+export type { KvLike } from "./workers.js";

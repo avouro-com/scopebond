@@ -1,0 +1,49 @@
+name: Deploy demo gateway
+
+# Deploys the live demo gateway (examples/demo-gateway) to Cloudflare Workers at
+# try.scopebond.com. Manual only. Requires the repo secret CLOUDFLARE_SCOPEBOND_TOKEN
+# (Workers Scripts + KV + Workers Routes + DNS edit).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_SCOPEBOND_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: "18478c6c136993fe92314dcd59ed8818"
+      WRANGLER: "wrangler@4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build packages
+        run: pnpm -r build
+      - name: Ensure KV namespace + inject id
+        working-directory: examples/demo-gateway
+        run: |
+          set -euo pipefail
+          title="scopebond-demo-gateway-RECEIPTS"
+          list=$(npx --yes $WRANGLER kv namespace list)
+          id=$(node -e "const t=process.argv[1];const a=JSON.parse(require('fs').readFileSync(0,'utf8'));const m=a.find(n=>n.title===t);process.stdout.write(m?m.id:'')" "$title" <<< "$list")
+          if [ -z "$id" ]; then
+            echo "creating KV namespace $title"
+            out=$(npx --yes $WRANGLER kv namespace create RECEIPTS)
+            echo "$out"
+            id=$(echo "$out" | grep -oE '"?id"?[ =:]+"?[0-9a-f]{32}"?' | grep -oE '[0-9a-f]{32}' | head -1)
+          fi
+          if [ -z "$id" ]; then echo "!! could not resolve KV namespace id"; exit 1; fi
+          echo "KV namespace id: $id"
+          sed -i "s/PLACEHOLDER_KV_ID/$id/" wrangler.toml
+          grep -A1 kv_namespaces wrangler.toml
+      - name: Deploy
+        working-directory: examples/demo-gateway
+        run: npx --yes $WRANGLER deploy
