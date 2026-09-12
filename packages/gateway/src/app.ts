@@ -56,7 +56,7 @@ export function createGateway(config: GatewayConfig): Gateway {
 
     // Fail closed: while killed, deny everything and record the denial.
     if (state.killed) {
-      const receipt = buildReceipt({
+      const receipt = await buildReceipt({
         intent: req.intent, intent_hash: ih, policy_hash: policyHash, policy_version: policyVersion,
         verifier_version: VERIFIER_VERSION, realtime_result: "deny", executed: false, execution_ref: null,
         attester: attesterRef, timestamp: ts,
@@ -71,7 +71,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     let ref: string | null = null;
     if (d.allow) ref = (await executor.execute(req.intent)).ref;
 
-    const receipt = buildReceipt({
+    const receipt = await buildReceipt({
       intent: req.intent, intent_hash: ih, policy_hash: policyHash, policy_version: policyVersion,
       verifier_version: VERIFIER_VERSION, realtime_result: d.realtime_result, executed: d.allow,
       execution_ref: ref, attester: attesterRef, timestamp: ts,

@@ -47,7 +47,8 @@ export interface Attester {
   publicKeyPem: string;
   /** The public key as a JWK (OKP/Ed25519) with kid — for JWKS discovery. */
   publicKeyJwk: Record<string, unknown>;
-  sign(canonicalPayload: string): string;
+  /** Sign the canonical payload. May be async (WebCrypto attesters on the edge). */
+  sign(canonicalPayload: string): string | Promise<string>;
 }
 
 /** A stable key id derived from the public key, so a receipt names the key that
@@ -114,10 +115,27 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string): Rec
   return { valid: signature_valid && intent_hash_valid, signature_valid, intent_hash_valid };
 }
 
-export function buildReceipt(payloadFields: Omit<ReceiptPayload, "type">, attester: Attester): SignedReceipt {
+export async function buildReceipt(payloadFields: Omit<ReceiptPayload, "type">, attester: Attester): Promise<SignedReceipt> {
   const payload: ReceiptPayload = { type: "scopebond:receipt", ...payloadFields };
-  const sig = attester.sign(canonical(payload));
+  const sig = await attester.sign(canonical(payload));
   return { payload, signature: { alg: "Ed25519", sig } };
+}
+
+/** The fixed 12-byte SPKI DER prefix for an Ed25519 public key. */
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+const b64urlToBuf = (s: string): Buffer => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+
+/** Wrap a raw 32-byte Ed25519 public key (as JWK `x`, base64url) into an SPKI PEM
+ *  — so a WebCrypto-derived key produces the same PEM as node:crypto exports. */
+export function ed25519JwkToSpkiPem(x: string): string {
+  const der = Buffer.concat([ED25519_SPKI_PREFIX, b64urlToBuf(x)]);
+  const b64 = der.toString("base64").replace(/(.{64})/g, "$1\n");
+  return `-----BEGIN PUBLIC KEY-----\n${b64}\n-----END PUBLIC KEY-----\n`;
+}
+
+/** Public: derive the stable, key-fingerprint kid from a public JWK. */
+export function deriveKid(publicJwk: Record<string, unknown>): string {
+  return fingerprintKid(publicJwk);
 }
 
 export interface ReceiptStore {

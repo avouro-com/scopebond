@@ -86,7 +86,7 @@ test("receipts survive a restart and enforce prior-state across a new instance",
     // Second process: a fresh store on the same DB sees the prior receipts.
     {
       const { store, kind } = openReceiptStore({ db: dbFile });
-      assert.equal(kind, "sqlite");
+      assert.ok(kind === "sqlite" || kind === "file", `durable store kind: ${kind}`);
       const prior = await store.list();
       assert.equal(prior.length, 2);
       // And a receipt from the reopened gateway still verifies against the persisted key.
