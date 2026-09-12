@@ -1,5 +1,8 @@
 # Scopebond
 
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml/badge.svg)](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml)
+
 **Trust infrastructure for AI agents that are delegated real authority.**
 
 When you give an AI agent authority to move money and touch systems, you can
@@ -44,6 +47,15 @@ code — those live in separate private repositories. A commit gate
 (`scripts/oss-gate.mjs`, enforced on commit, push, and merge) keeps non-public
 material out of this repo by design.
 
+## Packages
+
+| Package | What it is |
+|---|---|
+| [`@scopebond/policy-schema`](packages/policy-schema) | The policy vocabulary — JSON Schema for the policy document and the `scopebond:receipt` envelope, plus test vectors. |
+| [`@scopebond/verify`](packages/verify) | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` verdict library. |
+
+Further packages (gateway, sdk, contracts, conformance) are `[PLANNED]` — see [`packages/`](packages/).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
@@ -53,3 +65,6 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026
 Avouro LLC. Scopebond is a product of Avouro LLC (https://scopebond.com).
+
+Nothing in this repository is an offer of insurance, securities, or financial
+services, or legal or financial advice.

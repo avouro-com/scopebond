@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Packages currently have zero dependencies and run on Node's built-in test
+      # runner, so no install/build step is needed yet. Add `pnpm install` and
+      # per-package build/lint here as packages gain dependencies and TypeScript.
+      - name: Test packages
+        run: node --test packages/policy-schema/test/*.test.mjs packages/verify/test/*.test.mjs

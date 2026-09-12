@@ -1,8 +1,14 @@
 {
   "name": "@scopebond/verify",
   "version": "0.0.0",
-  "description": "scopebond-verify — the deterministic verdict library: violates(policy, receipts, claimed). The moat-bearing reference implementation (D27).",
+  "description": "scopebond-verify — the deterministic verdict library: violates(policy, receipts, claimed). The moat-bearing reference implementation.",
   "license": "Apache-2.0",
+  "author": "Avouro LLC",
+  "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/verify#readme",
+  "repository": { "type": "git", "url": "https://github.com/avouro-com/scopebond.git", "directory": "packages/verify" },
+  "bugs": { "url": "https://github.com/avouro-com/scopebond/issues" },
+  "keywords": ["scopebond", "verify", "policy", "ai-agents", "verdict", "receipts"],
+  "engines": { "node": ">=20" },
   "type": "module",
   "main": "src/violates.mjs",
   "exports": {
