@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/gateway",
-  "version": "0.1.0",
-  "description": "Scopebond Gateway — a policy-enforcement proxy for AI agents: prevent (deny out-of-policy, fail closed), prove (Ed25519-countersigned scopebond:receipts), kill switch. HTTP + MCP ingress on Hono.",
+  "version": "0.1.1",
+  "description": "Scopebond Gateway \u00e2\u20ac\u201d a policy-enforcement proxy for AI agents: prevent (deny out-of-policy, fail closed), prove (Ed25519-countersigned scopebond:receipts), kill switch. HTTP + MCP ingress on Hono.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/gateway#readme",

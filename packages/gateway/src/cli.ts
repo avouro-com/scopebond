@@ -12,14 +12,39 @@
 //      SCOPEBOND_DB (default ./scopebond.db) — set SCOPEBOND_RECEIPTS_FILE to force JSONL.
 
 import { serve } from "@hono/node-server";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { createGateway } from "./index.js";
 import { attesterFromPrivateKeyPem, verifyReceipt } from "./receipts.js";
 import type { Attester } from "./receipts.js";
 import { loadOrCreateAttester } from "./node-keys.js";
 import { openReceiptStore } from "./node-stores.js";
+import { sendStartupTelemetry, telemetryEnabled } from "./telemetry.js";
+
+const GATEWAY_VERSION: string = (() => {
+  try { return (createRequire(import.meta.url)("../package.json") as { version: string }).version; }
+  catch { return "0.0.0"; }
+})();
 
 function fail(msg: string): never { console.error(msg); process.exit(1); }
+
+/** A stable, anonymous install id for telemetry — a random UUID persisted to
+ *  ~/.scopebond/telemetry-id. No PII; used only to de-duplicate installs. */
+function anonInstallId(): { id: string; firstRun: boolean } {
+  const file = join(homedir(), ".scopebond", "telemetry-id");
+  try {
+    if (existsSync(file)) return { id: readFileSync(file, "utf8").trim(), firstRun: false };
+    const id = randomUUID();
+    mkdirSync(join(homedir(), ".scopebond"), { recursive: true });
+    writeFileSync(file, id, { mode: 0o600 });
+    return { id, firstRun: true };
+  } catch {
+    return { id: randomUUID(), firstRun: true };
+  }
+}
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
@@ -52,6 +77,25 @@ function cmdServe(policyPath: string | undefined): void {
   console.log(`  receipts  ${kind}: ${path} (durable)`);
   console.log(`  routes    POST /v1/evaluate · POST /mcp · POST /v1/kill · POST /v1/resume`);
   console.log(`            GET /v1/receipts · GET /v1/status · GET /v1/attester · GET /.well-known/jwks.json`);
+
+  // Anonymous, opt-out startup telemetry (no PII; disabled unless configured).
+  if (telemetryEnabled()) {
+    const { id, firstRun } = anonInstallId();
+    if (firstRun) {
+      console.log(`  telemetry anonymous usage stats are on (no PII, no policy contents).`);
+      console.log(`            opt out: SCOPEBOND_TELEMETRY=0 · details: TELEMETRY.md`);
+    }
+    const clauses = (policy.clauses ?? []) as Array<{ type?: string }>;
+    const clauseTypes = [...new Set(clauses.map((c) => c.type).filter(Boolean) as string[])].sort();
+    void sendStartupTelemetry({
+      gatewayVersion: GATEWAY_VERSION,
+      clauseTypes,
+      clauseCount: clauses.length,
+      storeKind: kind,
+      nodeVersion: process.version,
+      platform: process.platform,
+    }, id);
+  }
 }
 
 async function cmdVerify(args: string[]): Promise<void> {
