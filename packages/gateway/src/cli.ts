@@ -13,7 +13,8 @@
 
 import { serve } from "@hono/node-server";
 import { readFileSync, writeFileSync, watch } from "node:fs";
-import { createGateway } from "./index.js";
+import { createGateway, createCloudExporter, withCloudExporter } from "./index.js";
+import type { CloudExporter } from "./index.js";
 import { attesterFromPrivateKeyPem, verifyReceipt } from "./receipts.js";
 import type { Attester } from "./receipts.js";
 import { loadOrCreateAttester } from "./node-keys.js";
@@ -49,9 +50,23 @@ function cmdServe(policyPath: string | undefined): void {
   const policy = JSON.parse(readFileSync(policyPath as string, "utf8"));
   const { attester, source } = resolveAttester();
   const receiptsFile = process.env.SCOPEBOND_RECEIPTS_FILE;
-  const { store, kind, path } = openReceiptStore(
+  const { store: baseStore, kind, path } = openReceiptStore(
     receiptsFile ? { file: receiptsFile } : { db: process.env.SCOPEBOND_DB ?? "scopebond.db" },
   );
+
+  // Optional: mirror receipts to Scopebond Cloud (retention + dashboard). Opt-in.
+  let exporter: CloudExporter | undefined;
+  let store = baseStore;
+  const cloudUrl = process.env.SCOPEBOND_CLOUD_URL;
+  const cloudKey = process.env.SCOPEBOND_CLOUD_KEY;
+  if (cloudUrl && cloudKey) {
+    exporter = createCloudExporter({
+      url: cloudUrl, apiKey: cloudKey,
+      flushMs: Number(process.env.SCOPEBOND_CLOUD_FLUSH_MS ?? 15000),
+      onError: (e) => console.error(`  cloud export error: ${(e as Error).message}`),
+    });
+    store = withCloudExporter(baseStore, exporter);
+  }
 
   const gateway = createGateway({ policy, attester, store });
   const port = Number(process.env.PORT ?? 8787);
@@ -63,6 +78,17 @@ function cmdServe(policyPath: string | undefined): void {
   console.log(`  receipts  ${kind}: ${path} (durable)`);
   console.log(`  routes    POST /v1/evaluate · /mcp · /v1/kill · /v1/resume · /v1/anchor`);
   console.log(`            GET /v1/receipts · /v1/status · /v1/attester · /.well-known/jwks.json · /v1/anchors[/latest|/proof]`);
+
+  if (exporter) {
+    console.log(`  cloud     exporting receipts to ${cloudUrl}`);
+    // Backfill existing receipts once (Cloud dedupes on ingest, so it's idempotent).
+    if ((process.env.SCOPEBOND_CLOUD_BACKFILL ?? "1") !== "0") {
+      Promise.resolve(baseStore.list()).then((all) => { for (const r of all) exporter!.enqueue(r); }).catch(() => {});
+    }
+    const shutdown = () => { void exporter!.flush().finally(() => process.exit(0)); };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  }
 
   // Hot-reload: watch the policy file and swap it in without a restart. Fail safe —
   // a malformed file keeps the current policy. Disable with SCOPEBOND_POLICY_WATCH=0.
