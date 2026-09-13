@@ -8,6 +8,13 @@ tagged release.
 ## [Unreleased]
 
 ### Added
+- Durable execution reconciliation: atomic request/approval/budget consumption,
+  signed pre-dispatch lifecycle records, read-only adapter result queries,
+  control-protected unresolved-action inspection, pinned-policy restart recovery,
+  and an outbound-disabled restore mode. Ambiguous HTTP responses return `202` and
+  retain `outcome_unknown`; no reconciliation path redispatches an action.
+- One shared strict RFC-8785-target canonical serializer and cross-package vectors
+  now define schema, verifier, gateway and SDK signature/hash bytes.
 - Authenticated agent-intent and approval envelopes: Ed25519 key binding, bounded
   validity, single-use replay identifiers, exact intent/policy references, receipt
   evidence, and offline principal verification.
@@ -57,6 +64,9 @@ tagged release.
   with a runner.
 
 ### Changed
+- The constrained support-refund adapter can query the upstream result by its
+  durable idempotency key, distinguishing confirmed success or no effect from an
+  outcome that must remain unknown.
 - Global-scope window clauses now fail closed unless the caller explicitly declares
   that the coordinator has the complete gateway set.
 - Stores without atomic authority reservations reject real dispatch while retaining

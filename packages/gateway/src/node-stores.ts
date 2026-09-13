@@ -7,7 +7,7 @@ import { dirname } from "node:path";
 import { createRequire } from "node:module";
 import type {
   ReceiptStore, SignedReceipt, Anchor, AuthorityReservation,
-  AuthorityReservationResult, AuthorityFinalState, StopState,
+  AuthorityReservationResult, AuthorityFinalState, StopState, ActionLifecycleRecord, RealtimeResult,
 } from "./receipts.js";
 import type { Receipt } from "@scopebond/verify";
 
@@ -95,6 +95,20 @@ export class SqliteReceiptStore implements ReceiptStore {
          policy_ref_json TEXT NOT NULL,
          policy_snapshot TEXT NOT NULL
        );
+       CREATE TABLE IF NOT EXISTS authority_consumptions (
+         kind TEXT NOT NULL,
+         value TEXT NOT NULL,
+         action_id TEXT NOT NULL,
+         PRIMARY KEY (kind, value)
+       );
+       CREATE TABLE IF NOT EXISTS authority_lifecycle (
+         action_id TEXT PRIMARY KEY,
+         reservation_json TEXT NOT NULL,
+         realtime_result TEXT,
+         adapter_id TEXT,
+         pre_receipt_json TEXT,
+         terminal_receipt_json TEXT
+       );
        CREATE TABLE IF NOT EXISTS gateway_stops (
          target TEXT PRIMARY KEY,
          stopped INTEGER NOT NULL
@@ -114,7 +128,7 @@ export class SqliteReceiptStore implements ReceiptStore {
   executed(): Receipt[] {
     const receipts = this.list().map((r) => r.payload as unknown as Receipt);
     const rows = this.db.prepare(
-      `SELECT candidate_json FROM authority_actions WHERE state IN ('reserved', 'outcome_unknown') ORDER BY rowid`,
+      `SELECT candidate_json FROM authority_actions WHERE state IN ('reserved', 'dispatching', 'outcome_unknown') ORDER BY rowid`,
     ).all() as { candidate_json: string }[];
     return [...receipts, ...rows.map((row) => JSON.parse(row.candidate_json) as Receipt)];
   }
@@ -129,6 +143,16 @@ export class SqliteReceiptStore implements ReceiptStore {
         this.db.exec("ROLLBACK");
         return { duplicate: true };
       }
+      for (const [kind, value] of Object.entries(reservation.authorization_ids ?? {})) {
+        if (!value) continue;
+        const consumed = this.db.prepare(
+          `SELECT action_id FROM authority_consumptions WHERE kind = ? AND value = ?`,
+        ).all(kind, value);
+        if (consumed.length > 0) {
+          this.db.exec("ROLLBACK");
+          return { duplicate: true };
+        }
+      }
       const decision = decide(this.executed());
       this.db.prepare(
         `INSERT INTO authority_actions (action_id,state,candidate_json,policy_ref_json,policy_snapshot) VALUES (?,?,?,?,?)`,
@@ -137,10 +161,34 @@ export class SqliteReceiptStore implements ReceiptStore {
         decision.allow ? "reserved" : "denied",
         JSON.stringify(reservation.candidate),
         JSON.stringify(reservation.policy_ref),
-        reservation.policy_snapshot,
-      );
+         reservation.policy_snapshot,
+       );
+      for (const [kind, value] of Object.entries(reservation.authorization_ids ?? {})) {
+        if (value) this.db.prepare(
+          `INSERT INTO authority_consumptions (kind,value,action_id) VALUES (?,?,?)`,
+        ).run(kind, value, reservation.action_id);
+      }
+      const realtimeResult = "realtime_result" in decision ? decision.realtime_result as RealtimeResult : null;
+      this.db.prepare(
+        `INSERT INTO authority_lifecycle (action_id,reservation_json,realtime_result) VALUES (?,?,?)`,
+      ).run(reservation.action_id, JSON.stringify(reservation), realtimeResult);
       this.db.exec("COMMIT");
       return { duplicate: false, decision };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  prepareDispatch(actionId: string, receipt: SignedReceipt, adapterId: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = this.db.prepare(`SELECT state FROM authority_actions WHERE action_id = ?`).all(actionId) as { state: string }[];
+      if (rows[0]?.state !== "reserved") throw new Error(`action ${actionId} is not reserved for dispatch`);
+      this.db.prepare(`UPDATE authority_actions SET state = 'dispatching' WHERE action_id = ?`).run(actionId);
+      this.db.prepare(
+        `UPDATE authority_lifecycle SET adapter_id = ?, pre_receipt_json = ? WHERE action_id = ?`,
+      ).run(adapterId, JSON.stringify(receipt), actionId);
+      this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -156,11 +204,32 @@ export class SqliteReceiptStore implements ReceiptStore {
         .prepare(`INSERT INTO receipts (intent_hash,policy_hash,realtime_result,executed,timestamp,receipt_json) VALUES (?,?,?,?,?,?)`)
         .run(p.intent_hash, p.policy_hash, p.realtime_result, p.executed ? 1 : 0, p.timestamp, JSON.stringify(receipt));
       this.db.prepare(`UPDATE authority_actions SET state = ? WHERE action_id = ?`).run(state, actionId);
+      this.db.prepare(
+        `UPDATE authority_lifecycle SET terminal_receipt_json = ? WHERE action_id = ?`,
+      ).run(JSON.stringify(receipt), actionId);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+  getAction(actionId: string): ActionLifecycleRecord | null {
+    const rows = this.db.prepare(
+      `SELECT a.action_id,a.state,a.candidate_json,a.policy_ref_json,a.policy_snapshot,
+              l.reservation_json,l.realtime_result,l.adapter_id,l.pre_receipt_json,l.terminal_receipt_json
+         FROM authority_actions a LEFT JOIN authority_lifecycle l ON l.action_id = a.action_id
+        WHERE a.action_id = ?`,
+    ).all(actionId) as LifecycleRow[];
+    return rows[0] ? rowToLifecycle(rows[0]) : null;
+  }
+  unresolvedActions(): ActionLifecycleRecord[] {
+    const rows = this.db.prepare(
+      `SELECT a.action_id,a.state,a.candidate_json,a.policy_ref_json,a.policy_snapshot,
+              l.reservation_json,l.realtime_result,l.adapter_id,l.pre_receipt_json,l.terminal_receipt_json
+         FROM authority_actions a LEFT JOIN authority_lifecycle l ON l.action_id = a.action_id
+        WHERE a.state IN ('reserved','dispatching','outcome_unknown') ORDER BY a.rowid`,
+    ).all() as LifecycleRow[];
+    return rows.map(rowToLifecycle);
   }
   getStopState(): StopState {
     const rows = this.db.prepare(`SELECT target FROM gateway_stops WHERE stopped = 1 ORDER BY target`).all() as { target: string }[];
@@ -180,6 +249,39 @@ export class SqliteReceiptStore implements ReceiptStore {
     return rows.map((row) => JSON.parse(row.anchor_json) as Anchor);
   }
   close(): void { this.db.close(); }
+}
+
+interface LifecycleRow {
+  action_id: string;
+  state: ActionLifecycleRecord["state"];
+  candidate_json: string;
+  policy_ref_json: string;
+  policy_snapshot: string;
+  reservation_json: string | null;
+  realtime_result: RealtimeResult | null;
+  adapter_id: string | null;
+  pre_receipt_json: string | null;
+  terminal_receipt_json: string | null;
+}
+
+function rowToLifecycle(row: LifecycleRow): ActionLifecycleRecord {
+  const reservation = row.reservation_json
+    ? JSON.parse(row.reservation_json) as AuthorityReservation
+    : {
+        action_id: row.action_id,
+        candidate: JSON.parse(row.candidate_json) as Receipt,
+        policy_ref: JSON.parse(row.policy_ref_json),
+        policy_snapshot: row.policy_snapshot,
+      };
+  return {
+    action_id: row.action_id,
+    state: row.state,
+    reservation,
+    realtime_result: row.realtime_result,
+    adapter_id: row.adapter_id,
+    pre_receipt: row.pre_receipt_json ? JSON.parse(row.pre_receipt_json) as SignedReceipt : null,
+    terminal_receipt: row.terminal_receipt_json ? JSON.parse(row.terminal_receipt_json) as SignedReceipt : null,
+  };
 }
 
 /** Open a durable store: SQLite when `db` is given (falls back to the JSONL file

@@ -394,6 +394,11 @@ export interface ReceiptStore {
   /** Atomically persist the terminal receipt and move the write-ahead record out
    * of reserved state. Unknown outcomes remain charged conservatively. */
   finalizeAction?(actionId: string, receipt: SignedReceipt, state: AuthorityFinalState): void | Promise<void>;
+  /** Persist the signed pre-dispatch attestation before any external I/O. */
+  prepareDispatch?(actionId: string, receipt: SignedReceipt, adapterId: string): void | Promise<void>;
+  /** Read one lifecycle record or the unresolved set for retry-safe reconciliation. */
+  getAction?(actionId: string): ActionLifecycleRecord | null | Promise<ActionLifecycleRecord | null>;
+  unresolvedActions?(): ActionLifecycleRecord[] | Promise<ActionLifecycleRecord[]>;
   /** Durable emergency state. `agents` contains signer key ids. */
   getStopState?(): StopState | Promise<StopState>;
   setStopped?(target: "global" | string, stopped: boolean): void | Promise<void>;
@@ -406,9 +411,29 @@ export interface AuthorityReservation {
   candidate: Receipt;
   policy_ref: PolicyReference;
   policy_snapshot: string;
+  /** IDs consumed by the same atomic reservation as budget authority. */
+  authorization_ids?: { request_id?: string; approval_id?: string };
+  /** Minimized, reconstructible receipt fields fixed before reservation. */
+  receipt_context?: ReceiptContext;
 }
 
-export type AuthorityFinalState = "denied" | "simulated" | "executed" | "outcome_unknown";
+export type ReceiptContext = Omit<
+  ReceiptPayload,
+  "type" | "realtime_result" | "executed" | "execution_ref" | "execution"
+>;
+
+export type AuthorityFinalState = "denied" | "simulated" | "executed" | "failed" | "outcome_unknown";
+export type AuthorityLifecycleState = "reserved" | "dispatching" | AuthorityFinalState;
+
+export interface ActionLifecycleRecord {
+  action_id: string;
+  state: AuthorityLifecycleState;
+  reservation: AuthorityReservation;
+  realtime_result: RealtimeResult | null;
+  adapter_id: string | null;
+  pre_receipt: SignedReceipt | null;
+  terminal_receipt: SignedReceipt | null;
+}
 
 export type AuthorityReservationResult<T> =
   | { duplicate: true }
@@ -416,37 +441,69 @@ export type AuthorityReservationResult<T> =
 
 interface MemoryAuthorityRecord {
   reservation: AuthorityReservation;
-  state: "reserved" | AuthorityFinalState;
+  state: AuthorityLifecycleState;
+  realtimeResult: RealtimeResult | null;
+  adapterId: string | null;
+  preReceipt: SignedReceipt | null;
+  terminalReceipt: SignedReceipt | null;
 }
 
 export class MemoryReceiptStore implements ReceiptStore {
   private all: SignedReceipt[] = [];
   private anchorLog: Anchor[] = [];
   private authority = new Map<string, MemoryAuthorityRecord>();
+  private consumedAuthorizationIds = new Map<string, string>();
   private stops = new Set<string>();
   put(r: SignedReceipt): void { this.all.push(structuredClone(r)); }
   list(): SignedReceipt[] { return structuredClone(this.all); }
   executed(): Receipt[] {
     const receipts = this.all.map((r) => r.payload as unknown as Receipt);
     const held = [...this.authority.values()]
-      .filter((record) => record.state === "reserved" || record.state === "outcome_unknown")
+      .filter((record) => record.state === "reserved" || record.state === "dispatching" || record.state === "outcome_unknown")
       .map((record) => record.reservation.candidate);
     return structuredClone([...receipts, ...held]);
   }
   reserveAction<T extends { allow: boolean }>(reservation: AuthorityReservation, decide: (prior: Receipt[]) => T): AuthorityReservationResult<T> {
     if (this.authority.has(reservation.action_id)) return { duplicate: true };
+    for (const id of Object.values(reservation.authorization_ids ?? {})) {
+      if (id && this.consumedAuthorizationIds.has(id)) return { duplicate: true };
+    }
     const decision = decide(this.executed());
     this.authority.set(reservation.action_id, {
       reservation: structuredClone(reservation),
       state: decision.allow ? "reserved" : "denied",
+      realtimeResult: "realtime_result" in decision ? decision.realtime_result as RealtimeResult : null,
+      adapterId: null,
+      preReceipt: null,
+      terminalReceipt: null,
     });
+    for (const id of Object.values(reservation.authorization_ids ?? {})) {
+      if (id) this.consumedAuthorizationIds.set(id, reservation.action_id);
+    }
     return { duplicate: false, decision };
+  }
+  prepareDispatch(actionId: string, receipt: SignedReceipt, adapterId: string): void {
+    const record = this.authority.get(actionId);
+    if (!record || record.state !== "reserved") throw new Error(`action ${actionId} is not reserved for dispatch`);
+    record.state = "dispatching";
+    record.adapterId = adapterId;
+    record.preReceipt = structuredClone(receipt);
   }
   finalizeAction(actionId: string, receipt: SignedReceipt, state: AuthorityFinalState): void {
     const record = this.authority.get(actionId);
     if (!record) throw new Error(`unknown authority reservation ${actionId}`);
     this.all.push(structuredClone(receipt));
     record.state = state;
+    record.terminalReceipt = structuredClone(receipt);
+  }
+  getAction(actionId: string): ActionLifecycleRecord | null {
+    const record = this.authority.get(actionId);
+    return record ? lifecycleRecord(actionId, record) : null;
+  }
+  unresolvedActions(): ActionLifecycleRecord[] {
+    return [...this.authority.entries()]
+      .filter(([, record]) => record.state === "reserved" || record.state === "dispatching" || record.state === "outcome_unknown")
+      .map(([actionId, record]) => lifecycleRecord(actionId, record));
   }
   getStopState(): StopState { return { global: this.stops.has("global"), agents: [...this.stops].filter((key) => key !== "global") }; }
   setStopped(target: "global" | string, stopped: boolean): void {
@@ -454,4 +511,16 @@ export class MemoryReceiptStore implements ReceiptStore {
   }
   putAnchor(a: Anchor): void { this.anchorLog.push(a); }
   anchors(): Anchor[] { return this.anchorLog.slice(); }
+}
+
+function lifecycleRecord(actionId: string, record: MemoryAuthorityRecord): ActionLifecycleRecord {
+  return structuredClone({
+    action_id: actionId,
+    state: record.state,
+    reservation: record.reservation,
+    realtime_result: record.realtimeResult,
+    adapter_id: record.adapterId,
+    pre_receipt: record.preReceipt,
+    terminal_receipt: record.terminalReceipt,
+  });
 }

@@ -242,7 +242,7 @@ test("records an adapter exception as outcome unknown without raw error text", a
   });
   const response = await post(app, "/v1/evaluate", { intent: { action_type: "test.call" } });
   const result = await response.json();
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 202);
   assert.equal(result.allowed, true);
   assert.equal(result.receipt.payload.executed, false);
   assert.equal(result.receipt.payload.execution.state, "outcome_unknown");

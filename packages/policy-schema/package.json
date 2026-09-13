@@ -31,11 +31,16 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./canonical": {
+      "types": "./dist/canonical.d.ts",
+      "default": "./dist/canonical.js"
+    },
     "./policy.schema.json": "./schema/policy.schema.json",
     "./action.schema.json": "./schema/action.schema.json",
     "./receipt.schema.json": "./schema/receipt.schema.json",
     "./receipt-legacy.schema.json": "./schema/receipt-legacy.schema.json",
-    "./vectors/evidence-contract.json": "./vectors/evidence-contract.json"
+    "./vectors/evidence-contract.json": "./vectors/evidence-contract.json",
+    "./vectors/canonicalization.json": "./vectors/canonicalization.json"
   },
   "files": [
     "dist",

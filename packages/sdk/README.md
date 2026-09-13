@@ -13,6 +13,9 @@ const result = await submit("http://localhost:8787", signed);
 // → { allowed, reason, receipt }  (the gateway's decision + countersigned receipt)
 ```
 
+The SDK imports the same strict canonical serializer as the schema, verifier and
+gateway, so signatures and intent hashes use identical bytes across packages.
+
 - `createSigner({ privateKeyPem? })` generates or loads an Ed25519 key. Its `kid`
   is always derived from the public key and becomes `intent.signer`.
 - `sign(intent, { requestId?, issuedAt?, expiresAt?, ttlMs? })` binds the exact

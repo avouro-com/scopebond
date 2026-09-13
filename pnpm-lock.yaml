@@ -32,6 +32,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.13.0
         version: 1.19.17(hono@4.13.7)
+      '@scopebond/policy-schema':
+        specifier: workspace:^
+        version: link:../policy-schema
       '@scopebond/verify':
         specifier: workspace:*
         version: link:../verify
@@ -41,7 +44,11 @@ importers:
 
   packages/policy-schema: {}
 
-  packages/sdk: {}
+  packages/sdk:
+    dependencies:
+      '@scopebond/policy-schema':
+        specifier: workspace:^
+        version: link:../policy-schema
 
   packages/verify:
     dependencies:

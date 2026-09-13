@@ -4,7 +4,7 @@
 
 import { createHash } from "node:crypto";
 import { ExecutorInputError } from "./app.js";
-import type { Executor } from "./app.js";
+import type { Executor, ExecutionQueryResult } from "./app.js";
 import type { Intent } from "@scopebond/verify";
 
 export interface HttpExecutorOptions {
@@ -18,6 +18,7 @@ export function createHttpExecutor(opts: HttpExecutorOptions = {}): Executor {
   const f = opts.fetch ?? fetch;
   const scheme = opts.scheme ?? "https";
   return {
+    id: "scopebond:http-call",
     mode: "dispatch",
     async execute(intent: Intent) {
       const p = (intent.params ?? {}) as Record<string, any>;
@@ -97,7 +98,32 @@ export function createSupportRefundExecutor(opts: SupportRefundExecutorOptions):
     throw new TypeError("maxResponseBytes must be between 1 and 1048576");
   }
   const doFetch = opts.fetch ?? fetch;
+  const adapterId = `scopebond:support-refund:${origin.host}`;
+
+  async function boundedBody(response: Response): Promise<{ text: string; body: Record<string, unknown> }> {
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) throw new Error("refund response exceeds configured limit");
+    const text = await response.text();
+    if (Buffer.byteLength(text) > maxResponseBytes) throw new Error("refund response exceeds configured limit");
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { parsed = null; }
+    return { text, body: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {} };
+  }
+
+  function executionResult(response: Response, text: string, body: Record<string, unknown>) {
+    const digest = createHash("sha256").update(text).digest("hex");
+    const refundId = typeof body.refund_id === "string" && RESOURCE_ID.test(body.refund_id) ? body.refund_id : undefined;
+    return {
+      ref: `support-refund:${response.status}:sha256:${digest.slice(0, 16)}`,
+      output: {
+        status: response.status,
+        ...(refundId ? { refund_id: refundId } : {}),
+        ...(typeof body.duplicate === "boolean" ? { duplicate: body.duplicate } : {}),
+      },
+    };
+  }
   return {
+    id: adapterId,
     mode: "dispatch",
     validate(intent) { normalizedRefund(intent); },
     async execute(intent, context) {
@@ -112,25 +138,21 @@ export function createSupportRefundExecutor(opts: SupportRefundExecutorOptions):
         },
         body: JSON.stringify({ ...request, amount: intent.amount, asset: intent.asset }),
       });
-      const declaredLength = Number(response.headers.get("content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) throw new Error("refund response exceeds configured limit");
-      const text = await response.text();
-      if (Buffer.byteLength(text) > maxResponseBytes) throw new Error("refund response exceeds configured limit");
+      const { text, body } = await boundedBody(response);
       if (!response.ok) throw new Error(`refund upstream returned HTTP ${response.status}`);
-      const digest = createHash("sha256").update(text).digest("hex");
-      let parsed: unknown;
-      try { parsed = JSON.parse(text); } catch { parsed = null; }
-      const responseBody = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-      const refundId = typeof responseBody.refund_id === "string" && RESOURCE_ID.test(responseBody.refund_id)
-        ? responseBody.refund_id : undefined;
-      return {
-        ref: `support-refund:${response.status}:sha256:${digest.slice(0, 16)}`,
-        output: {
-          status: response.status,
-          ...(refundId ? { refund_id: refundId } : {}),
-          ...(typeof responseBody.duplicate === "boolean" ? { duplicate: responseBody.duplicate } : {}),
-        },
-      };
+      return executionResult(response, text, body);
+    },
+    async query({ actionId }): Promise<ExecutionQueryResult> {
+      const response = await doFetch(new URL(`/v1/refunds/by-idempotency-key/${encodeURIComponent(actionId)}`, origin), {
+        method: "GET",
+        redirect: "error",
+        headers: { authorization: `Bearer ${opts.apiToken}` },
+      });
+      const { text, body } = await boundedBody(response);
+      if (response.status === 404) return { state: "failed", ref: "support-refund:not-found" };
+      if (!response.ok) return { state: "outcome_unknown", ref: `support-refund:query-http-${response.status}` };
+      const result = executionResult(response, text, body);
+      return { state: "executed", ...result };
     },
   };
 }

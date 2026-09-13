@@ -6,8 +6,8 @@
 
 **Security & safety guardrails for AI agents with real authority.**
 
-> **Experimental alpha:** use controlled test systems only. Unknown-outcome
-> reconciliation, distributed hosted coordination, and release migration remain
+> **Experimental alpha:** use controlled test systems only. Upstream-specific
+> reconciliation coverage, distributed hosted coordination, and release migration remain
 > under active remediation. The live demo evaluates real policies but uses
 > a no-op executor; it does not perform the displayed business actions.
 
@@ -73,7 +73,7 @@ Works with any agent over **HTTP or MCP**. Self-host it free — no account requ
 
 | Package | What it is |
 |---|---|
-| [`@scopebond/gateway`](packages/gateway) | The experimental gateway alpha: HTTP + MCP ingress, authenticated Ed25519 action evidence, atomic SQLite authority reservations, persistent attester key, durable stop state and receipts, plus one constrained support-refund adapter. Default execution is a simulation. `npx @scopebond/gateway`. |
+| [`@scopebond/gateway`](packages/gateway) | The experimental gateway alpha: HTTP + MCP ingress, authenticated Ed25519 action evidence, atomic SQLite authority/approval reservations, durable pre-dispatch lifecycle and result-query reconciliation, persistent attester key and stop state, plus one constrained support-refund adapter. Default execution is a simulation. `npx @scopebond/gateway`. |
 | [`@scopebond/verify`](packages/verify) | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` verdict library + conformance vectors. The portable standard the whole thing rests on. |
 | [`@scopebond/policy-schema`](packages/policy-schema) | The policy vocabulary — JSON Schema for the policy document and the `scopebond:receipt` envelope, plus test vectors. |
 

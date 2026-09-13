@@ -10,7 +10,10 @@ import {
   minimizeIntentForEvidence, REDACTION_PROFILE,
   CANONICALIZATION,
 } from "./receipts.js";
-import type { Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult, AuthorityFinalState } from "./receipts.js";
+import type {
+  Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
+  AuthorityFinalState, ActionLifecycleRecord, ReceiptContext,
+} from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
 import { validateIntent, validatePolicy } from "@scopebond/verify";
@@ -23,14 +26,24 @@ import type {
 /** How an allowed action is actually carried out. Default: a no-op (record only).
  *  Real forwarding (HTTP proxy, MCP passthrough) is a swappable implementation. */
 export interface Executor {
+  /** Stable adapter identity used to ensure the same integration reconciles a dispatch. */
+  id?: string;
   /** Simulation never claims that an external action occurred. */
   mode?: "simulation" | "dispatch";
   /** Integration-specific structural validation before authorization/reservation. */
   validate?(intent: Intent): void;
   execute(intent: Intent, context: { actionId: string }): ExecutionResult | Promise<ExecutionResult>;
+  /** Query a prior dispatch by its durable idempotency key. It must never create an effect. */
+  query?(context: { actionId: string }): ExecutionQueryResult | Promise<ExecutionQueryResult>;
 }
 export interface ExecutionResult { ref: string; output?: unknown; }
-export const noopExecutor: Executor = { mode: "simulation", execute: () => ({ ref: "simulation:no-dispatch" }) };
+export type ExecutionQueryResult =
+  | { state: "executed"; ref: string; output?: unknown }
+  | { state: "failed"; ref: string | null; output?: unknown }
+  | { state: "outcome_unknown"; ref?: string | null };
+export const noopExecutor: Executor = {
+  id: "scopebond:simulation", mode: "simulation", execute: () => ({ ref: "simulation:no-dispatch" }),
+};
 
 export interface GatewayConfig {
   policy: Policy;
@@ -47,6 +60,8 @@ export interface GatewayConfig {
   /** Bearer token for receipt reads and emergency-control routes. Without it,
    * those routes remain unavailable. */
   control?: { bearerToken: string };
+  /** Recovery/inspection mode: new outbound dispatch and result queries are disabled. */
+  outboundExecution?: boolean;
 }
 
 export interface ActionRequest {
@@ -67,6 +82,11 @@ export class AuthorityUnavailableError extends Error {
   constructor() { super("receipt store does not provide atomic authority reservations for dispatch"); this.name = "AuthorityUnavailableError"; }
 }
 
+export class ReconciliationUnavailableError extends Error {
+  readonly status = 503 as const;
+  constructor(message: string) { super(message); this.name = "ReconciliationUnavailableError"; }
+}
+
 export class ExecutorInputError extends Error {
   readonly status = 400 as const;
   constructor(message: string) { super(message); this.name = "ExecutorInputError"; }
@@ -85,6 +105,8 @@ export interface Gateway {
   setPolicy(policy: Policy): void;
   /** Compute + store a Merkle anchor over the receipts to date (tamper-evidence). */
   anchor(): Promise<Anchor>;
+  unresolvedActions(): Promise<ActionLifecycleRecord[]>;
+  reconcileAction(actionId: string): Promise<ActionLifecycleRecord>;
 }
 
 const VERIFIER_VERSION = "scopebond-verify@0.1.0";
@@ -171,13 +193,8 @@ export function createGateway(config: GatewayConfig): Gateway {
     executor.validate?.(req.intent);
     const actionId = authenticated.evidence.agent?.request_id ?? globalThis.crypto.randomUUID();
 
-    const receiptFields = (
-      realtimeResult: RealtimeResult,
-      executionState: ExecutionState,
-      assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown",
-      executionRef: string | null,
-    ) => ({
-      evidence_version: "1.0" as const,
+    const receiptContext: ReceiptContext = {
+      evidence_version: "1.0",
       canonicalization: CANONICALIZATION,
       intent: minimized.intent,
       intent_hash: ih,
@@ -186,6 +203,18 @@ export function createGateway(config: GatewayConfig): Gateway {
       policy_version: activePolicyVersion,
       policy_ref: policyRef,
       verifier_version: VERIFIER_VERSION,
+      redaction: { profile: REDACTION_PROFILE, paths: minimized.redactedPaths },
+      authorization: authenticated.evidence,
+      attester: attesterRef,
+      timestamp: ts,
+    };
+    const receiptFields = (
+      realtimeResult: RealtimeResult,
+      executionState: ExecutionState,
+      assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown",
+      executionRef: string | null,
+    ) => ({
+      ...receiptContext,
       realtime_result: realtimeResult,
       executed: executionState === "executed",
       execution_ref: executionRef,
@@ -195,10 +224,6 @@ export function createGateway(config: GatewayConfig): Gateway {
         reference: executionRef,
         external_effect: "not_independently_verified" as const,
       },
-      redaction: { profile: REDACTION_PROFILE, paths: minimized.redactedPaths },
-      authorization: authenticated.evidence,
-      attester: attesterRef,
-      timestamp: ts,
     });
     const reservation = {
       action_id: actionId,
@@ -213,13 +238,18 @@ export function createGateway(config: GatewayConfig): Gateway {
       },
       policy_ref: policyRef,
       policy_snapshot: canonical(activePolicy),
+      authorization_ids: {
+        ...(authenticated.evidence.agent?.request_id ? { request_id: authenticated.evidence.agent.request_id } : {}),
+        ...(authenticated.evidence.approval?.approval_id ? { approval_id: authenticated.evidence.approval.approval_id } : {}),
+      },
+      receipt_context: receiptContext,
     };
 
     // Fail closed: while killed, deny everything and record the denial.
     if (await isStopped(req.intent.signer)) {
       if (store.reserveAction) {
         const attempt = await store.reserveAction(reservation, () => ({ allow: false }));
-        if (attempt.duplicate) throw new DuplicateActionError();
+        if (attempt.duplicate) return await duplicateActionResult(actionId);
       }
       const receipt = await buildReceipt({
         ...receiptFields("deny", "denied", "none", null),
@@ -237,7 +267,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     let d;
     if (store.reserveAction) {
       const attempt = await store.reserveAction(reservation, decide);
-      if (attempt.duplicate) throw new DuplicateActionError();
+      if (attempt.duplicate) return await duplicateActionResult(actionId);
       d = attempt.decision;
     } else {
       if (executor.mode === "dispatch") throw new AuthorityUnavailableError();
@@ -248,7 +278,8 @@ export function createGateway(config: GatewayConfig): Gateway {
     let output: unknown;
     let executionState: ExecutionState = "denied";
     let assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown" = "none";
-    const stoppedBeforeDispatch = d.allow && await isStopped(req.intent.signer);
+    const outboundDisabled = config.outboundExecution === false && executor.mode === "dispatch";
+    const stoppedBeforeDispatch = d.allow && (outboundDisabled || await isStopped(req.intent.signer));
     if (d.allow && !stoppedBeforeDispatch) {
       if (executor.mode === "simulation") {
         const result = await executor.execute(req.intent, { actionId });
@@ -257,6 +288,11 @@ export function createGateway(config: GatewayConfig): Gateway {
         executionState = "simulated";
         assertion = "gateway_simulation";
       } else {
+        if (!store.prepareDispatch) throw new AuthorityUnavailableError();
+        const pendingReceipt = await buildReceipt({
+          ...receiptFields(d.realtime_result, "allowed_pending", "none", null),
+        }, attester);
+        await store.prepareDispatch(actionId, pendingReceipt, executor.id ?? "scopebond:unidentified-dispatch-adapter");
         try {
           const result = await executor.execute(req.intent, { actionId });
           ref = result.ref;
@@ -264,10 +300,12 @@ export function createGateway(config: GatewayConfig): Gateway {
           executionState = "executed";
           assertion = "adapter_reported_success";
         } catch (error) {
-          const errorText = error instanceof Error ? `${error.name}:${error.message}` : String(error);
-          ref = `error:sha256:${sha256(errorText)}`;
-          executionState = "outcome_unknown";
-          assertion = "adapter_outcome_unknown";
+          const resolution = await queryAfterDispatchError(actionId, error);
+          ref = resolution.ref ?? null;
+          output = "output" in resolution ? resolution.output : undefined;
+          executionState = resolution.state;
+          assertion = resolution.state === "executed" ? "adapter_reported_success" :
+            resolution.state === "failed" ? "adapter_reported_failure" : "adapter_outcome_unknown";
         }
       }
     }
@@ -284,12 +322,88 @@ export function createGateway(config: GatewayConfig): Gateway {
       : (d.verdict.explanation || "denied");
     return {
       allowed: d.allow && !stoppedBeforeDispatch,
-      reason: stoppedBeforeDispatch ? "kill switch active before dispatch (fail closed)" :
-        (executionState === "outcome_unknown" ? "execution outcome unknown" : reason),
+      reason: outboundDisabled ? "outbound execution disabled (recovery mode)" :
+        stoppedBeforeDispatch ? "kill switch active before dispatch (fail closed)" :
+        (executionState === "outcome_unknown" ? "execution outcome unknown" :
+          executionState === "failed" ? "execution failed without an external effect" : reason),
       verdict: d.verdict,
       receipt,
       ...(output === undefined ? {} : { output }),
     };
+  }
+
+  async function duplicateActionResult(actionId: string): Promise<ActionResult> {
+    const existing = await store.getAction?.(actionId);
+    if (!existing?.terminal_receipt) throw new DuplicateActionError();
+    const executionState = existing.terminal_receipt.payload.execution.state;
+    return {
+      allowed: executionState !== "denied",
+      reason: executionState === "outcome_unknown"
+        ? "existing action outcome remains unknown"
+        : "existing result returned for duplicate action id",
+      receipt: existing.terminal_receipt,
+    };
+  }
+
+  async function queryAfterDispatchError(actionId: string, error: unknown): Promise<ExecutionQueryResult> {
+    if (config.outboundExecution !== false && executor.query) {
+      try {
+        const queried = await executor.query({ actionId });
+        if (queried.state === "executed" || queried.state === "failed") return queried;
+      } catch {
+        // A failed result query cannot weaken an ambiguous outcome.
+      }
+    }
+    const errorText = error instanceof Error ? `${error.name}:${error.message}` : String(error);
+    return { state: "outcome_unknown", ref: `error:sha256:${sha256(errorText)}` };
+  }
+
+  async function unresolvedActions(): Promise<ActionLifecycleRecord[]> {
+    if (!store.unresolvedActions) {
+      throw new ReconciliationUnavailableError("receipt store does not expose unresolved lifecycle records");
+    }
+    return await store.unresolvedActions();
+  }
+
+  async function reconcileAction(actionId: string): Promise<ActionLifecycleRecord> {
+    if (!store.getAction || !store.finalizeAction) {
+      throw new ReconciliationUnavailableError("receipt store does not support lifecycle reconciliation");
+    }
+    const record = await store.getAction(actionId);
+    if (!record) throw new ReconciliationUnavailableError("unknown action lifecycle record");
+    if (record.state !== "reserved" && record.state !== "dispatching" && record.state !== "outcome_unknown") return record;
+    let resolution: ExecutionQueryResult;
+    if (record.state === "reserved") {
+      resolution = { state: "failed", ref: "gateway:dispatch-not-started" };
+    } else {
+      if (config.outboundExecution === false) {
+        throw new ReconciliationUnavailableError("outbound result queries are disabled in recovery mode");
+      }
+      const adapterId = executor.id ?? "scopebond:unidentified-dispatch-adapter";
+      if (!executor.query || record.adapter_id !== adapterId) {
+        throw new ReconciliationUnavailableError("the configured adapter cannot query this action");
+      }
+      try { resolution = await executor.query({ actionId }); }
+      catch { resolution = { state: "outcome_unknown", ref: null }; }
+      if (resolution.state === "outcome_unknown") return record;
+    }
+
+    const context = record.reservation.receipt_context;
+    if (!context) throw new ReconciliationUnavailableError("legacy lifecycle record cannot reconstruct a receipt");
+    const receipt = await buildReceipt({
+      ...context,
+      realtime_result: record.realtime_result ?? "allow",
+      executed: resolution.state === "executed",
+      execution_ref: resolution.ref,
+      execution: {
+        state: resolution.state,
+        assertion: resolution.state === "executed" ? "adapter_reported_success" : "adapter_reported_failure",
+        reference: resolution.ref,
+        external_effect: "not_independently_verified",
+      },
+    }, attester);
+    await store.finalizeAction(actionId, receipt, resolution.state);
+    return (await store.getAction(actionId))!;
   }
 
   function setPolicy(next: Policy): void {
@@ -395,6 +509,22 @@ export function createGateway(config: GatewayConfig): Gateway {
     const denied = requireControl(c); if (denied) return denied;
     return c.json({ receipts: await store.list() });
   });
+  app.get("/v1/actions/unresolved", async (c) => {
+    const denied = requireControl(c); if (denied) return denied;
+    try { return c.json({ actions: await unresolvedActions() }); }
+    catch (error) {
+      if (error instanceof ReconciliationUnavailableError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
+  });
+  app.post("/v1/actions/:actionId/reconcile", async (c) => {
+    const denied = requireControl(c); if (denied) return denied;
+    try { return c.json(await reconcileAction(c.req.param("actionId"))); }
+    catch (error) {
+      if (error instanceof ReconciliationUnavailableError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
+  });
 
   // The attester's public key, so a receipt holder can independently verify
   // signatures (see verifyReceipt). JWKS is the standard discovery form.
@@ -438,10 +568,13 @@ export function createGateway(config: GatewayConfig): Gateway {
     if (!validation.valid) return c.json({ error: "invalid action", details: validation.errors }, 400);
     try {
       const result = await handleAction(body);
-      return c.json(result, result.allowed ? 200 : 403);
+      const executionState = result.receipt.payload.execution.state;
+      const status = !result.allowed ? 403 : executionState === "outcome_unknown" ? 202 : executionState === "failed" ? 502 : 200;
+      return c.json(result, status);
     } catch (error) {
       if (error instanceof AuthorizationError || error instanceof DuplicateActionError ||
-          error instanceof AuthorityUnavailableError || error instanceof ExecutorInputError) {
+          error instanceof AuthorityUnavailableError || error instanceof ExecutorInputError ||
+          error instanceof ReconciliationUnavailableError) {
         return c.json({ error: error.message }, error.status);
       }
       throw error;
@@ -470,7 +603,10 @@ export function createGateway(config: GatewayConfig): Gateway {
     return c.json(res as object);
   });
 
-  return { app, store, attester, state, get policyHash() { return policyHash; }, handleAction, observeAction, setPolicy, anchor };
+  return {
+    app, store, attester, state, get policyHash() { return policyHash; },
+    handleAction, observeAction, setPolicy, anchor, unresolvedActions, reconcileAction,
+  };
 }
 
 async function optionalJson(c: Context): Promise<Record<string, unknown> | null> {

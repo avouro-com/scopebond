@@ -56,9 +56,14 @@ try {
     stdio: "inherit",
   });
   writeFileSync(join(scratch, "smoke.mjs"), `
-    import { merkleRoot, sha256, createGateway, StaticPrincipalKeyRegistry } from "@scopebond/gateway";
-    import { createSigner } from "@scopebond/sdk";
+    import { merkleRoot, sha256, createGateway, StaticPrincipalKeyRegistry, canonical as gatewayCanonical } from "@scopebond/gateway";
+    import { createSigner, canonical as sdkCanonical } from "@scopebond/sdk";
+    import { canonical as verifyCanonical } from "@scopebond/verify";
+    import { canonical as schemaCanonical } from "@scopebond/policy-schema/canonical";
     if (merkleRoot([sha256("candidate")]).length !== 64) process.exit(1);
+    const canonicalVector = { numbers: [333333333.33333329, 1e30, 4.50, 2e-3, 1e-27], nested: { z: null, a: true } };
+    const canonicalBytes = [schemaCanonical, verifyCanonical, gatewayCanonical, sdkCanonical].map((fn) => fn(canonicalVector));
+    if (!canonicalBytes.every((value) => value === canonicalBytes[0])) process.exit(1);
     const agent = createSigner();
     const keys = new StaticPrincipalKeyRegistry([{ kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"] }]);
     const policy = { vocabulary_version: "1.0", policy_id: "smoke", version: 1, clauses: [

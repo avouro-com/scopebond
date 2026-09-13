@@ -15,8 +15,11 @@ evidence, and coverage all share — published before the proxy (D27).
 - `schema/receipt-legacy.schema.json` — the prior unversioned envelope, retained only
   for explicit compatibility handling.
 - `src/index.ts` — loads the schemas and exports the policy and evidence constants.
+- `src/canonical.ts` — the shared strict RFC-8785-target canonical serializer used
+  by schema, verifier, gateway and SDK signature/hash boundaries.
 - `vectors/evidence-contract.json` — shared execution-state, legacy/unknown-version
   and synthetic-secret cases used by Node, WebCrypto and offline verification tests.
+- `vectors/canonicalization.json` — shared canonical-byte vectors used across packages.
 - `vectors/example-policy.json` — example policy input.
 
 ## Status

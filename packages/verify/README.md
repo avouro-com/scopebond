@@ -14,6 +14,9 @@ const v = violates(policy, receipts, claimed, { at, gatewaysComplete });
 // → { violated, clause_id, explanation, inputs_hash, undetermined? }
 ```
 
+`inputs_hash` uses the shared strict canonical serializer also used by gateway and
+SDK signatures; cross-package vectors pin the resulting bytes.
+
 ## Guarantees
 
 - **Pure & deterministic** — no network, no wall-clock. The evaluation timestamp

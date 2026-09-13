@@ -1,0 +1,20 @@
+{
+  "canonicalization": "RFC8785",
+  "cases": [
+    {
+      "name": "nested-key-order",
+      "value": { "b": 1, "a": { "z": null, "x": [true, false] } },
+      "canonical": "{\"a\":{\"x\":[true,false],\"z\":null},\"b\":1}"
+    },
+    {
+      "name": "ecmascript-number-serialization",
+      "value": { "numbers": [333333333.33333329, 1e30, 4.50, 2e-3, 1e-27] },
+      "canonical": "{\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27]}"
+    },
+    {
+      "name": "strings-and-unicode-keys",
+      "value": { "é": "accent", "a": "line\nbreak", "quote": "\"" },
+      "canonical": "{\"a\":\"line\\nbreak\",\"quote\":\"\\\"\",\"é\":\"accent\"}"
+    }
+  ]
+}

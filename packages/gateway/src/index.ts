@@ -1,5 +1,11 @@
-export { createGateway, noopExecutor, DuplicateActionError, AuthorityUnavailableError, ExecutorInputError } from "./app.js";
-export type { Gateway, GatewayConfig, Executor, ExecutionResult, ActionRequest, ActionResult, ObservationResult } from "./app.js";
+export {
+  createGateway, noopExecutor, DuplicateActionError, AuthorityUnavailableError,
+  ReconciliationUnavailableError, ExecutorInputError,
+} from "./app.js";
+export type {
+  Gateway, GatewayConfig, Executor, ExecutionResult, ExecutionQueryResult,
+  ActionRequest, ActionResult, ObservationResult,
+} from "./app.js";
 export { createHttpExecutor, createSupportRefundExecutor } from "./executors.js";
 export type { HttpExecutorOptions, SupportRefundExecutorOptions } from "./executors.js";
 export { evaluate } from "./engine.js";
@@ -13,8 +19,8 @@ export {
 export type {
   ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification, Anchor,
   ExecutionState, ExecutionEvidence, PolicyReference, ActionReference, RedactionEvidence,
-  AuthorityReservation, AuthorityFinalState, AuthorityReservationResult,
-  StopState,
+  AuthorityReservation, AuthorityFinalState, AuthorityReservationResult, ReceiptContext,
+  AuthorityLifecycleState, ActionLifecycleRecord, StopState,
 } from "./receipts.js";
 export {
   AUTHORIZATION_VERSION, AuthorizationError, StaticPrincipalKeyRegistry,

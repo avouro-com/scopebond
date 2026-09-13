@@ -1,8 +1,8 @@
 # @scopebond/gateway
 
-> **Experimental alpha:** use controlled test systems only. Upstream idempotency,
-> reconciliation of unknown outcomes, and distributed hosted coordination remain
-> release gates. With no `executor` configured, allowed
+> **Experimental alpha:** use controlled test systems only. The constrained refund
+> adapter demonstrates idempotency and result-query reconciliation; wider upstream
+> coverage and distributed hosted coordination remain release gates. With no `executor` configured, allowed
 > requests run the built-in simulation and are recorded as `simulated`, never
 > `executed`.
 
@@ -40,8 +40,9 @@ separately signed and bind the exact intent and active policy reference; both re
 ids are single-use. Receipts preserve this evidence for offline verification.
 
 Every receipt also carries a stable action id. The in-memory and SQLite stores
-atomically consume that id and reserve shared budget before dispatch. Reserved and
-outcome-unknown actions remain charged conservatively across SQLite restarts. A
+atomically consume request and approval IDs and reserve shared budget before dispatch.
+A signed `allowed_pending` lifecycle record is persisted before external I/O. Reserved,
+dispatching and outcome-unknown actions remain charged conservatively across SQLite restarts. A
 policy reload cannot change the snapshot named by an in-flight action. Global-scope
 limits fail closed unless `gatewaysComplete: true` declares that the configured
 coordinator owns the complete gateway set. Stores without atomic reservations
@@ -59,7 +60,8 @@ node examples/quickstart.mjs
 ```
 
 Routes: `POST /v1/evaluate`, `POST /v1/observe`, `POST /mcp` (MCP ingress), `POST /v1/kill` · `/v1/resume`,
-`GET /v1/receipts`, `GET /v1/status`, `GET /v1/attester`, `GET /.well-known/jwks.json`,
+`GET /v1/receipts`, `GET /v1/actions/unresolved`, `POST /v1/actions/:actionId/reconcile`,
+`GET /v1/status`, `GET /v1/attester`, `GET /.well-known/jwks.json`,
 `POST /v1/anchor`, `GET /v1/anchors` · `/v1/anchors/latest` · `/v1/anchors/proof`,
 `GET /healthz`.
 
@@ -77,7 +79,7 @@ do not close the alpha findings described above. Configure:
 | `SCOPEBOND_DB` | `./scopebond.db` | SQLite receipt store path |
 | `SCOPEBOND_RECEIPTS_FILE` | — | use an append-only JSONL log instead of SQLite |
 | `SCOPEBOND_PRINCIPAL_KEYS_FILE` | required | JSON array of Ed25519 public keys and `agent`/`approver` purposes |
-| `SCOPEBOND_CONTROL_TOKEN` | — | bearer token (minimum 24 characters) enabling receipt reads and kill/resume routes |
+| `SCOPEBOND_CONTROL_TOKEN` | — | bearer token (minimum 24 characters) enabling receipt/lifecycle reads, reconciliation and kill/resume routes |
 | `SCOPEBOND_UNSAFE_ALLOW_UNSIGNED` | — | set to `1` only for local simulation; receipts are marked `insecure_development` |
 | `SCOPEBOND_ANCHOR_INTERVAL` | `24h` | anchor cadence (`24h`, `1h`, `30m`; `0`/`off` disables) |
 | `SCOPEBOND_POLICY_WATCH` | `1` | hot-reload the policy file on change (`0` disables) |
@@ -192,7 +194,9 @@ only `support.refund` with positive integer USD `amount`, bounded `ticket_id`,
 `payment_id`, and normalized `reason_code` values. The operator supplies one HTTPS
 origin and API token; the agent cannot choose a URL, path, method, headers, or raw
 body. Redirects are disabled and the durable action ID becomes the upstream
-`Idempotency-Key`.
+`Idempotency-Key`. A read-only lookup by that key lets the gateway resolve a lost
+response without issuing the refund again. An unavailable or inconclusive lookup
+keeps `outcome_unknown` and its conservative authority hold.
 Successful calls return only bounded `status`, `refund_id`, and `duplicate` fields;
 the receipt retains a digest of the complete response.
 
@@ -213,6 +217,12 @@ The configured hostname must also be constrained by deployment egress/private-DN
 controls; string validation cannot prevent DNS rebinding. Use a credential that can
 create refunds only through this upstream endpoint and keep it unavailable to the
 agent process.
+
+Dispatch executors may implement a read-only `query({ actionId })` method returning
+`executed`, confirmed `failed`, or `outcome_unknown`. The gateway queries after an
+ambiguous dispatch exception and exposes unresolved records only through the control
+API. Set `outboundExecution: false` when opening a restored store: new dispatch and
+reconciliation network calls stay disabled until an operator has reviewed the state.
 
 ## `[PLANNED]`
 

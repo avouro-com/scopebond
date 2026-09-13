@@ -5,6 +5,8 @@ import {
   generateKeyPairSync, createPrivateKey, createPublicKey, randomUUID,
   sign as edSign, verify as edVerify, createHash,
 } from "node:crypto";
+import { canonical } from "@scopebond/policy-schema/canonical";
+export { canonical } from "@scopebond/policy-schema/canonical";
 
 export interface Intent {
   action_type: string;
@@ -43,25 +45,6 @@ export interface SignedIntent {
   intent: Intent;
   authorization: SignedIntentAuthorization;
   approval?: SignedApproval;
-}
-
-export function canonical(v: unknown): string {
-  if (v === null || typeof v === "boolean" || typeof v === "string") return JSON.stringify(v);
-  if (typeof v === "number") {
-    if (!Number.isFinite(v)) throw new TypeError("canonical JSON rejects non-finite numbers");
-    return JSON.stringify(v);
-  }
-  if (Array.isArray(v)) {
-    for (let index = 0; index < v.length; index += 1) if (!(index in v)) throw new TypeError("canonical JSON rejects sparse arrays");
-    return "[" + v.map(canonical).join(",") + "]";
-  }
-  if (v && typeof v === "object") {
-    const prototype = Object.getPrototypeOf(v);
-    if (prototype !== Object.prototype && prototype !== null) throw new TypeError("canonical JSON accepts only plain JSON objects");
-    const o = v as Record<string, unknown>;
-    return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + canonical(o[k])).join(",") + "}";
-  }
-  throw new TypeError(`canonical JSON rejects ${typeof v}`);
 }
 
 export const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");

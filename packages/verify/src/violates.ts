@@ -26,6 +26,8 @@
 // (best-effort external data; not yet evaluated).
 
 import { createHash } from "node:crypto";
+import { canonical } from "@scopebond/policy-schema/canonical";
+export { canonical } from "@scopebond/policy-schema/canonical";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import { actionSchema, policySchema } from "@scopebond/policy-schema";
 
@@ -169,16 +171,6 @@ function globMatch(glob: string, s: string): boolean {
   return new RegExp("^" + re + "$").test(s);
 }
 
-// Stable JSON for the inputs hash. (RFC 8785 JCS is the exact target; this is a
-// deterministic sorted-key serialization sufficient for reproducibility here.)
-function canonical(v: unknown): string {
-  if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
-  if (v && typeof v === "object") {
-    const obj = v as Record<string, unknown>;
-    return "{" + Object.keys(obj).sort().map((k) => JSON.stringify(k) + ":" + canonical(obj[k])).join(",") + "}";
-  }
-  return JSON.stringify(v);
-}
 function inputsHash(policy: Policy, receipts: Receipt[], claimed: Receipt, at: string | undefined): string {
   return createHash("sha256").update(canonical({ policy, receipts, claimed, at })).digest("hex");
 }

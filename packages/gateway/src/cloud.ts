@@ -76,6 +76,9 @@ export function withCloudExporter(store: ReceiptStore, exporter: CloudExporter):
     ...(store.putAnchor ? { putAnchor: (a) => store.putAnchor!(a) } : {}),
     ...(store.anchors ? { anchors: () => store.anchors!() } : {}),
     ...(store.reserveAction ? { reserveAction: store.reserveAction.bind(store) } : {}),
+    ...(store.prepareDispatch ? { prepareDispatch: store.prepareDispatch.bind(store) } : {}),
+    ...(store.getAction ? { getAction: store.getAction.bind(store) } : {}),
+    ...(store.unresolvedActions ? { unresolvedActions: store.unresolvedActions.bind(store) } : {}),
     ...(store.finalizeAction ? { finalizeAction: async (actionId, receipt, state) => {
       await store.finalizeAction!(actionId, receipt, state);
       exporter.enqueue(receipt);

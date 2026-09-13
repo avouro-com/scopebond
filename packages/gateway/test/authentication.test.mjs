@@ -185,6 +185,43 @@ test("accepts only an authenticated approval bound to this intent and active pol
   assert.equal((await post(changedPolicy.app, staleApprovalRequest)).status, 401);
 });
 
+test("atomically consumes one approval across concurrent request ids", async () => {
+  const agent = principal(["agent"]);
+  const approver = principal(["approver"]);
+  const approvalPolicy = {
+    vocabulary_version: "1.0", policy_id: "approval-race", version: 1,
+    clauses: [{ id: "review", type: "require_approval", mode: "require_approval", action_types: ["tool.call"], approvers: [approver.kid] }],
+  };
+  let release;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const released = new Promise((resolve) => { release = resolve; });
+  let executions = 0;
+  const gw = secureGateway(approvalPolicy, [agent, approver], {
+    executor: {
+      id: "test:approval-race", mode: "dispatch",
+      execute: async () => { executions++; markStarted(); await released; return { ref: "sandbox:ok" }; },
+    },
+  });
+  const first = signIntent(agent, { action_type: "tool.call" }, { request_id: "request:approval-race-01" });
+  const second = signIntent(agent, { action_type: "tool.call" }, { request_id: "request:approval-race-02" });
+  const sharedApproval = signApproval(
+    approver,
+    first.intent,
+    { id: "approval-race", version: 1, digest: gw.policyHash },
+    { approval_id: "approval:shared-race-0001" },
+  );
+  first.approval = sharedApproval;
+  second.approval = sharedApproval;
+
+  const firstResult = gw.handleAction(first);
+  await started;
+  await assert.rejects(gw.handleAction(second), /already been consumed/);
+  release();
+  assert.equal((await firstResult).allowed, true);
+  assert.equal(executions, 1);
+});
+
 test("rejects fabricated approver names and revoked agent keys", async () => {
   const agent = principal(["agent"]);
   const approver = principal(["approver"]);

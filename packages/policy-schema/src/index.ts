@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+export { canonical } from "./canonical.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const load = (rel: string): Record<string, unknown> =>

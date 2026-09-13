@@ -6,11 +6,13 @@ import { dirname, join } from "node:path";
 import {
   policySchema, actionSchema, receiptSchema, legacyReceiptSchema, CLAUSE_TYPES, CLAUSE_MODES,
   VOCABULARY_VERSION, EVIDENCE_VERSION, CANONICALIZATION, EXECUTION_STATES, REALTIME_RESULTS,
+  canonical,
 } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const example = JSON.parse(readFileSync(join(here, "../vectors/example-policy.json"), "utf8"));
 const evidence = JSON.parse(readFileSync(join(here, "../vectors/evidence-contract.json"), "utf8"));
+const canonicalization = JSON.parse(readFileSync(join(here, "../vectors/canonicalization.json"), "utf8"));
 
 test("schemas parse and are 2020-12", () => {
   assert.equal(policySchema.$schema, "https://json-schema.org/draft/2020-12/schema");
@@ -58,4 +60,14 @@ test("receipt schema fixes the namespaced type", () => {
   assert.deepEqual(evidence.execution_states, EXECUTION_STATES);
   assert.deepEqual(evidence.realtime_results, REALTIME_RESULTS);
   assert.equal(evidence.version, EVIDENCE_VERSION);
+});
+
+test("canonical serialization matches the shared vectors", () => {
+  assert.equal(canonicalization.canonicalization, CANONICALIZATION);
+  for (const vector of canonicalization.cases) {
+    assert.equal(canonical(vector.value), vector.canonical, vector.name);
+  }
+  assert.throws(() => canonical({ missing: undefined }), /undefined/);
+  assert.throws(() => canonical([, 1]), /sparse/);
+  assert.throws(() => canonical({ invalid: Number.NaN }), /non-finite/);
 });
