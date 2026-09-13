@@ -16,6 +16,9 @@ tagged release.
   accounting for unknown outcomes, and durable global/per-agent stops.
 - Bearer authentication for receipt, status, stop/resume, and manual-anchor control
   routes.
+- Clean-consumer package smoke testing now forces the candidate schema and verifier
+  tarballs for transitive gateway dependencies, preventing a false pass against a
+  mixed local/published release set.
 - `createSupportRefundExecutor()`, a constrained reference adapter with a fixed
   operator-controlled HTTPS destination, gateway-owned credentials, action-ID
   idempotency, normalized fields, redirect denial, bounded responses, and

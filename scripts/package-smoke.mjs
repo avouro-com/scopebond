@@ -36,13 +36,19 @@ try {
       "@scopebond/gateway": gatewayArchive,
       "@scopebond/sdk": sdkArchive,
     },
+    pnpm: {
+      // A packed workspace dependency becomes a registry version. Force the
+      // candidate tarballs transitively so this test exercises one coherent
+      // release set instead of the currently published verifier/schema.
+      overrides: {
+        "@scopebond/policy-schema": policyArchive,
+        "@scopebond/verify": verifyArchive,
+      },
+    },
   }));
   writeFileSync(join(scratch, "pnpm-workspace.yaml"), [
     "packages:",
     "  - .",
-    "overrides:",
-    `  '@scopebond/policy-schema': '${policyArchive}'`,
-    `  '@scopebond/verify': '${verifyArchive}'`,
     "",
   ].join("\n"));
   execFileSync(process.execPath, [pnpmCli, "install", "--ignore-scripts"], {
