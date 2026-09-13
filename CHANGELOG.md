@@ -8,6 +8,18 @@ tagged release.
 ## [Unreleased]
 
 ### Added
+- Authenticated agent-intent and approval envelopes: Ed25519 key binding, bounded
+  validity, single-use replay identifiers, exact intent/policy references, receipt
+  evidence, and offline principal verification.
+- Stable action identifiers and atomic in-memory/SQLite authority reservations,
+  including write-ahead lifecycle state, pinned policy snapshots, conservative
+  accounting for unknown outcomes, and durable global/per-agent stops.
+- Bearer authentication for receipt, status, stop/resume, and manual-anchor control
+  routes.
+- `createSupportRefundExecutor()`, a constrained reference adapter with a fixed
+  operator-controlled HTTPS destination, gateway-owned credentials, action-ID
+  idempotency, normalized fields, redirect denial, bounded responses, and
+  transport-injection rejection.
 - Strict runtime policy/action validation, enforce-first all-clause evaluation,
   closed action allowlists and parameter types, fail-safe policy reload, and an
   explicit non-authorizing passive observation endpoint.
@@ -40,3 +52,9 @@ tagged release.
   (`oracle_condition` planned). Added the reference **conformance vector suite**
   (`vectors/conformance.json`, 30 cases: prevented / covered / ambiguity / refused)
   with a runner.
+
+### Changed
+- Global-scope window clauses now fail closed unless the caller explicitly declares
+  that the coordinator has the complete gateway set.
+- Stores without atomic authority reservations reject real dispatch while retaining
+  simulation and passive-observation support.

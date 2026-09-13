@@ -6,8 +6,9 @@
 
 **Security & safety guardrails for AI agents with real authority.**
 
-> **Experimental alpha:** use controlled test systems only. Concurrency and execution
-> durability findings remain under active remediation. The live demo evaluates real policies but uses
+> **Experimental alpha:** use controlled test systems only. Unknown-outcome
+> reconciliation, distributed hosted coordination, and release migration remain
+> under active remediation. The live demo evaluates real policies but uses
 > a no-op executor; it does not perform the displayed business actions.
 
 AI agents are being handed the power to **move money, send messages, and change
@@ -93,7 +94,7 @@ merge) keeps non-public material out of this repo by design.
 ## Status
 
 Early development, landing package by package. `@scopebond/verify` and
-`@scopebond/policy-schema` are published and stable at `0.1.0`; the gateway is a
+`@scopebond/policy-schema` are published at `0.1.0`; the gateway is a
 published **alpha**. The hosted control plane ("Scopebond Cloud") is a separate,
 proprietary product and is not in this repository.
 
