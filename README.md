@@ -2,70 +2,110 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml/badge.svg)](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@scopebond/gateway.svg)](https://www.npmjs.com/package/@scopebond/gateway)
 
-**Trust infrastructure for AI agents that are delegated real authority.**
+**Security & safety guardrails for AI agents with real authority.**
 
-When you give an AI agent authority to move money and touch systems, you can
-partly *prevent* misuse and you can *log* it — but when an agent acts outside
-what you authorized, your recourse today is a contract and a hope. Scopebond
-closes that gap with two open pieces built on one core:
+AI agents are being handed the power to **move money, send messages, and change
+systems** — on their own. When an agent makes a mistake or gets hijacked (a
+prompt-injected agent will happily use its real permissions against you), the
+damage is real and there's no undo. Scopebond is the open-source control layer
+that **blocks out-of-policy actions before they happen** and **proves exactly what
+every agent did**.
 
-- **Scopebond Gateway** — a policy-enforcement proxy that sits between an agent
-  and everything it can touch (MCP tools, HTTP APIs, wallets). You write a
-  machine-readable policy (spend limits, allowlists, action types, time windows,
-  approvals); each clause is *enforced* (blocked in-flight) or *monitored*
-  (allowed, but signed and logged). Every action the agent signs is
-  countersigned, the log is anchored so history can't be rewritten, and you have
-  a kill switch. No blockchain, no deposit, no account required to run it.
-- **Scopebond Collateral Registry** — a neutral vault where an agent's operator
-  posts a fractional USDC deposit against the *same* policy the gateway runs. On
-  a provable scope violation, the principal recovers from the deposit after a
-  short challenge window. Scopebond holds no key that can move it.
+> ▶ **See it live:** **[try.scopebond.com](https://try.scopebond.com)** — watch the
+> gateway stop the wrong action across finance, security, legal, DevOps, support,
+> data, and vendor scenarios. Learn more at **[scopebond.com](https://scopebond.com)**.
 
-**One policy, three uses: prevent · prove · pay.** Or, as a rule: *prevent what
-you can, collateralize what you can't prevent, refuse what you can't observe.*
+## One policy, three uses: prevent · prove · recover
 
-## Status
+- **Prevent** — the **Scopebond Gateway** sits between an agent and everything it
+  can touch (MCP tools, HTTP APIs, wallets). You write a machine-readable policy —
+  spend limits, allowlists, action bounds, time windows, approvals — and each rule
+  is *enforced* (blocked in-flight, **fail closed**) or *monitored* (allowed, but
+  signed and flagged). Plus a kill switch. The bad action never happens.
+- **Prove** — every action, allowed or blocked, is countersigned into a
+  tamper-evident **`scopebond:receipt`** (Ed25519). Anyone can verify a receipt
+  against the gateway's published key — an audit trail that writes itself,
+  compliance- and court-ready.
+- **Recover** *(roadmap)* — the **Collateral Registry**: an operator backs an agent
+  with a refundable USDC deposit against the *same* policy; on a provable scope
+  violation the principal recovers from it. Non-custodial — Scopebond holds no key
+  that can move it.
 
-Early development. This repository is the open-source home for the component,
-the verification library, the policy schema, the on-chain contracts, and the
-conformance suite. Code is landing package by package — see `packages/`. The
-hosted control plane ("Scopebond Cloud") is a separate, proprietary product and
-is not in this repository.
+## What it protects
 
-> `[PLANNED]` Quickstart, `npx scopebond-gateway`, and package docs will appear
-> here as each package lands.
+Payments & finance · security incident response · legal & litigation (proof) ·
+DevOps & infrastructure · customer support · data & privacy · third-party / vendor
+agents. **[Try each one live →](https://try.scopebond.com)**
 
-## What lives here (and what doesn't)
+## Quickstart
 
-**Here (Apache-2.0):** the gateway, the `scopebond-verify` verdict library and
-its test vectors, the policy schema, the SDK, the framework integrations, the
-smart contracts, the registry indexer/read API, and the conformance suite.
+```bash
+npx scopebond-gateway ./policy.json
+# serves on :8787 with a persistent signing key and a durable receipt store
+```
 
-**Not here:** Avouro's internal documentation and any proprietary or hosted-service
-code — those live in separate private repositories. A commit gate
-(`scripts/oss-gate.mjs`, enforced on commit, push, and merge) keeps non-public
-material out of this repo by design.
+```bash
+curl -sX POST localhost:8787/v1/evaluate \
+  -H 'content-type: application/json' \
+  -d '{"intent":{"action_type":"payout.create","asset":"USDC","amount":500000}}'
+```
+
+Embed it in your own service:
+
+```ts
+import { createGateway } from "@scopebond/gateway";
+const { app, handleAction } = createGateway({ policy });
+```
+
+Verify a receipt independently (no trust in the server required):
+
+```bash
+scopebond-gateway verify ./receipt.json --url http://localhost:8787
+```
+
+Works with any agent over **HTTP or MCP**. Self-host it free — no account required.
 
 ## Packages
 
 | Package | What it is |
 |---|---|
+| [`@scopebond/gateway`](packages/gateway) | The gateway (alpha) — prevent + prove: HTTP + MCP ingress, Ed25519 receipts, persistent attester key, durable receipt store, kill switch. `npx scopebond-gateway`. |
+| [`@scopebond/verify`](packages/verify) | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` verdict library + conformance vectors. The portable standard the whole thing rests on. |
 | [`@scopebond/policy-schema`](packages/policy-schema) | The policy vocabulary — JSON Schema for the policy document and the `scopebond:receipt` envelope, plus test vectors. |
-| [`@scopebond/verify`](packages/verify) | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` verdict library. |
 
-Further packages (gateway, sdk, contracts, conformance) are `[PLANNED]` — see [`packages/`](packages/).
+An Ed25519 operator-signing **`sdk`** and a runnable end-to-end **[`examples/quickstart`](examples/)** are in the repo; the on-chain **contracts** and the **conformance suite** are `[PLANNED]`.
+
+## What lives here (and what doesn't)
+
+**Here (Apache-2.0):** the gateway, the `scopebond-verify` verdict library and its
+test vectors, the policy schema, the SDK, framework integrations, the smart
+contracts, the registry read API, and the conformance suite — the open-source
+product you self-host and build on.
+
+**Not here:** Avouro's internal docs, marketing sites, hosted-service and
+control-plane code ("Scopebond Cloud") — those live in separate private
+repositories. A commit gate (`scripts/oss-gate.mjs`, enforced on commit, push, and
+merge) keeps non-public material out of this repo by design.
+
+## Status
+
+Early development, landing package by package. `@scopebond/verify` and
+`@scopebond/policy-schema` are published and stable at `0.1.0`; the gateway is a
+published **alpha**. The hosted control plane ("Scopebond Cloud") is a separate,
+proprietary product and is not in this repository.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SCOPE.md](SCOPE.md), and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md); contributions are under a
-[CLA](CLA.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md); contributions are under a [CLA](CLA.md).
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026
-Avouro LLC. Scopebond is a product of Avouro LLC (https://scopebond.com).
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). © 2026 Avouro LLC.
+Scopebond is a trademark of Avouro LLC (https://scopebond.com).
 
 Nothing in this repository is an offer of insurance, securities, or financial
 services, or legal or financial advice.
