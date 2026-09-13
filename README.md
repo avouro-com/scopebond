@@ -96,6 +96,25 @@ Early development, landing package by package. `@scopebond/verify` and
 published **alpha**. The hosted control plane ("Scopebond Cloud") is a separate,
 proprietary product and is not in this repository.
 
+## Using Scopebond? Show it
+
+If Scopebond guards your agents, add the badge so your users know their agent is
+bounded and its actions are provable:
+
+[![Secured by Scopebond](https://img.shields.io/badge/Secured%20by-Scopebond-5b8cff)](https://scopebond.com)
+
+Markdown:
+
+```md
+[![Secured by Scopebond](https://img.shields.io/badge/Secured%20by-Scopebond-5b8cff)](https://scopebond.com)
+```
+
+HTML:
+
+```html
+<a href="https://scopebond.com"><img src="https://img.shields.io/badge/Secured%20by-Scopebond-5b8cff" alt="Secured by Scopebond"></a>
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SCOPE.md](SCOPE.md), and
