@@ -45,6 +45,7 @@ On first run the gateway generates and persists an Ed25519 attester key
 | `SCOPEBOND_ATTESTER_KEY` | — | attester key inline (PEM), e.g. from a secret store |
 | `SCOPEBOND_DB` | `./scopebond.db` | SQLite receipt store path |
 | `SCOPEBOND_RECEIPTS_FILE` | — | use an append-only JSONL log instead of SQLite |
+| `SCOPEBOND_TELEMETRY` | — | set `0`/`off` (or `DO_NOT_TRACK=1`) to opt out of anonymous, no-PII usage stats — see [TELEMETRY.md](TELEMETRY.md) |
 
 ## Prove it — verify a receipt
 
