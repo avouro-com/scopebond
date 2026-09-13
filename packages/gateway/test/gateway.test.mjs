@@ -1,16 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createGateway, createHttpExecutor, verifyReceipt } from "../dist/index.js";
+import { createGateway, createHttpExecutor, MemoryReceiptStore, verifyReceipt } from "../dist/index.js";
 
 const AT = "2026-09-12T12:00:00Z";
+const CONTROL_TOKEN = "test-control-token-000000000001";
 const post = (app, path, body) =>
   app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 function gw(policy, times) {
   let i = 0;
   const now = times ? () => times[Math.min(i++, times.length - 1)] : () => AT;
-  return createGateway({ authentication: { mode: "insecure-development" }, policy, now });
+  return createGateway({ authentication: { mode: "insecure-development" }, policy, now, control: { bearerToken: CONTROL_TOKEN } });
 }
+
+const controlRequest = (app, path, init = {}) => app.request(path, {
+  ...init,
+  headers: { ...(init.headers ?? {}), authorization: `Bearer ${CONTROL_TOKEN}` },
+});
 
 const enforcePolicy = {
   vocabulary_version: "1.0", policy_id: "t", version: 1, clauses: [
@@ -72,6 +78,127 @@ test("monitor clause: windowed over-limit is allowed but flagged (covered)", asy
   assert.equal(j.receipt.payload.realtime_result, "deny"); // but flagged out-of-policy
 });
 
+test("atomically reserves a shared window so concurrent actions cannot overspend", async () => {
+  const policy = {
+    vocabulary_version: "1.0", policy_id: "concurrent-budget", version: 1,
+    clauses: [{ id: "window", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_window: 100, window: "P1D", scope: "principal" }],
+  };
+  let release;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const released = new Promise((resolve) => { release = resolve; });
+  let executions = 0;
+  const gateway = createGateway({
+    authentication: { mode: "insecure-development" }, policy, now: () => AT,
+    executor: { mode: "dispatch", execute: async () => { executions++; markStarted(); await released; return { ref: "sandbox:ok" }; } },
+  });
+
+  const firstPromise = gateway.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 60 } });
+  await started;
+  const second = await gateway.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 60 } });
+  release();
+  const first = await firstPromise;
+
+  assert.equal(first.allowed, true);
+  assert.equal(second.allowed, false);
+  assert.equal(executions, 1);
+  assert.notEqual(first.receipt.payload.action_ref.action_id, second.receipt.payload.action_ref.action_id);
+});
+
+test("pins the evaluated policy while an allowed action is in flight", async () => {
+  const firstPolicy = {
+    vocabulary_version: "1.0", policy_id: "pinned", version: 1,
+    clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["tool.call"] }],
+  };
+  let release;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const released = new Promise((resolve) => { release = resolve; });
+  const gateway = createGateway({
+    authentication: { mode: "insecure-development" }, policy: firstPolicy,
+    executor: { mode: "dispatch", execute: async () => { markStarted(); await released; return { ref: "sandbox:ok" }; } },
+  });
+  const acceptedHash = gateway.policyHash;
+  const pending = gateway.handleAction({ intent: { action_type: "tool.call" } });
+  await started;
+  gateway.setPolicy({ ...firstPolicy, version: 2 });
+  release();
+  const result = await pending;
+  assert.equal(result.receipt.payload.policy_ref.version, 1);
+  assert.equal(result.receipt.payload.policy_ref.digest, acceptedHash);
+  assert.notEqual(gateway.policyHash, acceptedHash);
+});
+
+test("global authority fails closed unless this coordinator has the complete gateway set", async () => {
+  const policy = {
+    vocabulary_version: "1.0", policy_id: "global", version: 1,
+    clauses: [{ id: "all-gateways", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_window: 100, window: "P1D", scope: "global" }],
+  };
+  let executions = 0;
+  const incomplete = createGateway({
+    authentication: { mode: "insecure-development" }, policy,
+    executor: { mode: "dispatch", execute: () => { executions++; return { ref: "unexpected" }; } },
+  });
+  const denied = await incomplete.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 1 } });
+  assert.equal(denied.allowed, false);
+  assert.equal(denied.verdict.undetermined, true);
+  assert.equal(executions, 0);
+
+  const complete = createGateway({
+    authentication: { mode: "insecure-development" }, policy, gatewaysComplete: true,
+    executor: { mode: "dispatch", execute: () => { executions++; return { ref: "sandbox:ok" }; } },
+  });
+  assert.equal((await complete.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 1 } })).allowed, true);
+  assert.equal(executions, 1);
+});
+
+test("checks durable stop state again after reservation and before dispatch", async () => {
+  class StopAfterReserveStore extends MemoryReceiptStore {
+    reserveAction(reservation, decide) {
+      const result = super.reserveAction(reservation, decide);
+      this.setStopped("global", true);
+      return result;
+    }
+  }
+  let called = false;
+  const gateway = createGateway({
+    authentication: { mode: "insecure-development" }, policy: enforcePolicy,
+    store: new StopAfterReserveStore(),
+    executor: { mode: "dispatch", execute: () => { called = true; return { ref: "unexpected" }; } },
+  });
+  const result = await gateway.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 1 } });
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /before dispatch/);
+  assert.equal(result.receipt.payload.execution.state, "denied");
+  assert.equal(called, false);
+});
+
+test("a receipt-finalization failure leaves the reservation charged conservatively", async () => {
+  class FailOnceStore extends MemoryReceiptStore {
+    failed = false;
+    finalizeAction(actionId, receipt, state) {
+      if (!this.failed) { this.failed = true; throw new Error("synthetic storage failure"); }
+      return super.finalizeAction(actionId, receipt, state);
+    }
+  }
+  const policy = {
+    vocabulary_version: "1.0", policy_id: "storage-failure", version: 1,
+    clauses: [{ id: "window", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_window: 100, window: "P1D", scope: "principal" }],
+  };
+  let executions = 0;
+  const gateway = createGateway({
+    authentication: { mode: "insecure-development" }, policy, store: new FailOnceStore(), now: () => AT,
+    executor: { mode: "dispatch", execute: () => { executions++; return { ref: "sandbox:ok" }; } },
+  });
+  await assert.rejects(
+    gateway.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 60 } }),
+    /synthetic storage failure/,
+  );
+  const retry = await gateway.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 60 } });
+  assert.equal(retry.allowed, false);
+  assert.equal(executions, 1);
+});
+
 test("minimizes sensitive request data before signing while retaining exact references", async () => {
   const policy = { vocabulary_version: "1.0", policy_id: "http-policy", version: 7, clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["http.call"] }] };
   const original = {
@@ -126,7 +253,8 @@ test("records an adapter exception as outcome unknown without raw error text", a
 
 test("kill switch fails closed", async () => {
   const { app } = gw(enforcePolicy);
-  await post(app, "/v1/kill", {});
+  assert.equal((await post(app, "/v1/kill", {})).status, 401);
+  await controlRequest(app, "/v1/kill", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   const res = await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 500000 } });
   assert.equal(res.status, 403);
   const j = await res.json();
@@ -140,13 +268,14 @@ test("stores and lists receipts; status reflects state", async () => {
   const action = await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 500000 } });
   const returned = await action.json();
   returned.receipt.payload.intent.amount = 9999999;
-  const list = await (await app.request("/v1/receipts")).json();
+  assert.equal((await app.request("/v1/receipts")).status, 401);
+  const list = await (await controlRequest(app, "/v1/receipts")).json();
   assert.equal(list.receipts.length, 1);
   assert.equal(list.receipts[0].payload.intent.amount, 500000, "accepted signed evidence is snapshotted");
   list.receipts[0].payload.intent.amount = 8888888;
-  const listedAgain = await (await app.request("/v1/receipts")).json();
+  const listedAgain = await (await controlRequest(app, "/v1/receipts")).json();
   assert.equal(listedAgain.receipts[0].payload.intent.amount, 500000, "reads cannot mutate retained evidence");
-  const status = await (await app.request("/v1/status")).json();
+  const status = await (await controlRequest(app, "/v1/status")).json();
   assert.equal(status.killed, false);
   assert.equal(status.receipts, 1);
 });

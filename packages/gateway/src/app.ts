@@ -3,13 +3,14 @@
 // is runtime-agnostic (ADR-004) and testable in-process via app.request().
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { evaluate } from "./engine.js";
 import {
   buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash,
   minimizeIntentForEvidence, REDACTION_PROFILE,
   CANONICALIZATION,
 } from "./receipts.js";
-import type { Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult } from "./receipts.js";
+import type { Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult, AuthorityFinalState } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
 import { validateIntent, validatePolicy } from "@scopebond/verify";
@@ -37,6 +38,12 @@ export interface GatewayConfig {
   now?: () => string;
   /** Principal-key verification. Insecure mode must be selected explicitly. */
   authentication: GatewayAuthentication;
+  /** True only when this coordinator owns the complete receipt set for global
+   * policy clauses. Global limits fail closed by default. */
+  gatewaysComplete?: boolean;
+  /** Bearer token for receipt reads and emergency-control routes. Without it,
+   * those routes remain unavailable. */
+  control?: { bearerToken: string };
 }
 
 export interface ActionRequest {
@@ -46,6 +53,16 @@ export interface ActionRequest {
 }
 export interface ActionResult { allowed: boolean; reason: string; verdict?: Verdict; receipt: SignedReceipt; }
 export interface ObservationResult { observed: true; receipt: SignedReceipt; }
+
+export class DuplicateActionError extends Error {
+  readonly status = 409 as const;
+  constructor() { super("action id has already been consumed"); this.name = "DuplicateActionError"; }
+}
+
+export class AuthorityUnavailableError extends Error {
+  readonly status = 503 as const;
+  constructor() { super("receipt store does not provide atomic authority reservations for dispatch"); this.name = "AuthorityUnavailableError"; }
+}
 
 export interface Gateway {
   app: Hono;
@@ -79,6 +96,29 @@ export function createGateway(config: GatewayConfig): Gateway {
   const now = config.now ?? (() => new Date().toISOString());
   const state = { killed: false };
 
+  async function isStopped(signer?: string): Promise<boolean> {
+    const durable = await store.getStopState?.();
+    if (durable) {
+      state.killed = durable.global;
+      return durable.global || (!!signer && durable.agents.includes(signer));
+    }
+    return state.killed;
+  }
+
+  async function setStopped(target: "global" | string, stopped: boolean): Promise<void> {
+    if (store.setStopped) await store.setStopped(target, stopped);
+    if (target === "global") state.killed = stopped;
+  }
+
+  function requireControl(c: Context): Response | null {
+    const expected = config.control?.bearerToken;
+    if (!expected) return c.json({ error: "control API is not configured" }, 503);
+    if (expected.length < 24) return c.json({ error: "control API token is invalid" }, 503);
+    const supplied = c.req.header("authorization") ?? "";
+    if (!constantTimeTextEqual(supplied, `Bearer ${expected}`)) return c.json({ error: "unauthorized" }, 401);
+    return null;
+  }
+
   async function authorize(req: ActionRequest, ts: string, policyRef: { id: string | null; version: number; digest: string }): Promise<{
     evidence: AuthorizationEvidence;
     approvalForPolicy?: Approval;
@@ -111,12 +151,16 @@ export function createGateway(config: GatewayConfig): Gateway {
     const minimized = minimizeIntentForEvidence(req.intent);
     const evidenceHash = intentHash(minimized.intent);
     const attesterRef = { kind: "gateway" as const, kid: attester.kid };
+    const activePolicy = structuredClone(policy);
+    const activePolicyHash = policyHash;
+    const activePolicyVersion = policyVersion;
     const policyRef = {
-      id: typeof policy.policy_id === "string" ? policy.policy_id : null,
-      version: policyVersion,
-      digest: policyHash,
+      id: typeof activePolicy.policy_id === "string" ? activePolicy.policy_id : null,
+      version: activePolicyVersion,
+      digest: activePolicyHash,
     };
     const authenticated = await authorize(req, ts, policyRef);
+    const actionId = authenticated.evidence.agent?.request_id ?? globalThis.crypto.randomUUID();
 
     const receiptFields = (
       realtimeResult: RealtimeResult,
@@ -128,9 +172,9 @@ export function createGateway(config: GatewayConfig): Gateway {
       canonicalization: CANONICALIZATION,
       intent: minimized.intent,
       intent_hash: ih,
-      action_ref: { authorized_intent_hash: ih, evidence_intent_hash: evidenceHash },
-      policy_hash: policyHash,
-      policy_version: policyVersion,
+      action_ref: { action_id: actionId, authorized_intent_hash: ih, evidence_intent_hash: evidenceHash },
+      policy_hash: activePolicyHash,
+      policy_version: activePolicyVersion,
       policy_ref: policyRef,
       verifier_version: VERIFIER_VERSION,
       realtime_result: realtimeResult,
@@ -147,23 +191,55 @@ export function createGateway(config: GatewayConfig): Gateway {
       attester: attesterRef,
       timestamp: ts,
     });
+    const reservation = {
+      action_id: actionId,
+      candidate: {
+        intent: minimized.intent,
+        action_id: actionId,
+        intent_hash: ih,
+        executed: true,
+        realtime_result: "allow",
+        timestamp: ts,
+        approval: authenticated.approvalForPolicy,
+      },
+      policy_ref: policyRef,
+      policy_snapshot: canonical(activePolicy),
+    };
 
     // Fail closed: while killed, deny everything and record the denial.
-    if (state.killed) {
+    if (await isStopped(req.intent.signer)) {
+      if (store.reserveAction) {
+        const attempt = await store.reserveAction(reservation, () => ({ allow: false }));
+        if (attempt.duplicate) throw new DuplicateActionError();
+      }
       const receipt = await buildReceipt({
         ...receiptFields("deny", "denied", "none", null),
       }, attester);
-      await store.put(receipt);
+      if (store.finalizeAction && store.reserveAction) await store.finalizeAction(actionId, receipt, "denied");
+      else await store.put(receipt);
       return { allowed: false, reason: "kill switch active (fail closed)", receipt };
     }
 
-    const prior = await store.executed();
-    const d = evaluate(policy, prior, { intent: req.intent, approval: authenticated.approvalForPolicy, intent_hash: ih }, ts);
+    const decide = (prior: Awaited<ReturnType<ReceiptStore["executed"]>>) => evaluate(
+      activePolicy, prior,
+      { intent: req.intent, approval: authenticated.approvalForPolicy, intent_hash: ih },
+      ts, { gatewaysComplete: config.gatewaysComplete ?? false },
+    );
+    let d;
+    if (store.reserveAction) {
+      const attempt = await store.reserveAction(reservation, decide);
+      if (attempt.duplicate) throw new DuplicateActionError();
+      d = attempt.decision;
+    } else {
+      if (executor.mode === "dispatch") throw new AuthorityUnavailableError();
+      d = decide(await store.executed());
+    }
 
     let ref: string | null = null;
     let executionState: ExecutionState = "denied";
     let assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown" = "none";
-    if (d.allow) {
+    const stoppedBeforeDispatch = d.allow && await isStopped(req.intent.signer);
+    if (d.allow && !stoppedBeforeDispatch) {
       if (executor.mode === "simulation") {
         ref = (await executor.execute(req.intent)).ref;
         executionState = "simulated";
@@ -183,16 +259,19 @@ export function createGateway(config: GatewayConfig): Gateway {
     }
 
     const receipt = await buildReceipt({
-      ...receiptFields(d.realtime_result, executionState, assertion, ref),
+      ...receiptFields(stoppedBeforeDispatch ? "deny" : d.realtime_result, executionState, assertion, ref),
     }, attester);
-    await store.put(receipt);
+    const finalState = executionState as AuthorityFinalState;
+    if (store.finalizeAction && store.reserveAction) await store.finalizeAction(actionId, receipt, finalState);
+    else await store.put(receipt);
 
     const reason = d.allow
       ? (d.clause_mode === "monitor" ? "allowed (monitored, out of policy — covered at claim time)" : "allowed")
       : (d.verdict.explanation || "denied");
     return {
-      allowed: d.allow,
-      reason: executionState === "outcome_unknown" ? "execution outcome unknown" : reason,
+      allowed: d.allow && !stoppedBeforeDispatch,
+      reason: stoppedBeforeDispatch ? "kill switch active before dispatch (fail closed)" :
+        (executionState === "outcome_unknown" ? "execution outcome unknown" : reason),
       verdict: d.verdict,
       receipt,
     };
@@ -220,14 +299,15 @@ export function createGateway(config: GatewayConfig): Gateway {
       digest: policyHash,
     };
     const authenticated = await authorize(req, ts, policyRef);
+    const actionId = authenticated.evidence.agent?.request_id ?? globalThis.crypto.randomUUID();
     const receipt = await buildReceipt({
       evidence_version: "1.0",
       canonicalization: CANONICALIZATION,
       intent: minimized.intent,
       intent_hash: ih,
-      action_ref: { authorized_intent_hash: ih, evidence_intent_hash: evidenceHash },
-      policy_hash: policyHash,
-      policy_version: policyVersion,
+      action_ref: { action_id: actionId, authorized_intent_hash: ih, evidence_intent_hash: evidenceHash },
+      policy_hash: policyRef.digest,
+      policy_version: policyRef.version,
       policy_ref: policyRef,
       verifier_version: VERIFIER_VERSION,
       realtime_result: "not_evaluated",
@@ -271,13 +351,35 @@ export function createGateway(config: GatewayConfig): Gateway {
 
   const app = new Hono();
   app.get("/healthz", (c) => c.json({ ok: true }));
-  app.get("/v1/status", async (c) => c.json({
-    killed: state.killed, policy_hash: policyHash, policy_version: policyVersion,
-    attester: attester.kid, receipts: (await store.list()).length,
-  }));
-  app.post("/v1/kill", (c) => { state.killed = true; return c.json({ killed: true }); });
-  app.post("/v1/resume", (c) => { state.killed = false; return c.json({ killed: false }); });
-  app.get("/v1/receipts", async (c) => c.json({ receipts: await store.list() }));
+  app.get("/v1/status", async (c) => {
+    const denied = requireControl(c); if (denied) return denied;
+    const stops = await store.getStopState?.() ?? { global: state.killed, agents: [] };
+    state.killed = stops.global;
+    return c.json({
+      killed: stops.global, stopped_agents: stops.agents, policy_hash: policyHash, policy_version: policyVersion,
+      attester: attester.kid, receipts: (await store.list()).length,
+    });
+  });
+  app.post("/v1/kill", async (c) => {
+    const denied = requireControl(c); if (denied) return denied;
+    const body = await optionalJson(c);
+    const target = typeof body?.agent === "string" ? body.agent : "global";
+    if (target !== "global" && !/^key:[0-9a-f]{16}$/.test(target)) return c.json({ error: "invalid agent key id" }, 400);
+    await setStopped(target, true);
+    return c.json({ killed: true, target });
+  });
+  app.post("/v1/resume", async (c) => {
+    const denied = requireControl(c); if (denied) return denied;
+    const body = await optionalJson(c);
+    const target = typeof body?.agent === "string" ? body.agent : "global";
+    if (target !== "global" && !/^key:[0-9a-f]{16}$/.test(target)) return c.json({ error: "invalid agent key id" }, 400);
+    await setStopped(target, false);
+    return c.json({ killed: false, target });
+  });
+  app.get("/v1/receipts", async (c) => {
+    const denied = requireControl(c); if (denied) return denied;
+    return c.json({ receipts: await store.list() });
+  });
 
   // The attester's public key, so a receipt holder can independently verify
   // signatures (see verifyReceipt). JWKS is the standard discovery form.
@@ -293,6 +395,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     return c.json(all[all.length - 1] ?? null);
   });
   app.post("/v1/anchor", async (c) => {
+    const denied = requireControl(c); if (denied) return denied;
     if (!store.putAnchor || !store.anchors) return c.json({ error: "this store does not support anchoring" }, 400);
     return c.json(await anchor());
   });
@@ -322,7 +425,9 @@ export function createGateway(config: GatewayConfig): Gateway {
       const result = await handleAction(body);
       return c.json(result, result.allowed ? 200 : 403);
     } catch (error) {
-      if (error instanceof AuthorizationError) return c.json({ error: error.message }, error.status);
+      if (error instanceof AuthorizationError || error instanceof DuplicateActionError || error instanceof AuthorityUnavailableError) {
+        return c.json({ error: error.message }, error.status);
+      }
       throw error;
     }
   });
@@ -350,6 +455,23 @@ export function createGateway(config: GatewayConfig): Gateway {
   });
 
   return { app, store, attester, state, get policyHash() { return policyHash; }, handleAction, observeAction, setPolicy, anchor };
+}
+
+async function optionalJson(c: Context): Promise<Record<string, unknown> | null> {
+  try {
+    const value = await c.req.json();
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+function constantTimeTextEqual(left: string, right: string): boolean {
+  if (left.length > 4096) return false;
+  const length = Math.max(left.length, right.length);
+  let difference = left.length ^ right.length;
+  for (let index = 0; index < length; index += 1) {
+    difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+  return difference === 0;
 }
 
 function assertValidPolicy(policy: unknown): asserts policy is Policy {

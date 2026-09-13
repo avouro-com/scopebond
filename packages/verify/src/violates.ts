@@ -66,6 +66,8 @@ export interface Receipt {
   realtime_result?: string;
   approval?: Approval;
   intent_hash?: string;
+  action_id?: string;
+  action_ref?: { action_id?: string };
   timestamp?: string;
   attester?: { kind?: string; kid?: string };
   /** ACTA envelope: a receipt may be wrapped as { payload, signature }. */
@@ -220,11 +222,14 @@ export function violates(
 
   // Executed receipts in the window ending at `at`, deduped by intent_hash.
   const executed = [...rs, c].filter((r) => r.executed === true);
-  // Dedup by receipt occurrence (intent hash + timestamp), so genuinely distinct
-  // actions that happen to share an intent hash both count, while the same receipt
-  // arriving from multiple sources (e.g. cross-gateway) is counted once.
+  // Modern receipts carry a stable action id. The hash/timestamp fallback is only
+  // for legacy evidence that predates action ids.
   const dedup = new Map<string, Receipt>();
-  for (const r of executed) dedup.set((r.intent_hash ?? JSON.stringify(r.intent)) + "@" + (r.timestamp ?? ""), r);
+  for (const r of executed) {
+    const actionId = r.action_id ?? r.action_ref?.action_id;
+    const occurrence = actionId ?? (r.intent_hash ?? JSON.stringify(r.intent)) + "@" + (r.timestamp ?? "");
+    dedup.set(occurrence, r);
+  }
   const executedUnique = [...dedup.values()];
   const inWindow = (r: Receipt, windowMs: number): boolean => { const t = ms(r.timestamp); return t <= at && t > at - windowMs; };
 

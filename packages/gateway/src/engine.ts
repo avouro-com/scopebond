@@ -19,6 +19,7 @@ export function evaluate(
   priorExecuted: Receipt[],
   req: { intent: Intent; approval?: Approval; intent_hash: string },
   at: string,
+  opts: { gatewaysComplete?: boolean } = {},
 ): Decision {
   const candidate: Receipt = {
     intent: req.intent,
@@ -27,7 +28,10 @@ export function evaluate(
     intent_hash: req.intent_hash,
     approval: req.approval,
   };
-  const verdict = violates(policy, priorExecuted, candidate, { at });
+  const verdict = violates(policy, priorExecuted, candidate, { at, gatewaysComplete: opts.gatewaysComplete });
+  if (verdict.undetermined) {
+    return { allow: false, realtime_result: "deny", verdict, clause_mode: "enforce" };
+  }
   if (!verdict.violated) {
     const approvalApplied = !!req.approval && (policy.clauses ?? []).some((clause) =>
       clause.type === "require_approval" &&

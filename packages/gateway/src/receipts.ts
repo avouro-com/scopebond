@@ -35,6 +35,8 @@ export interface PolicyReference {
 }
 
 export interface ActionReference {
+  /** Stable, single-use identifier for this attempted external action. */
+  action_id?: string;
   /** Digest of the full action presented to policy evaluation. */
   authorized_intent_hash: string;
   /** Digest of the minimized intent retained in this receipt. */
@@ -255,7 +257,7 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
     "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result",
     "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp",
-  ]) && hasOnlyKeys(payload.action_ref, ["authorized_intent_hash", "evidence_intent_hash"]) &&
+  ]) && hasOnlyKeys(payload.action_ref, ["action_id", "authorized_intent_hash", "evidence_intent_hash"]) &&
     hasOnlyKeys(payload.policy_ref, ["id", "version", "digest"]) &&
     hasOnlyKeys(payload.execution, ["state", "assertion", "reference", "external_effect"]) &&
     hasOnlyKeys(payload.redaction, ["profile", "paths"]) &&
@@ -264,6 +266,7 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     payload.canonicalization === CANONICALIZATION &&
     typeof payload.intent.action_type === "string" && payload.intent.action_type.length > 0 &&
     typeof payload.intent_hash === "string" && HEX_64.test(payload.intent_hash) &&
+    (payload.action_ref.action_id === undefined || (typeof payload.action_ref.action_id === "string" && payload.action_ref.action_id.length >= 16 && payload.action_ref.action_id.length <= 200)) &&
     typeof payload.action_ref.authorized_intent_hash === "string" && HEX_64.test(payload.action_ref.authorized_intent_hash) &&
     typeof payload.action_ref.evidence_intent_hash === "string" && HEX_64.test(payload.action_ref.evidence_intent_hash) &&
     typeof payload.policy_hash === "string" && HEX_64.test(payload.policy_hash) &&
@@ -280,6 +283,7 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     payload.execution.external_effect === "not_independently_verified" &&
     payload.redaction.profile === REDACTION_PROFILE &&
     validateAuthorizationEvidence(payload.authorization) &&
+    (payload.authorization.mode !== "authenticated" || payload.action_ref.action_id === undefined || payload.action_ref.action_id === payload.authorization.agent?.request_id) &&
     payload.attester.kind === "gateway" && typeof payload.attester.kid === "string" &&
     Number.isFinite(Date.parse(String(payload.timestamp)));
 }
@@ -380,14 +384,74 @@ export interface ReceiptStore {
   /** Append an anchor. Optional — a store that supports anchoring implements both. */
   putAnchor?(a: Anchor): void | Promise<void>;
   anchors?(): Anchor[] | Promise<Anchor[]>;
+  /** Atomically evaluate and consume an action id against prior committed or
+   * conservatively held authority. Stores without this capability cannot safely
+   * support dispatch executors. */
+  reserveAction?<T extends { allow: boolean }>(
+    reservation: AuthorityReservation,
+    decide: (prior: Receipt[]) => T,
+  ): AuthorityReservationResult<T> | Promise<AuthorityReservationResult<T>>;
+  /** Atomically persist the terminal receipt and move the write-ahead record out
+   * of reserved state. Unknown outcomes remain charged conservatively. */
+  finalizeAction?(actionId: string, receipt: SignedReceipt, state: AuthorityFinalState): void | Promise<void>;
+  /** Durable emergency state. `agents` contains signer key ids. */
+  getStopState?(): StopState | Promise<StopState>;
+  setStopped?(target: "global" | string, stopped: boolean): void | Promise<void>;
+}
+
+export interface StopState { global: boolean; agents: string[]; }
+
+export interface AuthorityReservation {
+  action_id: string;
+  candidate: Receipt;
+  policy_ref: PolicyReference;
+  policy_snapshot: string;
+}
+
+export type AuthorityFinalState = "denied" | "simulated" | "executed" | "outcome_unknown";
+
+export type AuthorityReservationResult<T> =
+  | { duplicate: true }
+  | { duplicate: false; decision: T };
+
+interface MemoryAuthorityRecord {
+  reservation: AuthorityReservation;
+  state: "reserved" | AuthorityFinalState;
 }
 
 export class MemoryReceiptStore implements ReceiptStore {
   private all: SignedReceipt[] = [];
   private anchorLog: Anchor[] = [];
+  private authority = new Map<string, MemoryAuthorityRecord>();
+  private stops = new Set<string>();
   put(r: SignedReceipt): void { this.all.push(structuredClone(r)); }
   list(): SignedReceipt[] { return structuredClone(this.all); }
-  executed(): Receipt[] { return structuredClone(this.all.map((r) => r.payload as unknown as Receipt)); }
+  executed(): Receipt[] {
+    const receipts = this.all.map((r) => r.payload as unknown as Receipt);
+    const held = [...this.authority.values()]
+      .filter((record) => record.state === "reserved" || record.state === "outcome_unknown")
+      .map((record) => record.reservation.candidate);
+    return structuredClone([...receipts, ...held]);
+  }
+  reserveAction<T extends { allow: boolean }>(reservation: AuthorityReservation, decide: (prior: Receipt[]) => T): AuthorityReservationResult<T> {
+    if (this.authority.has(reservation.action_id)) return { duplicate: true };
+    const decision = decide(this.executed());
+    this.authority.set(reservation.action_id, {
+      reservation: structuredClone(reservation),
+      state: decision.allow ? "reserved" : "denied",
+    });
+    return { duplicate: false, decision };
+  }
+  finalizeAction(actionId: string, receipt: SignedReceipt, state: AuthorityFinalState): void {
+    const record = this.authority.get(actionId);
+    if (!record) throw new Error(`unknown authority reservation ${actionId}`);
+    this.all.push(structuredClone(receipt));
+    record.state = state;
+  }
+  getStopState(): StopState { return { global: this.stops.has("global"), agents: [...this.stops].filter((key) => key !== "global") }; }
+  setStopped(target: "global" | string, stopped: boolean): void {
+    if (stopped) this.stops.add(target); else this.stops.delete(target);
+  }
   putAnchor(a: Anchor): void { this.anchorLog.push(a); }
   anchors(): Anchor[] { return this.anchorLog.slice(); }
 }

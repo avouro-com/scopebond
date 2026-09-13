@@ -10,6 +10,7 @@ const policy = {
   vocabulary_version: "1.0", policy_id: "t", version: 1,
   clauses: [{ id: "tx", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 1000000 }],
 };
+const CONTROL_TOKEN = "test-control-token-000000000001";
 const post = (app, path, body) =>
   app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
@@ -106,6 +107,82 @@ test("receipts survive a restart and enforce prior-state across a new instance",
   } finally { cleanup(); }
 });
 
+test("an unfinished SQLite reservation survives restart and remains charged", async (t) => {
+  const { dir, cleanup } = tmp();
+  try {
+    const dbFile = join(dir, "authority.db");
+    const opened = openReceiptStore({ db: dbFile });
+    if (opened.kind !== "sqlite" || !opened.store.reserveAction) {
+      t.skip("node:sqlite is unavailable on this supported runtime");
+      return;
+    }
+    const windowPolicy = {
+      vocabulary_version: "1.0", policy_id: "durable-window", version: 1,
+      clauses: [{ id: "window", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_window: 100, window: "P1D", scope: "principal" }],
+    };
+    const candidate = {
+      intent: { action_type: "payout.create", asset: "USDC", amount: 60 },
+      action_id: "action:unfinished000001", intent_hash: "a".repeat(64), executed: true, timestamp: "2026-09-12T12:00:00Z",
+    };
+    const attempt = opened.store.reserveAction({
+      action_id: candidate.action_id, candidate,
+      policy_ref: { id: "durable-window", version: 1, digest: "b".repeat(64) },
+      policy_snapshot: JSON.stringify(windowPolicy),
+    }, () => ({ allow: true }));
+    assert.equal(attempt.duplicate, false);
+    await opened.store.close?.();
+
+    const reopened = openReceiptStore({ db: dbFile });
+    let called = false;
+    const gateway = createGateway({
+      authentication: { mode: "insecure-development" }, policy: windowPolicy,
+      now: () => "2026-09-12T12:00:00Z", store: reopened.store,
+      executor: { mode: "dispatch", execute: () => { called = true; return { ref: "unexpected" }; } },
+    });
+    const result = await gateway.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 60 } });
+    assert.equal(result.allowed, false);
+    assert.equal(called, false);
+    await reopened.store.close?.();
+  } finally { cleanup(); }
+});
+
+test("global stop survives SQLite restart and only an authenticated resume clears it", async (t) => {
+  const { dir, cleanup } = tmp();
+  try {
+    const dbFile = join(dir, "stops.db");
+    const firstStore = openReceiptStore({ db: dbFile });
+    if (firstStore.kind !== "sqlite") {
+      t.skip("node:sqlite is unavailable on this supported runtime");
+      return;
+    }
+    const first = createGateway({
+      authentication: { mode: "insecure-development" }, policy, store: firstStore.store,
+      control: { bearerToken: CONTROL_TOKEN },
+    });
+    const kill = await first.app.request("/v1/kill", { method: "POST", headers: { authorization: `Bearer ${CONTROL_TOKEN}` } });
+    assert.equal(kill.status, 200);
+    await firstStore.store.close?.();
+
+    const secondStore = openReceiptStore({ db: dbFile });
+    let executions = 0;
+    const second = createGateway({
+      authentication: { mode: "insecure-development" }, policy, store: secondStore.store,
+      control: { bearerToken: CONTROL_TOKEN },
+      executor: { mode: "dispatch", execute: () => { executions++; return { ref: "sandbox:ok" }; } },
+    });
+    const intent = { action_type: "payout.create", asset: "USDC", amount: 1 };
+    assert.equal((await second.handleAction({ intent })).allowed, false);
+    assert.equal(executions, 0);
+    assert.equal((await second.app.request("/v1/resume", { method: "POST" })).status, 401);
+    assert.equal((await second.handleAction({ intent })).allowed, false);
+    const resumed = await second.app.request("/v1/resume", { method: "POST", headers: { authorization: `Bearer ${CONTROL_TOKEN}` } });
+    assert.equal(resumed.status, 200);
+    assert.equal((await second.handleAction({ intent })).allowed, true);
+    assert.equal(executions, 1);
+    await secondStore.store.close?.();
+  } finally { cleanup(); }
+});
+
 test("FileReceiptStore is durable (append-only JSONL)", async () => {
   const { dir, cleanup } = tmp();
   try {
@@ -118,6 +195,23 @@ test("FileReceiptStore is durable (append-only JSONL)", async () => {
     }
     const reopened = new FileReceiptStore(file);
     assert.equal(reopened.list().length, 1);
+  } finally { cleanup(); }
+});
+
+test("dispatch fails closed when a store has no atomic authority coordinator", async () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const store = new FileReceiptStore(join(dir, "receipts.jsonl"));
+    let called = false;
+    const gateway = createGateway({
+      authentication: { mode: "insecure-development" }, policy, store,
+      executor: { mode: "dispatch", execute: () => { called = true; return { ref: "unexpected" }; } },
+    });
+    await assert.rejects(
+      gateway.handleAction({ intent: { action_type: "payout.create", asset: "USDC", amount: 1 } }),
+      /does not provide atomic authority reservations/,
+    );
+    assert.equal(called, false);
   } finally { cleanup(); }
 });
 

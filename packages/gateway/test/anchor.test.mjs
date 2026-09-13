@@ -13,6 +13,7 @@ const policy = {
   vocabulary_version: "1.0", policy_id: "t", version: 1,
   clauses: [{ id: "tx", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000000 }],
 };
+const CONTROL_TOKEN = "test-control-token-000000000001";
 const post = (app, path, body) =>
   app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const pay = (app, amount) => post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount } });
@@ -27,7 +28,7 @@ test("merkle proofs verify for every leaf; a wrong leaf fails", () => {
 });
 
 test("anchor commits to receipts; inclusion proof verifies; anchors chain", async () => {
-  const gw = createGateway({ authentication: { mode: "insecure-development" }, policy, store: new MemoryReceiptStore() });
+  const gw = createGateway({ authentication: { mode: "insecure-development" }, policy, store: new MemoryReceiptStore(), control: { bearerToken: CONTROL_TOKEN } });
   await pay(gw.app, 100000); await pay(gw.app, 200000); await pay(gw.app, 300000);
 
   const a1 = await gw.anchor();
@@ -60,7 +61,8 @@ test("anchor commits to receipts; inclusion proof verifies; anchors chain", asyn
   assert.notEqual(a2.merkle_root, a1.merkle_root);
 
   // POST /v1/anchor endpoint works and continues the chain.
-  const a3 = await (await gw.app.request("/v1/anchor", { method: "POST" })).json();
+  assert.equal((await gw.app.request("/v1/anchor", { method: "POST" })).status, 401);
+  const a3 = await (await gw.app.request("/v1/anchor", { method: "POST", headers: { authorization: `Bearer ${CONTROL_TOKEN}` } })).json();
   assert.equal(a3.seq, 3);
   assert.equal(a3.prev_anchor_hash, a2.anchor_hash);
 
@@ -73,7 +75,7 @@ test("anchor commits to receipts; inclusion proof verifies; anchors chain", asyn
 test("setPolicy hot-swaps the active policy (and /v1/status reflects it)", async () => {
   const strict = { vocabulary_version: "1.0", policy_id: "s", version: 1, clauses: [{ id: "c", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000 }] };
   const loose = { vocabulary_version: "1.0", policy_id: "l", version: 2, clauses: [{ id: "c", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000000 }] };
-  const gw = createGateway({ authentication: { mode: "insecure-development" }, policy: strict, store: new MemoryReceiptStore() });
+  const gw = createGateway({ authentication: { mode: "insecure-development" }, policy: strict, store: new MemoryReceiptStore(), control: { bearerToken: CONTROL_TOKEN } });
   const h1 = gw.policyHash;
 
   let r = await (await pay(gw.app, 500000)).json(); // $5,000 > $1,000 cap
@@ -85,7 +87,7 @@ test("setPolicy hot-swaps the active policy (and /v1/status reflects it)", async
   r = await (await pay(gw.app, 500000)).json(); // now under the higher cap
   assert.equal(r.allowed, true);
 
-  const st = await (await gw.app.request("/v1/status")).json();
+  const st = await (await gw.app.request("/v1/status", { headers: { authorization: `Bearer ${CONTROL_TOKEN}` } })).json();
   assert.equal(st.policy_hash, gw.policyHash);
   assert.equal(st.policy_version, 2);
 });

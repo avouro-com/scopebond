@@ -103,7 +103,11 @@ function cmdServe(policyPath: string | undefined): void {
   }
 
   const authentication = resolveAuthentication();
-  const gateway = createGateway({ policy, attester, store, authentication });
+  const controlToken = process.env.SCOPEBOND_CONTROL_TOKEN;
+  const gateway = createGateway({
+    policy, attester, store, authentication,
+    ...(controlToken ? { control: { bearerToken: controlToken } } : {}),
+  });
   const port = Number(process.env.PORT ?? 8787);
   serve({ fetch: gateway.app.fetch, port });
 
@@ -111,6 +115,7 @@ function cmdServe(policyPath: string | undefined): void {
   console.log(`  policy    ${policyPath} (hash ${gateway.policyHash.slice(0, 12)}…)`);
   console.log(`  attester  ${attester.kid}  [${source}]`);
   console.log(`  receipts  ${kind}: ${path} (durable)`);
+  console.log(`  controls  ${controlToken ? "bearer protected" : "disabled (set SCOPEBOND_CONTROL_TOKEN)"}`);
   console.log(`  routes    POST /v1/evaluate · /mcp · /v1/kill · /v1/resume · /v1/anchor`);
   console.log(`            GET /v1/receipts · /v1/status · /v1/attester · /.well-known/jwks.json · /v1/anchors[/latest|/proof]`);
 

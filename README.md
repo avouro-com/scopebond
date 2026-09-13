@@ -72,7 +72,7 @@ Works with any agent over **HTTP or MCP**. Self-host it free — no account requ
 
 | Package | What it is |
 |---|---|
-| [`@scopebond/gateway`](packages/gateway) | The experimental gateway alpha: HTTP + MCP ingress, Ed25519 receipts, persistent attester key, durable receipt store and kill switch. Default execution is a no-op. `npx @scopebond/gateway`. |
+| [`@scopebond/gateway`](packages/gateway) | The experimental gateway alpha: HTTP + MCP ingress, authenticated Ed25519 action evidence, atomic SQLite authority reservations, persistent attester key, durable stop state and receipts. Default execution is a simulation. `npx @scopebond/gateway`. |
 | [`@scopebond/verify`](packages/verify) | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` verdict library + conformance vectors. The portable standard the whole thing rests on. |
 | [`@scopebond/policy-schema`](packages/policy-schema) | The policy vocabulary — JSON Schema for the policy document and the `scopebond:receipt` envelope, plus test vectors. |
 

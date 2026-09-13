@@ -32,6 +32,7 @@
           "required": ["authorized_intent_hash", "evidence_intent_hash"],
           "additionalProperties": false,
           "properties": {
+            "action_id": { "type": "string", "minLength": 16, "maxLength": 200 },
             "authorized_intent_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
             "evidence_intent_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
           }

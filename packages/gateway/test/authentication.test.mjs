@@ -12,6 +12,7 @@ import { openReceiptStore } from "../dist/node.js";
 
 const AT = "2026-09-13T12:00:00.000Z";
 const EXP = "2026-09-13T12:05:00.000Z";
+const CONTROL_TOKEN = "test-control-token-000000000001";
 const policy = {
   vocabulary_version: "1.0", policy_id: "auth-policy", version: 3,
   clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["tool.call"] }],
@@ -88,6 +89,16 @@ test("accepts a registered agent signature and preserves it in the receipt", asy
   assert.equal(verified.valid, true);
   assert.equal(verified.authorization_valid, true);
   assert.equal(verified.fully_valid, true);
+
+  const mismatchedPayload = structuredClone(result.receipt.payload);
+  mismatchedPayload.action_ref.action_id = "request:different-action-0001";
+  const mismatched = {
+    payload: mismatchedPayload,
+    signature: { alg: "Ed25519", sig: await gw.attester.sign(canonical(mismatchedPayload)) },
+  };
+  assert.equal(verifyReceipt(mismatched, gw.attester.publicKeyPem, [{
+    kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active",
+  }]).contract_valid, false);
 });
 
 test("rejects substituted fields, signer names, and signed-envelope metadata", async () => {
@@ -192,4 +203,23 @@ test("rejects fabricated approver names and revoked agent keys", async () => {
   const revoked = new StaticPrincipalKeyRegistry([{ kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "revoked" }]);
   const stopped = createGateway({ policy, now: () => AT, authentication: { keys: revoked } });
   assert.equal((await post(stopped.app, signIntent(agent, { action_type: "tool.call" }))).status, 401);
+});
+
+test("a bearer-protected per-agent stop leaves other registered agents available", async () => {
+  const stoppedAgent = principal(["agent"]);
+  const activeAgent = principal(["agent"]);
+  const gw = secureGateway(policy, [stoppedAgent, activeAgent], { control: { bearerToken: CONTROL_TOKEN } });
+  assert.equal((await gw.app.request("/v1/kill", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: stoppedAgent.kid }),
+  })).status, 401);
+  assert.equal((await gw.app.request("/v1/kill", {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${CONTROL_TOKEN}` },
+    body: JSON.stringify({ agent: stoppedAgent.kid }),
+  })).status, 200);
+
+  const stopped = await post(gw.app, signIntent(stoppedAgent, { action_type: "tool.call" }, { request_id: "request:stopped-agent-0001" }));
+  const active = await post(gw.app, signIntent(activeAgent, { action_type: "tool.call" }, { request_id: "request:active-agent-00001" }));
+  assert.equal(stopped.status, 403);
+  assert.equal(active.status, 200);
 });

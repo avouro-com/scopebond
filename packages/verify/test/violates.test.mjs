@@ -4,7 +4,7 @@ import { violates, durationToMs, validateIntent, validatePolicy } from "../dist/
 
 const rcpt = (o) => ({
   intent: o.intent, executed: o.executed ?? true, realtime_result: o.rr ?? "allow",
-  approval: o.approval, intent_hash: o.intent_hash, timestamp: o.ts,
+  approval: o.approval, intent_hash: o.intent_hash, action_id: o.action_id, timestamp: o.ts,
   attester: { kind: "gateway", kid: "g1" },
 });
 const spend = (amount, ts, extra = {}) => rcpt({ intent: { action_type: "payout.create", asset: "USDC", amount }, ts, ...extra });
@@ -44,6 +44,14 @@ test("covered row 1: windowed aggregate over the limit (each action under it)", 
   const v = violates(policy, receipts, claimed);
   assert.equal(v.violated, true);
   assert.equal(v.clause_id, "daily");
+});
+
+test("distinct action ids count separately even with identical intents and timestamps", () => {
+  const policy = valid({ clauses: [{ id: "daily", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_window: 100, window: "P1D", scope: "principal" }] });
+  const at = "2026-09-12T12:00:00Z";
+  const prior = spend(60, at, { action_id: "action:000000000000001" });
+  const claimed = spend(60, at, { action_id: "action:000000000000002" });
+  assert.equal(violates(policy, [prior], claimed).violated, true);
 });
 
 test("covered row 3: rate limit exceeded across a window", () => {

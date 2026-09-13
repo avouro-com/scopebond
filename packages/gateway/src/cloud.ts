@@ -75,5 +75,12 @@ export function withCloudExporter(store: ReceiptStore, exporter: CloudExporter):
     ...(store.close ? { close: () => store.close!() } : {}),
     ...(store.putAnchor ? { putAnchor: (a) => store.putAnchor!(a) } : {}),
     ...(store.anchors ? { anchors: () => store.anchors!() } : {}),
+    ...(store.reserveAction ? { reserveAction: store.reserveAction.bind(store) } : {}),
+    ...(store.finalizeAction ? { finalizeAction: async (actionId, receipt, state) => {
+      await store.finalizeAction!(actionId, receipt, state);
+      exporter.enqueue(receipt);
+    } } : {}),
+    ...(store.getStopState ? { getStopState: () => store.getStopState!() } : {}),
+    ...(store.setStopped ? { setStopped: (target, stopped) => store.setStopped!(target, stopped) } : {}),
   };
 }

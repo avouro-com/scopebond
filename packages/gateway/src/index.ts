@@ -1,4 +1,4 @@
-export { createGateway, noopExecutor } from "./app.js";
+export { createGateway, noopExecutor, DuplicateActionError, AuthorityUnavailableError } from "./app.js";
 export type { Gateway, GatewayConfig, Executor, ActionRequest, ActionResult, ObservationResult } from "./app.js";
 export { createHttpExecutor } from "./executors.js";
 export type { HttpExecutorOptions } from "./executors.js";
@@ -13,6 +13,8 @@ export {
 export type {
   ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification, Anchor,
   ExecutionState, ExecutionEvidence, PolicyReference, ActionReference, RedactionEvidence,
+  AuthorityReservation, AuthorityFinalState, AuthorityReservationResult,
+  StopState,
 } from "./receipts.js";
 export {
   AUTHORIZATION_VERSION, AuthorizationError, StaticPrincipalKeyRegistry,

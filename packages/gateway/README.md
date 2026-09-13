@@ -1,7 +1,8 @@
 # @scopebond/gateway
 
-> **Experimental alpha:** use controlled test systems only. Concurrency and
-> execution durability findings must be resolved before production reliance. With no `executor` configured, allowed
+> **Experimental alpha:** use controlled test systems only. Upstream idempotency,
+> reconciliation of unknown outcomes, and distributed hosted coordination remain
+> release gates. With no `executor` configured, allowed
 > requests run the built-in simulation and are recorded as `simulated`, never
 > `executed`.
 
@@ -17,7 +18,7 @@ codebase runs on Node and Workers (ADR-004).
 - **Prove** — countersigns every action into an **Ed25519-signed `scopebond:receipt`**
   with a **persistent attester key**, stored in a **durable receipt log** (the track
   record). Anyone can verify a receipt against the attester's published public key.
-- **Kill switch** — halt one or all agents instantly; while killed, everything is denied.
+- **Kill switch** — durable global or per-agent stops, checked again immediately before dispatch.
 
 Clause modes: `enforce` blocks in real time; `monitor` lets the action through but
 signs and flags it (covered at claim time); `require_approval` holds without a valid
@@ -38,10 +39,19 @@ fingerprint-derived key id, request id and validity window. Optional approvals a
 separately signed and bind the exact intent and active policy reference; both replay
 ids are single-use. Receipts preserve this evidence for offline verification.
 
+Every receipt also carries a stable action id. The in-memory and SQLite stores
+atomically consume that id and reserve shared budget before dispatch. Reserved and
+outcome-unknown actions remain charged conservatively across SQLite restarts. A
+policy reload cannot change the snapshot named by an in-flight action. Global-scope
+limits fail closed unless `gatewaysComplete: true` declares that the configured
+coordinator owns the complete gateway set. Stores without atomic reservations
+(including the JSONL and KV implementations) reject dispatch executors explicitly;
+they remain suitable for simulation and passive observation.
+
 ## Quickstart
 
 ```bash
-SCOPEBOND_PRINCIPAL_KEYS_FILE=./principal-keys.json npx @scopebond/gateway ./policy.json
+SCOPEBOND_PRINCIPAL_KEYS_FILE=./principal-keys.json SCOPEBOND_CONTROL_TOKEN=<random-24+-character-token> npx @scopebond/gateway ./policy.json
 ```
 
 ```bash
@@ -67,6 +77,7 @@ do not close the alpha findings described above. Configure:
 | `SCOPEBOND_DB` | `./scopebond.db` | SQLite receipt store path |
 | `SCOPEBOND_RECEIPTS_FILE` | — | use an append-only JSONL log instead of SQLite |
 | `SCOPEBOND_PRINCIPAL_KEYS_FILE` | required | JSON array of Ed25519 public keys and `agent`/`approver` purposes |
+| `SCOPEBOND_CONTROL_TOKEN` | — | bearer token (minimum 24 characters) enabling receipt reads and kill/resume routes |
 | `SCOPEBOND_UNSAFE_ALLOW_UNSIGNED` | — | set to `1` only for local simulation; receipts are marked `insecure_development` |
 | `SCOPEBOND_ANCHOR_INTERVAL` | `24h` | anchor cadence (`24h`, `1h`, `30m`; `0`/`off` disables) |
 | `SCOPEBOND_POLICY_WATCH` | `1` | hot-reload the policy file on change (`0` disables) |
@@ -168,7 +179,10 @@ under the `@scopebond/gateway/node` subpath (they use `node:fs` / `node:sqlite`)
 import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 const { attester } = loadOrCreateAttester({ file: "./scopebond-attester.key" });
 const { store } = openReceiptStore({ db: "./scopebond.db" });
-const { app } = createGateway({ policy, attester, store, authentication: { keys } });
+const { app } = createGateway({
+  policy, attester, store, authentication: { keys },
+  control: { bearerToken: process.env.SCOPEBOND_CONTROL_TOKEN! },
+});
 ```
 
 ## `[PLANNED]`

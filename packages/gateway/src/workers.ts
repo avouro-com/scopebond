@@ -6,7 +6,7 @@
 import { createGateway } from "./app.js";
 import type { Gateway } from "./app.js";
 import { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
-import type { ReceiptStore, SignedReceipt, Attester, Anchor } from "./receipts.js";
+import type { ReceiptStore, SignedReceipt, Attester, Anchor, StopState } from "./receipts.js";
 import type { Receipt, Policy } from "@scopebond/verify";
 import type { GatewayAuthentication } from "./auth.js";
 
@@ -41,6 +41,18 @@ export class KvReceiptStore implements ReceiptStore {
     await this.kv.put(this.key + ":anchors", JSON.stringify(all));
   }
   async anchors(): Promise<Anchor[]> { return this.loadAnchors(); }
+  async getStopState(): Promise<StopState> {
+    const raw = await this.kv.get(this.key + ":stops", "text");
+    return raw ? JSON.parse(raw) as StopState : { global: false, agents: [] };
+  }
+  async setStopped(target: "global" | string, stopped: boolean): Promise<void> {
+    const state = await this.getStopState();
+    const agents = new Set(state.agents);
+    if (target === "global") state.global = stopped;
+    else if (stopped) agents.add(target); else agents.delete(target);
+    state.agents = [...agents].sort();
+    await this.kv.put(this.key + ":stops", JSON.stringify(state));
+  }
 }
 
 /** Load the attester key from KV, or generate + persist one. Returns a WebCrypto
