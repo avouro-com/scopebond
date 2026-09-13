@@ -49,6 +49,17 @@ On first run the gateway generates and persists an Ed25519 attester key
 | `SCOPEBOND_RECEIPTS_FILE` | — | use an append-only JSONL log instead of SQLite |
 | `SCOPEBOND_ANCHOR_INTERVAL` | `24h` | anchor cadence (`24h`, `1h`, `30m`; `0`/`off` disables) |
 | `SCOPEBOND_POLICY_WATCH` | `1` | hot-reload the policy file on change (`0` disables) |
+| `SCOPEBOND_CLOUD_URL` | — | mirror receipts to a hosted control plane (e.g. `https://cloud.scopebond.com`) |
+| `SCOPEBOND_CLOUD_KEY` | — | tenant API key (`sbk_…`) for the Cloud (required with the URL) |
+| `SCOPEBOND_CLOUD_FLUSH_MS` | `15000` | Cloud export flush interval |
+
+## Optional: mirror receipts to Scopebond Cloud
+
+Set `SCOPEBOND_CLOUD_URL` + `SCOPEBOND_CLOUD_KEY` and the gateway keeps its local
+durable log **and** pushes each receipt to a hosted control plane (retention,
+dashboard, hosted verification) — **batched**, never per-request. Fully opt-in and
+non-blocking; if the Cloud is unreachable it retries and never disrupts the gateway.
+Get a free key + dashboard at [cloud.scopebond.com](https://cloud.scopebond.com).
 
 ## Tamper-evidence (anchoring)
 

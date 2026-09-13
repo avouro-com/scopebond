@@ -18,3 +18,5 @@ export { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
 export type { Ed25519Jwk } from "./webcrypto.js";
 export { KvReceiptStore, loadOrCreateKvAttester, createWorkerGateway } from "./workers.js";
 export type { KvLike } from "./workers.js";
+export { createCloudExporter, withCloudExporter } from "./cloud.js";
+export type { CloudExporter, CloudExporterOptions } from "./cloud.js";
