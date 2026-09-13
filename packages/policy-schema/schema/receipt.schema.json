@@ -1,18 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://scopebond.com/schema/receipt-1.0.json",
-  "title": "scopebond:receipt (ACTA envelope)",
-  "description": "A countersigned receipt in the ACTA signed-receipt envelope (flat {payload, signature}, RFC 8785 canonicalization) carrying Scopebond's fields in the namespaced type scopebond:receipt (POLICY_VOCABULARY.md §10; ADR-006). The countersignature attests occurrence and content, not compliance.",
+  "$id": "https://scopebond.com/schema/receipt-v1.json",
+  "title": "scopebond:receipt evidence contract v1",
+  "description": "A countersigned receipt whose signature covers the complete canonical payload. It attests the gateway's recorded decision and adapter assertion; it does not independently prove an external effect or compliance.",
   "type": "object",
   "required": ["payload", "signature"],
   "additionalProperties": false,
   "properties": {
     "payload": {
       "type": "object",
-      "required": ["type", "intent", "policy_hash", "policy_version", "verifier_version", "realtime_result", "executed", "attester", "timestamp"],
+      "required": ["type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref", "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result", "executed", "execution_ref", "execution", "redaction", "attester", "timestamp"],
       "additionalProperties": false,
       "properties": {
         "type": { "const": "scopebond:receipt" },
+        "evidence_version": { "const": "1.0" },
+        "canonicalization": { "const": "RFC8785" },
         "intent": {
           "type": "object",
           "description": "The action the agent signed (the ACTA payload_digest source).",
@@ -24,31 +26,74 @@
             "params": { "type": "object" }
           }
         },
-        "intent_hash": { "type": "string", "description": "ACTA action_ref = hash of the signed intent." },
+        "intent_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Compatibility alias of action_ref.authorized_intent_hash." },
+        "action_ref": {
+          "type": "object",
+          "required": ["authorized_intent_hash", "evidence_intent_hash"],
+          "additionalProperties": false,
+          "properties": {
+            "authorized_intent_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "evidence_intent_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
         "policy_hash": { "type": "string", "description": "ACTA policy_digest = the registered policy hash." },
         "policy_version": { "type": "integer", "minimum": 1 },
+        "policy_ref": {
+          "type": "object",
+          "required": ["id", "version", "digest"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": ["string", "null"] },
+            "version": { "type": "integer", "minimum": 1 },
+            "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
         "verifier_version": { "type": "string" },
         "realtime_result": { "enum": ["allow", "deny", "approved", "timeout"] },
         "executed": { "type": "boolean" },
-        "execution_ref": { "type": "string", "description": "tx hash, HTTP response digest, or resource receipt ID." },
-        "approval": {
+        "execution_ref": { "type": ["string", "null"], "description": "Compatibility alias of execution.reference." },
+        "execution": {
           "type": "object",
-          "description": "Present for require_approval clauses.",
+          "required": ["state", "assertion", "reference", "external_effect"],
+          "additionalProperties": false,
           "properties": {
-            "approver": { "type": "string" },
-            "intent_hash": { "type": "string" }
+            "state": { "enum": ["simulated", "observed_not_evaluated", "denied", "allowed_pending", "executed", "failed", "outcome_unknown"] },
+            "assertion": { "enum": ["none", "gateway_simulation", "adapter_reported_success", "adapter_reported_failure", "adapter_outcome_unknown"] },
+            "reference": { "type": ["string", "null"] },
+            "external_effect": { "const": "not_independently_verified" }
+          }
+        },
+        "redaction": {
+          "type": "object",
+          "required": ["profile", "paths"],
+          "additionalProperties": false,
+          "properties": {
+            "profile": { "const": "scopebond:minimized-intent/v1" },
+            "paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
           }
         },
         "attester": {
           "type": "object",
           "required": ["kind", "kid"],
+          "additionalProperties": false,
           "properties": {
             "kind": { "enum": ["gateway", "module", "resource"] },
             "kid": { "type": "string" }
           }
         },
         "timestamp": { "type": "string", "format": "date-time" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "execution": { "properties": { "state": { "const": "executed" } } } } },
+          "then": { "properties": { "executed": { "const": true } } },
+          "else": { "properties": { "executed": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "execution": { "properties": { "state": { "const": "simulated" } } } } },
+          "then": { "properties": { "execution": { "properties": { "assertion": { "const": "gateway_simulation" } } } } }
+        }
+      ]
     },
     "signature": {
       "type": "object",

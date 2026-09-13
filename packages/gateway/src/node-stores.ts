@@ -36,11 +36,12 @@ export class FileReceiptStore implements ReceiptStore {
     }
   }
   put(r: SignedReceipt): void {
-    appendFileSync(this.file, JSON.stringify(r) + "\n");
-    this.cache.push(r);
+    const serialized = JSON.stringify(r);
+    appendFileSync(this.file, serialized + "\n");
+    this.cache.push(JSON.parse(serialized) as SignedReceipt);
   }
-  list(): SignedReceipt[] { return this.cache.slice(); }
-  executed(): Receipt[] { return this.cache.map((r) => r.payload as unknown as Receipt); }
+  list(): SignedReceipt[] { return structuredClone(this.cache); }
+  executed(): Receipt[] { return structuredClone(this.cache.map((r) => r.payload as unknown as Receipt)); }
   putAnchor(a: Anchor): void { appendFileSync(this.anchorFile, JSON.stringify(a) + "\n"); this.anchorLog.push(a); }
   anchors(): Anchor[] { return this.anchorLog.slice(); }
 }

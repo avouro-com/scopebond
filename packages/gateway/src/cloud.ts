@@ -58,7 +58,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   timer.unref?.();
 
   return {
-    enqueue(r) { buffer.push(r); if (buffer.length >= batchSize) void flush(); },
+    enqueue(r) { buffer.push(structuredClone(r)); if (buffer.length >= batchSize) void flush(); },
     flush,
     stop() { clearInterval(timer as unknown as ReturnType<typeof setInterval>); },
     pending() { return buffer.length; },

@@ -3,7 +3,8 @@
 > **Experimental alpha:** use controlled test systems only. Open enforcement,
 > authentication, concurrency, durability and sensitive-data findings must be
 > resolved before production reliance. With no `executor` configured, allowed
-> requests run the built-in no-op and `executed` refers only to that no-op.
+> requests run the built-in simulation and are recorded as `simulated`, never
+> `executed`.
 
 The **Scopebond Gateway** — a policy-enforcement proxy that sits between an AI
 agent and everything it can touch. One policy, three uses: **prevent · prove · pay**
@@ -104,14 +105,24 @@ scopebond-gateway keygen ./scopebond-attester.key --out ./attester.pub.pem
 scopebond-gateway verify ./receipt.json --key ./attester.pub.pem
 ```
 
-`verify` accepts a bare `scopebond:receipt` or a `/v1/evaluate` response. It checks
-the **Ed25519 signature** and that the recorded **`intent_hash`** matches the intent
-(tampering fails both). In code:
+`verify` accepts a bare `scopebond:receipt` or a `/v1/evaluate` response. Evidence
+contract v1 checks the **Ed25519 signature**, authorized/minimized action references,
+policy digest/version reference and supported version. Legacy unversioned receipts
+remain verifiable but are labeled legacy. In every version, the signature proves
+what the gateway attested; an adapter reference does not independently prove an
+external effect. In code:
 
 ```ts
 import { verifyReceipt } from "@scopebond/gateway";
 const { valid } = verifyReceipt(receipt, publicKeyPem);
 ```
+
+V1 receipts use explicit execution states: `simulated`, `observed_not_evaluated`,
+`denied`, `allowed_pending`, `executed`, `failed`, and `outcome_unknown`. Before
+signing, known credential fields are replaced with `[REDACTED]` and request bodies
+with a SHA-256 digest plus byte length. Policy evaluation and a configured executor
+still receive the original action; stores and exporters receive only the minimized,
+signed receipt.
 
 ## Embed it
 

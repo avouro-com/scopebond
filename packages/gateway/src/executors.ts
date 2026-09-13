@@ -17,6 +17,7 @@ export function createHttpExecutor(opts: HttpExecutorOptions = {}): Executor {
   const f = opts.fetch ?? fetch;
   const scheme = opts.scheme ?? "https";
   return {
+    mode: "dispatch",
     async execute(intent: Intent) {
       const p = (intent.params ?? {}) as Record<string, any>;
       if (!p.host) return { ref: "noop:non-http-action" };

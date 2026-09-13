@@ -8,6 +8,12 @@ tagged release.
 ## [Unreleased]
 
 ### Added
+- Evidence contract v1 for `scopebond:receipt`: explicit execution states, exact
+  policy/action references, minimized request evidence, separate legacy schema,
+  Node/WebCrypto/offline vectors, and verification results that never imply an
+  independently proven external effect. The default no-op is now `simulated` and
+  ambiguous adapter exceptions are signed as `outcome_unknown` without retaining
+  raw error text.
 - Repository scaffolding: Apache-2.0 license, monorepo layout (`packages/`), the
   first packages (`@scopebond/policy-schema`, `@scopebond/verify`), and the
   open-source content gate (`scripts/oss-gate.mjs`) enforced on commit, push, and

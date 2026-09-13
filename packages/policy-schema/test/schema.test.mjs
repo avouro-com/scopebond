@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { policySchema, receiptSchema, CLAUSE_TYPES, CLAUSE_MODES, VOCABULARY_VERSION } from "../dist/index.js";
+import {
+  policySchema, receiptSchema, legacyReceiptSchema, CLAUSE_TYPES, CLAUSE_MODES,
+  VOCABULARY_VERSION, EVIDENCE_VERSION, CANONICALIZATION, EXECUTION_STATES,
+} from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const example = JSON.parse(readFileSync(join(here, "../vectors/example-policy.json"), "utf8"));
+const evidence = JSON.parse(readFileSync(join(here, "../vectors/evidence-contract.json"), "utf8"));
 
 test("schemas parse and are 2020-12", () => {
   assert.equal(policySchema.$schema, "https://json-schema.org/draft/2020-12/schema");
@@ -37,4 +41,10 @@ test("example vector uses only known clause types and modes", () => {
 
 test("receipt schema fixes the namespaced type", () => {
   assert.equal(receiptSchema.properties.payload.properties.type.const, "scopebond:receipt");
+  assert.equal(receiptSchema.properties.payload.properties.evidence_version.const, EVIDENCE_VERSION);
+  assert.equal(receiptSchema.properties.payload.properties.canonicalization.const, CANONICALIZATION);
+  assert.deepEqual(receiptSchema.properties.payload.properties.execution.properties.state.enum, EXECUTION_STATES);
+  assert.equal(legacyReceiptSchema.properties.payload.properties.type.const, "scopebond:receipt");
+  assert.deepEqual(evidence.execution_states, EXECUTION_STATES);
+  assert.equal(evidence.version, EVIDENCE_VERSION);
 });

@@ -9,18 +9,22 @@ evidence, and coverage all share — published before the proxy (D27).
 
 - `schema/policy.schema.json` — the policy document (closed schema: unknown clause
   types or fields make a policy invalid).
-- `schema/receipt.schema.json` — the `scopebond:receipt` (ACTA envelope; ADR-006).
-- `src/index.mjs` — loads the schemas and exports `CLAUSE_TYPES`, `CLAUSE_MODES`,
-  `REALTIME_RESULTS`, `COVERAGE_BUCKETS`, `VOCABULARY_VERSION`.
-- `vectors/` — example policies (valid and, over time, invalid) used as conformance vectors.
+- `schema/receipt.schema.json` — evidence contract v1 for `scopebond:receipt`.
+- `schema/receipt-legacy.schema.json` — the prior unversioned envelope, retained only
+  for explicit compatibility handling.
+- `src/index.ts` — loads the schemas and exports the policy and evidence constants.
+- `vectors/evidence-contract.json` — shared execution-state, legacy/unknown-version
+  and synthetic-secret cases used by Node, WebCrypto and offline verification tests.
+- `vectors/example-policy.json` — example policy input.
 
 ## Status
 
-Vocabulary v1 per the specification. The clause set and receipt envelope are
-encoded; **conformance vectors are being filled in** — the target (per the spec
-§11) is, for every clause type and mode, at least one prevented, one covered, one
-refused, and one ambiguity case. `[PLANNED]` an `ajv`-based `validate()` helper and
-the full vector suite shared with `@scopebond/verify`.
+Vocabulary v1 per the specification. The evidence schema distinguishes simulations,
+observations, denials, pending actions, reported execution, failures and unknown
+outcomes. It fixes the policy/action references and redaction profile inside the
+signed payload and states that external effects are not independently verified.
+The policy conformance vectors remain in `@scopebond/verify`; a runtime JSON-Schema
+validator remains planned for the strict DEV09/DEV14 input boundaries.
 
 ## Test
 

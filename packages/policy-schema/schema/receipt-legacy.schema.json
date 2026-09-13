@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scopebond.com/schema/receipt-legacy-0.json",
+  "title": "Legacy unversioned scopebond:receipt",
+  "description": "Compatibility schema for receipts emitted before evidence contract v1. A verifier may validate the historical signature and intent hash but must label the receipt legacy and must not infer an execution state beyond its old fields.",
+  "type": "object",
+  "required": ["payload", "signature"],
+  "additionalProperties": false,
+  "properties": {
+    "payload": {
+      "type": "object",
+      "required": ["type", "intent", "intent_hash", "policy_hash", "policy_version", "verifier_version", "realtime_result", "executed", "attester", "timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "scopebond:receipt" },
+        "intent": { "type": "object", "required": ["action_type"] },
+        "intent_hash": { "type": "string" },
+        "policy_hash": { "type": "string" },
+        "policy_version": { "type": "integer", "minimum": 1 },
+        "verifier_version": { "type": "string" },
+        "realtime_result": { "enum": ["allow", "deny", "approved", "timeout"] },
+        "executed": { "type": "boolean" },
+        "execution_ref": { "type": ["string", "null"] },
+        "approval": { "type": "object" },
+        "attester": {
+          "type": "object",
+          "required": ["kind", "kid"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["gateway", "module", "resource"] },
+            "kid": { "type": "string" }
+          }
+        },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["alg", "sig"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "enum": ["Ed25519", "ES256", "secp256k1", "EIP-712"] },
+        "sig": { "type": "string" }
+      }
+    }
+  }
+}

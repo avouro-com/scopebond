@@ -7,8 +7,13 @@ export type { Decision } from "./engine.js";
 export {
   MemoryReceiptStore, createAttester, attesterFromPrivateKeyPem, verifyReceipt,
   buildReceipt, canonical, sha256, intentHash, ed25519JwkToSpkiPem, deriveKid,
+  minimizeIntentForEvidence, EVIDENCE_VERSION, REDACTION_PROFILE, EXECUTION_STATES,
+  CANONICALIZATION, validateEvidencePayload,
 } from "./receipts.js";
-export type { ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification, Anchor } from "./receipts.js";
+export type {
+  ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification, Anchor,
+  ExecutionState, ExecutionEvidence, PolicyReference, ActionReference, RedactionEvidence,
+} from "./receipts.js";
 export { handleMcp } from "./mcp.js";
 export { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
 export type { ProofStep } from "./anchor.js";

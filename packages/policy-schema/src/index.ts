@@ -12,8 +12,12 @@ const load = (rel: string): Record<string, unknown> =>
 
 export const policySchema = load("../schema/policy.schema.json");
 export const receiptSchema = load("../schema/receipt.schema.json");
+export const legacyReceiptSchema = load("../schema/receipt-legacy.schema.json");
 
 export const VOCABULARY_VERSION = "1.0";
+export const EVIDENCE_VERSION = "1.0";
+export const CANONICALIZATION = "RFC8785";
+export const REDACTION_PROFILE = "scopebond:minimized-intent/v1";
 
 export const CLAUSE_TYPES = [
   "spend_limit", "rate_limit",
@@ -25,6 +29,10 @@ export const CLAUSE_TYPES = [
 export const CLAUSE_MODES = ["enforce", "monitor", "require_approval"] as const;
 
 export const REALTIME_RESULTS = ["allow", "deny", "approved", "timeout"] as const;
+export const EXECUTION_STATES = [
+  "simulated", "observed_not_evaluated", "denied", "allowed_pending",
+  "executed", "failed", "outcome_unknown",
+] as const;
 
 // The coverage buckets a policy resolves into (POLICY_VOCABULARY.md §4).
 export const COVERAGE_BUCKETS = ["prevented", "covered", "refused"] as const;
@@ -32,3 +40,4 @@ export const COVERAGE_BUCKETS = ["prevented", "covered", "refused"] as const;
 export type ClauseType = (typeof CLAUSE_TYPES)[number];
 export type ClauseMode = (typeof CLAUSE_MODES)[number];
 export type RealtimeResult = (typeof REALTIME_RESULTS)[number];
+export type ExecutionState = (typeof EXECUTION_STATES)[number];

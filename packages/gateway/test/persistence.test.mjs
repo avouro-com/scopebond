@@ -46,7 +46,13 @@ test("verifyReceipt validates a genuine receipt and rejects tampering", async ()
     const ok = verifyReceipt(receipt, attester.publicKeyPem);
     assert.equal(ok.valid, true);
     assert.equal(ok.signature_valid, true);
+    assert.equal(ok.contract_valid, true);
     assert.equal(ok.intent_hash_valid, true);
+    assert.equal(ok.policy_ref_valid, true);
+    assert.equal(ok.supported_version, true);
+    assert.equal(ok.key_binding_valid, true);
+    assert.equal(ok.legacy, false);
+    assert.equal(ok.external_effect_verified, false);
 
     // Tamper the amount: intent no longer matches the signed intent_hash.
     const tamperedIntent = structuredClone(receipt);

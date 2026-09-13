@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "execution_states": [
+    "simulated",
+    "observed_not_evaluated",
+    "denied",
+    "allowed_pending",
+    "executed",
+    "failed",
+    "outcome_unknown"
+  ],
+  "sensitive_intent": {
+    "action_type": "http.call",
+    "params": {
+      "host": "api.example.test",
+      "path": "/refund",
+      "method": "POST",
+      "headers": {
+        "authorization": "Bearer synthetic-secret-token",
+        "cookie": "session=synthetic-cookie",
+        "content-type": "application/json"
+      },
+      "body": {
+        "customer_email": "synthetic@example.test",
+        "reason": "synthetic private note"
+      },
+      "metadata": {
+        "access_token": "example-access-token",
+        "case_id": "case-123"
+      }
+    }
+  },
+  "forbidden_after_minimization": [
+    "synthetic-secret-token",
+    "synthetic-cookie",
+    "synthetic@example.test",
+    "synthetic private note",
+    "example-access-token"
+  ],
+  "required_redacted_paths": [
+    "intent.params.body",
+    "intent.params.headers.authorization",
+    "intent.params.headers.cookie",
+    "intent.params.metadata.access_token"
+  ],
+  "unsupported_versions": ["0.9", "2.0", "draft"]
+}

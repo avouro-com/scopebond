@@ -142,7 +142,12 @@ async function cmdVerify(args: string[]): Promise<void> {
 
   const v = verifyReceipt(receipt, pem as string);
   console.log(`signature_valid   ${v.signature_valid}`);
-  console.log(`intent_hash_valid ${v.intent_hash_valid}`);
+  console.log(`contract_valid    ${v.contract_valid}`);
+  console.log(`key_binding_valid ${v.key_binding_valid}`);
+  console.log(`action_ref_valid  ${v.intent_hash_valid}`);
+  console.log(`policy_ref_valid  ${v.policy_ref_valid}`);
+  console.log(`supported_version ${v.supported_version}${v.legacy ? " (legacy)" : ""}`);
+  console.log("external_effect_verified false");
   console.log(v.valid ? "✔ receipt is valid" : "✘ receipt is NOT valid");
   process.exit(v.valid ? 0 : 2);
 }

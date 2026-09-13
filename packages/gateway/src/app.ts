@@ -4,8 +4,12 @@
 
 import { Hono } from "hono";
 import { evaluate } from "./engine.js";
-import { buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash } from "./receipts.js";
-import type { Attester, ReceiptStore, SignedReceipt, Anchor } from "./receipts.js";
+import {
+  buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash,
+  minimizeIntentForEvidence, REDACTION_PROFILE,
+  CANONICALIZATION,
+} from "./receipts.js";
+import type { Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
 import type { Policy, Intent, Approval, Verdict } from "@scopebond/verify";
@@ -13,9 +17,11 @@ import type { Policy, Intent, Approval, Verdict } from "@scopebond/verify";
 /** How an allowed action is actually carried out. Default: a no-op (record only).
  *  Real forwarding (HTTP proxy, MCP passthrough) is a swappable implementation. */
 export interface Executor {
+  /** Simulation never claims that an external action occurred. */
+  mode?: "simulation" | "dispatch";
   execute(intent: Intent): { ref: string } | Promise<{ ref: string }>;
 }
-export const noopExecutor: Executor = { execute: () => ({ ref: "noop:executed" }) };
+export const noopExecutor: Executor = { mode: "simulation", execute: () => ({ ref: "simulation:no-dispatch" }) };
 
 export interface GatewayConfig {
   policy: Policy;
@@ -48,6 +54,9 @@ export function createGateway(config: GatewayConfig): Gateway {
   const store = config.store ?? new MemoryReceiptStore();
   const executor = config.executor ?? noopExecutor;
   const attester = config.attester ?? createAttester();
+  if (attester.kid !== deriveAttesterKid(attester.publicKeyJwk)) {
+    throw new Error("attester kid must match the public-key fingerprint for evidence contract v1");
+  }
   let policy = config.policy;
   let policyHash = sha256(canonical(policy));
   let policyVersion = (policy.version as number) ?? 1;
@@ -57,14 +66,48 @@ export function createGateway(config: GatewayConfig): Gateway {
   async function handleAction(req: ActionRequest): Promise<ActionResult> {
     const ts = now();
     const ih = intentHash(req.intent);
+    const minimized = minimizeIntentForEvidence(req.intent);
+    const evidenceHash = intentHash(minimized.intent);
     const attesterRef = { kind: "gateway" as const, kid: attester.kid };
+    const policyRef = {
+      id: typeof policy.policy_id === "string" ? policy.policy_id : null,
+      version: policyVersion,
+      digest: policyHash,
+    };
+
+    const receiptFields = (
+      realtimeResult: "allow" | "deny" | "approved" | "timeout",
+      executionState: ExecutionState,
+      assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown",
+      executionRef: string | null,
+    ) => ({
+      evidence_version: "1.0" as const,
+      canonicalization: CANONICALIZATION,
+      intent: minimized.intent,
+      intent_hash: ih,
+      action_ref: { authorized_intent_hash: ih, evidence_intent_hash: evidenceHash },
+      policy_hash: policyHash,
+      policy_version: policyVersion,
+      policy_ref: policyRef,
+      verifier_version: VERIFIER_VERSION,
+      realtime_result: realtimeResult,
+      executed: executionState === "executed",
+      execution_ref: executionRef,
+      execution: {
+        state: executionState,
+        assertion,
+        reference: executionRef,
+        external_effect: "not_independently_verified" as const,
+      },
+      redaction: { profile: REDACTION_PROFILE, paths: minimized.redactedPaths },
+      attester: attesterRef,
+      timestamp: ts,
+    });
 
     // Fail closed: while killed, deny everything and record the denial.
     if (state.killed) {
       const receipt = await buildReceipt({
-        intent: req.intent, intent_hash: ih, policy_hash: policyHash, policy_version: policyVersion,
-        verifier_version: VERIFIER_VERSION, realtime_result: "deny", executed: false, execution_ref: null,
-        attester: attesterRef, timestamp: ts,
+        ...receiptFields("deny", "denied", "none", null),
       }, attester);
       await store.put(receipt);
       return { allowed: false, reason: "kill switch active (fail closed)", receipt };
@@ -74,19 +117,41 @@ export function createGateway(config: GatewayConfig): Gateway {
     const d = evaluate(policy, prior, { intent: req.intent, approval: req.approval, intent_hash: ih }, ts);
 
     let ref: string | null = null;
-    if (d.allow) ref = (await executor.execute(req.intent)).ref;
+    let executionState: ExecutionState = "denied";
+    let assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown" = "none";
+    if (d.allow) {
+      if (executor.mode === "simulation") {
+        ref = (await executor.execute(req.intent)).ref;
+        executionState = "simulated";
+        assertion = "gateway_simulation";
+      } else {
+        try {
+          ref = (await executor.execute(req.intent)).ref;
+          executionState = "executed";
+          assertion = "adapter_reported_success";
+        } catch (error) {
+          const errorText = error instanceof Error ? `${error.name}:${error.message}` : String(error);
+          ref = `error:sha256:${sha256(errorText)}`;
+          executionState = "outcome_unknown";
+          assertion = "adapter_outcome_unknown";
+        }
+      }
+    }
 
     const receipt = await buildReceipt({
-      intent: req.intent, intent_hash: ih, policy_hash: policyHash, policy_version: policyVersion,
-      verifier_version: VERIFIER_VERSION, realtime_result: d.realtime_result, executed: d.allow,
-      execution_ref: ref, attester: attesterRef, timestamp: ts,
+      ...receiptFields(d.realtime_result, executionState, assertion, ref),
     }, attester);
     await store.put(receipt);
 
     const reason = d.allow
       ? (d.clause_mode === "monitor" ? "allowed (monitored, out of policy — covered at claim time)" : "allowed")
       : (d.verdict.explanation || "denied");
-    return { allowed: d.allow, reason, verdict: d.verdict, receipt };
+    return {
+      allowed: d.allow,
+      reason: executionState === "outcome_unknown" ? "execution outcome unknown" : reason,
+      verdict: d.verdict,
+      receipt,
+    };
   }
 
   function setPolicy(next: Policy): void {
@@ -178,4 +243,8 @@ export function createGateway(config: GatewayConfig): Gateway {
   });
 
   return { app, store, attester, state, get policyHash() { return policyHash; }, handleAction, setPolicy, anchor };
+}
+
+function deriveAttesterKid(jwk: Record<string, unknown>): string {
+  return "key:" + sha256(canonical({ crv: jwk.crv, kty: jwk.kty, x: jwk.x })).slice(0, 16);
 }

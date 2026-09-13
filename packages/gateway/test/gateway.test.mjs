@@ -26,7 +26,10 @@ test("allows an in-policy action and Ed25519-countersigns a receipt", async () =
   const j = await res.json();
   assert.equal(j.allowed, true);
   assert.equal(j.receipt.payload.type, "scopebond:receipt");
-  assert.equal(j.receipt.payload.executed, true);
+  assert.equal(j.receipt.payload.evidence_version, "1.0");
+  assert.equal(j.receipt.payload.executed, false);
+  assert.equal(j.receipt.payload.execution.state, "simulated");
+  assert.equal(j.receipt.payload.execution.external_effect, "not_independently_verified");
   assert.equal(j.receipt.payload.realtime_result, "allow");
   assert.equal(j.receipt.signature.alg, "Ed25519");
   assert.ok(j.receipt.signature.sig.length > 0);
@@ -51,7 +54,13 @@ test("denies a non-allowlisted endpoint (enforce)", async () => {
 
 test("monitor clause: windowed over-limit is allowed but flagged (covered)", async () => {
   const policy = { version: 1, clauses: [{ id: "daily", type: "spend_limit", mode: "monitor", asset: "USDC", max_per_window: 5000000, window: "P1D", scope: "principal" }] };
-  const { app } = gw(policy, ["2026-09-12T10:00:00Z", "2026-09-12T12:00:00Z"]);
+  let i = 0;
+  const times = ["2026-09-12T10:00:00Z", "2026-09-12T12:00:00Z"];
+  const { app } = createGateway({
+    policy,
+    now: () => times[Math.min(i++, times.length - 1)],
+    executor: { mode: "dispatch", execute: () => ({ ref: "test:reported" }) },
+  });
   const first = await (await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 3000000 } })).json();
   assert.equal(first.allowed, true);
   assert.equal(first.receipt.payload.realtime_result, "allow");
@@ -59,7 +68,60 @@ test("monitor clause: windowed over-limit is allowed but flagged (covered)", asy
   const j = await res.json();
   assert.equal(j.allowed, true); // monitor lets it through
   assert.equal(j.receipt.payload.executed, true);
+  assert.equal(j.receipt.payload.execution.state, "executed");
   assert.equal(j.receipt.payload.realtime_result, "deny"); // but flagged out-of-policy
+});
+
+test("minimizes sensitive request data before signing while retaining exact references", async () => {
+  const policy = { policy_id: "http-policy", version: 7, clauses: [] };
+  const original = {
+    action_type: "http.call",
+    params: {
+      host: "api.example.test",
+      headers: { authorization: "Bearer synthetic-secret", "content-type": "application/json" },
+      body: { email: "private@example.test", note: "private body" },
+      metadata: { access_token: "example-access-token", case_id: "case-1" },
+    },
+  };
+  const { app } = createGateway({ policy });
+  const response = await post(app, "/v1/evaluate", { intent: original });
+  const { receipt } = await response.json();
+  const serialized = JSON.stringify(receipt);
+
+  assert.equal(serialized.includes("synthetic-secret"), false);
+  assert.equal(serialized.includes("private@example.test"), false);
+  assert.equal(serialized.includes("private body"), false);
+  assert.equal(serialized.includes("example-access-token"), false);
+  assert.equal(receipt.payload.intent.params.headers.authorization, "[REDACTED]");
+  assert.match(receipt.payload.intent.params.body.content_digest, /^sha256:[0-9a-f]{64}$/);
+  assert.deepEqual(receipt.payload.redaction.paths, [
+    "intent.params.body",
+    "intent.params.headers.authorization",
+    "intent.params.metadata.access_token",
+  ]);
+  assert.equal(receipt.payload.action_ref.authorized_intent_hash, receipt.payload.intent_hash);
+  assert.equal(receipt.payload.policy_ref.id, "http-policy");
+  assert.equal(receipt.payload.policy_ref.version, 7);
+  assert.equal(receipt.payload.policy_ref.digest, receipt.payload.policy_hash);
+});
+
+test("records an adapter exception as outcome unknown without raw error text", async () => {
+  const { app } = createGateway({
+    policy: { version: 1, clauses: [] },
+    executor: {
+      mode: "dispatch",
+      execute: () => { throw new Error("synthetic upstream secret"); },
+    },
+  });
+  const response = await post(app, "/v1/evaluate", { intent: { action_type: "test.call" } });
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(result.allowed, true);
+  assert.equal(result.receipt.payload.executed, false);
+  assert.equal(result.receipt.payload.execution.state, "outcome_unknown");
+  assert.equal(result.receipt.payload.execution.assertion, "adapter_outcome_unknown");
+  assert.match(result.receipt.payload.execution.reference, /^error:sha256:[0-9a-f]{64}$/);
+  assert.equal(JSON.stringify(result).includes("synthetic upstream secret"), false);
 });
 
 test("kill switch fails closed", async () => {
@@ -75,9 +137,15 @@ test("kill switch fails closed", async () => {
 
 test("stores and lists receipts; status reflects state", async () => {
   const { app } = gw(enforcePolicy);
-  await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 500000 } });
+  const action = await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 500000 } });
+  const returned = await action.json();
+  returned.receipt.payload.intent.amount = 9999999;
   const list = await (await app.request("/v1/receipts")).json();
   assert.equal(list.receipts.length, 1);
+  assert.equal(list.receipts[0].payload.intent.amount, 500000, "accepted signed evidence is snapshotted");
+  list.receipts[0].payload.intent.amount = 8888888;
+  const listedAgain = await (await app.request("/v1/receipts")).json();
+  assert.equal(listedAgain.receipts[0].payload.intent.amount, 500000, "reads cannot mutate retained evidence");
   const status = await (await app.request("/v1/status")).json();
   assert.equal(status.killed, false);
   assert.equal(status.receipts, 1);
