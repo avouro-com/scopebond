@@ -44,7 +44,7 @@ test("withCloudExporter stores locally AND queues for Cloud; anchoring still wor
   const f = mockFetch();
   const ex = createCloudExporter({ url: "https://c", apiKey: "k", batchSize: 100, flushMs: 1e9, fetch: f });
   const base = new MemoryReceiptStore();
-  const gw = createGateway({
+  const gw = createGateway({ authentication: { mode: "insecure-development" },
     policy: {
       vocabulary_version: "1.0", policy_id: "cloud-export", version: 1,
       clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["x"] }],

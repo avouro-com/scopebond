@@ -50,6 +50,10 @@ test("receipt schema fixes the namespaced type", () => {
   assert.equal(receiptSchema.properties.payload.properties.evidence_version.const, EVIDENCE_VERSION);
   assert.equal(receiptSchema.properties.payload.properties.canonicalization.const, CANONICALIZATION);
   assert.deepEqual(receiptSchema.properties.payload.properties.execution.properties.state.enum, EXECUTION_STATES);
+  assert.ok(receiptSchema.properties.payload.required.includes("authorization"));
+  assert.deepEqual(receiptSchema.$defs.identity.properties.alg, { const: "Ed25519" });
+  assert.equal(receiptSchema.$defs.intentAuthorization.additionalProperties, false);
+  assert.equal(receiptSchema.$defs.approval.properties.decision.const, "approve");
   assert.equal(legacyReceiptSchema.properties.payload.properties.type.const, "scopebond:receipt");
   assert.deepEqual(evidence.execution_states, EXECUTION_STATES);
   assert.deepEqual(evidence.realtime_results, REALTIME_RESULTS);

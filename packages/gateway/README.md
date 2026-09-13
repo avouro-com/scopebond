@@ -1,8 +1,7 @@
 # @scopebond/gateway
 
-> **Experimental alpha:** use controlled test systems only. Open enforcement,
-> authentication, concurrency, durability and sensitive-data findings must be
-> resolved before production reliance. With no `executor` configured, allowed
+> **Experimental alpha:** use controlled test systems only. Concurrency and
+> execution durability findings must be resolved before production reliance. With no `executor` configured, allowed
 > requests run the built-in simulation and are recorded as `simulated`, never
 > `executed`.
 
@@ -33,16 +32,20 @@ Passive onboarding discovery uses `POST /v1/observe`. It returns `202` with an
 `observed_not_evaluated` receipt, never treats the action as allowed, and never
 invokes the configured executor.
 
+Every protected action and observation requires a short-lived Ed25519 authorization
+from a registered agent key. The signed envelope binds the complete intent digest,
+fingerprint-derived key id, request id and validity window. Optional approvals are
+separately signed and bind the exact intent and active policy reference; both replay
+ids are single-use. Receipts preserve this evidence for offline verification.
+
 ## Quickstart
 
 ```bash
-npx @scopebond/gateway ./policy.json      # serves on :8787
+SCOPEBOND_PRINCIPAL_KEYS_FILE=./principal-keys.json npx @scopebond/gateway ./policy.json
 ```
 
 ```bash
-curl -sX POST localhost:8787/v1/evaluate \
-  -H 'content-type: application/json' \
-  -d '{"intent":{"action_type":"payout.create","asset":"USDC","amount":500000}}'
+node examples/quickstart.mjs
 ```
 
 Routes: `POST /v1/evaluate`, `POST /v1/observe`, `POST /mcp` (MCP ingress), `POST /v1/kill` · `/v1/resume`,
@@ -63,11 +66,26 @@ do not close the alpha findings described above. Configure:
 | `SCOPEBOND_ATTESTER_KEY` | — | attester key inline (PEM), e.g. from a secret store |
 | `SCOPEBOND_DB` | `./scopebond.db` | SQLite receipt store path |
 | `SCOPEBOND_RECEIPTS_FILE` | — | use an append-only JSONL log instead of SQLite |
+| `SCOPEBOND_PRINCIPAL_KEYS_FILE` | required | JSON array of Ed25519 public keys and `agent`/`approver` purposes |
+| `SCOPEBOND_UNSAFE_ALLOW_UNSIGNED` | — | set to `1` only for local simulation; receipts are marked `insecure_development` |
 | `SCOPEBOND_ANCHOR_INTERVAL` | `24h` | anchor cadence (`24h`, `1h`, `30m`; `0`/`off` disables) |
 | `SCOPEBOND_POLICY_WATCH` | `1` | hot-reload the policy file on change (`0` disables) |
 | `SCOPEBOND_CLOUD_URL` | — | mirror receipts to a hosted control plane (e.g. `https://cloud.scopebond.com`) |
 | `SCOPEBOND_CLOUD_KEY` | — | tenant API key (`sbk_…`) for the Cloud (required with the URL) |
 | `SCOPEBOND_CLOUD_FLUSH_MS` | `15000` | Cloud export flush interval |
+
+`principal-keys.json` contains public material only. The gateway derives and checks
+each `kid`; do not put private keys in this file:
+
+```json
+[
+  {
+    "public_key_pem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+    "purposes": ["agent"],
+    "status": "active"
+  }
+]
+```
 
 ## Optional: mirror receipts to Scopebond Cloud
 
@@ -136,8 +154,9 @@ signed receipt.
 ## Embed it
 
 ```ts
-import { createGateway } from "@scopebond/gateway";
-const { app, handleAction } = createGateway({ policy });
+import { createGateway, StaticPrincipalKeyRegistry } from "@scopebond/gateway";
+const keys = new StaticPrincipalKeyRegistry(principalKeyRecords);
+const { app, handleAction } = createGateway({ policy, authentication: { keys } });
 // app is a Hono app (serve it anywhere); handleAction(req) evaluates directly.
 ```
 
@@ -149,7 +168,7 @@ under the `@scopebond/gateway/node` subpath (they use `node:fs` / `node:sqlite`)
 import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 const { attester } = loadOrCreateAttester({ file: "./scopebond-attester.key" });
 const { store } = openReceiptStore({ db: "./scopebond.db" });
-const { app } = createGateway({ policy, attester, store });
+const { app } = createGateway({ policy, attester, store, authentication: { keys } });
 ```
 
 ## `[PLANNED]`

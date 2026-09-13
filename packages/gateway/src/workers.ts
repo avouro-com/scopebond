@@ -8,6 +8,7 @@ import type { Gateway } from "./app.js";
 import { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
 import type { ReceiptStore, SignedReceipt, Attester, Anchor } from "./receipts.js";
 import type { Receipt, Policy } from "@scopebond/verify";
+import type { GatewayAuthentication } from "./auth.js";
 
 /** The subset of Cloudflare's KVNamespace this package uses. */
 export interface KvLike {
@@ -54,7 +55,12 @@ export async function loadOrCreateKvAttester(kv: KvLike, key = "attester:jwk"): 
 }
 
 /** Build a gateway for a Worker: a persistent KV attester + KV receipt store. */
-export async function createWorkerGateway(opts: { policy: Policy; kv: KvLike; attesterKey?: string }): Promise<Gateway> {
+export async function createWorkerGateway(opts: {
+  policy: Policy;
+  kv: KvLike;
+  authentication: GatewayAuthentication;
+  attesterKey?: string;
+}): Promise<Gateway> {
   const attester = await loadOrCreateKvAttester(opts.kv, opts.attesterKey);
-  return createGateway({ policy: opts.policy, attester, store: new KvReceiptStore(opts.kv) });
+  return createGateway({ policy: opts.policy, attester, store: new KvReceiptStore(opts.kv), authentication: opts.authentication });
 }

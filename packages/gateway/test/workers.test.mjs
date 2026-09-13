@@ -24,7 +24,7 @@ test("WebCrypto attester signs receipts that the Node verifier accepts", async (
   assert.ok(attester.kid.startsWith("key:"));
   assert.ok(attester.publicKeyPem.includes("BEGIN PUBLIC KEY"));
 
-  const { app } = createGateway({ policy, attester });
+  const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy, attester });
   const res = await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 500000 } });
   const { receipt } = await res.json();
 
@@ -50,12 +50,12 @@ test("KV attester persists across a restart; KV receipts are durable", async () 
   const a2 = await loadOrCreateKvAttester(kv); // second load reuses the stored key
   assert.equal(a1.kid, a2.kid);
 
-  const gw1 = await createWorkerGateway({ policy, kv });
+  const gw1 = await createWorkerGateway({ policy, kv, authentication: { mode: "insecure-development" } });
   await post(gw1.app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 100000 } });
   await post(gw1.app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 200000 } });
 
   // "Restart": a fresh gateway on the same KV sees prior receipts and the same key.
-  const gw2 = await createWorkerGateway({ policy, kv });
+  const gw2 = await createWorkerGateway({ policy, kv, authentication: { mode: "insecure-development" } });
   assert.equal(gw2.attester.kid, a1.kid);
   const list = await gw2.store.list();
   assert.equal(list.length, 2);

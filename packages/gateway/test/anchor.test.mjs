@@ -27,7 +27,7 @@ test("merkle proofs verify for every leaf; a wrong leaf fails", () => {
 });
 
 test("anchor commits to receipts; inclusion proof verifies; anchors chain", async () => {
-  const gw = createGateway({ policy, store: new MemoryReceiptStore() });
+  const gw = createGateway({ authentication: { mode: "insecure-development" }, policy, store: new MemoryReceiptStore() });
   await pay(gw.app, 100000); await pay(gw.app, 200000); await pay(gw.app, 300000);
 
   const a1 = await gw.anchor();
@@ -73,7 +73,7 @@ test("anchor commits to receipts; inclusion proof verifies; anchors chain", asyn
 test("setPolicy hot-swaps the active policy (and /v1/status reflects it)", async () => {
   const strict = { vocabulary_version: "1.0", policy_id: "s", version: 1, clauses: [{ id: "c", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000 }] };
   const loose = { vocabulary_version: "1.0", policy_id: "l", version: 2, clauses: [{ id: "c", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000000 }] };
-  const gw = createGateway({ policy: strict, store: new MemoryReceiptStore() });
+  const gw = createGateway({ authentication: { mode: "insecure-development" }, policy: strict, store: new MemoryReceiptStore() });
   const h1 = gw.policyHash;
 
   let r = await (await pay(gw.app, 500000)).json(); // $5,000 > $1,000 cap
@@ -92,7 +92,7 @@ test("setPolicy hot-swaps the active policy (and /v1/status reflects it)", async
 
 test("invalid policy initialization and reload fail without replacing the active snapshot", async () => {
   assert.throws(
-    () => createGateway({ policy: { vocabulary_version: "1.0", policy_id: "empty", version: 1, clauses: [] } }),
+    () => createGateway({ authentication: { mode: "insecure-development" }, policy: { vocabulary_version: "1.0", policy_id: "empty", version: 1, clauses: [] } }),
     /invalid policy/,
   );
 
@@ -100,7 +100,7 @@ test("invalid policy initialization and reload fail without replacing the active
     vocabulary_version: "1.0", policy_id: "strict", version: 1,
     clauses: [{ id: "cap", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100 }],
   };
-  const gateway = createGateway({ policy: strict });
+  const gateway = createGateway({ authentication: { mode: "insecure-development" }, policy: strict });
   const originalHash = gateway.policyHash;
   assert.throws(() => gateway.setPolicy({ clauses: [] }), /invalid policy/);
   assert.equal(gateway.policyHash, originalHash);
@@ -114,7 +114,7 @@ test("anchors persist in a durable store across reopen", async () => {
     const dbFile = join(dir, "r.db");
     {
       const { store } = openReceiptStore({ db: dbFile });
-      const gw = createGateway({ policy, store });
+      const gw = createGateway({ authentication: { mode: "insecure-development" }, policy, store });
       await pay(gw.app, 100000); await pay(gw.app, 200000);
       const a = await gw.anchor();
       assert.equal(a.seq, 1);

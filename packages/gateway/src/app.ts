@@ -14,6 +14,10 @@ import { handleMcp } from "./mcp.js";
 import { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
 import { validateIntent, validatePolicy } from "@scopebond/verify";
 import type { Policy, Intent, Approval, Verdict } from "@scopebond/verify";
+import { authenticateRequest, AuthorizationError } from "./auth.js";
+import type {
+  AuthorizationEvidence, GatewayAuthentication, SignedApproval, SignedIntentAuthorization,
+} from "./auth.js";
 
 /** How an allowed action is actually carried out. Default: a no-op (record only).
  *  Real forwarding (HTTP proxy, MCP passthrough) is a swappable implementation. */
@@ -31,9 +35,15 @@ export interface GatewayConfig {
   attester?: Attester;
   /** Injectable clock for determinism/testing. */
   now?: () => string;
+  /** Principal-key verification. Insecure mode must be selected explicitly. */
+  authentication: GatewayAuthentication;
 }
 
-export interface ActionRequest { intent: Intent; approval?: Approval; }
+export interface ActionRequest {
+  intent: Intent;
+  authorization?: SignedIntentAuthorization;
+  approval?: SignedApproval | Approval;
+}
 export interface ActionResult { allowed: boolean; reason: string; verdict?: Verdict; receipt: SignedReceipt; }
 export interface ObservationResult { observed: true; receipt: SignedReceipt; }
 
@@ -55,6 +65,7 @@ export interface Gateway {
 const VERIFIER_VERSION = "scopebond-verify@0.1.0";
 
 export function createGateway(config: GatewayConfig): Gateway {
+  if (!config.authentication) throw new Error("gateway authentication configuration is required");
   const store = config.store ?? new MemoryReceiptStore();
   const executor = config.executor ?? noopExecutor;
   const attester = config.attester ?? createAttester();
@@ -68,6 +79,31 @@ export function createGateway(config: GatewayConfig): Gateway {
   const now = config.now ?? (() => new Date().toISOString());
   const state = { killed: false };
 
+  async function authorize(req: ActionRequest, ts: string, policyRef: { id: string | null; version: number; digest: string }): Promise<{
+    evidence: AuthorizationEvidence;
+    approvalForPolicy?: Approval;
+  }> {
+    const authentication = config.authentication;
+    if (!("keys" in authentication)) {
+      return {
+        evidence: { mode: "insecure_development", agent: null, approval: null },
+        approvalForPolicy: req.approval as Approval | undefined,
+      };
+    }
+    const receipts = await store.list();
+    const usedRequestIds = new Set<string>();
+    const usedApprovalIds = new Set<string>();
+    for (const receipt of receipts) {
+      const evidence = receipt.payload.authorization;
+      if (evidence?.agent?.request_id) usedRequestIds.add(evidence.agent.request_id);
+      if (evidence?.approval?.approval_id) usedApprovalIds.add(evidence.approval.approval_id);
+    }
+    return authenticateRequest(
+      req.intent, req.authorization, req.approval, authentication, ts, policyRef,
+      usedRequestIds, usedApprovalIds,
+    );
+  }
+
   async function handleAction(req: ActionRequest): Promise<ActionResult> {
     assertValidIntent(req.intent);
     const ts = now();
@@ -80,6 +116,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       version: policyVersion,
       digest: policyHash,
     };
+    const authenticated = await authorize(req, ts, policyRef);
 
     const receiptFields = (
       realtimeResult: RealtimeResult,
@@ -106,6 +143,7 @@ export function createGateway(config: GatewayConfig): Gateway {
         external_effect: "not_independently_verified" as const,
       },
       redaction: { profile: REDACTION_PROFILE, paths: minimized.redactedPaths },
+      authorization: authenticated.evidence,
       attester: attesterRef,
       timestamp: ts,
     });
@@ -120,7 +158,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     }
 
     const prior = await store.executed();
-    const d = evaluate(policy, prior, { intent: req.intent, approval: req.approval, intent_hash: ih }, ts);
+    const d = evaluate(policy, prior, { intent: req.intent, approval: authenticated.approvalForPolicy, intent_hash: ih }, ts);
 
     let ref: string | null = null;
     let executionState: ExecutionState = "denied";
@@ -176,6 +214,12 @@ export function createGateway(config: GatewayConfig): Gateway {
     const ih = intentHash(req.intent);
     const minimized = minimizeIntentForEvidence(req.intent);
     const evidenceHash = intentHash(minimized.intent);
+    const policyRef = {
+      id: typeof policy.policy_id === "string" ? policy.policy_id : null,
+      version: policyVersion,
+      digest: policyHash,
+    };
+    const authenticated = await authorize(req, ts, policyRef);
     const receipt = await buildReceipt({
       evidence_version: "1.0",
       canonicalization: CANONICALIZATION,
@@ -184,11 +228,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       action_ref: { authorized_intent_hash: ih, evidence_intent_hash: evidenceHash },
       policy_hash: policyHash,
       policy_version: policyVersion,
-      policy_ref: {
-        id: policy.policy_id as string,
-        version: policyVersion,
-        digest: policyHash,
-      },
+      policy_ref: policyRef,
       verifier_version: VERIFIER_VERSION,
       realtime_result: "not_evaluated",
       executed: false,
@@ -200,6 +240,7 @@ export function createGateway(config: GatewayConfig): Gateway {
         external_effect: "not_independently_verified",
       },
       redaction: { profile: REDACTION_PROFILE, paths: minimized.redactedPaths },
+      authorization: authenticated.evidence,
       attester: { kind: "gateway", kid: attester.kid },
       timestamp: ts,
     }, attester);
@@ -277,8 +318,13 @@ export function createGateway(config: GatewayConfig): Gateway {
     try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
     const validation = validateIntent(body?.intent);
     if (!validation.valid) return c.json({ error: "invalid action", details: validation.errors }, 400);
-    const result = await handleAction(body);
-    return c.json(result, result.allowed ? 200 : 403);
+    try {
+      const result = await handleAction(body);
+      return c.json(result, result.allowed ? 200 : 403);
+    } catch (error) {
+      if (error instanceof AuthorizationError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
   });
 
   app.post("/v1/observe", async (c) => {
@@ -286,7 +332,12 @@ export function createGateway(config: GatewayConfig): Gateway {
     try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
     const validation = validateIntent(body?.intent);
     if (!validation.valid) return c.json({ error: "invalid action", details: validation.errors }, 400);
-    return c.json(await observeAction(body), 202);
+    try {
+      return c.json(await observeAction(body), 202);
+    } catch (error) {
+      if (error instanceof AuthorizationError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
   });
 
   app.post("/mcp", async (c) => {
@@ -294,7 +345,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     try { body = await c.req.json(); } catch {
       return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
     }
-    const res = await handleMcp(body, handleAction as unknown as (r: { intent: unknown; approval?: unknown }) => Promise<ActionResult>);
+    const res = await handleMcp(body, handleAction as unknown as (r: { intent: unknown; authorization?: unknown; approval?: unknown }) => Promise<ActionResult>);
     return c.json(res as object);
   });
 

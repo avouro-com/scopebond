@@ -6,9 +6,8 @@
 
 **Security & safety guardrails for AI agents with real authority.**
 
-> **Experimental alpha:** use controlled test systems only. The current release has
-> open enforcement, authentication, concurrency, durability and sensitive-data
-> findings under active remediation. The live demo evaluates real policies but uses
+> **Experimental alpha:** use controlled test systems only. Concurrency and execution
+> durability findings remain under active remediation. The live demo evaluates real policies but uses
 > a no-op executor; it does not perform the displayed business actions.
 
 AI agents are being handed the power to **move money, send messages, and change
@@ -49,22 +48,16 @@ agents. **[Try each one live →](https://try.scopebond.com)**
 ## Quickstart
 
 ```bash
-npx @scopebond/gateway ./policy.json
-# serves on :8787 with a persistent signing key and a durable receipt store
-# the default executor is a no-op; configure a reviewed adapter for real actions
-```
-
-```bash
-curl -sX POST localhost:8787/v1/evaluate \
-  -H 'content-type: application/json' \
-  -d '{"intent":{"action_type":"payout.create","asset":"USDC","amount":500000}}'
+pnpm -r build
+node examples/quickstart.mjs
 ```
 
 Embed it in your own service:
 
 ```ts
-import { createGateway } from "@scopebond/gateway";
-const { app, handleAction } = createGateway({ policy });
+import { createGateway, StaticPrincipalKeyRegistry } from "@scopebond/gateway";
+const keys = new StaticPrincipalKeyRegistry(principalKeyRecords);
+const { app, handleAction } = createGateway({ policy, authentication: { keys } });
 ```
 
 Verify a receipt independently (no trust in the server required):

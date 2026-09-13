@@ -9,7 +9,7 @@
   "properties": {
     "payload": {
       "type": "object",
-      "required": ["type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref", "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result", "executed", "execution_ref", "execution", "redaction", "attester", "timestamp"],
+      "required": ["type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref", "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result", "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp"],
       "additionalProperties": false,
       "properties": {
         "type": { "const": "scopebond:receipt" },
@@ -72,6 +72,30 @@
             "paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
           }
         },
+        "authorization": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["mode", "agent", "approval"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "authenticated" },
+                "agent": { "$ref": "#/$defs/intentAuthorization" },
+                "approval": { "oneOf": [{ "$ref": "#/$defs/approval" }, { "type": "null" }] }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["mode", "agent", "approval"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "insecure_development" },
+                "agent": { "type": "null" },
+                "approval": { "type": "null" }
+              }
+            }
+          ]
+        },
         "attester": {
           "type": "object",
           "required": ["kind", "kid"],
@@ -107,6 +131,56 @@
       "properties": {
         "alg": { "enum": ["Ed25519", "ES256", "secp256k1", "EIP-712"] },
         "sig": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "required": ["kid", "alg"],
+      "additionalProperties": false,
+      "properties": {
+        "kid": { "type": "string", "pattern": "^key:[0-9a-f]{16}$" },
+        "alg": { "const": "Ed25519" }
+      }
+    },
+    "intentAuthorization": {
+      "type": "object",
+      "required": ["version", "request_id", "issued_at", "expires_at", "signer", "intent_hash", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": "1.0" },
+        "request_id": { "type": "string", "minLength": 16, "maxLength": 200, "pattern": "^[A-Za-z0-9._:-]+$" },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "signer": { "$ref": "#/$defs/identity" },
+        "intent_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "signature": { "type": "string", "minLength": 40 }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "required": ["version", "approval_id", "issued_at", "expires_at", "approver", "intent_hash", "policy_ref", "decision", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": "1.0" },
+        "approval_id": { "type": "string", "minLength": 16, "maxLength": 200, "pattern": "^[A-Za-z0-9._:-]+$" },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "approver": { "$ref": "#/$defs/identity" },
+        "intent_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "policy_ref": {
+          "type": "object",
+          "required": ["id", "version", "digest"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": ["string", "null"] },
+            "version": { "type": "integer", "minimum": 1 },
+            "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        "decision": { "const": "approve" },
+        "signature": { "type": "string", "minLength": 40 }
       }
     }
   }

@@ -14,6 +14,16 @@ export type {
   ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification, Anchor,
   ExecutionState, ExecutionEvidence, PolicyReference, ActionReference, RedactionEvidence,
 } from "./receipts.js";
+export {
+  AUTHORIZATION_VERSION, AuthorizationError, StaticPrincipalKeyRegistry,
+  authenticateRequest, approvalClaims, intentAuthorizationClaims,
+  validateAuthorizationEvidence, validateIntentAuthorization, validateSignedApproval,
+  verifyAuthorizationEvidenceSignatures,
+} from "./auth.js";
+export type {
+  AuthenticationConfig, AuthorizationEvidence, AuthorizationVerification, GatewayAuthentication, PrincipalKeyRecord,
+  PrincipalKeyRegistry, PrincipalPurpose, SignatureIdentity, SignedApproval, SignedIntentAuthorization,
+} from "./auth.js";
 export { handleMcp } from "./mcp.js";
 export { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
 export type { ProofStep } from "./anchor.js";

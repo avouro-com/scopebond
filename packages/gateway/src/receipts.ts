@@ -3,36 +3,15 @@
 // a local implementation; SQLite/D1 are edge implementations added later).
 
 import {
-  createHash, generateKeyPairSync, sign as edSign, verify as edVerify,
+  generateKeyPairSync, sign as edSign, verify as edVerify,
   createPrivateKey, createPublicKey,
 } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import type { Intent, Receipt } from "@scopebond/verify";
-
-export function canonical(v: unknown): string {
-  if (v === null || typeof v === "boolean" || typeof v === "string") return JSON.stringify(v);
-  if (typeof v === "number") {
-    if (!Number.isFinite(v)) throw new TypeError("canonical JSON rejects non-finite numbers");
-    return JSON.stringify(v);
-  }
-  if (Array.isArray(v)) {
-    for (let index = 0; index < v.length; index += 1) {
-      if (!(index in v)) throw new TypeError("canonical JSON rejects sparse arrays");
-    }
-    return "[" + v.map(canonical).join(",") + "]";
-  }
-  if (v && typeof v === "object") {
-    const prototype = Object.getPrototypeOf(v);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError("canonical JSON accepts only plain JSON objects");
-    }
-    const o = v as Record<string, unknown>;
-    return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + canonical(o[k])).join(",") + "}";
-  }
-  throw new TypeError(`canonical JSON rejects ${typeof v}`);
-}
-export const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
-export const intentHash = (intent: Intent): string => sha256(canonical(intent));
+import { validateAuthorizationEvidence, verifyAuthorizationEvidenceSignatures } from "./auth.js";
+import type { AuthorizationEvidence, PrincipalKeyRecord } from "./auth.js";
+import { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
+export { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
 
 export type RealtimeResult = "allow" | "deny" | "approved" | "timeout" | "not_evaluated";
 export const EVIDENCE_VERSION = "1.0" as const;
@@ -91,6 +70,7 @@ export interface ReceiptPayload {
   execution_ref: string | null;
   execution: ExecutionEvidence;
   redaction: RedactionEvidence;
+  authorization: AuthorizationEvidence;
   attester: { kind: "gateway"; kid: string };
   timestamp: string;
 }
@@ -112,14 +92,10 @@ export interface Attester {
 
 /** A stable key id derived from the public key, so a receipt names the key that
  *  signed it and verifiers can resolve it across restarts. */
-function fingerprintKid(jwk: Record<string, unknown>): string {
-  return "key:" + sha256(canonical(jwk)).slice(0, 16);
-}
-
 function attesterFromKeyObjects(publicKey: KeyObject, privateKey: KeyObject, kid?: string): Attester {
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
   const jwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
-  const finalKid = kid ?? fingerprintKid(jwk);
+  const finalKid = kid ?? deriveKid(jwk);
   return {
     kind: "gateway",
     kid: finalKid,
@@ -155,18 +131,23 @@ export interface ReceiptVerification {
   key_binding_valid: boolean;
   legacy: boolean;
   external_effect_verified: false;
+  authorization_valid: boolean | null;
+  agent_signature_valid: boolean | null;
+  approval_signature_valid: boolean | null;
+  fully_valid: boolean;
 }
 
 /** Independently verify a scopebond:receipt against an attester public key (SPKI
  *  PEM): the Ed25519 signature covers the canonical payload, and the recorded
  *  intent_hash matches the intent. This is what a receipt holder runs to trust it. */
-export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string): ReceiptVerification {
+export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string, principalKeys?: PrincipalKeyRecord[]): ReceiptVerification {
   if (!receipt?.payload || !receipt?.signature?.sig) {
     return {
       valid: false, signature_valid: false, intent_hash_valid: false,
       contract_valid: false, policy_ref_valid: false, supported_version: false, legacy: false,
       key_binding_valid: false,
       external_effect_verified: false,
+      authorization_valid: null, agent_signature_valid: null, approval_signature_valid: null, fully_valid: false,
     };
   }
   let signature_valid = false;
@@ -180,7 +161,7 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string): Rec
       Buffer.from(receipt.signature.sig, "base64"),
     );
     const jwk = key.export({ format: "jwk" }) as Record<string, unknown>;
-    key_binding_valid = fingerprintKid(jwk) === receipt.payload.attester?.kid;
+    key_binding_valid = deriveKid(jwk) === receipt.payload.attester?.kid;
   } catch {
     signature_valid = false;
   }
@@ -198,8 +179,13 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string): Rec
     payload.policy_ref?.digest === payload.policy_hash &&
     payload.policy_ref?.version === payload.policy_version
   );
+  const valid = signature_valid && contract_valid && supported_version && intent_hash_valid && policy_ref_valid && (legacy || key_binding_valid);
+  const authorization = !legacy && principalKeys ? verifyAuthorizationEvidenceSignatures(
+    payload.authorization, payload.action_ref.authorized_intent_hash, payload.intent.signer,
+    payload.policy_ref, payload.timestamp, principalKeys,
+  ) : null;
   return {
-    valid: signature_valid && contract_valid && supported_version && intent_hash_valid && policy_ref_valid && (legacy || key_binding_valid),
+    valid,
     signature_valid,
     contract_valid,
     intent_hash_valid,
@@ -208,6 +194,10 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string): Rec
     key_binding_valid,
     legacy,
     external_effect_verified: false,
+    authorization_valid: authorization?.authorization_valid ?? null,
+    agent_signature_valid: authorization?.agent_signature_valid ?? null,
+    approval_signature_valid: authorization?.approval_signature_valid ?? null,
+    fully_valid: valid && authorization?.authorization_valid === true,
   };
 }
 
@@ -247,7 +237,7 @@ function validateLegacyPayload(payload: unknown): boolean {
 export function validateEvidencePayload(payload: unknown): payload is ReceiptPayload {
   if (!isRecord(payload) || !isRecord(payload.intent) || !isRecord(payload.action_ref) ||
       !isRecord(payload.policy_ref) || !isRecord(payload.execution) ||
-      !isRecord(payload.redaction) || !isRecord(payload.attester)) return false;
+      !isRecord(payload.redaction) || !isRecord(payload.authorization) || !isRecord(payload.attester)) return false;
   const state = String(payload.execution.state);
   const assertion = String(payload.execution.assertion);
   const paths = payload.redaction.paths;
@@ -264,7 +254,7 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
   return hasOnlyKeys(payload, [
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
     "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result",
-    "executed", "execution_ref", "execution", "redaction", "attester", "timestamp",
+    "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp",
   ]) && hasOnlyKeys(payload.action_ref, ["authorized_intent_hash", "evidence_intent_hash"]) &&
     hasOnlyKeys(payload.policy_ref, ["id", "version", "digest"]) &&
     hasOnlyKeys(payload.execution, ["state", "assertion", "reference", "external_effect"]) &&
@@ -289,6 +279,7 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     payload.execution.reference === payload.execution_ref &&
     payload.execution.external_effect === "not_independently_verified" &&
     payload.redaction.profile === REDACTION_PROFILE &&
+    validateAuthorizationEvidence(payload.authorization) &&
     payload.attester.kind === "gateway" && typeof payload.attester.kid === "string" &&
     Number.isFinite(Date.parse(String(payload.timestamp)));
 }
@@ -364,9 +355,6 @@ export function ed25519JwkToSpkiPem(x: string): string {
 }
 
 /** Public: derive the stable, key-fingerprint kid from a public JWK. */
-export function deriveKid(publicJwk: Record<string, unknown>): string {
-  return fingerprintKid(publicJwk);
-}
 
 /** A tamper-evidence anchor: a Merkle root committing to the first `count`
  *  receipts (append-only order), chained to the previous anchor. */

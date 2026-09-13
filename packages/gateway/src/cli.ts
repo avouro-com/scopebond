@@ -13,8 +13,10 @@
 
 import { serve } from "@hono/node-server";
 import { readFileSync, writeFileSync, watch } from "node:fs";
-import { createGateway, createCloudExporter, withCloudExporter } from "./index.js";
+import { createPublicKey } from "node:crypto";
+import { createGateway, createCloudExporter, withCloudExporter, StaticPrincipalKeyRegistry, deriveKid } from "./index.js";
 import type { CloudExporter } from "./index.js";
+import type { GatewayAuthentication, PrincipalKeyRecord, PrincipalPurpose } from "./index.js";
 import { attesterFromPrivateKeyPem, verifyReceipt } from "./receipts.js";
 import type { Attester } from "./receipts.js";
 import { loadOrCreateAttester } from "./node-keys.js";
@@ -45,6 +47,38 @@ function resolveAttester(): { attester: Attester; source: string } {
   return { attester, source: `${file}${created ? " (generated)" : ""}` };
 }
 
+function resolveAuthentication(): GatewayAuthentication {
+  if (process.env.SCOPEBOND_UNSAFE_ALLOW_UNSIGNED === "1") {
+    console.warn("WARNING: unsigned development mode is enabled; do not use this setting in production");
+    return { mode: "insecure-development" };
+  }
+  const file = process.env.SCOPEBOND_PRINCIPAL_KEYS_FILE;
+  if (!file) fail("SCOPEBOND_PRINCIPAL_KEYS_FILE is required (or set SCOPEBOND_UNSAFE_ALLOW_UNSIGNED=1 for local simulation only)");
+  let source: unknown;
+  try { source = JSON.parse(readFileSync(file as string, "utf8")); }
+  catch (error) { fail(`could not read principal key registry: ${(error as Error).message}`); }
+  if (!Array.isArray(source) || source.length === 0) fail("principal key registry must be a non-empty JSON array");
+  const records: PrincipalKeyRecord[] = source.map((item, index) => {
+    const row = item as Record<string, unknown>;
+    const publicKeyPem = String(row.public_key_pem ?? row.publicKeyPem ?? "");
+    const purposes = row.purposes as PrincipalPurpose[];
+    if (!publicKeyPem || !Array.isArray(purposes) || purposes.some((purpose) => purpose !== "agent" && purpose !== "approver")) {
+      fail(`invalid principal key record at index ${index}`);
+    }
+    let kid: string;
+    try {
+      const raw = createPublicKey(publicKeyPem).export({ format: "jwk" }) as Record<string, unknown>;
+      kid = deriveKid({ crv: raw.crv, kty: raw.kty, x: raw.x });
+    } catch { fail(`principal key record ${index} is not an Ed25519 public key`); }
+    return {
+      kid, publicKeyPem, purposes, status: row.status === "revoked" ? "revoked" : "active",
+      ...(typeof row.not_before === "string" ? { notBefore: row.not_before } : {}),
+      ...(typeof row.not_after === "string" ? { notAfter: row.not_after } : {}),
+    };
+  });
+  return { keys: new StaticPrincipalKeyRegistry(records) };
+}
+
 function cmdServe(policyPath: string | undefined): void {
   if (!policyPath) fail("usage: scopebond-gateway <policy.json>   (or set SCOPEBOND_POLICY)");
   const policy = JSON.parse(readFileSync(policyPath as string, "utf8"));
@@ -68,7 +102,8 @@ function cmdServe(policyPath: string | undefined): void {
     store = withCloudExporter(baseStore, exporter);
   }
 
-  const gateway = createGateway({ policy, attester, store });
+  const authentication = resolveAuthentication();
+  const gateway = createGateway({ policy, attester, store, authentication });
   const port = Number(process.env.PORT ?? 8787);
   serve({ fetch: gateway.app.fetch, port });
 

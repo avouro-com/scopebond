@@ -9,7 +9,7 @@ const post = (app, path, body) =>
 function gw(policy, times) {
   let i = 0;
   const now = times ? () => times[Math.min(i++, times.length - 1)] : () => AT;
-  return createGateway({ policy, now });
+  return createGateway({ authentication: { mode: "insecure-development" }, policy, now });
 }
 
 const enforcePolicy = {
@@ -56,7 +56,7 @@ test("monitor clause: windowed over-limit is allowed but flagged (covered)", asy
   const policy = { vocabulary_version: "1.0", policy_id: "monitor-test", version: 1, clauses: [{ id: "daily", type: "spend_limit", mode: "monitor", asset: "USDC", max_per_window: 5000000, window: "P1D", scope: "principal" }] };
   let i = 0;
   const times = ["2026-09-12T10:00:00Z", "2026-09-12T12:00:00Z"];
-  const { app } = createGateway({
+  const { app } = createGateway({ authentication: { mode: "insecure-development" },
     policy,
     now: () => times[Math.min(i++, times.length - 1)],
     executor: { mode: "dispatch", execute: () => ({ ref: "test:reported" }) },
@@ -83,7 +83,7 @@ test("minimizes sensitive request data before signing while retaining exact refe
       metadata: { access_token: "example-access-token", case_id: "case-1" },
     },
   };
-  const { app } = createGateway({ policy });
+  const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy });
   const response = await post(app, "/v1/evaluate", { intent: original });
   const { receipt } = await response.json();
   const serialized = JSON.stringify(receipt);
@@ -106,7 +106,7 @@ test("minimizes sensitive request data before signing while retaining exact refe
 });
 
 test("records an adapter exception as outcome unknown without raw error text", async () => {
-  const { app } = createGateway({
+  const { app } = createGateway({ authentication: { mode: "insecure-development" },
     policy: { vocabulary_version: "1.0", policy_id: "adapter-test", version: 1, clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["test.call"] }] },
     executor: {
       mode: "dispatch",
@@ -158,7 +158,7 @@ test("HTTP executor forwards an allowed call and records a response digest", asy
     seen = { url, method: init.method };
     return { status: 200, text: async () => "ok-body" };
   };
-  const { app } = createGateway({ policy, now: () => AT, executor: createHttpExecutor({ fetch: fakeFetch }) });
+  const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy, now: () => AT, executor: createHttpExecutor({ fetch: fakeFetch }) });
   const res = await post(app, "/v1/evaluate", { intent: { action_type: "http.call", params: { host: "api.ok.example", path: "/v1/x", method: "POST" } } });
   const j = await res.json();
   assert.equal(j.allowed, true);
@@ -171,7 +171,7 @@ test("HTTP executor is not called for a denied action", async () => {
   const policy = { vocabulary_version: "1.0", policy_id: "http-test", version: 1, clauses: [{ id: "ep", type: "endpoint_allowlist", mode: "enforce", hosts: ["api.ok.example"], methods: ["POST"] }] };
   let called = false;
   const fakeFetch = async () => { called = true; return { status: 200, text: async () => "" }; };
-  const { app } = createGateway({ policy, now: () => AT, executor: createHttpExecutor({ fetch: fakeFetch }) });
+  const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy, now: () => AT, executor: createHttpExecutor({ fetch: fakeFetch }) });
   const res = await post(app, "/v1/evaluate", { intent: { action_type: "http.call", params: { host: "evil.example", path: "/x", method: "POST" } } });
   assert.equal((await res.json()).allowed, false);
   assert.equal(called, false); // denied → never forwarded
@@ -199,7 +199,7 @@ test("an earlier monitor violation cannot override a later enforce violation", a
       { id: "enforce-cap", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 20 },
     ],
   };
-  const gateway = createGateway({
+  const gateway = createGateway({ authentication: { mode: "insecure-development" },
     policy,
     executor: { mode: "dispatch", execute: () => { called = true; return { ref: "unexpected" }; } },
   });
@@ -220,7 +220,7 @@ test("action allowlists deny unknown actions and reject numeric type bypasses", 
       action_types: ["transfer"], param_bounds: { amount: { min: 0, max: 100 } },
     }],
   };
-  const gateway = createGateway({ policy });
+  const gateway = createGateway({ authentication: { mode: "insecure-development" }, policy });
 
   let response = await post(gateway.app, "/v1/evaluate", { intent: { action_type: "unknown", params: { amount: 1 } } });
   assert.equal(response.status, 403);
@@ -240,7 +240,7 @@ test("action allowlists deny unknown actions and reject numeric type bypasses", 
 });
 
 test("a spend-limited action cannot omit its amount", async () => {
-  const gateway = createGateway({ policy: enforcePolicy });
+  const gateway = createGateway({ authentication: { mode: "insecure-development" }, policy: enforcePolicy });
   const response = await post(gateway.app, "/v1/evaluate", {
     intent: { action_type: "payout.create", asset: "USDC" },
   });
@@ -250,7 +250,7 @@ test("a spend-limited action cannot omit its amount", async () => {
 });
 
 test("an action outside every supported clause is denied", async () => {
-  const gateway = createGateway({ policy: enforcePolicy });
+  const gateway = createGateway({ authentication: { mode: "insecure-development" }, policy: enforcePolicy });
   const response = await post(gateway.app, "/v1/evaluate", { intent: { action_type: "data.read" } });
   const result = await response.json();
   assert.equal(response.status, 403);
@@ -263,7 +263,7 @@ test("passive observation has an explicit non-authorizing path", async () => {
     vocabulary_version: "1.0", policy_id: "observe", version: 1,
     clauses: [{ id: "known", type: "action_allowlist", mode: "enforce", action_types: ["known.action"] }],
   };
-  const gateway = createGateway({
+  const gateway = createGateway({ authentication: { mode: "insecure-development" },
     policy,
     executor: { mode: "dispatch", execute: () => { called = true; return { ref: "unexpected" }; } },
   });

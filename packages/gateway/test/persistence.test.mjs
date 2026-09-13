@@ -39,7 +39,7 @@ test("verifyReceipt validates a genuine receipt and rejects tampering", async ()
   const { dir, cleanup } = tmp();
   try {
     const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
-    const { app } = createGateway({ policy, attester });
+    const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy, attester });
     const res = await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 500000 } });
     const { receipt } = await res.json();
 
@@ -82,7 +82,7 @@ test("receipts survive a restart and enforce prior-state across a new instance",
     // First process: record two receipts, then close.
     {
       const { store } = openReceiptStore({ db: dbFile });
-      const { app } = createGateway({ policy, attester, store });
+      const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy, attester, store });
       await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 100000 } });
       await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 200000 } });
       assert.equal((await store.list()).length, 2);
@@ -96,7 +96,7 @@ test("receipts survive a restart and enforce prior-state across a new instance",
       const prior = await store.list();
       assert.equal(prior.length, 2);
       // And a receipt from the reopened gateway still verifies against the persisted key.
-      const { app } = createGateway({ policy, attester, store });
+      const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy, attester, store });
       const res = await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 300000 } });
       const { receipt } = await res.json();
       assert.equal(verifyReceipt(receipt, attester.publicKeyPem).valid, true);
@@ -113,7 +113,7 @@ test("FileReceiptStore is durable (append-only JSONL)", async () => {
     const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
     {
       const store = new FileReceiptStore(file);
-      const { app } = createGateway({ policy, attester, store });
+      const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy, attester, store });
       await post(app, "/v1/evaluate", { intent: { action_type: "payout.create", asset: "USDC", amount: 100000 } });
     }
     const reopened = new FileReceiptStore(file);
@@ -125,7 +125,7 @@ test("GET /v1/attester and JWKS expose the key; served receipts verify against i
   const { dir, cleanup } = tmp();
   try {
     const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
-    const { app } = createGateway({ policy, attester });
+    const { app } = createGateway({ authentication: { mode: "insecure-development" }, policy, attester });
 
     const meta = await (await app.request("/v1/attester")).json();
     assert.equal(meta.kid, attester.kid);

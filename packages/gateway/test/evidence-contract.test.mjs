@@ -50,7 +50,7 @@ test("Node and WebCrypto receipts share the v1 contract and offline verification
   const workerAttester = await createWebCryptoAttester(await generateAttesterJwk());
 
   for (const attester of [nodeAttester, workerAttester]) {
-    const gateway = createGateway({ policy, attester });
+    const gateway = createGateway({ authentication: { mode: "insecure-development" }, policy, attester });
     const response = await post(gateway.app, vectors.sensitive_intent);
     const { receipt } = await response.json();
     const verification = verifyReceipt(receipt, attester.publicKeyPem);
@@ -69,7 +69,7 @@ test("Node and WebCrypto receipts share the v1 contract and offline verification
 test("gateway refuses an attester identity that is not bound to its public key", () => {
   const unbound = createAttester("key:claimed-by-caller");
   assert.throws(
-    () => createGateway({ policy, attester: unbound }),
+    () => createGateway({ authentication: { mode: "insecure-development" }, policy, attester: unbound }),
     /kid must match the public-key fingerprint/,
   );
 });
@@ -99,7 +99,7 @@ test("offline verification labels legacy receipts and rejects signed unknown or 
   assert.equal(legacyResult.legacy, true);
   assert.equal(legacyResult.external_effect_verified, false);
 
-  const gateway = createGateway({ policy, attester });
+  const gateway = createGateway({ authentication: { mode: "insecure-development" }, policy, attester });
   const { receipt } = await (await post(gateway.app, { action_type: "current.action" })).json();
 
   for (const version of vectors.unsupported_versions) {

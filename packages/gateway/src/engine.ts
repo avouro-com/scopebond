@@ -28,7 +28,19 @@ export function evaluate(
     approval: req.approval,
   };
   const verdict = violates(policy, priorExecuted, candidate, { at });
-  if (!verdict.violated) return { allow: true, realtime_result: "allow", verdict, clause_mode: null };
+  if (!verdict.violated) {
+    const approvalApplied = !!req.approval && (policy.clauses ?? []).some((clause) =>
+      clause.type === "require_approval" &&
+      Array.isArray(clause.action_types) && clause.action_types.includes(req.intent.action_type) &&
+      Array.isArray(clause.approvers) && clause.approvers.includes(req.approval?.approver),
+    );
+    return {
+      allow: true,
+      realtime_result: approvalApplied ? "approved" : "allow",
+      verdict,
+      clause_mode: approvalApplied ? "require_approval" : null,
+    };
+  }
 
   const clause = (policy.clauses ?? []).find((c) => c.id === verdict.clause_id);
   const mode = clause?.type === "require_approval" ? "require_approval" : ((clause?.mode as string) ?? "enforce");

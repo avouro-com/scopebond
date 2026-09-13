@@ -4,7 +4,7 @@
 // surface (resources, prompts, streaming) is [PLANNED].
 
 type ActionResultLike = { allowed: boolean; reason: string; receipt: unknown };
-type HandleAction = (req: { intent: unknown; approval?: unknown }) => Promise<ActionResultLike>;
+type HandleAction = (req: { intent: unknown; authorization?: unknown; approval?: unknown }) => Promise<ActionResultLike>;
 
 const PROTOCOL_VERSION = "2024-11-05";
 
@@ -30,8 +30,8 @@ export async function handleMcp(body: any, handleAction: HandleAction): Promise<
           description: "Submit an agent action intent to be policy-checked, countersigned, and (if allowed) executed through the Scopebond gateway.",
           inputSchema: {
             type: "object",
-            properties: { intent: { type: "object" }, approval: { type: "object" } },
-            required: ["intent"],
+            properties: { intent: { type: "object" }, authorization: { type: "object" }, approval: { type: "object" } },
+            required: ["intent", "authorization"],
           },
         }],
       });
@@ -41,7 +41,7 @@ export async function handleMcp(body: any, handleAction: HandleAction): Promise<
       if (name !== "scopebond.evaluate") return fail(-32602, `unknown tool: ${name}`);
       if (!args?.intent?.action_type) return fail(-32602, "intent.action_type required");
       let result: ActionResultLike;
-      try { result = await handleAction({ intent: args.intent, approval: args.approval }); }
+      try { result = await handleAction({ intent: args.intent, authorization: args.authorization, approval: args.approval }); }
       catch (error) { return fail(-32602, error instanceof Error ? error.message : "invalid action"); }
       return ok({
         content: [{ type: "text", text: JSON.stringify({ allowed: result.allowed, reason: result.reason, receipt: result.receipt }) }],

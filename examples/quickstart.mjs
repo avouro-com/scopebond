@@ -1,16 +1,20 @@
 // Quickstart: an agent (SDK) submits actions through the gateway and gets a
 // countersigned receipt — all in-process. Run: `pnpm -r build && node examples/quickstart.mjs`
 import { readFileSync } from "node:fs";
-import { createGateway } from "@scopebond/gateway";
+import { createGateway, StaticPrincipalKeyRegistry } from "@scopebond/gateway";
 import { createSigner } from "@scopebond/sdk";
 
 const policy = JSON.parse(readFileSync(new URL("./policy.json", import.meta.url), "utf8"));
-const gateway = createGateway({ policy });
-const agent = createSigner({ kid: "key:agent-demo" });
+const agent = createSigner();
+policy.clauses.find((clause) => clause.type === "key_policy").active_keys = [agent.kid];
+const keys = new StaticPrincipalKeyRegistry([{
+  kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active",
+}]);
+const gateway = createGateway({ policy, authentication: { keys } });
 
 async function run(label, intent) {
   const signed = agent.sign(intent);
-  const res = await gateway.handleAction({ intent: signed.intent });
+  const res = await gateway.handleAction(signed);
   console.log(`\n${label}`);
   console.log(`  allowed = ${res.allowed}  ·  ${res.reason}`);
   console.log(`  receipt: executed=${res.receipt.payload.executed} realtime=${res.receipt.payload.realtime_result} sig=${res.receipt.signature.alg}`);
