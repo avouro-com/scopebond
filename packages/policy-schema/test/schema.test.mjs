@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  policySchema, receiptSchema, legacyReceiptSchema, CLAUSE_TYPES, CLAUSE_MODES,
-  VOCABULARY_VERSION, EVIDENCE_VERSION, CANONICALIZATION, EXECUTION_STATES,
+  policySchema, actionSchema, receiptSchema, legacyReceiptSchema, CLAUSE_TYPES, CLAUSE_MODES,
+  VOCABULARY_VERSION, EVIDENCE_VERSION, CANONICALIZATION, EXECUTION_STATES, REALTIME_RESULTS,
 } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -14,7 +14,13 @@ const evidence = JSON.parse(readFileSync(join(here, "../vectors/evidence-contrac
 
 test("schemas parse and are 2020-12", () => {
   assert.equal(policySchema.$schema, "https://json-schema.org/draft/2020-12/schema");
+  assert.equal(actionSchema.$schema, "https://json-schema.org/draft/2020-12/schema");
   assert.equal(receiptSchema.$schema, "https://json-schema.org/draft/2020-12/schema");
+});
+
+test("action schema is closed and requires an action type", () => {
+  assert.equal(actionSchema.additionalProperties, false);
+  assert.deepEqual(actionSchema.required, ["action_type"]);
 });
 
 test("policy schema is closed at the top level", () => {
@@ -46,5 +52,6 @@ test("receipt schema fixes the namespaced type", () => {
   assert.deepEqual(receiptSchema.properties.payload.properties.execution.properties.state.enum, EXECUTION_STATES);
   assert.equal(legacyReceiptSchema.properties.payload.properties.type.const, "scopebond:receipt");
   assert.deepEqual(evidence.execution_states, EXECUTION_STATES);
+  assert.deepEqual(evidence.realtime_results, REALTIME_RESULTS);
   assert.equal(evidence.version, EVIDENCE_VERSION);
 });

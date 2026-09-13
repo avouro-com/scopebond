@@ -44,7 +44,13 @@ test("withCloudExporter stores locally AND queues for Cloud; anchoring still wor
   const f = mockFetch();
   const ex = createCloudExporter({ url: "https://c", apiKey: "k", batchSize: 100, flushMs: 1e9, fetch: f });
   const base = new MemoryReceiptStore();
-  const gw = createGateway({ policy: { clauses: [] }, store: withCloudExporter(base, ex) });
+  const gw = createGateway({
+    policy: {
+      vocabulary_version: "1.0", policy_id: "cloud-export", version: 1,
+      clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["x"] }],
+    },
+    store: withCloudExporter(base, ex),
+  });
   await gw.app.request("/v1/evaluate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ intent: { action_type: "x" } }) });
   assert.equal((await base.list()).length, 1); // persisted locally
   assert.equal(ex.pending(), 1);               // queued for Cloud

@@ -40,7 +40,9 @@ export async function handleMcp(body: any, handleAction: HandleAction): Promise<
       const args = body?.params?.arguments ?? {};
       if (name !== "scopebond.evaluate") return fail(-32602, `unknown tool: ${name}`);
       if (!args?.intent?.action_type) return fail(-32602, "intent.action_type required");
-      const result = await handleAction({ intent: args.intent, approval: args.approval });
+      let result: ActionResultLike;
+      try { result = await handleAction({ intent: args.intent, approval: args.approval }); }
+      catch (error) { return fail(-32602, error instanceof Error ? error.message : "invalid action"); }
       return ok({
         content: [{ type: "text", text: JSON.stringify({ allowed: result.allowed, reason: result.reason, receipt: result.receipt }) }],
         isError: !result.allowed,

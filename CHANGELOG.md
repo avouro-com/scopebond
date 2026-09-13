@@ -8,6 +8,9 @@ tagged release.
 ## [Unreleased]
 
 ### Added
+- Strict runtime policy/action validation, enforce-first all-clause evaluation,
+  closed action allowlists and parameter types, fail-safe policy reload, and an
+  explicit non-authorizing passive observation endpoint.
 - Evidence contract v1 for `scopebond:receipt`: explicit execution states, exact
   policy/action references, minimized request evidence, separate legacy schema,
   Node/WebCrypto/offline vectors, and verification results that never imply an

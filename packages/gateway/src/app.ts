@@ -9,9 +9,10 @@ import {
   minimizeIntentForEvidence, REDACTION_PROFILE,
   CANONICALIZATION,
 } from "./receipts.js";
-import type { Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState } from "./receipts.js";
+import type { Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
+import { validateIntent, validatePolicy } from "@scopebond/verify";
 import type { Policy, Intent, Approval, Verdict } from "@scopebond/verify";
 
 /** How an allowed action is actually carried out. Default: a no-op (record only).
@@ -34,6 +35,7 @@ export interface GatewayConfig {
 
 export interface ActionRequest { intent: Intent; approval?: Approval; }
 export interface ActionResult { allowed: boolean; reason: string; verdict?: Verdict; receipt: SignedReceipt; }
+export interface ObservationResult { observed: true; receipt: SignedReceipt; }
 
 export interface Gateway {
   app: Hono;
@@ -42,6 +44,8 @@ export interface Gateway {
   state: { killed: boolean };
   policyHash: string;
   handleAction(req: ActionRequest): Promise<ActionResult>;
+  /** Record a passive observation without evaluating or dispatching it. */
+  observeAction(req: ActionRequest): Promise<ObservationResult>;
   /** Hot-swap the active policy (recomputes the policy hash + version). */
   setPolicy(policy: Policy): void;
   /** Compute + store a Merkle anchor over the receipts to date (tamper-evidence). */
@@ -57,13 +61,15 @@ export function createGateway(config: GatewayConfig): Gateway {
   if (attester.kid !== deriveAttesterKid(attester.publicKeyJwk)) {
     throw new Error("attester kid must match the public-key fingerprint for evidence contract v1");
   }
-  let policy = config.policy;
+  assertValidPolicy(config.policy);
+  let policy = structuredClone(config.policy);
   let policyHash = sha256(canonical(policy));
   let policyVersion = (policy.version as number) ?? 1;
   const now = config.now ?? (() => new Date().toISOString());
   const state = { killed: false };
 
   async function handleAction(req: ActionRequest): Promise<ActionResult> {
+    assertValidIntent(req.intent);
     const ts = now();
     const ih = intentHash(req.intent);
     const minimized = minimizeIntentForEvidence(req.intent);
@@ -76,7 +82,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     };
 
     const receiptFields = (
-      realtimeResult: "allow" | "deny" | "approved" | "timeout",
+      realtimeResult: RealtimeResult,
       executionState: ExecutionState,
       assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown",
       executionRef: string | null,
@@ -155,9 +161,50 @@ export function createGateway(config: GatewayConfig): Gateway {
   }
 
   function setPolicy(next: Policy): void {
-    policy = next;
-    policyHash = sha256(canonical(next));
-    policyVersion = (next.version as number) ?? 1;
+    assertValidPolicy(next);
+    const snapshot = structuredClone(next);
+    const nextHash = sha256(canonical(snapshot));
+    const nextVersion = snapshot.version as number;
+    policy = snapshot;
+    policyHash = nextHash;
+    policyVersion = nextVersion;
+  }
+
+  async function observeAction(req: ActionRequest): Promise<ObservationResult> {
+    assertValidIntent(req.intent);
+    const ts = now();
+    const ih = intentHash(req.intent);
+    const minimized = minimizeIntentForEvidence(req.intent);
+    const evidenceHash = intentHash(minimized.intent);
+    const receipt = await buildReceipt({
+      evidence_version: "1.0",
+      canonicalization: CANONICALIZATION,
+      intent: minimized.intent,
+      intent_hash: ih,
+      action_ref: { authorized_intent_hash: ih, evidence_intent_hash: evidenceHash },
+      policy_hash: policyHash,
+      policy_version: policyVersion,
+      policy_ref: {
+        id: policy.policy_id as string,
+        version: policyVersion,
+        digest: policyHash,
+      },
+      verifier_version: VERIFIER_VERSION,
+      realtime_result: "not_evaluated",
+      executed: false,
+      execution_ref: null,
+      execution: {
+        state: "observed_not_evaluated",
+        assertion: "none",
+        reference: null,
+        external_effect: "not_independently_verified",
+      },
+      redaction: { profile: REDACTION_PROFILE, paths: minimized.redactedPaths },
+      attester: { kind: "gateway", kid: attester.kid },
+      timestamp: ts,
+    }, attester);
+    await store.put(receipt);
+    return { observed: true, receipt };
   }
 
   async function anchor(): Promise<Anchor> {
@@ -228,9 +275,18 @@ export function createGateway(config: GatewayConfig): Gateway {
   app.post("/v1/evaluate", async (c) => {
     let body: ActionRequest;
     try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
-    if (!body?.intent?.action_type) return c.json({ error: "intent.action_type is required" }, 400);
+    const validation = validateIntent(body?.intent);
+    if (!validation.valid) return c.json({ error: "invalid action", details: validation.errors }, 400);
     const result = await handleAction(body);
     return c.json(result, result.allowed ? 200 : 403);
+  });
+
+  app.post("/v1/observe", async (c) => {
+    let body: ActionRequest;
+    try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
+    const validation = validateIntent(body?.intent);
+    if (!validation.valid) return c.json({ error: "invalid action", details: validation.errors }, 400);
+    return c.json(await observeAction(body), 202);
   });
 
   app.post("/mcp", async (c) => {
@@ -242,7 +298,17 @@ export function createGateway(config: GatewayConfig): Gateway {
     return c.json(res as object);
   });
 
-  return { app, store, attester, state, get policyHash() { return policyHash; }, handleAction, setPolicy, anchor };
+  return { app, store, attester, state, get policyHash() { return policyHash; }, handleAction, observeAction, setPolicy, anchor };
+}
+
+function assertValidPolicy(policy: unknown): asserts policy is Policy {
+  const result = validatePolicy(policy);
+  if (!result.valid) throw new TypeError(`invalid policy: ${result.errors.join("; ")}`);
+}
+
+function assertValidIntent(intent: unknown): asserts intent is Intent {
+  const result = validateIntent(intent);
+  if (!result.valid) throw new TypeError(`invalid action: ${result.errors.join("; ")}`);
 }
 
 function deriveAttesterKid(jwk: Record<string, unknown>): string {

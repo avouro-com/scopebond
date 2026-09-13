@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scopebond.com/schema/action-1.0.json",
+  "title": "Scopebond action intent (vocabulary v1)",
+  "type": "object",
+  "required": ["action_type"],
+  "additionalProperties": false,
+  "properties": {
+    "action_type": { "type": "string", "minLength": 1 },
+    "asset": { "type": "string", "minLength": 1 },
+    "amount": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "signer": { "type": "string", "minLength": 1 },
+    "params": { "$ref": "#/$defs/jsonObject" }
+  },
+  "$defs": {
+    "jsonValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        { "$ref": "#/$defs/jsonObject" }
+      ]
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    }
+  }
+}

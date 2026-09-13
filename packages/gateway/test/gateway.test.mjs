@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createGateway, createHttpExecutor } from "../dist/index.js";
+import { createGateway, createHttpExecutor, verifyReceipt } from "../dist/index.js";
 
 const AT = "2026-09-12T12:00:00Z";
 const post = (app, path, body) =>
@@ -13,7 +13,7 @@ function gw(policy, times) {
 }
 
 const enforcePolicy = {
-  policy_id: "t", version: 1, clauses: [
+  vocabulary_version: "1.0", policy_id: "t", version: 1, clauses: [
     { id: "tx", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 1000000 },
     { id: "vendors", type: "endpoint_allowlist", mode: "enforce", hosts: ["api.ok.example"], methods: ["POST"] },
   ],
@@ -53,7 +53,7 @@ test("denies a non-allowlisted endpoint (enforce)", async () => {
 });
 
 test("monitor clause: windowed over-limit is allowed but flagged (covered)", async () => {
-  const policy = { version: 1, clauses: [{ id: "daily", type: "spend_limit", mode: "monitor", asset: "USDC", max_per_window: 5000000, window: "P1D", scope: "principal" }] };
+  const policy = { vocabulary_version: "1.0", policy_id: "monitor-test", version: 1, clauses: [{ id: "daily", type: "spend_limit", mode: "monitor", asset: "USDC", max_per_window: 5000000, window: "P1D", scope: "principal" }] };
   let i = 0;
   const times = ["2026-09-12T10:00:00Z", "2026-09-12T12:00:00Z"];
   const { app } = createGateway({
@@ -73,7 +73,7 @@ test("monitor clause: windowed over-limit is allowed but flagged (covered)", asy
 });
 
 test("minimizes sensitive request data before signing while retaining exact references", async () => {
-  const policy = { policy_id: "http-policy", version: 7, clauses: [] };
+  const policy = { vocabulary_version: "1.0", policy_id: "http-policy", version: 7, clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["http.call"] }] };
   const original = {
     action_type: "http.call",
     params: {
@@ -107,7 +107,7 @@ test("minimizes sensitive request data before signing while retaining exact refe
 
 test("records an adapter exception as outcome unknown without raw error text", async () => {
   const { app } = createGateway({
-    policy: { version: 1, clauses: [] },
+    policy: { vocabulary_version: "1.0", policy_id: "adapter-test", version: 1, clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["test.call"] }] },
     executor: {
       mode: "dispatch",
       execute: () => { throw new Error("synthetic upstream secret"); },
@@ -152,7 +152,7 @@ test("stores and lists receipts; status reflects state", async () => {
 });
 
 test("HTTP executor forwards an allowed call and records a response digest", async () => {
-  const policy = { version: 1, clauses: [{ id: "ep", type: "endpoint_allowlist", mode: "enforce", hosts: ["api.ok.example"], methods: ["POST"] }] };
+  const policy = { vocabulary_version: "1.0", policy_id: "http-test", version: 1, clauses: [{ id: "ep", type: "endpoint_allowlist", mode: "enforce", hosts: ["api.ok.example"], methods: ["POST"] }] };
   let seen;
   const fakeFetch = async (url, init) => {
     seen = { url, method: init.method };
@@ -168,7 +168,7 @@ test("HTTP executor forwards an allowed call and records a response digest", asy
 });
 
 test("HTTP executor is not called for a denied action", async () => {
-  const policy = { version: 1, clauses: [{ id: "ep", type: "endpoint_allowlist", mode: "enforce", hosts: ["api.ok.example"], methods: ["POST"] }] };
+  const policy = { vocabulary_version: "1.0", policy_id: "http-test", version: 1, clauses: [{ id: "ep", type: "endpoint_allowlist", mode: "enforce", hosts: ["api.ok.example"], methods: ["POST"] }] };
   let called = false;
   const fakeFetch = async () => { called = true; return { status: 200, text: async () => "" }; };
   const { app } = createGateway({ policy, now: () => AT, executor: createHttpExecutor({ fetch: fakeFetch }) });
@@ -188,4 +188,92 @@ test("MCP: initialize + tools/call routes through policy enforcement", async () 
     params: { name: "scopebond.evaluate", arguments: { intent: { action_type: "payout.create", asset: "USDC", amount: 2000000 } } },
   })).json();
   assert.equal(call.result.isError, true); // over the enforce limit → denied
+});
+
+test("an earlier monitor violation cannot override a later enforce violation", async () => {
+  let called = false;
+  const policy = {
+    vocabulary_version: "1.0", policy_id: "precedence", version: 1,
+    clauses: [
+      { id: "monitor-cap", type: "spend_limit", mode: "monitor", asset: "USDC", max_per_action: 10 },
+      { id: "enforce-cap", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 20 },
+    ],
+  };
+  const gateway = createGateway({
+    policy,
+    executor: { mode: "dispatch", execute: () => { called = true; return { ref: "unexpected" }; } },
+  });
+  const response = await post(gateway.app, "/v1/evaluate", {
+    intent: { action_type: "payout.create", asset: "USDC", amount: 30 },
+  });
+  const result = await response.json();
+  assert.equal(response.status, 403);
+  assert.equal(result.verdict.clause_id, "enforce-cap");
+  assert.equal(called, false);
+});
+
+test("action allowlists deny unknown actions and reject numeric type bypasses", async () => {
+  const policy = {
+    vocabulary_version: "1.0", policy_id: "actions", version: 1,
+    clauses: [{
+      id: "allowed-actions", type: "action_allowlist", mode: "enforce",
+      action_types: ["transfer"], param_bounds: { amount: { min: 0, max: 100 } },
+    }],
+  };
+  const gateway = createGateway({ policy });
+
+  let response = await post(gateway.app, "/v1/evaluate", { intent: { action_type: "unknown", params: { amount: 1 } } });
+  assert.equal(response.status, 403);
+  assert.match((await response.json()).reason, /not allowlisted/);
+
+  response = await post(gateway.app, "/v1/evaluate", { intent: { action_type: "transfer", params: { amount: "101" } } });
+  assert.equal(response.status, 403);
+  assert.match((await response.json()).reason, /finite number/);
+
+  response = await post(gateway.app, "/v1/evaluate", { intent: { action_type: "transfer", params: { amount: 100 } } });
+  assert.equal(response.status, 200, "the exact numeric boundary remains allowed");
+
+  await assert.rejects(
+    gateway.handleAction({ intent: { action_type: "transfer", params: { amount: Number.NaN } } }),
+    /invalid action/,
+  );
+});
+
+test("a spend-limited action cannot omit its amount", async () => {
+  const gateway = createGateway({ policy: enforcePolicy });
+  const response = await post(gateway.app, "/v1/evaluate", {
+    intent: { action_type: "payout.create", asset: "USDC" },
+  });
+  const result = await response.json();
+  assert.equal(response.status, 403);
+  assert.match(result.reason, /amount.*safe integer/);
+});
+
+test("an action outside every supported clause is denied", async () => {
+  const gateway = createGateway({ policy: enforcePolicy });
+  const response = await post(gateway.app, "/v1/evaluate", { intent: { action_type: "data.read" } });
+  const result = await response.json();
+  assert.equal(response.status, 403);
+  assert.match(result.reason, /not covered/);
+});
+
+test("passive observation has an explicit non-authorizing path", async () => {
+  let called = false;
+  const policy = {
+    vocabulary_version: "1.0", policy_id: "observe", version: 1,
+    clauses: [{ id: "known", type: "action_allowlist", mode: "enforce", action_types: ["known.action"] }],
+  };
+  const gateway = createGateway({
+    policy,
+    executor: { mode: "dispatch", execute: () => { called = true; return { ref: "unexpected" }; } },
+  });
+  const response = await post(gateway.app, "/v1/observe", { intent: { action_type: "unknown.observed", params: { value: 1 } } });
+  const result = await response.json();
+  assert.equal(response.status, 202);
+  assert.equal(result.observed, true);
+  assert.equal(result.receipt.payload.realtime_result, "not_evaluated");
+  assert.equal(result.receipt.payload.execution.state, "observed_not_evaluated");
+  assert.equal(result.receipt.payload.executed, false);
+  assert.equal(verifyReceipt(result.receipt, gateway.attester.publicKeyPem).valid, true);
+  assert.equal(called, false);
 });

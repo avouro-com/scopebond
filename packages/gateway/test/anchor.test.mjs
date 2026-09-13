@@ -10,7 +10,7 @@ import {
 import { openReceiptStore } from "../dist/node.js";
 
 const policy = {
-  policy_id: "t", version: 1,
+  vocabulary_version: "1.0", policy_id: "t", version: 1,
   clauses: [{ id: "tx", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000000 }],
 };
 const post = (app, path, body) =>
@@ -71,8 +71,8 @@ test("anchor commits to receipts; inclusion proof verifies; anchors chain", asyn
 });
 
 test("setPolicy hot-swaps the active policy (and /v1/status reflects it)", async () => {
-  const strict = { policy_id: "s", version: 1, clauses: [{ id: "c", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000 }] };
-  const loose = { policy_id: "l", version: 2, clauses: [{ id: "c", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000000 }] };
+  const strict = { vocabulary_version: "1.0", policy_id: "s", version: 1, clauses: [{ id: "c", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000 }] };
+  const loose = { vocabulary_version: "1.0", policy_id: "l", version: 2, clauses: [{ id: "c", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100000000 }] };
   const gw = createGateway({ policy: strict, store: new MemoryReceiptStore() });
   const h1 = gw.policyHash;
 
@@ -88,6 +88,24 @@ test("setPolicy hot-swaps the active policy (and /v1/status reflects it)", async
   const st = await (await gw.app.request("/v1/status")).json();
   assert.equal(st.policy_hash, gw.policyHash);
   assert.equal(st.policy_version, 2);
+});
+
+test("invalid policy initialization and reload fail without replacing the active snapshot", async () => {
+  assert.throws(
+    () => createGateway({ policy: { vocabulary_version: "1.0", policy_id: "empty", version: 1, clauses: [] } }),
+    /invalid policy/,
+  );
+
+  const strict = {
+    vocabulary_version: "1.0", policy_id: "strict", version: 1,
+    clauses: [{ id: "cap", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100 }],
+  };
+  const gateway = createGateway({ policy: strict });
+  const originalHash = gateway.policyHash;
+  assert.throws(() => gateway.setPolicy({ clauses: [] }), /invalid policy/);
+  assert.equal(gateway.policyHash, originalHash);
+  const denied = await (await pay(gateway.app, 101)).json();
+  assert.equal(denied.allowed, false, "the last valid policy remains active");
 });
 
 test("anchors persist in a durable store across reopen", async () => {

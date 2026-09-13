@@ -1,5 +1,5 @@
 export { createGateway, noopExecutor } from "./app.js";
-export type { Gateway, GatewayConfig, Executor, ActionRequest, ActionResult } from "./app.js";
+export type { Gateway, GatewayConfig, Executor, ActionRequest, ActionResult, ObservationResult } from "./app.js";
 export { createHttpExecutor } from "./executors.js";
 export type { HttpExecutorOptions } from "./executors.js";
 export { evaluate } from "./engine.js";

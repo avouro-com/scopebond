@@ -19,7 +19,10 @@ const vectors = JSON.parse(readFileSync(
   join(here, "../../policy-schema/vectors/evidence-contract.json"),
   "utf8",
 ));
-const policy = { policy_id: "evidence-test", version: 3, clauses: [] };
+const policy = {
+  vocabulary_version: "1.0", policy_id: "evidence-test", version: 3,
+  clauses: [{ id: "actions", type: "action_allowlist", mode: "enforce", action_types: ["http.call", "current.action"] }],
+};
 const post = (app, intent) => app.request("/v1/evaluate", {
   method: "POST",
   headers: { "content-type": "application/json" },

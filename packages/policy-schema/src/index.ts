@@ -11,6 +11,7 @@ const load = (rel: string): Record<string, unknown> =>
   JSON.parse(readFileSync(join(here, rel), "utf8")) as Record<string, unknown>;
 
 export const policySchema = load("../schema/policy.schema.json");
+export const actionSchema = load("../schema/action.schema.json");
 export const receiptSchema = load("../schema/receipt.schema.json");
 export const legacyReceiptSchema = load("../schema/receipt-legacy.schema.json");
 
@@ -28,7 +29,7 @@ export const CLAUSE_TYPES = [
 
 export const CLAUSE_MODES = ["enforce", "monitor", "require_approval"] as const;
 
-export const REALTIME_RESULTS = ["allow", "deny", "approved", "timeout"] as const;
+export const REALTIME_RESULTS = ["allow", "deny", "approved", "timeout", "not_evaluated"] as const;
 export const EXECUTION_STATES = [
   "simulated", "observed_not_evaluated", "denied", "allowed_pending",
   "executed", "failed", "outcome_unknown",

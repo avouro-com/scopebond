@@ -34,7 +34,7 @@ export function canonical(v: unknown): string {
 export const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 export const intentHash = (intent: Intent): string => sha256(canonical(intent));
 
-export type RealtimeResult = "allow" | "deny" | "approved" | "timeout";
+export type RealtimeResult = "allow" | "deny" | "approved" | "timeout" | "not_evaluated";
 export const EVIDENCE_VERSION = "1.0" as const;
 export const CANONICALIZATION = "RFC8785" as const;
 export const REDACTION_PROFILE = "scopebond:minimized-intent/v1" as const;
@@ -216,7 +216,7 @@ const ASSERTIONS = new Set([
   "none", "gateway_simulation", "adapter_reported_success",
   "adapter_reported_failure", "adapter_outcome_unknown",
 ]);
-const REALTIME = new Set(["allow", "deny", "approved", "timeout"]);
+const REALTIME = new Set(["allow", "deny", "approved", "timeout", "not_evaluated"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -281,6 +281,7 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     (payload.policy_ref.id === null || typeof payload.policy_ref.id === "string") &&
     Number.isSafeInteger(payload.policy_ref.version) && typeof payload.policy_ref.digest === "string" &&
     typeof payload.verifier_version === "string" && REALTIME.has(String(payload.realtime_result)) &&
+    ((state === "observed_not_evaluated") === (payload.realtime_result === "not_evaluated")) &&
     EXECUTION_STATES.includes(state as ExecutionState) && ASSERTIONS.has(assertion) &&
     (assertionForState[state as ExecutionState] == null || assertionForState[state as ExecutionState] === assertion) &&
     typeof payload.executed === "boolean" && payload.executed === (state === "executed") &&

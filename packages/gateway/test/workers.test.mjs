@@ -6,7 +6,7 @@ import {
 } from "../dist/index.js";
 
 const policy = {
-  policy_id: "t", version: 1,
+  vocabulary_version: "1.0", policy_id: "t", version: 1,
   clauses: [{ id: "tx", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 1000000 }],
 };
 const post = (app, path, body) =>

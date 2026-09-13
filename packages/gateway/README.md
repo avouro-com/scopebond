@@ -24,6 +24,15 @@ Clause modes: `enforce` blocks in real time; `monitor` lets the action through b
 signs and flags it (covered at claim time); `require_approval` holds without a valid
 approval.
 
+Startup and policy reload require a complete vocabulary-v1 policy with a nonempty
+clause set. Invalid reloads leave the last valid, cloned policy snapshot active.
+Requests use the closed action schema; action allowlists deny unlisted action types,
+and numeric bounds reject string or nonfinite values.
+
+Passive onboarding discovery uses `POST /v1/observe`. It returns `202` with an
+`observed_not_evaluated` receipt, never treats the action as allowed, and never
+invokes the configured executor.
+
 ## Quickstart
 
 ```bash
@@ -36,7 +45,7 @@ curl -sX POST localhost:8787/v1/evaluate \
   -d '{"intent":{"action_type":"payout.create","asset":"USDC","amount":500000}}'
 ```
 
-Routes: `POST /v1/evaluate`, `POST /mcp` (MCP ingress), `POST /v1/kill` · `/v1/resume`,
+Routes: `POST /v1/evaluate`, `POST /v1/observe`, `POST /mcp` (MCP ingress), `POST /v1/kill` · `/v1/resume`,
 `GET /v1/receipts`, `GET /v1/status`, `GET /v1/attester`, `GET /.well-known/jwks.json`,
 `POST /v1/anchor`, `GET /v1/anchors` · `/v1/anchors/latest` · `/v1/anchors/proof`,
 `GET /healthz`.

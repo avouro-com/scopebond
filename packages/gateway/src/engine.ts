@@ -31,7 +31,7 @@ export function evaluate(
   if (!verdict.violated) return { allow: true, realtime_result: "allow", verdict, clause_mode: null };
 
   const clause = (policy.clauses ?? []).find((c) => c.id === verdict.clause_id);
-  const mode = (clause?.mode as string) ?? "enforce";
+  const mode = clause?.type === "require_approval" ? "require_approval" : ((clause?.mode as string) ?? "enforce");
 
   // monitor: let it through but sign+log; the violation is covered at claim time.
   if (mode === "monitor") return { allow: true, realtime_result: "deny", verdict, clause_mode: mode };

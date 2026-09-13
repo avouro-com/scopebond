@@ -6,8 +6,10 @@ full receipt set). **This is the moat-bearing artifact** (D27): whoever owns the
 reference `violates()` and the vectors owns the definition of a scope violation.
 
 ```js
-import { violates } from "@scopebond/verify";
+import { violates, validateIntent, validatePolicy } from "@scopebond/verify";
 
+validatePolicy(policy); // full, closed vocabulary-v1 document
+validateIntent(intent); // closed action shape with finite numeric values
 const v = violates(policy, receipts, claimed, { at, gatewaysComplete });
 // → { violated, clause_id, explanation, inputs_hash, undetermined? }
 ```
@@ -22,6 +24,10 @@ const v = violates(policy, receipts, claimed, { at, gatewaysComplete });
   limit is. The coverage buckets of the vocabulary (§4/§5) fall out of this rule.
 - **Ambiguity resolves for the operator** — limits use strict `>`; exactly at the
   limit is allowed.
+- **All applicable clauses are considered** — an enforcing violation outranks
+  approval and monitor violations regardless of clause order.
+- **Action allowlists are closed** — when present, an unlisted action violates
+  the allowlist; bounded numeric and patterned values must have the required type.
 - **`global` scope** returns `undetermined` (not `violated`) when the caller signals
   the cross-gateway receipt set is incomplete.
 
@@ -57,8 +63,8 @@ runs every vector through `violates()` and checks the verdict. A gateway build i
 
 ## Types
 
-Written in TypeScript; ships `.d.ts`. Public types: `Policy`, `Clause`, `Receipt`,
-`Intent`, `Approval`, `Verdict`, `Options`.
+Written in TypeScript; ships `.d.ts`. Public types include `Policy`, `Clause`,
+`Receipt`, `Intent`, `Approval`, `Verdict`, `Options`, and `ValidationResult`.
 
 ## Test
 

@@ -49,7 +49,7 @@
           }
         },
         "verifier_version": { "type": "string" },
-        "realtime_result": { "enum": ["allow", "deny", "approved", "timeout"] },
+        "realtime_result": { "enum": ["allow", "deny", "approved", "timeout", "not_evaluated"] },
         "executed": { "type": "boolean" },
         "execution_ref": { "type": ["string", "null"], "description": "Compatibility alias of execution.reference." },
         "execution": {
@@ -92,6 +92,11 @@
         {
           "if": { "properties": { "execution": { "properties": { "state": { "const": "simulated" } } } } },
           "then": { "properties": { "execution": { "properties": { "assertion": { "const": "gateway_simulation" } } } } }
+        },
+        {
+          "if": { "properties": { "execution": { "properties": { "state": { "const": "observed_not_evaluated" } } } } },
+          "then": { "properties": { "realtime_result": { "const": "not_evaluated" } } },
+          "else": { "properties": { "realtime_result": { "not": { "const": "not_evaluated" } } } }
         }
       ]
     },

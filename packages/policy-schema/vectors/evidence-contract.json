@@ -1,5 +1,6 @@
 {
   "version": "1.0",
+  "realtime_results": ["allow", "deny", "approved", "timeout", "not_evaluated"],
   "execution_states": [
     "simulated",
     "observed_not_evaluated",
