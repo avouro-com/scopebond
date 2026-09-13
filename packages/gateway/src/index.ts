@@ -1,7 +1,7 @@
-export { createGateway, noopExecutor, DuplicateActionError, AuthorityUnavailableError } from "./app.js";
-export type { Gateway, GatewayConfig, Executor, ActionRequest, ActionResult, ObservationResult } from "./app.js";
-export { createHttpExecutor } from "./executors.js";
-export type { HttpExecutorOptions } from "./executors.js";
+export { createGateway, noopExecutor, DuplicateActionError, AuthorityUnavailableError, ExecutorInputError } from "./app.js";
+export type { Gateway, GatewayConfig, Executor, ExecutionResult, ActionRequest, ActionResult, ObservationResult } from "./app.js";
+export { createHttpExecutor, createSupportRefundExecutor } from "./executors.js";
+export type { HttpExecutorOptions, SupportRefundExecutorOptions } from "./executors.js";
 export { evaluate } from "./engine.js";
 export type { Decision } from "./engine.js";
 export {

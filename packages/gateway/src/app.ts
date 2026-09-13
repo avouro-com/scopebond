@@ -25,8 +25,11 @@ import type {
 export interface Executor {
   /** Simulation never claims that an external action occurred. */
   mode?: "simulation" | "dispatch";
-  execute(intent: Intent): { ref: string } | Promise<{ ref: string }>;
+  /** Integration-specific structural validation before authorization/reservation. */
+  validate?(intent: Intent): void;
+  execute(intent: Intent, context: { actionId: string }): ExecutionResult | Promise<ExecutionResult>;
 }
+export interface ExecutionResult { ref: string; output?: unknown; }
 export const noopExecutor: Executor = { mode: "simulation", execute: () => ({ ref: "simulation:no-dispatch" }) };
 
 export interface GatewayConfig {
@@ -51,7 +54,7 @@ export interface ActionRequest {
   authorization?: SignedIntentAuthorization;
   approval?: SignedApproval | Approval;
 }
-export interface ActionResult { allowed: boolean; reason: string; verdict?: Verdict; receipt: SignedReceipt; }
+export interface ActionResult { allowed: boolean; reason: string; verdict?: Verdict; receipt: SignedReceipt; output?: unknown; }
 export interface ObservationResult { observed: true; receipt: SignedReceipt; }
 
 export class DuplicateActionError extends Error {
@@ -62,6 +65,11 @@ export class DuplicateActionError extends Error {
 export class AuthorityUnavailableError extends Error {
   readonly status = 503 as const;
   constructor() { super("receipt store does not provide atomic authority reservations for dispatch"); this.name = "AuthorityUnavailableError"; }
+}
+
+export class ExecutorInputError extends Error {
+  readonly status = 400 as const;
+  constructor(message: string) { super(message); this.name = "ExecutorInputError"; }
 }
 
 export interface Gateway {
@@ -160,6 +168,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       digest: activePolicyHash,
     };
     const authenticated = await authorize(req, ts, policyRef);
+    executor.validate?.(req.intent);
     const actionId = authenticated.evidence.agent?.request_id ?? globalThis.crypto.randomUUID();
 
     const receiptFields = (
@@ -236,17 +245,22 @@ export function createGateway(config: GatewayConfig): Gateway {
     }
 
     let ref: string | null = null;
+    let output: unknown;
     let executionState: ExecutionState = "denied";
     let assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown" = "none";
     const stoppedBeforeDispatch = d.allow && await isStopped(req.intent.signer);
     if (d.allow && !stoppedBeforeDispatch) {
       if (executor.mode === "simulation") {
-        ref = (await executor.execute(req.intent)).ref;
+        const result = await executor.execute(req.intent, { actionId });
+        ref = result.ref;
+        output = result.output;
         executionState = "simulated";
         assertion = "gateway_simulation";
       } else {
         try {
-          ref = (await executor.execute(req.intent)).ref;
+          const result = await executor.execute(req.intent, { actionId });
+          ref = result.ref;
+          output = result.output;
           executionState = "executed";
           assertion = "adapter_reported_success";
         } catch (error) {
@@ -274,6 +288,7 @@ export function createGateway(config: GatewayConfig): Gateway {
         (executionState === "outcome_unknown" ? "execution outcome unknown" : reason),
       verdict: d.verdict,
       receipt,
+      ...(output === undefined ? {} : { output }),
     };
   }
 
@@ -425,7 +440,8 @@ export function createGateway(config: GatewayConfig): Gateway {
       const result = await handleAction(body);
       return c.json(result, result.allowed ? 200 : 403);
     } catch (error) {
-      if (error instanceof AuthorizationError || error instanceof DuplicateActionError || error instanceof AuthorityUnavailableError) {
+      if (error instanceof AuthorizationError || error instanceof DuplicateActionError ||
+          error instanceof AuthorityUnavailableError || error instanceof ExecutorInputError) {
         return c.json({ error: error.message }, error.status);
       }
       throw error;

@@ -185,6 +185,35 @@ const { app } = createGateway({
 });
 ```
 
+### Constrained support refund adapter
+
+`createSupportRefundExecutor` is the first narrow dispatch integration. It accepts
+only `support.refund` with positive integer USD `amount`, bounded `ticket_id`,
+`payment_id`, and normalized `reason_code` values. The operator supplies one HTTPS
+origin and API token; the agent cannot choose a URL, path, method, headers, or raw
+body. Redirects are disabled and the durable action ID becomes the upstream
+`Idempotency-Key`.
+Successful calls return only bounded `status`, `refund_id`, and `duplicate` fields;
+the receipt retains a digest of the complete response.
+
+```ts
+import { createSupportRefundExecutor } from "@scopebond/gateway";
+
+const executor = createSupportRefundExecutor({
+  origin: "https://support.example.com",
+  apiToken: process.env.SUPPORT_REFUND_TOKEN!,
+});
+const { app } = createGateway({
+  policy, attester, store, executor, authentication: { keys },
+  control: { bearerToken: process.env.SCOPEBOND_CONTROL_TOKEN! },
+});
+```
+
+The configured hostname must also be constrained by deployment egress/private-DNS
+controls; string validation cannot prevent DNS rebinding. Use a credential that can
+create refunds only through this upstream endpoint and keep it unavailable to the
+agent process.
+
 ## `[PLANNED]`
 
 - Push the anchor Merkle root to an external transparency log (Sigstore Rekor / chain).
