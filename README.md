@@ -6,6 +6,11 @@
 
 **Security & safety guardrails for AI agents with real authority.**
 
+> **Experimental alpha:** use controlled test systems only. The current release has
+> open enforcement, authentication, concurrency, durability and sensitive-data
+> findings under active remediation. The live demo evaluates real policies but uses
+> a no-op executor; it does not perform the displayed business actions.
+
 AI agents are being handed the power to **move money, send messages, and change
 systems** — on their own. When an agent makes a mistake or gets hijacked (a
 prompt-injected agent will happily use its real permissions against you), the
@@ -13,8 +18,8 @@ damage is real and there's no undo. Scopebond is the open-source control layer
 that **blocks out-of-policy actions before they happen** and **proves exactly what
 every agent did**.
 
-> ▶ **See it live:** **[try.scopebond.com](https://try.scopebond.com)** — watch the
-> gateway stop the wrong action across finance, security, legal, DevOps, support,
+> ▶ **See the policy simulation:** **[try.scopebond.com](https://try.scopebond.com)** —
+> compare live allow/deny decisions across finance, security, legal, DevOps, support,
 > data, and vendor scenarios. Learn more at **[scopebond.com](https://scopebond.com)**.
 
 ## One policy, three uses: prevent · prove · recover
@@ -23,11 +28,13 @@ every agent did**.
   can touch (MCP tools, HTTP APIs, wallets). You write a machine-readable policy —
   spend limits, allowlists, action bounds, time windows, approvals — and each rule
   is *enforced* (blocked in-flight, **fail closed**) or *monitored* (allowed, but
-  signed and flagged). Plus a kill switch. The bad action never happens.
+  signed and flagged). Plus a kill switch. These are target semantics; do not rely on
+  the alpha for production protection until the open remediation work is released.
 - **Prove** — every action, allowed or blocked, is countersigned into a
   tamper-evident **`scopebond:receipt`** (Ed25519). Anyone can verify a receipt
-  against the gateway's published key — an audit trail that writes itself,
-  compliance- and court-ready.
+  against the gateway's published key. A valid signature supports integrity and
+  provenance for what the signer asserted; it does not by itself prove an external
+  effect, completeness, compliance or legal admissibility.
 - **Recover** *(roadmap)* — the **Collateral Registry**: an operator backs an agent
   with a refundable USDC deposit against the *same* policy; on a provable scope
   violation the principal recovers from it. Non-custodial — Scopebond holds no key
@@ -42,8 +49,9 @@ agents. **[Try each one live →](https://try.scopebond.com)**
 ## Quickstart
 
 ```bash
-npx scopebond-gateway ./policy.json
+npx @scopebond/gateway ./policy.json
 # serves on :8787 with a persistent signing key and a durable receipt store
+# the default executor is a no-op; configure a reviewed adapter for real actions
 ```
 
 ```bash
@@ -62,7 +70,7 @@ const { app, handleAction } = createGateway({ policy });
 Verify a receipt independently (no trust in the server required):
 
 ```bash
-scopebond-gateway verify ./receipt.json --url http://localhost:8787
+npx @scopebond/gateway verify ./receipt.json --url http://localhost:8787
 ```
 
 Works with any agent over **HTTP or MCP**. Self-host it free — no account required.
@@ -71,7 +79,7 @@ Works with any agent over **HTTP or MCP**. Self-host it free — no account requ
 
 | Package | What it is |
 |---|---|
-| [`@scopebond/gateway`](packages/gateway) | The gateway (alpha) — prevent + prove: HTTP + MCP ingress, Ed25519 receipts, persistent attester key, durable receipt store, kill switch. `npx scopebond-gateway`. |
+| [`@scopebond/gateway`](packages/gateway) | The experimental gateway alpha: HTTP + MCP ingress, Ed25519 receipts, persistent attester key, durable receipt store and kill switch. Default execution is a no-op. `npx @scopebond/gateway`. |
 | [`@scopebond/verify`](packages/verify) | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` verdict library + conformance vectors. The portable standard the whole thing rests on. |
 | [`@scopebond/policy-schema`](packages/policy-schema) | The policy vocabulary — JSON Schema for the policy document and the `scopebond:receipt` envelope, plus test vectors. |
 

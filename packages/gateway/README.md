@@ -1,5 +1,10 @@
 # @scopebond/gateway
 
+> **Experimental alpha:** use controlled test systems only. Open enforcement,
+> authentication, concurrency, durability and sensitive-data findings must be
+> resolved before production reliance. With no `executor` configured, allowed
+> requests run the built-in no-op and `executed` refers only to that no-op.
+
 The **Scopebond Gateway** — a policy-enforcement proxy that sits between an AI
 agent and everything it can touch. One policy, three uses: **prevent · prove · pay**
 (the gateway does prevent + prove). Built on [Hono](https://hono.dev) so the same
@@ -21,7 +26,7 @@ approval.
 ## Quickstart
 
 ```bash
-npx scopebond-gateway ./policy.json      # serves on :8787
+npx @scopebond/gateway ./policy.json      # serves on :8787
 ```
 
 ```bash
@@ -38,7 +43,8 @@ Routes: `POST /v1/evaluate`, `POST /mcp` (MCP ingress), `POST /v1/kill` · `/v1/
 On first run the gateway generates and persists an Ed25519 attester key
 (`./scopebond-attester.key`, mode 0600) and a durable SQLite receipt store
 (`./scopebond.db`), so **receipts stay verifiable and survive restarts**. It also
-**anchors** the receipt log and **hot-reloads** the policy (below). Configure:
+**anchors** the receipt log and **hot-reloads** the policy (below). These mechanisms
+do not close the alpha findings described above. Configure:
 
 | Env | Default | Purpose |
 |---|---|---|
