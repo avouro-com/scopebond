@@ -32,11 +32,13 @@ curl -sX POST localhost:8787/v1/evaluate \
 
 Routes: `POST /v1/evaluate`, `POST /mcp` (MCP ingress), `POST /v1/kill` · `/v1/resume`,
 `GET /v1/receipts`, `GET /v1/status`, `GET /v1/attester`, `GET /.well-known/jwks.json`,
+`POST /v1/anchor`, `GET /v1/anchors` · `/v1/anchors/latest` · `/v1/anchors/proof`,
 `GET /healthz`.
 
 On first run the gateway generates and persists an Ed25519 attester key
 (`./scopebond-attester.key`, mode 0600) and a durable SQLite receipt store
-(`./scopebond.db`), so **receipts stay verifiable and survive restarts**. Configure:
+(`./scopebond.db`), so **receipts stay verifiable and survive restarts**. It also
+**anchors** the receipt log and **hot-reloads** the policy (below). Configure:
 
 | Env | Default | Purpose |
 |---|---|---|
@@ -45,6 +47,31 @@ On first run the gateway generates and persists an Ed25519 attester key
 | `SCOPEBOND_ATTESTER_KEY` | — | attester key inline (PEM), e.g. from a secret store |
 | `SCOPEBOND_DB` | `./scopebond.db` | SQLite receipt store path |
 | `SCOPEBOND_RECEIPTS_FILE` | — | use an append-only JSONL log instead of SQLite |
+| `SCOPEBOND_ANCHOR_INTERVAL` | `24h` | anchor cadence (`24h`, `1h`, `30m`; `0`/`off` disables) |
+| `SCOPEBOND_POLICY_WATCH` | `1` | hot-reload the policy file on change (`0` disables) |
+
+## Tamper-evidence (anchoring)
+
+The gateway periodically commits the receipt log to a **sha256 Merkle root** — an
+"anchor" that fixes exactly which receipts existed, chained to the previous anchor so
+the anchor log is itself tamper-evident. Anyone can prove a specific receipt is
+covered with an **inclusion proof**, without seeing the others:
+
+```bash
+curl -sX POST localhost:8787/v1/anchor                 # anchor now (also runs on a timer)
+curl -s "localhost:8787/v1/anchors/proof?intent_hash=<hash>"   # { merkle_root, proof, included }
+```
+
+`GET /v1/anchors` lists anchors; `GET /v1/anchors/latest` returns the newest.
+[PLANNED] pushing the root to an external transparency log (Sigstore Rekor / chain).
+
+## Policy hot-reload
+
+Edit `policy.json` while the gateway runs and it swaps the policy in without a
+restart (recomputing the policy hash), **fail safe** — a malformed file is rejected
+and the current policy stays in force. `POST`ing a policy over HTTP is deliberately
+**not** supported (that would let anyone weaken enforcement); policy changes come
+from the watched file or the authenticated hosted control plane.
 
 ## Prove it — verify a receipt
 
@@ -90,9 +117,9 @@ const { app } = createGateway({ policy, attester, store });
 
 ## `[PLANNED]`
 
-- Real action forwarding (HTTP proxy / MCP passthrough) executors — HTTP forwarding is in.
-- Daily anchoring of the receipt log (tamper-evidence) + a Cloudflare D1/KV edge store.
-- Policy hot-reload; fuller MCP surface.
+- Push the anchor Merkle root to an external transparency log (Sigstore Rekor / chain).
+- A Cloudflare **D1** edge receipt store (KV store is in) for the hosted path.
+- Fuller MCP surface; MCP-passthrough executor.
 
 ## Test
 

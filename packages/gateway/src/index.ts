@@ -8,8 +8,10 @@ export {
   MemoryReceiptStore, createAttester, attesterFromPrivateKeyPem, verifyReceipt,
   buildReceipt, canonical, sha256, intentHash, ed25519JwkToSpkiPem, deriveKid,
 } from "./receipts.js";
-export type { ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification } from "./receipts.js";
+export type { ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification, Anchor } from "./receipts.js";
 export { handleMcp } from "./mcp.js";
+export { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
+export type { ProofStep } from "./anchor.js";
 
 // Edge (Cloudflare Workers) support — WebCrypto attester + KV store. Edge-safe.
 export { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
