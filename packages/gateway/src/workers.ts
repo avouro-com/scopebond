@@ -6,7 +6,7 @@
 import { createGateway } from "./app.js";
 import type { Gateway } from "./app.js";
 import { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
-import type { ReceiptStore, SignedReceipt, Attester } from "./receipts.js";
+import type { ReceiptStore, SignedReceipt, Attester, Anchor } from "./receipts.js";
 import type { Receipt, Policy } from "@scopebond/verify";
 
 /** The subset of Cloudflare's KVNamespace this package uses. */
@@ -30,6 +30,16 @@ export class KvReceiptStore implements ReceiptStore {
   }
   async list(): Promise<SignedReceipt[]> { return this.load(); }
   async executed(): Promise<Receipt[]> { return (await this.load()).map((r) => r.payload as unknown as Receipt); }
+  private async loadAnchors(): Promise<Anchor[]> {
+    const raw = await this.kv.get(this.key + ":anchors", "text");
+    return raw ? (JSON.parse(raw) as Anchor[]) : [];
+  }
+  async putAnchor(a: Anchor): Promise<void> {
+    const all = await this.loadAnchors();
+    all.push(a);
+    await this.kv.put(this.key + ":anchors", JSON.stringify(all));
+  }
+  async anchors(): Promise<Anchor[]> { return this.loadAnchors(); }
 }
 
 /** Load the attester key from KV, or generate + persist one. Returns a WebCrypto

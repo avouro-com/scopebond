@@ -5,8 +5,9 @@
 import { Hono } from "hono";
 import { evaluate } from "./engine.js";
 import { buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash } from "./receipts.js";
-import type { Attester, ReceiptStore, SignedReceipt } from "./receipts.js";
+import type { Attester, ReceiptStore, SignedReceipt, Anchor } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
+import { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
 import type { Policy, Intent, Approval, Verdict } from "@scopebond/verify";
 
 /** How an allowed action is actually carried out. Default: a no-op (record only).
@@ -35,6 +36,10 @@ export interface Gateway {
   state: { killed: boolean };
   policyHash: string;
   handleAction(req: ActionRequest): Promise<ActionResult>;
+  /** Hot-swap the active policy (recomputes the policy hash + version). */
+  setPolicy(policy: Policy): void;
+  /** Compute + store a Merkle anchor over the receipts to date (tamper-evidence). */
+  anchor(): Promise<Anchor>;
 }
 
 const VERIFIER_VERSION = "scopebond-verify@0.1.0";
@@ -43,9 +48,9 @@ export function createGateway(config: GatewayConfig): Gateway {
   const store = config.store ?? new MemoryReceiptStore();
   const executor = config.executor ?? noopExecutor;
   const attester = config.attester ?? createAttester();
-  const policy = config.policy;
-  const policyHash = sha256(canonical(policy));
-  const policyVersion = (policy.version as number) ?? 1;
+  let policy = config.policy;
+  let policyHash = sha256(canonical(policy));
+  let policyVersion = (policy.version as number) ?? 1;
   const now = config.now ?? (() => new Date().toISOString());
   const state = { killed: false };
 
@@ -84,6 +89,33 @@ export function createGateway(config: GatewayConfig): Gateway {
     return { allowed: d.allow, reason, verdict: d.verdict, receipt };
   }
 
+  function setPolicy(next: Policy): void {
+    policy = next;
+    policyHash = sha256(canonical(next));
+    policyVersion = (next.version as number) ?? 1;
+  }
+
+  async function anchor(): Promise<Anchor> {
+    const receipts = (await store.list()) as SignedReceipt[];
+    const leaves = receipts.map((r) => sha256(canonical(r.payload)));
+    const prior = (await store.anchors?.()) ?? [];
+    const prev = prior[prior.length - 1] ?? null;
+    const ts = now();
+    const base = {
+      seq: (prev?.seq ?? 0) + 1,
+      algo: "sha256-merkle" as const,
+      merkle_root: merkleRoot(leaves),
+      count: leaves.length,
+      from: receipts[0]?.payload.timestamp ?? null,
+      to: ts,
+      prev_anchor_hash: prev?.anchor_hash ?? null,
+      timestamp: ts,
+    };
+    const a: Anchor = { ...base, anchor_hash: sha256(canonical(base)) };
+    await store.putAnchor?.(a);
+    return a;
+  }
+
   const app = new Hono();
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/v1/status", async (c) => c.json({
@@ -100,6 +132,33 @@ export function createGateway(config: GatewayConfig): Gateway {
     kid: attester.kid, alg: "Ed25519", public_key_pem: attester.publicKeyPem, jwk: attester.publicKeyJwk,
   }));
   app.get("/.well-known/jwks.json", (c) => c.json({ keys: [attester.publicKeyJwk] }));
+
+  // Tamper-evidence: Merkle anchors over the receipt log, and inclusion proofs.
+  app.get("/v1/anchors", async (c) => c.json({ anchors: (await store.anchors?.()) ?? [] }));
+  app.get("/v1/anchors/latest", async (c) => {
+    const all = (await store.anchors?.()) ?? [];
+    return c.json(all[all.length - 1] ?? null);
+  });
+  app.post("/v1/anchor", async (c) => {
+    if (!store.putAnchor || !store.anchors) return c.json({ error: "this store does not support anchoring" }, 400);
+    return c.json(await anchor());
+  });
+  app.get("/v1/anchors/proof", async (c) => {
+    const all = (await store.anchors?.()) ?? [];
+    const latest = all[all.length - 1];
+    if (!latest) return c.json({ error: "no anchor yet — POST /v1/anchor first" }, 404);
+    const receipts = ((await store.list()) as SignedReceipt[]).slice(0, latest.count);
+    const leaves = receipts.map((r) => sha256(canonical(r.payload)));
+    const wantLeaf = c.req.query("leaf");
+    const wantIntent = c.req.query("intent_hash");
+    let index = -1;
+    if (wantLeaf) index = leaves.indexOf(wantLeaf);
+    else if (wantIntent) index = receipts.findIndex((r) => r.payload.intent_hash === wantIntent);
+    if (index < 0) return c.json({ error: "receipt not covered by the latest anchor" }, 404);
+    const leaf = leaves[index];
+    const proof = merkleProof(leaves, index);
+    return c.json({ anchor_seq: latest.seq, merkle_root: latest.merkle_root, leaf, proof, included: verifyProof(leaf, proof, latest.merkle_root) });
+  });
 
   app.post("/v1/evaluate", async (c) => {
     let body: ActionRequest;
@@ -118,5 +177,5 @@ export function createGateway(config: GatewayConfig): Gateway {
     return c.json(res as object);
   });
 
-  return { app, store, attester, state, policyHash, handleAction };
+  return { app, store, attester, state, get policyHash() { return policyHash; }, handleAction, setPolicy, anchor };
 }

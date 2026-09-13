@@ -5,7 +5,7 @@
 import { appendFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
-import type { ReceiptStore, SignedReceipt } from "./receipts.js";
+import type { ReceiptStore, SignedReceipt, Anchor } from "./receipts.js";
 import type { Receipt } from "@scopebond/verify";
 
 function ensureDir(file: string): void {
@@ -17,12 +17,21 @@ function ensureDir(file: string): void {
  *  record is not silently rewritten). Loads the log into memory on open. */
 export class FileReceiptStore implements ReceiptStore {
   private cache: SignedReceipt[] = [];
+  private anchorLog: Anchor[] = [];
+  private readonly anchorFile: string;
   constructor(private readonly file: string) {
     ensureDir(file);
+    this.anchorFile = file + ".anchors";
     if (existsSync(file)) {
       for (const line of readFileSync(file, "utf8").split("\n")) {
         const t = line.trim();
         if (t) this.cache.push(JSON.parse(t) as SignedReceipt);
+      }
+    }
+    if (existsSync(this.anchorFile)) {
+      for (const line of readFileSync(this.anchorFile, "utf8").split("\n")) {
+        const t = line.trim();
+        if (t) this.anchorLog.push(JSON.parse(t) as Anchor);
       }
     }
   }
@@ -32,6 +41,8 @@ export class FileReceiptStore implements ReceiptStore {
   }
   list(): SignedReceipt[] { return this.cache.slice(); }
   executed(): Receipt[] { return this.cache.map((r) => r.payload as unknown as Receipt); }
+  putAnchor(a: Anchor): void { appendFileSync(this.anchorFile, JSON.stringify(a) + "\n"); this.anchorLog.push(a); }
+  anchors(): Anchor[] { return this.anchorLog.slice(); }
 }
 
 /** SQLite-backed receipt store using Node's built-in `node:sqlite` (no native
@@ -52,6 +63,10 @@ export class SqliteReceiptStore implements ReceiptStore {
          executed INTEGER NOT NULL,
          timestamp TEXT NOT NULL,
          receipt_json TEXT NOT NULL
+       );
+       CREATE TABLE IF NOT EXISTS anchors (
+         seq INTEGER PRIMARY KEY,
+         anchor_json TEXT NOT NULL
        );`,
     );
   }
@@ -66,6 +81,13 @@ export class SqliteReceiptStore implements ReceiptStore {
     return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
   }
   executed(): Receipt[] { return this.list().map((r) => r.payload as unknown as Receipt); }
+  putAnchor(a: Anchor): void {
+    this.db.prepare(`INSERT OR REPLACE INTO anchors (seq, anchor_json) VALUES (?, ?)`).run(a.seq, JSON.stringify(a));
+  }
+  anchors(): Anchor[] {
+    const rows = this.db.prepare(`SELECT anchor_json FROM anchors ORDER BY seq`).all() as { anchor_json: string }[];
+    return rows.map((row) => JSON.parse(row.anchor_json) as Anchor);
+  }
   close(): void { this.db.close(); }
 }
 
