@@ -138,6 +138,20 @@ export function deriveKid(publicJwk: Record<string, unknown>): string {
   return fingerprintKid(publicJwk);
 }
 
+/** A tamper-evidence anchor: a Merkle root committing to the first `count`
+ *  receipts (append-only order), chained to the previous anchor. */
+export interface Anchor {
+  seq: number;
+  algo: "sha256-merkle";
+  merkle_root: string;
+  count: number;
+  from: string | null;
+  to: string;
+  prev_anchor_hash: string | null;
+  anchor_hash: string;
+  timestamp: string;
+}
+
 export interface ReceiptStore {
   put(r: SignedReceipt): void | Promise<void>;
   list(): SignedReceipt[] | Promise<SignedReceipt[]>;
@@ -145,11 +159,17 @@ export interface ReceiptStore {
   executed(): Receipt[] | Promise<Receipt[]>;
   /** Release any underlying handle (e.g. a SQLite connection). Optional. */
   close?(): void | Promise<void>;
+  /** Append an anchor. Optional — a store that supports anchoring implements both. */
+  putAnchor?(a: Anchor): void | Promise<void>;
+  anchors?(): Anchor[] | Promise<Anchor[]>;
 }
 
 export class MemoryReceiptStore implements ReceiptStore {
   private all: SignedReceipt[] = [];
+  private anchorLog: Anchor[] = [];
   put(r: SignedReceipt): void { this.all.push(r); }
   list(): SignedReceipt[] { return this.all.slice(); }
   executed(): Receipt[] { return this.all.map((r) => r.payload as unknown as Receipt); }
+  putAnchor(a: Anchor): void { this.anchorLog.push(a); }
+  anchors(): Anchor[] { return this.anchorLog.slice(); }
 }

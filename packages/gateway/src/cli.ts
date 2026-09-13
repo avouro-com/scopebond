@@ -12,7 +12,7 @@
 //      SCOPEBOND_DB (default ./scopebond.db) — set SCOPEBOND_RECEIPTS_FILE to force JSONL.
 
 import { serve } from "@hono/node-server";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, watch } from "node:fs";
 import { createGateway } from "./index.js";
 import { attesterFromPrivateKeyPem, verifyReceipt } from "./receipts.js";
 import type { Attester } from "./receipts.js";
@@ -20,6 +20,17 @@ import { loadOrCreateAttester } from "./node-keys.js";
 import { openReceiptStore } from "./node-stores.js";
 
 function fail(msg: string): never { console.error(msg); process.exit(1); }
+
+/** Parse a short duration ("24h", "30m", "1000ms", "0"/"off" → 0). */
+function parseDurationMs(s: string): number {
+  const t = s.trim().toLowerCase();
+  if (t === "" || t === "0" || t === "off" || t === "false") return 0;
+  const m = t.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/);
+  if (!m) return 0;
+  const mult: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return Math.round(parseFloat(m[1]) * mult[m[2] ?? "ms"]);
+}
+
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
@@ -42,16 +53,49 @@ function cmdServe(policyPath: string | undefined): void {
     receiptsFile ? { file: receiptsFile } : { db: process.env.SCOPEBOND_DB ?? "scopebond.db" },
   );
 
-  const { app, policyHash } = createGateway({ policy, attester, store });
+  const gateway = createGateway({ policy, attester, store });
   const port = Number(process.env.PORT ?? 8787);
-  serve({ fetch: app.fetch, port });
+  serve({ fetch: gateway.app.fetch, port });
 
   console.log(`scopebond-gateway listening on :${port}`);
-  console.log(`  policy    ${policyPath} (hash ${policyHash.slice(0, 12)}…)`);
+  console.log(`  policy    ${policyPath} (hash ${gateway.policyHash.slice(0, 12)}…)`);
   console.log(`  attester  ${attester.kid}  [${source}]`);
   console.log(`  receipts  ${kind}: ${path} (durable)`);
-  console.log(`  routes    POST /v1/evaluate · POST /mcp · POST /v1/kill · POST /v1/resume`);
-  console.log(`            GET /v1/receipts · GET /v1/status · GET /v1/attester · GET /.well-known/jwks.json`);
+  console.log(`  routes    POST /v1/evaluate · /mcp · /v1/kill · /v1/resume · /v1/anchor`);
+  console.log(`            GET /v1/receipts · /v1/status · /v1/attester · /.well-known/jwks.json · /v1/anchors[/latest|/proof]`);
+
+  // Hot-reload: watch the policy file and swap it in without a restart. Fail safe —
+  // a malformed file keeps the current policy. Disable with SCOPEBOND_POLICY_WATCH=0.
+  if ((process.env.SCOPEBOND_POLICY_WATCH ?? "1") !== "0") {
+    try {
+      let debounce: ReturnType<typeof setTimeout> | undefined;
+      watch(policyPath as string, () => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+          try {
+            gateway.setPolicy(JSON.parse(readFileSync(policyPath as string, "utf8")));
+            console.log(`  policy reloaded (hash ${gateway.policyHash.slice(0, 12)}…)`);
+          } catch (e) {
+            console.error(`  policy reload failed, keeping current: ${(e as Error).message}`);
+          }
+        }, 150);
+      });
+      console.log(`  hot-reload watching ${policyPath}`);
+    } catch { /* fs.watch unsupported here — skip */ }
+  }
+
+  // Daily anchoring: periodically Merkle-anchor the receipt log (tamper-evidence).
+  // SCOPEBOND_ANCHOR_INTERVAL, e.g. 24h (default), 1h, 30m; 0/off disables.
+  const anchorMs = parseDurationMs(process.env.SCOPEBOND_ANCHOR_INTERVAL ?? "24h");
+  if (anchorMs > 0) {
+    const timer = setInterval(() => {
+      gateway.anchor()
+        .then((a) => console.log(`  anchored #${a.seq}: ${a.count} receipts · root ${a.merkle_root.slice(0, 12)}…`))
+        .catch((e) => console.error(`  anchor failed: ${(e as Error).message}`));
+    }, anchorMs);
+    timer.unref?.();
+    console.log(`  anchoring every ${process.env.SCOPEBOND_ANCHOR_INTERVAL ?? "24h"}`);
+  }
 }
 
 async function cmdVerify(args: string[]): Promise<void> {
