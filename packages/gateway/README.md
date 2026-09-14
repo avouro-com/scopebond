@@ -120,6 +120,18 @@ Hosted export uses `node:sqlite` and therefore requires Node 22 or newer. Receip
 before durable action IDs are retained locally and recorded as `missing_action_id`
 delivery gaps rather than uploaded under an invented identity.
 
+The customer workspace supplies a short-lived JSON enrollment bundle. Save it on the
+gateway machine and complete possession proof with the same attester key the gateway
+will use:
+
+```bash
+corepack pnpm dlx @scopebond/gateway@0.4.0 enroll https://cloud.scopebond.com scopebond-enrollment.json
+```
+
+The command refuses non-HTTPS remote origins, signs the canonical challenge locally,
+and prints the scoped exporter credential only to that terminal. Keep the bundle and
+returned credential out of URLs, chat, shell arguments and source control.
+
 ## Tamper-evidence (anchoring)
 
 The gateway periodically commits the receipt log to a **sha256 Merkle root** — an

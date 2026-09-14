@@ -42,6 +42,8 @@ export type { Ed25519Jwk } from "./webcrypto.js";
 export { KvReceiptStore, loadOrCreateKvAttester, createWorkerGateway } from "./workers.js";
 export type { KvLike } from "./workers.js";
 export { createCloudExporter, createMemoryCloudOutbox, withCloudExporter } from "./cloud.js";
+export { completeCloudEnrollment } from "./enrollment.js";
+export type { CloudEnrollmentBundle, CloudEnrollmentResult } from "./enrollment.js";
 export type {
   CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus,
   CloudOutbox, CloudOutboxEntry, CloudOutboxStatus, MemoryCloudOutboxOptions,

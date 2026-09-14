@@ -6,6 +6,8 @@
 //   scopebond-gateway verify <receipt.json>    verify a receipt's signature + integrity
 //        [--key <pubkey.pem>] [--url <gateway-url>]
 //   scopebond-gateway keygen [key-file]        generate + persist an attester key
+//   scopebond-gateway enroll <cloud-url> <enrollment.json>
+//                                               prove key possession and print config
 //
 // Env: SCOPEBOND_POLICY, PORT (8787),
 //      SCOPEBOND_KEY_FILE (default ./scopebond-attester.key) or SCOPEBOND_ATTESTER_KEY (PKCS8 PEM),
@@ -15,7 +17,7 @@
 import { serve } from "@hono/node-server";
 import { readFileSync, writeFileSync, watch } from "node:fs";
 import { createPublicKey } from "node:crypto";
-import { createGateway, createCloudExporter, withCloudExporter, StaticPrincipalKeyRegistry, deriveKid } from "./index.js";
+import { createGateway, createCloudExporter, withCloudExporter, StaticPrincipalKeyRegistry, deriveKid, completeCloudEnrollment } from "./index.js";
 import type { CloudExporter } from "./index.js";
 import type { GatewayAuthentication, PrincipalKeyRecord, PrincipalPurpose } from "./index.js";
 import { attesterFromPrivateKeyPem, verifyReceipt } from "./receipts.js";
@@ -219,8 +221,27 @@ function cmdKeygen(args: string[]): void {
   else console.log(attester.publicKeyPem.trim());
 }
 
+async function cmdEnroll(args: string[]): Promise<void> {
+  const [url, bundlePath] = args;
+  if (!url || !bundlePath) fail("usage: scopebond-gateway enroll <cloud-url> <enrollment.json>");
+  let bundle: { enrollment_token: string; proof_canonical: string };
+  try { bundle = JSON.parse(readFileSync(bundlePath, "utf8")); }
+  catch (error) { fail(`could not read enrollment bundle: ${(error as Error).message}`); }
+  const { attester, source } = resolveAttester();
+  try {
+    const result = await completeCloudEnrollment({ url, bundle, attester });
+    console.log(`gateway enrolled: ${result.gateway_id}`);
+    console.log(`attester: ${result.attester_kid} [${source}]`);
+    console.log(`credential expires: ${result.expires_at}`);
+    console.log("Set these only in the gateway environment:");
+    console.log(`SCOPEBOND_CLOUD_URL=${new URL(url).origin}`);
+    console.log(`SCOPEBOND_CLOUD_CREDENTIAL=${result.credential}`);
+  } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "verify") { await cmdVerify(rest); }
 else if (cmd === "keygen") { cmdKeygen(rest); }
+else if (cmd === "enroll") { await cmdEnroll(rest); }
 else if (cmd === "serve") { cmdServe(rest[0]); }
 else { cmdServe(cmd ?? process.env.SCOPEBOND_POLICY); } // default: treat first arg as the policy path

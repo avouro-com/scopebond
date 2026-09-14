@@ -8,6 +8,9 @@ tagged release.
 ## [Unreleased]
 
 ### Added
+- A bounded `scopebond-gateway enroll` handoff that reads a one-use Cloud bundle,
+  proves possession with the local attester key, and prints the scoped exporter
+  credential only to the gateway terminal.
 - A release-candidate Cloud exporter with scoped machine credentials, a bounded
   durable SQLite outbox and gap journal, duplicate-safe acknowledgements, retry
   backoff, and explicit status for capacity, conflict, expiry and legacy-ID gaps.
