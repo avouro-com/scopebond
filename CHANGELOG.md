@@ -8,6 +8,11 @@ tagged release.
 ## [Unreleased]
 
 ### Added
+- A release-candidate Cloud exporter with scoped machine credentials, a bounded
+  durable SQLite outbox and gap journal, duplicate-safe acknowledgements, retry
+  backoff, and explicit status for capacity, conflict, expiry and legacy-ID gaps.
+- A coherent local package release set: policy-schema 0.2.0, verifier 0.1.1,
+  gateway 0.4.0 and the SDK's first 0.1.0 candidate.
 - Durable execution reconciliation: atomic request/approval/budget consumption,
   signed pre-dispatch lifecycle records, read-only adapter result queries,
   control-protected unresolved-action inspection, pinned-policy restart recovery,
@@ -15,6 +20,8 @@ tagged release.
   retain `outcome_unknown`; no reconciliation path redispatches an action.
 - One shared strict RFC-8785-target canonical serializer and cross-package vectors
   now define schema, verifier, gateway and SDK signature/hash bytes.
+- Policy schemas now load through bundleable JSON modules, keeping strict gateway
+  validation available in Cloudflare Workers without a `node:fs` dependency.
 - Authenticated agent-intent and approval envelopes: Ed25519 key binding, bounded
   validity, single-use replay identifiers, exact intent/policy references, receipt
   evidence, and offline principal verification.

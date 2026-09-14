@@ -5,6 +5,7 @@
 ### Minor Changes
 
 - 875d640: Publish one strict canonical JSON implementation and use it for verifier hashes and signatures across the Scopebond packages.
+- Load the schema documents through bundleable JSON modules so strict validation also runs in edge Workers.
 
 ## 0.1.0
 

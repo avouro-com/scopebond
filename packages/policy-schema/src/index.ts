@@ -2,19 +2,16 @@
 // vectors. Runtime validation is left to consumers (e.g. ajv); this package is
 // the canonical source of the schema and the enumerations.
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import policySchemaDocument from "../schema/policy.schema.json" with { type: "json" };
+import actionSchemaDocument from "../schema/action.schema.json" with { type: "json" };
+import receiptSchemaDocument from "../schema/receipt.schema.json" with { type: "json" };
+import legacyReceiptSchemaDocument from "../schema/receipt-legacy.schema.json" with { type: "json" };
 export { canonical } from "./canonical.js";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const load = (rel: string): Record<string, unknown> =>
-  JSON.parse(readFileSync(join(here, rel), "utf8")) as Record<string, unknown>;
-
-export const policySchema = load("../schema/policy.schema.json");
-export const actionSchema = load("../schema/action.schema.json");
-export const receiptSchema = load("../schema/receipt.schema.json");
-export const legacyReceiptSchema = load("../schema/receipt-legacy.schema.json");
+export const policySchema = policySchemaDocument as Record<string, unknown>;
+export const actionSchema = actionSchemaDocument as Record<string, unknown>;
+export const receiptSchema = receiptSchemaDocument as Record<string, unknown>;
+export const legacyReceiptSchema = legacyReceiptSchemaDocument as Record<string, unknown>;
 
 export const VOCABULARY_VERSION = "1.0";
 export const EVIDENCE_VERSION = "1.0";
