@@ -109,7 +109,7 @@ export interface Gateway {
   reconcileAction(actionId: string): Promise<ActionLifecycleRecord>;
 }
 
-const VERIFIER_VERSION = "scopebond-verify@0.1.0";
+const VERIFIER_VERSION = "scopebond-verify@0.1.1";
 
 export function createGateway(config: GatewayConfig): Gateway {
   if (!config.authentication) throw new Error("gateway authentication configuration is required");

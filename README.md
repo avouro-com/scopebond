@@ -93,10 +93,12 @@ merge) keeps non-public material out of this repo by design.
 
 ## Status
 
-Early development, landing package by package. `@scopebond/verify` and
-`@scopebond/policy-schema` are published at `0.1.0`; the gateway is a
-published **alpha**. The hosted control plane ("Scopebond Cloud") is a separate,
-proprietary product and is not in this repository.
+Early development, landing package by package. Published versions remain
+`@scopebond/policy-schema@0.1.0`, `@scopebond/verify@0.1.0`, and
+`@scopebond/gateway@0.3.0`. The reviewed local release candidate is schema 0.2.0,
+verifier 0.1.1, gateway 0.4.0, and the SDK's first 0.1.0 release; it has not been
+published. The hosted control plane ("Scopebond Cloud") is a separate proprietary
+product and is not in this repository.
 
 ## Using Scopebond? Show it
 

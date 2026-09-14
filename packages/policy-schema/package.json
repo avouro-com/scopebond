@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/policy-schema",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scopebond policy vocabulary — JSON Schema for the policy document and the scopebond:receipt envelope, plus test vectors.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",

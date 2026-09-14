@@ -1,24 +1,49 @@
 {
   "name": "@scopebond/sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Scopebond SDK — operator-side Ed25519 signing of agent action intents and a thin client for submitting them to a Scopebond gateway.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/sdk#readme",
-  "repository": { "type": "git", "url": "https://github.com/avouro-com/scopebond.git", "directory": "packages/sdk" },
-  "bugs": { "url": "https://github.com/avouro-com/scopebond/issues" },
-  "keywords": ["scopebond", "sdk", "ai-agents", "signing", "ed25519"],
-  "engines": { "node": ">=20" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avouro-com/scopebond.git",
+    "directory": "packages/sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/avouro-com/scopebond/issues"
+  },
+  "keywords": [
+    "scopebond",
+    "sdk",
+    "ai-agents",
+    "signing",
+    "ed25519"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "files": ["dist"],
-  "dependencies": { "@scopebond/policy-schema": "workspace:^" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@scopebond/policy-schema": "workspace:^"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepublishOnly": "tsc -p tsconfig.json",
     "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
   },
-  "publishConfig": { "access": "public" }
+  "publishConfig": {
+    "access": "public"
+  }
 }

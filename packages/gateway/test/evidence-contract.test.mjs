@@ -56,6 +56,7 @@ test("Node and WebCrypto receipts share the v1 contract and offline verification
     const verification = verifyReceipt(receipt, attester.publicKeyPem);
 
     assert.equal(receipt.payload.evidence_version, vectors.version);
+    assert.equal(receipt.payload.verifier_version, "scopebond-verify@0.1.1");
     assert.ok(vectors.execution_states.includes(receipt.payload.execution.state));
     assert.equal(verification.valid, true);
     assert.equal(verification.contract_valid, true);

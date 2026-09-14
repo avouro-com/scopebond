@@ -1,5 +1,11 @@
 # @scopebond/policy-schema
 
+## 0.2.0
+
+### Minor Changes
+
+- 875d640: Publish one strict canonical JSON implementation and use it for verifier hashes and signatures across the Scopebond packages.
+
 ## 0.1.0
 
 ### Minor Changes
