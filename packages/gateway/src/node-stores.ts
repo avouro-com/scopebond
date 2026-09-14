@@ -5,6 +5,8 @@
 import { appendFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
+import { canonical, sha256 } from "./crypto.js";
+import type { CloudDeliveryGap, CloudOutbox, CloudOutboxEntry, CloudOutboxStatus } from "./cloud.js";
 import type {
   ReceiptStore, SignedReceipt, Anchor, AuthorityReservation,
   AuthorityReservationResult, AuthorityFinalState, StopState, ActionLifecycleRecord, RealtimeResult,
@@ -296,4 +298,192 @@ export function openReceiptStore(opts: { db?: string; file?: string }): { store:
   }
   const file = opts.file ?? "scopebond-receipts.jsonl";
   return { store: new FileReceiptStore(file), kind: "file", path: file };
+}
+
+export interface SqliteCloudOutboxOptions {
+  maxPending?: number;
+  maxBytes?: number;
+  maxAgeMs?: number;
+  maxGapRecords?: number;
+  now?: () => number;
+}
+
+/** Durable, bounded Cloud delivery queue. Rejections and expiry are retained as
+ * explicit gap rows so a local receipt never disappears without evidence. */
+export class SqliteCloudOutbox implements CloudOutbox {
+  private readonly db: {
+    exec(sql: string): void;
+    prepare(sql: string): { run(...args: unknown[]): unknown; all(...args: unknown[]): unknown[] };
+    close(): void;
+  };
+  private readonly maxPending: number;
+  private readonly maxBytes: number;
+  private readonly maxAgeMs: number;
+  private readonly maxGapRecords: number;
+  private readonly now: () => number;
+
+  constructor(path: string, options: SqliteCloudOutboxOptions = {}) {
+    ensureDir(path);
+    const require = createRequire(import.meta.url);
+    const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (value: string) => SqliteCloudOutbox["db"] };
+    this.db = new DatabaseSync(path);
+    this.maxPending = positiveInteger(options.maxPending, 10_000);
+    this.maxBytes = positiveInteger(options.maxBytes, 64 * 1024 * 1024);
+    this.maxAgeMs = positiveInteger(options.maxAgeMs, 7 * 24 * 60 * 60 * 1000);
+    this.maxGapRecords = positiveInteger(options.maxGapRecords, 10_000);
+    this.now = options.now ?? Date.now;
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cloud_outbox (
+        event_id TEXT PRIMARY KEY,
+        payload_hash TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        enqueued_at INTEGER NOT NULL,
+        bytes INTEGER NOT NULL CHECK (bytes > 0)
+      );
+      CREATE INDEX IF NOT EXISTS cloud_outbox_order ON cloud_outbox (enqueued_at, event_id);
+      CREATE TABLE IF NOT EXISTS cloud_delivery_gaps (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT,
+        reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS cloud_outbox_metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        total_gaps INTEGER NOT NULL CHECK (total_gaps >= 0)
+      );
+      INSERT OR IGNORE INTO cloud_outbox_metadata (singleton, total_gaps)
+        SELECT 1, COUNT(*) FROM cloud_delivery_gaps;
+    `);
+  }
+
+  enqueue(receipt: SignedReceipt): { queued: boolean; duplicate: boolean; gap?: CloudDeliveryGap } {
+    const at = this.now();
+    const id = receipt.payload.action_ref?.action_id;
+    if (!id) return { queued: false, duplicate: false, gap: this.gap(null, "missing_action_id", at) };
+    const receiptJson = canonical(receipt);
+    const payloadHash = sha256(receiptJson);
+    const bytes = Buffer.byteLength(receiptJson);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.expire(at);
+      const existing = this.db.prepare(
+        "SELECT payload_hash FROM cloud_outbox WHERE event_id = ?",
+      ).all(id) as { payload_hash: string }[];
+      if (existing[0]) {
+        if (existing[0].payload_hash === payloadHash) {
+          this.db.exec("COMMIT");
+          return { queued: true, duplicate: true };
+        }
+        const gap = this.gap(id, "id_conflict", at);
+        this.db.exec("COMMIT");
+        return { queued: false, duplicate: false, gap };
+      }
+      const totals = this.db.prepare(
+        "SELECT COUNT(*) AS count, COALESCE(SUM(bytes), 0) AS bytes FROM cloud_outbox",
+      ).all() as Array<{ count: number; bytes: number }>;
+      if ((totals[0]?.count ?? 0) >= this.maxPending || (totals[0]?.bytes ?? 0) + bytes > this.maxBytes) {
+        const gap = this.gap(id, "capacity", at);
+        this.db.exec("COMMIT");
+        return { queued: false, duplicate: false, gap };
+      }
+      this.db.prepare(
+        "INSERT INTO cloud_outbox (event_id, payload_hash, receipt_json, enqueued_at, bytes) VALUES (?, ?, ?, ?, ?)",
+      ).run(id, payloadHash, receiptJson, at, bytes);
+      this.db.exec("COMMIT");
+      return { queued: true, duplicate: false };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  peek(limit: number, at: number): CloudOutboxEntry[] {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.expire(at);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    const bounded = Math.max(1, Math.min(100, Math.trunc(limit)));
+    const rows = this.db.prepare(
+      `SELECT event_id, payload_hash, receipt_json, enqueued_at, bytes
+         FROM cloud_outbox ORDER BY enqueued_at, event_id LIMIT ?`,
+    ).all(bounded) as Array<{
+      event_id: string; payload_hash: string; receipt_json: string; enqueued_at: number; bytes: number;
+    }>;
+    return rows.map((row) => ({
+      id: row.event_id,
+      payloadHash: row.payload_hash,
+      receipt: JSON.parse(row.receipt_json) as SignedReceipt,
+      enqueuedAt: row.enqueued_at,
+      bytes: row.bytes,
+    }));
+  }
+
+  acknowledge(entries: Array<{ id: string; payloadHash: string }>): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const remove = this.db.prepare("DELETE FROM cloud_outbox WHERE event_id = ? AND payload_hash = ?");
+      for (const entry of entries) remove.run(entry.id, entry.payloadHash);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  status(): CloudOutboxStatus {
+    const total = this.db.prepare(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(bytes), 0) AS bytes,
+              MIN(enqueued_at) AS oldest FROM cloud_outbox`,
+    ).all() as Array<{ count: number; bytes: number; oldest: number | null }>;
+    const gapCount = this.db.prepare(
+      "SELECT total_gaps AS count FROM cloud_outbox_metadata WHERE singleton = 1",
+    ).all() as Array<{ count: number }>;
+    const retainedGapCount = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM cloud_delivery_gaps",
+    ).all() as Array<{ count: number }>;
+    const latest = this.db.prepare(
+      "SELECT event_id, reason, created_at FROM cloud_delivery_gaps ORDER BY seq DESC LIMIT 1",
+    ).all() as Array<{ event_id: string | null; reason: CloudDeliveryGap["reason"]; created_at: number }>;
+    return {
+      pending: total[0]?.count ?? 0,
+      pendingBytes: total[0]?.bytes ?? 0,
+      oldestEnqueuedAt: total[0]?.oldest ?? null,
+      gaps: gapCount[0]?.count ?? 0,
+      retainedGapRecords: retainedGapCount[0]?.count ?? 0,
+      latestGap: latest[0] ? { id: latest[0].event_id, reason: latest[0].reason, at: latest[0].created_at } : null,
+    };
+  }
+
+  close(): void { this.db.close(); }
+
+  private expire(at: number): void {
+    const expired = this.db.prepare(
+      "SELECT event_id FROM cloud_outbox WHERE enqueued_at < ? ORDER BY enqueued_at, event_id",
+    ).all(at - this.maxAgeMs) as Array<{ event_id: string }>;
+    for (const row of expired) this.gap(row.event_id, "expired", at);
+    this.db.prepare("DELETE FROM cloud_outbox WHERE enqueued_at < ?").run(at - this.maxAgeMs);
+  }
+
+  private gap(id: string | null, reason: CloudDeliveryGap["reason"], at: number): CloudDeliveryGap {
+    this.db.prepare(
+      "INSERT INTO cloud_delivery_gaps (event_id, reason, created_at) VALUES (?, ?, ?)",
+    ).run(id, reason, at);
+    this.db.prepare(
+      "UPDATE cloud_outbox_metadata SET total_gaps = total_gaps + 1 WHERE singleton = 1",
+    ).run();
+    this.db.prepare(
+      `DELETE FROM cloud_delivery_gaps WHERE seq <= (
+         SELECT COALESCE(MAX(seq), 0) - ? FROM cloud_delivery_gaps
+       )`,
+    ).run(this.maxGapRecords);
+    return { id, reason, at };
+  }
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && (value ?? 0) > 0 ? value! : fallback;
 }

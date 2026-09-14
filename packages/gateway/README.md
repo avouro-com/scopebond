@@ -84,8 +84,13 @@ do not close the alpha findings described above. Configure:
 | `SCOPEBOND_ANCHOR_INTERVAL` | `24h` | anchor cadence (`24h`, `1h`, `30m`; `0`/`off` disables) |
 | `SCOPEBOND_POLICY_WATCH` | `1` | hot-reload the policy file on change (`0` disables) |
 | `SCOPEBOND_CLOUD_URL` | — | mirror receipts to a hosted control plane (e.g. `https://cloud.scopebond.com`) |
-| `SCOPEBOND_CLOUD_KEY` | — | tenant API key (`sbk_…`) for the Cloud (required with the URL) |
+| `SCOPEBOND_CLOUD_CREDENTIAL` | — | scoped machine credential (`sbm_…`) returned once by Cloud gateway enrollment |
 | `SCOPEBOND_CLOUD_FLUSH_MS` | `15000` | Cloud export flush interval |
+| `SCOPEBOND_CLOUD_OUTBOX` | `<receipt path>.cloud-outbox.db` | durable SQLite delivery outbox |
+| `SCOPEBOND_CLOUD_MAX_PENDING` | `10000` | maximum queued receipts before an explicit delivery gap |
+| `SCOPEBOND_CLOUD_MAX_BYTES` | `67108864` | maximum queued canonical evidence bytes |
+| `SCOPEBOND_CLOUD_MAX_AGE_MS` | `604800000` | maximum queued age (7 days) before an explicit delivery gap |
+| `SCOPEBOND_CLOUD_MAX_GAPS` | `10000` | maximum retained gap-detail rows; the cumulative count remains monotonic |
 
 `principal-keys.json` contains public material only. The gateway derives and checks
 each `kid`; do not put private keys in this file:
@@ -102,11 +107,18 @@ each `kid`; do not put private keys in this file:
 
 ## Optional: mirror receipts to Scopebond Cloud
 
-Set `SCOPEBOND_CLOUD_URL` + `SCOPEBOND_CLOUD_KEY` and the gateway keeps its local
-durable log **and** pushes each receipt to a hosted control plane (retention,
-dashboard, hosted verification) — **batched**, never per-request. Fully opt-in and
-non-blocking; if the Cloud is unreachable it retries and never disrupts the gateway.
-Get a free key + dashboard at [cloud.scopebond.com](https://cloud.scopebond.com).
+Create an organization/environment gateway enrollment in Cloud, prove possession of
+this gateway's attester key, and set `SCOPEBOND_CLOUD_URL` plus the returned
+`SCOPEBOND_CLOUD_CREDENTIAL`. The gateway stores locally first and queues canonical
+evidence in a separate SQLite outbox. Exact action-ID retries are free, successful
+batches are acknowledged by ID and content hash, and failures use bounded exponential
+backoff. Queue count, bytes and age are bounded; overflow, conflicting IDs and expiry
+produce explicit delivery-gap events instead of silent deletion. Cloud availability
+never changes the local enforcement decision. The current hosted service is not ready
+for customer enrollment; use the local/staging acceptance flow until its gates close.
+Hosted export uses `node:sqlite` and therefore requires Node 22 or newer. Receipts from
+before durable action IDs are retained locally and recorded as `missing_action_id`
+delivery gaps rather than uploaded under an invented identity.
 
 ## Tamper-evidence (anchoring)
 

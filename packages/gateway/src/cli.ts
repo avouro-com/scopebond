@@ -9,7 +9,8 @@
 //
 // Env: SCOPEBOND_POLICY, PORT (8787),
 //      SCOPEBOND_KEY_FILE (default ./scopebond-attester.key) or SCOPEBOND_ATTESTER_KEY (PKCS8 PEM),
-//      SCOPEBOND_DB (default ./scopebond.db) — set SCOPEBOND_RECEIPTS_FILE to force JSONL.
+//      SCOPEBOND_DB (default ./scopebond.db) — set SCOPEBOND_RECEIPTS_FILE to force JSONL,
+//      SCOPEBOND_CLOUD_URL + SCOPEBOND_CLOUD_CREDENTIAL for durable hosted export.
 
 import { serve } from "@hono/node-server";
 import { readFileSync, writeFileSync, watch } from "node:fs";
@@ -20,7 +21,7 @@ import type { GatewayAuthentication, PrincipalKeyRecord, PrincipalPurpose } from
 import { attesterFromPrivateKeyPem, verifyReceipt } from "./receipts.js";
 import type { Attester } from "./receipts.js";
 import { loadOrCreateAttester } from "./node-keys.js";
-import { openReceiptStore } from "./node-stores.js";
+import { openReceiptStore, SqliteCloudOutbox } from "./node-stores.js";
 
 function fail(msg: string): never { console.error(msg); process.exit(1); }
 
@@ -92,12 +93,28 @@ function cmdServe(policyPath: string | undefined): void {
   let exporter: CloudExporter | undefined;
   let store = baseStore;
   const cloudUrl = process.env.SCOPEBOND_CLOUD_URL;
-  const cloudKey = process.env.SCOPEBOND_CLOUD_KEY;
-  if (cloudUrl && cloudKey) {
+  const cloudCredential = process.env.SCOPEBOND_CLOUD_CREDENTIAL;
+  if ((cloudUrl && !cloudCredential) || (!cloudUrl && cloudCredential)) {
+    fail("SCOPEBOND_CLOUD_URL and SCOPEBOND_CLOUD_CREDENTIAL must be configured together");
+  }
+  if (cloudUrl && cloudCredential) {
+    let outbox: SqliteCloudOutbox;
+    const outboxPath = process.env.SCOPEBOND_CLOUD_OUTBOX ?? `${path}.cloud-outbox.db`;
+    try {
+      outbox = new SqliteCloudOutbox(outboxPath, {
+        maxPending: Number(process.env.SCOPEBOND_CLOUD_MAX_PENDING ?? 10_000),
+        maxBytes: Number(process.env.SCOPEBOND_CLOUD_MAX_BYTES ?? 64 * 1024 * 1024),
+        maxAgeMs: Number(process.env.SCOPEBOND_CLOUD_MAX_AGE_MS ?? 7 * 24 * 60 * 60 * 1000),
+        maxGapRecords: Number(process.env.SCOPEBOND_CLOUD_MAX_GAPS ?? 10_000),
+      });
+    } catch (error) {
+      fail(`durable Cloud outbox could not open: ${error instanceof Error ? error.message : String(error)}`);
+    }
     exporter = createCloudExporter({
-      url: cloudUrl, apiKey: cloudKey,
+      url: cloudUrl, credential: cloudCredential, outbox,
       flushMs: Number(process.env.SCOPEBOND_CLOUD_FLUSH_MS ?? 15000),
       onError: (e) => console.error(`  cloud export error: ${(e as Error).message}`),
+      onGap: (gap) => console.error(`  cloud delivery gap: ${gap.reason}${gap.id ? ` (${gap.id})` : ""}`),
     });
     store = withCloudExporter(baseStore, exporter);
   }
@@ -120,12 +137,12 @@ function cmdServe(policyPath: string | undefined): void {
   console.log(`            GET /v1/receipts · /v1/status · /v1/attester · /.well-known/jwks.json · /v1/anchors[/latest|/proof]`);
 
   if (exporter) {
-    console.log(`  cloud     exporting receipts to ${cloudUrl}`);
+    console.log(`  cloud     exporting receipts to ${cloudUrl} (${exporter.pending()} pending)`);
     // Backfill existing receipts once (Cloud dedupes on ingest, so it's idempotent).
     if ((process.env.SCOPEBOND_CLOUD_BACKFILL ?? "1") !== "0") {
       Promise.resolve(baseStore.list()).then((all) => { for (const r of all) exporter!.enqueue(r); }).catch(() => {});
     }
-    const shutdown = () => { void exporter!.flush().finally(() => process.exit(0)); };
+    const shutdown = () => { void exporter!.flush().finally(() => { exporter!.stop(); process.exit(0); }); };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
   }
