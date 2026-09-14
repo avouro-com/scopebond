@@ -28,8 +28,9 @@
 import { createHash } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
 export { canonical } from "@scopebond/policy-schema/canonical";
-import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
-import { actionSchema, policySchema } from "@scopebond/policy-schema";
+import { validateAction, validatePolicyShape } from "./validate.js";
+import type { ValidationResult } from "./validate.js";
+export type { ValidationResult } from "./validate.js";
 
 export type Mode = "enforce" | "monitor" | "require_approval";
 
@@ -92,25 +93,12 @@ export interface Options {
   gatewaysComplete?: boolean;
 }
 
-export interface ValidationResult {
-  valid: boolean;
-  errors: string[];
-}
-
-const ajv = new Ajv2020({ allErrors: true, strict: false, strictNumbers: true });
-const checkPolicySchema = ajv.compile(policySchema);
-const checkActionSchema = ajv.compile(actionSchema);
-
-function validationErrors(errors: ErrorObject[] | null | undefined): string[] {
-  return (errors ?? []).map((error) => `${error.instancePath || "/"} ${error.message ?? "is invalid"}`);
-}
-
 /** Validate the complete policy boundary, including semantic constraints that
  * JSON Schema cannot express clearly (unique clause ids and coherent bounds). */
 export function validatePolicy(value: unknown): ValidationResult {
-  const validSchema = checkPolicySchema(value);
-  const errors = validSchema ? [] : validationErrors(checkPolicySchema.errors);
-  if (validSchema) {
+  const shape = validatePolicyShape(value);
+  const errors = [...shape.errors];
+  if (shape.valid) {
     const policy = value as Policy;
     const ids = new Set<string>();
     for (const clause of policy.clauses ?? []) {
@@ -138,8 +126,7 @@ export function validatePolicy(value: unknown): ValidationResult {
 
 /** Validate an action as closed, finite JSON before hashing or evaluation. */
 export function validateIntent(value: unknown): ValidationResult {
-  const valid = checkActionSchema(value);
-  return { valid: !!valid, errors: valid ? [] : validationErrors(checkActionSchema.errors) };
+  return validateAction(value);
 }
 
 type AnyClause = Clause & Record<string, any>;

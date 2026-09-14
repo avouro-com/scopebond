@@ -46,7 +46,6 @@
     "access": "public"
   },
   "dependencies": {
-    "@scopebond/policy-schema": "workspace:^",
-    "ajv": "8.17.1"
+    "@scopebond/policy-schema": "workspace:^"
   }
 }
