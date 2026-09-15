@@ -22,5 +22,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build + test (tsc build, then node --test)
         run: pnpm -r test
+      - name: Check published release metadata
+        run: pnpm run check:release-state
       - name: Pack and install gateway as a consumer
         run: pnpm run test:package
