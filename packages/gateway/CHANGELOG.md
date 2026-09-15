@@ -1,5 +1,11 @@
 # @scopebond/gateway
 
+## 0.4.1
+
+### Patch Changes
+
+- b434d38: Add a bounded CLI enrollment flow that proves possession of the gateway attester key and returns scoped Cloud exporter configuration only to the gateway terminal.
+
 ## 0.4.0
 
 ### Minor Changes
