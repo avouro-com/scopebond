@@ -27,16 +27,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The repository currently disallows Actions' default token from
+          # creating pull requests. Reuse the existing company automation PAT
+          # when configured, while retaining github.token for forks/dev copies.
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.20.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Configure company commit identity
+        run: |
+          git config user.name "avourohq"
+          git config user.email "founder@avouro.com"
       - uses: changesets/action@v1
         with:
+          github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
+          setupGitUser: false
           version: pnpm version:packages
           commit: "chore: version packages"
           title: "Version packages"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -17,7 +17,7 @@
  *   --staged        check files staged for commit (default)
  *   --tree          check every tracked file in the working tree (CI / pre-push)
  *   --range A..B    check files changed in a commit range
- *   --message FILE  scan a commit-message file for codenames/secrets/private markers
+ *   --message FILE  scan a commit-message file for private and tool-attribution markers
  *   --help
  *
  * No external dependencies. Node >= 18.
@@ -93,6 +93,23 @@ const PRIVATE_DOC_SIGNATURES = [
 // repo — not in code, paths, or docs. Assembled by concatenation so this file
 // does not trip its own scanner. Add codenames here as needed.
 const BLOCKED_TERMS = ["key" + "tine", "true" + "stead"];
+
+// Local workstation paths and private-repository references are never useful
+// in a public source tree. Keep the repository name split so the gate does not
+// report its own policy declaration.
+const PERSONAL_OR_PRIVATE_PATTERNS = [
+  { name: "Windows user profile path", re: /\b[A-Za-z]:[\\/]Users[\\/][^\\/\s]+/ },
+  { name: "macOS user profile path", re: /\/Users\/[^/\s]+/ },
+  { name: "Linux user profile path", re: /\/home\/[^/\s]+/ },
+  { name: "private repository name", re: new RegExp("scopebond-" + "internal", "i") },
+];
+
+// Do not advertise an assistant or generation tool in commit metadata. Product
+// references to AI providers remain valid source content and are not blocked.
+const TOOL_ATTRIBUTION_PATTERNS = [
+  { name: "AI co-author trailer", re: /co-authored-by:.*(?:chatgpt|openai|codex|claude|anthropic|copilot|\[bot\])/i },
+  { name: "AI generation attribution", re: /(?:AI[- ]generated|generated (?:by|with) (?:AI|ChatGPT|OpenAI|Codex|Claude|Anthropic|Copilot))/i },
+];
 
 // High-signal secret patterns. Kept conservative to avoid false positives.
 const SECRET_PATTERNS = [
@@ -179,6 +196,7 @@ if (mode === "message") {
   const t = BLOCKED_TERMS.find((x) => lower.includes(x));
   if (t) found.push(`blocked codename "${t}"`);
   for (const sig of PRIVATE_DOC_SIGNATURES) if (msg.includes(sig)) { found.push(`private-doc signature "${sig}"`); break; }
+  for (const { name, re } of TOOL_ATTRIBUTION_PATTERNS) if (re.test(msg)) { found.push(name); break; }
   for (const { name, re } of SECRET_PATTERNS) { const m = msg.match(re); if (m && !PLACEHOLDER.test(m[0])) { found.push(`possible ${name}`); break; } }
   if (found.length === 0) { console.log("✓ oss-gate: commit message clean."); process.exit(0); }
   console.error(`\n✗ oss-gate: commit message contains: ${found.join(", ")}. Rewrite the message.\n`);
@@ -219,6 +237,13 @@ for (const f of files) {
   if (term) {
     violations.push({ path, kind: "BLOCKED TERM", detail: `references private project codename "${term}" — must not appear in the public repo` });
     continue;
+  }
+  for (const { name, re } of PERSONAL_OR_PRIVATE_PATTERNS) {
+    const m = content.match(re);
+    if (m) {
+      violations.push({ path, kind: "PERSONAL OR PRIVATE CONTENT", detail: `${name}: ${m[0]}` });
+      break;
+    }
   }
   for (const sig of PRIVATE_DOC_SIGNATURES) {
     if (content.includes(sig)) {
