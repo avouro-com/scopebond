@@ -93,12 +93,12 @@ merge) keeps non-public material out of this repo by design.
 
 ## Status
 
-Early development, landing package by package. Published versions remain
-`@scopebond/policy-schema@0.1.0`, `@scopebond/verify@0.1.0`, and
-`@scopebond/gateway@0.3.0`. Private `main` now contains the reviewed but unpublished
-candidate: schema 0.2.0, verifier 0.1.1, gateway 0.4.0, and the SDK's first 0.1.0
-release. The hosted control plane ("Scopebond Cloud") is a separate proprietary
-product and is not in this repository.
+Experimental alpha. The published package set is
+`@scopebond/policy-schema@0.2.0`, `@scopebond/verify@0.1.1`,
+`@scopebond/gateway@0.4.1`, and `@scopebond/sdk@0.1.0`. The source tree matches
+that release set. Use controlled test systems only until the documented safety,
+integration, and operational gates close. The hosted control plane ("Scopebond
+Cloud") is a separate proprietary product and is not in this repository.
 
 ## Using Scopebond? Show it
 

@@ -7,6 +7,11 @@ tagged release.
 
 ## [Unreleased]
 
+### Fixed
+- Reconciled public package status and enrollment examples with the published
+  policy-schema 0.2.0, verifier 0.1.1, gateway 0.4.1 and SDK 0.1.0 release set;
+  CI now rejects release metadata that drifts from package manifests.
+
 ### Added
 - A bounded `scopebond-gateway enroll` handoff that reads a one-use Cloud bundle,
   proves possession with the local attester key, and prints the scoped exporter
