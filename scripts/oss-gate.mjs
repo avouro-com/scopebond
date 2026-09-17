@@ -186,6 +186,7 @@ let mode = "staged", range = "", msgFile = "";
 if (arg === "--tree") mode = "tree";
 else if (arg === "--range") { mode = "range"; range = process.argv[3] || "HEAD~1..HEAD"; }
 else if (arg === "--message") { mode = "message"; msgFile = process.argv[3] || ""; }
+else if (arg === "--messages-range") { mode = "messages-range"; range = process.argv[3] || "HEAD~1..HEAD"; }
 else if (arg !== "--staged") { console.error(`unknown argument: ${arg}`); process.exit(2); }
 
 // Commit-message scan: content checks only (no path allowlist).
@@ -200,6 +201,35 @@ if (mode === "message") {
   for (const { name, re } of SECRET_PATTERNS) { const m = msg.match(re); if (m && !PLACEHOLDER.test(m[0])) { found.push(`possible ${name}`); break; } }
   if (found.length === 0) { console.log("✓ oss-gate: commit message clean."); process.exit(0); }
   console.error(`\n✗ oss-gate: commit message contains: ${found.join(", ")}. Rewrite the message.\n`);
+  process.exit(1);
+}
+
+// Scan every commit message in a range (CI required check — closes the local
+// commit-msg hook's `--no-verify` bypass by enforcing messages server-side).
+function scanCommitMessage(msg) {
+  const lower = msg.toLowerCase();
+  const found = [];
+  const t = BLOCKED_TERMS.find((x) => lower.includes(x));
+  if (t) found.push(`blocked codename "${t}"`);
+  for (const sig of PRIVATE_DOC_SIGNATURES) if (msg.includes(sig)) { found.push(`private-doc signature "${sig}"`); break; }
+  for (const { name, re } of TOOL_ATTRIBUTION_PATTERNS) if (re.test(msg)) { found.push(name); break; }
+  for (const { name, re } of PERSONAL_OR_PRIVATE_PATTERNS) if (re.test(msg)) { found.push(name); break; }
+  for (const { name, re } of SECRET_PATTERNS) { const m = msg.match(re); if (m && !PLACEHOLDER.test(m[0])) { found.push(`possible ${name}`); break; } }
+  return found;
+}
+if (mode === "messages-range") {
+  let shas;
+  try { shas = sh(`git log --format=%H ${range}`).split(/\r?\n/).filter(Boolean); }
+  catch (e) { console.error("oss-gate: could not list commits in range:", e.message); process.exit(2); }
+  const bad = [];
+  for (const sha of shas) {
+    const found = scanCommitMessage(sh(`git log -1 --format=%B ${sha}`));
+    if (found.length) bad.push(`${sha.slice(0, 8)}: ${found.join(", ")}`);
+  }
+  if (bad.length === 0) { console.log(`✓ oss-gate: ${shas.length} commit message(s) clean in ${range}.`); process.exit(0); }
+  console.error(`\n✗ oss-gate: forbidden content in commit message(s):`);
+  for (const b of bad) console.error(`  ${b}`);
+  console.error(`\nRewrite these messages (no AI/tool attribution, no private markers or secrets).\n`);
   process.exit(1);
 }
 
