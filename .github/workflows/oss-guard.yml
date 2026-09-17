@@ -24,5 +24,8 @@ jobs:
           node-version: 22.20.0
       - name: Run OSS content & secret gate
         run: node scripts/oss-gate.mjs --tree
+      - name: Scan PR commit messages (attribution / private / secrets)
+        if: github.event_name == 'pull_request'
+        run: node scripts/oss-gate.mjs --messages-range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
       - name: Enforce core-package dependency boundary (ADR-008)
         run: node scripts/deps-allowlist.mjs
