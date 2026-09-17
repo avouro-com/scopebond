@@ -6,6 +6,7 @@
     "observed_not_evaluated",
     "denied",
     "allowed_pending",
+    "cooperative_allow",
     "executed",
     "failed",
     "outcome_unknown"

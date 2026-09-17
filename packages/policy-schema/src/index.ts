@@ -30,6 +30,7 @@ export const CLAUSE_MODES = ["enforce", "monitor", "require_approval"] as const;
 export const REALTIME_RESULTS = ["allow", "deny", "approved", "timeout", "not_evaluated"] as const;
 export const EXECUTION_STATES = [
   "simulated", "observed_not_evaluated", "denied", "allowed_pending",
+  "cooperative_allow",
   "executed", "failed", "outcome_unknown",
 ] as const;
 

@@ -58,7 +58,7 @@
           "required": ["state", "assertion", "reference", "external_effect"],
           "additionalProperties": false,
           "properties": {
-            "state": { "enum": ["simulated", "observed_not_evaluated", "denied", "allowed_pending", "executed", "failed", "outcome_unknown"] },
+            "state": { "enum": ["simulated", "observed_not_evaluated", "denied", "allowed_pending", "cooperative_allow", "executed", "failed", "outcome_unknown"] },
             "assertion": { "enum": ["none", "gateway_simulation", "adapter_reported_success", "adapter_reported_failure", "adapter_outcome_unknown"] },
             "reference": { "type": ["string", "null"] },
             "external_effect": { "const": "not_independently_verified" }
