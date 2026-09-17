@@ -11,6 +11,7 @@ import {
   generateAttesterJwk,
   intentHash,
   minimizeIntentForEvidence,
+  validateEvidencePayload,
   verifyReceipt,
 } from "../dist/index.js";
 
@@ -65,6 +66,28 @@ test("Node and WebCrypto receipts share the v1 contract and offline verification
     assert.equal(verification.legacy, false);
     assert.equal(verification.external_effect_verified, false);
   }
+});
+
+test("cooperative_allow is a valid check-only (M0) execution state and never claims execution", async () => {
+  const attester = createAttester();
+  const gateway = createGateway({ authentication: { mode: "insecure-development" }, policy, attester });
+  // A non-allowlisted action is denied → a valid receipt (executed:false, assertion:none).
+  const denied = await (await post(gateway.app, { action_type: "unlisted.action" })).json();
+  assert.equal(validateEvidencePayload(denied.receipt.payload), true);
+
+  // M0 cooperative allow: policy allowed the action, but the gateway did not execute
+  // it — the agent does, cooperatively. Honest evidence, never labeled executed.
+  const coop = structuredClone(denied.receipt.payload);
+  coop.realtime_result = "allow";
+  coop.executed = false;
+  coop.execution_ref = null;
+  coop.execution = { state: "cooperative_allow", assertion: "none", reference: null, external_effect: "not_independently_verified" };
+  assert.equal(validateEvidencePayload(coop), true);
+
+  // A cooperative allow must never claim it executed.
+  const lying = structuredClone(coop);
+  lying.executed = true;
+  assert.equal(validateEvidencePayload(lying), false);
 });
 
 test("gateway refuses an attester identity that is not bound to its public key", () => {
