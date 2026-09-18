@@ -104,8 +104,8 @@ merge) keeps non-public material out of this repo by design.
 ## Status
 
 Experimental alpha. The published package set is
-`@scopebond/policy-schema@0.2.0`, `@scopebond/verify@0.1.1`,
-`@scopebond/gateway@0.4.1`, and `@scopebond/sdk@0.1.0`. The source tree matches
+`@scopebond/policy-schema@0.3.0`, `@scopebond/verify@0.2.0`,
+`@scopebond/gateway@0.5.0`, and `@scopebond/sdk@0.1.1`. The source tree matches
 that release set. Use controlled test systems only until the documented safety,
 integration, and operational gates close. The hosted control plane ("Scopebond
 Cloud") is a separate proprietary product and is not in this repository.

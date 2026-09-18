@@ -133,7 +133,7 @@ gateway machine and complete possession proof with the same attester key the gat
 will use:
 
 ```bash
-corepack pnpm dlx @scopebond/gateway@0.4.1 enroll https://cloud.scopebond.com scopebond-enrollment.json
+corepack pnpm dlx @scopebond/gateway@0.5.0 enroll https://cloud.scopebond.com scopebond-enrollment.json
 ```
 
 The command refuses non-HTTPS remote origins, signs the canonical challenge locally,
