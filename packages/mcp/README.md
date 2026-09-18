@@ -24,6 +24,12 @@ scopebond-mcp --server filesystem --policy scopebond.policy.json --key scopebond
 through. A denial returns a JSON-RPC error to the client and is never sent
 upstream. Set `--receipts log.jsonl` to keep the signed receipts locally.
 
+**Ceiling.** The proxy governs **tool invocations** (`tools/call`). It does not
+gate resource reads (`resources/read`) or prompt fetches (`prompts/get`), which
+pass through — so a server that exposes data as resources rather than tools is not
+covered by a tool policy. Govern such data at the server, or front only servers
+whose sensitive operations are tools.
+
 ## Policy
 
 Bound MCP calls with the Action Taxonomy's `mcp.tool.call` type — "read-only
