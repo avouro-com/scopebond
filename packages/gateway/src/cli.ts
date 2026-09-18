@@ -250,17 +250,20 @@ function cmdInit(args: string[]): void {
   const keysRegistry = "principal-keys.json";
   const policyFile = "scopebond.policy.json";
 
+  // Refuse before writing (or generating a key): a run that will not overwrite must
+  // leave the directory exactly as it found it, never a stray agent key behind.
+  if (existsSync(keysRegistry) && !force) fail(`${keysRegistry} already exists (use --force to overwrite)`);
+  if (existsSync(policyFile) && !force) fail(`${policyFile} already exists (use --force to overwrite)`);
+
   // 1. The agent's signing key (Ed25519, persisted PKCS8) — reused across restarts.
   const existed = existsSync(keyFile);
   const { attester: agent } = loadOrCreateAttester({ file: keyFile });
 
   // 2. Register the agent's public key so the gateway accepts its signatures.
-  if (existsSync(keysRegistry) && !force) fail(`${keysRegistry} already exists (use --force to overwrite)`);
   writeFileSync(keysRegistry, JSON.stringify(
     [{ public_key_pem: agent.publicKeyPem, purposes: ["agent"], status: "active" }], null, 2) + "\n");
 
   // 3. A starter policy bound to this agent's key. Edit the limits to taste.
-  if (existsSync(policyFile) && !force) fail(`${policyFile} already exists (use --force to overwrite)`);
   const policy = {
     vocabulary_version: "1.0",
     assets: { USDC: { decimals: 2 } },

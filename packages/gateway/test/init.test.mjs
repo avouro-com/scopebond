@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,4 +38,14 @@ test("init refuses to overwrite without --force, then overwrites with it", () =>
   run(dir);
   assert.throws(() => run(dir), "second init without --force fails closed");
   assert.match(run(dir, "--force"), /scaffolded/);
+});
+
+test("a refused init leaves the directory untouched — no stray agent key", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-init-"));
+  // A pre-existing registry (and no key yet) must make init fail before it
+  // generates anything: a refused run cannot leave a new signing key behind.
+  writeFileSync(join(dir, "principal-keys.json"), "[]\n");
+  assert.throws(() => run(dir), "init fails closed against an existing registry");
+  assert.ok(!existsSync(join(dir, "scopebond-agent.key")), "no agent key was generated");
+  assert.ok(!existsSync(join(dir, "scopebond.policy.json")), "no policy was written");
 });
