@@ -105,6 +105,17 @@
                 "agent": { "type": "null" },
                 "approval": { "type": "null" }
               }
+            },
+            {
+              "type": "object",
+              "description": "No agent signature — a proxy/PEP decided a request carrying the caller's own identity (pep_authorized receipts). Identity is the receipt's principal.",
+              "required": ["mode", "agent", "approval"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "pep" },
+                "agent": { "type": "null" },
+                "approval": { "type": "null" }
+              }
             }
           ]
         },
