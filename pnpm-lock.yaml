@@ -27,6 +27,18 @@ importers:
         specifier: workspace:*
         version: link:../packages/sdk
 
+  packages/framework:
+    dependencies:
+      '@scopebond/gateway':
+        specifier: workspace:^
+        version: link:../gateway
+      '@scopebond/policy-schema':
+        specifier: workspace:^
+        version: link:../policy-schema
+      '@scopebond/sdk':
+        specifier: workspace:^
+        version: link:../sdk
+
   packages/gateway:
     dependencies:
       '@hono/node-server':
