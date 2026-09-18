@@ -46,6 +46,15 @@ importers:
         specifier: workspace:*
         version: link:../sdk
 
+  packages/github-action:
+    dependencies:
+      '@scopebond/policy-schema':
+        specifier: workspace:^
+        version: link:../policy-schema
+      '@scopebond/verify':
+        specifier: workspace:^
+        version: link:../verify
+
   packages/hook:
     dependencies:
       '@scopebond/gateway':

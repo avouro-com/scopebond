@@ -1,0 +1,29 @@
+name: "Scopebond policy"
+description: "Check an agent pull request against your Scopebond policy, in your own Actions runner, before it can merge."
+branding:
+  icon: shield
+  color: orange
+inputs:
+  policy:
+    description: "Path to the policy JSON in the repository."
+    required: false
+    default: "scopebond.policy.json"
+  version:
+    description: "The @scopebond/github-action version to run."
+    required: false
+    default: "latest"
+runs:
+  using: "composite"
+  steps:
+    - name: Determine the changed paths
+      shell: bash
+      run: |
+        git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.ref }}" || true
+        git diff --name-only "origin/${{ github.event.pull_request.base.ref }}...HEAD" > "$RUNNER_TEMP/scopebond-pr-paths.txt" || true
+    - name: Scopebond policy check
+      shell: bash
+      env:
+        SCOPEBOND_PR_PATHS: ${{ runner.temp }}/scopebond-pr-paths.txt
+      run: >
+        npx --yes -p "@scopebond/github-action@${{ inputs.version }}" scopebond-verify-pr
+        --policy "${{ inputs.policy }}"
