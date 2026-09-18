@@ -73,12 +73,30 @@ if (decision.ruleIds.length) console.log(`  rules: ${decision.ruleIds.join(", ")
 const keyPem = arg("--key") ?? process.env.SCOPEBOND_ATTESTER_KEY;
 const receiptOut = arg("--receipt-out") ?? process.env.SCOPEBOND_RECEIPT_OUT;
 if (keyPem && decision.attribution && decision.decision !== "not_evaluated") {
+  let receipt: Awaited<ReturnType<typeof buildPullRequestReceipt>>;
   try {
-    const receipt = await buildPullRequestReceipt(ctx, policy, decision, keyPem);
+    receipt = await buildPullRequestReceipt(ctx, policy, decision, keyPem);
     if (receiptOut) writeFileSync(receiptOut, JSON.stringify(receipt) + "\n");
     console.log(`  receipt: boundary/${decision.decision} @ ${ctx.headSha}${receiptOut ? ` → ${receiptOut}` : ""}`);
   } catch (e) {
     die(`could not emit the boundary receipt: ${(e as Error).message}`);
+  }
+  // Optionally mirror the boundary receipt to a Scopebond workspace. Best-effort:
+  // export is evidence, not enforcement — the required check already gated the merge,
+  // so a Cloud outage must never fail the check. Credentials come from repo secrets.
+  const cloudUrl = process.env.SCOPEBOND_CLOUD_URL;
+  const cloudCred = process.env.SCOPEBOND_CLOUD_CREDENTIAL;
+  if (cloudUrl && cloudCred) {
+    try {
+      const res = await fetch(cloudUrl.replace(/\/+$/, "") + "/v1/ingest", {
+        method: "POST",
+        headers: { authorization: "Bearer " + cloudCred, "content-type": "application/json" },
+        body: JSON.stringify({ receipts: [receipt] }),
+      });
+      console.log(res.ok ? `  exported to ${cloudUrl}` : `  cloud export failed: HTTP ${res.status} (the check still gated the merge)`);
+    } catch (e) {
+      console.log(`  cloud export failed: ${(e as Error).message} (the check still gated the merge)`);
+    }
   }
 }
 

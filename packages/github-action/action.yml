@@ -12,6 +12,10 @@ inputs:
     description: "The @scopebond/github-action version to run."
     required: false
     default: "latest"
+  workspace-url:
+    description: "Optional Scopebond workspace URL to mirror the signed boundary receipt to. Also set the SCOPEBOND_ATTESTER_KEY and SCOPEBOND_CLOUD_CREDENTIAL job env from repository secrets. Export is best-effort and never fails the check."
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -24,6 +28,7 @@ runs:
       shell: bash
       env:
         SCOPEBOND_PR_PATHS: ${{ runner.temp }}/scopebond-pr-paths.txt
+        SCOPEBOND_CLOUD_URL: ${{ inputs.workspace-url }}
       run: >
         npx --yes -p "@scopebond/github-action@${{ inputs.version }}" scopebond-verify-pr
         --policy "${{ inputs.policy }}"
