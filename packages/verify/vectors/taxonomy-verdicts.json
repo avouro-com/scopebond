@@ -126,5 +126,37 @@
     ] },
     "claimed": { "intent": { "action_type": "pr.merge", "params": { "repo": "acme/app" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p4" },
     "expect": { "violated": true, "clause_id": "paths" }
+  },
+  {
+    "name": "array bound match:any passes when at least one element satisfies the item bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["pr.merge"], "param_bounds": { "paths": { "items": { "enum": ["reviewed/a", "reviewed/b"] }, "match": "any" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "pr.merge", "params": { "paths": ["src/x", "reviewed/b"] } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p5" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "array bound match:any denies when no element satisfies the item bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["pr.merge"], "param_bounds": { "paths": { "items": { "enum": ["reviewed/a", "reviewed/b"] }, "match": "any" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "pr.merge", "params": { "paths": ["src/x", "src/y"] } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p6" },
+    "expect": { "violated": true, "clause_id": "paths" }
+  },
+  {
+    "name": "array bound match:any denies an empty array (no element can satisfy it)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["pr.merge"], "param_bounds": { "paths": { "items": { "enum": ["reviewed/a"] }, "match": "any" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "pr.merge", "params": { "paths": [] } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p7" },
+    "expect": { "violated": true, "clause_id": "paths" }
+  },
+  {
+    "name": "array bound match:all with a non-string element denies (pattern needs a string)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["pr.merge"], "param_bounds": { "paths": { "items": { "pattern": "^src/" }, "match": "all" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "pr.merge", "params": { "paths": ["src/a", 123] } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p8" },
+    "expect": { "violated": true, "clause_id": "paths" }
   }
 ]
