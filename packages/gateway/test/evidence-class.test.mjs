@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  createAttester, createGateway, buildReceipt, verifyReceipt, validateEvidencePayload,
+  createAttester, createGateway, buildReceipt, buildBoundaryReceipt, verifyReceipt, validateEvidencePayload,
   StaticPrincipalKeyRegistry,
 } from "../dist/index.js";
 import { createSigner } from "@scopebond/sdk";
@@ -94,6 +94,47 @@ test("a pep_authorized receipt requires a principal; a boundary receipt cannot s
     principal: { subject: "s", issuer: "i" },
   });
   assert.equal(verifyReceipt(smuggled, attester.publicKeyPem).contract_valid, false, "boundary cannot carry a principal");
+});
+
+test("buildBoundaryReceipt produces a valid, verifiable boundary receipt (deny)", async () => {
+  const attester = createAttester();
+  const boundaryPolicy = {
+    vocabulary_version: "1.0", policy_id: "gh", version: 3,
+    clauses: [{ id: "no-prod", type: "action_allowlist", mode: "enforce", action_types: ["pr.merge"], param_bounds: { paths: { items: { pattern: "^(?!infra/prod/).*" }, match: "all" } } }],
+  };
+  const receipt = await buildBoundaryReceipt({
+    intent: { action_type: "pr.merge", params: { repo: "acme/app", base: "main", paths: ["infra/prod/main.tf"] } },
+    policy: boundaryPolicy, gate: "merge", outcomeRef: "pr:acme/app#42:0f1e2d",
+    attribution: { kind: "asserted", actor: "copilot-swe-agent[bot]" }, realtimeResult: "deny", now: () => AT,
+  }, attester);
+
+  assert.equal(validateEvidencePayload(receipt.payload), true, "the boundary receipt satisfies the evidence contract");
+  const v = verifyReceipt(receipt, attester.publicKeyPem);
+  assert.equal(v.valid, true);
+  assert.equal(v.evidence_class, "boundary");
+  const p = receipt.payload;
+  assert.equal(p.authorization.mode, "boundary", "no agent authorization — not insecure_development");
+  assert.deepEqual(p.boundary, { gate: "merge", outcome_ref: "pr:acme/app#42:0f1e2d", attribution: { kind: "asserted", actor: "copilot-swe-agent[bot]" } });
+  assert.equal(p.realtime_result, "deny");
+  assert.equal(p.executed, false);
+  assert.equal(p.execution.state, "denied");
+  assert.equal(p.policy_ref.digest, p.policy_hash, "the receipt pins the deciding policy");
+});
+
+test("buildBoundaryReceipt maps allow and not_evaluated to honest execution states", async () => {
+  const attester = createAttester();
+  const policy = { vocabulary_version: "1.0", policy_id: "gh", version: 1, clauses: [] };
+  const base = { intent: { action_type: "pr.merge", params: { repo: "a/b", paths: ["docs/x"] } }, policy, gate: "merge", outcomeRef: "sha", attribution: { kind: "inferred", actor: "x" }, now: () => AT };
+
+  const allowed = await buildBoundaryReceipt({ ...base, realtimeResult: "allow" }, attester);
+  assert.equal(allowed.payload.execution.state, "cooperative_allow");
+  assert.equal(allowed.payload.executed, false);
+  assert.equal(verifyReceipt(allowed, attester.publicKeyPem).valid, true);
+
+  const attested = await buildBoundaryReceipt({ ...base, realtimeResult: "not_evaluated" }, attester);
+  assert.equal(attested.payload.execution.state, "observed_not_evaluated");
+  assert.equal(attested.payload.realtime_result, "not_evaluated");
+  assert.equal(verifyReceipt(attested, attester.publicKeyPem).valid, true);
 });
 
 test("the verifier never upgrades an explicit class — a boundary receipt with an agent signature stays boundary", async () => {

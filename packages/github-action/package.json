@@ -42,7 +42,8 @@
   ],
   "dependencies": {
     "@scopebond/policy-schema": "workspace:^",
-    "@scopebond/verify": "workspace:^"
+    "@scopebond/verify": "workspace:^",
+    "@scopebond/gateway": "workspace:^"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

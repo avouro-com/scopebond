@@ -94,6 +94,17 @@
                 "agent": { "type": "null" },
                 "approval": { "type": "null" }
               }
+            },
+            {
+              "type": "object",
+              "description": "No agent authorization — a gate attested a consequence (boundary-class receipts). Identity is the receipt's boundary attribution.",
+              "required": ["mode", "agent", "approval"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "boundary" },
+                "agent": { "type": "null" },
+                "approval": { "type": "null" }
+              }
             }
           ]
         },
