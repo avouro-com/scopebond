@@ -16,13 +16,14 @@ const conformancePolicy = {
   ],
 };
 
-function freshRuntime() {
+function freshRuntime(extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-"));
   scaffold(dir);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(conformancePolicy));
   return createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"),
     attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"),
+    ...extra,
   });
 }
 
@@ -59,6 +60,13 @@ test("conformance: an unknown tool is not evaluated and grants nothing", async (
   const d = await freshRuntime().evaluate(mapClaudeToolUse(claude("Glob", { pattern: "**/*" })));
   assert.equal(d.decision, "not_evaluated");
   assert.equal(d.receipt.payload.execution.state, "observed_not_evaluated");
+});
+
+test("strict mode: an unknown/unmapped tool is denied by the closed allowlist, not observed", async () => {
+  const d = await freshRuntime({ strict: true }).evaluate(mapClaudeToolUse(claude("Glob", { pattern: "**/*" })));
+  assert.equal(d.decision, "deny", "fail-closed for tools with no taxonomy mapping");
+  assert.equal(d.receipt.payload.realtime_result, "deny");
+  assert.match(d.reason, /not allowlisted/);
 });
 
 test("conformance: the same policy applies to Cursor events", async () => {

@@ -34,6 +34,10 @@ recorded as *not evaluated* and grant nothing. Anything unexpected fails closed
 Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.
 
+**Strict mode.** By default a tool with no taxonomy mapping is recorded *not
+evaluated* (not blocked). Add `--strict` (or `SCOPEBOND_HOOK_STRICT=1`) to deny
+unmapped tools too — fail-closed coverage for anything the taxonomy does not map.
+
 ## Library
 
 The mapper and runtime are exported for testing and embedding:
