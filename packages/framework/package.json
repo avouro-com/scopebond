@@ -1,0 +1,53 @@
+{
+  "name": "@scopebond/framework",
+  "version": "0.1.0",
+  "description": "Scopebond framework plugins — one import so an agent checks your policy before every tool call and records a signed receipt. Cooperative (M0) in-process guard with Vercel AI SDK and LangGraph/LangChain adapters.",
+  "license": "Apache-2.0",
+  "author": "Avouro LLC",
+  "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/framework#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avouro-com/scopebond.git",
+    "directory": "packages/framework"
+  },
+  "bugs": {
+    "url": "https://github.com/avouro-com/scopebond/issues"
+  },
+  "keywords": [
+    "scopebond",
+    "vercel-ai",
+    "langgraph",
+    "langchain",
+    "ai-agents",
+    "tools",
+    "policy"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@scopebond/policy-schema": "workspace:^",
+    "@scopebond/sdk": "workspace:^",
+    "@scopebond/gateway": "workspace:^"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
