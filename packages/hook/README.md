@@ -2,8 +2,8 @@
 
 The Scopebond connector for **Claude Code** and **Cursor**. It checks every tool
 call a coding agent makes against your policy *before it runs*, blocks the ones
-outside policy, and records a signed receipt — locally, on the machine, with no
-Cloud dependency in this release.
+outside policy, and records a signed receipt — locally, on the machine, and
+optionally mirrored to your Scopebond Cloud workspace for monitoring.
 
 - **Label:** in-path · prevents (a Claude Code `PreToolUse` deny via exit code 2
   blocks even in bypass-permissions mode).
@@ -16,10 +16,30 @@ Cloud dependency in this release.
 npx @scopebond/hook init            # Claude Code (or: init --cursor)
 ```
 
-`init` scaffolds `.scopebond/` (a machine signing key, a countersigning key and a
-starter policy — "protect main and production paths") and prints the hook
-configuration to add to `.claude/settings.json` or `.cursor/hooks.json`. Then run
-one safe command in the agent and see the receipt in `.scopebond/receipts.db`.
+`init` scaffolds `.scopebond/` (a machine signing key, a countersigning key, a
+starter policy — "protect main and production paths" — and a `.gitignore` so none
+of it is committed) and prints the hook configuration to add to
+`.claude/settings.json` or `.cursor/hooks.json`. Then run one safe command in the
+agent and see the receipt in `.scopebond/receipts.db`.
+
+## Connect it to your workspace (optional)
+
+To see the receipts in your hosted Scopebond workspace, create a connection from
+the portal's **Connect** step (it gives you a one-use enrollment bundle), save it
+as `scopebond-enrollment.json`, then:
+
+```
+npx @scopebond/hook connect https://<your-workspace> scopebond-enrollment.json
+```
+
+`connect` scaffolds `.scopebond/` if needed, enrolls this machine's countersigning
+key with the workspace, and stores a scoped machine credential in
+`.scopebond/cloud.json` (a secret — never commit it). From then on every receipt is
+mirrored to the workspace through a **durable outbox**: delivery is best-effort and
+never blocks a tool call, and receipts are retained locally and retried if the
+workspace is unreachable. `scopebond-hook flush` delivers anything still queued —
+run it on a session-end hook (and set `SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero
+per-call latency.
 
 ## How it works
 
@@ -48,6 +68,7 @@ import { mapClaudeToolUse, createHookRuntime } from "@scopebond/hook";
 
 `mapClaudeToolUse` / `mapCursorEvent` are pure functions (native payload →
 normalized action). `createHookRuntime` builds the check-only gateway from a
-policy, a machine key and a local receipt log.
+policy, a machine key and a local receipt log; pass `cloud: { connection }` (from
+`connectCloud`) to mirror receipts to a workspace.
 
 Experimental alpha; controlled test use only.

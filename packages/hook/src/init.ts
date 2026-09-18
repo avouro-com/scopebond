@@ -13,6 +13,9 @@ export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKi
   const keyPath = join(dir, "agent.key");
   const attesterPath = join(dir, "attester.key");
   const policyPath = join(dir, "policy.json");
+  // Never let the signing keys, the Cloud credential or the local log be committed.
+  const gitignorePath = join(dir, ".gitignore");
+  if (!existsSync(gitignorePath)) writeFileSync(gitignorePath, "*\n");
   // Machine signing key (agent) + gateway countersigning key (attester). Reused if present.
   loadOrCreateAttester({ file: keyPath });
   loadOrCreateAttester({ file: attesterPath });

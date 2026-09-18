@@ -7,4 +7,6 @@ export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy } from "./runtime.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export { scaffold, harnessSnippet } from "./init.js";
+export { connectCloud, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
+export type { HookConnection } from "./cloud.js";
 export { scrubSecrets, redactCommand, digest, sha256 } from "./minimize.js";

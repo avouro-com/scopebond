@@ -4,10 +4,11 @@
 // with no HTTP server and no Cloud dependency in 0.1.
 
 import { readFileSync } from "node:fs";
-import { createGateway, StaticPrincipalKeyRegistry } from "@scopebond/gateway";
+import { createGateway, StaticPrincipalKeyRegistry, type CloudExporter } from "@scopebond/gateway";
 import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
+import { attachExporter, flushBounded, type HookConnection } from "./cloud.js";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -18,6 +19,9 @@ export interface RuntimeConfig {
    *  allowlist) instead of observed. Fail-closed for tools with no taxonomy
    *  mapping; default false (observe, matching the connector conformance vector). */
   strict?: boolean;
+  /** When connected to a Cloud workspace, receipts are auto-exported to the portal.
+   *  Export is best-effort and never changes the local decision. */
+  cloud?: { connection: HookConnection; fetch?: typeof fetch; flushTimeoutMs?: number };
 }
 
 export interface Decision {
@@ -58,12 +62,27 @@ export function createHookRuntime(config: RuntimeConfig) {
     { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },
   ]);
   const { attester } = loadOrCreateAttester({ file: config.attesterPath });
-  const { store } = openReceiptStore({ db: config.dbPath });
+  const { store: baseStore } = openReceiptStore({ db: config.dbPath });
+  // When connected, mirror every stored receipt to the hosted portal through a
+  // durable outbox. The wrapped store's decision is unchanged; export is best-effort.
+  let store = baseStore;
+  let exporter: CloudExporter | undefined;
+  if (config.cloud) {
+    const attached = attachExporter(config.dbPath + ".cloud-outbox.db", config.cloud.connection, baseStore, config.cloud.fetch);
+    store = attached.store;
+    exporter = attached.exporter;
+  }
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only" });
 
   return {
     gateway,
     agentKid: agent.kid,
+    exporter,
+    /** Deliver queued receipts to Cloud with a bounded timeout, then it is safe to
+     *  exit. Undelivered receipts persist in the durable outbox for the next run. */
+    async flush(): Promise<void> {
+      if (exporter) await flushBounded(exporter, config.cloud?.flushTimeoutMs);
+    },
     async evaluate(mapped: Mapped): Promise<Decision> {
       const signed = agent.sign(mapped.intent);
       if (!mapped.evaluated && !config.strict) {
