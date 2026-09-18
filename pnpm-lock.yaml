@@ -20,6 +20,9 @@ importers:
 
   examples:
     dependencies:
+      '@scopebond/framework':
+        specifier: workspace:*
+        version: link:../packages/framework
       '@scopebond/gateway':
         specifier: workspace:*
         version: link:../packages/gateway

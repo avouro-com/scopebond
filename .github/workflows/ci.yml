@@ -26,3 +26,5 @@ jobs:
         run: pnpm run check:release-state
       - name: Pack and install gateway as a consumer
         run: pnpm run test:package
+      - name: Run examples as a smoke (decisions asserted)
+        run: pnpm run test:examples

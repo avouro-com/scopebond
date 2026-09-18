@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@scopebond/framework": "workspace:*",
     "@scopebond/gateway": "workspace:*",
     "@scopebond/sdk": "workspace:*"
   }
