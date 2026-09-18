@@ -8,3 +8,5 @@ export type { ToolGuard, ToolGuardConfig, ToolDecision } from "./guard.js";
 export { wrapVercelTools, wrapLangGraphTool, guardExecute, guardedTool, wrapOpenAITools } from "./adapters.js";
 export type { WrapOptions, VercelTool, LangChainTool, FunctionTool } from "./adapters.js";
 export { generateAgentKey, starterToolPolicy } from "./starter.js";
+export { connectCloud } from "./cloud.js";
+export type { FrameworkConnection } from "./cloud.js";

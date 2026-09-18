@@ -16,9 +16,11 @@
 import { readFileSync, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import type { SignedReceipt, CloudExporter } from "@scopebond/gateway";
 import { createMcpProxy } from "./proxy.js";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
 import { scaffold } from "./init.js";
+import { connectCloud, loadMcpConnection, connectionFileFor, openExporter } from "./cloud.js";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -40,6 +42,23 @@ if (process.argv[2] === "init") {
   process.exit(0);
 }
 
+// `connect`: enroll the proxy's key with a workspace and store a scoped credential.
+if (process.argv[2] === "connect") {
+  const url = process.argv[3];
+  const bundleFile = process.argv[4];
+  const keyPath = arg("--key", process.env.SCOPEBOND_MCP_KEY ?? "scopebond-agent.key")!;
+  if (!url || !bundleFile) die("usage: scopebond-mcp connect <workspace-url> <enrollment-bundle.json> [--key k.pem]");
+  let bundle;
+  try { bundle = JSON.parse(readFileSync(bundleFile, "utf8")); }
+  catch (e) { die(`could not read the enrollment bundle ${bundleFile}: ${(e as Error).message}`); }
+  connectCloud(keyPath, url, bundle).then((c) => {
+    console.log(`Connected to ${c.url} (org ${c.organization_id} · env ${c.environment_id})`);
+    console.log(`  credential stored in ${connectionFileFor(keyPath)} — a secret, do not commit`);
+    console.log("Run the proxy as usual; every governed tool call is now mirrored to your workspace.");
+    process.exit(0);
+  }).catch((e) => die(`connect failed: ${(e as Error).message}`));
+} else {
+
 const dashDash = process.argv.indexOf("--");
 if (dashDash < 0 || dashDash === process.argv.length - 1) die("provide the upstream command after `--`");
 const upstreamCmd = process.argv.slice(dashDash + 1);
@@ -56,10 +75,26 @@ let attesterKeyPem: string;
 try { policy = JSON.parse(readFileSync(policyPath as string, "utf8")); } catch (e) { die(`could not read policy ${policyPath}: ${(e as Error).message}`); }
 try { attesterKeyPem = readFileSync(keyPath as string, "utf8"); } catch (e) { die(`could not read signing key ${keyPath}: ${(e as Error).message}`); }
 
+// When connected to a workspace, mirror the PEP-authorized receipts to the portal
+// through a durable outbox. The proxy is long-running, so the exporter's own timer
+// delivers; a final flush runs on shutdown.
+const connection = loadMcpConnection(keyPath as string);
+let exporter: CloudExporter | undefined;
+if (connection) {
+  try { exporter = openExporter(keyPath as string, connection); }
+  catch (e) { die(`durable Cloud outbox could not open: ${(e as Error).message}`); }
+}
+
 // Spawn the upstream server and correlate its responses by id.
 const child = spawn(upstreamCmd[0], upstreamCmd.slice(1), { stdio: ["pipe", "pipe", "inherit"] });
 child.on("error", (e) => die(`could not start the upstream server: ${e.message}`));
-child.on("exit", (code) => process.exit(code ?? 0));
+const shutdown = (code: number) => {
+  if (!exporter) process.exit(code);
+  void exporter.flush().finally(() => { exporter!.stop(); process.exit(code); });
+};
+child.on("exit", (code) => shutdown(code ?? 0));
+process.on("SIGINT", () => shutdown(0));
+process.on("SIGTERM", () => shutdown(0));
 
 const pending = new Map<string, (m: JsonRpcMessage) => void>();
 const key = (id: unknown) => JSON.stringify(id ?? null);
@@ -90,7 +125,10 @@ const upstream: McpUpstream = {
 const proxy = createMcpProxy({
   policy, principal: { subject: `client:${principal}`, issuer: "scopebond:mcp-proxy" }, server: server as string,
   attesterKeyPem, upstream,
-  onReceipt: receiptsPath ? (r) => { try { appendFileSync(receiptsPath, JSON.stringify(r) + "\n"); } catch { /* best effort */ } } : undefined,
+  onReceipt: (r: SignedReceipt) => {
+    if (receiptsPath) { try { appendFileSync(receiptsPath, JSON.stringify(r) + "\n"); } catch { /* best effort */ } }
+    exporter?.enqueue(r); // mirror to the workspace when connected
+  },
 });
 
 createInterface({ input: process.stdin }).on("line", async (line) => {
@@ -107,3 +145,4 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     }
   }
 });
+}

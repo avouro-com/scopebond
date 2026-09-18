@@ -3,8 +3,8 @@
 // signs the intent, so the receipt is the strongest class. Framework-agnostic —
 // the adapters wrap each framework's tool loop around `check`.
 
-import { createGateway, StaticPrincipalKeyRegistry, MemoryReceiptStore, createAttester, attesterFromPrivateKeyPem } from "@scopebond/gateway";
-import type { SignedReceipt, ReceiptStore } from "@scopebond/gateway";
+import { createGateway, StaticPrincipalKeyRegistry, MemoryReceiptStore, createAttester, attesterFromPrivateKeyPem, createCloudExporter, createMemoryCloudOutbox, withCloudExporter } from "@scopebond/gateway";
+import type { SignedReceipt, ReceiptStore, CloudExporter, CloudOutbox } from "@scopebond/gateway";
 import { createSigner } from "@scopebond/sdk";
 
 export interface ToolGuardConfig {
@@ -23,6 +23,10 @@ export interface ToolGuardConfig {
   onReceipt?: (receipt: SignedReceipt) => void | Promise<void>;
   /** Injectable store (defaults to in-memory). */
   store?: ReceiptStore;
+  /** Connect to a Scopebond workspace so receipts are mirrored to the hosted portal.
+   *  `connection` comes from `connectCloud`. `outbox` defaults to in-memory (fine for
+   *  a long-running agent); pass a durable one to survive restarts. */
+  cloud?: { connection: { url: string; credential: string }; outbox?: CloudOutbox; fetch?: typeof fetch };
 }
 
 export interface ToolDecision {
@@ -36,6 +40,10 @@ export interface ToolGuard {
   /** Check a tool call. Returns the cooperative decision and its signed receipt;
    *  the caller runs the tool only when `allowed` is true. */
   check(toolName: string, args?: Record<string, unknown>): Promise<ToolDecision>;
+  /** Deliver any queued receipts to Cloud now (a no-op when not connected). */
+  flush(): Promise<void>;
+  /** Stop the background exporter (a no-op when not connected). */
+  stop(): void;
 }
 
 /** Build the guard once and reuse it across tool calls. */
@@ -45,15 +53,28 @@ export function createToolGuard(config: ToolGuardConfig): ToolGuard {
     { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },
   ]);
   const attester = config.attesterKeyPem ? attesterFromPrivateKeyPem(config.attesterKeyPem) : createAttester();
+  // When connected, mirror receipts to the workspace through a bounded outbox.
+  const baseStore = config.store ?? new MemoryReceiptStore();
+  let store = baseStore;
+  let exporter: CloudExporter | undefined;
+  if (config.cloud) {
+    exporter = createCloudExporter({
+      url: config.cloud.connection.url, credential: config.cloud.connection.credential,
+      outbox: config.cloud.outbox ?? createMemoryCloudOutbox(), fetch: config.cloud.fetch,
+    });
+    store = withCloudExporter(baseStore, exporter);
+  }
   const gateway = createGateway({
     policy: config.policy as never,
     authentication: { keys },
     attester,
-    store: config.store ?? new MemoryReceiptStore(),
+    store,
     mode: "check_only",
   });
 
   return {
+    flush: () => exporter ? exporter.flush() : Promise.resolve(),
+    stop: () => exporter?.stop(),
     async check(toolName, args = {}) {
       const actionType = config.manifest?.[toolName] ?? `tool.${toolName}`;
       const intent: Record<string, unknown> = { action_type: actionType, params: args };

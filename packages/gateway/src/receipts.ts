@@ -402,7 +402,9 @@ export async function buildBoundaryReceipt(input: BoundaryReceiptInput, attester
     canonicalization: CANONICALIZATION,
     intent: minimized.intent,
     intent_hash: authorizedHash,
-    action_ref: { authorized_intent_hash: authorizedHash, evidence_intent_hash: evidenceHash },
+    // Idempotency key: stable per (gate, outcome, intent) so re-evaluating the same
+    // PR head / deployment dedupes at the outbox and at ingest.
+    action_ref: { action_id: sha256(canonical({ gate: input.gate, outcome_ref: input.outcomeRef, intent_hash: authorizedHash })), authorized_intent_hash: authorizedHash, evidence_intent_hash: evidenceHash },
     policy_hash: policyHash,
     policy_version: policyVersion,
     policy_ref: { id: policyId, version: policyVersion, digest: policyHash },
@@ -456,7 +458,9 @@ export async function buildPepReceipt(input: PepReceiptInput, attester: Attester
     canonicalization: CANONICALIZATION,
     intent: minimized.intent,
     intent_hash: authorizedHash,
-    action_ref: { authorized_intent_hash: authorizedHash, evidence_intent_hash: evidenceHash },
+    // Idempotency key: unique per authorized call (intent + time + principal), so a
+    // retried batch dedupes while distinct tool calls stay distinct.
+    action_ref: { action_id: sha256(canonical({ intent_hash: authorizedHash, ts, subject: input.principal.subject })), authorized_intent_hash: authorizedHash, evidence_intent_hash: evidenceHash },
     policy_hash: policyHash,
     policy_version: policyVersion,
     policy_ref: { id: policyId, version: policyVersion, digest: policyHash },
