@@ -9,6 +9,7 @@ The Scopebond monorepo packages. Landing incrementally; entries marked
 | `verify` | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` library used by the gateway and offline verification. | **experimental** (published 0.1.1) |
 | `gateway` | Policy gateway with authenticated HTTP/MCP ingress, durable authority/lifecycle state, signed evidence, constrained execution and optional bounded Cloud export. Default execution is a simulation. `npx @scopebond/gateway`. | **experimental alpha** (published 0.4.1; not production-qualified) |
 | `sdk` | Signing SDK for authenticated action intents and approvals plus a thin gateway client. | **experimental** (published 0.1.0) |
+| `hook` | `scopebond-hook` — the Claude Code + Cursor connector (leaf): maps each tool call to a taxonomy action and checks it against policy in-path (cooperative M0) with a signed local receipt. | **experimental** (candidate 0.1.0; unpublished) |
 | `attest` | Countersignature / receipt emission (ACTA envelope, `scopebond:receipt`). | `[PLANNED]` |
 | `contracts` | The on-chain vault, registry, and claim contracts (written fresh on OpenZeppelin primitives), verified on-chain. | `[PLANNED]` |
 | `conformance` | The conformance suite a build must pass to use the "Scopebond Gateway" name. | `[PLANNED]` |

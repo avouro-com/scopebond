@@ -41,6 +41,22 @@ importers:
       hono:
         specifier: ^4.6.0
         version: 4.13.7
+    devDependencies:
+      '@scopebond/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
+  packages/hook:
+    dependencies:
+      '@scopebond/gateway':
+        specifier: workspace:^
+        version: link:../gateway
+      '@scopebond/policy-schema':
+        specifier: workspace:^
+        version: link:../policy-schema
+      '@scopebond/sdk':
+        specifier: workspace:^
+        version: link:../sdk
 
   packages/policy-schema: {}
 
@@ -768,9 +784,7 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
-  jsonfile@4.0.0:
-    optionalDependencies:
-      graceful-fs: 4.2.11
+  jsonfile@4.0.0: {}
 
   locate-path@5.0.0:
     dependencies:

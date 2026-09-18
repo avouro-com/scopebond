@@ -51,6 +51,14 @@ they remain suitable for simulation and passive observation.
 
 ## Quickstart
 
+Scaffold a working key, key registry and starter policy, then follow the printed steps:
+
+```bash
+npx @scopebond/gateway init
+```
+
+Or wire it up yourself with an existing policy and key registry:
+
 ```bash
 SCOPEBOND_PRINCIPAL_KEYS_FILE=./principal-keys.json SCOPEBOND_CONTROL_TOKEN=<random-24+-character-token> npx @scopebond/gateway ./policy.json
 ```

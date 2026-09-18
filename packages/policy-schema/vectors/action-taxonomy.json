@@ -1,0 +1,30 @@
+{
+  "taxonomy_version": "1.0",
+  "description": "Schema conformance for validateActionParams: valid and invalid parameter payloads per action type. A connector's mapping fixture (native payload → normalized action) is expected to produce params that pass the valid cases.",
+  "schema_cases": [
+    { "action_type": "shell.exec", "params": { "command": "rm -rf /tmp/x", "program": "rm" }, "valid": true },
+    { "action_type": "shell.exec", "params": { "program": "rm" }, "valid": false, "reason": "missing required command" },
+    { "action_type": "shell.exec", "params": { "command": "ls", "args": "notarray" }, "valid": false, "reason": "args must be an array" },
+    { "action_type": "file.read", "params": { "path": ".env" }, "valid": true },
+    { "action_type": "file.read", "params": { "path": 42 }, "valid": false, "reason": "path must be a string" },
+    { "action_type": "file.write", "params": { "path": "src/app.ts" }, "valid": true },
+    { "action_type": "file.write", "params": {}, "valid": false, "reason": "missing required path" },
+    { "action_type": "git.push", "params": { "remote": "origin", "ref": "main", "force": true }, "valid": true },
+    { "action_type": "git.push", "params": { "force": true }, "valid": false, "reason": "missing required ref" },
+    { "action_type": "git.push", "params": { "ref": "main", "force": "yes" }, "valid": false, "reason": "force must be boolean" },
+    { "action_type": "package.install", "params": { "name": "left-pad", "manager": "npm", "source": "registry" }, "valid": true },
+    { "action_type": "package.install", "params": { "name": "x", "manager": "brew" }, "valid": false, "reason": "manager not in enum" },
+    { "action_type": "net.fetch", "params": { "host": "api.example", "method": "GET" }, "valid": true },
+    { "action_type": "net.fetch", "params": { "host": "api.example", "method": "CONNECT" }, "valid": false, "reason": "method not in enum" },
+    { "action_type": "http.call", "params": { "host": "api.example", "path": "/x", "method": "POST" }, "valid": true },
+    { "action_type": "http.call", "params": { "host": "api.example" }, "valid": false, "reason": "missing required method" },
+    { "action_type": "mcp.tool.call", "params": { "server": "fs", "tool": "read_file", "args_digest": "sha256:abc" }, "valid": true },
+    { "action_type": "mcp.tool.call", "params": { "server": "fs" }, "valid": false, "reason": "missing required tool" },
+    { "action_type": "pr.open", "params": { "repo": "acme/app", "base": "main", "paths": ["docs/x.md"], "files_changed": 1 }, "valid": true },
+    { "action_type": "pr.open", "params": { "repo": "acme/app", "files_changed": 3.5 }, "valid": false, "reason": "files_changed must be an integer" },
+    { "action_type": "pr.merge", "params": { "repo": "acme/app", "paths": "notarray" }, "valid": false, "reason": "paths must be an array" },
+    { "action_type": "deploy.release", "params": { "repo": "acme/app", "environment": "production", "sha": "0f1e2d" }, "valid": true },
+    { "action_type": "deploy.release", "params": { "sha": "0f1e2d" }, "valid": false, "reason": "missing required environment" },
+    { "action_type": "totally.made.up", "params": {}, "valid": false, "known": false, "reason": "unknown action type" }
+  ]
+}

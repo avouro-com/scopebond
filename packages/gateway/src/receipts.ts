@@ -14,6 +14,28 @@ import { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
 export { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
 
 export type RealtimeResult = "allow" | "deny" | "approved" | "timeout" | "not_evaluated";
+
+// Evidence class (GATEWAY_SPEC §15 / D65): how strong the evidence is, so a
+// verifier, the workspace and every export can say what a receipt proves without
+// over-claiming. It is an additive payload field; the envelope is unchanged.
+export type EvidenceClass = "signed_intent" | "pep_authorized" | "boundary";
+export const EVIDENCE_CLASSES: readonly EvidenceClass[] = ["signed_intent", "pep_authorized", "boundary"];
+export type BoundaryGate = "merge" | "deploy" | "egress" | "platform_event";
+export const BOUNDARY_GATES: readonly BoundaryGate[] = ["merge", "deploy", "egress", "platform_event"];
+export type AttributionKind = "asserted" | "inferred";
+
+/** A PEP-authorized principal: a validated identity subject and its issuer.
+ *  Required when evidence_class === "pep_authorized" (no agent signature). */
+export interface PepPrincipal { subject: string; issuer: string; }
+
+/** Boundary evidence: an action already happened elsewhere and a gate decided
+ *  its consequence (or attested a reported action). Required when
+ *  evidence_class === "boundary". */
+export interface BoundaryEvidence {
+  gate: BoundaryGate;
+  outcome_ref: string;
+  attribution: { kind: AttributionKind; actor: string };
+}
 export const EVIDENCE_VERSION = "1.0" as const;
 export const CANONICALIZATION = "RFC8785" as const;
 export const REDACTION_PROFILE = "scopebond:minimized-intent/v1" as const;
@@ -76,6 +98,14 @@ export interface ReceiptPayload {
   authorization: AuthorizationEvidence;
   attester: { kind: "gateway"; kid: string };
   timestamp: string;
+  /** Evidence class (§15). Absent = legacy, inferred at read time as signed_intent
+   *  when an agent signature is present and pep_authorized otherwise. The verifier
+   *  never upgrades an explicitly set class. */
+  evidence_class?: EvidenceClass;
+  /** Required when evidence_class === "pep_authorized"; absent otherwise. */
+  principal?: PepPrincipal;
+  /** Required when evidence_class === "boundary"; absent otherwise. */
+  boundary?: BoundaryEvidence;
 }
 
 export interface SignedReceipt {
@@ -134,6 +164,9 @@ export interface ReceiptVerification {
   key_binding_valid: boolean;
   legacy: boolean;
   external_effect_verified: false;
+  /** The evidence class (§15), classified without ever upgrading an explicit
+   *  class. Null only when the receipt has no readable payload. */
+  evidence_class: EvidenceClass | null;
   authorization_valid: boolean | null;
   agent_signature_valid: boolean | null;
   approval_signature_valid: boolean | null;
@@ -149,7 +182,7 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string, prin
       valid: false, signature_valid: false, intent_hash_valid: false,
       contract_valid: false, policy_ref_valid: false, supported_version: false, legacy: false,
       key_binding_valid: false,
-      external_effect_verified: false,
+      external_effect_verified: false, evidence_class: null,
       authorization_valid: null, agent_signature_valid: null, approval_signature_valid: null, fully_valid: false,
     };
   }
@@ -197,6 +230,7 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string, prin
     key_binding_valid,
     legacy,
     external_effect_verified: false,
+    evidence_class: classifyEvidenceClass(payload as ReceiptPayload),
     authorization_valid: authorization?.authorization_valid ?? null,
     agent_signature_valid: authorization?.agent_signature_valid ?? null,
     approval_signature_valid: authorization?.approval_signature_valid ?? null,
@@ -237,6 +271,40 @@ function validateLegacyPayload(payload: unknown): boolean {
 
 /** Runtime verifier for the signed v1 payload invariants. Full request/policy
  * input validation is a separate boundary completed in DEV09/DEV14. */
+/** The evidence class of a receipt (§15). An explicit class is returned as-is —
+ *  never upgraded. A legacy receipt (no class) is inferred: signed_intent when an
+ *  agent signature is present, pep_authorized otherwise. */
+export function classifyEvidenceClass(payload: ReceiptPayload): EvidenceClass {
+  if (payload.evidence_class) return payload.evidence_class;
+  return payload.authorization?.agent ? "signed_intent" : "pep_authorized";
+}
+
+/** Class-required fields hold and no foreign class fields are smuggled in. */
+function evidenceClassValid(payload: ReceiptPayload): boolean {
+  const cls = payload.evidence_class;
+  if (cls !== undefined && !EVIDENCE_CLASSES.includes(cls)) return false;
+  const hasPrincipal = payload.principal !== undefined;
+  const hasBoundary = payload.boundary !== undefined;
+  if (cls === "pep_authorized") {
+    const pr = payload.principal;
+    if (hasBoundary || !isRecord(pr) || !hasOnlyKeys(pr, ["subject", "issuer"])) return false;
+    return typeof pr.subject === "string" && pr.subject.length > 0 &&
+      typeof pr.issuer === "string" && pr.issuer.length > 0;
+  }
+  if (cls === "boundary") {
+    const b = payload.boundary as unknown;
+    if (hasPrincipal || !isRecord(b) || !hasOnlyKeys(b, ["gate", "outcome_ref", "attribution"])) return false;
+    if (!BOUNDARY_GATES.includes(b.gate as BoundaryGate)) return false;
+    if (typeof b.outcome_ref !== "string" || b.outcome_ref.length === 0) return false;
+    const at = b.attribution;
+    if (!isRecord(at) || !hasOnlyKeys(at, ["kind", "actor"])) return false;
+    if (at.kind !== "asserted" && at.kind !== "inferred") return false;
+    return typeof at.actor === "string" && at.actor.length > 0;
+  }
+  // signed_intent or legacy (undefined): no class-specific fields are permitted.
+  return !hasPrincipal && !hasBoundary;
+}
+
 export function validateEvidencePayload(payload: unknown): payload is ReceiptPayload {
   if (!isRecord(payload) || !isRecord(payload.intent) || !isRecord(payload.action_ref) ||
       !isRecord(payload.policy_ref) || !isRecord(payload.execution) ||
@@ -259,7 +327,9 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
     "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result",
     "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp",
-  ]) && hasOnlyKeys(payload.action_ref, ["action_id", "authorized_intent_hash", "evidence_intent_hash"]) &&
+    "evidence_class", "principal", "boundary",
+  ]) && evidenceClassValid(payload as unknown as ReceiptPayload) &&
+    hasOnlyKeys(payload.action_ref, ["action_id", "authorized_intent_hash", "evidence_intent_hash"]) &&
     hasOnlyKeys(payload.policy_ref, ["id", "version", "digest"]) &&
     hasOnlyKeys(payload.execution, ["state", "assertion", "reference", "external_effect"]) &&
     hasOnlyKeys(payload.redaction, ["profile", "paths"]) &&
@@ -424,7 +494,7 @@ export type ReceiptContext = Omit<
   "type" | "realtime_result" | "executed" | "execution_ref" | "execution"
 >;
 
-export type AuthorityFinalState = "denied" | "simulated" | "executed" | "failed" | "outcome_unknown";
+export type AuthorityFinalState = "denied" | "simulated" | "cooperative_allow" | "executed" | "failed" | "outcome_unknown";
 export type AuthorityLifecycleState = "reserved" | "dispatching" | AuthorityFinalState;
 
 export interface ActionLifecycleRecord {

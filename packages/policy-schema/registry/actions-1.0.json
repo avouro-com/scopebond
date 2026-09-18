@@ -1,0 +1,184 @@
+{
+  "taxonomy_version": "1.0",
+  "description": "Scopebond Action Taxonomy v1 — the coding, GitHub, MCP and HTTP action types and their parameter bounds, an extension of the policy vocabulary. Parameters are carried under intent.params; bound-able parameters (boundable: true) may be constrained by an action_allowlist clause's param_bounds. This JSON is the machine source; docs/integrations/ACTION_TAXONOMY.md is its human index. Money/commerce action types keep their existing gateway/demo shapes and are not redefined here.",
+  "actions": [
+    {
+      "id": "shell.exec",
+      "taxonomy_version": "1.0",
+      "summary": "A shell command executed by a coding agent's harness.",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "command", "type": "string", "required": true, "boundable": false, "description": "The raw command line, stored as a digest plus a redacted head, never in full." },
+        { "name": "program", "type": "string", "required": false, "boundable": true, "description": "The resolved executable (argv[0]), for allow/deny bounds such as denying rm or sudo." },
+        { "name": "cwd", "type": "string", "required": false, "boundable": true, "description": "The working directory the command runs in, relative to the connector root." },
+        { "name": "args", "type": "array", "required": false, "boundable": false, "description": "The parsed argument vector, excluding the program." }
+      ],
+      "examples": [
+        { "program": "rm", "cwd": "/tmp/other" },
+        { "program": "pnpm", "args": ["test"] }
+      ]
+    },
+    {
+      "id": "file.read",
+      "taxonomy_version": "1.0",
+      "summary": "A file read by a coding agent.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex"],
+      "parameters": [
+        { "name": "path", "type": "string", "required": true, "boundable": true, "description": "The file path, relative to the connector root; bound with a pattern allowlist." }
+      ],
+      "examples": [{ "path": "src/index.ts" }, { "path": ".env" }]
+    },
+    {
+      "id": "file.write",
+      "taxonomy_version": "1.0",
+      "summary": "A file write or edit by a coding agent.",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex"],
+      "parameters": [
+        { "name": "path", "type": "string", "required": true, "boundable": true, "description": "The file path written, relative to the connector root; bound with a pattern allowlist." }
+      ],
+      "examples": [{ "path": "src/app.ts" }, { "path": "infra/prod/main.tf" }]
+    },
+    {
+      "id": "git.push",
+      "taxonomy_version": "1.0",
+      "summary": "A git push, derived from a shell command when the command is unambiguous.",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "remote", "type": "string", "required": false, "boundable": true, "description": "The push remote (e.g. origin)." },
+        { "name": "ref", "type": "string", "required": true, "boundable": true, "description": "The destination ref/branch; bound to deny protected branches such as main or release/*." },
+        { "name": "force", "type": "boolean", "required": false, "boundable": true, "description": "Whether the push is a force push." },
+        { "name": "repo", "type": "string", "required": false, "boundable": true, "description": "The repository the push targets." }
+      ],
+      "examples": [
+        { "remote": "origin", "ref": "main", "force": true },
+        { "remote": "origin", "ref": "feature/x", "force": false }
+      ]
+    },
+    {
+      "id": "package.install",
+      "taxonomy_version": "1.0",
+      "summary": "A dependency installed by a coding agent.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex"],
+      "parameters": [
+        { "name": "name", "type": "string", "required": true, "boundable": true, "description": "The package name." },
+        { "name": "manager", "type": "enum", "required": false, "boundable": true, "description": "The package manager.", "enum": ["npm", "pnpm", "yarn", "pip", "cargo", "go", "gem", "other"] },
+        { "name": "source", "type": "string", "required": false, "boundable": true, "description": "The install source (registry, git, url, path); bound to require a trusted registry." }
+      ],
+      "examples": [
+        { "name": "left-pad", "manager": "npm", "source": "registry" },
+        { "name": "evil", "manager": "npm", "source": "https://example.test/evil.tgz" }
+      ]
+    },
+    {
+      "id": "net.fetch",
+      "taxonomy_version": "1.0",
+      "summary": "An outbound network fetch made by a coding agent's tool (distinct from a governed http.call action).",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "mcp_proxy"],
+      "parameters": [
+        { "name": "host", "type": "string", "required": true, "boundable": true, "description": "The destination host; bound with endpoint_allowlist or a pattern." },
+        { "name": "path", "type": "string", "required": false, "boundable": true, "description": "The request path." },
+        { "name": "method", "type": "enum", "required": false, "boundable": true, "description": "The HTTP method.", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] }
+      ],
+      "examples": [
+        { "host": "api.internal.example", "path": "/v1/status", "method": "GET" },
+        { "host": "exfil.example", "path": "/", "method": "POST" }
+      ]
+    },
+    {
+      "id": "http.call",
+      "taxonomy_version": "1.0",
+      "summary": "A governed HTTP action the gateway may dispatch or check; endpoint_allowlist/endpoint_denylist clauses apply.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["self_hosted_gateway", "cx_agents", "mcp_proxy"],
+      "parameters": [
+        { "name": "host", "type": "string", "required": true, "boundable": true, "description": "The destination host." },
+        { "name": "path", "type": "string", "required": false, "boundable": true, "description": "The request path." },
+        { "name": "method", "type": "enum", "required": true, "boundable": true, "description": "The HTTP method.", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] }
+      ],
+      "examples": [
+        { "host": "api.ok.example", "path": "/refunds", "method": "POST" }
+      ]
+    },
+    {
+      "id": "mcp.tool.call",
+      "taxonomy_version": "1.0",
+      "summary": "A Model Context Protocol tool invocation routed through a proxy or client.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["mcp_proxy", "claude_code_cursor"],
+      "parameters": [
+        { "name": "server", "type": "string", "required": true, "boundable": true, "description": "The MCP server id; bound with a server allowlist." },
+        { "name": "tool", "type": "string", "required": true, "boundable": true, "description": "The tool name; bound with a tool allowlist." },
+        { "name": "args_digest", "type": "string", "required": false, "boundable": false, "description": "A digest of the tool arguments; raw arguments are never stored." }
+      ],
+      "examples": [
+        { "server": "filesystem", "tool": "read_file", "args_digest": "sha256:…" }
+      ]
+    },
+    {
+      "id": "pr.open",
+      "taxonomy_version": "1.0",
+      "summary": "A pull request opened by an agent (boundary-lane connectors emit this with the boundary receipt class).",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["github_app"],
+      "parameters": [
+        { "name": "repo", "type": "string", "required": true, "boundable": true, "description": "The repository, owner/name." },
+        { "name": "base", "type": "string", "required": false, "boundable": true, "description": "The base branch." },
+        { "name": "head", "type": "string", "required": false, "boundable": true, "description": "The head branch." },
+        { "name": "paths", "type": "array", "required": false, "boundable": true, "description": "The changed paths; bound to deny production paths." },
+        { "name": "files_changed", "type": "integer", "required": false, "boundable": true, "description": "The count of files changed; bound with a max." },
+        { "name": "additions", "type": "integer", "required": false, "boundable": true, "description": "Lines added." },
+        { "name": "deletions", "type": "integer", "required": false, "boundable": true, "description": "Lines deleted." }
+      ],
+      "examples": [
+        { "repo": "acme/app", "base": "main", "head": "agent/patch", "paths": ["docs/readme.md"], "files_changed": 1 }
+      ]
+    },
+    {
+      "id": "pr.merge",
+      "taxonomy_version": "1.0",
+      "summary": "A pull request merge, gated by a boundary connector before it can land.",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["github_app"],
+      "parameters": [
+        { "name": "repo", "type": "string", "required": true, "boundable": true, "description": "The repository, owner/name." },
+        { "name": "base", "type": "string", "required": false, "boundable": true, "description": "The branch being merged into." },
+        { "name": "paths", "type": "array", "required": false, "boundable": true, "description": "The changed paths; bound to deny production paths." }
+      ],
+      "examples": [
+        { "repo": "acme/app", "base": "main", "paths": ["infra/prod/main.tf"] }
+      ]
+    },
+    {
+      "id": "deploy.release",
+      "taxonomy_version": "1.0",
+      "summary": "A deployment or release to an environment, gated by a boundary connector via OIDC.",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["github_app", "aws_agentcore", "cloudflare"],
+      "parameters": [
+        { "name": "repo", "type": "string", "required": false, "boundable": true, "description": "The repository, owner/name." },
+        { "name": "environment", "type": "string", "required": true, "boundable": true, "description": "The deployment environment; bound to require staging or an approval for production." },
+        { "name": "sha", "type": "string", "required": false, "boundable": false, "description": "The commit SHA being deployed." }
+      ],
+      "examples": [
+        { "repo": "acme/app", "environment": "production", "sha": "0f1e2d…" }
+      ]
+    }
+  ]
+}

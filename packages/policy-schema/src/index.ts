@@ -7,6 +7,12 @@ import actionSchemaDocument from "../schema/action.schema.json" with { type: "js
 import receiptSchemaDocument from "../schema/receipt.schema.json" with { type: "json" };
 import legacyReceiptSchemaDocument from "../schema/receipt-legacy.schema.json" with { type: "json" };
 export { canonical } from "./canonical.js";
+export {
+  actionRegistry, TAXONOMY_VERSION, getActionType, validateActionParams,
+} from "./registry.js";
+export type {
+  ActionRegistry, ActionType, ActionParameter, ParameterType, RiskClass, ParamValidation,
+} from "./registry.js";
 
 export const policySchema = policySchemaDocument as Record<string, unknown>;
 export const actionSchema = actionSchemaDocument as Record<string, unknown>;
@@ -34,6 +40,12 @@ export const EXECUTION_STATES = [
   "executed", "failed", "outcome_unknown",
 ] as const;
 
+// Evidence classes (§15 / D65): how strong a receipt's evidence is. Additive
+// payload field; the verifier never upgrades an explicitly set class.
+export const EVIDENCE_CLASSES = ["signed_intent", "pep_authorized", "boundary"] as const;
+export const BOUNDARY_GATES = ["merge", "deploy", "egress", "platform_event"] as const;
+export const ATTRIBUTION_KINDS = ["asserted", "inferred"] as const;
+
 // The coverage buckets a policy resolves into (POLICY_VOCABULARY.md §4).
 export const COVERAGE_BUCKETS = ["prevented", "covered", "refused"] as const;
 
@@ -41,3 +53,6 @@ export type ClauseType = (typeof CLAUSE_TYPES)[number];
 export type ClauseMode = (typeof CLAUSE_MODES)[number];
 export type RealtimeResult = (typeof REALTIME_RESULTS)[number];
 export type ExecutionState = (typeof EXECUTION_STATES)[number];
+export type EvidenceClass = (typeof EVIDENCE_CLASSES)[number];
+export type BoundaryGate = (typeof BOUNDARY_GATES)[number];
+export type AttributionKind = (typeof ATTRIBUTION_KINDS)[number];

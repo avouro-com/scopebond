@@ -1,0 +1,98 @@
+[
+  {
+    "name": "git.push to a protected branch is denied by a ref bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "push", "type": "action_allowlist", "mode": "enforce", "action_types": ["git.push"], "param_bounds": { "ref": { "pattern": "^(?!(?:main|master)$)(?!release/).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "git.push", "params": { "ref": "main" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "a1" },
+    "expect": { "violated": true, "clause_id": "push" }
+  },
+  {
+    "name": "git.push to a feature branch passes the ref bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "push", "type": "action_allowlist", "mode": "enforce", "action_types": ["git.push"], "param_bounds": { "ref": { "pattern": "^(?!(?:main|master)$)(?!release/).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "git.push", "params": { "ref": "feature/x" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "a2" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "git.push omitting the bounded ref denies (an omitted bounded parameter is denied)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "push", "type": "action_allowlist", "mode": "enforce", "action_types": ["git.push"], "param_bounds": { "ref": { "pattern": "^(?!(?:main|master)$)(?!release/).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "git.push", "params": {} }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "a3" },
+    "expect": { "violated": true, "clause_id": "push" }
+  },
+  {
+    "name": "git.push force push is denied by a boolean-as-enum bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "push", "type": "action_allowlist", "mode": "enforce", "action_types": ["git.push"], "param_bounds": { "ref": { "pattern": "^(?!(?:main|master)$)(?!release/).+" }, "force": { "enum": [false] } } }
+    ] },
+    "claimed": { "intent": { "action_type": "git.push", "params": { "ref": "feature/x", "force": true } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "a4" },
+    "expect": { "violated": true, "clause_id": "push" }
+  },
+  {
+    "name": "git.push non-force to a feature branch passes both bounds",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "push", "type": "action_allowlist", "mode": "enforce", "action_types": ["git.push"], "param_bounds": { "ref": { "pattern": "^(?!(?:main|master)$)(?!release/).+" }, "force": { "enum": [false] } } }
+    ] },
+    "claimed": { "intent": { "action_type": "git.push", "params": { "ref": "feature/x", "force": false } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "a5" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "http.call method outside the enum is denied",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "http", "type": "action_allowlist", "mode": "enforce", "action_types": ["http.call"], "param_bounds": { "method": { "enum": ["GET", "POST"] } } }
+    ] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "api.ok.example", "method": "DELETE" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "b1" },
+    "expect": { "violated": true, "clause_id": "http" }
+  },
+  {
+    "name": "http.call method within the enum is allowed",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "http", "type": "action_allowlist", "mode": "enforce", "action_types": ["http.call"], "param_bounds": { "method": { "enum": ["GET", "POST"] } } }
+    ] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "api.ok.example", "method": "POST" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "b2" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "package.install from an untrusted source is denied by a source bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "pkg", "type": "action_allowlist", "mode": "enforce", "action_types": ["package.install"], "param_bounds": { "source": { "pattern": "^registry$" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "package.install", "params": { "name": "evil", "source": "https://evil.example/x.tgz" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "c1" },
+    "expect": { "violated": true, "clause_id": "pkg" }
+  },
+  {
+    "name": "package.install from the registry is allowed",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "pkg", "type": "action_allowlist", "mode": "enforce", "action_types": ["package.install"], "param_bounds": { "source": { "pattern": "^registry$" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "package.install", "params": { "name": "left-pad", "source": "registry" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "c2" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "an unlisted action type is denied by the closed allowlist",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "http", "type": "action_allowlist", "mode": "enforce", "action_types": ["http.call"], "param_bounds": { "method": { "enum": ["GET", "POST"] } } }
+    ] },
+    "claimed": { "intent": { "action_type": "shell.exec", "params": { "program": "rm" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "d1" },
+    "expect": { "violated": true, "clause_id": "http" }
+  },
+  {
+    "name": "deploy.release to production without an approval violates require_approval",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "gate", "type": "require_approval", "action_types": ["deploy.release"], "approvers": ["key:approver-1"] }
+    ] },
+    "claimed": { "intent": { "action_type": "deploy.release", "params": { "environment": "production" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "e1" },
+    "expect": { "violated": true, "clause_id": "gate" }
+  },
+  {
+    "name": "deploy.release to production with a valid approval is allowed",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "gate", "type": "require_approval", "action_types": ["deploy.release"], "approvers": ["key:approver-1"] }
+    ] },
+    "claimed": { "intent": { "action_type": "deploy.release", "params": { "environment": "production" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "e2", "approval": { "approver": "key:approver-1", "intent_hash": "e2" } },
+    "expect": { "violated": false }
+  }
+]

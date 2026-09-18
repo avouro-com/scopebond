@@ -35,6 +35,11 @@
       "types": "./dist/canonical.d.ts",
       "default": "./dist/canonical.js"
     },
+    "./registry": {
+      "types": "./dist/registry.d.ts",
+      "default": "./dist/registry.js"
+    },
+    "./registry/actions-1.0.json": "./registry/actions-1.0.json",
     "./policy.schema.json": "./schema/policy.schema.json",
     "./action.schema.json": "./schema/action.schema.json",
     "./receipt.schema.json": "./schema/receipt.schema.json",
@@ -45,6 +50,7 @@
   "files": [
     "dist",
     "schema",
+    "registry",
     "vectors"
   ],
   "scripts": {

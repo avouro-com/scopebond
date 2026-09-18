@@ -7,6 +7,9 @@ type ActionResultLike = { allowed: boolean; reason: string; receipt: unknown };
 type HandleAction = (req: { intent: unknown; authorization?: unknown; approval?: unknown }) => Promise<ActionResultLike>;
 
 const PROTOCOL_VERSION = "2024-11-05";
+// Reported as MCP serverInfo.version. Bundled into Workers, so it cannot read
+// package.json at runtime; keep this in sync with the package version on release.
+const SERVER_VERSION = "0.4.1";
 
 export async function handleMcp(body: any, handleAction: HandleAction): Promise<unknown> {
   const id = body?.id ?? null;
@@ -19,7 +22,7 @@ export async function handleMcp(body: any, handleAction: HandleAction): Promise<
       return ok({
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: "scopebond-gateway", version: "0.0.0" },
+        serverInfo: { name: "scopebond-gateway", version: SERVER_VERSION },
       });
     case "notifications/initialized":
       return ok({});

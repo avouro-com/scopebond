@@ -1,0 +1,55 @@
+{
+  "name": "@scopebond/hook",
+  "version": "0.1.0",
+  "description": "Scopebond hook for Claude Code and Cursor — checks each coding-agent tool call against policy before it runs (in-path, cooperative M0) and records a signed receipt, locally.",
+  "license": "Apache-2.0",
+  "author": "Avouro LLC",
+  "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/hook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avouro-com/scopebond.git",
+    "directory": "packages/hook"
+  },
+  "bugs": {
+    "url": "https://github.com/avouro-com/scopebond/issues"
+  },
+  "keywords": [
+    "scopebond",
+    "claude-code",
+    "cursor",
+    "hooks",
+    "ai-agents",
+    "policy"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "scopebond-hook": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@scopebond/policy-schema": "workspace:^",
+    "@scopebond/sdk": "workspace:^",
+    "@scopebond/gateway": "workspace:^"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
