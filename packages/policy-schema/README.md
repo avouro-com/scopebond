@@ -15,8 +15,16 @@ evidence, and coverage all share — published before the proxy (D27).
 - `schema/receipt-legacy.schema.json` — the prior unversioned envelope, retained only
   for explicit compatibility handling.
 - `src/index.ts` — loads the schemas and exports the policy and evidence constants.
+- `registry/actions-1.0.json` — Action Taxonomy v1: the coding, GitHub, MCP and HTTP
+  action types and their parameter bounds (machine source; the human index lives in
+  the product docs). Exposed at the `./registry` subpath, which also exports
+  `actionRegistry`, `TAXONOMY_VERSION`, `getActionType(id)` and
+  `validateActionParams(type, params)`. Parameters are carried under `intent.params`;
+  bound-able ones are constrained by an `action_allowlist` clause's `param_bounds`.
 - `src/canonical.ts` — the shared strict RFC-8785-target canonical serializer used
   by schema, verifier, gateway and SDK signature/hash boundaries.
+- `vectors/action-taxonomy.json` — schema conformance (valid/invalid parameter
+  payloads per action type) for `validateActionParams`.
 - `vectors/evidence-contract.json` — shared execution-state, legacy/unknown-version
   and synthetic-secret cases used by Node, WebCrypto and offline verification tests.
 - `vectors/canonicalization.json` — shared canonical-byte vectors used across packages.

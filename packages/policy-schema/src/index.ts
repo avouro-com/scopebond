@@ -7,6 +7,12 @@ import actionSchemaDocument from "../schema/action.schema.json" with { type: "js
 import receiptSchemaDocument from "../schema/receipt.schema.json" with { type: "json" };
 import legacyReceiptSchemaDocument from "../schema/receipt-legacy.schema.json" with { type: "json" };
 export { canonical } from "./canonical.js";
+export {
+  actionRegistry, TAXONOMY_VERSION, getActionType, validateActionParams,
+} from "./registry.js";
+export type {
+  ActionRegistry, ActionType, ActionParameter, ParameterType, RiskClass, ParamValidation,
+} from "./registry.js";
 
 export const policySchema = policySchemaDocument as Record<string, unknown>;
 export const actionSchema = actionSchemaDocument as Record<string, unknown>;
