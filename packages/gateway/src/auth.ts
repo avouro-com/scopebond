@@ -72,8 +72,10 @@ export interface AuthorizationEvidence {
   // "authenticated": the agent signed the intent. "insecure_development": no
   // signature, dev/simulation only. "boundary": no agent authorization applies —
   // a gate attested a consequence; the identity is the receipt's boundary
-  // attribution, not a signature (used only by boundary-class receipts).
-  mode: "authenticated" | "insecure_development" | "boundary";
+  // attribution. "pep": a proxy/PEP decided a request carrying the caller's own
+  // identity; no agent signature — the identity is the receipt's principal (used
+  // only by pep_authorized receipts).
+  mode: "authenticated" | "insecure_development" | "boundary" | "pep";
   agent: SignedIntentAuthorization | null;
   approval: SignedApproval | null;
 }
@@ -173,7 +175,7 @@ export function validateSignedApproval(value: unknown): value is SignedApproval 
 
 export function validateAuthorizationEvidence(value: unknown): value is AuthorizationEvidence {
   if (!isRecord(value) || !hasExactKeys(value, ["agent", "approval", "mode"])) return false;
-  if (value.mode === "insecure_development" || value.mode === "boundary") return value.agent === null && value.approval === null;
+  if (value.mode === "insecure_development" || value.mode === "boundary" || value.mode === "pep") return value.agent === null && value.approval === null;
   return value.mode === "authenticated" && validateIntentAuthorization(value.agent) &&
     (value.approval === null || validateSignedApproval(value.approval));
 }

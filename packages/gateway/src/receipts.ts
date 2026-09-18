@@ -422,6 +422,58 @@ export async function buildBoundaryReceipt(input: BoundaryReceiptInput, attester
 
 const BOUNDARY_VERIFIER_VERSION = "scopebond-verify@0.1.1";
 
+export interface PepReceiptInput {
+  /** The normalized action the proxy/PEP decided (e.g. an `mcp.tool.call`). */
+  intent: Intent;
+  /** The policy the PEP decided against (pins policy_hash / version / ref). */
+  policy: Policy;
+  /** The validated identity the request carried (subject + issuer). */
+  principal: PepPrincipal;
+  /** The verdict: `allow` / `deny` (evaluated) or `not_evaluated`. */
+  realtimeResult: RealtimeResult;
+  now?: () => string;
+}
+
+/** Build and sign a PEP-authorized receipt (§15). A proxy/PEP decided a request
+ *  carrying the caller's own identity; there is no agent signature
+ *  (`authorization.mode: "pep"`), and the identity is the principal. It attests
+ *  the PEP authorized this normalized action for this principal — never agent
+ *  non-repudiation. Reusable by any M1/PEP connector (the MCP proxy, interceptors). */
+export async function buildPepReceipt(input: PepReceiptInput, attester: Attester): Promise<SignedReceipt> {
+  const ts = input.now?.() ?? new Date().toISOString();
+  const minimized = minimizeIntentForEvidence(input.intent);
+  const authorizedHash = intentHash(input.intent);
+  const evidenceHash = intentHash(minimized.intent);
+  const policyHash = sha256(canonical(input.policy as unknown as Record<string, unknown>));
+  const policyVersion = typeof (input.policy as { version?: unknown }).version === "number" ? (input.policy as { version: number }).version : 1;
+  const policyId = typeof (input.policy as { policy_id?: unknown }).policy_id === "string" ? (input.policy as { policy_id: string }).policy_id : null;
+  const state: ExecutionState =
+    input.realtimeResult === "deny" ? "denied" :
+    input.realtimeResult === "not_evaluated" ? "observed_not_evaluated" :
+    "cooperative_allow";
+  return buildReceipt({
+    evidence_version: EVIDENCE_VERSION,
+    canonicalization: CANONICALIZATION,
+    intent: minimized.intent,
+    intent_hash: authorizedHash,
+    action_ref: { authorized_intent_hash: authorizedHash, evidence_intent_hash: evidenceHash },
+    policy_hash: policyHash,
+    policy_version: policyVersion,
+    policy_ref: { id: policyId, version: policyVersion, digest: policyHash },
+    verifier_version: BOUNDARY_VERIFIER_VERSION,
+    realtime_result: input.realtimeResult,
+    executed: false,
+    execution_ref: null,
+    execution: { state, assertion: "none", reference: null, external_effect: "not_independently_verified" },
+    redaction: { profile: REDACTION_PROFILE, paths: minimized.redactedPaths },
+    authorization: { mode: "pep", agent: null, approval: null },
+    attester: { kind: "gateway", kid: attester.kid },
+    timestamp: ts,
+    evidence_class: "pep_authorized",
+    principal: { subject: input.principal.subject, issuer: input.principal.issuer },
+  }, attester);
+}
+
 const SECRET_KEYS = new Set([
   "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key",
   "apikey", "password", "passwd", "secret", "client-secret", "client_secret", "access-token",

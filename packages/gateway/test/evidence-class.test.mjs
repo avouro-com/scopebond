@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  createAttester, createGateway, buildReceipt, buildBoundaryReceipt, verifyReceipt, validateEvidencePayload,
+  createAttester, createGateway, buildReceipt, buildBoundaryReceipt, buildPepReceipt, verifyReceipt, validateEvidencePayload,
   StaticPrincipalKeyRegistry,
 } from "../dist/index.js";
 import { createSigner } from "@scopebond/sdk";
@@ -135,6 +135,35 @@ test("buildBoundaryReceipt maps allow and not_evaluated to honest execution stat
   assert.equal(attested.payload.execution.state, "observed_not_evaluated");
   assert.equal(attested.payload.realtime_result, "not_evaluated");
   assert.equal(verifyReceipt(attested, attester.publicKeyPem).valid, true);
+});
+
+test("buildPepReceipt produces a valid, verifiable pep_authorized receipt", async () => {
+  const attester = createAttester();
+  const pepPolicy = { vocabulary_version: "1.0", policy_id: "mcp", version: 2, clauses: [{ id: "srv", type: "action_allowlist", mode: "enforce", action_types: ["mcp.tool.call"], param_bounds: { server: { enum: ["filesystem", "github"] } } }] };
+  const receipt = await buildPepReceipt({
+    intent: { action_type: "mcp.tool.call", params: { server: "evilserver", tool: "do", args_digest: "sha256:x" } },
+    policy: pepPolicy, principal: { subject: "client:mcp-7", issuer: "scopebond:mcp-proxy" },
+    realtimeResult: "deny", now: () => AT,
+  }, attester);
+
+  assert.equal(validateEvidencePayload(receipt.payload), true);
+  const v = verifyReceipt(receipt, attester.publicKeyPem);
+  assert.equal(v.valid, true);
+  assert.equal(v.evidence_class, "pep_authorized");
+  const p = receipt.payload;
+  assert.equal(p.authorization.mode, "pep", "no agent signature — not insecure_development");
+  assert.deepEqual(p.principal, { subject: "client:mcp-7", issuer: "scopebond:mcp-proxy" });
+  assert.equal(p.realtime_result, "deny");
+  assert.equal(p.execution.state, "denied");
+  assert.equal(p.boundary, undefined, "a pep receipt carries no boundary block");
+
+  // An allowed PEP decision is a cooperative allow (executed:false).
+  const allowed = await buildPepReceipt({
+    intent: { action_type: "mcp.tool.call", params: { server: "github", tool: "read", args_digest: "sha256:y" } },
+    policy: pepPolicy, principal: { subject: "client:mcp-7", issuer: "scopebond:mcp-proxy" }, realtimeResult: "allow", now: () => AT,
+  }, attester);
+  assert.equal(allowed.payload.execution.state, "cooperative_allow");
+  assert.equal(verifyReceipt(allowed, attester.publicKeyPem).valid, true);
 });
 
 test("the verifier never upgrades an explicit class — a boundary receipt with an agent signature stays boundary", async () => {
