@@ -20,9 +20,18 @@ importers:
 
   examples:
     dependencies:
+      '@scopebond/framework':
+        specifier: workspace:*
+        version: link:../packages/framework
       '@scopebond/gateway':
         specifier: workspace:*
         version: link:../packages/gateway
+      '@scopebond/github-action':
+        specifier: workspace:*
+        version: link:../packages/github-action
+      '@scopebond/mcp':
+        specifier: workspace:*
+        version: link:../packages/mcp
       '@scopebond/sdk':
         specifier: workspace:*
         version: link:../packages/sdk

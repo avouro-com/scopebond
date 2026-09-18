@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@scopebond/framework": "workspace:*",
     "@scopebond/gateway": "workspace:*",
+    "@scopebond/github-action": "workspace:*",
+    "@scopebond/mcp": "workspace:*",
     "@scopebond/sdk": "workspace:*"
   }
 }
