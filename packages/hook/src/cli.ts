@@ -2,23 +2,29 @@
 // scopebond-hook — govern a coding agent's tool calls against policy, in-path,
 // before they run, with a signed local receipt.
 //
-//   scopebond-hook claude              evaluate a Claude Code PreToolUse call (stdin JSON)
-//   scopebond-hook cursor              evaluate a Cursor hook event (stdin JSON)
-//   scopebond-hook init [--cursor]     scaffold keys + starter policy, print the config
+//   scopebond-hook claude                     evaluate a Claude Code PreToolUse call (stdin JSON)
+//   scopebond-hook cursor                     evaluate a Cursor hook event (stdin JSON)
+//   scopebond-hook init [--cursor]            scaffold keys + starter policy, print the config
+//   scopebond-hook connect <url> <bundle.json> [--cursor]
+//                                             enroll with a Cloud workspace and start exporting
+//   scopebond-hook flush                      deliver any queued receipts to Cloud now
 //
 // Config dir: $SCOPEBOND_HOOK_DIR, else ./.scopebond
 // Fail-closed: any error denies the action with a repair message.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { mapClaudeToolUse, mapCursorEvent } from "./map.js";
 import { createHookRuntime } from "./runtime.js";
 import { scaffold, harnessSnippet } from "./init.js";
+import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
 
 function configDir(): string {
   return process.env.SCOPEBOND_HOOK_DIR ?? join(process.cwd(), ".scopebond");
 }
 function runtimePaths(dir: string) {
+  const connection = loadConnection(dir);
   return {
     policyPath: join(dir, "policy.json"),
     keyPath: join(dir, "agent.key"),
@@ -26,6 +32,10 @@ function runtimePaths(dir: string) {
     dbPath: join(dir, "receipts.db"),
     // Strict: deny (not just observe) tools with no taxonomy mapping.
     strict: process.argv.includes("--strict") || process.env.SCOPEBOND_HOOK_STRICT === "1",
+    // When connected, auto-export receipts. A short bounded flush keeps the hot path
+    // fast; undelivered receipts persist in the durable outbox and flush next time
+    // (or via `scopebond-hook flush`, e.g. on a session-end hook).
+    ...(connection ? { cloud: { connection, flushTimeoutMs: Number(process.env.SCOPEBOND_HOOK_FLUSH_MS ?? 800) } } : {}),
   };
 }
 function readStdin(): string {
@@ -46,6 +56,7 @@ async function runClaude(): Promise<void> {
   try {
     const runtime = createHookRuntime(runtimePaths(configDir()));
     const decision = await runtime.evaluate(mapClaudeToolUse(input!));
+    await runtime.flush();
     if (decision.decision === "deny") denyClaude(decision.reason);
     if (decision.decision === "allow") {
       process.stdout.write(JSON.stringify({
@@ -69,6 +80,7 @@ async function runCursor(): Promise<void> {
   try {
     const runtime = createHookRuntime(runtimePaths(configDir()));
     const decision = await runtime.evaluate(mapCursorEvent(event, input));
+    await runtime.flush();
     permission = decision.decision === "deny" ? "deny" : decision.decision === "allow" ? "allow" : "ask";
     message = decision.reason;
   } catch (error) {
@@ -91,13 +103,62 @@ function runInit(args: string[]): void {
   console.log(harnessSnippet(harness));
   console.log("");
   console.log("Then run one safe command in the agent and see the receipt in .scopebond/receipts.db.");
+  console.log("To send receipts to your workspace, run: scopebond-hook connect <workspace-url> scopebond-enrollment.json");
+}
+
+async function runConnect(args: string[]): Promise<void> {
+  const positional = args.filter((a) => !a.startsWith("--"));
+  const url = positional[0];
+  const bundleFile = positional[1];
+  if (!url) {
+    console.error("usage: scopebond-hook connect <workspace-url> <enrollment-bundle.json> [--cursor]");
+    process.exit(1);
+  }
+  const dir = configDir();
+  // One command sets everything up: scaffold the key, attester and starter policy if
+  // they do not exist, then enroll and persist the scoped machine credential.
+  scaffold(dir, {});
+  let bundleText: string;
+  try { bundleText = bundleFile ? readFileSync(bundleFile, "utf8") : readStdin(); }
+  catch { console.error(`could not read the enrollment bundle${bundleFile ? ` from ${bundleFile}` : " on stdin"}`); process.exit(1); }
+  let bundle: CloudEnrollmentBundle;
+  try { bundle = JSON.parse(bundleText) as CloudEnrollmentBundle; }
+  catch { console.error("the enrollment bundle is not valid JSON"); process.exit(1); }
+  try {
+    const c = await connectCloud(dir, url, bundle);
+    console.log(`Connected to ${c.url}`);
+    console.log(`  workspace     org ${c.organization_id} · env ${c.environment_id}`);
+    console.log(`  gateway id    ${c.gateway_id}`);
+    console.log(`  attester kid  ${c.attester_kid}`);
+    console.log(`  credential    stored in ${connectionPath(dir)} — a secret, do not commit`);
+    console.log("");
+    console.log(`Add this to your ${args.includes("--cursor") ? ".cursor/hooks.json" : ".claude/settings.json"}:`);
+    console.log(harnessSnippet(args.includes("--cursor") ? "cursor" : "claude"));
+    console.log("");
+    console.log("Run one safe command in the agent; the receipt appears in your workspace within seconds.");
+  } catch (error) {
+    console.error(`connect failed: ${(error as Error).message}`);
+    process.exit(1);
+  }
+}
+
+async function runFlush(): Promise<void> {
+  const dir = configDir();
+  if (!loadConnection(dir)) { console.error("not connected to a workspace; run `scopebond-hook connect` first"); process.exit(1); }
+  const runtime = createHookRuntime(runtimePaths(dir));
+  await runtime.exporter?.flush();
+  const status = runtime.exporter?.status();
+  console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
+  process.exit(status && status.pending > 0 ? 1 : 0);
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "claude") { await runClaude(); }
 else if (cmd === "cursor") { await runCursor(); }
 else if (cmd === "init") { runInit(rest); }
+else if (cmd === "connect") { await runConnect(rest); }
+else if (cmd === "flush") { await runFlush(); }
 else {
-  console.error("usage: scopebond-hook <claude|cursor|init> [--cursor] [--force]");
+  console.error("usage: scopebond-hook <claude|cursor|init|connect|flush> [--cursor] [--force] [--strict]");
   process.exit(1);
 }
