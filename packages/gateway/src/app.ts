@@ -221,6 +221,9 @@ export function createGateway(config: GatewayConfig): Gateway {
       authorization: authenticated.evidence,
       attester: attesterRef,
       timestamp: ts,
+      // Tag the class explicitly when the agent signed (§15). Unsigned/dev
+      // receipts stay legacy (absent) and are classified at read time.
+      ...(authenticated.evidence.agent ? { evidence_class: "signed_intent" as const } : {}),
     };
     const receiptFields = (
       realtimeResult: RealtimeResult,

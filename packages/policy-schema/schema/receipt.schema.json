@@ -106,9 +106,49 @@
             "kid": { "type": "string" }
           }
         },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "timestamp": { "type": "string", "format": "date-time" },
+        "evidence_class": { "enum": ["signed_intent", "pep_authorized", "boundary"], "description": "Evidence class (§15). Absent = legacy, inferred at read time. Never upgraded." },
+        "principal": {
+          "type": "object",
+          "description": "Required for pep_authorized: the validated identity subject and issuer.",
+          "required": ["subject", "issuer"],
+          "additionalProperties": false,
+          "properties": {
+            "subject": { "type": "string", "minLength": 1 },
+            "issuer": { "type": "string", "minLength": 1 }
+          }
+        },
+        "boundary": {
+          "type": "object",
+          "description": "Required for boundary: the gate that decided a consequence and the attributed actor.",
+          "required": ["gate", "outcome_ref", "attribution"],
+          "additionalProperties": false,
+          "properties": {
+            "gate": { "enum": ["merge", "deploy", "egress", "platform_event"] },
+            "outcome_ref": { "type": "string", "minLength": 1 },
+            "attribution": {
+              "type": "object",
+              "required": ["kind", "actor"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "enum": ["asserted", "inferred"] },
+                "actor": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
       },
       "allOf": [
+        {
+          "if": { "required": ["evidence_class"], "properties": { "evidence_class": { "const": "boundary" } } },
+          "then": { "required": ["boundary"], "not": { "required": ["principal"] } },
+          "else": { "not": { "required": ["boundary"] } }
+        },
+        {
+          "if": { "required": ["evidence_class"], "properties": { "evidence_class": { "const": "pep_authorized" } } },
+          "then": { "required": ["principal"], "not": { "required": ["boundary"] } },
+          "else": { "not": { "required": ["principal"] } }
+        },
         {
           "if": { "properties": { "execution": { "properties": { "state": { "const": "executed" } } } } },
           "then": { "properties": { "executed": { "const": true } } },
