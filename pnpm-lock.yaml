@@ -46,6 +46,18 @@ importers:
         specifier: workspace:*
         version: link:../sdk
 
+  packages/hook:
+    dependencies:
+      '@scopebond/gateway':
+        specifier: workspace:^
+        version: link:../gateway
+      '@scopebond/policy-schema':
+        specifier: workspace:^
+        version: link:../policy-schema
+      '@scopebond/sdk':
+        specifier: workspace:^
+        version: link:../sdk
+
   packages/policy-schema: {}
 
   packages/sdk:

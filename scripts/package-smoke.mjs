@@ -9,16 +9,16 @@ const pnpmCli = process.env.npm_execpath;
 assert.ok(pnpmCli, "run this check through pnpm so its pinned CLI can be reused");
 
 try {
-  for (const packageName of ["policy-schema", "verify", "gateway", "sdk"]) {
+  for (const packageName of ["policy-schema", "verify", "gateway", "sdk", "hook"]) {
     execFileSync(process.execPath, [pnpmCli, "pack", "--pack-destination", scratch], {
       cwd: new URL(`../packages/${packageName}/`, import.meta.url),
       stdio: "inherit",
     });
   }
   const archives = readdirSync(scratch).filter((name) => name.endsWith(".tgz"));
-  assert.equal(archives.length, 4, "schema, verifier, gateway and SDK archives must be created");
+  assert.equal(archives.length, 5, "schema, verifier, gateway, SDK and hook archives must be created");
   const archiveFor = (name) => {
-    const archive = archives.find((candidate) => candidate.includes(name));
+    const archive = archives.find((candidate) => candidate.includes(`scopebond-${name}-`));
     assert.ok(archive, `${name} package archive was not created`);
     return `file:./${archive}`;
   };
@@ -26,31 +26,30 @@ try {
   const verifyArchive = archiveFor("verify");
   const gatewayArchive = archiveFor("gateway");
   const sdkArchive = archiveFor("sdk");
+  const hookArchive = archiveFor("hook");
 
+  // Every @scopebond/* dependency (including the hook's transitive ones) must
+  // resolve to a local archive, so override the full set.
+  const overrides = {
+    "@scopebond/policy-schema": policyArchive,
+    "@scopebond/verify": verifyArchive,
+    "@scopebond/gateway": gatewayArchive,
+    "@scopebond/sdk": sdkArchive,
+    "@scopebond/hook": hookArchive,
+  };
   writeFileSync(join(scratch, "package.json"), JSON.stringify({
     private: true,
     type: "module",
-    dependencies: {
-      "@scopebond/policy-schema": policyArchive,
-      "@scopebond/verify": verifyArchive,
-      "@scopebond/gateway": gatewayArchive,
-      "@scopebond/sdk": sdkArchive,
-    },
-    pnpm: {
-      // pnpm 9 reads overrides from package.json; pnpm 10+ reads the same
-      // declarations from pnpm-workspace.yaml below.
-      overrides: {
-        "@scopebond/policy-schema": policyArchive,
-        "@scopebond/verify": verifyArchive,
-      },
-    },
+    dependencies: { ...overrides },
+    // pnpm 9 reads overrides from package.json; pnpm 10+ reads the same
+    // declarations from pnpm-workspace.yaml below.
+    pnpm: { overrides },
   }));
   writeFileSync(join(scratch, "pnpm-workspace.yaml"), [
     "packages:",
     "  - .",
     "overrides:",
-    `  '@scopebond/policy-schema': '${policyArchive}'`,
-    `  '@scopebond/verify': '${verifyArchive}'`,
+    ...Object.entries(overrides).map(([name, archive]) => `  '${name}': '${archive}'`),
     "",
   ].join("\n"));
   execFileSync(process.execPath, [pnpmCli, "install", "--ignore-scripts"], {
@@ -62,6 +61,8 @@ try {
     import { createSigner, canonical as sdkCanonical } from "@scopebond/sdk";
     import { canonical as verifyCanonical } from "@scopebond/verify";
     import { canonical as schemaCanonical } from "@scopebond/policy-schema/canonical";
+    import { validateActionParams } from "@scopebond/policy-schema/registry";
+    import { mapClaudeToolUse } from "@scopebond/hook";
     if (merkleRoot([sha256("candidate")]).length !== 64) process.exit(1);
     const canonicalVector = { numbers: [333333333.33333329, 1e30, 4.50, 2e-3, 1e-27], nested: { z: null, a: true } };
     const canonicalBytes = [schemaCanonical, verifyCanonical, gatewayCanonical, sdkCanonical].map((fn) => fn(canonicalVector));
@@ -74,9 +75,12 @@ try {
     const gateway = createGateway({ policy, authentication: { keys } });
     const result = await gateway.handleAction(agent.sign({ action_type: "smoke.call" }));
     if (!result.allowed || result.receipt.payload.authorization.mode !== "authenticated") process.exit(1);
+    // The taxonomy registry and the hook connector resolve and agree.
+    if (!validateActionParams("git.push", { ref: "main" }).valid) process.exit(1);
+    if (mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push origin main" } }).intent.action_type !== "git.push") process.exit(1);
   `);
   execFileSync(process.execPath, [join(scratch, "smoke.mjs")], { cwd: scratch, stdio: "inherit" });
-  console.log("Packed policy-schema, verify, gateway, and SDK candidates authenticate together in a clean consumer project.");
+  console.log("Packed policy-schema, verify, gateway, SDK and hook candidates authenticate together in a clean consumer project.");
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
