@@ -8,3 +8,4 @@ export {
   mapPullRequest, evaluatePullRequest, isAgentActor, KNOWN_AGENT_ACTORS,
 } from "./pr.js";
 export type { PullRequestContext, EvaluateOptions, PrDecision } from "./pr.js";
+export { buildPullRequestReceipt } from "./receipt.js";

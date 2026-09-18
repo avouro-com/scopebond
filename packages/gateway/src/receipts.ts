@@ -7,7 +7,7 @@ import {
   createPrivateKey, createPublicKey,
 } from "node:crypto";
 import type { KeyObject } from "node:crypto";
-import type { Intent, Receipt } from "@scopebond/verify";
+import type { Intent, Receipt, Policy } from "@scopebond/verify";
 import { validateAuthorizationEvidence, verifyAuthorizationEvidenceSignatures } from "./auth.js";
 import type { AuthorizationEvidence, PrincipalKeyRecord } from "./auth.js";
 import { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
@@ -365,6 +365,62 @@ export async function buildReceipt(payloadFields: Omit<ReceiptPayload, "type">, 
   const sig = await attester.sign(canonical(payload));
   return { payload, signature: { alg: "Ed25519", sig } };
 }
+
+export interface BoundaryReceiptInput {
+  /** The normalized action the gate observed (e.g. a `pr.merge`). */
+  intent: Intent;
+  /** The policy the gate decided against (pins policy_hash / version / ref). */
+  policy: Policy;
+  gate: BoundaryGate;
+  /** The outcome reference: a PR head SHA, a deployment id, an event id. */
+  outcomeRef: string;
+  attribution: { kind: AttributionKind; actor: string };
+  /** The gate verdict: `allow` / `deny` (evaluated) or `not_evaluated` (attestation). */
+  realtimeResult: RealtimeResult;
+  /** Injectable clock for determinism/testing. */
+  now?: () => string;
+}
+
+/** Build and sign a boundary-class receipt (§15 / D65). A gate decided the
+ *  consequence of an action that already happened elsewhere; there is no agent
+ *  signature (`authorization.mode: "boundary"`), and the identity is the
+ *  attribution. Reusable by any boundary-lane connector (GitHub App, host agent). */
+export async function buildBoundaryReceipt(input: BoundaryReceiptInput, attester: Attester): Promise<SignedReceipt> {
+  const ts = input.now?.() ?? new Date().toISOString();
+  const minimized = minimizeIntentForEvidence(input.intent);
+  const authorizedHash = intentHash(input.intent);
+  const evidenceHash = intentHash(minimized.intent);
+  const policyHash = sha256(canonical(input.policy as unknown as Record<string, unknown>));
+  const policyVersion = typeof (input.policy as { version?: unknown }).version === "number" ? (input.policy as { version: number }).version : 1;
+  const policyId = typeof (input.policy as { policy_id?: unknown }).policy_id === "string" ? (input.policy as { policy_id: string }).policy_id : null;
+  const state: ExecutionState =
+    input.realtimeResult === "deny" ? "denied" :
+    input.realtimeResult === "not_evaluated" ? "observed_not_evaluated" :
+    "cooperative_allow";
+  return buildReceipt({
+    evidence_version: EVIDENCE_VERSION,
+    canonicalization: CANONICALIZATION,
+    intent: minimized.intent,
+    intent_hash: authorizedHash,
+    action_ref: { authorized_intent_hash: authorizedHash, evidence_intent_hash: evidenceHash },
+    policy_hash: policyHash,
+    policy_version: policyVersion,
+    policy_ref: { id: policyId, version: policyVersion, digest: policyHash },
+    verifier_version: BOUNDARY_VERIFIER_VERSION,
+    realtime_result: input.realtimeResult,
+    executed: false,
+    execution_ref: null,
+    execution: { state, assertion: "none", reference: null, external_effect: "not_independently_verified" },
+    redaction: { profile: REDACTION_PROFILE, paths: minimized.redactedPaths },
+    authorization: { mode: "boundary", agent: null, approval: null },
+    attester: { kind: "gateway", kid: attester.kid },
+    timestamp: ts,
+    evidence_class: "boundary",
+    boundary: { gate: input.gate, outcome_ref: input.outcomeRef, attribution: input.attribution },
+  }, attester);
+}
+
+const BOUNDARY_VERIFIER_VERSION = "scopebond-verify@0.1.1";
 
 const SECRET_KEYS = new Set([
   "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key",

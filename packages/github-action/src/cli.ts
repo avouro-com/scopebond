@@ -8,9 +8,10 @@
 //
 // Env: GITHUB_EVENT_PATH, GITHUB_EVENT_NAME, SCOPEBOND_POLICY, GITHUB_OUTPUT.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { validatePolicy } from "@scopebond/verify";
 import { evaluatePullRequest } from "./pr.js";
+import { buildPullRequestReceipt } from "./receipt.js";
 import type { PullRequestContext } from "./pr.js";
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -66,6 +67,20 @@ const line = `${decision.decision.toUpperCase()} — ${decision.reason}`;
 console.log(`Scopebond policy: ${line}`);
 if (decision.attribution) console.log(`  agent: ${decision.attribution.actor} (${decision.attribution.kind})`);
 if (decision.ruleIds.length) console.log(`  rules: ${decision.ruleIds.join(", ")}`);
+
+// Optionally emit a signed boundary receipt (customer's own key). Only for a
+// governed-agent decision; a not_evaluated PR gets none.
+const keyPem = arg("--key") ?? process.env.SCOPEBOND_ATTESTER_KEY;
+const receiptOut = arg("--receipt-out") ?? process.env.SCOPEBOND_RECEIPT_OUT;
+if (keyPem && decision.attribution && decision.decision !== "not_evaluated") {
+  try {
+    const receipt = await buildPullRequestReceipt(ctx, policy, decision, keyPem);
+    if (receiptOut) writeFileSync(receiptOut, JSON.stringify(receipt) + "\n");
+    console.log(`  receipt: boundary/${decision.decision} @ ${ctx.headSha}${receiptOut ? ` → ${receiptOut}` : ""}`);
+  } catch (e) {
+    die(`could not emit the boundary receipt: ${(e as Error).message}`);
+  }
+}
 
 if (process.env.GITHUB_OUTPUT) {
   try {

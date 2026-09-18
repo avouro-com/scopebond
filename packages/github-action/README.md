@@ -59,11 +59,29 @@ import { evaluatePullRequest, mapPullRequest } from "@scopebond/github-action";
 
 `evaluatePullRequest(ctx, policy)` returns `{ decision, reason, ruleIds, attribution, outcomeRef }`.
 
+## Signed receipts
+
+Set a signing key (a repository secret) to emit a signed **boundary receipt** per
+PR head — the verdict, the gate, the attributed agent and the pinned policy, in
+the `boundary` evidence class:
+
+```yaml
+      - uses: avouro-com/scopebond/packages/github-action@v1
+        with:
+          policy: scopebond.policy.json
+        env:
+          SCOPEBOND_ATTESTER_KEY: ${{ secrets.SCOPEBOND_ATTESTER_KEY }}
+          SCOPEBOND_RECEIPT_OUT: scopebond-receipt.json
+```
+
+The receipt is signed with your own key in your own runner (Scopebond holds no
+key), records `boundary` — never that the agent's sandbox action was prevented or
+signed — and verifies offline like any `scopebond:receipt`. A `not_evaluated`
+(human) PR emits none.
+
 ## Not in this release
 
-Signed **boundary-receipt** emission per PR head (the `boundary` evidence class),
-Cloud-side webhook/check-run posting, deploy gating via OIDC, and the GitHub
-Marketplace listing. Enforcement is the required check; the portable receipt is
-added next.
+Cloud-side webhook/check-run posting, deploy gating via OIDC, the admin-bypass
+record, and the GitHub Marketplace listing.
 
 Experimental alpha; controlled test use only.

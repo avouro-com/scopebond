@@ -15,14 +15,14 @@ export {
   buildReceipt, canonical, sha256, intentHash, ed25519JwkToSpkiPem, deriveKid,
   minimizeIntentForEvidence, EVIDENCE_VERSION, REDACTION_PROFILE, EXECUTION_STATES,
   CANONICALIZATION, validateEvidencePayload,
-  classifyEvidenceClass, EVIDENCE_CLASSES, BOUNDARY_GATES,
+  classifyEvidenceClass, EVIDENCE_CLASSES, BOUNDARY_GATES, buildBoundaryReceipt,
 } from "./receipts.js";
 export type {
   ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification, Anchor,
   ExecutionState, ExecutionEvidence, PolicyReference, ActionReference, RedactionEvidence,
   AuthorityReservation, AuthorityFinalState, AuthorityReservationResult, ReceiptContext,
   AuthorityLifecycleState, ActionLifecycleRecord, StopState,
-  EvidenceClass, BoundaryGate, AttributionKind, PepPrincipal, BoundaryEvidence,
+  EvidenceClass, BoundaryGate, AttributionKind, PepPrincipal, BoundaryEvidence, BoundaryReceiptInput,
 } from "./receipts.js";
 export {
   AUTHORIZATION_VERSION, AuthorizationError, StaticPrincipalKeyRegistry,

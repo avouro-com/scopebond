@@ -48,6 +48,9 @@ importers:
 
   packages/github-action:
     dependencies:
+      '@scopebond/gateway':
+        specifier: workspace:^
+        version: link:../gateway
       '@scopebond/policy-schema':
         specifier: workspace:^
         version: link:../policy-schema
