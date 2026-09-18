@@ -2,11 +2,9 @@
 // action (git.push, http.call, package.install, deploy.release, …) through
 // violates() against an action_allowlist / require_approval policy and checks the
 // verdict. This proves the taxonomy's scalar parameter bounds — enum, pattern,
-// boolean-as-enum, omitted-parameter-denies — and the closed-allowlist deny of an
-// unlisted type. NOTE: array parameters (e.g. pr.* paths) are declared bound-able
-// in the registry, but the current engine's param_bounds only match scalar values;
-// element-wise array bounds await a vocabulary decision, so no array-bound vector
-// is asserted here (see docs/integrations/ACTION_TAXONOMY.md open questions).
+// boolean-as-enum, omitted-parameter-denies — the closed-allowlist deny of an
+// unlisted type, and element-wise array bounds (`items` + `match`) for `pr.*`
+// `paths`, e.g. deny a merge that touches `infra/prod/**`.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

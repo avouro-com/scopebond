@@ -129,6 +129,19 @@ test("action allowlists reject unlisted actions and nonnumeric bounded values", 
   assert.match(result.explanation, /finite number/);
 });
 
+test("array param bounds validate, and malformed shapes are rejected", () => {
+  const withBound = (pb) => valid({ clauses: [{
+    id: "p", type: "action_allowlist", mode: "enforce", action_types: ["pr.merge"], param_bounds: { paths: pb },
+  }] });
+  assert.equal(validatePolicy(withBound({ items: { pattern: "^x" }, match: "all" })).valid, true);
+  assert.equal(validatePolicy(withBound({ items: { pattern: "^x" } })).valid, true, "match is optional");
+  assert.equal(validatePolicy(withBound({ items: { enum: ["a", "b"] }, match: "any" })).valid, true);
+  assert.equal(validatePolicy(withBound({ match: "all" })).valid, false, "match without items");
+  assert.equal(validatePolicy(withBound({ items: { pattern: "^x" }, match: "some" })).valid, false, "unknown match");
+  assert.equal(validatePolicy(withBound({ items: { pattern: "^x" }, min: 0 })).valid, false, "items and scalar are mutually exclusive");
+  assert.equal(validatePolicy(withBound({ items: { items: { pattern: "^x" } } })).valid, false, "no nested items");
+});
+
 test("an action that no supported policy clause addresses fails closed", () => {
   const policy = valid({ clauses: [{
     id: "spend", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 100,

@@ -94,5 +94,37 @@
     ] },
     "claimed": { "intent": { "action_type": "deploy.release", "params": { "environment": "production" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "e2", "approval": { "approver": "key:approver-1", "intent_hash": "e2" } },
     "expect": { "violated": false }
+  },
+  {
+    "name": "pr.merge with every path outside infra/prod passes the array bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["pr.merge"], "param_bounds": { "paths": { "items": { "pattern": "^(?!infra/prod/).*" }, "match": "all" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "pr.merge", "params": { "repo": "acme/app", "paths": ["src/checkout.ts", "docs/readme.md"] } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p1" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "pr.merge touching a protected production path is denied by the array bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["pr.merge"], "param_bounds": { "paths": { "items": { "pattern": "^(?!infra/prod/).*" }, "match": "all" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "pr.merge", "params": { "repo": "acme/app", "paths": ["src/checkout.ts", "infra/prod/main.tf"] } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p2" },
+    "expect": { "violated": true, "clause_id": "paths" }
+  },
+  {
+    "name": "pr.merge with an empty path set vacuously satisfies match:all",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["pr.merge"], "param_bounds": { "paths": { "items": { "pattern": "^(?!infra/prod/).*" }, "match": "all" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "pr.merge", "params": { "repo": "acme/app", "paths": [] } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p3" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "pr.merge omitting the bounded array parameter denies (fail closed)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["pr.merge"], "param_bounds": { "paths": { "items": { "pattern": "^(?!infra/prod/).*" }, "match": "all" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "pr.merge", "params": { "repo": "acme/app" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p4" },
+    "expect": { "violated": true, "clause_id": "paths" }
   }
 ]

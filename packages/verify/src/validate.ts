@@ -94,7 +94,9 @@ export function validateAction(value: unknown): ValidationResult {
 const POLICY_KEYS = ["vocabulary_version", "assets", "policy_id", "version", "agent_id", "clauses"] as const;
 const CLAUSE_BASE_KEYS = ["id", "type", "mode", "description"] as const;
 
-function isParamBound(v: unknown): boolean {
+// A scalar bound: min / max / enum / pattern. Used both at the top level and as
+// the `items` of an array bound.
+function isScalarBound(v: unknown): boolean {
   if (!isPlainObject(v)) return false;
   if (!onlyKeys(v, ["min", "max", "enum", "pattern"])) return false;
   if (Object.keys(v).length < 1) return false; // minProperties 1
@@ -113,6 +115,20 @@ function isParamBound(v: unknown): boolean {
     }
   }
   return true;
+}
+
+function isParamBound(v: unknown): boolean {
+  if (!isPlainObject(v)) return false;
+  // An array bound carries `items` (a scalar bound applied per element) and an
+  // optional `match` ("all" default | "any"); it is mutually exclusive with a
+  // top-level scalar bound. `match` is only meaningful with `items`.
+  if ("items" in v || "match" in v) {
+    if (!onlyKeys(v, ["items", "match"])) return false;
+    if (!("items" in v) || !isScalarBound(v.items)) return false;
+    if ("match" in v && v.match !== "all" && v.match !== "any") return false;
+    return true;
+  }
+  return isScalarBound(v);
 }
 
 function validateAssets(v: unknown): boolean {

@@ -29,7 +29,7 @@
       "type": "array", "minItems": 1, "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
     },
-    "paramBound": {
+    "scalarBound": {
       "type": "object", "additionalProperties": false, "minProperties": 1,
       "properties": {
         "min": { "type": "number" },
@@ -37,6 +37,19 @@
         "enum": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": ["string", "number", "boolean", "null"] } },
         "pattern": { "type": "string" }
       }
+    },
+    "paramBound": {
+      "oneOf": [
+        { "$ref": "#/$defs/scalarBound" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["items"],
+          "description": "Array-element bound: each element (match:all, default) or at least one (match:any) must satisfy items.",
+          "properties": {
+            "items": { "$ref": "#/$defs/scalarBound" },
+            "match": { "enum": ["all", "any"] }
+          }
+        }
+      ]
     },
     "clauseBase": {
       "type": "object",

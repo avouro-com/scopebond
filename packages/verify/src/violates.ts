@@ -138,6 +138,20 @@ const norm = (r: unknown): Receipt => {
 const ms = (isoTs: string | undefined): number => Date.parse(isoTs ?? "");
 const paramsOf = (r: Receipt): Record<string, any> => (r.intent?.params ?? {}) as Record<string, any>;
 
+// Whether a single value satisfies a scalar bound (enum / min / max / pattern).
+// Used for array-element bounds (`items`); the top-level scalar checks below keep
+// their own precise messages.
+function elementSatisfiesBound(el: unknown, b: any): boolean {
+  if (b.enum && !b.enum.includes(el)) return false;
+  if (b.min != null || b.max != null) {
+    if (typeof el !== "number" || !Number.isFinite(el)) return false;
+    if (b.min != null && el < b.min) return false;
+    if (b.max != null && el > b.max) return false;
+  }
+  if (b.pattern && (typeof el !== "string" || !new RegExp(b.pattern).test(el))) return false;
+  return true;
+}
+
 // Minimal ISO-8601 duration → milliseconds (days/hours/minutes/seconds).
 export function durationToMs(d: string): number {
   const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(d || "");
@@ -378,6 +392,18 @@ export function violates(
       if (clause.action_types.includes(c.intent?.action_type) && clause.param_bounds) {
         for (const [field, b] of Object.entries(clause.param_bounds as Record<string, any>)) {
           const val = p[field];
+          if (b.items) {
+            // Array-element bound: every (match:"all", default) or at least one
+            // (match:"any") element must satisfy the item bound. A bounded array
+            // that is absent or not an array denies (fail closed).
+            const match = b.match === "any" ? "any" : "all";
+            if (!Array.isArray(val)) { record(clause, `param ${field} must be an array`); continue clauses; }
+            const ok = match === "any"
+              ? val.some((el) => elementSatisfiesBound(el, b.items))
+              : val.every((el) => elementSatisfiesBound(el, b.items));
+            if (!ok) { record(clause, `param ${field} array fails ${match}-match bound`); continue clauses; }
+            continue; // this field is handled by its array bound
+          }
           if (b.enum && !b.enum.includes(val)) { record(clause, `param ${field}=${val} not in enum`); continue clauses; }
           if ((b.min != null || b.max != null) && (typeof val !== "number" || !Number.isFinite(val))) {
             record(clause, `param ${field} must be a finite number`); continue clauses;
