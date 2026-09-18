@@ -79,9 +79,27 @@ key), records `boundary` — never that the agent's sandbox action was prevented
 signed — and verifies offline like any `scopebond:receipt`. A `not_evaluated`
 (human) PR emits none.
 
+## Mirror receipts to your workspace (optional)
+
+Set `workspace-url` and a machine credential (from the portal's Connect step,
+stored as a repository secret) to POST the boundary receipt to your workspace so
+agent PRs show in the hosted portal. Export is **best-effort** — a Cloud outage
+never fails the required check, which already gated the merge:
+
+```yaml
+      - uses: avouro-com/scopebond/packages/github-action@v1
+        with:
+          policy: scopebond.policy.json
+          workspace-url: https://your-workspace.example
+        env:
+          SCOPEBOND_ATTESTER_KEY: ${{ secrets.SCOPEBOND_ATTESTER_KEY }}
+          SCOPEBOND_CLOUD_CREDENTIAL: ${{ secrets.SCOPEBOND_CLOUD_CREDENTIAL }}
+```
+
 ## Not in this release
 
-Cloud-side webhook/check-run posting, deploy gating via OIDC, the admin-bypass
-record, and the GitHub Marketplace listing.
+The GitHub App's Cloud-side webhook/check-run posting (identity linking + the
+Cloud fallback evaluation), deploy gating via OIDC, the admin-bypass record, and
+the GitHub Marketplace listing.
 
 Experimental alpha; controlled test use only.
