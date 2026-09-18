@@ -21,3 +21,17 @@ The Scopebond monorepo packages. Landing incrementally; entries marked
 `contracts` carry no vendor or agent-framework SDK dependencies. External
 services sit behind an interface with a local implementation exercised in tests.
 Framework integrations are separate leaf packages.
+
+## Runnable examples
+
+Each connector has a worked, end-to-end example under [`../examples/`](../examples/)
+(run with `node examples/<file>.mjs` after `pnpm -r build`); the same files are a
+CI smoke that asserts their decisions (`pnpm run test:examples`):
+
+| Connector | Example | Shows |
+|---|---|---|
+| `framework` | `framework-guard.mjs` | allow, spend-cap deny, fail-closed deny; signed-intent receipt |
+| `github-action` | `github-pr-gate.mjs` | human PR never blocked; agent PR denied on a production path (D67) |
+| `mcp` | `mcp-proxy.mjs` | allowed call forwarded (PEP receipt); denied call never forwarded |
+| `hook` | `hook-map.mjs` | protected-branch push deny, destructive-program deny, unmapped → not_evaluated |
+| `gateway` | `quickstart.mjs` | an agent signs an action; in-policy allowed, over-limit denied |
