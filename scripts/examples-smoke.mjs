@@ -45,6 +45,15 @@ const cases = [
       "no (blocked before forwarding)", // and never forwarded upstream
     ],
   },
+  {
+    file: "examples/hook-map.mjs",
+    expect: [
+      "git.push", // Bash `git push` maps to the git.push taxonomy action
+      "param ref fails pattern", // push to main denied by the protected-branch bound
+      "param program fails pattern", // rm denied by the destructive-program bound
+      "not_evaluated", // an unmapped tool is observed, never silently allowed
+    ],
+  },
 ];
 
 let failures = 0;
