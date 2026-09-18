@@ -29,6 +29,9 @@ importers:
       '@scopebond/github-action':
         specifier: workspace:*
         version: link:../packages/github-action
+      '@scopebond/hook':
+        specifier: workspace:*
+        version: link:../packages/hook
       '@scopebond/mcp':
         specifier: workspace:*
         version: link:../packages/mcp

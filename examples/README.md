@@ -27,12 +27,20 @@
   **never forwarded** (the example's stub upstream records that the denied call never
   reached it).
 
+- **`hook-map.mjs`** — the Claude Code / Cursor connector (`@scopebond/hook`): maps a
+  coding agent's native tool call (`mapClaudeToolUse`) to a normalized taxonomy action
+  and decides it, exactly as the `scopebond-hook` runtime does. Shows a `git push` to a
+  protected branch denied, a workspace read allowed, a destructive `rm` denied (with the
+  command redacted), and an unmapped tool observed as `not_evaluated` — never a silent
+  allow.
+
 ```bash
 pnpm install && pnpm -r build
 node examples/quickstart.mjs
 node examples/framework-guard.mjs
 node examples/github-pr-gate.mjs
 node examples/mcp-proxy.mjs
+node examples/hook-map.mjs
 ```
 
 `policy.json` is a small sample policy (per-action cap, monitored daily cap, key policy).
