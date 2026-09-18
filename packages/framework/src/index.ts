@@ -7,3 +7,4 @@ export { createToolGuard } from "./guard.js";
 export type { ToolGuard, ToolGuardConfig, ToolDecision } from "./guard.js";
 export { wrapVercelTools, wrapLangGraphTool, guardExecute, guardedTool, wrapOpenAITools } from "./adapters.js";
 export type { WrapOptions, VercelTool, LangChainTool, FunctionTool } from "./adapters.js";
+export { generateAgentKey, starterToolPolicy } from "./starter.js";

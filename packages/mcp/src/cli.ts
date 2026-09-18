@@ -5,6 +5,7 @@
 // tools/call is checked against policy before it is forwarded; a denial returns a
 // JSON-RPC error and is never sent upstream.
 //
+//   scopebond-mcp init --server <id>          scaffold a key + starter policy
 //   scopebond-mcp --server <id> [--policy p.json] [--key k.pem] [--principal sub] \
 //       [--receipts log.jsonl] -- <upstream-command...>
 //
@@ -17,12 +18,27 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { createMcpProxy } from "./proxy.js";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
+import { scaffold } from "./init.js";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 function die(message: string): never { process.stderr.write(`scopebond-mcp: ${message}\n`); process.exit(1); }
+
+// `init`: scaffold a key + a starter policy for one server, then exit.
+if (process.argv[2] === "init") {
+  const server = arg("--server", process.env.SCOPEBOND_MCP_SERVER);
+  if (!server) die("usage: scopebond-mcp init --server <upstream-server-id>");
+  const { keyFile, policyFile } = scaffold(server as string, { force: process.argv.includes("--force") });
+  console.log(`Scopebond MCP proxy enrolled for server "${server}":`);
+  console.log(`  key      ${keyFile}`);
+  console.log(`  policy   ${policyFile} (starter — edit the tool bounds)`);
+  console.log("");
+  console.log("Point your MCP client at the proxy:");
+  console.log(`  scopebond-mcp --server ${server} -- <your real MCP server command>`);
+  process.exit(0);
+}
 
 const dashDash = process.argv.indexOf("--");
 if (dashDash < 0 || dashDash === process.argv.length - 1) die("provide the upstream command after `--`");
