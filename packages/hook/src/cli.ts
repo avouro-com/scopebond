@@ -24,6 +24,8 @@ function runtimePaths(dir: string) {
     keyPath: join(dir, "agent.key"),
     attesterPath: join(dir, "attester.key"),
     dbPath: join(dir, "receipts.db"),
+    // Strict: deny (not just observe) tools with no taxonomy mapping.
+    strict: process.argv.includes("--strict") || process.env.SCOPEBOND_HOOK_STRICT === "1",
   };
 }
 function readStdin(): string {

@@ -14,6 +14,10 @@ export interface RuntimeConfig {
   keyPath: string;
   attesterPath: string;
   dbPath: string;
+  /** Strict mode: an unmapped tool is policy-checked (and denied by a closed
+   *  allowlist) instead of observed. Fail-closed for tools with no taxonomy
+   *  mapping; default false (observe, matching the connector conformance vector). */
+  strict?: boolean;
 }
 
 export interface Decision {
@@ -62,11 +66,13 @@ export function createHookRuntime(config: RuntimeConfig) {
     agentKid: agent.kid,
     async evaluate(mapped: Mapped): Promise<Decision> {
       const signed = agent.sign(mapped.intent);
-      if (!mapped.evaluated) {
-        // Unknown tool: observe without evaluating — grants nothing (D30).
+      if (!mapped.evaluated && !config.strict) {
+        // Unknown tool, non-strict: observe without evaluating — grants nothing (D30).
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization });
         return { decision: "not_evaluated", reason: `no policy applies to ${mapped.intent.action_type}`, receipt };
       }
+      // Evaluated tools, and (in strict mode) unmapped tool.<name> actions, go
+      // through policy — a closed allowlist denies an unlisted action.
       const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
       return { decision: result.allowed ? "allow" : "deny", reason: result.reason, receipt: result.receipt };
     },
