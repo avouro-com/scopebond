@@ -13,6 +13,42 @@ export interface WrapOptions {
 const deniedResult = (opts: WrapOptions, name: string, reason: string, args: unknown): unknown =>
   opts.onDenied ? opts.onDenied(name, reason, args) : `Denied by Scopebond policy: ${reason}`;
 
+// —— Generic ——
+// Any framework whose tool has a name and an async execute is covered by these.
+
+/** Wrap a single tool's execute function so it checks policy first. A denied call
+ *  returns a synthetic denial result instead of running. Framework-agnostic. */
+export function guardExecute<A extends Record<string, unknown>>(
+  name: string,
+  execute: (args: A, ...rest: unknown[]) => unknown,
+  guard: ToolGuard,
+  opts: WrapOptions = {},
+): (args: A, ...rest: unknown[]) => Promise<unknown> {
+  return async (args: A, ...rest: unknown[]) => {
+    const decision = await guard.check(name, (args ?? {}) as Record<string, unknown>);
+    if (!decision.allowed) return deniedResult(opts, name, decision.reason, args);
+    return execute(args, ...rest);
+  };
+}
+
+export interface FunctionTool {
+  name: string;
+  execute?: (args: Record<string, unknown>, ...rest: unknown[]) => unknown;
+  [key: string]: unknown;
+}
+
+/** Wrap a `{ name, execute }` tool (OpenAI Agents SDK, CrewAI, Claude Agent SDK
+ *  MCP tools and any framework with function tools). */
+export function guardedTool<T extends FunctionTool>(tool: T, guard: ToolGuard, opts: WrapOptions = {}): T {
+  if (!tool.execute) return { ...tool };
+  return { ...tool, execute: guardExecute(tool.name, tool.execute, guard, opts) };
+}
+
+/** Wrap an OpenAI Agents SDK tools array so each tool checks policy before it runs. */
+export function wrapOpenAITools<T extends FunctionTool>(tools: T[], guard: ToolGuard, opts: WrapOptions = {}): T[] {
+  return tools.map((tool) => guardedTool(tool, guard, opts));
+}
+
 // —— Vercel AI SDK ——
 // A `tools` record: { [name]: { description?, parameters?/inputSchema?, execute } }.
 export interface VercelTool {

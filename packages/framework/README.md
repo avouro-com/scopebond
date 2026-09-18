@@ -40,6 +40,18 @@ const guardedSearch = wrapLangGraphTool(searchTool, guard);
 // use guardedSearch anywhere the original tool went (ToolNode, bindTools, …)
 ```
 
+## Other frameworks
+
+Any framework whose tools have a `name` and an async `execute` is covered:
+
+```js
+import { guardedTool, wrapOpenAITools, guardExecute } from "@scopebond/framework";
+
+const guarded = guardedTool(myTool, guard);            // { name, execute }
+const guardedList = wrapOpenAITools(agentTools, guard); // OpenAI Agents SDK array
+const safeExecute = guardExecute("send_email", sendEmail, guard); // any function
+```
+
 ## Policy
 
 Tools are governed by name via the Action Taxonomy's `tool.<name>` type (or a
