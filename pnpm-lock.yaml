@@ -70,6 +70,18 @@ importers:
         specifier: workspace:^
         version: link:../sdk
 
+  packages/mcp:
+    dependencies:
+      '@scopebond/gateway':
+        specifier: workspace:^
+        version: link:../gateway
+      '@scopebond/policy-schema':
+        specifier: workspace:^
+        version: link:../policy-schema
+      '@scopebond/verify':
+        specifier: workspace:^
+        version: link:../verify
+
   packages/policy-schema: {}
 
   packages/sdk:

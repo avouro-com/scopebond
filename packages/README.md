@@ -11,6 +11,7 @@ The Scopebond monorepo packages. Landing incrementally; entries marked
 | `sdk` | Signing SDK for authenticated action intents and approvals plus a thin gateway client. | **experimental** (published 0.1.0) |
 | `hook` | `scopebond-hook` — the Claude Code + Cursor connector (leaf): maps each tool call to a taxonomy action and checks it against policy in-path (cooperative M0) with a signed local receipt. | **experimental** (candidate 0.1.0; unpublished) |
 | `github-action` | `scopebond-verify-pr` — the GitHub connector's boundary-lane runner (leaf): checks an agent pull request against policy in your own Actions runner before it can merge. | **experimental** (candidate 0.1.0; unpublished) |
+| `mcp` | `scopebond-mcp` — the MCP proxy connector (leaf): one policy for every Model Context Protocol tool call, in-path in front of the upstream server, with a signed PEP-authorized receipt. | **experimental** (candidate 0.1.0; unpublished) |
 | `attest` | Countersignature / receipt emission (ACTA envelope, `scopebond:receipt`). | `[PLANNED]` |
 | `contracts` | The on-chain vault, registry, and claim contracts (written fresh on OpenZeppelin primitives), verified on-chain. | `[PLANNED]` |
 | `conformance` | The conformance suite a build must pass to use the "Scopebond Gateway" name. | `[PLANNED]` |
