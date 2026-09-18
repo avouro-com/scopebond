@@ -5,3 +5,5 @@
 export { createMcpProxy, mapMcpToolCall } from "./proxy.js";
 export type { McpProxy, McpProxyConfig, McpUpstream, JsonRpcMessage } from "./proxy.js";
 export { starterMcpPolicy } from "./init.js";
+export { connectCloud, loadMcpConnection, openExporter, connectionFileFor } from "./cloud.js";
+export type { McpConnection } from "./cloud.js";
