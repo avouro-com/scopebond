@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // scopebond-gateway — run the gateway, verify a receipt, or generate an attester key.
 //
+//   scopebond-gateway init [--force]           scaffold agent key + principal-keys.json + policy
 //   scopebond-gateway <policy.json>            run the gateway (durable by default)
 //   scopebond-gateway serve <policy.json>      same, explicit
 //   scopebond-gateway verify <receipt.json>    verify a receipt's signature + integrity
@@ -15,8 +16,8 @@
 //      SCOPEBOND_CLOUD_URL + SCOPEBOND_CLOUD_CREDENTIAL for durable hosted export.
 
 import { serve } from "@hono/node-server";
-import { readFileSync, writeFileSync, watch } from "node:fs";
-import { createPublicKey } from "node:crypto";
+import { readFileSync, writeFileSync, watch, existsSync } from "node:fs";
+import { createPublicKey, randomBytes } from "node:crypto";
 import { createGateway, createCloudExporter, withCloudExporter, StaticPrincipalKeyRegistry, deriveKid, completeCloudEnrollment } from "./index.js";
 import type { CloudExporter } from "./index.js";
 import type { GatewayAuthentication, PrincipalKeyRecord, PrincipalPurpose } from "./index.js";
@@ -239,9 +240,68 @@ async function cmdEnroll(args: string[]): Promise<void> {
   } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
 }
 
+// Scaffold a working project: an agent signing key, a key registry that trusts it,
+// and a starter policy bound to that key — the gap between the ephemeral-key demo
+// and a real agent submitting signed actions. Nothing here is a secret at rest
+// except the generated control token, which is printed once and never written.
+function cmdInit(args: string[]): void {
+  const force = args.includes("--force");
+  const keyFile = "scopebond-agent.key";
+  const keysRegistry = "principal-keys.json";
+  const policyFile = "scopebond.policy.json";
+
+  // 1. The agent's signing key (Ed25519, persisted PKCS8) — reused across restarts.
+  const existed = existsSync(keyFile);
+  const { attester: agent } = loadOrCreateAttester({ file: keyFile });
+
+  // 2. Register the agent's public key so the gateway accepts its signatures.
+  if (existsSync(keysRegistry) && !force) fail(`${keysRegistry} already exists (use --force to overwrite)`);
+  writeFileSync(keysRegistry, JSON.stringify(
+    [{ public_key_pem: agent.publicKeyPem, purposes: ["agent"], status: "active" }], null, 2) + "\n");
+
+  // 3. A starter policy bound to this agent's key. Edit the limits to taste.
+  if (existsSync(policyFile) && !force) fail(`${policyFile} already exists (use --force to overwrite)`);
+  const policy = {
+    vocabulary_version: "1.0",
+    assets: { USDC: { decimals: 2 } },
+    policy_id: "my-agent",
+    version: 1,
+    clauses: [
+      { id: "tx-cap", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_action: 1000000, description: "Enforced: no single payment above $10,000" },
+      { id: "daily", type: "spend_limit", mode: "monitor", asset: "USDC", max_per_window: 5000000, window: "P1D", scope: "principal", description: "Monitored: no more than $50,000/day" },
+      { id: "keys", type: "key_policy", active_keys: [agent.kid], description: "Only this agent key may sign" },
+    ],
+  };
+  writeFileSync(policyFile, JSON.stringify(policy, null, 2) + "\n");
+
+  // 4. A control token for the kill switch / control routes — printed once, kept out of files.
+  const controlToken = randomBytes(24).toString("base64url");
+
+  console.log("Scopebond project scaffolded:");
+  console.log(`  ${keyFile}        ${existed ? "(existing key reused)" : "(new agent signing key)"}`);
+  console.log(`  ${keysRegistry}   (registers the agent public key · kid ${agent.kid})`);
+  console.log(`  ${policyFile}  (starter policy — edit the limits)`);
+  console.log("");
+  console.log("1) Start the gateway (keep the control token secret; do not commit it):");
+  console.log(`     SCOPEBOND_PRINCIPAL_KEYS_FILE=${keysRegistry} \\`);
+  console.log(`     SCOPEBOND_CONTROL_TOKEN=${controlToken} \\`);
+  console.log(`     npx @scopebond/gateway ${policyFile}`);
+  console.log("");
+  console.log("2) From your agent, sign an action and submit it:");
+  console.log(`     import { readFileSync } from "node:fs";`);
+  console.log(`     import { createSigner, submit } from "@scopebond/sdk";`);
+  console.log(`     const agent = createSigner({ privateKeyPem: readFileSync("${keyFile}", "utf8") });`);
+  console.log(`     const signed = agent.sign({ action_type: "payout.create", asset: "USDC", amount: 500000 });`);
+  console.log(`     console.log(await submit("http://localhost:8787", signed)); // { allowed, reason, receipt }`);
+  console.log("");
+  console.log("3) Verify a saved receipt against the gateway's published key:");
+  console.log(`     npx @scopebond/gateway verify ./receipt.json --url http://localhost:8787`);
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "verify") { await cmdVerify(rest); }
 else if (cmd === "keygen") { cmdKeygen(rest); }
 else if (cmd === "enroll") { await cmdEnroll(rest); }
+else if (cmd === "init") { cmdInit(rest); }
 else if (cmd === "serve") { cmdServe(rest[0]); }
 else { cmdServe(cmd ?? process.env.SCOPEBOND_POLICY); } // default: treat first arg as the policy path

@@ -48,9 +48,19 @@ agents. **[Try each one live →](https://try.scopebond.com)**
 
 ## Quickstart
 
+Try the bundled demo (allow + deny + a signed receipt), from a clone of this repo:
+
 ```bash
 pnpm -r build
 node examples/quickstart.mjs
+```
+
+**Start your own project** — scaffold a working agent key, a key registry that trusts it, and a starter policy in one command, then follow the printed steps to run the gateway and submit your first signed action:
+
+```bash
+npx @scopebond/gateway init
+# writes scopebond-agent.key, principal-keys.json and scopebond.policy.json,
+# then prints the exact start → sign → submit → verify commands
 ```
 
 Embed it in your own service:
