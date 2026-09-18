@@ -14,10 +14,25 @@
   synthetic denial to the model instead of executing; `executed` is `false` because the
   guard never runs the tool itself.
 
+- **`github-pr-gate.mjs`** — the GitHub connector's boundary lane
+  (`@scopebond/github-action`): decides whether an agent's pull request may merge, as a
+  required status check would in your own Actions runner. Pure and deterministic (no
+  credential, no network). Shows a human PR never blocked, an agent PR within policy
+  allowed, and an agent PR touching `infra/prod/**` denied by the element-wise array
+  path bound (D67).
+
+- **`mcp-proxy.mjs`** — the MCP connector's in-path proxy (`@scopebond/mcp`): one policy
+  in front of every `tools/call`. An allowed call is forwarded to the upstream and gets a
+  **PEP-authorized** receipt; a denied call is answered with a JSON-RPC error and is
+  **never forwarded** (the example's stub upstream records that the denied call never
+  reached it).
+
 ```bash
 pnpm install && pnpm -r build
 node examples/quickstart.mjs
 node examples/framework-guard.mjs
+node examples/github-pr-gate.mjs
+node examples/mcp-proxy.mjs
 ```
 
 `policy.json` is a small sample policy (per-action cap, monitored daily cap, key policy).

@@ -28,6 +28,23 @@ const cases = [
       "executed         = false", // cooperative M0 check; the guard never runs the tool
     ],
   },
+  {
+    file: "examples/github-pr-gate.mjs",
+    expect: [
+      "is not a governed agent", // human PR is never blocked
+      "decision = allow", // agent PR within policy merges
+      "decision = deny", // agent PR touching a production path cannot merge
+      "asserted:copilot-swe-agent[bot]", // attribution from the login
+    ],
+  },
+  {
+    file: "examples/mcp-proxy.mjs",
+    expect: [
+      "ran read_file", // allowed call was forwarded to the upstream
+      "Scopebond policy denied delete_file", // destructive call denied
+      "no (blocked before forwarding)", // and never forwarded upstream
+    ],
+  },
 ];
 
 let failures = 0;
