@@ -1,0 +1,55 @@
+{
+  "name": "@scopebond/mcp",
+  "version": "0.1.0",
+  "description": "Scopebond MCP proxy — one policy for every Model Context Protocol tool call, in front of the servers an agent uses. In-path enforcement with a signed PEP-authorized receipt.",
+  "license": "Apache-2.0",
+  "author": "Avouro LLC",
+  "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avouro-com/scopebond.git",
+    "directory": "packages/mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/avouro-com/scopebond/issues"
+  },
+  "keywords": [
+    "scopebond",
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "policy",
+    "proxy"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "scopebond-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@scopebond/policy-schema": "workspace:^",
+    "@scopebond/verify": "workspace:^",
+    "@scopebond/gateway": "workspace:^"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
