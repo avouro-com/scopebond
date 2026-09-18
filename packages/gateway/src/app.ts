@@ -62,6 +62,11 @@ export interface GatewayConfig {
   control?: { bearerToken: string };
   /** Recovery/inspection mode: new outbound dispatch and result queries are disabled. */
   outboundExecution?: boolean;
+  /** Enforcement mode. `"enforce"` (default) simulates or dispatches an allowed
+   * action; `"check_only"` (M0 / cooperative) never touches an executor — an
+   * allowed action is recorded as `cooperative_allow` (executed: false) and the
+   * agent performs it itself. Must be selected explicitly; it is never implicit. */
+  mode?: "enforce" | "check_only";
 }
 
 export interface ActionRequest {
@@ -99,6 +104,11 @@ export interface Gateway {
   state: { killed: boolean };
   policyHash: string;
   handleAction(req: ActionRequest): Promise<ActionResult>;
+  /** M0 cooperative check: evaluate and countersign a decision without ever
+   * dispatching. An allowed action is recorded as `cooperative_allow`
+   * (executed: false); the caller performs the action itself. Equivalent to a
+   * `check_only`-mode `handleAction`, but forced regardless of configured mode. */
+  check(req: ActionRequest): Promise<ActionResult>;
   /** Record a passive observation without evaluating or dispatching it. */
   observeAction(req: ActionRequest): Promise<ObservationResult>;
   /** Hot-swap the active policy (recomputes the policy hash + version). */
@@ -174,7 +184,11 @@ export function createGateway(config: GatewayConfig): Gateway {
     );
   }
 
-  async function handleAction(req: ActionRequest): Promise<ActionResult> {
+  async function handleAction(req: ActionRequest, opts?: { checkOnly?: boolean }): Promise<ActionResult> {
+    // Check-only (M0): never dispatch; an allowed action is a cooperative allow.
+    // The flag defaults to the gateway's configured mode and can be forced per
+    // call by `check()`, but is never implicitly turned on.
+    const checkOnly = opts?.checkOnly ?? (config.mode === "check_only");
     assertValidIntent(req.intent);
     const ts = now();
     const ih = intentHash(req.intent);
@@ -231,7 +245,9 @@ export function createGateway(config: GatewayConfig): Gateway {
         intent: minimized.intent,
         action_id: actionId,
         intent_hash: ih,
-        executed: true,
+        // A cooperative allow is never counted as executed — not even transiently
+        // while reserved — so it cannot inflate a spend window it did not dispatch.
+        executed: !checkOnly,
         realtime_result: "allow",
         timestamp: ts,
         approval: authenticated.approvalForPolicy,
@@ -281,7 +297,13 @@ export function createGateway(config: GatewayConfig): Gateway {
     const outboundDisabled = config.outboundExecution === false && executor.mode === "dispatch";
     const stoppedBeforeDispatch = d.allow && (outboundDisabled || await isStopped(req.intent.signer));
     if (d.allow && !stoppedBeforeDispatch) {
-      if (executor.mode === "simulation") {
+      if (checkOnly) {
+        // Cooperative enforcement (M0): the gateway decides but does not act; the
+        // agent performs the allowed action itself. No executor is invoked, and the
+        // receipt asserts nothing about execution beyond the policy decision.
+        executionState = "cooperative_allow";
+        assertion = "none";
+      } else if (executor.mode === "simulation") {
         const result = await executor.execute(req.intent, { actionId });
         ref = result.ref;
         output = result.output;
@@ -605,7 +627,8 @@ export function createGateway(config: GatewayConfig): Gateway {
 
   return {
     app, store, attester, state, get policyHash() { return policyHash; },
-    handleAction, observeAction, setPolicy, anchor, unresolvedActions, reconcileAction,
+    handleAction, check: (req: ActionRequest) => handleAction(req, { checkOnly: true }),
+    observeAction, setPolicy, anchor, unresolvedActions, reconcileAction,
   };
 }
 

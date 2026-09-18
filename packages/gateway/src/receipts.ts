@@ -424,7 +424,7 @@ export type ReceiptContext = Omit<
   "type" | "realtime_result" | "executed" | "execution_ref" | "execution"
 >;
 
-export type AuthorityFinalState = "denied" | "simulated" | "executed" | "failed" | "outcome_unknown";
+export type AuthorityFinalState = "denied" | "simulated" | "cooperative_allow" | "executed" | "failed" | "outcome_unknown";
 export type AuthorityLifecycleState = "reserved" | "dispatching" | AuthorityFinalState;
 
 export interface ActionLifecycleRecord {

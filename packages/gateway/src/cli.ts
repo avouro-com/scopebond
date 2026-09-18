@@ -4,6 +4,7 @@
 //   scopebond-gateway init [--force]           scaffold agent key + principal-keys.json + policy
 //   scopebond-gateway <policy.json>            run the gateway (durable by default)
 //   scopebond-gateway serve <policy.json>      same, explicit
+//        [--check-only]                         M0 cooperative mode: decide + sign, never dispatch
 //   scopebond-gateway verify <receipt.json>    verify a receipt's signature + integrity
 //        [--key <pubkey.pem>] [--url <gateway-url>]
 //   scopebond-gateway keygen [key-file]        generate + persist an attester key
@@ -13,6 +14,7 @@
 // Env: SCOPEBOND_POLICY, PORT (8787),
 //      SCOPEBOND_KEY_FILE (default ./scopebond-attester.key) or SCOPEBOND_ATTESTER_KEY (PKCS8 PEM),
 //      SCOPEBOND_DB (default ./scopebond.db) — set SCOPEBOND_RECEIPTS_FILE to force JSONL,
+//      SCOPEBOND_MODE (enforce | check_only; same as --check-only),
 //      SCOPEBOND_CLOUD_URL + SCOPEBOND_CLOUD_CREDENTIAL for durable hosted export.
 
 import { serve } from "@hono/node-server";
@@ -83,6 +85,15 @@ function resolveAuthentication(): GatewayAuthentication {
   return { keys: new StaticPrincipalKeyRegistry(records) };
 }
 
+/** Resolve the enforcement mode from `--check-only` or SCOPEBOND_MODE. Default enforce. */
+function resolveMode(): "enforce" | "check_only" {
+  const flagged = process.argv.includes("--check-only");
+  const env = (process.env.SCOPEBOND_MODE ?? "").trim().toLowerCase().replace(/-/g, "_");
+  if (flagged || env === "check_only") return "check_only";
+  if (env && env !== "enforce") fail(`SCOPEBOND_MODE must be "enforce" or "check_only" (got "${process.env.SCOPEBOND_MODE}")`);
+  return "enforce";
+}
+
 function cmdServe(policyPath: string | undefined): void {
   if (!policyPath) fail("usage: scopebond-gateway <policy.json>   (or set SCOPEBOND_POLICY)");
   const policy = JSON.parse(readFileSync(policyPath as string, "utf8"));
@@ -124,8 +135,9 @@ function cmdServe(policyPath: string | undefined): void {
 
   const authentication = resolveAuthentication();
   const controlToken = process.env.SCOPEBOND_CONTROL_TOKEN;
+  const mode = resolveMode();
   const gateway = createGateway({
-    policy, attester, store, authentication,
+    policy, attester, store, authentication, mode,
     ...(controlToken ? { control: { bearerToken: controlToken } } : {}),
   });
   const port = Number(process.env.PORT ?? 8787);
@@ -133,6 +145,7 @@ function cmdServe(policyPath: string | undefined): void {
 
   console.log(`scopebond-gateway listening on :${port}`);
   console.log(`  policy    ${policyPath} (hash ${gateway.policyHash.slice(0, 12)}…)`);
+  console.log(`  mode      ${mode === "check_only" ? "check-only (cooperative — allowed actions are not dispatched)" : "enforce"}`);
   console.log(`  attester  ${attester.kid}  [${source}]`);
   console.log(`  receipts  ${kind}: ${path} (durable)`);
   console.log(`  controls  ${controlToken ? "bearer protected" : "disabled (set SCOPEBOND_CONTROL_TOKEN)"}`);
@@ -301,10 +314,13 @@ function cmdInit(args: string[]): void {
   console.log(`     npx @scopebond/gateway verify ./receipt.json --url http://localhost:8787`);
 }
 
-const [cmd, ...rest] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const [cmd, ...rest] = argv;
+// The policy path is the first non-flag argument (so --check-only may appear anywhere).
+const policyArg = (args: string[]): string | undefined => args.find((a) => !a.startsWith("--")) ?? process.env.SCOPEBOND_POLICY;
 if (cmd === "verify") { await cmdVerify(rest); }
 else if (cmd === "keygen") { cmdKeygen(rest); }
 else if (cmd === "enroll") { await cmdEnroll(rest); }
 else if (cmd === "init") { cmdInit(rest); }
-else if (cmd === "serve") { cmdServe(rest[0]); }
-else { cmdServe(cmd ?? process.env.SCOPEBOND_POLICY); } // default: treat first arg as the policy path
+else if (cmd === "serve") { cmdServe(policyArg(rest)); }
+else { cmdServe(policyArg(argv)); } // default: treat the first non-flag arg as the policy path
