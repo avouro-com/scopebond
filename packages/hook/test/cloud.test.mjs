@@ -5,8 +5,27 @@ import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, connectCloud, loadConnection, connectionPath, createHookRuntime } from "../dist/index.js";
+import { scaffold, connectCloud, loadConnection, connectionPath, createHookRuntime, installHarness } from "../dist/index.js";
 import { mapClaudeToolUse } from "../dist/index.js";
+
+test("installHarness merges the hook into the agent config, idempotently and preserving existing settings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-install-"));
+  const file = installHarness("claude", dir);
+  assert.ok(file.endsWith(join(".claude", "settings.json")));
+  let cfg = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(cfg.hooks.PreToolUse.length, 1);
+  assert.equal(cfg.hooks.PreToolUse[0].hooks[0].command, "scopebond-hook claude");
+  // Idempotent: re-running does not add a duplicate.
+  installHarness("claude", dir);
+  cfg = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(cfg.hooks.PreToolUse.length, 1, "no duplicate on re-run");
+  // Preserves unrelated settings and an existing hook.
+  writeFileSync(file, JSON.stringify({ model: "opus", hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "other-tool" }] }] } }));
+  installHarness("claude", dir);
+  cfg = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(cfg.model, "opus", "unrelated settings preserved");
+  assert.equal(cfg.hooks.PreToolUse.length, 2, "existing hook preserved, scopebond added");
+});
 
 // A minimal in-process Cloud: /v1/enroll issues a scoped credential bound to the
 // enrolling attester's kid; /v1/ingest records the receipts it receives. This

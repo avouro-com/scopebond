@@ -3,7 +3,7 @@
 // machine; no credentials are handled.
 
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import { starterPolicy } from "./runtime.js";
@@ -24,6 +24,34 @@ export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKi
     writeFileSync(policyPath, JSON.stringify(starterPolicy(agent.kid), null, 2) + "\n");
   }
   return { agentKid: agent.kid, policyPath };
+}
+
+/** Install the hook into the agent's own config file, merging with anything already
+ *  there (idempotent — safe to run twice). Returns the file it wrote. This is what
+ *  lets `connect` finish setup without the user hand-editing JSON.
+ *  `cwd` defaults to the current directory (the project root the user runs it in). */
+export function installHarness(harness: "claude" | "cursor", cwd: string = process.cwd()): string {
+  const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+  const file = harness === "cursor" ? join(cwd, ".cursor", "hooks.json") : join(cwd, ".claude", "settings.json");
+  mkdirSync(dirname(file), { recursive: true });
+  let config: Record<string, unknown> = {};
+  if (existsSync(file)) { try { const p = JSON.parse(readFileSync(file, "utf8")); if (isRecord(p)) config = p; } catch { /* start fresh on unreadable */ } }
+  const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
+  const has = (list: unknown, cmd: string): boolean =>
+    Array.isArray(list) && list.some((e) => isRecord(e) && (e.command === cmd
+      || (Array.isArray(e.hooks) && e.hooks.some((h) => isRecord(h) && h.command === cmd))));
+  if (harness === "cursor") {
+    config.version = config.version ?? 1;
+    for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
+      const list = Array.isArray((hooks as Record<string, unknown>)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
+      if (!has(list, "scopebond-hook cursor")) list.push({ command: "scopebond-hook cursor" });
+    }
+  } else {
+    const list = Array.isArray((hooks as Record<string, unknown>).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
+    if (!has(list, "scopebond-hook claude")) list.push({ matcher: "*", hooks: [{ type: "command", command: "scopebond-hook claude" }] });
+  }
+  writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+  return file;
 }
 
 /** The harness configuration snippet to install the hook. */

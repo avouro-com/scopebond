@@ -32,14 +32,19 @@ as `scopebond-enrollment.json`, then:
 npx @scopebond/hook connect https://<your-workspace> scopebond-enrollment.json
 ```
 
-`connect` scaffolds `.scopebond/` if needed, enrolls this machine's countersigning
-key with the workspace, and stores a scoped machine credential in
-`.scopebond/cloud.json` (a secret — never commit it). From then on every receipt is
-mirrored to the workspace through a **durable outbox**: delivery is best-effort and
-never blocks a tool call, and receipts are retained locally and retried if the
-workspace is unreachable. `scopebond-hook flush` delivers anything still queued —
-run it on a session-end hook (and set `SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero
-per-call latency.
+`connect` does the whole setup in one command: it scaffolds `.scopebond/` if needed,
+enrolls this machine's countersigning key, stores a scoped machine credential in
+`.scopebond/cloud.json` (a secret — never commit it), **and configures Claude Code
+for you** (it merges the hook into `.claude/settings.json`, preserving anything
+already there — pass `--no-install` to skip, or `--cursor` for Cursor). The
+enrollment argument can be a file, an inline blob, or JSON on stdin, so the portal
+can hand you a single copy-paste command with nothing to save.
+
+From then on every receipt is mirrored to the workspace through a **durable outbox**:
+delivery is best-effort and never blocks a tool call, and receipts are retained
+locally and retried if the workspace is unreachable. `scopebond-hook flush` delivers
+anything still queued — run it on a session-end hook (and set
+`SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency.
 
 ## How it works
 

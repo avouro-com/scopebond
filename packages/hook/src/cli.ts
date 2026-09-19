@@ -12,13 +12,24 @@
 // Config dir: $SCOPEBOND_HOOK_DIR, else ./.scopebond
 // Fail-closed: any error denies the action with a repair message.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { mapClaudeToolUse, mapCursorEvent } from "./map.js";
 import { createHookRuntime } from "./runtime.js";
-import { scaffold, harnessSnippet } from "./init.js";
+import { scaffold, harnessSnippet, installHarness } from "./init.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
+
+/** Read an enrollment bundle from a file path, an inline base64 blob, or inline raw
+ *  JSON (the portal hands out a base64 blob so it is one clean argument). */
+function readBundleArg(bundleArg: string | undefined, stdin: () => string): CloudEnrollmentBundle {
+  let text: string;
+  if (!bundleArg) text = stdin();
+  else if (existsSync(bundleArg)) text = readFileSync(bundleArg, "utf8");
+  else if (bundleArg.trim().startsWith("{")) text = bundleArg;
+  else { try { text = Buffer.from(bundleArg, "base64").toString("utf8"); } catch { text = bundleArg; } }
+  return JSON.parse(text) as CloudEnrollmentBundle;
+}
 
 function configDir(): string {
   return process.env.SCOPEBOND_HOOK_DIR ?? join(process.cwd(), ".scopebond");
@@ -109,33 +120,35 @@ function runInit(args: string[]): void {
 async function runConnect(args: string[]): Promise<void> {
   const positional = args.filter((a) => !a.startsWith("--"));
   const url = positional[0];
-  const bundleFile = positional[1];
+  const bundleArg = positional[1];
+  const harness = args.includes("--cursor") ? "cursor" : "claude";
   if (!url) {
-    console.error("usage: scopebond-hook connect <workspace-url> <enrollment-bundle.json> [--cursor]");
+    console.error("usage: scopebond-hook connect <workspace-url> <enrollment> [--cursor] [--no-install]");
     process.exit(1);
   }
   const dir = configDir();
   // One command sets everything up: scaffold the key, attester and starter policy if
-  // they do not exist, then enroll and persist the scoped machine credential.
+  // they do not exist, then enroll and persist the scoped machine credential. The
+  // enrollment can be a file, an inline base64 blob (what the portal hands out) or
+  // raw JSON — the user never has to save or open a JSON file.
   scaffold(dir, {});
-  let bundleText: string;
-  try { bundleText = bundleFile ? readFileSync(bundleFile, "utf8") : readStdin(); }
-  catch { console.error(`could not read the enrollment bundle${bundleFile ? ` from ${bundleFile}` : " on stdin"}`); process.exit(1); }
   let bundle: CloudEnrollmentBundle;
-  try { bundle = JSON.parse(bundleText) as CloudEnrollmentBundle; }
-  catch { console.error("the enrollment bundle is not valid JSON"); process.exit(1); }
+  try { bundle = readBundleArg(bundleArg, readStdin); }
+  catch { console.error("could not read the enrollment (expected a file, inline blob, or JSON on stdin)"); process.exit(1); }
   try {
     const c = await connectCloud(dir, url, bundle);
-    console.log(`Connected to ${c.url}`);
-    console.log(`  workspace     org ${c.organization_id} · env ${c.environment_id}`);
-    console.log(`  gateway id    ${c.gateway_id}`);
-    console.log(`  attester kid  ${c.attester_kid}`);
-    console.log(`  credential    stored in ${connectionPath(dir)} — a secret, do not commit`);
+    console.log(`✓ Connected to ${c.url}`);
+    // Configure the agent automatically (merges into the existing config), unless the
+    // caller opts out. This removes the "paste this snippet" step.
+    if (!args.includes("--no-install")) {
+      const file = installHarness(harness);
+      console.log(`✓ ${harness === "cursor" ? "Cursor" : "Claude Code"} configured in ${file}`);
+    } else {
+      console.log(`Add this to your ${harness === "cursor" ? ".cursor/hooks.json" : ".claude/settings.json"}:`);
+      console.log(harnessSnippet(harness));
+    }
     console.log("");
-    console.log(`Add this to your ${args.includes("--cursor") ? ".cursor/hooks.json" : ".claude/settings.json"}:`);
-    console.log(harnessSnippet(args.includes("--cursor") ? "cursor" : "claude"));
-    console.log("");
-    console.log("Run one safe command in the agent; the receipt appears in your workspace within seconds.");
+    console.log("Run your agent — the first action appears in your workspace within seconds.");
   } catch (error) {
     console.error(`connect failed: ${(error as Error).message}`);
     process.exit(1);
