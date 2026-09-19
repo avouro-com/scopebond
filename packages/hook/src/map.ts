@@ -25,7 +25,7 @@ const rel = (value: unknown, cwd?: string): string => {
 
 /** The invoked program's basename, after stripping sudo and `env VAR=val` prefixes. */
 function programOf(command: string): string {
-  const stripped = command.trim().replace(/^sudo\s+/, "").replace(/^(?:env\s+\S+=\S+\s+)+/, "");
+  const stripped = command.trim().replace(/^sudo\s+/, "").replace(/^(?:env\s+[^\s=]+=\S+\s+)+/, "");
   const first = stripped.split(/\s+/)[0] ?? "";
   return first.replace(/^.*[\\/]/, "");
 }
