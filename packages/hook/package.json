@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/hook",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Scopebond hook for Claude Code and Cursor — checks each coding-agent tool call against policy before it runs (in-path, cooperative M0) and records a signed receipt, locally.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
