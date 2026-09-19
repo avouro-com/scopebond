@@ -55,7 +55,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^1.13.0
-        version: 1.19.17(hono@4.13.7)
+        version: 1.19.17(hono@4.13.8)
       '@scopebond/policy-schema':
         specifier: workspace:^
         version: link:../policy-schema
@@ -63,8 +63,8 @@ importers:
         specifier: workspace:*
         version: link:../verify
       hono:
-        specifier: ^4.6.0
-        version: 4.13.7
+        specifier: ^4.13.8
+        version: 4.13.8
     devDependencies:
       '@scopebond/sdk':
         specifier: workspace:*
@@ -307,8 +307,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  hono@4.13.7:
-    resolution: {integrity: sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==}
+  hono@4.13.8:
+    resolution: {integrity: sha512-/Gng7NfoykZl2pjukW5Z6+8Yxm3BPRf86GTbQnt0SbySkvax4fyL4H3HhY1cCpBGmiW9XDRFzRV+CXK2W8QudQ==}
     engines: {node: '>=16.9.0'}
 
   human-id@4.2.1:
@@ -661,9 +661,9 @@ snapshots:
       human-id: 4.2.1
       prettier: 2.8.8
 
-  '@hono/node-server@1.19.17(hono@4.13.7)':
+  '@hono/node-server@1.19.17(hono@4.13.8)':
     dependencies:
-      hono: 4.13.7
+      hono: 4.13.8
 
   '@inquirer/external-editor@1.0.3(@types/node@22.20.2)':
     dependencies:
@@ -797,7 +797,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  hono@4.13.7: {}
+  hono@4.13.8: {}
 
   human-id@4.2.1: {}
 
@@ -832,7 +832,9 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
-  jsonfile@4.0.0: {}
+  jsonfile@4.0.0:
+    optionalDependencies:
+      graceful-fs: 4.2.11
 
   locate-path@5.0.0:
     dependencies:
