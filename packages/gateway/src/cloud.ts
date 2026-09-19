@@ -149,7 +149,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   const batchSize = Math.max(1, Math.min(100, Math.trunc(opts.batchSize ?? 100)));
   const flushMs = Math.max(100, Math.trunc(opts.flushMs ?? 15_000));
   const maxRetryMs = Math.max(flushMs, Math.trunc(opts.maxRetryMs ?? 60_000));
-  const endpoint = opts.url.replace(/\/+$/, "") + "/v1/ingest";
+  let base = opts.url;
+  while (base.endsWith("/")) base = base.slice(0, -1);
+  const endpoint = base + "/v1/ingest";
   let sending = false;
   let stopped = false;
   let consecutiveFailures = 0;
