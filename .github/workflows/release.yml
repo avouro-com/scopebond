@@ -54,4 +54,7 @@ jobs:
           # which builds and `changeset publish`es the bumped packages to npm.
           publish: pnpm release
         env:
+          # changesets/action writes ~/.npmrc from NPM_TOKEN before `changeset
+          # publish`; NODE_AUTH_TOKEN alone is not enough (ENEEDAUTH).
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
