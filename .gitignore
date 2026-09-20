@@ -43,3 +43,8 @@ Thumbs.db
 # scratch
 tmp/
 .clean-validation-dev02*/
+
+# First-run / test artifacts from the hook (never source)
+**/.scopebond/
+**/receipts.db
+packages/**/.claude/
