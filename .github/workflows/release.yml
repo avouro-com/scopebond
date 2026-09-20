@@ -49,3 +49,9 @@ jobs:
           version: pnpm version:packages
           commit: "chore: version packages"
           title: "Version packages"
+          # Publish-on-merge: with pending changesets this opens/updates the Version
+          # PR; once that PR is merged (no changesets left) it runs `pnpm release`,
+          # which builds and `changeset publish`es the bumped packages to npm.
+          publish: pnpm release
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
