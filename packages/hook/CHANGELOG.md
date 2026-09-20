@@ -1,5 +1,76 @@
 # @scopebond/hook
 
+## 0.3.0
+
+### Minor Changes
+
+- 0f0012c: Make the hook usable in one command and honest on first run.
+
+  - `init` now configures the agent automatically (idempotent; `--no-install` prints
+    the snippet instead), and both `init` and `connect` install a **version-pinned**
+    `npx -y @scopebond/hook@<version> <harness>` command rather than a bare
+    `scopebond-hook`, so a missing global binary is fetched instead of silently
+    skipped (which a harness can treat as "no hook" and fail open). A legacy bare
+    command is replaced in place, never duplicated.
+  - New commands: `scopebond-hook log` (recent decisions), `scopebond-hook verify`
+    (every local receipt verified offline against the attester key), and
+    `scopebond-hook test "<command>"` (show a command's decision without recording
+    it), so a new user reaches a visible, verifiable receipt in the first minute.
+  - The starter policy no longer breaks ordinary work: `net.fetch` and MCP tool calls
+    are observed (recorded, not blocked) instead of denied by the closed allowlist,
+    and a bare `git push` is allowed on a non-protected branch — the runtime resolves
+    the current branch and fills it in (`fillPushBranch`), so only pushes to
+    `main`/`master`/`release/*` are denied. If the branch can't be resolved the ref
+    stays absent and the policy fails closed.
+  - The README leads with the hook and the 60-second flow and lists all eight
+    packages; collateral vocabulary is out of the lead.
+
+- 5277099: Close command-injection bypasses in the hook and stop it suppressing the host's
+  own review.
+
+  Previously the mapper read only the first token of a Bash command, so a denied
+  program could ride in behind an allowed one — `echo hi && rm -rf x`,
+  `bash -c 'rm -rf /'`, `$(rm -rf x)`, `FOO=1 rm -rf x`, `git push origin +main`,
+  `git -C /repo push origin main` all slipped past the starter policy. A new shell
+  decomposer (`decomposeShell`) splits a command into every simple command it will
+  run — across `&&`/`||`/`|`/`;`/`&`/newline separators, `bash -c`/`sh -c` scripts
+  (including combined flags like `-lc`), `$( )`/backtick/`( )` substitutions and
+  subshells, and `sudo`/`env`/`xargs`/assignment prefixes — and `mapClaudeToolUse`
+  and `mapCursorEvent` now return one intent per simple command (an array). The
+  runtime evaluates all of them and denies the call if any one is out of policy;
+  `git push` parsing understands `-C`, `--force`/`-f`/`--force-with-lease` and a
+  leading `+` force refspec. A command that cannot be parsed with confidence is
+  opaque: denied in strict mode, observed otherwise — never trusted.
+
+  The hook no longer returns `permissionDecision:"allow"` (Claude Code) or
+  `permission:"allow"` (Cursor) for an in-policy action, which used to suppress the
+  user's normal permission prompt. It records the receipt and defers: only an
+  out-of-policy action is blocked outright.
+
+  The starter policy now protects the hook's own control surface — it denies writes
+  to `.scopebond/**`, `.claude/settings*`, `.cursor/hooks*` and `.git/hooks/**`, and
+  reads of `*.key` and `.scopebond/**` — so a governed agent cannot rewrite its own
+  policy or read the signing keys. Adds a 42-case bypass corpus, decomposition,
+  self-protection and ReDoS-timing tests.
+
+### Patch Changes
+
+- 738a8dc: Fix the secret scrubber, which leaked credentials into receipts. For single-token
+  secret shapes (GitHub, GitLab, npm, Slack, Stripe, OpenAI/Anthropic, Google and AWS
+  keys, JWTs and high-entropy blobs) the replace callback treated the match offset as a
+  capture group and emitted the secret followed by `***` instead of masking it — the
+  un-redacted value was then signed into the receipt, written to the local store and
+  exported to Cloud. The scrubber is rewritten as explicit `pattern → replacement`
+  rules covering private-key blocks, credential flags and headers, URL userinfo,
+  credential-named `NAME=value` assignments and the token families above. Structured
+  mapper parameters (program, git-push remote and ref, fetch host and path) are scrubbed
+  too, so a secret embedded in a command can no longer survive as a path-split fragment,
+  while ordinary policy-matched values (branch names, remotes, commit ids) are left
+  intact. Adds a property-based regression suite that asserts no secret fragment reaches
+  the signed receipt, the on-disk store or the Cloud export.
+- Updated dependencies [4dd6919]
+  - @scopebond/gateway@0.6.0
+
 ## 0.2.1
 
 ### Patch Changes
