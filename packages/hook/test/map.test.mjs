@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mapClaudeToolUse, mapCursorEvent, redactCommand, scrubSecrets } from "../dist/index.js";
+import { mapClaudeToolUse, mapCursorEvent, redactCommand, scrubSecrets, fillPushBranch } from "../dist/index.js";
 
 // The mapper returns one intent per simple command. These helpers keep the common
 // single-command assertions readable.
@@ -125,4 +125,19 @@ test("an unbalanced command is opaque and not evaluated (fails closed at the run
   assert.equal(m.intent.action_type, "shell.exec");
   assert.equal(m.evaluated, false, "opaque commands are not trusted");
   assert.equal(m.intent.params.program, "");
+});
+
+test("fillPushBranch fills a bare git push with the current branch, and leaves explicit refs alone", () => {
+  const bare = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push" } });
+  assert.equal(bare[0].intent.params.ref, undefined);
+  const filled = fillPushBranch(bare, "feature/x");
+  assert.equal(filled[0].intent.params.ref, "feature/x");
+  // explicit ref untouched
+  const explicit = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push origin main" } }), "feature/x");
+  assert.equal(explicit[0].intent.params.ref, "main");
+  // no branch resolved → left absent (fail-closed at the policy)
+  assert.equal(fillPushBranch(bare, null)[0].intent.params.ref, undefined);
+  // non-git intents untouched
+  const read = fillPushBranch(mapClaudeToolUse({ tool_name: "Read", tool_input: { file_path: "a.ts" } }), "feature/x");
+  assert.equal(read[0].intent.action_type, "file.read");
 });

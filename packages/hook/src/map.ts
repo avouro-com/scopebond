@@ -85,6 +85,18 @@ function splitUrl(url: string): { host: string; path: string } {
 
 const one = (intent: NormalizedIntent, evaluated: boolean, source: string): Mapped[] => [{ intent, evaluated, source }];
 
+/** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,
+ *  so the runtime resolves it and fills it in here, before evaluation — otherwise the
+ *  starter policy's ref bound would fail-closed on every plain push. Only git.push
+ *  intents with no ref are touched. */
+export function fillPushBranch(mapped: Mapped[], branch: string | null | undefined): Mapped[] {
+  if (!branch) return mapped;
+  return mapped.map((m) =>
+    m.intent.action_type === "git.push" && m.intent.params.ref === undefined
+      ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, ref: scrubParam(branch) } } }
+      : m);
+}
+
 /** Map a Claude Code PreToolUse payload to the normalized actions it represents. */
 export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
   const name = String(input?.tool_name ?? "");

@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import { starterPolicy } from "./runtime.js";
+import { hookCommand } from "./version.js";
 
 export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKid: string; policyPath: string } {
   mkdirSync(dir, { recursive: true });
@@ -37,39 +38,47 @@ export function installHarness(harness: "claude" | "cursor", cwd: string = proce
   let config: Record<string, unknown> = {};
   if (existsSync(file)) { try { const p = JSON.parse(readFileSync(file, "utf8")); if (isRecord(p)) config = p; } catch { /* start fresh on unreadable */ } }
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
-  const has = (list: unknown, cmd: string): boolean =>
-    Array.isArray(list) && list.some((e) => isRecord(e) && (e.command === cmd
-      || (Array.isArray(e.hooks) && e.hooks.some((h) => isRecord(h) && h.command === cmd))));
+  const cursorCmd = hookCommand("cursor");
+  const claudeCmd = hookCommand("claude");
+  // Match any existing Scopebond hook entry (pinned or a legacy bare `scopebond-hook`)
+  // so re-running never appends a duplicate and an old bare command is replaced.
+  const isScopebond = (cmd: unknown): boolean => typeof cmd === "string" && /(^|\s)(npx\s+.*)?@scopebond\/hook|(^|\s)scopebond-hook(\s|$)/.test(cmd);
+  const entryMatches = (e: unknown): boolean =>
+    isRecord(e) && (isScopebond(e.command) || (Array.isArray(e.hooks) && e.hooks.some((h) => isRecord(h) && isScopebond(h.command))));
   if (harness === "cursor") {
     config.version = config.version ?? 1;
     for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
       const list = Array.isArray((hooks as Record<string, unknown>)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
-      if (!has(list, "scopebond-hook cursor")) list.push({ command: "scopebond-hook cursor" });
+      const existing = list.findIndex(entryMatches);
+      if (existing >= 0) list[existing] = { command: cursorCmd }; else list.push({ command: cursorCmd });
     }
   } else {
     const list = Array.isArray((hooks as Record<string, unknown>).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
-    if (!has(list, "scopebond-hook claude")) list.push({ matcher: "*", hooks: [{ type: "command", command: "scopebond-hook claude" }] });
+    const existing = list.findIndex(entryMatches);
+    const entry = { matcher: "*", hooks: [{ type: "command", command: claudeCmd }] };
+    if (existing >= 0) list[existing] = entry; else list.push(entry);
   }
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return file;
 }
 
-/** The harness configuration snippet to install the hook. */
+/** The harness configuration snippet to install the hook (version-pinned npx). */
 export function harnessSnippet(harness: "claude" | "cursor"): string {
   if (harness === "cursor") {
+    const cmd = hookCommand("cursor");
     return JSON.stringify({
       version: 1,
       hooks: {
-        beforeShellExecution: [{ command: "scopebond-hook cursor" }],
-        beforeMCPExecution: [{ command: "scopebond-hook cursor" }],
-        beforeReadFile: [{ command: "scopebond-hook cursor" }],
-        afterFileEdit: [{ command: "scopebond-hook cursor" }],
+        beforeShellExecution: [{ command: cmd }],
+        beforeMCPExecution: [{ command: cmd }],
+        beforeReadFile: [{ command: cmd }],
+        afterFileEdit: [{ command: cmd }],
       },
     }, null, 2);
   }
   return JSON.stringify({
     hooks: {
-      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "scopebond-hook claude" }] }],
+      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: hookCommand("claude") }] }],
     },
   }, null, 2);
 }
