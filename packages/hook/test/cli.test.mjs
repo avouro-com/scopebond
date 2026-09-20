@@ -42,10 +42,12 @@ test("claude: a protected-branch push is denied with exit 2 and a deny decision"
   assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
 });
 
-test("claude: an in-policy write is allowed with exit 0", () => {
+test("claude: an in-policy action defers to Claude Code's own prompt (exit 0, no auto-allow)", () => {
   const r = run(enrolledDir(), ["claude"], JSON.stringify({ tool_name: "Write", tool_input: { file_path: "src/app.ts" } }));
   assert.equal(r.status, 0);
-  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+  // The hook must NOT return permissionDecision:"allow" — that would suppress the
+  // user's normal review. It records the receipt and stays silent so the host decides.
+  assert.equal(r.stdout.trim(), "", "an allowed action produces no permission decision");
 });
 
 test("claude: invalid stdin fails closed (deny, exit 2)", () => {

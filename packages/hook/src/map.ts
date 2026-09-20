@@ -1,8 +1,14 @@
-// The mapper: a pure function from a coding agent's native tool call to a
-// normalized Scopebond action (Action Taxonomy v1). This is the connector's core
-// — deterministic and side-effect free, so it can be conformance-tested directly.
+// The mapper: a pure function from a coding agent's native tool call to the
+// normalized Scopebond actions (Action Taxonomy v1) it represents. Deterministic
+// and side-effect free, so it can be conformance-tested directly.
+//
+// A shell tool call can carry several commands (`a && b`, `$(c)`, `bash -c '…'`);
+// the mapper decomposes it and returns one intent per simple command, so the
+// runtime evaluates every one and denies if any is out of policy. Non-shell tools
+// map to a single intent (a one-element array).
 
 import { digest, redactCommand, scrubParam, scrubSecrets } from "./minimize.js";
+import { decomposeShell, parseGitPush, type SimpleCommand } from "./shell.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -10,12 +16,15 @@ export interface NormalizedIntent {
 }
 export interface Mapped {
   intent: NormalizedIntent;
-  /** false when no taxonomy type applies: emitted as tool.<name> and routed to the
-   *  observation path (not_evaluated), never granted. */
+  /** false when no taxonomy type applies (an unknown tool, or a shell command that
+   *  could not be parsed): emitted to the observation path (not_evaluated) in normal
+   *  mode and denied by the closed allowlist in strict mode — never granted. */
   evaluated: boolean;
   /** The native tool/event name, for diagnostics. */
   source: string;
 }
+
+const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
 
 const rel = (value: unknown, cwd?: string): string => {
   const s = String(value ?? "");
@@ -23,40 +32,42 @@ const rel = (value: unknown, cwd?: string): string => {
   return s;
 };
 
-/** The invoked program's basename, after stripping sudo and `env VAR=val` prefixes. */
-function programOf(command: string): string {
-  const stripped = command.trim().replace(/^sudo\s+/, "").replace(/^(?:env\s+[^\s=]+=\S+\s+)+/, "");
-  const first = stripped.split(/\s+/)[0] ?? "";
-  return first.replace(/^.*[\\/]/, "");
-}
-
-// Best-effort `git push [--force|-f] [remote] [ref]` parse. Ambiguous pushes omit
-// the ref, which a ref bound then denies (fail closed).
-function parseGitPush(command: string): Record<string, unknown> | null {
-  const t = command.trim().replace(/^sudo\s+/, "");
-  if (!/^git\s+push(\s|$)/.test(t)) return null;
-  const force = /(?:^|\s)(?:--force\b|--force-with-lease\b|-f\b)/.test(t);
-  const rest = t.replace(/^git\s+push\b/, "").trim();
-  const positional = rest.split(/\s+/).filter((a) => a && !a.startsWith("-"));
-  const params: Record<string, unknown> = { force };
-  // A remote can be a URL carrying credentials; nothing secret-shaped is retained.
-  if (positional[0]) params.remote = scrubParam(positional[0]);
-  if (positional[1]) params.ref = scrubParam(positional[1].replace(/^[^:]*:/, "")); // src:dst → dst
-  return params;
-}
-
-function mapShell(command: string, cwd?: string): Mapped {
-  const push = parseGitPush(command);
-  if (push) return { intent: { action_type: "git.push", params: push }, evaluated: true, source: "shell" };
+/** Map one parsed simple command to a git.push or shell.exec intent. An opaque
+ *  (unparseable) command becomes an un-evaluated shell.exec so it fails closed. */
+function mapSimpleCommand(sc: SimpleCommand, cwd?: string): Mapped {
+  if (sc.opaque) {
+    return {
+      intent: { action_type: "shell.exec", params: { command: redactCommand(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
+      evaluated: false, source: "shell",
+    };
+  }
+  const push = parseGitPush(sc);
+  if (push) {
+    const params: Record<string, unknown> = { force: push.force };
+    if (push.remote !== undefined) params.remote = scrubParam(push.remote);
+    if (push.ref !== undefined) params.ref = scrubParam(push.ref);
+    return { intent: { action_type: "git.push", params }, evaluated: true, source: "shell" };
+  }
   return {
     intent: {
       action_type: "shell.exec",
-      // Scrub before taking the program: a bare-secret command containing "/" would
-      // otherwise yield a short, un-scrubbed basename fragment of the secret.
-      params: { command: redactCommand(command), program: programOf(scrubSecrets(command)), ...(cwd ? { cwd } : {}) },
+      // Scrub before storing: the raw command through the blob-aware scrubber, and
+      // the whole first token BEFORE taking its basename, so a bare-secret command
+      // containing "/" cannot leak a path-fragment as the program.
+      params: { command: redactCommand(sc.raw), program: basename(scrubSecrets(sc.programRaw)), ...(cwd ? { cwd } : {}) },
     },
     evaluated: true, source: "shell",
   };
+}
+
+/** Decompose a shell command into one intent per simple command it will run. An
+ *  empty command yields a single un-evaluated placeholder (nothing to grant). */
+function mapShell(command: string, cwd?: string): Mapped[] {
+  const commands = decomposeShell(command);
+  if (commands.length === 0) {
+    return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
+  }
+  return commands.map((sc) => mapSimpleCommand(sc, cwd));
 }
 
 function parseMcpName(name: string): { server: string; tool: string } | null {
@@ -72,44 +83,46 @@ function splitUrl(url: string): { host: string; path: string } {
   catch { return { host: scrubParam(url), path: "" }; }
 }
 
-/** Map a Claude Code PreToolUse payload to a normalized taxonomy action. */
-export function mapClaudeToolUse(input: Record<string, unknown>): Mapped {
+const one = (intent: NormalizedIntent, evaluated: boolean, source: string): Mapped[] => [{ intent, evaluated, source }];
+
+/** Map a Claude Code PreToolUse payload to the normalized actions it represents. */
+export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
   const name = String(input?.tool_name ?? "");
   const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
   const cwd = input?.cwd ? String(input.cwd) : undefined;
   if (name === "Bash") return mapShell(String(ti.command ?? ""), cwd);
   if (name === "Write" || name === "Edit" || name === "MultiEdit")
-    return { intent: { action_type: "file.write", params: { path: rel(ti.file_path, cwd) } }, evaluated: true, source: name };
+    return one({ action_type: "file.write", params: { path: rel(ti.file_path, cwd) } }, true, name);
   if (name === "NotebookEdit")
-    return { intent: { action_type: "file.write", params: { path: rel(ti.notebook_path ?? ti.file_path, cwd) } }, evaluated: true, source: name };
+    return one({ action_type: "file.write", params: { path: rel(ti.notebook_path ?? ti.file_path, cwd) } }, true, name);
   if (name === "Read")
-    return { intent: { action_type: "file.read", params: { path: rel(ti.file_path, cwd) } }, evaluated: true, source: name };
+    return one({ action_type: "file.read", params: { path: rel(ti.file_path, cwd) } }, true, name);
   if (name === "WebFetch") {
     const { host, path } = splitUrl(String(ti.url ?? ""));
-    return { intent: { action_type: "net.fetch", params: { host, path, method: "GET" } }, evaluated: true, source: name };
+    return one({ action_type: "net.fetch", params: { host, path, method: "GET" } }, true, name);
   }
   const mcp = parseMcpName(name);
-  if (mcp) return { intent: { action_type: "mcp.tool.call", params: { server: mcp.server, tool: mcp.tool, args_digest: digest(ti) } }, evaluated: true, source: name };
-  return { intent: { action_type: `tool.${name.toLowerCase()}`, params: {} }, evaluated: false, source: name };
+  if (mcp) return one({ action_type: "mcp.tool.call", params: { server: mcp.server, tool: mcp.tool, args_digest: digest(ti) } }, true, name);
+  return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
 }
 
-/** Map a Cursor hook event to a normalized taxonomy action. */
-export function mapCursorEvent(event: string, payload: Record<string, unknown>): Mapped {
+/** Map a Cursor hook event to the normalized actions it represents. */
+export function mapCursorEvent(event: string, payload: Record<string, unknown>): Mapped[] {
   const p = payload ?? {};
   const cwd = p.cwd ? String(p.cwd) : undefined;
   switch (event) {
     case "beforeShellExecution":
       return mapShell(String(p.command ?? ""), cwd);
     case "beforeReadFile":
-      return { intent: { action_type: "file.read", params: { path: rel(p.path ?? p.file_path, cwd) } }, evaluated: true, source: event };
+      return one({ action_type: "file.read", params: { path: rel(p.path ?? p.file_path, cwd) } }, true, event);
     case "afterFileEdit":
-      return { intent: { action_type: "file.write", params: { path: rel(p.path ?? p.file_path, cwd) } }, evaluated: true, source: event };
+      return one({ action_type: "file.write", params: { path: rel(p.path ?? p.file_path, cwd) } }, true, event);
     case "beforeMCPExecution": {
       const server = String(p.server ?? p.server_name ?? "");
       const tool = String(p.tool ?? p.tool_name ?? "");
-      return { intent: { action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(p.args ?? p.arguments ?? {}) } }, evaluated: true, source: event };
+      return one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(p.args ?? p.arguments ?? {}) } }, true, event);
     }
     default:
-      return { intent: { action_type: `tool.${event.toLowerCase()}`, params: {} }, evaluated: false, source: event };
+      return one({ action_type: `tool.${event.toLowerCase()}`, params: {} }, false, event);
   }
 }
