@@ -2,7 +2,7 @@
 // normalized Scopebond action (Action Taxonomy v1). This is the connector's core
 // — deterministic and side-effect free, so it can be conformance-tested directly.
 
-import { digest, redactCommand } from "./minimize.js";
+import { digest, redactCommand, scrubParam, scrubSecrets } from "./minimize.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -39,8 +39,9 @@ function parseGitPush(command: string): Record<string, unknown> | null {
   const rest = t.replace(/^git\s+push\b/, "").trim();
   const positional = rest.split(/\s+/).filter((a) => a && !a.startsWith("-"));
   const params: Record<string, unknown> = { force };
-  if (positional[0]) params.remote = positional[0];
-  if (positional[1]) params.ref = positional[1].replace(/^[^:]*:/, ""); // src:dst → dst
+  // A remote can be a URL carrying credentials; nothing secret-shaped is retained.
+  if (positional[0]) params.remote = scrubParam(positional[0]);
+  if (positional[1]) params.ref = scrubParam(positional[1].replace(/^[^:]*:/, "")); // src:dst → dst
   return params;
 }
 
@@ -50,7 +51,9 @@ function mapShell(command: string, cwd?: string): Mapped {
   return {
     intent: {
       action_type: "shell.exec",
-      params: { command: redactCommand(command), program: programOf(command), ...(cwd ? { cwd } : {}) },
+      // Scrub before taking the program: a bare-secret command containing "/" would
+      // otherwise yield a short, un-scrubbed basename fragment of the secret.
+      params: { command: redactCommand(command), program: programOf(scrubSecrets(command)), ...(cwd ? { cwd } : {}) },
     },
     evaluated: true, source: "shell",
   };
@@ -64,8 +67,9 @@ function parseMcpName(name: string): { server: string; tool: string } | null {
 }
 
 function splitUrl(url: string): { host: string; path: string } {
-  try { const u = new URL(url); return { host: u.host, path: u.pathname }; }
-  catch { return { host: url, path: "" }; }
+  // The query string is dropped; a token in the path or an unparseable URL is scrubbed.
+  try { const u = new URL(url); return { host: u.host, path: scrubParam(u.pathname) }; }
+  catch { return { host: scrubParam(url), path: "" }; }
 }
 
 /** Map a Claude Code PreToolUse payload to a normalized taxonomy action. */

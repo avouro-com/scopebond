@@ -9,4 +9,4 @@ export type { RuntimeConfig, Decision } from "./runtime.js";
 export { scaffold, harnessSnippet, installHarness } from "./init.js";
 export { connectCloud, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
 export type { HookConnection } from "./cloud.js";
-export { scrubSecrets, redactCommand, digest, sha256 } from "./minimize.js";
+export { scrubSecrets, scrubParam, redactCommand, digest, sha256 } from "./minimize.js";
