@@ -38,6 +38,15 @@ export interface McpUpstream {
   call(message: JsonRpcMessage): Promise<JsonRpcMessage>;
 }
 
+/** The minimal receipt shape a windowed clause needs to count a prior authorized
+ *  call. The proxy keeps these for the session so rate_limit/sequence clauses work. */
+export interface CountableCall {
+  intent: { action_type: string; params?: Record<string, unknown>; asset?: string; amount?: number };
+  executed: boolean;
+  timestamp: string;
+  intent_hash: string;
+}
+
 export interface McpProxyConfig {
   policy: unknown;
   /** The validated caller identity recorded on every receipt. */
@@ -50,6 +59,11 @@ export interface McpProxyConfig {
   now?: () => string;
   /** Sink for each emitted receipt (e.g. a local log / exporter). */
   onReceipt?: (receipt: SignedReceipt) => void | Promise<void>;
+  /** Prior authorized calls to seed the window with (e.g. loaded from a durable log
+   *  at startup). The proxy also accumulates in-session calls on top of these so
+   *  rate_limit, spend_limit and sequence clauses see the real history rather than
+   *  an empty one. */
+  history?: CountableCall[];
 }
 
 export interface McpProxy {
@@ -60,18 +74,17 @@ export interface McpProxy {
  * else is passed through to the upstream unchanged. */
 export function createMcpProxy(config: McpProxyConfig): McpProxy {
   const attester: Attester = attesterFromPrivateKeyPem(config.attesterKeyPem);
+  // Session history of authorized calls. A forwarded call actually runs, so it
+  // counts as executed for windowed clauses (rate_limit, sequence, spend_limit).
+  const history: CountableCall[] = [...(config.history ?? [])];
   return {
     async handle(message: JsonRpcMessage): Promise<JsonRpcMessage> {
       if (message?.method !== "tools/call") return config.upstream.call(message);
 
       const intent = mapMcpToolCall(config.server, message.params);
-      const claimed = {
-        intent,
-        executed: true,
-        timestamp: config.now?.() ?? new Date().toISOString(),
-        intent_hash: digest(intent).slice(7),
-      };
-      const verdict = violates(config.policy as never, [], claimed as never, {});
+      const timestamp = config.now?.() ?? new Date().toISOString();
+      const claimed = { intent, executed: true, timestamp, intent_hash: digest(intent).slice(7) };
+      const verdict = violates(config.policy as never, history as never, claimed as never, { at: timestamp });
       const decision = verdict.violated ? "deny" : "allow";
 
       const receipt = await buildPepReceipt(
@@ -87,6 +100,8 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
           error: { code: -32000, message: `Scopebond policy denied ${intent.params.tool}: ${verdict.explanation || "out of policy"}` },
         };
       }
+      // Authorized and about to be forwarded: record it so it counts toward the window.
+      history.push(claimed);
       return config.upstream.call(message);
     },
   };

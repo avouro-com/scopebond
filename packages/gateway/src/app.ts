@@ -281,7 +281,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     const decide = (prior: Awaited<ReturnType<ReceiptStore["executed"]>>) => evaluate(
       activePolicy, prior,
       { intent: req.intent, approval: authenticated.approvalForPolicy, intent_hash: ih },
-      ts, { gatewaysComplete: config.gatewaysComplete ?? false },
+      ts, { gatewaysComplete: config.gatewaysComplete ?? false, cooperative: checkOnly },
     );
     let d;
     if (store.reserveAction) {
