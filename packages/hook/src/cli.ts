@@ -4,21 +4,39 @@
 //
 //   scopebond-hook claude                     evaluate a Claude Code PreToolUse call (stdin JSON)
 //   scopebond-hook cursor                     evaluate a Cursor hook event (stdin JSON)
-//   scopebond-hook init [--cursor]            scaffold keys + starter policy, print the config
+//   scopebond-hook init [--cursor] [--no-install]  scaffold keys + starter policy and configure the agent
 //   scopebond-hook connect <url> <bundle.json> [--cursor]
 //                                             enroll with a Cloud workspace and start exporting
+//   scopebond-hook log [-n N]                 show the most recent local receipts
+//   scopebond-hook verify                     verify every local receipt offline against the attester key
+//   scopebond-hook test "<shell command>"     show the decision for a command without recording it
 //   scopebond-hook flush                      deliver any queued receipts to Cloud now
 //
 // Config dir: $SCOPEBOND_HOOK_DIR, else ./.scopebond
 // Fail-closed: any error denies the action with a repair message.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
-import { mapClaudeToolUse, mapCursorEvent } from "./map.js";
+import { verifyReceipt } from "@scopebond/gateway";
+import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { mapClaudeToolUse, mapCursorEvent, fillPushBranch } from "./map.js";
 import { createHookRuntime } from "./runtime.js";
 import { scaffold, harnessSnippet, installHarness } from "./init.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
+
+/** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
+ *  the runtime fills it in before evaluating; on failure the ref stays absent and
+ *  the starter policy fails closed. */
+function currentBranch(cwd: string): string | null {
+  try {
+    return execFileSync("git", ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || null;
+  } catch { return null; }
+}
 
 /** Read an enrollment bundle from a file path, an inline base64 blob, or inline raw
  *  JSON (the portal hands out a base64 blob so it is one clean argument). */
@@ -65,8 +83,9 @@ async function runClaude(): Promise<void> {
   let input: Record<string, unknown>;
   try { input = JSON.parse(readStdin()); } catch { denyClaude("hook received invalid JSON on stdin"); }
   try {
+    const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const runtime = createHookRuntime(runtimePaths(configDir()));
-    const decision = await runtime.evaluate(mapClaudeToolUse(input!));
+    const decision = await runtime.evaluate(fillPushBranch(mapClaudeToolUse(input!), currentBranch(cwd)));
     await runtime.flush();
     if (decision.decision === "deny") denyClaude(decision.reason);
     // allow and not_evaluated both DEFER to Claude Code's own permission flow: the
@@ -85,8 +104,9 @@ async function runCursor(): Promise<void> {
   let permission: "allow" | "deny" | "ask" = "deny";
   let message = "Scopebond hook failed closed";
   try {
+    const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const runtime = createHookRuntime(runtimePaths(configDir()));
-    const decision = await runtime.evaluate(mapCursorEvent(event, input));
+    const decision = await runtime.evaluate(fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd)));
     await runtime.flush();
     // Only an out-of-policy action is denied outright; an allowed or unevaluated
     // action defers to Cursor's own prompt ("ask"), never a silent auto-allow.
@@ -108,11 +128,106 @@ function runInit(args: string[]): void {
   console.log(`  machine key    ${agentKid}`);
   console.log(`  policy         ${policyPath} (starter — edit the limits)`);
   console.log("");
-  console.log(`Add this to your ${harness === "cursor" ? ".cursor/hooks.json" : ".claude/settings.json"}:`);
-  console.log(harnessSnippet(harness));
+  // Configure the agent automatically by default (idempotent), so there is no
+  // hand-editing step; --no-install prints the snippet instead.
+  if (!args.includes("--no-install")) {
+    const file = installHarness(harness);
+    console.log(`✓ ${harness === "cursor" ? "Cursor" : "Claude Code"} configured in ${file}`);
+  } else {
+    console.log(`Add this to your ${harness === "cursor" ? ".cursor/hooks.json" : ".claude/settings.json"}:`);
+    console.log(harnessSnippet(harness));
+  }
   console.log("");
-  console.log("Then run one safe command in the agent and see the receipt in .scopebond/receipts.db.");
-  console.log("To send receipts to your workspace, run: scopebond-hook connect <workspace-url> scopebond-enrollment.json");
+  console.log("Next: run one command in the agent, then `scopebond-hook log` to see the receipt");
+  console.log("and `scopebond-hook verify` to check it offline. Try `scopebond-hook test \"rm -rf /\"`.");
+  console.log("To send receipts to a workspace: scopebond-hook connect <workspace-url> <enrollment>");
+}
+
+function decisionOf(payload: Record<string, unknown>): string {
+  const rr = String(payload.realtime_result ?? "");
+  const state = String((payload.execution as Record<string, unknown> | undefined)?.state ?? "");
+  if (state === "observed_not_evaluated") return "not_evaluated";
+  if (rr === "deny") return state === "cooperative_allow" || state === "executed" ? "monitor" : "deny";
+  return "allow";
+}
+
+function describeIntent(payload: Record<string, unknown>): string {
+  const intent = (payload.intent ?? {}) as Record<string, unknown>;
+  const p = (intent.params ?? {}) as Record<string, unknown>;
+  const bits = intent.action_type === "shell.exec" ? String(p.program ?? "")
+    : intent.action_type === "git.push" ? `${p.remote ?? ""} ${p.ref ?? ""}`.trim()
+    : intent.action_type === "file.write" || intent.action_type === "file.read" ? String(p.path ?? "")
+    : intent.action_type === "mcp.tool.call" ? `${p.server ?? ""}/${p.tool ?? ""}`
+    : intent.action_type === "net.fetch" ? String(p.host ?? "") : "";
+  return `${String(intent.action_type ?? "?")}${bits ? ` ${bits}` : ""}`;
+}
+
+async function runLog(args: string[]): Promise<void> {
+  const dir = configDir();
+  const dbPath = join(dir, "receipts.db");
+  if (!existsSync(dbPath)) { console.log("no receipts yet — run a command in the agent first."); process.exit(0); }
+  const nIdx = args.indexOf("-n");
+  const n = nIdx >= 0 ? Math.max(1, Number(args[nIdx + 1]) || 20) : 20;
+  const { store } = openReceiptStore({ db: dbPath });
+  const all = await Promise.resolve(store.list());
+  const recent = all.slice(-n);
+  if (recent.length === 0) { console.log("no receipts yet."); process.exit(0); }
+  for (const r of recent) {
+    const p = r.payload as unknown as Record<string, unknown>;
+    console.log(`${String(p.timestamp ?? "")}  ${decisionOf(p).padEnd(13)}  ${describeIntent(p)}`);
+  }
+  console.log(`\n${recent.length} of ${all.length} receipt(s). Verify them: scopebond-hook verify`);
+}
+
+async function runVerify(): Promise<void> {
+  const dir = configDir();
+  const dbPath = join(dir, "receipts.db");
+  const attesterPath = join(dir, "attester.key");
+  if (!existsSync(dbPath) || !existsSync(attesterPath)) { console.log("nothing to verify yet (no receipts or no attester key)."); process.exit(0); }
+  const { attester } = loadOrCreateAttester({ file: attesterPath });
+  const { store } = openReceiptStore({ db: dbPath });
+  const all = await Promise.resolve(store.list());
+  let ok = 0;
+  const bad: string[] = [];
+  for (const r of all) {
+    const result = verifyReceipt(r, attester.publicKeyPem) as unknown as Record<string, boolean>;
+    if (result.valid) ok += 1;
+    else {
+      const failed = Object.entries(result).filter(([k, v]) => k.endsWith("_valid") && v === false).map(([k]) => k);
+      bad.push(`${String((r.payload as unknown as Record<string, unknown>).timestamp ?? "")}: ${failed.join(", ") || "invalid"}`);
+    }
+  }
+  console.log(`${ok}/${all.length} receipt(s) verify offline against ${attesterPath}.`);
+  if (bad.length) { for (const b of bad) console.error(`  ✗ ${b}`); process.exit(1); }
+  process.exit(0);
+}
+
+async function runTest(args: string[]): Promise<void> {
+  const command = args.find((a) => !a.startsWith("-"));
+  if (!command) { console.error('usage: scopebond-hook test "<shell command>"'); process.exit(1); }
+  const dir = configDir();
+  if (!existsSync(join(dir, "policy.json"))) { console.error("no policy yet — run `scopebond-hook init` first."); process.exit(1); }
+  // Evaluate against the real policy and keys, but a throwaway store, so `test`
+  // never records a receipt or exports anything.
+  const tmp = mkdtempSync(join(tmpdir(), "sb-hook-test-"));
+  try {
+    const runtime = createHookRuntime({
+      policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"),
+      attesterPath: join(dir, "attester.key"), dbPath: join(tmp, "receipts.db"),
+      strict: process.argv.includes("--strict"),
+    });
+    const mapped = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command } }), currentBranch(process.cwd()));
+    console.log(`command: ${command}`);
+    for (const m of mapped) {
+      const d = await runtime.evaluateOne(m);
+      console.log(`  ${describeIntent({ intent: m.intent }).padEnd(28)} → ${d.decision}${d.reason ? `  (${d.reason})` : ""}`);
+    }
+    const overall = await runtime.evaluate(mapped);
+    console.log(`\noverall: ${overall.decision}${overall.reason ? `  · ${overall.reason}` : ""}`);
+    process.exit(overall.decision === "deny" ? 2 : 0);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 async function runConnect(args: string[]): Promise<void> {
@@ -168,8 +283,11 @@ if (cmd === "claude") { await runClaude(); }
 else if (cmd === "cursor") { await runCursor(); }
 else if (cmd === "init") { runInit(rest); }
 else if (cmd === "connect") { await runConnect(rest); }
+else if (cmd === "log") { await runLog(rest); }
+else if (cmd === "verify") { await runVerify(); }
+else if (cmd === "test") { await runTest(rest); }
 else if (cmd === "flush") { await runFlush(); }
 else {
-  console.error("usage: scopebond-hook <claude|cursor|init|connect|flush> [--cursor] [--force] [--strict]");
+  console.error("usage: scopebond-hook <claude|cursor|init|connect|log|verify|test|flush> [--cursor] [--force] [--strict] [--no-install]");
   process.exit(1);
 }

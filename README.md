@@ -4,66 +4,91 @@
 [![CI](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml/badge.svg)](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@scopebond/gateway.svg)](https://www.npmjs.com/package/@scopebond/gateway)
 
-**Security & safety guardrails for AI agents with real authority.**
+**Guardrails and audit-grade proof for AI agents.** Scopebond checks every action a
+coding agent takes — a shell command, a file edit, a git push, an MCP tool call —
+against rules you write, blocks the ones that break them, and signs a tamper-evident
+receipt of every decision that anyone can verify offline.
 
-> **Experimental alpha:** use controlled test systems only. Upstream-specific
-> reconciliation coverage, distributed hosted coordination, and release migration remain
-> under active remediation. The live demo evaluates real policies but uses
-> a no-op executor; it does not perform the displayed business actions.
+> **Experimental alpha — use controlled test systems only.** The semantics below are
+> the target; the alpha is under active hardening. The hosted workspace ("Scopebond
+> Cloud") is a separate, proprietary product and is not in this repository.
 
-AI agents are being handed the power to **move money, send messages, and change
-systems** — on their own. When an agent makes a mistake or gets hijacked (a
-prompt-injected agent will happily use its real permissions against you), the
-damage is real and there's no undo. Scopebond is the open-source control layer
-that **blocks out-of-policy actions before they happen** and **proves exactly what
-every agent did**.
+## 60-second start: govern your coding agent
 
-> ▶ **See the policy simulation:** **[try.scopebond.com](https://try.scopebond.com)** —
-> compare live allow/deny decisions across finance, security, legal, DevOps, support,
-> data, and vendor scenarios. Learn more at **[scopebond.com](https://scopebond.com)**.
+Put Scopebond in front of Claude Code or Cursor. One command scaffolds a signing
+key and a starter policy and wires the hook into your agent:
+
+```bash
+npx @scopebond/hook init            # add --cursor for Cursor
+```
+
+Then work as usual. A push to `main`, an `rm -rf`, a write to your CI config, a read
+of a `*.key` — blocked before it runs. Everything else is recorded. Look at what
+happened and check it cryptographically, with no network and no account:
+
+```bash
+scopebond-hook log                  # recent decisions
+scopebond-hook verify               # every receipt verifies offline
+scopebond-hook test "rm -rf /"      # see a decision without running anything
+```
+
+The starter policy protects release branches, blocks destructive programs, keeps the
+agent out of its own policy and keys, and observes network and MCP calls so you can
+tighten them when ready. It is a plain JSON file — edit the limits.
 
 ## One policy, three uses: prevent · prove · recover
 
-- **Prevent** — the **Scopebond Gateway** sits between an agent and everything it
-  can touch (MCP tools, HTTP APIs, wallets). You write a machine-readable policy —
-  spend limits, allowlists, action bounds, time windows, approvals — and each rule
-  is *enforced* (blocked in-flight, **fail closed**) or *monitored* (allowed, but
-  signed and flagged). Plus a kill switch. These are target semantics; do not rely on
-  the alpha for production protection until the open remediation work is released.
-- **Prove** — every action, allowed or blocked, is countersigned into a
-  tamper-evident **`scopebond:receipt`** (Ed25519). Anyone can verify a receipt
-  against the gateway's published key. A valid signature supports integrity and
-  provenance for what the signer asserted; it does not by itself prove an external
-  effect, completeness, compliance or legal admissibility.
-- **Recover** *(roadmap)* — the **Collateral Registry**: an operator backs an agent
-  with a refundable USDC deposit against the *same* policy; on a provable scope
-  violation the principal recovers from it. Non-custodial — Scopebond holds no key
-  that can move it.
+- **Prevent** — the **Scopebond Gateway** sits between an agent and what it can touch
+  (MCP tools, HTTP APIs, wallets). You write a machine-readable policy — spend limits,
+  allowlists, action bounds, time windows, approvals — and each rule is *enforced*
+  (blocked in-flight, **fail closed**) or *monitored* (allowed, but signed and
+  flagged). Plus a kill switch.
+- **Prove** — every action, allowed or blocked, is countersigned into a tamper-evident
+  **`scopebond:receipt`** (Ed25519). Anyone can verify a receipt against the signer's
+  published key. A valid signature supports integrity and provenance for what the
+  signer asserted; it does not by itself prove an external effect, completeness or
+  compliance.
+- **Recover** *(roadmap)* — a later, optional layer where an operator backs an agent
+  with a refundable deposit against the *same* policy. Non-custodial. Not required to
+  use anything above, and not in scope for the alpha.
 
-## What it protects
+## How enforcement actually works
 
-Payments & finance · security incident response · legal & litigation (proof) ·
-DevOps & infrastructure · customer support · data & privacy · third-party / vendor
-agents. **[Try each one live →](https://try.scopebond.com)**
+The hook maps each native tool call to a normalized action, decomposing a shell
+command into every simple command it will run (`a && b`, `$(c)`, `bash -c '…'`), so a
+denied program can't ride in behind an allowed one. It records a signed receipt and,
+when a call is out of policy, blocks it — otherwise it defers to the agent's own
+permission flow (it blocks; it never silently auto-approves). Secrets in commands are
+scrubbed before anything is signed or stored. It is cooperative (M0): the agent runs
+the allowed action itself. An agent that ignores the hook is not enforced — for
+in-path enforcement of money or system actions, put the **gateway** in the path.
 
-## Quickstart
+## Connectors
 
-Try the bundled demo (allow + deny + a signed receipt), from a clone of this repo:
+| Package | Governs |
+|---|---|
+| [`@scopebond/hook`](packages/hook) | Claude Code + Cursor tool calls, in-path, before they run. `npx @scopebond/hook init`. |
+| [`@scopebond/mcp`](packages/mcp) | Any MCP client, by proxying an upstream MCP server and deciding each `tools/call`. |
+| [`@scopebond/framework`](packages/framework) | In-process agents — a Vercel AI SDK / LangGraph tool loop — via a cooperative guard. |
+| [`@scopebond/github-action`](packages/github-action) | Pull requests from coding agents, as a required policy check in GitHub Actions. |
+
+## Core
+
+| Package | What it is |
+|---|---|
+| [`@scopebond/gateway`](packages/gateway) | The enforcement engine: HTTP + MCP ingress, Ed25519 action evidence, atomic SQLite authority/approval reservations, durable dispatch lifecycle and reconciliation, kill switch, Merkle anchoring. Default execution is a simulation. |
+| [`@scopebond/verify`](packages/verify) | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` verdict library plus conformance vectors. The portable standard the rest rests on. |
+| [`@scopebond/policy-schema`](packages/policy-schema) | The policy vocabulary and the `scopebond:receipt` envelope as JSON Schema, plus the action taxonomy and test vectors. |
+| [`@scopebond/sdk`](packages/sdk) | Ed25519 operator signing for agents that emit signed intents. |
+
+The on-chain **contracts**, the **registry read API** and the **conformance suite**
+are `[PLANNED]`.
+
+## Embed the gateway
 
 ```bash
-pnpm -r build
-node examples/quickstart.mjs
+npx @scopebond/gateway init         # writes a key, a key registry and a starter policy
 ```
-
-**Start your own project** — scaffold a working agent key, a key registry that trusts it, and a starter policy in one command, then follow the printed steps to run the gateway and submit your first signed action:
-
-```bash
-npx @scopebond/gateway init
-# writes scopebond-agent.key, principal-keys.json and scopebond.policy.json,
-# then prints the exact start → sign → submit → verify commands
-```
-
-Embed it in your own service:
 
 ```ts
 import { createGateway, StaticPrincipalKeyRegistry } from "@scopebond/gateway";
@@ -71,69 +96,48 @@ const keys = new StaticPrincipalKeyRegistry(principalKeyRecords);
 const { app, handleAction } = createGateway({ policy, authentication: { keys } });
 ```
 
-Verify a receipt independently (no trust in the server required):
+Verify a receipt independently, no trust in the server required:
 
 ```bash
 npx @scopebond/gateway verify ./receipt.json --url http://localhost:8787
 ```
 
-Works with any agent over **HTTP or MCP**. Self-host it free — no account required.
-
-## Packages
-
-| Package | What it is |
-|---|---|
-| [`@scopebond/gateway`](packages/gateway) | The experimental gateway alpha: HTTP + MCP ingress, authenticated Ed25519 action evidence, atomic SQLite authority/approval reservations, durable pre-dispatch lifecycle and result-query reconciliation, persistent attester key and stop state, plus one constrained support-refund adapter. Default execution is a simulation. `npx @scopebond/gateway`. |
-| [`@scopebond/verify`](packages/verify) | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` verdict library + conformance vectors. The portable standard the whole thing rests on. |
-| [`@scopebond/policy-schema`](packages/policy-schema) | The policy vocabulary — JSON Schema for the policy document and the `scopebond:receipt` envelope, plus test vectors. |
-
-An Ed25519 operator-signing **`sdk`** and a runnable end-to-end **[`examples/quickstart`](examples/)** are in the repo; the on-chain **contracts** and the **conformance suite** are `[PLANNED]`.
+Runnable end-to-end walkthroughs are in [`examples/`](examples/). Self-host everything
+free — no account required.
 
 ## What lives here (and what doesn't)
 
-**Here (Apache-2.0):** the gateway, the `scopebond-verify` verdict library and its
-test vectors, the policy schema, the SDK, framework integrations, the smart
-contracts, the registry read API, and the conformance suite — the open-source
-product you self-host and build on.
+**Here (Apache-2.0):** the connectors, the gateway, the `scopebond-verify` verdict
+library and its vectors, the policy schema and the SDK — the open-source product you
+self-host and build on.
 
-**Not here:** Avouro's internal docs, marketing sites, hosted-service and
-control-plane code ("Scopebond Cloud") — those live in separate private
-repositories. A commit gate (`scripts/oss-gate.mjs`, enforced on commit, push, and
-merge) keeps non-public material out of this repo by design.
+**Not here:** Avouro's internal docs, marketing site, and the hosted control plane
+("Scopebond Cloud"). A commit gate (`scripts/oss-gate.mjs`, enforced on commit, push
+and merge) keeps non-public material out of this repository by design.
 
 ## Status
 
-Experimental alpha. The published package set is
-`@scopebond/policy-schema@0.3.0`, `@scopebond/verify@0.2.0`,
-`@scopebond/gateway@0.5.0`, and `@scopebond/sdk@0.1.1`. The source tree matches
-that release set. Use controlled test systems only until the documented safety,
-integration, and operational gates close. The hosted control plane ("Scopebond
-Cloud") is a separate proprietary product and is not in this repository.
+Experimental alpha. Published set: `@scopebond/policy-schema@0.3.0`,
+`@scopebond/verify@0.2.0`, `@scopebond/gateway@0.5.0`, `@scopebond/sdk@0.1.1`, and the
+connectors `@scopebond/hook`, `@scopebond/mcp`, `@scopebond/framework`,
+`@scopebond/github-action`. The source tree matches that release set. Use controlled
+test systems only until the documented safety, integration and operational gates
+close. See [scopebond.com](https://scopebond.com) and the live policy demo at
+[try.scopebond.com](https://try.scopebond.com).
 
 ## Using Scopebond? Show it
 
-If Scopebond guards your agents, add the badge so your users know their agent is
-bounded and its actions are provable:
-
 [![Secured by Scopebond](https://img.shields.io/badge/Secured%20by-Scopebond-5b8cff)](https://scopebond.com)
-
-Markdown:
 
 ```md
 [![Secured by Scopebond](https://img.shields.io/badge/Secured%20by-Scopebond-5b8cff)](https://scopebond.com)
 ```
 
-HTML:
-
-```html
-<a href="https://scopebond.com"><img src="https://img.shields.io/badge/Secured%20by-Scopebond-5b8cff" alt="Secured by Scopebond"></a>
-```
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SCOPE.md](SCOPE.md), and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md); contributions are under a [CLA](CLA.md).
-To report a vulnerability, see [SECURITY.md](SECURITY.md).
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md); contributions are under a [CLA](CLA.md). To
+report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 

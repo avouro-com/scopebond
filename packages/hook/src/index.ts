@@ -2,7 +2,7 @@
 // the deterministic mapper and the check-only runtime; the `scopebond-hook`
 // binary is the thin harness adapter over them.
 
-export { mapClaudeToolUse, mapCursorEvent } from "./map.js";
+export { mapClaudeToolUse, mapCursorEvent, fillPushBranch } from "./map.js";
 export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy } from "./runtime.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";

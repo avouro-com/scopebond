@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,9 +56,69 @@ test("claude: invalid stdin fails closed (deny, exit 2)", () => {
   assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
 });
 
-test("init scaffolds keys and a policy and prints the harness snippet", () => {
-  const dir = mkdtempSync(join(tmpdir(), "sb-hook-init-"));
-  const stdout = execFileSync(process.execPath, [cli, "init"], { encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+test("init scaffolds keys and a policy and auto-configures the agent", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-init-"));
+  const dir = join(project, ".scopebond");
+  const stdout = execFileSync(process.execPath, [cli, "init"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
   assert.ok(existsSync(join(dir, "agent.key")) && existsSync(join(dir, "policy.json")), "keys and policy exist");
-  assert.match(stdout, /scopebond-hook claude/, "prints the Claude hook command");
+  const settings = join(project, ".claude", "settings.json");
+  assert.ok(existsSync(settings), "init writes the Claude settings automatically");
+  const cfg = JSON.parse(readFileSync(settings, "utf8"));
+  assert.match(cfg.hooks.PreToolUse[0].hooks[0].command, /^npx -y @scopebond\/hook@\S+ claude$/);
+  assert.match(stdout, /configured/, "reports that the agent was configured");
+});
+
+test("init --no-install prints the snippet instead of writing config", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-init-ni-"));
+  const dir = join(project, ".scopebond");
+  const stdout = execFileSync(process.execPath, [cli, "init", "--no-install"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+  assert.ok(!existsSync(join(project, ".claude", "settings.json")), "no config written with --no-install");
+  assert.match(stdout, /npx -y @scopebond\/hook@\S+ claude/, "prints the pinned hook command");
+});
+
+test("first-run smoke: init, a blocked command, then the receipt shows in log and verifies", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-e2e-"));
+  const dir = join(project, ".scopebond");
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
+  execFileSync(process.execPath, [cli, "init", "--no-install"], { encoding: "utf8", cwd: project, env });
+  // A destructive command is blocked (exit 2) and recorded.
+  const blocked = run(dir, ["claude"], JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" }, cwd: project }));
+  assert.equal(blocked.status, 2, "the destructive command is denied");
+  // log shows it; verify passes offline.
+  const log = execFileSync(process.execPath, [cli, "log"], { encoding: "utf8", cwd: project, env });
+  assert.match(log, /shell\.exec rm/, "the receipt appears in the log");
+  assert.match(log, /deny/, "recorded as a deny");
+  const verify = execFileSync(process.execPath, [cli, "verify"], { encoding: "utf8", cwd: project, env });
+  assert.match(verify, /receipt\(s\) verify offline/);
+  assert.doesNotMatch(verify, /0\/[1-9]/, "at least one receipt verifies");
+});
+
+test("test subcommand shows the decision without recording a receipt", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-test-"));
+  const dir = join(project, ".scopebond");
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
+  execFileSync(process.execPath, [cli, "init", "--no-install"], { encoding: "utf8", cwd: project, env });
+  const denied = run(dir, ["test", "echo hi && rm -rf x"]);
+  assert.equal(denied.status, 2, "a command containing rm is denied");
+  assert.match(denied.stdout, /overall: deny/);
+  const allowed = run(dir, ["test", "npm run build"]);
+  assert.equal(allowed.status, 0);
+  assert.match(allowed.stdout, /overall: (allow|not_evaluated)/);
+  // `test` must not persist anything.
+  assert.ok(!existsSync(join(dir, "receipts.db")), "test does not record a receipt");
+});
+
+test("starter policy: a fetch and an MCP call are observed (allowed), a bare git push on a feature branch is allowed", async () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-starter-"));
+  const dir = join(project, ".scopebond");
+  scaffold(dir);
+  const { createHookRuntime } = await import("../dist/index.js");
+  const { mapClaudeToolUse, fillPushBranch } = await import("../dist/index.js");
+  const rt = createHookRuntime({ policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db") });
+  assert.notEqual((await rt.evaluate(mapClaudeToolUse({ tool_name: "WebFetch", tool_input: { url: "https://example.com/x" } }))).decision, "deny", "net.fetch is observed, not denied");
+  assert.notEqual((await rt.evaluate(mapClaudeToolUse({ tool_name: "mcp__github__create_issue", tool_input: { title: "x" } }))).decision, "deny", "mcp.tool.call is observed, not denied");
+  const push = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push" } }), "feature/x");
+  assert.notEqual((await rt.evaluate(push)).decision, "deny", "a bare push on a feature branch is allowed");
+  const toMain = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push" } }), "main");
+  assert.equal((await rt.evaluate(toMain)).decision, "deny", "a bare push resolved to main is denied");
 });

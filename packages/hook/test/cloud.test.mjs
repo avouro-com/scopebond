@@ -14,11 +14,18 @@ test("installHarness merges the hook into the agent config, idempotently and pre
   assert.ok(file.endsWith(join(".claude", "settings.json")));
   let cfg = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(cfg.hooks.PreToolUse.length, 1);
-  assert.equal(cfg.hooks.PreToolUse[0].hooks[0].command, "scopebond-hook claude");
+  // A version-pinned npx command so a missing global binary is fetched, not skipped.
+  assert.match(cfg.hooks.PreToolUse[0].hooks[0].command, /^npx -y @scopebond\/hook@\S+ claude$/);
   // Idempotent: re-running does not add a duplicate.
   installHarness("claude", dir);
   cfg = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(cfg.hooks.PreToolUse.length, 1, "no duplicate on re-run");
+  // A legacy bare `scopebond-hook claude` entry is replaced, not duplicated.
+  writeFileSync(file, JSON.stringify({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "scopebond-hook claude" }] }] } }));
+  installHarness("claude", dir);
+  cfg = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(cfg.hooks.PreToolUse.length, 1, "legacy bare command replaced in place");
+  assert.match(cfg.hooks.PreToolUse[0].hooks[0].command, /^npx -y @scopebond\/hook@\S+ claude$/);
   // Preserves unrelated settings and an existing hook.
   writeFileSync(file, JSON.stringify({ model: "opus", hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "other-tool" }] }] } }));
   installHarness("claude", dir);

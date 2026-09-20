@@ -69,6 +69,11 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
         param_bounds: { path: { pattern: PROTECTED_READ } },
         description: "Allow workspace reads, but never the signing keys (*.key) or the hook's own .scopebond directory.",
       },
+      {
+        id: "observe-net-mcp", type: "action_allowlist", mode: "monitor",
+        action_types: ["net.fetch", "mcp.tool.call"],
+        description: "Observe network fetches and MCP tool calls (recorded, not blocked) — add bounds to enforce.",
+      },
       { id: "keys", type: "key_policy", active_keys: [agentKid], description: "Only the enrolled machine key may sign." },
     ],
   };
