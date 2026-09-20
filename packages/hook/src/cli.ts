@@ -69,13 +69,9 @@ async function runClaude(): Promise<void> {
     const decision = await runtime.evaluate(mapClaudeToolUse(input!));
     await runtime.flush();
     if (decision.decision === "deny") denyClaude(decision.reason);
-    if (decision.decision === "allow") {
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: decision.reason },
-      }) + "\n");
-      process.exit(0);
-    }
-    // not_evaluated: defer to the harness default (grant nothing, block nothing).
+    // allow and not_evaluated both DEFER to Claude Code's own permission flow: the
+    // hook records the receipt but never returns permissionDecision:"allow", which
+    // would suppress the user's normal review. Scopebond blocks; it does not approve.
     process.exit(0);
   } catch (error) {
     denyClaude(`Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`scopebond-hook init\`.`);
@@ -92,7 +88,9 @@ async function runCursor(): Promise<void> {
     const runtime = createHookRuntime(runtimePaths(configDir()));
     const decision = await runtime.evaluate(mapCursorEvent(event, input));
     await runtime.flush();
-    permission = decision.decision === "deny" ? "deny" : decision.decision === "allow" ? "allow" : "ask";
+    // Only an out-of-policy action is denied outright; an allowed or unevaluated
+    // action defers to Cursor's own prompt ("ask"), never a silent auto-allow.
+    permission = decision.decision === "deny" ? "deny" : "ask";
     message = decision.reason;
   } catch (error) {
     permission = "deny";

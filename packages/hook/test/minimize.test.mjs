@@ -130,7 +130,7 @@ test("structured parameters never carry a secret: program, push remote and ref, 
   const shell = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: `GH_TOKEN=${token} gh api user` } });
   assertAbsent(JSON.stringify(shell), token, "program");
 
-  const push = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: `git push https://ci:${weak}@github.com/acme/app.git feature/x` } });
+  const [push] = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: `git push https://ci:${weak}@github.com/acme/app.git feature/x` } });
   assert.equal(push.intent.action_type, "git.push");
   assert.equal(JSON.stringify(push).includes(weak), false, "push remote userinfo");
   assert.equal(push.intent.params.ref, "feature/x");
@@ -138,7 +138,7 @@ test("structured parameters never carry a secret: program, push remote and ref, 
   const pushToken = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: `git push https://${token}@github.com/acme/app.git main` } });
   assertAbsent(JSON.stringify(pushToken), token, "push remote token");
 
-  const fetchPath = mapClaudeToolUse({ tool_name: "WebFetch", tool_input: { url: `https://hooks.example.com/services/${token}/send?key=${weak}` } });
+  const [fetchPath] = mapClaudeToolUse({ tool_name: "WebFetch", tool_input: { url: `https://hooks.example.com/services/${token}/send?key=${weak}` } });
   assertAbsent(JSON.stringify(fetchPath), token, "fetch path");
   assert.equal(JSON.stringify(fetchPath).includes(weak), false, "fetch query string");
   assert.equal(fetchPath.intent.params.host, "hooks.example.com");
@@ -152,7 +152,7 @@ test("ordinary values a policy matches on are left alone", () => {
   assert.equal(scrubParam("feature/a-long-branch-name-with-many-words-in-it-for-a-ticket"), "feature/a-long-branch-name-with-many-words-in-it-for-a-ticket");
   assert.equal(scrubParam("/acme/app/commit/0123456789abcdef0123456789abcdef01234567"), "/acme/app/commit/0123456789abcdef0123456789abcdef01234567");
   assert.equal(scrubParam("npm"), "npm");
-  const m = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "npm test -- --watch=false" } });
+  const [m] = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "npm test -- --watch=false" } });
   assert.equal(m.intent.params.program, "npm");
   assert.match(m.intent.params.command, /^npm test -- --watch=false \(sha256:/);
   assert.equal(scrubSecrets("NODE_ENV=production PORT=8080 node server.js"), "NODE_ENV=production PORT=8080 node server.js");

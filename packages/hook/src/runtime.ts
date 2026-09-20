@@ -27,12 +27,24 @@ export interface RuntimeConfig {
 export interface Decision {
   decision: "allow" | "deny" | "not_evaluated";
   reason: string;
+  /** The deciding receipt (the denied one, or the first allow). */
   receipt?: unknown;
+  /** Every receipt produced — one per simple command in a decomposed shell call. */
+  receipts?: unknown[];
 }
 
+// The hook's own config and keys must be off-limits to the agent it governs:
+// otherwise the agent could rewrite its policy or read the signing keys and the
+// receipts stop meaning anything. These patterns are "allow if the path does NOT
+// match a protected location"; they run against the cwd-relative path the mapper
+// produces (and equally against an absolute one).
+const PROTECTED_WRITE = "^(?!(?:.*/)?\\.scopebond/)(?!(?:.*/)?\\.claude/settings)(?!(?:.*/)?\\.cursor/hooks)(?!(?:.*/)?\\.git/hooks/).+";
+const PROTECTED_READ = "^(?!(?:.*/)?\\.scopebond/)(?!.*\\.key$).+";
+
 /** The default starter policy for a coding agent: protect release branches, deny
- *  destructive programs, allow workspace file access, and trust only the enrolled
- *  machine key. Every threshold is the operator's to edit. */
+ *  destructive programs, allow workspace file access except the hook's own config
+ *  and keys, and trust only the enrolled machine key. Every threshold is the
+ *  operator's to edit. */
 export function starterPolicy(agentKid: string): Record<string, unknown> {
   return {
     vocabulary_version: "1.0", policy_id: "coding-agent", version: 1,
@@ -45,9 +57,18 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
       {
         id: "safe-shell", type: "action_allowlist", mode: "enforce", action_types: ["shell.exec"],
         param_bounds: { program: { pattern: "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+" } },
-        description: "Deny destructive programs (rm, sudo, …).",
+        description: "Deny destructive programs (rm, sudo, …). An empty program (an unparseable command) is denied.",
       },
-      { id: "workspace-files", type: "action_allowlist", mode: "enforce", action_types: ["file.write", "file.read"] },
+      {
+        id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
+        param_bounds: { path: { pattern: PROTECTED_WRITE } },
+        description: "Allow workspace writes, but never to the hook's policy/keys, .claude/settings, .cursor/hooks or git hooks.",
+      },
+      {
+        id: "protect-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
+        param_bounds: { path: { pattern: PROTECTED_READ } },
+        description: "Allow workspace reads, but never the signing keys (*.key) or the hook's own .scopebond directory.",
+      },
       { id: "keys", type: "key_policy", active_keys: [agentKid], description: "Only the enrolled machine key may sign." },
     ],
   };
@@ -83,17 +104,38 @@ export function createHookRuntime(config: RuntimeConfig) {
     async flush(): Promise<void> {
       if (exporter) await flushBounded(exporter, config.cloud?.flushTimeoutMs);
     },
-    async evaluate(mapped: Mapped): Promise<Decision> {
+    /** Decide one mapped action, recording a receipt either way. */
+    async evaluateOne(mapped: Mapped): Promise<Decision> {
       const signed = agent.sign(mapped.intent);
       if (!mapped.evaluated && !config.strict) {
-        // Unknown tool, non-strict: observe without evaluating — grants nothing (D30).
+        // Unknown tool or unparseable command, non-strict: observe without
+        // evaluating — grants nothing (D30).
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization });
         return { decision: "not_evaluated", reason: `no policy applies to ${mapped.intent.action_type}`, receipt };
       }
-      // Evaluated tools, and (in strict mode) unmapped tool.<name> actions, go
-      // through policy — a closed allowlist denies an unlisted action.
+      // Evaluated actions, and (in strict mode) unmapped tool.<name>/opaque commands,
+      // go through policy — a closed allowlist denies an unlisted action.
       const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
       return { decision: result.allowed ? "allow" : "deny", reason: result.reason, receipt: result.receipt };
+    },
+    /** Decide a whole tool call. A shell call decomposes into several simple
+     *  commands; every one is recorded, and a single deny denies the call. */
+    async evaluate(mapped: Mapped | Mapped[]): Promise<Decision> {
+      const list = Array.isArray(mapped) ? mapped : [mapped];
+      if (list.length === 0) return { decision: "not_evaluated", reason: "no action", receipts: [] };
+      const receipts: unknown[] = [];
+      let allow: Decision | null = null;
+      let notEvaluated: Decision | null = null;
+      for (const m of list) {
+        const d = await this.evaluateOne(m);
+        if (d.receipt !== undefined) receipts.push(d.receipt);
+        if (d.decision === "deny") return { ...d, receipts };            // any deny denies the call
+        if (d.decision === "allow" && !allow) allow = d;
+        if (d.decision === "not_evaluated" && !notEvaluated) notEvaluated = d;
+      }
+      // No deny: allow if any command was evaluated-and-allowed, else not_evaluated.
+      const chosen = allow ?? notEvaluated!;
+      return { ...chosen, receipts };
     },
   };
 }
