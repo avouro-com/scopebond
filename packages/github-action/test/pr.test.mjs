@@ -47,3 +47,27 @@ test("options can extend the governed-agent actor set", () => {
     noProdPaths, { agentActors: ["our-internal-agent[bot]"] });
   assert.equal(d.decision, "deny");
 });
+
+test("claude[bot] and github-actions[bot] are governed coding-agent actors (SB68)", () => {
+  assert.equal(isAgentActor("claude[bot]"), true);
+  assert.equal(isAgentActor("github-actions[bot]"), true);
+  const d = evaluatePullRequest({ ...base, actor: "claude[bot]", paths: ["infra/prod/main.tf"] }, noProdPaths);
+  assert.equal(d.decision, "deny", "an out-of-policy claude[bot] PR is denied");
+  assert.deepEqual(d.attribution, { kind: "asserted", actor: "claude[bot]" });
+});
+
+test("time_window binds because evaluation uses a real timestamp, not epoch 0 (SB68)", () => {
+  const businessHours = {
+    vocabulary_version: "1.0", policy_id: "gh-tw", version: 1,
+    clauses: [
+      { id: "merge", type: "action_allowlist", mode: "enforce", action_types: ["pr.merge"] },
+      { id: "hours", type: "time_window", mode: "enforce", start: "13:00", end: "21:00" },
+    ],
+  };
+  // 15:00 UTC is inside the window → allowed.
+  const inHours = evaluatePullRequest({ ...base, paths: ["src/a.ts"] }, businessHours, { now: () => "2026-09-21T15:00:00Z" });
+  assert.equal(inHours.decision, "allow", inHours.reason);
+  // 03:00 UTC is outside the window → denied (epoch 0 would have made this meaningless).
+  const offHours = evaluatePullRequest({ ...base, paths: ["src/a.ts"] }, businessHours, { now: () => "2026-09-21T03:00:00Z" });
+  assert.equal(offHours.decision, "deny", "an out-of-hours merge is denied");
+});

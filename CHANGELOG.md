@@ -7,10 +7,31 @@ tagged release.
 
 ## [Unreleased]
 
+Per-package versions and notes are managed with changesets; this section is a
+human summary. The published set is policy-schema 0.3.0, verify 0.2.0, gateway
+0.5.0, sdk 0.1.1 and the connectors hook, mcp, framework and github-action.
+
+### Security
+- **hook:** the secret scrubber leaked credentials — single-token shapes (GitHub,
+  AWS, Slack, Stripe, npm, OpenAI/Anthropic, Google keys, JWTs, high-entropy blobs)
+  were emitted as `secret***` and signed into receipts. Rewritten with explicit
+  rules and a property-based regression suite; structured mapper parameters are
+  scrubbed too.
+- **hook:** command-injection bypasses — a denied program could ride in behind an
+  allowed one (`a && b`, `bash -c '…'`, `$(…)`, `FOO=1 rm`, `git -C`, `+ref`). The
+  mapper now decomposes a command into every simple command and denies the call if
+  any is out of policy; the hook defers to the host on allow instead of
+  auto-approving; the starter policy protects the hook's own config and keys.
+- **gateway, mcp:** stateful clauses (rate_limit, spend_limit, sequence) never bound
+  in cooperative mode; they now count prior cooperative allows.
+- **framework:** `guardedTool` returned a tool unguarded when it lacked `execute`;
+  it now throws rather than silently pass a tool through with no policy check.
+
 ### Fixed
+- **github-action:** governs `claude[bot]` and `github-actions[bot]`, and evaluates
+  at a real timestamp so `time_window` clauses bind (was epoch 0).
 - Reconciled public package status and enrollment examples with the published
-  policy-schema 0.2.0, verifier 0.1.1, gateway 0.4.1 and SDK 0.1.0 release set;
-  CI now rejects release metadata that drifts from package manifests.
+  release set; CI rejects release metadata that drifts from package manifests.
 
 ### Added
 - A bounded `scopebond-gateway enroll` handoff that reads a one-use Cloud bundle,

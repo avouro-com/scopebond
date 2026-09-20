@@ -48,3 +48,11 @@ test("onDenied customizes the denial value", async () => {
   assert.equal(r.blocked, "delete_all");
   assert.match(r.reason, /not allowlisted/);
 });
+
+test("guardedTool throws on a tool with no execute — never a silent unguarded passthrough (SB68)", () => {
+  const g = guard();
+  // An OpenAI-Agents constructed tool exposes `invoke`, not `execute`; guarding it
+  // here would have silently returned it unguarded before this fix.
+  assert.throws(() => guardedTool({ name: "delete_all", invoke: async () => "gone" }, g), /no execute/);
+  assert.throws(() => wrapOpenAITools([{ name: "ok", execute: async () => 1 }, { name: "bad" }], g), /no execute/);
+});
