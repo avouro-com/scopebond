@@ -77,3 +77,44 @@ test("non-tool-call methods pass through unchanged", async () => {
   assert.deepEqual(res.result, { ok: true });
   assert.equal(upstream.calls.length, 1, "the passthrough reached the upstream");
 });
+
+test("rate_limit binds across calls: the proxy counts prior authorized calls (SB66)", async () => {
+  const ratePolicy = {
+    vocabulary_version: "1.0", policy_id: "mcp-rate", version: 1,
+    clauses: [
+      { id: "fs", type: "action_allowlist", mode: "enforce", action_types: ["mcp.tool.call"], param_bounds: { server: { enum: ["filesystem"] } } },
+      { id: "rl", type: "rate_limit", mode: "enforce", action_types: ["mcp.tool.call"], max_count: 2, window: "PT1H" },
+    ],
+  };
+  const upstream = stubUpstream();
+  const proxy = createMcpProxy({
+    policy: ratePolicy, principal: { subject: "client:c7", issuer: "scopebond:mcp-proxy" },
+    server: "filesystem", attesterKeyPem: keyPem(), upstream,
+  });
+  const call = (i) => proxy.handle({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: "read_file", arguments: { path: `f${i}` } } });
+  assert.ok((await call(1)).result, "first call allowed");
+  assert.ok((await call(2)).result, "second call allowed");
+  const third = await call(3);
+  assert.ok(third.error, "the third call in the window is denied");
+  assert.match(third.error.message, /max_count/);
+  assert.equal(upstream.calls.length, 2, "only the two authorized calls were forwarded");
+});
+
+test("seeded history counts toward the window at startup (SB66)", async () => {
+  const ratePolicy = {
+    vocabulary_version: "1.0", policy_id: "mcp-rate2", version: 1,
+    clauses: [
+      { id: "fs", type: "action_allowlist", mode: "enforce", action_types: ["mcp.tool.call"], param_bounds: { server: { enum: ["filesystem"] } } },
+      { id: "rl", type: "rate_limit", mode: "enforce", action_types: ["mcp.tool.call"], max_count: 1, window: "PT1H" },
+    ],
+  };
+  const upstream = stubUpstream();
+  const proxy = createMcpProxy({
+    policy: ratePolicy, principal: { subject: "client:c7", issuer: "scopebond:mcp-proxy" },
+    server: "filesystem", attesterKeyPem: keyPem(), upstream,
+    history: [{ intent: { action_type: "mcp.tool.call", params: { server: "filesystem", tool: "read_file", args_digest: "sha256:seed" } }, executed: true, timestamp: new Date().toISOString(), intent_hash: "seed-1" }],
+  });
+  const res = await proxy.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_file", arguments: { path: "x" } } });
+  assert.ok(res.error, "one seeded call already fills the max_count:1 window, so this is denied");
+  assert.equal(upstream.calls.length, 0, "the denied call was not forwarded");
+});

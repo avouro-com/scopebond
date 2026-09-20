@@ -93,10 +93,12 @@ test("replay protection holds in check-only: a reused signed request_id is rejec
   );
 });
 
-test("honest M0 boundary: cooperative allows do not accumulate toward a spend window", async () => {
-  // The gateway cannot independently verify a cooperative action happened, so it is
-  // recorded executed:false and does not fill a window. Per-action caps still hold;
-  // cumulative window enforcement across cooperative allows is NOT provided in M0.
+test("windowed spend accumulates across cooperative allows (SB66)", async () => {
+  // In cooperative mode the gateway authorized the first payout, so it counts toward
+  // the window for the next decision — otherwise a per-window cap could never bind.
+  // The receipt still records executed:false; the coercion is for the live decision
+  // only, and claim-time verification is unchanged. Conservative by design: an
+  // authorized-but-skipped action counts, which over-restricts rather than under.
   const windowed = {
     vocabulary_version: "1.0", policy_id: "m0-window", version: 1,
     clauses: [
@@ -107,6 +109,38 @@ test("honest M0 boundary: cooperative allows do not accumulate toward a spend wi
   const gateway = gw({ policy: windowed, mode: "check_only", store: new MemoryReceiptStore() });
   const one = await gateway.check({ intent: { action_type: "payout.create", asset: "USDC", amount: 600000 } });
   const two = await gateway.check({ intent: { action_type: "payout.create", asset: "USDC", amount: 600000 } });
-  assert.equal(one.allowed, true);
-  assert.equal(two.allowed, true, "both cooperative allows pass — the window is not enforced across them (documented M0 limit)");
+  assert.equal(one.allowed, true, one.reason);
+  assert.equal(two.allowed, false, "the second cooperative payout exceeds the 1,000,000 window and is denied");
+  assert.equal(two.receipt.payload.execution.state, "denied");
+});
+
+test("rate_limit binds across cooperative allows (SB66)", async () => {
+  const oncePerHour = {
+    vocabulary_version: "1.0", policy_id: "m0-rate", version: 1,
+    clauses: [{ id: "rl", type: "rate_limit", mode: "enforce", action_types: ["social.post"], max_count: 1, window: "PT1H" }],
+  };
+  const gateway = gw({ policy: oncePerHour, mode: "check_only", store: new MemoryReceiptStore() });
+  const first = await gateway.check({ intent: { action_type: "social.post", params: { text: "one" } } });
+  const second = await gateway.check({ intent: { action_type: "social.post", params: { text: "two" } } });
+  assert.equal(first.allowed, true, first.reason);
+  assert.equal(second.allowed, false, "the second post in the window is denied");
+  assert.match(second.reason ?? "", /max_count/);
+});
+
+test("sequence cooldown sees prior cooperative allows (SB66)", async () => {
+  // A cooldown: a second deploy within the forbidden window is a violation because a
+  // prior deploy is in range. For it to bind cooperatively, the first (cooperative)
+  // deploy must be counted.
+  const seq = {
+    vocabulary_version: "1.0", policy_id: "m0-seq", version: 1,
+    clauses: [{
+      id: "sq", type: "sequence", mode: "enforce",
+      first_action_types: ["deploy.run"], then_action_types: ["deploy.run"], forbidden_within: "PT1H",
+    }],
+  };
+  const gateway = gw({ policy: seq, mode: "check_only", store: new MemoryReceiptStore() });
+  const first = await gateway.check({ intent: { action_type: "deploy.run", params: {} } });
+  const second = await gateway.check({ intent: { action_type: "deploy.run", params: {} } });
+  assert.equal(first.allowed, true, first.reason);
+  assert.equal(second.allowed, false, "a second deploy within the cooldown is denied because the first is counted");
 });

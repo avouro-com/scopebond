@@ -86,3 +86,27 @@ test("onReceipt receives a receipt for every checked call", async () => {
   assert.equal(receipts[0].payload.realtime_result, "allow");
   assert.equal(receipts[1].payload.realtime_result, "deny");
 });
+
+test("stateful clauses bind across cooperative tool calls (SB66)", async () => {
+  // rate_limit and windowed spend must accumulate across a long-running guard's
+  // cooperative allows, or an agent could post/pay without limit.
+  const statefulPolicy = {
+    vocabulary_version: "1.0", policy_id: "agent-stateful", version: 1,
+    clauses: [
+      { id: "tools", type: "action_allowlist", mode: "enforce", action_types: ["social.post", "payout.create"] },
+      { id: "rl", type: "rate_limit", mode: "enforce", action_types: ["social.post"], max_count: 3, window: "P1D" },
+      { id: "win", type: "spend_limit", mode: "enforce", asset: "USDC", max_per_window: 100000, window: "P1D", scope: "principal" },
+    ],
+  };
+  const guard = createToolGuard({ policy: statefulPolicy, agentKeyPem: edPem(), attesterKeyPem: edPem(), manifest: { post: "social.post", pay: "payout.create" } });
+
+  // "max 5 posts a day" — the exact case the review said never fired.
+  assert.equal((await guard.check("post", { text: "1" })).allowed, true);
+  assert.equal((await guard.check("post", { text: "2" })).allowed, true);
+  assert.equal((await guard.check("post", { text: "3" })).allowed, true);
+  assert.equal((await guard.check("post", { text: "4" })).allowed, false, "the 4th post exceeds the daily rate limit");
+
+  // Windowed spend accumulates too.
+  assert.equal((await guard.check("pay", { asset: "USDC", amount: 60000 })).allowed, true);
+  assert.equal((await guard.check("pay", { asset: "USDC", amount: 60000 })).allowed, false, "the second payout exceeds the daily window");
+});

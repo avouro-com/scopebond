@@ -151,3 +151,23 @@ test("an action that no supported policy clause addresses fails closed", () => {
   assert.equal(result.clause_id, null);
   assert.match(result.explanation, /not covered/);
 });
+
+// The counting contract the gateway's cooperative-mode coercion depends on (SB66):
+// windowed clauses count executed receipts and skip executed:false ones. The
+// gateway coerces cooperative allows to executed:true for the live decision so a
+// rate/spend/sequence clause binds; claim-time verification keeps the strict rule.
+test("rate_limit counts prior executed receipts in the window (SB66 contract)", () => {
+  const policy = valid({ clauses: [{ id: "rl", type: "rate_limit", mode: "enforce", action_types: ["social.post"], max_count: 1, window: "PT1H" }] });
+  const at = "2026-09-19T12:00:00Z";
+  const prior = rcpt({ intent: { action_type: "social.post" }, executed: true, ts: "2026-09-19T11:30:00Z", action_id: "a1" });
+  const candidate = rcpt({ intent: { action_type: "social.post" }, executed: true, ts: at, action_id: "a2" });
+  assert.equal(violates(policy, [prior], candidate, { at }).violated, true, "the second post in the window violates");
+});
+
+test("a prior executed:false receipt does NOT count — the gateway must coerce cooperative allows (SB66 contract)", () => {
+  const policy = valid({ clauses: [{ id: "rl", type: "rate_limit", mode: "enforce", action_types: ["social.post"], max_count: 1, window: "PT1H" }] });
+  const at = "2026-09-19T12:00:00Z";
+  const notCounted = rcpt({ intent: { action_type: "social.post" }, executed: false, ts: "2026-09-19T11:30:00Z", action_id: "a1" });
+  const candidate = rcpt({ intent: { action_type: "social.post" }, executed: true, ts: at, action_id: "a2" });
+  assert.equal(violates(policy, [notCounted], candidate, { at }).violated, false, "executed:false is skipped, so this is only the first counted post");
+});
