@@ -27,6 +27,11 @@ export const KNOWN_AGENT_ACTORS: readonly string[] = [
   "copilot-swe-agent[bot]", "copilot[bot]",
   "devin-ai-integration[bot]", "google-labs-jules[bot]",
   "chatgpt-codex-connector[bot]", "codex[bot]", "cursor[bot]",
+  // Claude's GitHub app, and the generic Actions bot that authors PRs when a
+  // coding agent runs inside a workflow. Governing github-actions[bot] can also
+  // reach release/changeset PRs it authors; a policy that allows their paths is
+  // unaffected, and a repo can narrow the set via `agentActors`.
+  "claude[bot]", "github-actions[bot]",
 ];
 
 export interface EvaluateOptions {
@@ -34,6 +39,9 @@ export interface EvaluateOptions {
   agentActors?: readonly string[];
   /** The gate being evaluated; "merge" (default) maps to pr.merge. */
   gate?: "merge" | "deploy";
+  /** Evaluation clock (ISO 8601). Defaults to now; injectable for tests. Used as
+   *  the receipt timestamp and the evaluation instant, so time_window clauses bind. */
+  now?: () => string;
 }
 
 export interface PrDecision {
@@ -78,8 +86,9 @@ export function evaluatePullRequest(ctx: PullRequestContext, policy: unknown, op
     return { decision: "not_evaluated", reason: `"${ctx.actor}" is not a governed agent`, actionType: "pr.merge", ruleIds: [], attribution: null, outcomeRef };
   }
   const intent = mapPullRequest(ctx, opts);
-  const claimed = { intent, executed: true, timestamp: new Date(0).toISOString(), intent_hash: outcomeRef };
-  const verdict = violates(policy as never, [], claimed as never, {});
+  const timestamp = opts.now?.() ?? new Date().toISOString();
+  const claimed = { intent, executed: true, timestamp, intent_hash: outcomeRef };
+  const verdict = violates(policy as never, [], claimed as never, { at: timestamp });
   const attribution = { kind: "asserted" as const, actor: ctx.actor };
   if (verdict.violated) {
     return {

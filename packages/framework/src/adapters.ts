@@ -37,14 +37,29 @@ export interface FunctionTool {
   [key: string]: unknown;
 }
 
-/** Wrap a `{ name, execute }` tool (OpenAI Agents SDK, CrewAI, Claude Agent SDK
- *  MCP tools and any framework with function tools). */
+/** Wrap a function-tool *definition* — `{ name, execute }` — so `execute` checks
+ *  policy first. Use this on the definition you pass to the framework's tool
+ *  constructor (OpenAI Agents SDK `tool({ name, execute })`, CrewAI, Claude Agent
+ *  SDK function tools), not on an already-constructed tool object.
+ *
+ *  It throws if the tool has no `execute` function, rather than returning it
+ *  unguarded: a silent passthrough on a shape it does not recognize would let a
+ *  tool run with no policy check, which is exactly the failure a guard must not
+ *  have. A tool exposed only through a runtime `invoke` (a constructed OpenAI
+ *  Agents tool) is not guardable here — wrap its `execute` at definition time. */
 export function guardedTool<T extends FunctionTool>(tool: T, guard: ToolGuard, opts: WrapOptions = {}): T {
-  if (!tool.execute) return { ...tool };
+  if (typeof tool.execute !== "function") {
+    throw new Error(
+      `scopebond: cannot guard tool "${tool.name ?? "<unnamed>"}" — it has no execute() function. ` +
+      "Wrap the tool definition's execute before constructing the tool, or use guardExecute() directly.",
+    );
+  }
   return { ...tool, execute: guardExecute(tool.name, tool.execute, guard, opts) };
 }
 
-/** Wrap an OpenAI Agents SDK tools array so each tool checks policy before it runs. */
+/** Wrap an array of OpenAI Agents SDK tool *definitions* so each `execute` checks
+ *  policy before it runs. Throws on any tool lacking `execute` (never silently
+ *  unguarded). Wrap definitions, then pass them to `tool()`/the agent. */
 export function wrapOpenAITools<T extends FunctionTool>(tools: T[], guard: ToolGuard, opts: WrapOptions = {}): T[] {
   return tools.map((tool) => guardedTool(tool, guard, opts));
 }
