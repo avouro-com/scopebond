@@ -86,7 +86,7 @@ try {
     if (!result.allowed || result.receipt.payload.authorization.mode !== "authenticated") process.exit(1);
     // The taxonomy registry and the hook connector resolve and agree.
     if (!validateActionParams("git.push", { ref: "main" }).valid) process.exit(1);
-    if (mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push origin main" } }).intent.action_type !== "git.push") process.exit(1);
+    if (mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push origin main" } })[0].intent.action_type !== "git.push") process.exit(1);
     const prPolicy = { vocabulary_version: "1.0", policy_id: "smoke", version: 1, clauses: [
       { id: "no-prod", type: "action_allowlist", mode: "enforce", action_types: ["pr.merge"], param_bounds: { paths: { items: { pattern: "^(?!infra/prod/).*" }, match: "all" } } },
     ] };

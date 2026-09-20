@@ -16,21 +16,22 @@ const keys = new StaticPrincipalKeyRegistry([
 const gateway = createGateway({ policy: starterPolicy(agent.kid), authentication: { keys }, mode: "check_only" });
 
 async function hook(label, payload) {
+  // A shell tool call can carry several commands (`a && b`, `bash -c '…'`), so the
+  // mapper returns one intent per simple command. Decide every one and deny the
+  // call if any is out of policy.
   const mapped = mapClaudeToolUse(payload);
-  const signed = agent.sign(mapped.intent);
-  let decision, reason;
-  if (!mapped.evaluated) {
-    // No taxonomy type applies: the runtime observes without evaluating — grants
-    // nothing (never a silent allow).
-    decision = "not_evaluated";
-    reason = `no policy applies to ${mapped.intent.action_type}`;
-  } else {
-    const res = await gateway.handleAction(signed);
-    decision = res.allowed ? "allow" : "deny";
-    reason = res.reason;
+  const lines = [];
+  let decision = "not_evaluated";
+  let reason = "no policy applies";
+  for (const m of mapped) {
+    lines.push(`${m.intent.action_type} ${JSON.stringify(m.intent.params)}`);
+    if (!m.evaluated) continue; // no taxonomy type: observed, grants nothing
+    const res = await gateway.handleAction(agent.sign(m.intent));
+    if (!res.allowed) { decision = "deny"; reason = res.reason; break; }
+    decision = "allow"; reason = res.reason;
   }
   console.log(`\n${label}`);
-  console.log(`  ${payload.tool_name} → ${mapped.intent.action_type} ${JSON.stringify(mapped.intent.params)}`);
+  console.log(`  ${payload.tool_name} → ${lines.join("  |  ")}`);
   console.log(`  decision = ${decision}  ·  ${reason}`);
 }
 
