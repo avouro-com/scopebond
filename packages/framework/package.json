@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/framework",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Scopebond framework plugins — one import so an agent checks your policy before every tool call and records a signed receipt. Cooperative (M0) in-process guard with Vercel AI SDK and LangGraph/LangChain adapters.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
