@@ -220,7 +220,7 @@ async function runTest(args: string[]): Promise<void> {
     console.log(`command: ${command}`);
     for (const m of mapped) {
       const d = await runtime.evaluateOne(m);
-      console.log(`  ${describeIntent((d.receipt as Record<string, unknown>) ?? { intent: m.intent }).padEnd(28)} → ${d.decision}${d.reason ? `  (${d.reason})` : ""}`);
+      console.log(`  ${describeIntent({ intent: m.intent }).padEnd(28)} → ${d.decision}${d.reason ? `  (${d.reason})` : ""}`);
     }
     const overall = await runtime.evaluate(mapped);
     console.log(`\noverall: ${overall.decision}${overall.reason ? `  · ${overall.reason}` : ""}`);
