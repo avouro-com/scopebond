@@ -121,17 +121,36 @@ test("self-protection: the agent cannot rewrite the hook config or read the keys
     ["Write", { file_path: "nested/dir/.claude/settings.local.json" }],
     ["Write", { file_path: ".cursor/hooks.json" }],
     ["Write", { file_path: ".git/hooks/pre-commit" }],
+    // SB81: CI config is protected from silent rewrites (matches the README claim).
+    ["Write", { file_path: ".github/workflows/ci.yml" }],
+    ["Write", { file_path: ".github/workflows/release.yaml" }],
+    ["Write", { file_path: ".github/actions/build/action.yml" }],
+    ["Write", { file_path: ".gitlab-ci.yml" }],
+    ["Write", { file_path: ".circleci/config.yml" }],
+    ["Write", { file_path: "Jenkinsfile" }],
     ["Read", { file_path: ".scopebond/agent.key" }],
     ["Read", { file_path: "secrets/deploy.key" }],
     ["Read", { file_path: ".scopebond/cloud.json" }],
+    // SB81: environment secret files are protected from reads (exfiltration risk).
+    ["Read", { file_path: ".env" }],
+    ["Read", { file_path: ".env.production" }],
+    ["Read", { file_path: "config/.env.local" }],
   ];
   for (const [tool, input] of denied) {
     const d = await rt.evaluate(mapClaudeToolUse(claude(tool, input)));
     assert.equal(d.decision, "deny", `${tool} ${JSON.stringify(input)} should be denied`);
   }
-  // ordinary workspace files still work
-  assert.notEqual((await rt.evaluate(mapClaudeToolUse(claude("Write", { file_path: "src/app.ts" })))).decision, "deny");
-  assert.notEqual((await rt.evaluate(mapClaudeToolUse(claude("Read", { file_path: "README.md" })))).decision, "deny");
+  // ordinary workspace files still work, and safe look-alikes are not over-blocked
+  const allowed = [
+    ["Write", { file_path: "src/app.ts" }],
+    ["Write", { file_path: ".github/ISSUE_TEMPLATE/bug.md" }],
+    ["Read", { file_path: "README.md" }],
+    ["Read", { file_path: ".env.example" }],
+    ["Read", { file_path: "src/environment.ts" }],
+  ];
+  for (const [tool, input] of allowed) {
+    assert.notEqual((await rt.evaluate(mapClaudeToolUse(claude(tool, input)))).decision, "deny", `${tool} ${JSON.stringify(input)} should be allowed`);
+  }
 });
 
 test("strict mode: an unparseable command is denied; non-strict observes it", async () => {
