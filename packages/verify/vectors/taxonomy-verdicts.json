@@ -158,5 +158,69 @@
     ] },
     "claimed": { "intent": { "action_type": "pr.merge", "params": { "paths": ["src/a", 123] } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "p8" },
     "expect": { "violated": true, "clause_id": "paths" }
+  },
+  {
+    "name": "SB81: file.write to a CI workflow path is denied by a path bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "protect-write", "type": "action_allowlist", "mode": "enforce", "action_types": ["file.write"], "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?\\.github/workflows/)(?!(?:.*/)?\\.github/actions/)(?!(?:.*/)?\\.gitlab-ci\\.yml$)(?!(?:.*/)?Jenkinsfile$).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "file.write", "params": { "path": ".github/workflows/ci.yml" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "sb1" },
+    "expect": { "violated": true, "clause_id": "protect-write" }
+  },
+  {
+    "name": "SB81: file.write to an ordinary source path passes the CI path bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "protect-write", "type": "action_allowlist", "mode": "enforce", "action_types": ["file.write"], "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?\\.github/workflows/)(?!(?:.*/)?\\.github/actions/)(?!(?:.*/)?\\.gitlab-ci\\.yml$)(?!(?:.*/)?Jenkinsfile$).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "file.write", "params": { "path": "src/app.ts" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "sb2" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "SB81: file.read of an environment secret file is denied by a path bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "protect-read", "type": "action_allowlist", "mode": "enforce", "action_types": ["file.read"], "param_bounds": { "path": { "pattern": "^(?!.*\\.key$)(?!(?:.*/)?\\.env(?:\\.(?!example$|sample$|template$)[^/]*)?$).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "file.read", "params": { "path": "config/.env.production" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "sb3" },
+    "expect": { "violated": true, "clause_id": "protect-read" }
+  },
+  {
+    "name": "SB81: file.read of a .env.example template passes the secret bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "protect-read", "type": "action_allowlist", "mode": "enforce", "action_types": ["file.read"], "param_bounds": { "path": { "pattern": "^(?!.*\\.key$)(?!(?:.*/)?\\.env(?:\\.(?!example$|sample$|template$)[^/]*)?$).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "file.read", "params": { "path": ".env.example" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "sb4" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "SB81: file.read of a signing key is denied by a path bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "protect-read", "type": "action_allowlist", "mode": "enforce", "action_types": ["file.read"], "param_bounds": { "path": { "pattern": "^(?!.*\\.key$)(?!(?:.*/)?\\.env(?:\\.(?!example$|sample$|template$)[^/]*)?$).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "file.read", "params": { "path": "secrets/deploy.key" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "sb5" },
+    "expect": { "violated": true, "clause_id": "protect-read" }
+  },
+  {
+    "name": "SB81: file.write to a production path is denied by a customer path bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "prod-paths", "type": "action_allowlist", "mode": "enforce", "action_types": ["file.write"], "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?infra/prod/).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "file.write", "params": { "path": "infra/prod/main.tf" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "sb6" },
+    "expect": { "violated": true, "clause_id": "prod-paths" }
+  },
+  {
+    "name": "SB81: file.write to a dependency manifest is denied by a customer path bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "manifests", "type": "action_allowlist", "mode": "monitor", "action_types": ["file.write"], "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?(?:package(?:-lock)?\\.json|pnpm-lock\\.yaml|yarn\\.lock|requirements\\.txt|Cargo\\.(?:toml|lock)|go\\.(?:mod|sum))$).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "file.write", "params": { "path": "package.json" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "sb7" },
+    "expect": { "violated": true, "clause_id": "manifests" }
+  },
+  {
+    "name": "SB81: file.write to an ordinary source file passes the manifest bound",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "tax", "version": 1, "clauses": [
+      { "id": "manifests", "type": "action_allowlist", "mode": "monitor", "action_types": ["file.write"], "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?(?:package(?:-lock)?\\.json|pnpm-lock\\.yaml|yarn\\.lock|requirements\\.txt|Cargo\\.(?:toml|lock)|go\\.(?:mod|sum))$).+" } } }
+    ] },
+    "claimed": { "intent": { "action_type": "file.write", "params": { "path": "src/index.ts" } }, "executed": true, "timestamp": "2026-09-18T12:00:00Z", "intent_hash": "sb8" },
+    "expect": { "violated": false }
   }
 ]

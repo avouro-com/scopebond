@@ -38,8 +38,8 @@ export interface Decision {
 // receipts stop meaning anything. These patterns are "allow if the path does NOT
 // match a protected location"; they run against the cwd-relative path the mapper
 // produces (and equally against an absolute one).
-const PROTECTED_WRITE = "^(?!(?:.*/)?\\.scopebond/)(?!(?:.*/)?\\.claude/settings)(?!(?:.*/)?\\.cursor/hooks)(?!(?:.*/)?\\.git/hooks/).+";
-const PROTECTED_READ = "^(?!(?:.*/)?\\.scopebond/)(?!.*\\.key$).+";
+const PROTECTED_WRITE = "^(?!(?:.*/)?\\.scopebond/)(?!(?:.*/)?\\.claude/settings)(?!(?:.*/)?\\.cursor/hooks)(?!(?:.*/)?\\.git/hooks/)(?!(?:.*/)?\\.github/workflows/)(?!(?:.*/)?\\.github/actions/)(?!(?:.*/)?\\.gitlab-ci\\.yml$)(?!(?:.*/)?\\.circleci/)(?!(?:.*/)?azure-pipelines\\.yml$)(?!(?:.*/)?Jenkinsfile$).+";
+const PROTECTED_READ = "^(?!(?:.*/)?\\.scopebond/)(?!.*\\.key$)(?!(?:.*/)?\\.env(?:\\.(?!example$|sample$|template$)[^/]*)?$).+";
 
 /** The default starter policy for a coding agent: protect release branches, deny
  *  destructive programs, allow workspace file access except the hook's own config
@@ -62,12 +62,12 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
       {
         id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
         param_bounds: { path: { pattern: PROTECTED_WRITE } },
-        description: "Allow workspace writes, but never to the hook's policy/keys, .claude/settings, .cursor/hooks or git hooks.",
+        description: "Allow workspace writes, but never to the hook's policy/keys, .claude/settings, .cursor/hooks, git hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml, .circleci, azure-pipelines.yml, Jenkinsfile).",
       },
       {
         id: "protect-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
         param_bounds: { path: { pattern: PROTECTED_READ } },
-        description: "Allow workspace reads, but never the signing keys (*.key) or the hook's own .scopebond directory.",
+        description: "Allow workspace reads, but never the signing keys (*.key), environment secret files (.env, .env.*, except .env.example/.sample/.template) or the hook's own .scopebond directory.",
       },
       {
         id: "observe-net-mcp", type: "action_allowlist", mode: "monitor",

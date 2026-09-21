@@ -33,8 +33,10 @@ scopebond-hook test "rm -rf /"      # see a decision without running anything
 ```
 
 The starter policy protects release branches, blocks destructive programs, keeps the
-agent out of its own policy and keys, and observes network and MCP calls so you can
-tighten them when ready. It is a plain JSON file — edit the limits.
+agent out of its own policy and keys, its CI config (`.github/workflows`, and the
+other common CI files) and environment secret files (`.env`), and observes network
+and MCP calls so you can tighten them when ready. It is a plain JSON file — edit the
+limits.
 
 ## One policy, three uses: prevent · prove · recover
 
