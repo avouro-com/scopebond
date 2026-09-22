@@ -1,5 +1,64 @@
 # @scopebond/hook
 
+## 0.4.0
+
+### Minor Changes
+
+- 4c55503: Self-protection completeness and a runnable first run (security).
+
+  The starter policy protected the hook's own keys and config only against the
+  native file tools. Three gaps let a governed agent reach them anyway; all are now
+  closed, with regression cases in the mapper suite and the bypass corpus:
+
+  - **Shell reads of the signing key or a secret file** (`cat .scopebond/attester.key`,
+    `head .env`) mapped to `shell.exec` only, bypassing the `file.read` guard entirely.
+    A reader program's operands (and the targets of `>`/`>>` redirections) now also
+    emit `file.read`/`file.write` intents, so the same `protect-read`/`protect-write`
+    clauses apply. Reading the attester key — which would let an agent forge receipts —
+    is denied.
+  - **Windows backslash paths** (`.scopebond\policy.json`) did not match the guard
+    patterns, which are written with `/`. Paths are normalized to `/` before matching.
+  - **The `PowerShell` and generic `Shell` tools were unmapped**, so a command like
+    `Remove-Item -Recurse -Force .` fell through to an un-evaluated `tool.<name>` and
+    was allowed. They now decompose like `Bash`, and the starter policy's destructive
+    denylist covers the Windows/PowerShell forms (`del`, `rd`, `rmdir`, `erase`,
+    `deltree`, `format`, `Remove-Item`).
+
+  Also: `init` now prints runnable `npx -y @scopebond/hook@<version> …` commands for
+  the follow-up steps (the previous `scopebond-hook …` form is not on PATH after an
+  `npx` install), and `engines` requires Node `>=22.13` (the cloud outbox needs
+  `node:sqlite`, which is unavailable/flagged on 22.0–22.12).
+
+  Existing scaffolded policies are unchanged — only newly-initialized policies pick up
+  the tighter destructive denylist; the mapper-level protections apply to every install.
+
+- e6143b0: Real install package: a once-per-machine, user-level installer (SB112).
+
+  - New `scopebond` bin (alongside `scopebond-hook`) and commands: `install`
+    (user-level home in `~/.scopebond`, hook registered by absolute path in
+    `~/.claude/settings.json` / `~/.cursor/hooks.json`, Cursor auto-detected),
+    `status`, `doctor`, `uninstall` (`--purge`), and `login` (points at `connect`
+    until device-code login ships).
+  - Hook events now resolve their config most-specific first: an explicit
+    `SCOPEBOND_HOOK_DIR`, then the payload's project `.scopebond`, then
+    `$CLAUDE_PROJECT_DIR`, then the user-level home — so one install governs every
+    project while a project-local policy still wins.
+  - Ships as a Claude Code plugin (a `.claude-plugin` marketplace at the repo root):
+    `/plugin marketplace add avouro-com/scopebond` then `/plugin install scopebond`.
+
+### Patch Changes
+
+- c07b340: Starter policy: block writes to CI config and reads of environment secret files (SB81).
+
+  `npx @scopebond/hook init` now scaffolds a starter policy whose `protect-write` clause
+  also denies writes to CI configuration (`.github/workflows/`, `.github/actions/`,
+  `.gitlab-ci.yml`, `.circleci/`, `azure-pipelines.yml`, `Jenkinsfile`) and whose
+  `protect-read` clause also denies reads of environment secret files (`.env`, `.env.*`),
+  while still allowing `.env.example`/`.sample`/`.template`. This closes the gap between
+  the documented protection ("a write to your CI config — blocked before it runs") and the
+  shipped default. Existing scaffolded policies are unchanged — the policy is a plain JSON
+  file the operator edits; only newly-initialized policies pick up the tighter defaults.
+
 ## 0.3.0
 
 ### Minor Changes
