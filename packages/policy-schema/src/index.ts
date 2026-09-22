@@ -29,6 +29,7 @@ export const CLAUSE_TYPES = [
   "address_allowlist", "address_denylist", "contract_allowlist",
   "endpoint_allowlist", "endpoint_denylist", "action_allowlist",
   "time_window", "require_approval", "sequence", "oracle_condition", "key_policy",
+  "force_push_guard",
 ] as const;
 
 export const CLAUSE_MODES = ["enforce", "monitor", "require_approval"] as const;
