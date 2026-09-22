@@ -26,29 +26,68 @@ export interface Mapped {
 
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
 
+// Normalize Windows backslash separators to "/" so a path guard written with "/"
+// (the hook's own .scopebond/**, .claude/settings*, *.key rules) cannot be bypassed
+// on Windows by a backslash path. The taxonomy path space is "/"-separated.
+const normPath = (s: string): string => s.replace(/\\/g, "/");
+
 const rel = (value: unknown, cwd?: string): string => {
-  const s = String(value ?? "");
-  if (cwd && s.startsWith(cwd)) return s.slice(cwd.length).replace(/^[\\/]+/, "");
+  const s = normPath(String(value ?? ""));
+  const c = cwd ? normPath(cwd) : undefined;
+  if (c && s.startsWith(c)) return s.slice(c.length).replace(/^\/+/, "");
   return s;
 };
 
-/** Map one parsed simple command to a git.push or shell.exec intent. An opaque
- *  (unparseable) command becomes an un-evaluated shell.exec so it fails closed. */
-function mapSimpleCommand(sc: SimpleCommand, cwd?: string): Mapped {
+// Shell programs that READ a file given as an operand. A read of the signing keys
+// or a secret file through the shell (`cat .scopebond/attester.key`) must reach the
+// same file.read guard as the Read tool, or the cooperative protection is a fiction.
+const READERS = new Set([
+  "cat", "tac", "less", "more", "head", "tail", "nl", "od", "xxd", "hexdump",
+  "strings", "base64", "bat", "type", "get-content", "gc",
+]);
+
+/** Derive the additional file.read / file.write intents a simple shell command
+ *  implies: operands of a reader program, and the targets of `>`/`>>` redirections.
+ *  These flow through the same protect-read / protect-write clauses as the native
+ *  file tools. A false positive (a non-protected operand) is a harmless extra
+ *  receipt that the starter policy allows. */
+function fileOpsFromShell(sc: SimpleCommand, cwd?: string): Mapped[] {
+  const ops: Mapped[] = [];
+  if (READERS.has(sc.program.toLowerCase())) {
+    for (const t of sc.argv) {
+      if (t.startsWith("-") || /^\d+$/.test(t)) continue; // skip flags and flag values (head -n 5)
+      ops.push({ intent: { action_type: "file.read", params: { path: rel(scrubParam(t), cwd) } }, evaluated: true, source: "shell" });
+    }
+  }
+  for (let i = 0; i < sc.argv.length; i++) {
+    // `> file`, `>>file`, `2>file`, `&>file` — the token after the redirection op is a write target.
+    const m = /^(?:\d|&)?(>>?)(.*)$/.exec(sc.argv[i]);
+    if (!m) continue;
+    const target = m[2] || sc.argv[i + 1];
+    if (target && !target.startsWith("-") && !/^(?:\d|&)?>>?/.test(target))
+      ops.push({ intent: { action_type: "file.write", params: { path: rel(scrubParam(target), cwd) } }, evaluated: true, source: "shell" });
+  }
+  return ops;
+}
+
+/** Map one parsed simple command to the intents it implies: the git.push or
+ *  shell.exec itself, plus any file reads/writes it performs. An opaque
+ *  (unparseable) command becomes a single un-evaluated shell.exec so it fails closed. */
+function mapSimpleCommand(sc: SimpleCommand, cwd?: string): Mapped[] {
   if (sc.opaque) {
-    return {
+    return [{
       intent: { action_type: "shell.exec", params: { command: redactCommand(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
       evaluated: false, source: "shell",
-    };
+    }];
   }
   const push = parseGitPush(sc);
   if (push) {
     const params: Record<string, unknown> = { force: push.force };
     if (push.remote !== undefined) params.remote = scrubParam(push.remote);
     if (push.ref !== undefined) params.ref = scrubParam(push.ref);
-    return { intent: { action_type: "git.push", params }, evaluated: true, source: "shell" };
+    return [{ intent: { action_type: "git.push", params }, evaluated: true, source: "shell" }];
   }
-  return {
+  const exec: Mapped = {
     intent: {
       action_type: "shell.exec",
       // Scrub before storing: the raw command through the blob-aware scrubber, and
@@ -58,16 +97,17 @@ function mapSimpleCommand(sc: SimpleCommand, cwd?: string): Mapped {
     },
     evaluated: true, source: "shell",
   };
+  return [exec, ...fileOpsFromShell(sc, cwd)];
 }
 
-/** Decompose a shell command into one intent per simple command it will run. An
- *  empty command yields a single un-evaluated placeholder (nothing to grant). */
+/** Decompose a shell command into the intents it will run. An empty command yields
+ *  a single un-evaluated placeholder (nothing to grant). */
 function mapShell(command: string, cwd?: string): Mapped[] {
   const commands = decomposeShell(command);
   if (commands.length === 0) {
     return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
   }
-  return commands.map((sc) => mapSimpleCommand(sc, cwd));
+  return commands.flatMap((sc) => mapSimpleCommand(sc, cwd));
 }
 
 function parseMcpName(name: string): { server: string; tool: string } | null {
@@ -102,7 +142,12 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
   const name = String(input?.tool_name ?? "");
   const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
   const cwd = input?.cwd ? String(input.cwd) : undefined;
-  if (name === "Bash") return mapShell(String(ti.command ?? ""), cwd);
+  // Every shell-executing tool decomposes the same way. Claude Code exposes Bash;
+  // some hosts/agents expose PowerShell or a generic Shell tool — mapping only Bash
+  // let a PowerShell command (e.g. `Remove-Item -Recurse -Force .`) fall through to
+  // an un-evaluated tool.<name> and be allowed.
+  if (name === "Bash" || name === "PowerShell" || name === "Shell")
+    return mapShell(String(ti.command ?? ""), cwd);
   if (name === "Write" || name === "Edit" || name === "MultiEdit")
     return one({ action_type: "file.write", params: { path: rel(ti.file_path, cwd) } }, true, name);
   if (name === "NotebookEdit")

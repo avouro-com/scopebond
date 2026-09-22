@@ -56,8 +56,8 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
       },
       {
         id: "safe-shell", type: "action_allowlist", mode: "enforce", action_types: ["shell.exec"],
-        param_bounds: { program: { pattern: "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+" } },
-        description: "Deny destructive programs (rm, sudo, …). An empty program (an unparseable command) is denied.",
+        param_bounds: { program: { pattern: "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+" } },
+        description: "Deny destructive programs — POSIX (rm, sudo, shutdown, reboot, mkfs, dd) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, Remove-Item). An empty program (an unparseable command) is denied.",
       },
       {
         id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
