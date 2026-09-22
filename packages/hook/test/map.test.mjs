@@ -6,6 +6,11 @@ import { mapClaudeToolUse, mapCursorEvent, redactCommand, scrubSecrets, fillPush
 // single-command assertions readable.
 const only = (mapped) => { assert.equal(mapped.length, 1, `expected one intent, got ${mapped.length}`); return mapped[0]; };
 const types = (mapped) => mapped.map((m) => m.intent.action_type);
+// Programs of the shell.exec intents only (a reader/redirect also emits file.read/write).
+const shellProgs = (mapped) => mapped.filter((m) => m.intent.action_type === "shell.exec").map((m) => m.intent.params.program);
+// The path of every file.read / file.write intent the call implies.
+const readPaths = (mapped) => mapped.filter((m) => m.intent.action_type === "file.read").map((m) => m.intent.params.path);
+const writePaths = (mapped) => mapped.filter((m) => m.intent.action_type === "file.write").map((m) => m.intent.params.path);
 
 test("Bash maps to shell.exec with the program basename and a redacted command", () => {
   const m = only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/other" } }));
@@ -92,9 +97,42 @@ test("chained commands each become their own intent", () => {
 
 test("every separator splits: ; | && || & and newline", () => {
   for (const sep of ["; ", " | ", " && ", " || ", " & ", "\n"]) {
-    const progs = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: `cat a${sep}rm -rf b` } }).map((m) => m.intent.params.program);
+    const progs = shellProgs(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: `cat a${sep}rm -rf b` } }));
     assert.deepEqual(progs, ["cat", "rm"], `separator ${JSON.stringify(sep)}`);
   }
+});
+
+// ---- SB111: self-protection completeness (the holes reproduced in published 0.3.0) ----
+
+test("a shell read of the signing key / a secret file emits a file.read the read-guard sees", () => {
+  // `cat .scopebond/attester.key` used to map to shell.exec(cat) only, bypassing the
+  // file.read protection entirely — the agent could exfiltrate the key and forge receipts.
+  assert.deepEqual(readPaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "cat .scopebond/attester.key" } })), [".scopebond/attester.key"]);
+  assert.ok(readPaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "head -n 5 .env" } })).includes(".env"), "flag values (5) are not treated as files");
+  assert.deepEqual(readPaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "cat /work/.scopebond/agent.key" }, cwd: "/work" })), [".scopebond/agent.key"]);
+});
+
+test("a Windows backslash path is normalized so the .scopebond / settings guards still match", () => {
+  const w = mapClaudeToolUse({ tool_name: "Write", tool_input: { file_path: "C:\\work\\.scopebond\\policy.json" }, cwd: "C:\\work" });
+  assert.deepEqual(writePaths(w), [".scopebond/policy.json"]);
+  const s = mapClaudeToolUse({ tool_name: "Edit", tool_input: { file_path: "C:\\work\\.claude\\settings.json" }, cwd: "C:\\work" });
+  assert.deepEqual(writePaths(s), [".claude/settings.json"]);
+  const r = mapClaudeToolUse({ tool_name: "Read", tool_input: { file_path: "C:\\work\\secret.key" }, cwd: "C:\\work" });
+  assert.deepEqual(readPaths(r), ["secret.key"]);
+});
+
+test("a shell redirection target emits a file.write the write-guard sees", () => {
+  assert.ok(writePaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "echo x > .scopebond/policy.json" } })).includes(".scopebond/policy.json"));
+  assert.ok(writePaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "printf pwned >>.claude/settings.json" } })).includes(".claude/settings.json"));
+});
+
+test("PowerShell and a generic Shell tool decompose like Bash (not an un-evaluated tool.<name>)", () => {
+  const ps = mapClaudeToolUse({ tool_name: "PowerShell", tool_input: { command: "Remove-Item -Recurse -Force ." } });
+  assert.equal(ps[0].intent.action_type, "shell.exec");
+  assert.equal(ps[0].intent.params.program, "Remove-Item");
+  assert.equal(ps[0].evaluated, true, "a mapped shell.exec is evaluated, not observed-and-allowed");
+  const sh = mapClaudeToolUse({ tool_name: "Shell", tool_input: { command: "rm -rf /" } });
+  assert.equal(sh[0].intent.params.program, "rm");
 });
 
 test("bash -c and sh -c recurse into the inner script", () => {

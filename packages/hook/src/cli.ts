@@ -26,6 +26,7 @@ import { mapClaudeToolUse, mapCursorEvent, fillPushBranch } from "./map.js";
 import { createHookRuntime } from "./runtime.js";
 import { scaffold, harnessSnippet, installHarness } from "./init.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
+import { cliCommand } from "./version.js";
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
  *  the runtime fills it in before evaluating; on failure the ref stays absent and
@@ -93,7 +94,7 @@ async function runClaude(): Promise<void> {
     // would suppress the user's normal review. Scopebond blocks; it does not approve.
     process.exit(0);
   } catch (error) {
-    denyClaude(`Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`scopebond-hook init\`.`);
+    denyClaude(`Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`);
   }
 }
 
@@ -114,7 +115,7 @@ async function runCursor(): Promise<void> {
     message = decision.reason;
   } catch (error) {
     permission = "deny";
-    message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`scopebond-hook init\`.`;
+    message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`;
   }
   process.stdout.write(JSON.stringify({ permission, agentMessage: message }) + "\n");
   process.exit(0);
@@ -138,9 +139,11 @@ function runInit(args: string[]): void {
     console.log(harnessSnippet(harness));
   }
   console.log("");
-  console.log("Next: run one command in the agent, then `scopebond-hook log` to see the receipt");
-  console.log("and `scopebond-hook verify` to check it offline. Try `scopebond-hook test \"rm -rf /\"`.");
-  console.log("To send receipts to a workspace: scopebond-hook connect <workspace-url> <enrollment>");
+  // Print the runnable `npx` form: after `npx @scopebond/hook init` there is no
+  // `scopebond-hook` binary on PATH, so a bare `scopebond-hook log` would fail.
+  console.log(`Next: run one command in the agent, then \`${cliCommand("log")}\` to see the receipt`);
+  console.log(`and \`${cliCommand("verify")}\` to check it offline. Try \`${cliCommand('test "rm -rf /"')}\`.`);
+  console.log(`To send receipts to a workspace: ${cliCommand("connect <workspace-url> <enrollment>")}`);
 }
 
 function decisionOf(payload: Record<string, unknown>): string {
@@ -176,7 +179,7 @@ async function runLog(args: string[]): Promise<void> {
     const p = r.payload as unknown as Record<string, unknown>;
     console.log(`${String(p.timestamp ?? "")}  ${decisionOf(p).padEnd(13)}  ${describeIntent(p)}`);
   }
-  console.log(`\n${recent.length} of ${all.length} receipt(s). Verify them: scopebond-hook verify`);
+  console.log(`\n${recent.length} of ${all.length} receipt(s). Verify them: ${cliCommand("verify")}`);
 }
 
 async function runVerify(): Promise<void> {
