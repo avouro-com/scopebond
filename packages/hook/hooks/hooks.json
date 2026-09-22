@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "npx -y @scopebond/hook@0.3.0 claude" }
+        ]
+      }
+    ]
+  }
+}
