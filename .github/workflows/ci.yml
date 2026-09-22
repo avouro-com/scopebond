@@ -30,7 +30,7 @@ jobs:
         run: pnpm run test:examples
 
   install-matrix:
-    name: install (${{ matrix.os }} · node ${{ matrix.node }})
+    name: "install (${{ matrix.os }}, node ${{ matrix.node }})"
     strategy:
       fail-fast: false
       matrix:
@@ -47,7 +47,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build the hook
         run: pnpm --filter @scopebond/hook build
-      - name: Pack the hook (pnpm rewrites workspace: deps to published versions)
+      - name: Pack the hook with pnpm (rewrites workspace deps to published versions)
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/pack"
