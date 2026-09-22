@@ -113,6 +113,10 @@ released one at a time; see the [roadmap](https://scopebond.com/roadmap).
 | [`@scopebond/policy-schema`](packages/policy-schema) | The policy vocabulary and the `scopebond:receipt` envelope as JSON Schema, plus the action taxonomy and test vectors. |
 | [`@scopebond/sdk`](packages/sdk) | Ed25519 operator signing for agents that emit signed intents. |
 
+The receipt format is documented in **[SPEC.md](SPEC.md)** — the envelope, the action
+taxonomy, verification, the conformance vectors, and what a valid signature does and does
+not prove.
+
 The on-chain **contracts**, the **registry read API** and the **conformance suite**
 are `[PLANNED]`.
 
