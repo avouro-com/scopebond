@@ -25,8 +25,13 @@ import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node"
 import { mapClaudeToolUse, mapCursorEvent, fillPushBranch } from "./map.js";
 import { createHookRuntime } from "./runtime.js";
 import { scaffold, harnessSnippet, installHarness } from "./init.js";
+import {
+  userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
+  cursorDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
+} from "./install.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
-import { cliCommand } from "./version.js";
+import { cliCommand, hookVersion } from "./version.js";
+import { fileURLToPath } from "node:url";
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
  *  the runtime fills it in before evaluating; on failure the ref stays absent and
@@ -85,7 +90,7 @@ async function runClaude(): Promise<void> {
   try { input = JSON.parse(readStdin()); } catch { denyClaude("hook received invalid JSON on stdin"); }
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
-    const runtime = createHookRuntime(runtimePaths(configDir()));
+    const runtime = createHookRuntime(runtimePaths(resolveConfigDir(cwd)));
     const decision = await runtime.evaluate(fillPushBranch(mapClaudeToolUse(input!), currentBranch(cwd)));
     await runtime.flush();
     if (decision.decision === "deny") denyClaude(decision.reason);
@@ -106,7 +111,7 @@ async function runCursor(): Promise<void> {
   let message = "Scopebond hook failed closed";
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
-    const runtime = createHookRuntime(runtimePaths(configDir()));
+    const runtime = createHookRuntime(runtimePaths(resolveConfigDir(cwd)));
     const decision = await runtime.evaluate(fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd)));
     await runtime.flush();
     // Only an out-of-policy action is denied outright; an allowed or unevaluated
@@ -166,7 +171,7 @@ function describeIntent(payload: Record<string, unknown>): string {
 }
 
 async function runLog(args: string[]): Promise<void> {
-  const dir = configDir();
+  const dir = resolveConfigDir(process.cwd());
   const dbPath = join(dir, "receipts.db");
   if (!existsSync(dbPath)) { console.log("no receipts yet — run a command in the agent first."); process.exit(0); }
   const nIdx = args.indexOf("-n");
@@ -183,7 +188,7 @@ async function runLog(args: string[]): Promise<void> {
 }
 
 async function runVerify(): Promise<void> {
-  const dir = configDir();
+  const dir = resolveConfigDir(process.cwd());
   const dbPath = join(dir, "receipts.db");
   const attesterPath = join(dir, "attester.key");
   if (!existsSync(dbPath) || !existsSync(attesterPath)) { console.log("nothing to verify yet (no receipts or no attester key)."); process.exit(0); }
@@ -208,7 +213,7 @@ async function runVerify(): Promise<void> {
 async function runTest(args: string[]): Promise<void> {
   const command = args.find((a) => !a.startsWith("-"));
   if (!command) { console.error('usage: scopebond-hook test "<shell command>"'); process.exit(1); }
-  const dir = configDir();
+  const dir = resolveConfigDir(process.cwd());
   if (!existsSync(join(dir, "policy.json"))) { console.error("no policy yet — run `scopebond-hook init` first."); process.exit(1); }
   // Evaluate against the real policy and keys, but a throwaway store, so `test`
   // never records a receipt or exports anything.
@@ -272,7 +277,7 @@ async function runConnect(args: string[]): Promise<void> {
 }
 
 async function runFlush(): Promise<void> {
-  const dir = configDir();
+  const dir = resolveConfigDir(process.cwd());
   if (!loadConnection(dir)) { console.error("not connected to a workspace; run `scopebond-hook connect` first"); process.exit(1); }
   const runtime = createHookRuntime(runtimePaths(dir));
   await runtime.exporter?.flush();
@@ -281,16 +286,115 @@ async function runFlush(): Promise<void> {
   process.exit(status && status.pending > 0 ? 1 : 0);
 }
 
+/** The absolute path to this CLI file, for registering the hook by absolute path. */
+function cliPath(): string {
+  return fileURLToPath(import.meta.url);
+}
+
+/** `install` — the once-per-machine, user-level install (SB112). Scaffolds the
+ *  user home and registers the hook by absolute path in the user-level agent config,
+ *  so every project a developer opens is governed without a per-repo `init`. */
+function runInstall(args: string[]): void {
+  const dir = userHome();
+  const { agentKid, policyPath } = scaffold(dir, { force: args.includes("--force") });
+  console.log(`Scopebond installed for this user in ${dir}`);
+  console.log(`  machine key    ${agentKid}`);
+  console.log(`  policy         ${policyPath} (starter — edit the limits)`);
+  console.log("");
+  const harnesses: Harness[] = args.includes("--cursor")
+    ? ["cursor"]
+    : args.includes("--claude") ? ["claude"] : (cursorDetected() ? ["claude", "cursor"] : ["claude"]);
+  if (!args.includes("--no-install")) {
+    for (const h of harnesses) {
+      const file = writeHarnessConfig(userHarnessFile(h), h, absoluteHookCommand(cliPath(), h));
+      console.log(`✓ ${h === "cursor" ? "Cursor" : "Claude Code"} configured in ${file}`);
+    }
+  } else {
+    console.log("Add this to your user-level agent config:");
+    console.log(harnessSnippet(harnesses[0]));
+  }
+  console.log("");
+  console.log("A project-local .scopebond still takes precedence when present.");
+  console.log(`Check it: ${cliCommand("doctor")} · see decisions: ${cliCommand("log")}`);
+  console.log(`To send receipts to a workspace: ${cliCommand("connect <workspace-url> <enrollment>")}`);
+}
+
+function runStatus(): void {
+  const home = userHome();
+  const installed = existsSync(join(home, "policy.json"));
+  const claude = isHarnessConfigured(userHarnessFile("claude"));
+  const cursor = isHarnessConfigured(userHarnessFile("cursor"));
+  const connected = !!loadConnection(resolveConfigDir(process.cwd()));
+  const dbPath = join(resolveConfigDir(process.cwd()), "receipts.db");
+  console.log(`Scopebond hook ${hookVersion()}`);
+  console.log(`  user home        ${home} ${installed ? "(installed)" : "(not installed — run `scopebond install`)"}`);
+  console.log(`  active config    ${resolveConfigDir(process.cwd())}`);
+  console.log(`  Claude Code      ${claude ? "configured" : "not configured"}`);
+  console.log(`  Cursor           ${cursor ? "configured" : cursorDetected() ? "detected, not configured" : "not detected"}`);
+  console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
+  console.log(`  local receipts   ${existsSync(dbPath) ? dbPath : "none yet"}`);
+}
+
+async function runDoctor(): Promise<void> {
+  const problems: string[] = [];
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  const nodeOk = major > 22 || (major === 22 && minor >= 13);
+  console.log(`Scopebond doctor`);
+  console.log(`  node             ${process.versions.node} ${nodeOk ? "ok" : "TOO OLD (need >=22.13)"}`);
+  if (!nodeOk) problems.push("node >=22.13 is required (the Cloud outbox uses node:sqlite)");
+  const cli = cliPath();
+  console.log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}`);
+  const active = resolveConfigDir(process.cwd());
+  const hasPolicy = existsSync(join(active, "policy.json"));
+  console.log(`  active config    ${active} ${hasPolicy ? "ok" : "no policy (run `scopebond install` or `init`)"}`);
+  if (!hasPolicy) problems.push("no policy found in the active config dir");
+  const connection = loadConnection(active);
+  if (!connection) {
+    console.log(`  cloud            not connected (local only) — receipts stay on this machine`);
+  } else {
+    let reachable = "unknown";
+    try {
+      const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET" });
+      reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
+    } catch (error) { reachable = `unreachable (${(error as Error).message})`; }
+    console.log(`  cloud            ${connection.url} — ${reachable}`);
+  }
+  console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
+  process.exit(problems.length ? 1 : 0);
+}
+
+function runUninstall(args: string[]): void {
+  let removed = 0;
+  for (const h of ["claude", "cursor"] as Harness[]) {
+    if (removeHarnessConfig(userHarnessFile(h))) { console.log(`✓ removed the Scopebond hook from ${userHarnessFile(h)}`); removed++; }
+  }
+  if (removed === 0) console.log("no user-level harness config found.");
+  if (args.includes("--purge")) { purgeHome(); console.log(`✓ purged ${userHome()} (keys, policy, receipts)`); }
+  else console.log(`Kept ${userHome()} (keys, policy, receipts). Use --purge to remove it too.`);
+}
+
+function runLogin(): void {
+  console.log("Device-code login is not available yet.");
+  console.log(`For now, connect with a one-time enrollment from your workspace:`);
+  console.log(`  ${cliCommand("connect <workspace-url> <enrollment>")}`);
+  process.exit(0);
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "claude") { await runClaude(); }
 else if (cmd === "cursor") { await runCursor(); }
 else if (cmd === "init") { runInit(rest); }
+else if (cmd === "install") { runInstall(rest); }
 else if (cmd === "connect") { await runConnect(rest); }
 else if (cmd === "log") { await runLog(rest); }
 else if (cmd === "verify") { await runVerify(); }
 else if (cmd === "test") { await runTest(rest); }
 else if (cmd === "flush") { await runFlush(); }
+else if (cmd === "status") { runStatus(); }
+else if (cmd === "doctor") { await runDoctor(); }
+else if (cmd === "uninstall") { runUninstall(rest); }
+else if (cmd === "login") { runLogin(); }
 else {
-  console.error("usage: scopebond-hook <claude|cursor|init|connect|log|verify|test|flush> [--cursor] [--force] [--strict] [--no-install]");
+  console.error("usage: scopebond <claude|cursor|init|install|connect|log|verify|test|flush|status|doctor|uninstall|login> [--cursor] [--claude] [--force] [--strict] [--no-install] [--purge]");
   process.exit(1);
 }

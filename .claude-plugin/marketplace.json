@@ -1,0 +1,14 @@
+{
+  "name": "scopebond",
+  "owner": {
+    "name": "Avouro LLC",
+    "url": "https://scopebond.com"
+  },
+  "plugins": [
+    {
+      "name": "scopebond",
+      "source": "./packages/hook",
+      "description": "A checkpoint for Claude Code: blocks out-of-policy actions before they run and signs every decision into a receipt you can verify offline."
+    }
+  ]
+}

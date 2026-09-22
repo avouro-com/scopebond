@@ -48,3 +48,4 @@ tmp/
 **/.scopebond/
 **/receipts.db
 packages/**/.claude/
+*.tgz

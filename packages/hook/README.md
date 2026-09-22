@@ -10,17 +10,47 @@ optionally mirrored to your Scopebond Cloud workspace for monitoring.
 - **Ceiling:** it governs actions the harness routes through its tool system
   (shell, file, MCP, web). A process started outside the harness is not covered.
 
-## Enroll
+## Install once for your machine
+
+```
+npm i -g @scopebond/hook
+scopebond install                   # detects Cursor; add --claude / --cursor to pick
+```
+
+`install` sets Scopebond up **once per developer machine**, not per repository: it
+scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
+signing key, a countersigning key and a starter policy, and registers the hook by
+absolute path in your user-level `~/.claude/settings.json` (and `~/.cursor/hooks.json`
+when Cursor is present). Every project you open is then governed, and a project-local
+`.scopebond/` still takes precedence when you want a per-repo policy.
+
+```
+scopebond status                    # home, which agents are configured, cloud, receipts
+scopebond doctor                    # node version, config location, cloud reachability
+scopebond log                       # recent decisions        scopebond verify   # offline
+scopebond uninstall                 # remove the hook (add --purge to delete keys too)
+```
+
+### Install as a Claude Code plugin
+
+Scopebond is also a Claude Code plugin (this repo is a plugin marketplace):
+
+```
+/plugin marketplace add avouro-com/scopebond
+/plugin install scopebond
+```
+
+### Per-repository enroll (alternative)
 
 ```
 npx @scopebond/hook init            # Claude Code (or: init --cursor)
 ```
 
-`init` scaffolds `.scopebond/` (a machine signing key, a countersigning key, a
-starter policy — "protect main and production paths" — and a `.gitignore` so none
-of it is committed) and prints the hook configuration to add to
-`.claude/settings.json` or `.cursor/hooks.json`. Then run one safe command in the
-agent and see the receipt in `.scopebond/receipts.db`.
+`init` scaffolds `.scopebond/` in the current project (a machine signing key, a
+countersigning key, a starter policy — "protect main and production paths" — and a
+`.gitignore` so none of it is committed) and configures `.claude/settings.json` or
+`.cursor/hooks.json`. Then run one safe command in the agent and see the receipt in
+`.scopebond/receipts.db`.
 
 ## Connect it to your workspace (optional)
 
