@@ -51,7 +51,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/pack"
-          pnpm --filter @scopebond/hook pack --pack-destination "$RUNNER_TEMP/pack"
+          cd packages/hook
+          pnpm pack --pack-destination "$RUNNER_TEMP/pack"
       - name: Install the packed tarball globally and drive the real install
         shell: bash
         run: |
