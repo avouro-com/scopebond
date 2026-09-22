@@ -62,6 +62,8 @@ as `scopebond-enrollment.json`, then:
 npx @scopebond/hook connect https://<your-workspace> scopebond-enrollment.json
 ```
 
+In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Enrollment registers both the gateway attester and the hook's separate agent signing key with proof of possession, so Cloud can verify authenticated receipts.
+
 `connect` does the whole setup in one command: it scaffolds `.scopebond/` if needed,
 enrolls this machine's countersigning key, stores a scoped machine credential in
 `.scopebond/cloud.json` (a secret — never commit it), **and configures Claude Code

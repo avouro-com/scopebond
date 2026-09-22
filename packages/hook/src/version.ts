@@ -28,5 +28,5 @@ export function hookCommand(harness: "claude" | "cursor"): string {
  *  binary on PATH, so printed guidance must use the same version-pinned `npx` form,
  *  which also resolves to a global install when one exists. */
 export function cliCommand(sub: string): string {
-  return `npx -y @scopebond/hook@${hookVersion()} ${sub}`;
+  return `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/hook@${hookVersion()} ${sub}`;
 }

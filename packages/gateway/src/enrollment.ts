@@ -14,6 +14,8 @@ export interface CloudEnrollmentResult {
   environment_id: string;
   gateway_id: string;
   attester_kid: string;
+  /** Present only when the enrolling client supplied and proved its agent key. */
+  agent_kid?: string;
   scopes: string[];
   expires_at: string;
 }
@@ -22,6 +24,8 @@ export async function completeCloudEnrollment(options: {
   url: string;
   bundle: CloudEnrollmentBundle;
   attester: Attester;
+  /** Optional separate signing key used by authenticated hook receipts. */
+  agent?: Attester;
   fetch?: typeof fetch;
 }): Promise<CloudEnrollmentResult> {
   const endpoint = new URL("/v1/enroll", options.url);
@@ -45,6 +49,10 @@ export async function completeCloudEnrollment(options: {
     throw new Error("Cloud enrollment bundle has expired");
   }
 
+  const agentPublicKeyPem = options.agent?.publicKeyPem.trim();
+  const proofCanonical = options.agent
+    ? canonical({ ...claims, agent_public_key_pem: agentPublicKeyPem })
+    : options.bundle.proof_canonical;
   const response = await (options.fetch ?? fetch)(endpoint, {
     method: "POST",
     redirect: "error",
@@ -52,7 +60,11 @@ export async function completeCloudEnrollment(options: {
     body: JSON.stringify({
       enrollment_token: options.bundle.enrollment_token,
       public_key_pem: options.attester.publicKeyPem,
-      signature: await options.attester.sign(options.bundle.proof_canonical),
+      signature: await options.attester.sign(proofCanonical),
+      ...(options.agent ? {
+        agent_public_key_pem: agentPublicKeyPem,
+        agent_signature: await options.agent.sign(proofCanonical),
+      } : {}),
     }),
   });
   const declaredLength = Number(response.headers.get("content-length") ?? 0);
@@ -65,6 +77,9 @@ export async function completeCloudEnrollment(options: {
   if (!response.ok) throw new Error(result.error ?? `Cloud enrollment failed (${response.status})`);
   if (!result.credential?.startsWith("sbm_") || result.attester_kid !== options.attester.kid) {
     throw new Error("Cloud enrollment returned an invalid credential binding");
+  }
+  if (options.agent && result.agent_kid !== options.agent.kid) {
+    throw new Error("Cloud enrollment did not register the agent signing key; update the server and obtain a fresh enrollment");
   }
   return result as CloudEnrollmentResult;
 }
