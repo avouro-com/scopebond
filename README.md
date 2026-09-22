@@ -3,15 +3,29 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml/badge.svg)](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@scopebond/gateway.svg)](https://www.npmjs.com/package/@scopebond/gateway)
+[![npm downloads](https://img.shields.io/npm/dm/@scopebond/hook.svg?label=hook%20downloads)](https://www.npmjs.com/package/@scopebond/hook)
 
-**Guardrails and audit-grade proof for AI agents.** Scopebond checks every action a
-coding agent takes — a shell command, a file edit, a git push, an MCP tool call —
-against rules you write, blocks the ones that break them, and signs a tamper-evident
-receipt of every decision that anyone can verify offline.
+**Scopebond is an open-source checkpoint for AI coding agents (Claude Code, Cursor,
+MCP, GitHub) that blocks out-of-policy actions before they run and signs every
+decision into a tamper-evident record anyone can verify offline.** It checks every
+action a coding agent takes — a shell command, a file edit, a git push, an MCP tool
+call — against rules you write, blocks the ones that break them, and records the rest.
+
+Try it: [scopebond.com](https://scopebond.com) · live policy demo at
+[try.scopebond.com](https://try.scopebond.com).
 
 > **Experimental alpha — use controlled test systems only.** The semantics below are
 > the target; the alpha is under active hardening. The hosted workspace ("Scopebond
 > Cloud") is a separate, proprietary product and is not in this repository.
+
+### Who it's for
+
+- **A developer** running Claude Code or Cursor who wants a guardrail that blocks a
+  destructive command before it runs, not a log they read afterward.
+- **A team lead** who has to show what the agents did — which actions, decided by which
+  rule — to a client, an insurer or an auditor.
+- **An auditor or client** who needs to check that record independently, offline, with
+  no account and no trust in the vendor.
 
 ## 60-second start: govern your coding agent
 
@@ -37,6 +51,17 @@ agent out of its own policy and keys, its CI config (`.github/workflows`, and th
 other common CI files) and environment secret files (`.env`), and observes network
 and MCP calls so you can tighten them when ready. It is a plain JSON file — edit the
 limits.
+
+### Maturity
+
+- **The open-source hook, gateway, Action and verifier enforce real rules and sign
+  real records today.** They run entirely in your environment; records verify offline
+  and nothing phones home. This is an **experimental alpha** — start on test systems
+  until the documented safety, integration and operational gates close.
+- **Scopebond Cloud** is a separate, proprietary hosted workspace (the shared team
+  view, alerts, the monthly report, exports). It is a reviewed beta with billing off,
+  not production protection, and is **not** in this repository. Enforcement does not
+  depend on it.
 
 ## One policy, three uses: prevent · prove · recover
 
@@ -65,6 +90,8 @@ scrubbed before anything is signed or stored. It is cooperative (M0): the agent 
 the allowed action itself. An agent that ignores the hook is not enforced — for
 in-path enforcement of money or system actions, put the **gateway** in the path.
 
+![How Scopebond works: a coding agent's action passes through the Scopebond checkpoint, which blocks out-of-policy actions before they run and signs every decision into a receipt anyone can verify offline.](architecture.svg)
+
 ## Connectors
 
 | Package | Governs |
@@ -73,6 +100,9 @@ in-path enforcement of money or system actions, put the **gateway** in the path.
 | [`@scopebond/mcp`](packages/mcp) | Any MCP client, by proxying an upstream MCP server and deciding each `tools/call`. |
 | [`@scopebond/framework`](packages/framework) | In-process agents — a Vercel AI SDK / LangGraph tool loop — via a cooperative guard. |
 | [`@scopebond/github-action`](packages/github-action) | Pull requests from coding agents, as a required policy check in GitHub Actions. |
+
+Roadmap connectors — **OpenAI Codex**, cloud runtimes and business platforms — are
+released one at a time; see the [roadmap](https://scopebond.com/roadmap).
 
 ## Core
 
@@ -126,6 +156,62 @@ connectors `@scopebond/hook`, `@scopebond/mcp`, `@scopebond/framework`,
 test systems only until the documented safety, integration and operational gates
 close. See [scopebond.com](https://scopebond.com) and the live policy demo at
 [try.scopebond.com](https://try.scopebond.com).
+
+## How Scopebond compares
+
+Every cell is what each project's own docs describe; follow the link to check. A dash
+means the project does not claim it.
+
+| | Blocks before it runs | Signed record | Verify offline | Claude Code | Cursor | MCP | GitHub PR gate | Open source | Account required |
+|---|---|---|---|---|---|---|---|---|---|
+| **Scopebond** | Yes (fail-closed) | Yes (Ed25519) | Yes | Yes | Yes | Yes | Yes | Yes (Apache-2.0) | No |
+| [Microsoft Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit) | — (governance/policy docs) | Yes | Partial | — | — | Yes | — | Yes (MIT) | No |
+| [Agent Receipts](https://agentreceipts.ai/) | — (receipts) | Yes | Yes | — | — | — | — | Partial | Varies |
+| [ThumbGate](https://github.com/ThumbLabsAI/thumbgate) | Yes (approval gate) | — | — | Yes | — | Yes | — | Yes | No |
+| Hand-written Claude Code hooks | Yes (your script) | — | — | Yes | — | — | — | Your code | No |
+| [Endor Labs](https://www.endorlabs.com/) | Partial (CI findings) | — | — | — | — | — | Yes | No | Yes |
+
+Scopebond's distinguishing pair is **blocks before it runs *and* a portable signed
+record anyone can verify offline** — enforcement and evidence in one policy.
+
+## FAQ
+
+**How can I see and log everything Claude Code does on my machine?**
+Install the hook (`npx @scopebond/hook init`); every tool call is mapped to a
+normalized action and written to a signed local receipt. `scopebond-hook log` shows
+recent decisions; `scopebond-hook verify` checks them offline.
+
+**How do I block Claude Code from running dangerous commands like `rm -rf` or `git push --force`?**
+The starter policy denies destructive programs and force-pushes to protected branches,
+and the hook decomposes shell commands so a denied program can't ride in behind an
+allowed one. A denied action is blocked before it runs (fail-closed in strict mode).
+
+**What are the best Claude Code hooks for security?**
+A security hook should map each tool call to an action, fail closed on anything it
+can't parse, protect its own keys and config, and leave a record you can verify.
+`@scopebond/hook` does this and signs an offline-verifiable receipt for every decision.
+
+**How do I control what Cursor's agent is allowed to do?**
+Run `npx @scopebond/hook init --cursor`; the same policy governs Cursor's tool calls
+in-path, blocking out-of-policy actions and signing each decision.
+
+**How do I prove to an auditor or client what an AI coding agent changed and did?**
+Every decision is an Ed25519-signed `scopebond:receipt` carrying the action, the rule
+that decided and cryptographic fingerprints — never file contents or prompts. Anyone
+can verify the record offline against the signer's public key, with no account.
+
+**Is Claude Code safe to use at work?**
+Claude Code is as safe as the guardrails around it. Add a fail-closed checkpoint that
+blocks destructive actions before they run and records the rest, and start on test
+systems. Scopebond is one open-source way to do that; see the [roadmap](https://scopebond.com/roadmap).
+
+**Is there a GitHub Action that fails a pull request when an AI agent breaks policy?**
+Yes — `@scopebond/github-action` is a required check that fails an out-of-policy agent
+pull request before it can merge and signs a boundary receipt in your own runner.
+
+**How do I put a policy in front of MCP tool calls?**
+`@scopebond/mcp` proxies an upstream MCP server and checks every `tools/call` against
+your policy in-path, signing a receipt for each decision.
 
 ## Using Scopebond? Show it
 

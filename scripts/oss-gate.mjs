@@ -38,6 +38,7 @@ const ALLOW = [
   "README.md", "LICENSE", "NOTICE", "CHANGELOG.md",
   "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md",
   "GOVERNANCE.md", "MAINTAINERS.md", "SCOPE.md", "CLA.md", "RELEASING.md",
+  "CITATION.cff", "llms.txt", "architecture.svg",
   ".changeset/**",
   ".gitignore", ".gitattributes", ".editorconfig", ".nvmrc", ".node-version", ".npmrc",
   "package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml",
