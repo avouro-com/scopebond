@@ -9,7 +9,8 @@ tagged release.
 
 Per-package versions and notes are managed with changesets; this section is a
 human summary. The published set is policy-schema 0.3.0, verify 0.2.0, gateway
-0.5.0, sdk 0.1.1 and the connectors hook, mcp, framework and github-action.
+0.6.0, sdk 0.1.1 and the connectors hook, mcp, framework and github-action at 0.3.0.
+Past security advisories are summarized in [SECURITY.md](SECURITY.md).
 
 ### Security
 - **hook:** the secret scrubber leaked credentials — single-token shapes (GitHub,

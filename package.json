@@ -3,13 +3,31 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Scopebond — open-source trust infrastructure for AI agents with delegated authority: a policy-enforcement gateway (prevent, prove) and a collateral registry (pay).",
+  "description": "Scopebond is an open-source checkpoint for AI coding agents (Claude Code, Cursor, MCP, GitHub) that blocks out-of-policy actions before they run and signs every decision into a tamper-evident record anyone can verify offline.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://scopebond.com",
-  "repository": { "type": "git", "url": "https://github.com/avouro-com/scopebond.git" },
-  "bugs": { "url": "https://github.com/avouro-com/scopebond/issues" },
-  "keywords": ["ai-agents", "agent-security", "policy", "gateway", "mcp", "receipts", "scope", "trust"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avouro-com/scopebond.git"
+  },
+  "bugs": {
+    "url": "https://github.com/avouro-com/scopebond/issues"
+  },
+  "keywords": [
+    "ai-agents",
+    "agent-security",
+    "ai-agent-security",
+    "claude-code",
+    "cursor",
+    "mcp",
+    "guardrails",
+    "policy-enforcement",
+    "hooks",
+    "github-actions",
+    "audit-trail",
+    "ed25519"
+  ],
   "packageManager": "pnpm@9.12.0",
   "engines": {
     "node": ">=20"

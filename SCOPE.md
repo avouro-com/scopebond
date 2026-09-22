@@ -1,5 +1,9 @@
 # Scope policy
 
+Scopebond is an open-source checkpoint for AI coding agents (Claude Code, Cursor, MCP,
+GitHub) that blocks out-of-policy actions before they run and signs every decision into
+a tamper-evident record anyone can verify offline.
+
 This is the contract that decides what belongs in Scopebond. It is written for
 two readers: contributors, and the **automated scope-review agent** that reads
 every pull request and issue and judges it against this document. Keep it precise —

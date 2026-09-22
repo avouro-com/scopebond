@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: Scopebond
+message: "If you use Scopebond, please cite it using these metadata."
+type: software
+authors:
+  - name: "Avouro LLC"
+    website: "https://avouro.com"
+repository-code: "https://github.com/avouro-com/scopebond"
+url: "https://scopebond.com"
+abstract: "Scopebond is an open-source checkpoint for AI coding agents (Claude Code, Cursor, MCP, GitHub) that blocks out-of-policy actions before they run and signs every decision into a tamper-evident record anyone can verify offline."
+keywords:
+  - ai-agents
+  - agent-security
+  - claude-code
+  - cursor
+  - mcp
+  - guardrails
+  - policy-enforcement
+  - audit-trail
+license: Apache-2.0

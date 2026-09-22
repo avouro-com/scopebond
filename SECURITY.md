@@ -34,3 +34,23 @@ a "bypass" report. Reports that a *routed* action escaped its policy, that a rec
 misrepresents a decision, or that a secret leaked into a receipt are in scope.
 
 > `[PLANNED]` A bug-bounty program will be published at general availability.
+
+## Past advisories
+
+Resolved before the first tagged release, during the alpha hardening. Full detail is
+in the [CHANGELOG](CHANGELOG.md) `### Security` entries.
+
+- **`@scopebond/hook` — secret scrubber leak.** Single-token credential shapes were
+  emitted as `secret***` and signed into receipts. Rewritten with explicit rules and a
+  property-based regression suite. (Fixed in `@scopebond/hook@0.3.0`.)
+- **`@scopebond/hook` — command-mapping bypasses.** A denied program could ride in
+  behind an allowed one (`a && b`, `bash -c '…'`, `$(…)`, env-prefix, `git -C`,
+  `+ref`). The mapper now decomposes a command into every simple command and denies the
+  call if any segment is out of policy; the hook defers to the host on allow. (Fixed in
+  `@scopebond/hook@0.3.0`.)
+- **`@scopebond/gateway`, `@scopebond/mcp` — stateful clauses never bound in
+  cooperative mode.** `rate_limit`, `spend_limit` and `sequence` now count prior
+  cooperative allows. (Fixed in `@scopebond/gateway@0.6.0`.)
+- **`@scopebond/framework` — `guardedTool` passed a tool unguarded** when it lacked an
+  `execute` implementation; it now throws instead of silently skipping the policy
+  check. (Fixed in `@scopebond/framework@0.3.0`.)

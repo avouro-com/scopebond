@@ -1,0 +1,40 @@
+# Scopebond
+
+> Scopebond is an open-source checkpoint for AI coding agents (Claude Code, Cursor, MCP,
+> GitHub) that blocks out-of-policy actions before they run and signs every decision into
+> a tamper-evident record anyone can verify offline. Open source (Apache-2.0), self-host
+> free, records verify with no account and no network.
+
+This repository is the open-source product. The hosted workspace ("Scopebond Cloud") is
+a separate, proprietary product and is not here.
+
+## What it is
+Scopebond checks every action a coding agent takes — a shell command, a file edit, a git
+push, an MCP tool call — against rules you write, blocks the ones that break them, and
+signs a tamper-evident `scopebond:receipt` (Ed25519) for every decision. Cooperative
+(in-path on the developer's machine) for Claude Code, Cursor and MCP; a required check
+(gated) for agent pull requests on GitHub.
+
+## Packages (npm @scopebond/*)
+- @scopebond/hook — Claude Code + Cursor connector. `npx @scopebond/hook init` (add --cursor for Cursor).
+- @scopebond/github-action — required policy check that fails an out-of-policy agent pull request.
+- @scopebond/mcp — proxy that checks every MCP tools/call against your policy.
+- @scopebond/framework — in-process guard for Vercel AI SDK, LangGraph and more.
+- @scopebond/gateway — self-hosted policy-enforcement checkpoint over HTTP/MCP, with a kill switch. `npx @scopebond/gateway init`.
+- @scopebond/verify — deterministic `violates(policy, receipts, claimed)` and conformance vectors.
+- @scopebond/policy-schema — the policy vocabulary and receipt envelope as JSON Schema.
+- @scopebond/sdk — Ed25519 operator signing.
+
+## Roadmap
+OpenAI Codex, cloud runtimes and business platforms are released one at a time. See https://scopebond.com/roadmap.
+
+## What a valid signature proves
+Integrity and provenance for what the signer asserted. It does not by itself prove an
+external effect, completeness or compliance.
+
+## Links
+- Site: https://scopebond.com
+- Live demo: https://try.scopebond.com
+- Source: https://github.com/avouro-com/scopebond
+- npm: https://www.npmjs.com/package/@scopebond/hook
+- Contact: scopebond@avouro.com (Avouro LLC, Michigan, USA)
