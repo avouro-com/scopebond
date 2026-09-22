@@ -7,6 +7,11 @@ export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy } from "./runtime.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export { scaffold, harnessSnippet, installHarness } from "./init.js";
+export {
+  userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
+  cursorDetected, absoluteHookCommand, isHarnessConfigured, purgeHome,
+} from "./install.js";
+export type { Harness } from "./install.js";
 export { connectCloud, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
 export type { HookConnection } from "./cloud.js";
 export { scrubSecrets, scrubParam, redactCommand, digest, sha256 } from "./minimize.js";
