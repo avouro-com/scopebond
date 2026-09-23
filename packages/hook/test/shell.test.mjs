@@ -164,6 +164,11 @@ test("decomposeShell does not stall on adversarial nesting or length", () => {
   decomposeShell("$(".repeat(5000) + "rm -rf x" + ")".repeat(5000));
   decomposeShell("a && ".repeat(50000) + "b");
   decomposeShell(`echo "` + "x".repeat(500000));
+  // The mapper's path canonicalization and glob analysis stay linear too.
+  mapClaudeToolUse(bash(`cat "a${" ".repeat(100000)}b"`));
+  mapClaudeToolUse(bash("cat " + "${".repeat(20000) + "x"));
+  mapClaudeToolUse(bash("cat " + "*".repeat(100000) + ".key"));
+  mapClaudeToolUse(bash(`node -e "${"a".repeat(200000)}"`));
   const ms = Number(process.hrtime.bigint() - started) / 1e6;
   assert.ok(ms < 2000, `took ${ms.toFixed(0)} ms`);
 });
@@ -238,6 +243,9 @@ const MUST_DENY_CANONICAL = [
   "cat ~/.ssh/id_ed25519",
   "cat ${HOME}/.aws/credentials",
   "cat .scope$(echo bond)/agent.key",
+  "cat x/../.scope*/agent.key",
+  "cat $D/agent.key",
+  "cp /tmp/p ./x/../.scopebond/polic?.json",
   // other credentials
   "cat ~/.npmrc",
   "cat ~/.git-credentials",

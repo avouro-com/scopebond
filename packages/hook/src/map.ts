@@ -34,10 +34,16 @@ const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
 //    cannot disguise the file they open;
 //  - `//` and `/./` collapse.
 // Case is preserved (it is evidence); the starter policy matches case-insensitively.
+// Linear (no regex backtracking on long runs of dots/spaces).
+const trimDotsSpaces = (seg: string): string => {
+  let end = seg.length;
+  while (end > 0 && (seg[end - 1] === "." || seg[end - 1] === " ")) end--;
+  return end === 0 ? seg : seg.slice(0, end);
+};
 const normPath = (s: string): string =>
   s.replace(/\\/g, "/")
     .replace(/::?\$data$/i, "")
-    .split("/").map((seg) => (seg === "." || seg === ".." ? seg : seg.replace(/[. ]+$/, "") || seg)).join("/")
+    .split("/").map((seg) => (seg === "." || seg === ".." ? seg : trimDotsSpaces(seg))).join("/")
     .replace(/\/(?:\.\/)+/g, "/").replace(/\/{2,}/g, "/");
 
 const rel = (value: unknown, cwd?: string): string => {
@@ -96,12 +102,23 @@ function wordMatcher(word: string): RegExp {
 /** The protected sample an unresolvable operand could name, if any. An operand that
  *  is only wildcards or only a variable (`*`, `$FILE`) carries no name to test and is
  *  left to the literal path — a cooperative hook cannot know a variable's value. */
+const MAX_WORD = 4096;
 function protectedCandidate(word: string): string | undefined {
+  // An absurdly long unresolvable operand is not worth analysing: treat it as if it
+  // could name the hook's own files (fail closed) rather than scan it.
+  if (word.length > MAX_WORD) return PROTECTED_SAMPLES[0];
   const literal = word.replace(/\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$[A-Za-z0-9_]+|[*?[\]{}]/g, "");
   if (!/[A-Za-z0-9]/.test(literal)) return undefined;
-  const m = wordMatcher(word);
+  // Compare the operand's last N segments with each N-segment sample, so any prefix —
+  // `x/../`, `$HOME/`, an absolute path — cannot move the tail out of view.
+  const segs = word.split("/");
+  const cache = new Map<number, RegExp>();
   for (const sample of PROTECTED_SAMPLES) {
-    if (m.test(sample) || m.test("d/" + sample) || m.test("/root/" + sample)) return sample;
+    const n = sample.split("/").length;
+    if (segs.length < n) continue;
+    let m = cache.get(n);
+    if (!m) { m = wordMatcher(segs.slice(-n).join("/")); cache.set(n, m); }
+    if (m.test(sample)) return sample;
   }
   return undefined;
 }
