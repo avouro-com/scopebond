@@ -39,8 +39,12 @@ A receipt is a JSON object with exactly two members:
 { "payload": { … }, "signature": { "alg": "Ed25519", "sig": "<base64>" } }
 ```
 
-The signature covers the **canonical serialization of the entire `payload`**. Supported
-algorithms: `Ed25519` (native), `ES256`, `secp256k1`, `EIP-712`.
+The signature covers the **canonical serialization of the entire `payload`**. Receipts
+v1 are signed with `Ed25519` by an attester of kind `gateway`, and that is the only
+combination the reference verifiers accept. The schema also names `ES256`, `secp256k1` and
+`EIP-712` signatures and `module` / `resource` attesters; these are **reserved** for later
+versions, and a conforming v1 verifier reports a receipt that uses one as unsupported —
+never as valid.
 
 ### Canonicalization
 
@@ -137,8 +141,11 @@ scopebond-hook verify                                # verify every local receip
 ```
 
 `@scopebond/verify` exposes the deterministic `violates(policy, receipts, claimed)` verdict
-library and its conformance suite; the same bytes verify in Node, in browsers (WebCrypto
-Ed25519) and offline.
+library and its conformance suite, and — at `@scopebond/verify/signature` —
+`verifyReceiptSignature(receipt, publicKey)`, which performs steps 1–2 plus the key-binding
+check (`attester.kid` is derived from the key) with WebCrypto only, so the same bytes verify
+in Node, browsers, Cloudflare Workers and offline. It accepts the attester key as SPKI PEM
+or as an Ed25519 JWK.
 
 ## Conformance vectors
 
