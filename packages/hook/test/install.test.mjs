@@ -76,6 +76,22 @@ test("writeHarnessConfig preserves unrelated user config", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("writeHarnessConfig installs a Codex PreToolUse hook with a clear status", () => {
+  const dir = tmp(); const file = join(dir, "hooks.json");
+  writeHarnessConfig(file, "codex", absoluteHookCommand("/abs/cli.js", "codex"));
+  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(parsed.hooks.PreToolUse.length, 1);
+  assert.equal(parsed.hooks.PreToolUse[0].matcher, undefined, "no matcher means every Codex tool");
+  assert.match(parsed.hooks.PreToolUse[0].hooks[0].command, /cli\.js.* codex$/);
+  assert.equal(parsed.hooks.PreToolUse[0].hooks[0].statusMessage, "Checking this action with Scopebond");
+  assert.equal(parsed.hooks.PreToolUse[0].hooks[0].timeout, 30);
+  writeHarnessConfig(file, "codex", absoluteHookCommand("/abs/cli.js", "codex"));
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).hooks.PreToolUse.length, 1, "reinstall is idempotent");
+  removeHarnessConfig(file);
+  assert.equal(isHarnessConfigured(file), false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 // --- CLI end-to-end: install / status / doctor / uninstall against a temp HOME ---
 
 function runCli(args, env) {
@@ -121,6 +137,22 @@ test("doctor reports node ok and finds the installed policy", () => {
   assert.equal(doctor.status, 0, doctor.stdout);
   assert.match(doctor.stdout, /node\s+\d+\.\d+\.\d+ ok/);
   assert.match(doctor.stdout, /All good\./);
+  rmSync(home, { recursive: true, force: true }); rmSync(sbHome, { recursive: true, force: true });
+});
+
+test("install --codex writes ~/.codex/hooks.json and explains the one approval step", () => {
+  const home = tmp(); const sbHome = join(tmp(), ".scopebond");
+  const env = { HOME: home, USERPROFILE: home, SCOPEBOND_HOME: sbHome };
+  const install = runCli(["install", "--codex"], env);
+  assert.equal(install.status, 0, install.stdout);
+  const hooks = join(home, ".codex", "hooks.json");
+  assert.ok(existsSync(hooks));
+  assert.match(install.stdout, /run `\/hooks`/i);
+  assert.match(install.stdout, /choose Trust/i);
+  const status = runCli(["status"], env);
+  assert.match(status.stdout, /Codex\s+configured/);
+  runCli(["uninstall"], env);
+  assert.equal(JSON.parse(readFileSync(hooks, "utf8")).hooks.PreToolUse.length, 0);
   rmSync(home, { recursive: true, force: true }); rmSync(sbHome, { recursive: true, force: true });
 });
 
