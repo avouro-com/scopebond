@@ -282,8 +282,10 @@ async function runFlush(): Promise<void> {
   const runtime = createHookRuntime(runtimePaths(dir));
   await runtime.exporter?.flush();
   const status = runtime.exporter?.status();
+  runtime.exporter?.stop();
   console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
-  process.exit(status && status.pending > 0 ? 1 : 0);
+  // Let pending HTTP handles close normally (forced exit can abort on Windows).
+  process.exitCode = status && status.pending > 0 ? 1 : 0;
 }
 
 /** The absolute path to this CLI file, for registering the hook by absolute path. */
@@ -360,7 +362,7 @@ async function runDoctor(): Promise<void> {
     console.log(`  cloud            ${connection.url} — ${reachable}`);
   }
   console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
-  process.exit(problems.length ? 1 : 0);
+  process.exitCode = problems.length ? 1 : 0;
 }
 
 function runUninstall(args: string[]): void {
