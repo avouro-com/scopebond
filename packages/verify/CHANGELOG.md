@@ -1,5 +1,16 @@
 # @scopebond/verify
 
+## 0.3.0
+
+### Minor Changes
+
+- f212f82: Add a `force_push_guard` clause type. It denies a `git.push` that is a force-push to a protected branch (matched against `protected_refs`; glob, default `["main", "master", "release/*"]`), while still allowing ordinary pushes to those branches and force-pushes to feature branches. A force-push whose target ref cannot be resolved is denied (fail closed). This expresses a predicate a per-field `action_allowlist` bound cannot, since it must AND the `force` flag with a protected-ref set.
+
+### Patch Changes
+
+- Updated dependencies [f212f82]
+  - @scopebond/policy-schema@0.4.0
+
 ## 0.2.0
 
 ### Minor Changes
