@@ -130,11 +130,11 @@ function splitUrl(url: string): { host: string; path: string } {
 function mapApplyPatch(command: string, cwd?: string): Mapped[] {
   const paths: string[] = [];
   const seen = new Set<string>();
+  const prefixes = ["*** Add File:", "*** Update File:", "*** Delete File:", "*** Move to:"];
   for (const line of command.split(/\r?\n/)) {
-    const match = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+?)\s*$/.exec(line)
-      ?? /^\*\*\* Move to:\s*(.+?)\s*$/.exec(line);
-    if (!match) continue;
-    const path = rel(scrubParam(match[1]), cwd);
+    const prefix = prefixes.find((candidate) => line.startsWith(candidate));
+    if (!prefix) continue;
+    const path = rel(scrubParam(line.slice(prefix.length).trim()), cwd);
     if (!path || seen.has(path)) continue;
     seen.add(path);
     paths.push(path);
