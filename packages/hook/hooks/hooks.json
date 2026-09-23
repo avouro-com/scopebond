@@ -4,7 +4,7 @@
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "npx -y @scopebond/hook@0.4.0 claude" }
+          { "type": "command", "command": "npx -y @scopebond/hook@0.5.0 claude" }
         ]
       }
     ]

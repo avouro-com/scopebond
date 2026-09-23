@@ -30,6 +30,14 @@ if (!gatewayReadme.includes(enrollment)) {
   failures.push(`packages/gateway/README.md must use ${enrollment}`);
 }
 
+// The Claude Code plugin runs the hook through a pinned npx command; it must pin the
+// version this repository ships (scripts/sync-plugin-version.mjs keeps it in step).
+const hookVersion = json("packages/hook/package.json").version;
+const pluginHooks = read("packages/hook/hooks/hooks.json");
+for (const pin of pluginHooks.match(/@scopebond\/hook@[0-9A-Za-z.+-]+/g) ?? []) {
+  if (pin !== `@scopebond/hook@${hookVersion}`) failures.push(`packages/hook/hooks/hooks.json pins ${pin}; expected @scopebond/hook@${hookVersion} (run node scripts/sync-plugin-version.mjs)`);
+}
+
 const staleClaims = [
   [rootReadme, "README.md", /reviewed but unpublished|Published versions remain/i],
   [packageReadme, "packages/README.md", /not yet published|local publication candidate/i],

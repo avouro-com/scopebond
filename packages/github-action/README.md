@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: avouro-com/scopebond/packages/github-action@v1
+      - uses: avouro-com/scopebond/packages/github-action@main  # or pin a full commit SHA
         with:
           policy: scopebond.policy.json
 ```
@@ -31,7 +31,16 @@ jobs:
 A governed-agent PR that violates the policy fails the check (blocking the merge);
 a human PR and non-pull-request events are **not evaluated** (never blocked). The
 governed-agent actors are the known coding-agent bots (Copilot, Devin, Jules,
-Codex, Cursor); extend the set in code via `evaluatePullRequest`.
+Codex, Cursor, Claude, and `github-actions[bot]` when an agent runs inside a
+workflow); to govern another actor, call `evaluatePullRequest` from your own script.
+
+The policy is read from the pull request’s **base commit**, not from the branch
+under review, so a pull request cannot loosen the policy it is checked against: a PR
+that adds or edits `scopebond.policy.json` is checked against the policy already on
+the base branch. Merge policy changes through a reviewed (human) pull request first.
+The changed-file list comes from the pull request API (including the old name of a
+renamed file), falling back to a merge-base diff; if neither yields paths for a PR
+that changed files, the check fails closed.
 
 ## Policy
 
@@ -66,7 +75,7 @@ PR head — the verdict, the gate, the attributed agent and the pinned policy, i
 the `boundary` evidence class:
 
 ```yaml
-      - uses: avouro-com/scopebond/packages/github-action@v1
+      - uses: avouro-com/scopebond/packages/github-action@main  # or pin a full commit SHA
         with:
           policy: scopebond.policy.json
         env:
@@ -87,7 +96,7 @@ agent PRs show in the hosted portal. Export is **best-effort** — a Cloud outag
 never fails the required check, which already gated the merge:
 
 ```yaml
-      - uses: avouro-com/scopebond/packages/github-action@v1
+      - uses: avouro-com/scopebond/packages/github-action@main  # or pin a full commit SHA
         with:
           policy: scopebond.policy.json
           workspace-url: https://your-workspace.example

@@ -23,8 +23,11 @@ scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
 absolute path in your user-level `~/.claude/settings.json`, `~/.cursor/hooks.json`,
 or `~/.codex/hooks.json`. After Codex setup, open Codex, run `/hooks`, review
-Scopebond, and choose **Trust** once. Every project you open is then governed, and a project-local
-`.scopebond/` still takes precedence when you want a per-repo policy.
+Scopebond, and choose **Trust** once. Every project you open is then governed by your
+user-level policy. A project's own `.scopebond/policy.json` applies only after you trust it
+in that project (`scopebond trust`, or `init` there), pinned to its exact contents: a
+repository you clone, or an agent working in it, cannot swap in a weaker policy, and any
+later edit to that file stops it applying until you trust it again.
 
 ```
 scopebond status                    # home, which agents are configured, cloud, receipts
@@ -94,6 +97,26 @@ recorded as *not evaluated* and grant nothing. Anything unexpected fails closed
 
 Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.
+
+**What a shell command is checked for.** A command line is split into every command it
+runs (`&&`, `;`, pipes, `$( )`, `bash -c`, `cmd /c`, `pwsh -Command` and
+`-EncodedCommand`, `find -exec`, `sudo`/`env`/`timeout`/`busybox` wrappers). Each is
+checked as a program, and the files it reads or writes are checked like the Read and
+Write tools: operands of readers (`cat`, `grep`, `tar`, …), copies and moves (`cp`, `mv`,
+`rsync`, `scp`, `Copy-Item`), writers (`tee`, `touch`, `sed -i`, `Set-Content`), upload
+flags (`curl -T`, `-d @file`) and redirections, including `x>file` without spaces. Paths
+are compared case-insensitively, Windows `\` paths, `::$DATA` streams and trailing dots
+are normalized, and a glob, variable or brace list that could name a protected file
+(`.scope*/agent.key`, `$HOME/.ssh/id_rsa`) is treated as that file. Every destination of
+a `git push` is checked, in any spelling (`refs/heads/main`, `HEAD:main`, a second
+refspec, `--all`, `--mirror`).
+
+**Limits.** The hook sees the command text, not what a program does at run time. It
+does not follow a variable whose value it cannot see (`cat $FILE`), a path assembled
+inside a script or interpreter (`python script.py`), recursive reads of a whole
+directory (`grep -r . `), archive extraction, or deletion expressed as arguments
+(`find -delete`, `git clean`). For those, run the agent behind the Scopebond gateway
+or in a sandbox; the hook is a guardrail for a cooperating agent, not a jail.
 
 **Strict mode.** By default a tool with no taxonomy mapping is recorded *not
 evaluated* (not blocked). Add `--strict` (or `SCOPEBOND_HOOK_STRICT=1`) to deny
