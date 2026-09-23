@@ -95,11 +95,26 @@ jobs:
           sarif_file: zizmor.sarif
           category: zizmor
 
-      # shellcheck SC2012 and SC2016 are informational style nits — SC2016 fires
-      # on the deliberately single-quoted `node -e` scripts this pipeline uses,
-      # and neither affects correctness. Everything else actionlint reports fails.
-      - name: actionlint
-        run: actionlint -color -ignore "SC2012" -ignore "SC2016"
+      # actionlint does two jobs: it validates workflow YAML, expressions and
+      # action inputs, and it runs shellcheck over every `run:` block. The first
+      # is a correctness check and runs over everything. The second reports
+      # mostly style on shell that already works, so it gets the same ratchet as
+      # the zizmor gate below: full coverage, style scoped to what changed.
+      - name: actionlint (workflow validity, all files)
+        run: actionlint -color -shellcheck=
+
+      - name: actionlint (shell lint, changed files only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only --diff-filter=d "$BASE_SHA" "$HEAD_SHA" -- .github/workflows/ || true)"
+          [ -n "$changed" ] || { echo "no workflow files changed"; exit 0; }
+          # SC2016 fires on the deliberately single-quoted `node -e` scripts here.
+          # shellcheck disable=SC2086
+          actionlint -color -ignore "SC2016" $changed
 
       # Ratchet, not a wall. The existing workflows carry a backlog of high
       # findings (mostly unpinned actions, which SB139 is draining), and a check
