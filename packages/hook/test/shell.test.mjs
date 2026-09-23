@@ -369,3 +369,33 @@ test("parseGitPush ignores non-push git commands", () => {
   const [commit] = decomposeShell("git commit -m x");
   assert.equal(parseGitPush(commit), null);
 });
+
+// Generated corpus: every protected target × every spelling × every way to reach it.
+// A deterministic cross-product (no randomness) so a failure names its exact command.
+test("generated corpus: protected reads/writes survive no spelling, quoting, prefix or wrapper", async () => {
+  const rt = starterRuntime();
+  const readTargets = [".scopebond/agent.key", ".env", "secrets/deploy.key", "~/.ssh/id_rsa", "~/.aws/credentials"];
+  const writeTargets = [".scopebond/policy.json", ".claude/settings.json", ".github/workflows/ci.yml", ".git/hooks/pre-push"];
+  const spell = (p) => [
+    p,
+    p.toUpperCase(),
+    p.replace(/\//g, "\\\\"),              // backslash separators (escaped for the shell)
+    p.startsWith("~") ? p : `./${p}`,
+    p.startsWith("~") ? p : `x/../${p}`,
+    `${p}.`,                               // Windows trailing dot
+  ];
+  const quote = (w) => [w, `'${w}'`, `"${w}"`];
+  const readVia = (w) => [`cat ${w}`, `cp ${w} /tmp/o`, `tar czf /tmp/o.tgz ${w}`, `bash -c "cat ${w.replace(/"/g, '\\"')}"`, `echo $(cat ${w})`, `sudo -u me head -n 1 ${w}`];
+  const writeVia = (w) => [`echo x > ${w}`, `cp /tmp/i ${w}`, `tee ${w} < /tmp/i`, `sed -i s/a/b/ ${w}`, `bash -c "touch ${w.replace(/"/g, '\\"')}"`, `timeout 5 mv /tmp/i ${w}`];
+  const survived = [];
+  let total = 0;
+  for (const [targets, via] of [[readTargets, readVia], [writeTargets, writeVia]]) {
+    for (const t of targets) for (const s of spell(t)) for (const q of quote(s)) for (const cmd of via(q)) {
+      total += 1;
+      const d = await evalCmd(rt, cmd);
+      if (d.decision !== "deny") survived.push(`${cmd} -> ${d.decision}`);
+    }
+  }
+  assert.ok(total >= 500, `generated ${total} commands`);
+  assert.deepEqual(survived.slice(0, 25), [], `${survived.length} of ${total} bypassed the policy:\n${survived.slice(0, 25).join("\n")}`);
+});

@@ -147,8 +147,10 @@ function tokenize(s: string): Token[] {
     const n = s[i + 1];
     if (quote === "'") { if (c === "'") quote = null; else cur += c; has = true; continue; }
     if (quote === '"') {
+      // As in bash: inside double quotes a backslash escapes only $ ` " \ and newline;
+      // before anything else it is a literal character (so "a\b" keeps its backslash).
       if (c === '"') quote = null;
-      else if (c === "\\" && n !== undefined) cur += s[++i];
+      else if (c === "\\" && n !== undefined && /[$`"\\\n]/.test(n)) cur += s[++i];
       else cur += c;
       has = true; continue;
     }
