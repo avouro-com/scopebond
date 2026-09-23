@@ -69,27 +69,38 @@ jobs:
           tar -xzf "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
 
-      - name: actionlint
-        run: actionlint -color
-
+      # zizmor runs before the linter so its SARIF always reaches code scanning,
+      # even when actionlint fails the job first.
+      #
       # The `auditor` persona includes findings that are correct but noisy on a
-      # young repository (undocumented permissions, anonymous jobs). Those are
-      # written to the summary; only `--min-severity=high` fails the build.
+      # young repository (undocumented permissions, anonymous jobs). Those go to
+      # the run summary; only `--min-severity=high` fails the build.
       - name: zizmor (report)
-        run: zizmor --persona=auditor --format=plain .github/workflows/ | tee zizmor-report.txt
-        continue-on-error: true
+        run: |
+          {
+            echo "## zizmor — GitHub Actions audit"
+            echo '```'
+            zizmor --persona=auditor --format=plain .github/workflows/ 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: zizmor (SARIF)
-        run: zizmor --persona=auditor --format=sarif .github/workflows/ > zizmor.sarif
-        continue-on-error: true
+        run: zizmor --persona=auditor --format=sarif .github/workflows/ > zizmor.sarif || true
 
       - uses: github/codeql-action/upload-sarif@416ff0dea110f80f0f56f0046500dbf7420e4bb0 # codeql-bundle-v2.27.1
-        if: always()
+        if: always() && hashFiles('zizmor.sarif') != ''
         with:
           sarif_file: zizmor.sarif
           category: zizmor
 
+      # shellcheck SC2012 and SC2016 are informational style nits — SC2016 fires
+      # on the deliberately single-quoted `node -e` scripts this pipeline uses,
+      # and neither affects correctness. Everything else actionlint reports fails.
+      - name: actionlint
+        run: actionlint -color -ignore "SC2012" -ignore "SC2016"
+
       - name: Fail on high-severity workflow findings
+        if: always()
         run: zizmor --persona=auditor --min-severity=high --format=plain .github/workflows/
 
   # ---------------------------------------------------------------------------
