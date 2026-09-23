@@ -31,15 +31,18 @@ export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKi
  *  there (idempotent — safe to run twice). Returns the file it wrote. This is what
  *  lets `connect` finish setup without the user hand-editing JSON.
  *  `cwd` defaults to the current directory (the project root the user runs it in). */
-export function installHarness(harness: "claude" | "cursor", cwd: string = process.cwd()): string {
+export function installHarness(harness: "claude" | "cursor" | "codex", cwd: string = process.cwd()): string {
   const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-  const file = harness === "cursor" ? join(cwd, ".cursor", "hooks.json") : join(cwd, ".claude", "settings.json");
+  const file = harness === "cursor" ? join(cwd, ".cursor", "hooks.json")
+    : harness === "codex" ? join(cwd, ".codex", "hooks.json")
+    : join(cwd, ".claude", "settings.json");
   mkdirSync(dirname(file), { recursive: true });
   let config: Record<string, unknown> = {};
   if (existsSync(file)) { try { const p = JSON.parse(readFileSync(file, "utf8")); if (isRecord(p)) config = p; } catch { /* start fresh on unreadable */ } }
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   const cursorCmd = hookCommand("cursor");
   const claudeCmd = hookCommand("claude");
+  const codexCmd = hookCommand("codex");
   // Match any existing Scopebond hook entry (pinned or a legacy bare `scopebond-hook`)
   // so re-running never appends a duplicate and an old bare command is replaced.
   const isScopebond = (cmd: unknown): boolean => typeof cmd === "string" && /(^|\s)(npx\s+.*)?@scopebond\/hook|(^|\s)scopebond-hook(\s|$)/.test(cmd);
@@ -55,7 +58,10 @@ export function installHarness(harness: "claude" | "cursor", cwd: string = proce
   } else {
     const list = Array.isArray((hooks as Record<string, unknown>).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
     const existing = list.findIndex(entryMatches);
-    const entry = { matcher: "*", hooks: [{ type: "command", command: claudeCmd }] };
+    // Codex matchers are regular expressions. No matcher means all supported tools.
+    const entry = harness === "codex"
+      ? { hooks: [{ type: "command", command: codexCmd, timeout: 30, statusMessage: "Checking this action with Scopebond" }] }
+      : { matcher: "*", hooks: [{ type: "command", command: claudeCmd }] };
     if (existing >= 0) list[existing] = entry; else list.push(entry);
   }
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
@@ -63,7 +69,7 @@ export function installHarness(harness: "claude" | "cursor", cwd: string = proce
 }
 
 /** The harness configuration snippet to install the hook (version-pinned npx). */
-export function harnessSnippet(harness: "claude" | "cursor"): string {
+export function harnessSnippet(harness: "claude" | "cursor" | "codex"): string {
   if (harness === "cursor") {
     const cmd = hookCommand("cursor");
     return JSON.stringify({
@@ -73,6 +79,15 @@ export function harnessSnippet(harness: "claude" | "cursor"): string {
         beforeMCPExecution: [{ command: cmd }],
         beforeReadFile: [{ command: cmd }],
         afterFileEdit: [{ command: cmd }],
+      },
+    }, null, 2);
+  }
+  if (harness === "codex") {
+    return JSON.stringify({
+      hooks: {
+        PreToolUse: [{
+          hooks: [{ type: "command", command: hookCommand("codex"), timeout: 30, statusMessage: "Checking this action with Scopebond" }],
+        }],
       },
     }, null, 2);
   }

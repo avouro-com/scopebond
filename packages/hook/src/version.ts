@@ -19,7 +19,7 @@ export function hookVersion(): string {
 /** The command the agent harness runs for each tool call: a version-pinned npx
  *  invocation so a missing global binary is fetched rather than silently skipped
  *  (which a harness can treat as "no hook" and fail open). */
-export function hookCommand(harness: "claude" | "cursor"): string {
+export function hookCommand(harness: "claude" | "cursor" | "codex"): string {
   return `npx -y @scopebond/hook@${hookVersion()} ${harness}`;
 }
 

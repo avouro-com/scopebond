@@ -1,14 +1,14 @@
 // SB112 — the user-level installer. One install per developer machine (not per repo):
 // keys and a starter policy live in a user-level home (~/.scopebond, override
 // SCOPEBOND_HOME), and the hook is registered by absolute path in the user-level agent
-// config (~/.claude/settings.json, ~/.cursor/hooks.json). A project-local `.scopebond`
+// config (~/.claude/settings.json, ~/.cursor/hooks.json, ~/.codex/hooks.json). A project-local `.scopebond`
 // still wins when present, so per-project policies keep working.
 
 import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type Harness = "claude" | "cursor";
+export type Harness = "claude" | "cursor" | "codex";
 
 /** The user-level Scopebond home. `SCOPEBOND_HOME` overrides it (tests, CI). */
 export function userHome(): string {
@@ -18,7 +18,9 @@ export function userHome(): string {
 /** The user-level agent config file for a harness. `HOME`/`USERPROFILE` (via homedir)
  *  roots it; SCOPEBOND_HOME does not move the agent's own config. */
 export function userHarnessFile(harness: Harness): string {
-  return harness === "cursor" ? join(homedir(), ".cursor", "hooks.json") : join(homedir(), ".claude", "settings.json");
+  if (harness === "cursor") return join(homedir(), ".cursor", "hooks.json");
+  if (harness === "codex") return join(homedir(), ".codex", "hooks.json");
+  return join(homedir(), ".claude", "settings.json");
 }
 
 /** Resolve the config dir for a hook event, most specific first:
@@ -43,9 +45,9 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const isScopebond = (cmd: unknown): boolean =>
   typeof cmd === "string" && (
     /@scopebond\/hook|scopebond-hook(\s|$)/.test(cmd) ||
-    // the user-level absolute form: `<node> <…/cli.js> claude|cursor`
-    /cli\.js["']?\s+(claude|cursor)\s*$/.test(cmd) ||
-    /(^|["\s])scopebond(["'\s]).*\b(claude|cursor)\b/.test(cmd)
+    // the user-level absolute form: `<node> <…/cli.js> claude|cursor|codex`
+    /cli\.js["']?\s+(claude|cursor|codex)\s*$/.test(cmd) ||
+    /(^|["\s])scopebond(["'\s]).*\b(claude|cursor|codex)\b/.test(cmd)
   );
 const entryMatches = (e: unknown): boolean =>
   isRecord(e) && (isScopebond(e.command) || (Array.isArray(e.hooks) && e.hooks.some((h) => isRecord(h) && isScopebond(h.command))));
@@ -68,7 +70,11 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
   } else {
     const list = Array.isArray((hooks as Record<string, unknown>).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
     const at = list.findIndex(entryMatches);
-    const entry = { matcher: "*", hooks: [{ type: "command", command }] };
+    // Codex matchers are regular expressions; omitting the matcher means every tool.
+    // A literal "*" is not a valid regular expression and causes Codex to skip the group.
+    const entry = harness === "codex"
+      ? { hooks: [{ type: "command", command, timeout: 30, statusMessage: "Checking this action with Scopebond" }] }
+      : { matcher: "*", hooks: [{ type: "command", command }] };
     if (at >= 0) list[at] = entry; else list.push(entry);
   }
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
@@ -92,6 +98,11 @@ export function removeHarnessConfig(file: string): boolean {
 /** Detect a Cursor install by its user config directory. */
 export function cursorDetected(): boolean {
   return existsSync(join(homedir(), ".cursor"));
+}
+
+/** Detect a Codex install by its user config directory. */
+export function codexDetected(): boolean {
+  return existsSync(join(homedir(), ".codex"));
 }
 
 /** The absolute command a user-level harness entry runs: the current Node executable
