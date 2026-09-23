@@ -1,5 +1,20 @@
 # @scopebond/hook
 
+## 0.5.0
+
+### Minor Changes
+
+- 2d2a9eb: Add OpenAI Codex support through its `PreToolUse` hook. Scopebond can install or connect Codex with `--codex`, maps shell, patch, and MCP actions into the existing policy runtime, blocks protected actions before they run, and explains the one-time `/hooks` approval step in plain language.
+
+### Patch Changes
+
+- 7343f01: Register the hook's separate agent signing key during enrollment using a challenge signed by both keys. Require the server to acknowledge that key before saving the connection, so authenticated receipts can be uploaded. Let doctor and flush exit normally after network requests to avoid a Windows shutdown assertion.
+- Updated dependencies [f212f82]
+- Updated dependencies [7343f01]
+  - @scopebond/policy-schema@0.4.0
+  - @scopebond/gateway@0.6.1
+  - @scopebond/sdk@0.1.2
+
 ## 0.4.0
 
 ### Minor Changes

@@ -1,5 +1,14 @@
 # @scopebond/gateway
 
+## 0.6.1
+
+### Patch Changes
+
+- 7343f01: Register the hook's separate agent signing key during enrollment using a challenge signed by both keys. Require the server to acknowledge that key before saving the connection, so authenticated receipts can be uploaded. Let doctor and flush exit normally after network requests to avoid a Windows shutdown assertion.
+- Updated dependencies [f212f82]
+  - @scopebond/policy-schema@0.4.0
+  - @scopebond/verify@0.3.0
+
 ## 0.6.0
 
 ### Minor Changes
