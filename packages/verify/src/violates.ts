@@ -259,6 +259,7 @@ export function violates(
       case "contract_allowlist": return typeof p.contract === "string";
       case "time_window": return true;
       case "key_policy": return typeof c.intent?.signer === "string";
+      case "force_push_guard": return c.intent?.action_type === "git.push";
       default: return false;
     }
   });
@@ -422,6 +423,27 @@ export function violates(
       if (signer != null && !clause.active_keys.includes(signer)) {
         record(clause, `signed by key ${signer} outside the active key set`);
         continue;
+      }
+    }
+
+    else if (t === "force_push_guard") {
+      // Deny a force-push to a protected branch while still allowing ordinary
+      // pushes to those branches and force-pushes to feature branches — the one
+      // predicate a per-field action_allowlist bound cannot express (it cannot
+      // AND `force` with a protected-ref set). A force-push whose target ref
+      // cannot be resolved is denied (fail closed): it cannot be shown to avoid
+      // the protected set.
+      if (c.intent?.action_type === "git.push" && p.force === true) {
+        const refs: string[] = Array.isArray(clause.protected_refs) && clause.protected_refs.length > 0
+          ? clause.protected_refs
+          : ["main", "master", "release/*"];
+        const ref = typeof p.ref === "string" ? p.ref : undefined;
+        if (ref === undefined || refs.some((g) => globMatch(g, ref))) {
+          record(clause, ref === undefined
+            ? "force-push with an unresolved target ref is denied"
+            : `force-push to protected ref ${ref} is denied`);
+          continue;
+        }
       }
     }
 

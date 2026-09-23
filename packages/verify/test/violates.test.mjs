@@ -171,3 +171,52 @@ test("a prior executed:false receipt does NOT count — the gateway must coerce 
   const candidate = rcpt({ intent: { action_type: "social.post" }, executed: true, ts: at, action_id: "a2" });
   assert.equal(violates(policy, [notCounted], candidate, { at }).violated, false, "executed:false is skipped, so this is only the first counted post");
 });
+
+// force_push_guard (D-new): deny a force-push to a protected branch while still
+// allowing ordinary pushes to those branches and force-pushes to feature branches
+// — the one predicate a per-field action_allowlist bound cannot express. An
+// executed force-push surfaces the violation (a prevented, executed:false one is
+// bucket A and returns no violation, like every other clause).
+const push = (params, ts, extra = {}) => rcpt({ intent: { action_type: "git.push", params }, ts, ...extra });
+
+test("force_push_guard: an executed force-push to a protected branch is a violation", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "monitor" }] });
+  const v = violates(policy, [], push({ force: true, ref: "main" }, "2026-09-21T14:14:07Z", { rr: "deny" }));
+  assert.equal(v.violated, true);
+  assert.equal(v.clause_id, "fpg");
+});
+
+test("force_push_guard: a prevented (not executed) force-push is bucket A, not a violation", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "enforce" }] });
+  const v = violates(policy, [], push({ force: true, ref: "main" }, "2026-09-21T14:14:07Z", { executed: false, rr: "deny" }));
+  assert.equal(v.violated, false);
+});
+
+test("force_push_guard: an ordinary push to a protected branch is allowed", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "enforce" }] });
+  assert.equal(violates(policy, [], push({ force: false, ref: "main" }, "2026-09-21T14:14:07Z")).violated, false);
+});
+
+test("force_push_guard: a force-push to a feature branch is allowed", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "enforce" }] });
+  assert.equal(violates(policy, [], push({ force: true, ref: "feature/checkout-fix" }, "2026-09-21T14:14:07Z")).violated, false);
+});
+
+test("force_push_guard: custom protected_refs (glob) match, and refs outside the set are allowed", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "monitor", protected_refs: ["release/*"] }] });
+  assert.equal(violates(policy, [], push({ force: true, ref: "release/2026.09" }, "2026-09-21T14:14:07Z", { rr: "deny" })).violated, true);
+  assert.equal(violates(policy, [], push({ force: true, ref: "main" }, "2026-09-21T14:14:07Z")).violated, false);
+});
+
+test("force_push_guard: a force-push with an unresolved target ref fails closed", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "monitor" }] });
+  const v = violates(policy, [], push({ force: true }, "2026-09-21T14:14:07Z", { rr: "deny" }));
+  assert.equal(v.violated, true);
+  assert.equal(v.clause_id, "fpg");
+});
+
+test("force_push_guard: validates as a policy clause (with and without protected_refs)", () => {
+  assert.equal(validatePolicy(valid({ clauses: [{ id: "fpg", type: "force_push_guard" }] })).valid, true);
+  assert.equal(validatePolicy(valid({ clauses: [{ id: "fpg", type: "force_push_guard", protected_refs: ["main", "release/*"] }] })).valid, true);
+  assert.equal(validatePolicy(valid({ clauses: [{ id: "fpg", type: "force_push_guard", protected_refs: [] }] })).valid, false);
+});
