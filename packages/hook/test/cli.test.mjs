@@ -56,6 +56,32 @@ test("claude: invalid stdin fails closed (deny, exit 2)", () => {
   assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
 });
 
+test("codex: a protected branch push is denied and an allowed action stays silent", () => {
+  const denied = run(enrolledDir(), ["codex"], JSON.stringify({
+    hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git push origin main" },
+  }));
+  assert.equal(denied.status, 0, "Codex consumes the structured deny without treating the hook as failed");
+  assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny");
+
+  const allowed = run(enrolledDir(), ["codex"], JSON.stringify({
+    hook_event_name: "PreToolUse", tool_name: "apply_patch",
+    tool_input: { command: "*** Begin Patch\n*** Update File: src/app.ts\n@@\n-old\n+new\n*** End Patch" },
+  }));
+  assert.equal(allowed.status, 0);
+  assert.equal(allowed.stdout.trim(), "", "Codex keeps its normal approval flow");
+});
+
+test("codex: apply_patch cannot rewrite Codex's own hook configuration", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-codex-protect-"));
+  scaffold(dir);
+  const r = run(dir, ["codex"], JSON.stringify({
+    hook_event_name: "PreToolUse", tool_name: "apply_patch",
+    tool_input: { command: "*** Begin Patch\n*** Update File: .codex/hooks.json\n@@\n-old\n+new\n*** End Patch" },
+  }));
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
+});
+
 test("init scaffolds keys and a policy and auto-configures the agent", () => {
   const project = mkdtempSync(join(tmpdir(), "sb-hook-init-"));
   const dir = join(project, ".scopebond");
@@ -74,6 +100,17 @@ test("init --no-install prints the snippet instead of writing config", () => {
   const stdout = execFileSync(process.execPath, [cli, "init", "--no-install"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
   assert.ok(!existsSync(join(project, ".claude", "settings.json")), "no config written with --no-install");
   assert.match(stdout, /npx -y @scopebond\/hook@\S+ claude/, "prints the pinned hook command");
+});
+
+test("init --codex configures .codex/hooks.json and prints the trust step", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-init-codex-"));
+  const dir = join(project, ".scopebond");
+  const stdout = execFileSync(process.execPath, [cli, "init", "--codex"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+  const hooks = join(project, ".codex", "hooks.json");
+  assert.ok(existsSync(hooks));
+  const cfg = JSON.parse(readFileSync(hooks, "utf8"));
+  assert.match(cfg.hooks.PreToolUse[0].hooks[0].command, /^npx -y @scopebond\/hook@\S+ codex$/);
+  assert.match(stdout, /run `\/hooks`/i);
 });
 
 test("first-run smoke: init, a blocked command, then the receipt shows in log and verifies", () => {

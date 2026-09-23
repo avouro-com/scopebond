@@ -1,27 +1,29 @@
 # @scopebond/hook
 
-The Scopebond connector for **Claude Code** and **Cursor**. It checks every tool
+The Scopebond connector for **Claude Code**, **Cursor**, and **OpenAI Codex**. It checks every tool
 call a coding agent makes against your policy *before it runs*, blocks the ones
 outside policy, and records a signed receipt — locally, on the machine, and
 optionally mirrored to your Scopebond Cloud workspace for monitoring.
 
-- **Label:** in-path · prevents (a Claude Code `PreToolUse` deny via exit code 2
-  blocks even in bypass-permissions mode).
-- **Ceiling:** it governs actions the harness routes through its tool system
+- **What it does:** checks supported agent actions before they run and blocks an
+  action when it breaks your policy.
+- **Where it works:** actions the coding agent routes through its tool system
   (shell, file, MCP, web). A process started outside the harness is not covered.
 
 ## Install once for your machine
 
 ```
 npm i -g @scopebond/hook
-scopebond install                   # detects Cursor; add --claude / --cursor to pick
+scopebond install                   # detects Cursor and Codex
+scopebond install --codex           # set up Codex only
 ```
 
 `install` sets Scopebond up **once per developer machine**, not per repository: it
 scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
-absolute path in your user-level `~/.claude/settings.json` (and `~/.cursor/hooks.json`
-when Cursor is present). Every project you open is then governed, and a project-local
+absolute path in your user-level `~/.claude/settings.json`, `~/.cursor/hooks.json`,
+or `~/.codex/hooks.json`. After Codex setup, open Codex, run `/hooks`, review
+Scopebond, and choose **Trust** once. Every project you open is then governed, and a project-local
 `.scopebond/` still takes precedence when you want a per-repo policy.
 
 ```
@@ -43,13 +45,15 @@ Scopebond is also a Claude Code plugin (this repo is a plugin marketplace):
 ### Per-repository enroll (alternative)
 
 ```
-npx @scopebond/hook init            # Claude Code (or: init --cursor)
+npx @scopebond/hook init            # Claude Code
+npx @scopebond/hook init --cursor   # Cursor
+npx @scopebond/hook init --codex    # Codex, then approve it once with /hooks
 ```
 
 `init` scaffolds `.scopebond/` in the current project (a machine signing key, a
 countersigning key, a starter policy — "protect main and production paths" — and a
-`.gitignore` so none of it is committed) and configures `.claude/settings.json` or
-`.cursor/hooks.json`. Then run one safe command in the agent and see the receipt in
+`.gitignore` so none of it is committed) and configures `.claude/settings.json`,
+`.cursor/hooks.json`, or `.codex/hooks.json`. Then run one safe command in the agent and see the receipt in
 `.scopebond/receipts.db`.
 
 ## Connect it to your workspace (optional)
@@ -66,9 +70,9 @@ In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy
 
 `connect` does the whole setup in one command: it scaffolds `.scopebond/` if needed,
 enrolls this machine's countersigning key, stores a scoped machine credential in
-`.scopebond/cloud.json` (a secret — never commit it), **and configures Claude Code
-for you** (it merges the hook into `.claude/settings.json`, preserving anything
-already there — pass `--no-install` to skip, or `--cursor` for Cursor). The
+`.scopebond/cloud.json` (a secret — never commit it), **and configures your coding
+agent for you** (it merges the hook into the agent's settings, preserving anything
+already there — pass `--no-install` to skip, `--cursor` for Cursor, or `--codex` for Codex). The
 enrollment argument can be a file, an inline blob, or JSON on stdin, so the portal
 can hand you a single copy-paste command with nothing to save.
 
@@ -83,8 +87,8 @@ anything still queued — run it on a session-end hook (and set
 Each tool call is mapped to a normalized [Action Taxonomy](https://github.com/avouro-com/scopebond)
 action (`shell.exec`, `git.push`, `file.write`, `mcp.tool.call`, …), signed by the
 machine key and decided against your policy by an in-process check-only gateway.
-An allowed action is a **cooperative allow** (recorded, never executed by the
-hook — the agent performs it); a denied action is blocked. Unknown tools are
+An allowed action is recorded and left to the coding agent's normal permission
+prompt; the hook never auto-approves it. A denied action is blocked. Unknown tools are
 recorded as *not evaluated* and grant nothing. Anything unexpected fails closed
 (deny) with a repair message.
 
@@ -100,10 +104,10 @@ unmapped tools too — fail-closed coverage for anything the taxonomy does not m
 The mapper and runtime are exported for testing and embedding:
 
 ```js
-import { mapClaudeToolUse, createHookRuntime } from "@scopebond/hook";
+import { mapClaudeToolUse, mapCodexToolUse, createHookRuntime } from "@scopebond/hook";
 ```
 
-`mapClaudeToolUse` / `mapCursorEvent` are pure functions (native payload →
+`mapClaudeToolUse`, `mapCursorEvent`, and `mapCodexToolUse` are pure functions (native payload →
 normalized action). `createHookRuntime` builds the check-only gateway from a
 policy, a machine key and a local receipt log; pass `cloud: { connection }` (from
 `connectCloud`) to mirror receipts to a workspace.

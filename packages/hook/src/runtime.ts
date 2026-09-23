@@ -38,7 +38,7 @@ export interface Decision {
 // receipts stop meaning anything. These patterns are "allow if the path does NOT
 // match a protected location"; they run against the cwd-relative path the mapper
 // produces (and equally against an absolute one).
-const PROTECTED_WRITE = "^(?!(?:.*/)?\\.scopebond/)(?!(?:.*/)?\\.claude/settings)(?!(?:.*/)?\\.cursor/hooks)(?!(?:.*/)?\\.git/hooks/)(?!(?:.*/)?\\.github/workflows/)(?!(?:.*/)?\\.github/actions/)(?!(?:.*/)?\\.gitlab-ci\\.yml$)(?!(?:.*/)?\\.circleci/)(?!(?:.*/)?azure-pipelines\\.yml$)(?!(?:.*/)?Jenkinsfile$).+";
+const PROTECTED_WRITE = "^(?!(?:.*/)?\\.scopebond/)(?!(?:.*/)?\\.claude/settings)(?!(?:.*/)?\\.cursor/hooks)(?!(?:.*/)?\\.codex/(?:hooks\\.json|config\\.toml)$)(?!(?:.*/)?\\.git/hooks/)(?!(?:.*/)?\\.github/workflows/)(?!(?:.*/)?\\.github/actions/)(?!(?:.*/)?\\.gitlab-ci\\.yml$)(?!(?:.*/)?\\.circleci/)(?!(?:.*/)?azure-pipelines\\.yml$)(?!(?:.*/)?Jenkinsfile$).+";
 const PROTECTED_READ = "^(?!(?:.*/)?\\.scopebond/)(?!.*\\.key$)(?!(?:.*/)?\\.env(?:\\.(?!example$|sample$|template$)[^/]*)?$).+";
 
 /** The default starter policy for a coding agent: protect release branches, deny
@@ -62,7 +62,7 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
       {
         id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
         param_bounds: { path: { pattern: PROTECTED_WRITE } },
-        description: "Allow workspace writes, but never to the hook's policy/keys, .claude/settings, .cursor/hooks, git hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml, .circleci, azure-pipelines.yml, Jenkinsfile).",
+        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code, Cursor or Codex hook settings, git hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml, .circleci, azure-pipelines.yml, Jenkinsfile).",
       },
       {
         id: "protect-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],

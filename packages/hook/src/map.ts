@@ -123,6 +123,32 @@ function splitUrl(url: string): { host: string; path: string } {
   catch { return { host: scrubParam(url), path: "" }; }
 }
 
+/** Extract every path changed by an apply_patch call. Codex sends the patch in
+ *  `tool_input.command`; recording one file.write per path lets the same protected-
+ *  path rules cover file edits made by Claude Code, Cursor and Codex. A patch with
+ *  no recognizable path is deliberately not evaluated so strict mode can deny it. */
+function mapApplyPatch(command: string, cwd?: string): Mapped[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const line of command.split(/\r?\n/)) {
+    const match = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+?)\s*$/.exec(line)
+      ?? /^\*\*\* Move to:\s*(.+?)\s*$/.exec(line);
+    if (!match) continue;
+    const path = rel(scrubParam(match[1]), cwd);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+  }
+  if (paths.length === 0) {
+    return one({ action_type: "file.write", params: { path: "" } }, false, "apply_patch");
+  }
+  return paths.map((path) => ({
+    intent: { action_type: "file.write", params: { path } },
+    evaluated: true,
+    source: "apply_patch",
+  }));
+}
+
 const one = (intent: NormalizedIntent, evaluated: boolean, source: string): Mapped[] => [{ intent, evaluated, source }];
 
 /** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,
@@ -158,6 +184,22 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
     const { host, path } = splitUrl(String(ti.url ?? ""));
     return one({ action_type: "net.fetch", params: { host, path, method: "GET" } }, true, name);
   }
+  const mcp = parseMcpName(name);
+  if (mcp) return one({ action_type: "mcp.tool.call", params: { server: mcp.server, tool: mcp.tool, args_digest: digest(ti) } }, true, name);
+  return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
+}
+
+/** Map an OpenAI Codex PreToolUse payload. Codex reports shell and unified-exec
+ *  calls as `Bash`, file patches as `apply_patch`, and MCP calls by their native
+ *  `mcp__server__tool` name. Other local tools remain visible but unevaluated. */
+export function mapCodexToolUse(input: Record<string, unknown>): Mapped[] {
+  const name = String(input?.tool_name ?? "");
+  const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
+  const cwd = input?.cwd ? String(input.cwd) : undefined;
+  if (name === "Bash" || name === "PowerShell" || name === "Shell" || name === "exec_command" || name === "unified_exec")
+    return mapShell(String(ti.command ?? ti.cmd ?? ""), cwd);
+  if (name === "apply_patch" || name === "Edit" || name === "Write")
+    return mapApplyPatch(String(ti.command ?? ti.patch ?? ""), cwd);
   const mcp = parseMcpName(name);
   if (mcp) return one({ action_type: "mcp.tool.call", params: { server: mcp.server, tool: mcp.tool, args_digest: digest(ti) } }, true, name);
   return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
