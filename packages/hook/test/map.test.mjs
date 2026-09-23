@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mapClaudeToolUse, mapCursorEvent, redactCommand, scrubSecrets, fillPushBranch } from "../dist/index.js";
+import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, redactCommand, scrubSecrets, fillPushBranch } from "../dist/index.js";
 
 // The mapper returns one intent per simple command. These helpers keep the common
 // single-command assertions readable.
@@ -85,6 +85,41 @@ test("Cursor events map the same way as Claude tools", () => {
   assert.equal(only(mapCursorEvent("beforeReadFile", { path: "/w/x.ts", cwd: "/w" })).intent.params.path, "x.ts");
   assert.equal(only(mapCursorEvent("beforeMCPExecution", { server: "github", tool: "merge_pr" })).intent.action_type, "mcp.tool.call");
   assert.equal(only(mapCursorEvent("somethingElse", {})).evaluated, false);
+});
+
+test("Codex Bash and MCP calls use the shared action mapping", () => {
+  assert.equal(only(mapCodexToolUse({ tool_name: "Bash", tool_input: { command: "git push origin main" } })).intent.action_type, "git.push");
+  const mcp = only(mapCodexToolUse({ tool_name: "mcp__github__create_issue", tool_input: { title: "x" } }));
+  assert.equal(mcp.intent.action_type, "mcp.tool.call");
+  assert.equal(mcp.intent.params.server, "github");
+  assert.equal(mcp.intent.params.tool, "create_issue");
+});
+
+test("Codex apply_patch maps every changed path, including moves", () => {
+  const patch = `*** Begin Patch
+*** Update File: src/app.ts
+@@
+-old
++new
+*** Add File: src/new.ts
++export {};
+*** Update File: src/old.ts
+*** Move to: src/moved.ts
+@@
+-old
++moved
+*** Delete File: src/gone.ts
+*** End Patch`;
+  const mapped = mapCodexToolUse({ tool_name: "apply_patch", tool_input: { command: patch }, cwd: "/work" });
+  assert.deepEqual(writePaths(mapped), ["src/app.ts", "src/new.ts", "src/old.ts", "src/moved.ts", "src/gone.ts"]);
+  assert.ok(mapped.every((m) => m.evaluated));
+});
+
+test("Codex apply_patch with no recognizable path is not trusted", () => {
+  const mapped = mapCodexToolUse({ tool_name: "apply_patch", tool_input: { command: "not a patch" } });
+  assert.equal(mapped.length, 1);
+  assert.equal(mapped[0].intent.action_type, "file.write");
+  assert.equal(mapped[0].evaluated, false);
 });
 
 // ---- Decomposition: a shell call is split into every simple command it runs ----

@@ -38,7 +38,8 @@ export async function connectCloud(
   dir: string, url: string, bundle: CloudEnrollmentBundle, fetchImpl?: typeof fetch,
 ): Promise<HookConnection> {
   const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
-  const result = await completeCloudEnrollment({ url, bundle, attester, fetch: fetchImpl });
+  const { attester: agent } = loadOrCreateAttester({ file: join(dir, "agent.key") });
+  const result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: fetchImpl });
   const connection: HookConnection = { url, ...result };
   writeFileSync(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n", { mode: 0o600 });
   return connection;

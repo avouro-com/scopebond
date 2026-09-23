@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { verify } from "node:crypto";
 import { createWebCryptoAttester, generateAttesterJwk, completeCloudEnrollment } from "../dist/index.js";
 
 test("Cloud enrollment binds the returned credential to the gateway attester", async () => {
@@ -43,4 +44,26 @@ test("Cloud enrollment rejects insecure remote origins and altered proof bytes",
     completeCloudEnrollment({ url: "https://cloud.example", bundle, attester }),
     /not canonical/,
   );
+});
+
+test("agent enrollment proves possession with both keys and requires acknowledgement", async () => {
+  const attester = await createWebCryptoAttester(await generateAttesterJwk());
+  const agent = await createWebCryptoAttester(await generateAttesterJwk());
+  const proof = { challenge: "challenge_abc", enrollment_id: "enrollment-1", type: "scopebond:gateway-enrollment", version: 1 };
+  const options = {
+    url: "https://cloud.scopebond.test", attester, agent,
+    bundle: { enrollment_token: "sbe_test-token", proof_canonical: JSON.stringify(proof) },
+  };
+  for (const acknowledgedKid of [undefined, attester.kid, agent.kid]) {
+    const attempt = completeCloudEnrollment({ ...options, fetch: async (_url, init) => {
+      const submitted = JSON.parse(init.body);
+      assert.equal(submitted.agent_public_key_pem, agent.publicKeyPem.trim());
+      const bytes = Buffer.from(JSON.stringify({ agent_public_key_pem: agent.publicKeyPem.trim(), ...proof }));
+      assert.ok(verify(null, bytes, submitted.public_key_pem, Buffer.from(submitted.signature, "base64url")));
+      assert.ok(verify(null, bytes, submitted.agent_public_key_pem, Buffer.from(submitted.agent_signature, "base64url")));
+      return Response.json({ credential: "sbm_secret", attester_kid: attester.kid, agent_kid: acknowledgedKid }, { status: 201 });
+    } });
+    if (acknowledgedKid === agent.kid) assert.equal((await attempt).agent_kid, agent.kid);
+    else await assert.rejects(attempt, /did not register the agent signing key/);
+  }
 });
