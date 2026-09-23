@@ -385,8 +385,10 @@ test("generated corpus: protected reads/writes survive no spelling, quoting, pre
     `${p}.`,                               // Windows trailing dot
   ];
   const quote = (w) => [w, `'${w}'`, `"${w}"`];
-  const readVia = (w) => [`cat ${w}`, `cp ${w} /tmp/o`, `tar czf /tmp/o.tgz ${w}`, `bash -c "cat ${w.replace(/"/g, '\\"')}"`, `echo $(cat ${w})`, `sudo -u me head -n 1 ${w}`];
-  const writeVia = (w) => [`echo x > ${w}`, `cp /tmp/i ${w}`, `tee ${w} < /tmp/i`, `sed -i s/a/b/ ${w}`, `bash -c "touch ${w.replace(/"/g, '\\"')}"`, `timeout 5 mv /tmp/i ${w}`];
+  // Escape a word for use inside a double-quoted `bash -c "…"` script.
+  const dq = (w) => w.replace(/[\\"$`]/g, (c) => "\\" + c);
+  const readVia = (w) => [`cat ${w}`, `cp ${w} /tmp/o`, `tar czf /tmp/o.tgz ${w}`, `bash -c "cat ${dq(w)}"`, `echo $(cat ${w})`, `sudo -u me head -n 1 ${w}`];
+  const writeVia = (w) => [`echo x > ${w}`, `cp /tmp/i ${w}`, `tee ${w} < /tmp/i`, `sed -i s/a/b/ ${w}`, `bash -c "touch ${dq(w)}"`, `timeout 5 mv /tmp/i ${w}`];
   const survived = [];
   let total = 0;
   for (const [targets, via] of [[readTargets, readVia], [writeTargets, writeVia]]) {
