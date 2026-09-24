@@ -83,7 +83,10 @@ function stubScript(bashPath, name, kind, real) {
   const log = '>>"$SB_ORACLE_LOG"';
   const lines = [
     `#!${bashPath}`,
-    `{ printf 'X${FS}%s' "${name}"; for a in "$@"; do printf '${FS}%s' "$a"; done; printf '${RS}'; } ${log}`,
+    // One record, one `printf`: a single write(2) to an O_APPEND fd cannot interleave
+    // with a concurrent stub's. Building the line with several printfs let the stages of
+    // a pipeline (`cat list.txt | head -n 2`) tear each other's records apart.
+    `rec='X${FS}${name}'; for a in "$@"; do rec="$rec${FS}$a"; done; printf '%s${RS}' "$rec" ${log}`,
     `for a in "$@"; do case $a in *${MARK}*) printf 'A${RS}' ${log};; esac; done`,
   ];
   if (kind === "reader") {
@@ -104,6 +107,27 @@ function stubScript(bashPath, name, kind, real) {
     lines.push(`if [ ! -t 0 ]; then while IFS= read -r l || [ -n "$l" ]; do case $l in *${MARK}*) printf 'S${RS}' ${log};; esac; done; fi`, "exit 0");
   }
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Read a stub log into the programs that ran and the marker leaks observed.
+ *
+ * Every record carries a known tag, so an unknown one means the log is corrupt.
+ * Reporting corruption as a leak would invent a secret read on a harmless command —
+ * the failure this replaced — so it throws instead of guessing.
+ */
+export function parseLog(text, command = "") {
+  const execs = [];
+  const leaks = [];
+  for (const rec of text.split(RS).filter(Boolean)) {
+    const x = rec.split(FS);
+    if (x[0] === "X") execs.push({ program: x[1], argv: x.slice(2) });
+    else if (x[0] === "R") leaks.push(`read ${x[1]}`);
+    else if (x[0] === "A") leaks.push("marker in argv");
+    else if (x[0] === "S") leaks.push("marker on stdin");
+    else throw new Error(`oracle log corrupt for ${JSON.stringify(command)}: unknown record ${JSON.stringify(rec)}`);
+  }
+  return { execs, leaks };
 }
 
 /** Build the stub directory once; returns a runner for single commands. */
@@ -167,10 +191,7 @@ export function createOracle() {
       env: { PATH: stubs, HOME: slash(home), SB_ORACLE_LOG: slash(log), LANG: "C", LC_ALL: "C" },
     });
     if (r.error) throw new Error(`oracle run failed for ${JSON.stringify(command)}: ${r.error.message}`);
-    const records = readFileSync(log, "utf8").split(RS).filter(Boolean).map((rec) => rec.split(FS));
-    const execs = records.filter((x) => x[0] === "X").map((x) => ({ program: x[1], argv: x.slice(2) }));
-    const leaks = [];
-    for (const x of records) if (x[0] !== "X") leaks.push(x[0] === "R" ? `read ${x[1]}` : x[0] === "A" ? "marker in argv" : "marker on stdin");
+    const { execs, leaks } = parseLog(readFileSync(log, "utf8"), command);
     if (`${r.stdout}${r.stderr}`.includes(MARK)) leaks.push("marker in output");
     // A secret copied or redirected into an ordinary file.
     const scan = (dir, skip) => {

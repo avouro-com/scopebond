@@ -17,7 +17,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mapClaudeToolUse, createHookRuntime, scaffold, fillPushBranch } from "../dist/index.js";
-import { createOracle, findBash } from "./oracle/harness.mjs";
+import { createOracle, findBash, parseLog } from "./oracle/harness.mjs";
 
 // Denials of commands bash runs harmlessly. Lower it when the mapper improves; never
 // raise it without reviewing the new false positives printed by this test.
@@ -85,4 +85,24 @@ test("bash oracle: the hook denies everything bash would run harmfully", { skip 
   assert.deepEqual(mislabeled, [], `corpus entries whose label disagrees with bash:\n${mislabeled.join("\n")}`);
   assert.deepEqual(misses, [], `the hook allowed commands bash runs harmfully:\n${misses.join("\n")}`);
   assert.ok(fps.length <= FP_BASELINE, `false positives rose to ${fps.length} (baseline ${FP_BASELINE}):\n${fps.map((f) => f.command).join("\n")}`);
+});
+
+// A record the stubs never write means the log is corrupt. The stub log is append-only
+// and shared, so a torn write must not be read as evidence: this ran as a benign
+// pipeline whose stages interleaved their records, and the leftover fragment was
+// reported as "marker on stdin" — a secret read on `cat list.txt | head -n 2`.
+test("a corrupt oracle log throws instead of reporting a phantom leak", () => {
+  const FSC = "", RSC = "";
+  const whole = `X${FSC}cat${FSC}list.txt${RSC}`;
+  assert.deepEqual(parseLog(whole).execs, [{ program: "cat", argv: ["list.txt"] }]);
+  assert.deepEqual(parseLog(whole).leaks, []);
+
+  // The fragment a torn record leaves behind: a record whose first field is empty.
+  const fragment = `X${FSC}head${RSC}${FSC}-n${FSC}2${RSC}`;
+  assert.throws(() => parseLog(fragment, "cat list.txt | head -n 2"), /oracle log corrupt/);
+
+  // Known tags still read as themselves.
+  assert.deepEqual(parseLog(`R${FSC}SBCANARY_env${RSC}`).leaks, ["read SBCANARY_env"]);
+  assert.deepEqual(parseLog(`A${RSC}`).leaks, ["marker in argv"]);
+  assert.deepEqual(parseLog(`S${RSC}`).leaks, ["marker on stdin"]);
 });
