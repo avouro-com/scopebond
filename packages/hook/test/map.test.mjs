@@ -21,9 +21,9 @@ test("Bash maps to shell.exec with the program basename and a redacted command",
   assert.equal(String(m.intent.params.command).includes("/tmp/other"), true, "short commands keep a readable head");
 });
 
-test("sudo and env prefixes are stripped when resolving the program", () => {
-  assert.equal(only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "sudo rm -rf /" } })).intent.params.program, "rm");
-  assert.equal(only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "env FOO=1 /usr/bin/node app.js" } })).intent.params.program, "node");
+test("sudo and env prefixes are resolved to the real program, and the wrapper is recorded too", () => {
+  assert.deepEqual(shellProgs(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "sudo rm -rf /" } })), ["sudo", "rm"]);
+  assert.deepEqual(shellProgs(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "env FOO=1 /usr/bin/node app.js" } })), ["env", "node"]);
   assert.equal(only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "FOO=1 BAR=2 python run.py" } })).intent.params.program, "python");
 });
 
@@ -193,10 +193,10 @@ test("a separator inside quotes is not a split point", () => {
   assert.equal(m.intent.params.program, "echo");
 });
 
-test("an unbalanced command is opaque and not evaluated (fails closed at the runtime)", () => {
+test("an unbalanced command is opaque: evaluated with an empty program (the starter policy denies it)", () => {
   const m = only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: `echo "unterminated` } }));
   assert.equal(m.intent.action_type, "shell.exec");
-  assert.equal(m.evaluated, false, "opaque commands are not trusted");
+  assert.equal(m.evaluated, true, "opaque commands are evaluated, not observed");
   assert.equal(m.intent.params.program, "");
 });
 

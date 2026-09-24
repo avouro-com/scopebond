@@ -80,7 +80,7 @@ test("withCloudExporter stores locally AND queues for Cloud; anchoring still wor
   await ex.flush();
   assert.equal(ex.pending(), 0);
   const a = await gw.anchor();                  // anchor via the wrapped store
-  assert.equal(a.count, 1);
+  assert.equal(a.tree_size, 1);
   ex.stop();
 });
 
