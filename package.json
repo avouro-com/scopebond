@@ -42,7 +42,7 @@
     "gate:staged": "node scripts/oss-gate.mjs --staged",
     "check:release-state": "node scripts/check-release-state.mjs",
     "changeset": "changeset",
-    "version:packages": "changeset version",
+    "version:packages": "changeset version && node scripts/sync-plugin-version.mjs",
     "release": "pnpm -r build && changeset publish",
     "hooks:install": "git config core.hooksPath .githooks",
     "prepare": "git config core.hooksPath .githooks || true"

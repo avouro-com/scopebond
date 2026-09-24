@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import { starterPolicy } from "./runtime.js";
+import { readHarnessConfig } from "./install.js";
 import { hookCommand } from "./version.js";
 
 export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKid: string; policyPath: string } {
@@ -36,9 +37,8 @@ export function installHarness(harness: "claude" | "cursor" | "codex", cwd: stri
   const file = harness === "cursor" ? join(cwd, ".cursor", "hooks.json")
     : harness === "codex" ? join(cwd, ".codex", "hooks.json")
     : join(cwd, ".claude", "settings.json");
+  const config = readHarnessConfig(file); // throws, leaving the file intact, if it is not a JSON object
   mkdirSync(dirname(file), { recursive: true });
-  let config: Record<string, unknown> = {};
-  if (existsSync(file)) { try { const p = JSON.parse(readFileSync(file, "utf8")); if (isRecord(p)) config = p; } catch { /* start fresh on unreadable */ } }
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   const cursorCmd = hookCommand("cursor");
   const claudeCmd = hookCommand("claude");
