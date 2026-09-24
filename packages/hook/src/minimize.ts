@@ -35,6 +35,22 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, MASK], // JWTs
 ];
 
+// Free-text-only rules (the command head), never applied to structured parameters a
+// policy matches on. These cover common shapes that carry a secret on argv without a
+// recognizable token format:
+//  - an attached `-p`/`-u` value (`mysql -phunter2`, `psql -uadmin`) — the single most
+//    common way a password reaches a shell. A space-separated `-p value` (the mkdir
+//    flag, or `-u origin`) is not attached and is left alone; the `--password`/`--user`
+//    forms are handled by the labelled rules above.
+//  - a header whose name looks like a credential (`X-Custom-Secret: …`, `My-Token: …`).
+//    Bare `key:` is deliberately excluded so ordinary `key: value` text is untouched.
+const HEAD_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/(^|\s)(-[pu])[^\s=-]\S*/g, `$1$2${MASK}`],
+  // `auth` is omitted: `Authorization:` is handled above (with its Bearer/Basic label),
+  // and other auth headers (`X-Auth-Token`) still match on `token`.
+  [/(\b[\w-]*(?:secret|token|api[-_]?key|apikey|password|passwd|credential)[\w-]*\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
+];
+
 // Generic high-entropy shapes. Applied to free text only (the command head), never to
 // structured parameters a policy matches on: a long path or a commit id is not a secret.
 const BLOB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
@@ -66,17 +82,21 @@ export function scrubParam(text: string): string {
   return out;
 }
 
-/** Scrub free text: everything `scrubParam` removes plus generic high-entropy blobs. */
+/** Scrub free text: everything `scrubParam` removes, plus the free-text-only argv and
+ *  header shapes and generic high-entropy blobs. */
 export function scrubSecrets(text: string): string {
   let out = scrubParam(text);
+  for (const [re, replacement] of HEAD_RULES) out = out.replace(re, replacement);
   for (const [re, replacement] of BLOB_RULES) out = out.replace(re, replacement);
   return out;
 }
 
-/** A privacy-preserving representation of a shell command: a scrubbed, truncated
- *  head plus a digest of the full original. The full command is never retained. */
+/** A privacy-preserving representation of a shell command: a scrubbed, truncated head
+ *  plus a digest of the scrubbed command. The full original is never retained, and the
+ *  digest is taken over the scrubbed text so a secret the head removed cannot be
+ *  brute-forced back from the digest. */
 export function redactCommand(command: string, headLen = 64): string {
   const scrubbed = scrubSecrets(command);
   const head = scrubbed.length > headLen ? `${scrubbed.slice(0, headLen)}…` : scrubbed;
-  return `${head} (${sha256(command)})`;
+  return `${head} (${sha256(scrubbed)})`;
 }

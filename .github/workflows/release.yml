@@ -1,14 +1,10 @@
 name: Release
 
-# Versioning automation (safe by default — never auto-publishes). On push to main
-# with pending changesets, opens/updates a "Version packages" PR that bumps versions
-# and writes changelogs. With no changesets, this is a clean no-op.
-#
-# PUBLISHING is a deliberate step, kept off CI so nothing (especially 0.0.0) is ever
-# auto-published. When you're ready to publish (see RELEASING.md): merge the Version
-# PR, then either run `pnpm release` locally, or add a `publish: pnpm release` input
-# to the step below (with NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}) to enable
-# publish-on-merge. Publishing needs the NPM_TOKEN secret.
+# Versioning and publish-on-merge. On push to main with pending changesets, this
+# opens/updates a "Version packages" PR that bumps versions and writes changelogs.
+# Merging that PR is the publish decision: with no changesets left, the step below
+# runs `pnpm release`, which builds and publishes the bumped packages to npm with
+# provenance (NPM_TOKEN_SCOPEBOND secret). See RELEASING.md.
 
 on:
   push:
@@ -17,6 +13,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # npm provenance: the registry records which workflow run built each package.
+  id-token: write
 
 concurrency:
   group: release
@@ -26,14 +24,14 @@ jobs:
   version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The repository currently disallows Actions' default token from
           # creating pull requests. Reuse the existing company automation PAT
           # when configured, while retaining github.token for forks/dev copies.
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22.20.0
           cache: pnpm
@@ -42,7 +40,7 @@ jobs:
         run: |
           git config user.name "avourohq"
           git config user.email "founder@avouro.com"
-      - uses: changesets/action@v1
+      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
           setupGitUser: false
@@ -58,3 +56,4 @@ jobs:
           # publish`; NODE_AUTH_TOKEN alone is not enough (ENEEDAUTH).
           NPM_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
+          NPM_CONFIG_PROVENANCE: "true"

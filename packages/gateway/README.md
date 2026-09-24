@@ -142,17 +142,29 @@ returned credential out of URLs, chat, shell arguments and source control.
 
 ## Tamper-evidence (anchoring)
 
-The gateway periodically commits the receipt log to a **sha256 Merkle root** — an
-"anchor" that fixes exactly which receipts existed, chained to the previous anchor so
-the anchor log is itself tamper-evident. Anyone can prove a specific receipt is
-covered with an **inclusion proof**, without seeing the others:
+The gateway periodically commits the receipt log to an **RFC 9162 Merkle root** — an
+"anchor" that fixes exactly which receipts existed, is **Ed25519-signed** by the
+attester, and is chained to the previous anchor so the anchor log is itself
+tamper-evident. Anyone can prove a specific receipt is covered with an **inclusion
+proof**, without seeing the others, and verify it themselves:
 
 ```bash
 curl -sX POST localhost:8787/v1/anchor                 # anchor now (also runs on a timer)
-curl -s "localhost:8787/v1/anchors/proof?intent_hash=<hash>"   # { merkle_root, proof, included }
+curl -s "localhost:8787/v1/anchors/proof?intent_hash=<hash>"   # { leaf_index, tree_size, audit_path, anchor }
+curl -s "localhost:8787/v1/anchors/consistency?from=1&to=2"    # the later anchor extends the earlier one
 ```
 
-`GET /v1/anchors` lists anchors; `GET /v1/anchors/latest` returns the newest.
+```js
+import { verifyAnchorSignature, verifyInclusionProof, receiptLeafHash } from "@scopebond/verify/anchor";
+const ok = await verifyAnchorSignature(p.anchor, attesterJwk) && await verifyInclusionProof({
+  leaf_hash: await receiptLeafHash(receipt.payload), leaf_index: p.leaf_index,
+  tree_size: p.anchor.tree_size, audit_path: p.audit_path, root: p.anchor.root,
+});
+```
+
+`GET /v1/anchors` lists anchors; `GET /v1/anchors/latest` returns the newest. Anchors
+written by earlier releases (`algo: "sha256-merkle"`, unsigned) keep verifying; the
+first new anchor chains to the last of them. See SPEC.md "Anchors".
 [PLANNED] pushing the root to an external transparency log (Sigstore Rekor / chain).
 
 ## Policy hot-reload

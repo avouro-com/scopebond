@@ -150,7 +150,7 @@ function cmdServe(policyPath: string | undefined): void {
   console.log(`  receipts  ${kind}: ${path} (durable)`);
   console.log(`  controls  ${controlToken ? "bearer protected" : "disabled (set SCOPEBOND_CONTROL_TOKEN)"}`);
   console.log(`  routes    POST /v1/evaluate · /mcp · /v1/kill · /v1/resume · /v1/anchor`);
-  console.log(`            GET /v1/receipts · /v1/status · /v1/attester · /.well-known/jwks.json · /v1/anchors[/latest|/proof]`);
+  console.log(`            GET /v1/receipts · /v1/status · /v1/attester · /.well-known/jwks.json · /v1/anchors[/latest|/proof|/consistency]`);
 
   if (exporter) {
     console.log(`  cloud     exporting receipts to ${cloudUrl} (${exporter.pending()} pending)`);
@@ -189,7 +189,7 @@ function cmdServe(policyPath: string | undefined): void {
   if (anchorMs > 0) {
     const timer = setInterval(() => {
       gateway.anchor()
-        .then((a) => console.log(`  anchored #${a.seq}: ${a.count} receipts · root ${a.merkle_root.slice(0, 12)}…`))
+        .then((a) => console.log(`  anchored #${a.seq}: ${a.tree_size} receipts · root ${a.root.slice(0, 12)}…`))
         .catch((e) => console.error(`  anchor failed: ${(e as Error).message}`));
     }, anchorMs);
     timer.unref?.();
