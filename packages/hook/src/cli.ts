@@ -5,14 +5,14 @@
 //   scopebond-hook claude                     evaluate a Claude Code PreToolUse call (stdin JSON)
 //   scopebond-hook cursor                     evaluate a Cursor hook event (stdin JSON)
 //   scopebond-hook codex                      evaluate a Codex PreToolUse call (stdin JSON)
-//   scopebond-hook init [--cursor|--codex] [--no-install]
+//   scopebond-hook init [--cursor|--codex] [--no-install] [--yes]
 //   scopebond-hook connect <url> <bundle.json> [--cursor|--codex]
 //                                             enroll with a Cloud workspace and start exporting
 //   scopebond-hook log [-n N]                 show the most recent local receipts
 //   scopebond-hook verify                     verify every local receipt offline against the attester key
 //   scopebond-hook test "<shell command>"     show the decision for a command without recording it
 //   scopebond-hook flush                      deliver any queued receipts to Cloud now
-//   scopebond-hook trust                      let this project's .scopebond policy govern here (pinned)
+//   scopebond-hook trust [--yes]              let this project's .scopebond policy govern here (pinned)
 //
 // Config dir: $SCOPEBOND_HOOK_DIR, else ./.scopebond
 // Fail-closed: any error denies the action with a repair message.
@@ -151,7 +151,19 @@ async function runCursor(): Promise<void> {
   process.exit(0);
 }
 
+/** `init`, `trust` and `uninstall` change what governs the agent, so they are for a
+ *  person at a terminal. A coding agent's shell is not interactive: without a TTY on
+ *  stdin they refuse unless `--yes` is passed (for scripts and CI). The starter policy
+ *  also denies the agent running them. */
+function requireInteractive(command: string, args: string[]): void {
+  if (process.stdin.isTTY || args.includes("--yes")) return;
+  console.error(`scopebond ${command} changes what governs your coding agent, so it must be run from an interactive terminal.`);
+  console.error(`In a script or CI, pass --yes: ${cliCommand(`${command} --yes`)}`);
+  process.exit(1);
+}
+
 function runInit(args: string[]): void {
+  requireInteractive("init", args);
   const harness = selectedHarness(args);
   const dir = configDir();
   const { agentKid, policyPath } = scaffold(dir, { force: args.includes("--force") });
@@ -413,6 +425,7 @@ async function runDoctor(): Promise<void> {
 }
 
 function runUninstall(args: string[]): void {
+  requireInteractive("uninstall", args);
   let removed = 0;
   for (const h of ["claude", "cursor", "codex"] as Harness[]) {
     if (removeHarnessConfig(userHarnessFile(h))) { console.log(`✓ removed the Scopebond hook from ${userHarnessFile(h)}`); removed++; }
@@ -425,7 +438,8 @@ function runUninstall(args: string[]): void {
 /** `trust` — let this project's .scopebond policy govern here instead of the user
  *  home, pinned to its current contents. Run by the user, not the agent: the file it
  *  writes lives in the user home, which the starter policy write-protects. */
-function runTrust(): void {
+function runTrust(args: string[]): void {
+  requireInteractive("trust", args);
   const dir = join(process.cwd(), ".scopebond");
   if (!existsSync(join(dir, "policy.json"))) { console.error(`no project policy at ${join(dir, "policy.json")}`); process.exit(1); }
   const digest = trustProjectPolicy(dir);
@@ -455,8 +469,8 @@ else if (cmd === "status") { runStatus(); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "uninstall") { runUninstall(rest); }
 else if (cmd === "login") { runLogin(); }
-else if (cmd === "trust") { runTrust(); }
+else if (cmd === "trust") { runTrust(rest); }
 else {
-  console.error("usage: scopebond <claude|cursor|codex|init|install|connect|log|verify|test|flush|status|doctor|uninstall|login|trust> [--cursor] [--claude] [--codex] [--force] [--strict] [--no-install] [--purge]");
+  console.error("usage: scopebond <claude|cursor|codex|init|install|connect|log|verify|test|flush|status|doctor|uninstall|login|trust> [--cursor] [--claude] [--codex] [--force] [--strict] [--no-install] [--purge] [--yes]");
   process.exit(1);
 }

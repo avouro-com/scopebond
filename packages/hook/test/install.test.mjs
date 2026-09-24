@@ -148,7 +148,7 @@ test("install writes the user home + an absolute-path Claude hook, then uninstal
   const status = runCli(["status"], env);
   assert.match(status.stdout, /Claude Code\s+configured/);
 
-  const uninstall = runCli(["uninstall"], env);
+  const uninstall = runCli(["uninstall", "--yes"], env);
   assert.equal(uninstall.status, 0, uninstall.stdout);
   const after = JSON.parse(readFileSync(settings, "utf8"));
   assert.equal((after.hooks.PreToolUse ?? []).length, 0, "uninstall removes our entry");
@@ -179,7 +179,7 @@ test("install --codex writes ~/.codex/hooks.json and explains the one approval s
   assert.match(install.stdout, /choose Trust/i);
   const status = runCli(["status"], env);
   assert.match(status.stdout, /Codex\s+configured/);
-  runCli(["uninstall"], env);
+  runCli(["uninstall", "--yes"], env);
   assert.equal(JSON.parse(readFileSync(hooks, "utf8")).hooks.PreToolUse.length, 0);
   rmSync(home, { recursive: true, force: true }); rmSync(sbHome, { recursive: true, force: true });
 });
