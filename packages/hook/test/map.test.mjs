@@ -145,6 +145,12 @@ test("a shell read of the signing key / a secret file emits a file.read the read
   assert.deepEqual(readPaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "cat .scopebond/attester.key" } })), [".scopebond/attester.key"]);
   assert.ok(readPaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "head -n 5 .env" } })).includes(".env"), "flag values (5) are not treated as files");
   assert.deepEqual(readPaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "cat /work/.scopebond/agent.key" }, cwd: "/work" })), [".scopebond/agent.key"]);
+  // The bash oracle caught this: sed reads its operand files, but sed was missing from
+  // READERS, so `sed -n '1p' .env` bypassed the read guard entirely.
+  assert.ok(readPaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "sed -n '1p' .env" } })).includes(".env"), "sed reads its operand");
+  const sedI = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "sed -i 's/x/y/' .env" } });
+  assert.ok(readPaths(sedI).includes(".env"), "sed -i reads the file");
+  assert.ok(writePaths(sedI).includes(".env"), "sed -i rewrites the file");
 });
 
 test("a Windows backslash path is normalized so the .scopebond / settings guards still match", () => {
