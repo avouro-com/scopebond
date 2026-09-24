@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   mapClaudeToolUse, mapCursorEvent, createHookRuntime, scaffold,
-  scrubSecrets, scrubParam, redactCommand,
+  scrubSecrets, scrubParam, redactCommand, sha256,
 } from "../dist/index.js";
 
 // Secret-shaped values are built at runtime so no token literal sits in this source.
@@ -103,6 +103,11 @@ test("labelled secrets: flags, headers, credential assignments and URL userinfo 
     (s) => [`export AWS_SECRET_ACCESS_KEY=${s}`, "AWS_SECRET_ACCESS_KEY="],
     (s) => [`DATABASE_PASSWORD=${s} npm run migrate`, "DATABASE_PASSWORD="],
     (s) => [`git clone https://deploy:${s}@git.example.com/acme/app.git`, "https://"],
+    // N-032: attached -p/-u values and custom secret-named headers
+    (s) => [`mysql -p${s} -e 'select 1'`, "-p"],
+    (s) => [`psql -u${s} -h db.internal`, "-u"],
+    (s) => [`curl -H 'X-Custom-Secret: ${s}' https://example.com`, "X-Custom-Secret:"],
+    (s) => [`curl -H "My-Token: ${s}" https://example.com`, "My-Token:"],
   ];
   for (const make of cases) {
     const secret = weak();
@@ -111,6 +116,25 @@ test("labelled secrets: flags, headers, credential assignments and URL userinfo 
     assert.equal(out.includes(secret), false, `value survived in: ${label}`);
     assert.equal(out.includes(label), true, `label was lost: ${label}`);
   }
+});
+
+test("N-032: a space-separated -p operand is not masked by the attached-value rule", () => {
+  // `mkdir -p dir` uses -p as an ordinary flag with a space-separated operand; the
+  // attached-value rule targets only `-p<value>` with no space, so the operand stays.
+  assert.equal(scrubSecrets("mkdir -p src/deep/dir"), "mkdir -p src/deep/dir");
+  assert.equal(scrubSecrets("tar -c -p -f a.tgz src"), "tar -c -p -f a.tgz src");
+});
+
+test("N-031: the command digest is taken over the scrubbed text, not the secret-bearing original", () => {
+  const rand = rng(31);
+  const password = pick(rand, ALNUM, 20);
+  const command = `mysql -p${password} -e 'select 1'`;
+  const redacted = redactCommand(command, 4096);
+  // The digest embedded in the redacted string equals the hash of the scrubbed command,
+  // so an attacker holding the receipt cannot brute-force the password from the digest.
+  const scrubbed = scrubSecrets(command);
+  assert.equal(redacted.includes(sha256(scrubbed)), true, "digest is not over the scrubbed text");
+  assert.equal(redacted.includes(sha256(command)), false, "digest still leaks the original");
 });
 
 test("a private key block is removed whole, even when unterminated", () => {
