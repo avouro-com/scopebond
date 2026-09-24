@@ -38,6 +38,7 @@
     "test": "pnpm -r test",
     "test:package": "node scripts/package-smoke.mjs",
     "test:examples": "node scripts/examples-smoke.mjs",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "gate": "node scripts/oss-gate.mjs --tree && node scripts/check-release-state.mjs",
     "gate:staged": "node scripts/oss-gate.mjs --staged",
     "check:release-state": "node scripts/check-release-state.mjs",
