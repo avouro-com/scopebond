@@ -1,5 +1,21 @@
 # @scopebond/gateway
 
+## 0.7.0
+
+### Minor Changes
+
+- df4fc67: Anchors v2: `gateway.anchor()` now writes RFC 9162 anchors (`algo: "rfc9162-sha256"`, `tree_size`, `root`, `prev_anchor_hash`) signed with the attester key, chained to the last existing (v1) anchor, and refuses to sign when the receipt log no longer reproduces the previous anchor. `GET /v1/anchors/proof` returns the audit path (`leaf_index`, `tree_size`, `audit_path`) and the signed anchor for the client to verify, accepts `anchor_seq`, and no longer returns a server-computed `included` flag; `GET /v1/anchors/consistency` returns RFC 9162 consistency proofs. `merkleRoot`, `merkleProof`, `verifyProof`, `canonical` and `sha256` are unchanged; the v2 functions from `@scopebond/verify/anchor` are re-exported. The `Anchor` type is now `AnchorV1 | AnchorV2`.
+
+### Patch Changes
+
+- 5329932: Local stores tolerate concurrent writers and crashes. SQLite stores (receipts and the Cloud outbox) open with WAL and a 5-second busy timeout, so parallel hook processes wait for the lock instead of failing with SQLITE_BUSY. `openReceiptStore` falls back to a JSONL file only when `node:sqlite` is unavailable, and then beside the requested database rather than in the current directory; a database that exists but cannot be opened is now an error instead of a silent switch to another log. The JSONL store truncates a torn final line left by a crash and refuses a corrupt record anywhere else.
+- Updated dependencies [df4fc67]
+- Updated dependencies [f2e4d62]
+- Updated dependencies [792c40f]
+- Updated dependencies [a488918]
+  - @scopebond/verify@0.4.0
+  - @scopebond/policy-schema@0.4.1
+
 ## 0.6.1
 
 ### Patch Changes

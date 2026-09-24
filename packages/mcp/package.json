@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/mcp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Scopebond MCP proxy — one policy for every Model Context Protocol tool call, in front of the servers an agent uses. In-path enforcement with a signed PEP-authorized receipt.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
