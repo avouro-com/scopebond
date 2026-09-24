@@ -54,3 +54,18 @@ export function verifyProof(leaf: string, proof: ProofStep[], root: string): boo
   for (const step of proof) h = step.side === "right" ? hashPair(h, step.hash) : hashPair(step.hash, h);
   return h === root;
 }
+
+// v2 (RFC 9162, signed, versioned): the pure implementation lives in
+// @scopebond/verify/anchor (WebCrypto, async) so any verifier uses the same code.
+// The v1 functions above are kept, unchanged, for existing consumers and for
+// verifying legacy anchors.
+export {
+  ANCHOR_ALGO_V1, ANCHOR_ALGO_V2, ANCHOR_TYPE,
+  leafHash, nodeHash, receiptLeafHash, receiptLeafHashV1, merkleTreeHash, merkleRootV1,
+  inclusionProof, verifyInclusionProof, consistencyProof, verifyConsistencyProof,
+  anchorBody, anchorHash, anchorRoot, verifyAnchorRoot, verifyAnchorSignature, verifyAnchorChain,
+  isAnchorV2,
+} from "@scopebond/verify/anchor";
+export type {
+  AnchorV1, AnchorV2, AnchorV2Body, AnyAnchor, InclusionProof, ConsistencyProof, AnchorChainResult, Ed25519PublicJwk,
+} from "@scopebond/verify/anchor";
