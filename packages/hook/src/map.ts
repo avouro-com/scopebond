@@ -196,7 +196,7 @@ function fileIntent(action: "file.read" | "file.write", word: string, dir: strin
 const READERS = new Set([
   "cat", "tac", "less", "more", "head", "tail", "nl", "od", "xxd", "hexdump", "strings", "base64", "base32",
   "bat", "type", "get-content", "gc", "grep", "egrep", "fgrep", "rg", "ag", "ack", "awk", "gawk", "mawk", "nawk", "sort",
-  "uniq", "cut", "paste", "diff", "cmp", "comm", "wc", "jq", "yq", "iconv", "openssl", "gpg", "md5sum",
+  "uniq", "cut", "paste", "diff", "cmp", "comm", "wc", "jq", "yq", "sed", "iconv", "openssl", "gpg", "md5sum",
   "sha1sum", "sha256sum", "sha512sum", "shasum", "source", ".", "select-string", "sls",
   "import-csv", "tar", "bsdtar", "zip", "7z", "7za", "7zz", "gzip", "bzip2", "xz", "zstd", "zcat", "view", "code",
 ]);
@@ -492,6 +492,12 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   } else if (READERS.has(prog)) {
     operands.forEach(read);
     if (prog === "yq" && args.some(inPlace)) operands.forEach(write);
+    // `sed -i 's/x/y/' f…` rewrites its operands in place; the first operand is the
+    // script unless `-e`/`-f` supplied one.
+    if (prog === "sed" && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith("--in-place"))) {
+      const scriptGiven = args.some((a) => a === "-e" || a === "-f" || a.startsWith("--expression")) || given.has("-e") || given.has("-f");
+      (scriptGiven ? operands : operands.slice(1)).forEach(write);
+    }
   } else if (EDITORS.has(prog)) {
     operands.forEach(read);
     operands.forEach(write);
@@ -509,8 +515,8 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     else if (prog === "chown" || prog === "chgrp") targets = targets.slice(1);
     targets.forEach(write);
   }
-  else if ((prog === "sed" || prog === "perl" || prog === "ruby") && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith("--in-place"))) {
-    // `sed -i 's/x/y/' f…`: the first operand is the script (unless -e/-f gave it).
+  else if ((prog === "perl" || prog === "ruby") && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith("--in-place"))) {
+    // `perl -i -pe 's/x/y/' f…`: the first operand is the script (unless -e/-f gave it).
     const scriptGiven = args.some((a) => a === "-e" || a === "-f" || a.startsWith("--expression")) || given.has("-e") || given.has("-f");
     (scriptGiven ? operands : operands.slice(1)).forEach(write);
   } else if (INTERPRETERS.has(prog)) {
@@ -569,6 +575,8 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string): Mapped[
       const params: Record<string, unknown> = { force: t.force };
       if (push.remote !== undefined) params.remote = scrubParam(push.remote);
       if (t.ref !== undefined) params.ref = scrubParam(t.ref);
+      if (t.del) params.delete = true;
+      if (t.all) params.all = true;
       return { intent: { action_type: "git.push", params }, evaluated: true, source: "shell" } as Mapped;
     });
   }

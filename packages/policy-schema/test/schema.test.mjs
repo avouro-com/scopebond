@@ -70,4 +70,13 @@ test("canonical serialization matches the shared vectors", () => {
   assert.throws(() => canonical({ missing: undefined }), /undefined/);
   assert.throws(() => canonical([, 1]), /sparse/);
   assert.throws(() => canonical({ invalid: Number.NaN }), /non-finite/);
+  // RFC 8785 canonicalizes valid Unicode; a lone surrogate is malformed and must be
+  // refused, not silently escaped into a signable string (N-034).
+  assert.throws(() => canonical("\uD800"), /lone surrogate/);          // high, unpaired
+  assert.throws(() => canonical("\uDC00"), /lone surrogate/);          // low, unpaired
+  assert.throws(() => canonical("a\uD834b"), /lone surrogate/);        // high mid-string
+  assert.throws(() => canonical({ "\uD800": 1 }), /lone surrogate/);   // in an object key
+  // a valid surrogate pair (an astral character) is accepted
+  assert.equal(canonical("𝄞"), JSON.stringify("𝄞")); // U+1D11E 𝄞
+  assert.equal(canonical("café ❤"), JSON.stringify("café ❤"));   // ordinary non-ASCII
 });

@@ -91,6 +91,15 @@ Also: `verifyConsistencyProof`, `verifyAnchorChain`, `verifyAnchorRoot`,
 `merkleTreeHash`, `inclusionProof`, `consistencyProof`, `merkleRootV1`. Exact
 definitions: SPEC.md "Anchors"; vectors: `vectors/merkle-rfc9162.json`.
 
+## Examples
+
+Runnable end to end against a real gateway (asserted in CI by `pnpm run test:examples`):
+
+- [`examples/verify-receipt-offline.mjs`](../../examples/verify-receipt-offline.mjs) —
+  `verifyReceiptSignature` on a gateway receipt; a tampered copy fails.
+- [`examples/verify-anchor-inclusion.mjs`](../../examples/verify-anchor-inclusion.mjs) —
+  a signed v2 anchor and an inclusion proof verified offline; a wrong-index proof fails.
+
 ## `[PLANNED]`
 
 - `oracle_condition` (best-effort external data) and active-key/list history inputs.

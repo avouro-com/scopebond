@@ -38,6 +38,9 @@ importers:
       '@scopebond/sdk':
         specifier: workspace:*
         version: link:../packages/sdk
+      '@scopebond/verify':
+        specifier: workspace:*
+        version: link:../packages/verify
 
   packages/framework:
     dependencies:
