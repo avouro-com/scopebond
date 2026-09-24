@@ -1,5 +1,51 @@
 # @scopebond/hook
 
+## 0.6.0
+
+### Minor Changes
+
+- 792c40f: Security: `force_push_guard` now covers branch deletion and all-branch pushes, and its default protects nested release branches.
+
+  The clause previously fired only on a `--force` push whose single resolved ref matched the protected set. Three destructive pushes slipped through:
+
+  - **Deletion** (`git push origin :main`, `git push origin --delete main`) removes a protected branch and is destructive even without `--force`; it was treated as an ordinary push.
+  - **All-branch force pushes** (`git push --all --force`, `git push --mirror`) reach every branch — so they necessarily rewrite the protected ones, and `--mirror` also prunes — but their whole-repo push carried no single protected ref to match.
+  - The default protected set was `["main", "master", "release/*"]`; the single-star glob does not cross `/`, so `release/1.0/hotfix` was unprotected. The default is now `release/**`.
+
+  The hook mapper marks these on the `git.push` intent it emits (`delete` for `:dst`/`--delete`, `all` for `--all`/`--mirror`/`--branches`), and `force_push_guard` denies a delete of a protected ref (regardless of `force`), a force-push to all branches, and a force-push to a protected ref, still allowing ordinary pushes, feature-branch force-pushes and a non-forced `--all`. A destructive push whose target ref cannot be resolved still fails closed. The hook's own starter policy already denied these through its stricter ref allowlist; this closes the gap for customer policies that use the `force_push_guard` clause.
+
+- a42fc81: Security: canonicalize shell and path inputs before policy evaluation, and stop a project policy from overriding the user's.
+
+  - A project `.scopebond/policy.json` no longer overrides an existing user-level install unless the user trusted that exact policy (`scopebond trust`, or `init` in the project). A later edit un-trusts it, so neither a cloned repository nor the governed agent can swap in a weaker policy.
+  - `git push` destinations are checked in the common spellings: `refs/heads/main`, `HEAD:main`, a second refspec, `-o`/`--repo` options, combined `-uf` flags, `--all` and `--mirror`. A push whose destination is not on the command line (a git alias, a configured push refspec, `send-pack`, `subtree push`) is denied; a tags-only push (`--tags`) is allowed.
+  - Shell commands are decomposed through keywords and grouping (`if`/`for`/`while`/`{ }`/`!`/`case`), `eval`, `trap`, substitutions inside double quotes, `env -S`, `su -c`, `script -c`, `watch`, `parallel`, `cmd /c`, `pwsh -Command`/`-EncodedCommand` and `find -exec`, and through wrappers (`sudo`, `time`, `nice`, `xargs`, `timeout`, `strace` …) with their own option arities; wrappers such as `sudo` are checked as programs too. Trailing `#` comments are handled.
+  - Files read or written through the shell reach the same guards as the Read and Write tools in the common spellings: copies and moves, writers and editors (`tee`, `sed -i`, `yq -i`, `ed`, `vim`), git's own writes (`checkout -- p`, `restore`, `mv`, `rm`, `config core.hooksPath`), secrets sent or staged (`curl -T`, `-d @file`, `gh gist create`, `git add`), redirections without spaces, a directory reached with `cd`, protected directories given as operands (`cp -r ~/.ssh`), and globs, variables or brace lists that could name a protected file (`.*/*`). Existence and metadata checks (`ls`, `test -f`, `stat`) and a secret file's name in a string no longer count as reads.
+  - Everyday agent commands are no longer misread as policy violations: a here-document body is inert data (a commit message or PR body written with `git commit -m "$(cat <<EOF …)"`, a note written with `cat <<EOF > f`), never a sequence of commands — but a body fed to a shell (`bash <<EOF …`) still runs and is evaluated, and a here-doc redirected to a protected file is still a write. An inline HTTP payload is data, not a filename: `curl -d '{…}'`, `--data-raw`, `--json` and `wget --post-data` values are inline unless they name a file with `@` (`-d @.env`, `-F up=@secret` still read). A protected path named in inline interpreter code (`node -e`, `python -c`) is recorded only when the same snippet also calls a file or process API, so a path merely mentioned in a log string is not a finding. A `chmod`/`chown` mode or owner (`+x`, `0755`, `root:wheel`) is not recorded as a written path.
+  - Paths and program names are matched case-insensitively; `.exe` suffixes, Windows backslash paths, 8.3 short names (`CLAUDE~1`), PowerShell backtick escapes, `::$DATA` streams and trailing dots are normalized.
+  - The starter policy now also protects SSH, AWS, Kubernetes, Docker, GnuPG, gcloud and Azure credentials (and their directories), the GitHub CLI's `hosts.yml`, Claude Code's `.credentials.json`, key containers (`*.pem`, `*.p12`, `*.pfx`), `.envrc`, `.git/config`, Husky hooks, `.claude/hooks`, `.claude/agents`, `.mcp.json` and `.gitlab-ci.yaml`, and denies `shred`, `truncate`, `unlink`, `wipe`, `diskpart` and `Clear-Content`. `.env` templates ending in `.example`, `.sample`, `.template` or `.dist` stay readable. Starter policies written by earlier versions are upgraded in memory.
+  - Behaviour change: a shell command that cannot be parsed, or whose program is only known at run time (`$cmd`, `$(…) args`), is now evaluated with an empty program and denied by the starter policy in normal mode too (it was previously recorded as not evaluated).
+  - The agent running the hook's own `init`, `install`, `trust`, `uninstall` or `connect` is denied, and `init`, `trust` and `uninstall` refuse a non-interactive stdin unless `--yes` is passed.
+  - `init` and `install` refuse to overwrite an agent settings file that is not valid JSON instead of replacing it.
+  - The Claude Code plugin pins the current hook version, and its manifest version follows the hook version.
+
+  Documented limits: the hook reads the command text only. It cannot see a variable's value, a path built inside a script, aliases or functions from an earlier call, git aliases in a config file, or recursive reads of a parent of a protected directory. Writes named only inside a patch or archive (`patch`, `git apply`, `tar x`, `unzip`) are recorded as not evaluated (denied in strict mode). Reading any `*.pem` file is denied, public certificates included.
+
+- 8332610: Privacy: the command digest no longer hands back what the scrubber removed, and the scrubber catches two more common secret shapes.
+
+  - **Digest over scrubbed text.** `redactCommand` recorded a scrubbed, truncated head followed by a SHA-256 of the _original_ command, so a secret the head removed (`psql --password hunter2 …`) was still brute-forceable from the retained digest. The digest is now taken over the scrubbed command, so the receipt reveals nothing the head already hid.
+  - **Attached `-p`/`-u` values.** `mysql -phunter2` / `psql -uadmin` put a password or user on argv with no separator, and passed through unchanged. The scrubber now masks an attached `-p`/`-u` value in the command head; a space-separated operand (`mkdir -p dir`, `-p value`) is untouched, and the `--password`/`--user` forms remain handled as before.
+  - **Custom secret-named headers.** A header whose name looks like a credential (`X-Custom-Secret:`, `My-Token:`) now has its value masked, alongside the existing `Authorization`/`X-API-Key` rules. Bare `key:` is deliberately excluded so ordinary `key: value` text is left alone.
+
+  Both new rules apply to free text (the command head) only, never to the structured parameters a policy matches on, so policy evaluation is unchanged. Command scrubbing remains best-effort — secrets should not be passed on argv in the first place.
+
+### Patch Changes
+
+- Updated dependencies [df4fc67]
+- Updated dependencies [f2e4d62]
+- Updated dependencies [5329932]
+  - @scopebond/gateway@0.7.0
+  - @scopebond/policy-schema@0.4.1
+
 ## 0.5.0
 
 ### Minor Changes
