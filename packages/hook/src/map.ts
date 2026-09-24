@@ -569,6 +569,8 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string): Mapped[
       const params: Record<string, unknown> = { force: t.force };
       if (push.remote !== undefined) params.remote = scrubParam(push.remote);
       if (t.ref !== undefined) params.ref = scrubParam(t.ref);
+      if (t.del) params.delete = true;
+      if (t.all) params.all = true;
       return { intent: { action_type: "git.push", params }, evaluated: true, source: "shell" } as Mapped;
     });
   }
