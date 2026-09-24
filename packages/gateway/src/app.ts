@@ -15,7 +15,12 @@ import type {
   AuthorityFinalState, ActionLifecycleRecord, ReceiptContext,
 } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
-import { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
+import { merkleProof } from "./anchor.js";
+import {
+  ANCHOR_ALGO_V1, ANCHOR_ALGO_V2, ANCHOR_TYPE, receiptLeafHash, merkleTreeHash, inclusionProof, consistencyProof,
+  verifyAnchorRoot, isAnchorV2,
+} from "@scopebond/verify/anchor";
+import type { AnchorV2, AnchorV2Body } from "@scopebond/verify/anchor";
 import { validateIntent, validatePolicy } from "@scopebond/verify";
 import type { Policy, Intent, Approval, Verdict } from "@scopebond/verify";
 import { authenticateRequest, AuthorizationError } from "./auth.js";
@@ -113,8 +118,8 @@ export interface Gateway {
   observeAction(req: ActionRequest): Promise<ObservationResult>;
   /** Hot-swap the active policy (recomputes the policy hash + version). */
   setPolicy(policy: Policy): void;
-  /** Compute + store a Merkle anchor over the receipts to date (tamper-evidence). */
-  anchor(): Promise<Anchor>;
+  /** Compute, sign and store a v2 (RFC 9162) anchor over the receipts to date. */
+  anchor(): Promise<AnchorV2>;
   unresolvedActions(): Promise<ActionLifecycleRecord[]>;
   reconcileAction(actionId: string): Promise<ActionLifecycleRecord>;
 }
@@ -482,25 +487,47 @@ export function createGateway(config: GatewayConfig): Gateway {
     return { observed: true, receipt };
   }
 
-  async function anchor(): Promise<Anchor> {
+  // Anchors v2 (SPEC.md "Anchors"): an RFC 9162 root over the first `tree_size`
+  // receipts in append order, chained to the previous anchor (v1 or v2) and
+  // Ed25519-signed by the attester. Before signing, the log is checked against
+  // the previous anchor so a rewritten or reordered prefix is never re-anchored.
+  async function anchor(): Promise<AnchorV2> {
     const receipts = (await store.list()) as SignedReceipt[];
-    const leaves = receipts.map((r) => sha256(canonical(r.payload)));
+    const payloads = receipts.map((r) => r.payload);
+    const leaves = await Promise.all(payloads.map(receiptLeafHash));
     const prior = (await store.anchors?.()) ?? [];
     const prev = prior[prior.length - 1] ?? null;
-    const ts = now();
-    const base = {
+    if (prev) {
+      const prevSize = isAnchorV2(prev) ? prev.tree_size : prev.count;
+      if (!(prevSize <= payloads.length && await verifyAnchorRoot(prev, payloads.slice(0, prevSize)))) {
+        throw new Error("receipt log does not match the previous anchor; refusing to anchor");
+      }
+    }
+    const body: AnchorV2Body = {
+      type: ANCHOR_TYPE,
       seq: (prev?.seq ?? 0) + 1,
-      algo: "sha256-merkle" as const,
-      merkle_root: merkleRoot(leaves),
-      count: leaves.length,
-      from: receipts[0]?.payload.timestamp ?? null,
-      to: ts,
+      algo: ANCHOR_ALGO_V2,
+      tree_size: leaves.length,
+      root: await merkleTreeHash(leaves),
       prev_anchor_hash: prev?.anchor_hash ?? null,
-      timestamp: ts,
+      timestamp: now(),
+      attester: { kind: "gateway", kid: attester.kid },
     };
-    const a: Anchor = { ...base, anchor_hash: sha256(canonical(base)) };
+    const bytes = canonical(body);
+    const a: AnchorV2 = {
+      ...body,
+      anchor_hash: sha256(bytes),
+      signature: { alg: "Ed25519", sig: await attester.sign(bytes) },
+    };
     await store.putAnchor?.(a);
     return a;
+  }
+
+  async function findAnchor(seqParam: string | undefined): Promise<Anchor | null> {
+    const all = (await store.anchors?.()) ?? [];
+    if (seqParam === undefined) return all[all.length - 1] ?? null;
+    if (!/^[1-9][0-9]{0,15}$/.test(seqParam)) return null;
+    return all.find((a) => a.seq === Number(seqParam)) ?? null;
   }
 
   const app = new Hono();
@@ -569,21 +596,55 @@ export function createGateway(config: GatewayConfig): Gateway {
     if (!store.putAnchor || !store.anchors) return c.json({ error: "this store does not support anchoring" }, 400);
     return c.json(await anchor());
   });
+  // Inclusion proof for one receipt against an anchor (the latest, or ?anchor_seq=).
+  // The server returns the audit path and the signed anchor; it never asserts
+  // inclusion itself — the client verifies (verifyInclusionProof +
+  // verifyAnchorSignature from @scopebond/verify/anchor). Leaf positions are the
+  // receipts' append-order sequence in the log.
   app.get("/v1/anchors/proof", async (c) => {
-    const all = (await store.anchors?.()) ?? [];
-    const latest = all[all.length - 1];
-    if (!latest) return c.json({ error: "no anchor yet — POST /v1/anchor first" }, 404);
-    const receipts = ((await store.list()) as SignedReceipt[]).slice(0, latest.count);
-    const leaves = receipts.map((r) => sha256(canonical(r.payload)));
+    const target = await findAnchor(c.req.query("anchor_seq"));
+    if (!target) return c.json({ error: "anchor not found — POST /v1/anchor first" }, 404);
+    const size = isAnchorV2(target) ? target.tree_size : target.count;
+    const receipts = ((await store.list()) as SignedReceipt[]).slice(0, size);
     const wantLeaf = c.req.query("leaf");
     const wantIntent = c.req.query("intent_hash");
+    if (isAnchorV2(target)) {
+      const leaves = await Promise.all(receipts.map((r) => receiptLeafHash(r.payload)));
+      let index = -1;
+      if (wantLeaf) index = leaves.indexOf(wantLeaf);
+      else if (wantIntent) index = receipts.findIndex((r) => r.payload.intent_hash === wantIntent);
+      if (index < 0) return c.json({ error: "receipt not covered by this anchor" }, 404);
+      const proof = await inclusionProof(leaves, index);
+      return c.json({
+        algo: target.algo, anchor_seq: target.seq, root: target.root, leaf_hash: leaves[index],
+        leaf_index: proof.leaf_index, tree_size: proof.tree_size, audit_path: proof.audit_path, anchor: target,
+      });
+    }
+    // Legacy v1 anchor: the v1 sibling list; verify with verifyProof (unsigned, see SPEC.md).
+    const leaves = receipts.map((r) => sha256(canonical(r.payload)));
     let index = -1;
     if (wantLeaf) index = leaves.indexOf(wantLeaf);
     else if (wantIntent) index = receipts.findIndex((r) => r.payload.intent_hash === wantIntent);
-    if (index < 0) return c.json({ error: "receipt not covered by the latest anchor" }, 404);
-    const leaf = leaves[index];
-    const proof = merkleProof(leaves, index);
-    return c.json({ anchor_seq: latest.seq, merkle_root: latest.merkle_root, leaf, proof, included: verifyProof(leaf, proof, latest.merkle_root) });
+    if (index < 0) return c.json({ error: "receipt not covered by this anchor" }, 404);
+    return c.json({
+      algo: target.algo ?? ANCHOR_ALGO_V1, anchor_seq: target.seq, merkle_root: target.merkle_root,
+      leaf: leaves[index], leaf_index: index, proof: merkleProof(leaves, index), anchor: target,
+    });
+  });
+  // Consistency proof between two v2 anchors: ?from=<seq>&to=<seq> (to defaults to latest).
+  app.get("/v1/anchors/consistency", async (c) => {
+    const fromParam = c.req.query("from");
+    if (fromParam === undefined) return c.json({ error: "from (anchor seq) is required" }, 400);
+    const first = await findAnchor(fromParam);
+    const second = await findAnchor(c.req.query("to"));
+    if (!first || !second) return c.json({ error: "anchor not found" }, 404);
+    if (!isAnchorV2(first) || !isAnchorV2(second)) return c.json({ error: "consistency proofs require v2 anchors" }, 400);
+    if (first.tree_size > second.tree_size) return c.json({ error: "from must not be larger than to" }, 400);
+    const receipts = ((await store.list()) as SignedReceipt[]).slice(0, second.tree_size);
+    if (receipts.length < second.tree_size) return c.json({ error: "receipt log is shorter than the anchor" }, 409);
+    const leaves = await Promise.all(receipts.map((r) => receiptLeafHash(r.payload)));
+    const proof = await consistencyProof(leaves, first.tree_size);
+    return c.json({ ...proof, first_root: first.root, second_root: second.root, first, second });
   });
 
   app.post("/v1/evaluate", async (c) => {

@@ -35,6 +35,10 @@
     "./signature": {
       "types": "./dist/signature.d.ts",
       "default": "./dist/signature.js"
+    },
+    "./anchor": {
+      "types": "./dist/anchor.d.ts",
+      "default": "./dist/anchor.js"
     }
   },
   "files": [
