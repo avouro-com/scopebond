@@ -8,6 +8,8 @@ import {
 } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import type { Intent, Receipt, Policy } from "@scopebond/verify";
+import type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
+export type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
 import { validateAuthorizationEvidence, verifyAuthorizationEvidenceSignatures } from "./auth.js";
 import type { AuthorizationEvidence, PrincipalKeyRecord } from "./auth.js";
 import { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
@@ -544,22 +546,18 @@ export function ed25519JwkToSpkiPem(x: string): string {
 
 /** Public: derive the stable, key-fingerprint kid from a public JWK. */
 
-/** A tamper-evidence anchor: a Merkle root committing to the first `count`
- *  receipts (append-only order), chained to the previous anchor. */
-export interface Anchor {
-  seq: number;
-  algo: "sha256-merkle";
-  merkle_root: string;
-  count: number;
-  from: string | null;
-  to: string;
-  prev_anchor_hash: string | null;
-  anchor_hash: string;
-  timestamp: string;
-}
+/** A tamper-evidence anchor: a Merkle root committing to the first receipts of
+ *  the log (append order), chained to the previous anchor. Verifiers dispatch on
+ *  `algo`: v1 `"sha256-merkle"` (legacy, unsigned) or v2 `"rfc9162-sha256"`
+ *  (RFC 9162 tree, Ed25519-signed by the attester). See SPEC.md "Anchors". */
+export type Anchor = AnchorV1 | AnchorV2;
 
 export interface ReceiptStore {
   put(r: SignedReceipt): void | Promise<void>;
+  /** Every receipt in append order. The position in this list is the receipt's
+   *  stable log sequence (its anchor leaf index); a store MUST NOT reorder,
+   *  remove or insert before existing receipts. Anchoring refuses to sign a log
+   *  that no longer matches the previous anchor. */
   list(): SignedReceipt[] | Promise<SignedReceipt[]>;
   /** The receipt payloads, for feeding claim-time-style evaluation to verify. */
   executed(): Receipt[] | Promise<Receipt[]>;

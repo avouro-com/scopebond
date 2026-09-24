@@ -23,8 +23,11 @@ scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
 absolute path in your user-level `~/.claude/settings.json`, `~/.cursor/hooks.json`,
 or `~/.codex/hooks.json`. After Codex setup, open Codex, run `/hooks`, review
-Scopebond, and choose **Trust** once. Every project you open is then governed, and a project-local
-`.scopebond/` still takes precedence when you want a per-repo policy.
+Scopebond, and choose **Trust** once. Every project you open is then governed by your
+user-level policy. A project's own `.scopebond/policy.json` applies only after you trust it
+in that project (`scopebond trust`, or `init` there), pinned to its exact contents: a
+repository you clone, or an agent working in it, cannot swap in a weaker policy, and any
+later edit to that file stops it applying until you trust it again.
 
 ```
 scopebond status                    # home, which agents are configured, cloud, receipts
@@ -54,7 +57,8 @@ npx @scopebond/hook init --codex    # Codex, then approve it once with /hooks
 countersigning key, a starter policy — "protect main and production paths" — and a
 `.gitignore` so none of it is committed) and configures `.claude/settings.json`,
 `.cursor/hooks.json`, or `.codex/hooks.json`. Then run one safe command in the agent and see the receipt in
-`.scopebond/receipts.db`.
+`.scopebond/receipts.db`. `init`, `trust` and `uninstall` are meant for a person at a
+terminal: in a script or CI, pass `--yes`.
 
 ## Connect it to your workspace (optional)
 
@@ -95,9 +99,51 @@ recorded as *not evaluated* and grant nothing. Anything unexpected fails closed
 Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.
 
-**Strict mode.** By default a tool with no taxonomy mapping is recorded *not
-evaluated* (not blocked). Add `--strict` (or `SCOPEBOND_HOOK_STRICT=1`) to deny
-unmapped tools too — fail-closed coverage for anything the taxonomy does not map.
+**What a shell command is checked for.** A command line is split into every command it
+runs (`&&`, `;`, pipes, `$( )` and backticks — also inside double quotes — `bash -c`,
+`eval`, `trap`, `su -c`, `script -c`, `watch`, `parallel`, `cmd /c`, `pwsh -Command`
+and `-EncodedCommand`, `find -exec`, `env -S`), with shell keywords and grouping
+(`if … then`, `for … do`, `{ … }`, `!`, `case`) and wrappers (`sudo`, `env`, `time`,
+`nice`, `xargs`, `timeout`, `strace`, `busybox` …, each with its own option arity)
+stripped so the real program is seen; the wrappers are checked too. Each command is
+checked as a program, and the files it reads or writes are checked like the Read and
+Write tools: operands of programs that output or copy file content (`cat`, `grep`,
+`tar`, …), copies and moves (`cp`, `mv`, `rsync`, `scp`, `Copy-Item`), writers and
+editors (`tee`, `touch`, `sed -i`, `yq -i`, `ed`, `vim`, `Set-Content`), git's own writes
+(`checkout -- p`, `restore`, `mv`, `rm`, `config core.hooksPath`), secrets sent or staged
+(`curl -T`, `-d @file`, `gh gist create`, `git add`) and redirections, including
+`x>file` without spaces. Existence and metadata checks (`ls`, `test -f`, `[ -f ]`,
+`stat`) and a secret file's name in a string are not reads. Paths are compared
+case-insensitively; Windows `\` paths, 8.3 short names (`CLAUDE~1`), `::$DATA` streams
+and trailing dots are normalized; and a glob, variable or brace list that could name a
+protected file or directory (`.scope*/agent.key`, `.*/*`, `$HOME/.ssh/id_rsa`) is
+treated as that file. Every destination of a `git push` is checked in the common
+spellings (`refs/heads/main`, `HEAD:main`, a second refspec, `--repo`, `--all`,
+`--mirror`); a push whose destination is not on the command line (a git alias, a
+configured push refspec, `send-pack`) is denied, and a tags-only push is allowed. The
+agent running the hook's own `init`, `install`, `trust`, `uninstall` or `connect` is
+denied, and those commands also refuse a non-interactive terminal unless `--yes` is
+passed.
+
+**Limits.** The hook sees the command text, not what a program does at run time. It
+does not follow a variable whose value it cannot see (`cat $FILE`), a path assembled
+inside a script or interpreter (`python script.py`), aliases and functions defined in
+an earlier call, git aliases from a config file, recursive reads of a parent of a
+protected directory (`grep -r . `, `cp -r ~ /tmp`), or deletion expressed as arguments
+(`find -delete`, `git clean`). Commands whose written files are named only inside their
+input — `patch`, `git apply`, `git am`, `tar x`, `unzip`, `7z x`, `cpio -i` — are
+recorded with an unevaluated write: allowed in normal mode, denied in strict mode.
+Reading any `*.pem` file is denied, including a public certificate, because a PEM file
+is often a private key. For stronger guarantees, run the agent behind the Scopebond
+gateway or in a sandbox; the hook is a guardrail for a cooperating agent, not a jail.
+
+**Strict mode.** A shell command that cannot be parsed (an unbalanced quote) or whose
+program is only known at run time (`$cmd`, `$(…) args`) is checked with an empty
+program name, which the starter policy denies in every mode — edit the `safe-shell`
+clause to change that. By default a tool with no taxonomy mapping, or a write whose
+target the command text does not name, is recorded *not evaluated* (not blocked). Add
+`--strict` (or `SCOPEBOND_HOOK_STRICT=1`) to deny those too — fail-closed coverage for
+anything the taxonomy does not map.
 
 ## Library
 

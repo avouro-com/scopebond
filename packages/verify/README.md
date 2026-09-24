@@ -50,12 +50,46 @@ Finalized alongside the gateway/SDK; used by the clause logic and the vectors:
 - on-chain actions — `intent.params.to`, `.chain_id`, `.contract`, `.selector`
 - signing key — `intent.signer`
 
+## Receipt signatures (`@scopebond/verify/signature`)
+
+```js
+import { verifyReceiptSignature } from "@scopebond/verify/signature";
+const result = await verifyReceiptSignature(receipt, attesterPublicKeyPemOrJwk);
+// { valid, signature_valid, key_binding_valid, alg_supported, attester_kind_supported }
+```
+
+Verifies the attester's Ed25519 signature over the RFC 8785 canonical payload and checks
+that `payload.attester.kid` is the key's derived id. WebCrypto only, no `node:` imports:
+the same code runs in Node, browsers and Cloudflare Workers. Receipts v1 use `Ed25519`
+from a `gateway` attester; other algorithms and attester kinds the schema reserves are
+reported as unsupported, never valid. It never throws for a malformed receipt or key.
+
 ## Conformance suite
 
 `vectors/conformance.json` is the reference vector suite (D27): every implemented
 clause type across prevented / covered / ambiguity / refused cases. `pnpm test`
 runs every vector through `violates()` and checks the verdict. A gateway build is
 "Scopebond-compatible" only if it produces identical verdicts on this suite.
+
+## Anchor verification (`@scopebond/verify/anchor`)
+
+Verifies the gateway's receipt-log anchors with WebCrypto only (Node, browsers,
+Workers). v2 anchors (`algo: "rfc9162-sha256"`) use the RFC 9162 Merkle tree and are
+Ed25519-signed by the attester; legacy v1 anchors (`sha256-merkle`) still verify.
+
+```js
+import { verifyAnchorSignature, verifyInclusionProof, receiptLeafHash } from "@scopebond/verify/anchor";
+
+await verifyAnchorSignature(anchor, attesterPublicJwk);
+await verifyInclusionProof({
+  leaf_hash: await receiptLeafHash(receipt.payload),
+  leaf_index, tree_size: anchor.tree_size, audit_path, root: anchor.root,
+});
+```
+
+Also: `verifyConsistencyProof`, `verifyAnchorChain`, `verifyAnchorRoot`,
+`merkleTreeHash`, `inclusionProof`, `consistencyProof`, `merkleRootV1`. Exact
+definitions: SPEC.md "Anchors"; vectors: `vectors/merkle-rfc9162.json`.
 
 ## `[PLANNED]`
 

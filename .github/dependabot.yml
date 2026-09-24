@@ -5,7 +5,30 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # @types/node must track the lowest Node we support, not the newest. The
+      # packages declare engines ">=20" (hook: ">=22.13"); newer majors of the
+      # types would let code call Node APIs that do not exist on those runtimes
+      # and still type-check. Move this major only when the engines floor moves.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # @changesets/cli 3 is a release-pipeline migration, not a drop-in bump:
+      # it requires pnpm >= 10 (repo pins pnpm 9), and `changeset publish` no
+      # longer prints "New tag:" lines, which changesets/action@v1 parses to
+      # detect what was published (so GitHub releases would silently stop).
+      # It must land together with changesets/action@v2 and a release.yml
+      # rewrite; do that deliberately, then remove this rule.
+      - dependency-name: "@changesets/cli"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # changesets/action@v2 refuses to run with @changesets/cli 2, renames every
+      # input release.yml uses (version -> version-script, publish ->
+      # publish-script, commit -> commit-message, title -> pr-title; setupGitUser
+      # removed) and no longer writes ~/.npmrc from NPM_TOKEN, so publish-on-merge
+      # would stop publishing. Migrate together with @changesets/cli 3 (see above).
+      - dependency-name: "changesets/action"
+        update-types: ["version-update:semver-major"]

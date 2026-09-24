@@ -35,8 +35,17 @@ export type {
   PrincipalKeyRegistry, PrincipalPurpose, SignatureIdentity, SignedApproval, SignedIntentAuthorization,
 } from "./auth.js";
 export { handleMcp } from "./mcp.js";
-export { merkleRoot, merkleProof, verifyProof } from "./anchor.js";
-export type { ProofStep } from "./anchor.js";
+export {
+  merkleRoot, merkleProof, verifyProof,
+  ANCHOR_ALGO_V1, ANCHOR_ALGO_V2, ANCHOR_TYPE,
+  leafHash, nodeHash, receiptLeafHash, receiptLeafHashV1, merkleTreeHash, merkleRootV1,
+  inclusionProof, verifyInclusionProof, consistencyProof, verifyConsistencyProof,
+  anchorBody, anchorHash, anchorRoot, verifyAnchorRoot, verifyAnchorSignature, verifyAnchorChain,
+  isAnchorV2,
+} from "./anchor.js";
+export type {
+  ProofStep, AnchorV1, AnchorV2, AnchorV2Body, AnyAnchor, InclusionProof, ConsistencyProof, AnchorChainResult, Ed25519PublicJwk,
+} from "./anchor.js";
 
 // Edge (Cloudflare Workers) support — WebCrypto attester + KV store. Edge-safe.
 export { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
