@@ -16,17 +16,31 @@ Add the check to a workflow and make it a **required status check** in your rule
 ```yaml
 # .github/workflows/scopebond-policy.yml
 name: Scopebond policy
-on: pull_request
+on: pull_request_target        # runs the workflow as it is on the base branch
+permissions:
+  contents: read
+  pull-requests: read
 jobs:
   scopebond:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}   # the BASE commit only; never the PR head
+          fetch-depth: 0
       - uses: avouro-com/scopebond/packages/github-action@main  # or pin a full commit SHA
         with:
           policy: scopebond.policy.json
 ```
+
+Why `pull_request_target` with a base checkout: under `on: pull_request` the
+workflow file itself comes from the pull request, so an agent's PR could edit or
+delete the very workflow that checks it. Under `pull_request_target` GitHub runs the
+workflow (and this action's pin) from the base branch. The job checks out only the
+base commit and never runs code from the PR: the changed-file list comes from the
+pull-request API, and the policy is read from the base commit. Do not add steps that
+check out or execute the PR head in this job — `pull_request_target` runs with the
+base repository's token.
 
 A governed-agent PR that violates the policy fails the check (blocking the merge);
 a human PR and non-pull-request events are **not evaluated** (never blocked). The
@@ -39,8 +53,9 @@ under review, so a pull request cannot loosen the policy it is checked against: 
 that adds or edits `scopebond.policy.json` is checked against the policy already on
 the base branch. Merge policy changes through a reviewed (human) pull request first.
 The changed-file list comes from the pull request API (including the old name of a
-renamed file), falling back to a merge-base diff; if neither yields paths for a PR
-that changed files, the check fails closed.
+renamed file), falling back to a merge-base diff; if neither yields the full list —
+no paths, or fewer paths than the PR's `changed_files` (the API stops at 3000
+files) — the check fails closed.
 
 ## Policy
 

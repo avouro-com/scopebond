@@ -95,6 +95,12 @@ const ctx: PullRequestContext = {
 if (ctx.paths.length === 0 && ctx.filesChanged > 0) {
   die("the pull request changed files but no paths were resolved (diff step failed); failing closed");
 }
+// Fail closed on a partial list too: the pull-request files API stops at 3000 files,
+// so a larger PR would otherwise be judged on the files it happened to list while an
+// out-of-policy path hides past the cut-off.
+if (ctx.paths.length < ctx.filesChanged) {
+  die(`the pull request changed ${ctx.filesChanged} files but only ${ctx.paths.length} paths were resolved (the file list was truncated); failing closed`);
+}
 
 const decision = evaluatePullRequest(ctx, policy);
 

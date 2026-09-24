@@ -27,21 +27,29 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
       run: |
         set -uo pipefail
         out="$RUNNER_TEMP/scopebond-pr-paths.txt"
         : > "$out"
         # Preferred: the pull request's own file list from the API (exact, includes the
-        # old name of a renamed file). Fallback: a diff from the merge base. If neither
-        # yields paths, the file stays empty and the check fails closed.
+        # old name of a renamed file). The API stops at 3000 files: a list with fewer
+        # files than the PR changed is discarded. Fallback: a diff from the merge base
+        # (with rename detection off, so both names of a rename are listed). If neither
+        # yields the full list, the check fails closed.
         if command -v gh >/dev/null 2>&1 && [ -n "${PR_NUMBER:-}" ]; then
           gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
             --jq '.[] | .filename, (.previous_filename // empty)' > "$out" 2>/dev/null || : > "$out"
+          listed=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' 2>/dev/null | wc -l | tr -d ' ')
+          if [ -n "${CHANGED_FILES:-}" ] && [ "${listed:-0}" -lt "$CHANGED_FILES" ]; then
+            echo "Scopebond: the files API listed $listed of $CHANGED_FILES changed files; using a git diff instead"
+            : > "$out"
+          fi
         fi
         if [ ! -s "$out" ] && [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
           git fetch --no-tags --quiet origin "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true
           git fetch --no-tags --quiet --deepen=200 origin 2>/dev/null || true
-          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$out" 2>/dev/null || : > "$out"
+          git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA" > "$out" 2>/dev/null || : > "$out"
         fi
         echo "Scopebond: $(wc -l < "$out" | tr -d ' ') changed path(s) resolved"
     - name: Scopebond policy check

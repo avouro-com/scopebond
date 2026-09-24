@@ -45,6 +45,16 @@ test("the check fails (exit 1) for a PR touching a production path", () => {
   assert.match(r.stdout, /DENY/);
 });
 
+test("the check fails closed when the file list is truncated (fewer paths than changed_files)", () => {
+  // The pull-request files API stops at 3000 files; an out-of-policy path can hide past it.
+  const listed = Array.from({ length: 3000 }, (_, i) => `src/f${i}.ts`);
+  const r = run({
+    pull_request: { base: { ref: "main" }, head: { ref: "agent/x", sha: "abc123def456abc1" }, changed_files: 3001, additions: 1, deletions: 0, user: { login: "copilot-swe-agent[bot]" } },
+  }, listed);
+  assert.equal(r.status, 1, "a truncated list must not pass the check");
+  assert.match(r.stderr, /truncated/);
+});
+
 test("exports the boundary receipt to a workspace when configured (best-effort)", async () => {
   const { generateKeyPairSync } = await import("node:crypto");
   const { execFile } = await import("node:child_process");
@@ -119,7 +129,7 @@ test("the policy is read from the base commit, so a PR cannot loosen the policy 
   assert.equal(r.status, 1, "the base policy (no infra/prod) still applies");
   assert.match(r.stdout, /DENY/);
   // The same PR evaluated against the head's copy would pass — which is exactly the hole.
-  const head = runIn(repo, event, ["infra/prod/main.tf"], ["--policy-source", "workspace"]);
+  const head = runIn(repo, event, ["infra/prod/main.tf", "scopebond.policy.json"], ["--policy-source", "workspace"]);
   assert.equal(head.status, 0);
 });
 
