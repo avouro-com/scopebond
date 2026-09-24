@@ -50,6 +50,20 @@ Finalized alongside the gateway/SDK; used by the clause logic and the vectors:
 - on-chain actions — `intent.params.to`, `.chain_id`, `.contract`, `.selector`
 - signing key — `intent.signer`
 
+## Receipt signatures (`@scopebond/verify/signature`)
+
+```js
+import { verifyReceiptSignature } from "@scopebond/verify/signature";
+const result = await verifyReceiptSignature(receipt, attesterPublicKeyPemOrJwk);
+// { valid, signature_valid, key_binding_valid, alg_supported, attester_kind_supported }
+```
+
+Verifies the attester's Ed25519 signature over the RFC 8785 canonical payload and checks
+that `payload.attester.kid` is the key's derived id. WebCrypto only, no `node:` imports:
+the same code runs in Node, browsers and Cloudflare Workers. Receipts v1 use `Ed25519`
+from a `gateway` attester; other algorithms and attester kinds the schema reserves are
+reported as unsupported, never valid. It never throws for a malformed receipt or key.
+
 ## Conformance suite
 
 `vectors/conformance.json` is the reference vector suite (D27): every implemented

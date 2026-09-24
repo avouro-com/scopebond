@@ -31,6 +31,10 @@
     ".": {
       "types": "./dist/violates.d.ts",
       "default": "./dist/violates.js"
+    },
+    "./signature": {
+      "types": "./dist/signature.d.ts",
+      "default": "./dist/signature.js"
     }
   },
   "files": [
