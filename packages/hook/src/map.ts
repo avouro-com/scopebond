@@ -219,6 +219,19 @@ const UPLOADERS = new Set([
 // Read flags apply to readers, copiers and uploaders only (`test -f .env` reads nothing).
 const READ_FLAGS = new Set(["-t", "--upload-file", "-k", "--config", "--input-file", "--post-file", "--body-file", "-in", "-inkey", "-key", "-infile", "--key", "--cert", "-f", "--file", "-literalpath", "-path", "-filepath", "-inputobject"]);
 const WRITE_FLAGS = new Set(["-o", "--output", "-out", "--output-document", "-destination", "-outfile", "--target-directory"]);
+// curl/wget request-body and form flags carry inline data, not a filename — a quoted
+// JSON body must not be read as a glob over a protected path. Their value names a file
+// only through `@`: `-d @.env`, `-F upload=@secret`, `--data-urlencode key@file`.
+const CURL_DATA = new Set(["-d", "--data", "--data-ascii", "--data-binary", "--data-raw", "--json", "--post-data", "--body-data"]);
+const CURL_URLENCODE = "--data-urlencode";
+const CURL_FORM = new Set(["-F", "--form", "--form-string"]);
+/** The file a curl/wget body/form value points at with `@`, or undefined for inline data. */
+function curlFileRef(flag: string, value: string): string | undefined {
+  if (value.startsWith("@")) return value.slice(1).split(";")[0];
+  if (flag === CURL_URLENCODE) { const m = /^[^=@]*@(.+)$/.exec(value); if (m) return m[1]; }
+  if (CURL_FORM.has(flag)) { const m = /=@([^;]+)/.exec(value); if (m) return m[1]; }
+  return undefined;
+}
 // Names an uploader's operand, or `git add`'s, is checked against: a secret path sent
 // or staged (`gh gist create .env`, `git add .env`) is a read of that path.
 const SENSITIVE = /(?:^|[/\\])(?:\.scopebond(?:[/\\]|$)|\.env(?:\.[^/\\]*)?$|\.envrc$|\.ssh(?:[/\\]|$)|\.aws(?:[/\\]|$)|\.npmrc$|\.pypirc$|_?\.?netrc$|\.git-credentials$|\.kube(?:[/\\]|$)|\.docker(?:[/\\]|$)|\.azure(?:[/\\]|$)|\.gnupg(?:[/\\]|$)|\.config[/\\](?:gcloud|gh)(?:[/\\]|$)|\.credentials\.json$)|\.(?:key|pem|p12|pfx|jks|keystore)$/i;
@@ -228,6 +241,12 @@ const INTERPRETERS = new Set(["node", "deno", "bun", "python", "python3", "py", 
 // a word character — so `process.env` is not `.env`) and has no overlapping repeats,
 // keeping the scan linear; input is capped per argument.
 const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
+// A file or process API in the same inline snippet, required in call or member form
+// (not a bare English word — "your .env file" must not read like `File`). Without one,
+// a protected path in a string literal opens nothing. Covers Node (fs/child_process/
+// streams), Python (open, os, subprocess, pathlib, shutil), Ruby/PHP (File/IO/fopen/
+// file_get_contents) and PowerShell (Get-/Set-Content, Out-File, Invoke-*).
+const FILE_API = /\b(?:open|fopen|readlink|read_file|readfile|read_to_string|readfilesync|writefile|writefilesync|appendfile|appendfilesync|createreadstream|createwritestream|openfile|opensync|copyfile|copyfilesync|rename|renamesync|unlink|unlinksync|popen|spawn|spawnsync|exec|execsync|execfile|execfilesync|system|shell_exec|proc_open|file_get_contents|file_put_contents|urlopen)\s*\(|\b(?:fs|io|os|subprocess|child_process|pathlib|shutil|File|Dir|IO|Pathname|Path|FileUtils)\s*\.\s*\w|\bimport\s+(?:os|subprocess|shutil|pathlib|io)\b|\brequire\s*\(\s*['"`](?:node:)?(?:fs|child_process)|\b(?:Get-Content|Set-Content|Out-File|Add-Content|Import-Csv|Invoke-\w+)\b/i;
 const CODE_SCAN_LIMIT = 20000;
 
 /** Option arities of the content readers, so an option's value (`grep -C 3`, `rg -g
@@ -367,6 +386,17 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     if (t === "--") { operands.push(...args.slice(i + 1)); break; }
     const lower = t.toLowerCase();
     const eq = t.indexOf("=");
+    if (prog === "curl" || prog === "wget") {
+      const flag = eq > 0 && t.startsWith("--") ? t.slice(0, eq) : t;
+      if (CURL_DATA.has(flag) || CURL_FORM.has(flag) || flag === CURL_URLENCODE) {
+        let value: string | undefined;
+        if (eq > 0 && t.startsWith("--")) value = t.slice(eq + 1);
+        else value = args[++i];
+        given.add(flag);
+        if (value !== undefined) { const f = curlFileRef(flag, value); if (f !== undefined) read(f); }
+        continue;
+      }
+    }
     if (t.startsWith("-") && eq > 0) {                       // --flag=value
       const flag = t.slice(0, eq);
       const value = t.slice(eq + 1);
@@ -471,16 +501,28 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     sources.forEach(read);
     if (MOVERS.has(prog)) sources.forEach(write);
     if (!hasTarget) write(operands[operands.length - 1]);
-  } else if (WRITERS.has(prog)) operands.forEach(write);
+  } else if (WRITERS.has(prog)) {
+    // A permission/owner spec is not a path: `chmod +x f`, `chmod 0755 f`,
+    // `chattr +i f`, `chown root:wheel f`, `attrib +r f` write f, not "+x".
+    let targets = operands;
+    if (prog === "chmod" || prog === "chattr" || prog === "attrib") targets = targets.filter((o) => !/^[+\-=][rwxstugoa+-]*$|^[ugoa]+[+\-=][rwxXst]*$|^[0-7]{3,4}$/i.test(o));
+    else if (prog === "chown" || prog === "chgrp") targets = targets.slice(1);
+    targets.forEach(write);
+  }
   else if ((prog === "sed" || prog === "perl" || prog === "ruby") && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith("--in-place"))) {
     // `sed -i 's/x/y/' f…`: the first operand is the script (unless -e/-f gave it).
     const scriptGiven = args.some((a) => a === "-e" || a === "-f" || a.startsWith("--expression")) || given.has("-e") || given.has("-f");
     (scriptGiven ? operands : operands.slice(1)).forEach(write);
   } else if (INTERPRETERS.has(prog)) {
-    // Inline code (`node -e "…"`, `python -c "…"`): best effort — every protected-
-    // looking path literal in the code is recorded as both a read and a write. Code
-    // that assembles a path at run time is beyond a cooperative hook (use a gateway).
-    for (const w of args) for (const m of w.slice(0, CODE_SCAN_LIMIT).match(SENSITIVE_IN_CODE) ?? []) { read(m); write(m); }
+    // Inline code (`node -e "…"`, `python -c "…"`): best effort — a protected-looking
+    // path literal is recorded as a read and a write only when the same code also calls
+    // a file or process API, so a path merely named in a log string is not a finding.
+    // Code that assembles a path at run time is beyond a cooperative hook (use a gateway).
+    for (const w of args) {
+      const code = w.slice(0, CODE_SCAN_LIMIT);
+      if (!FILE_API.test(code)) continue;
+      for (const m of code.match(SENSITIVE_IN_CODE) ?? []) { read(m); write(m); }
+    }
   } else if (UPLOADERS.has(prog)) {
     operands.filter(isSensitiveOperand).forEach(read);
   }

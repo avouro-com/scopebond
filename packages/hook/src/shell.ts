@@ -415,6 +415,107 @@ function findExecCommands(argv: string[]): string[] {
   return out;
 }
 
+interface Heredoc { line: number; delim: string; dashed: boolean; ownerIsShell: boolean }
+
+/** Find here-document openers (`<<word`, `<<-word`, `<< 'word'`, `<<\word`) in the
+ *  whole command, honoring quotes and command-substitution nesting so a `<<` inside
+ *  `"$(cat <<EOF …)"` is seen but a `<<` inside a quoted string, a here-string
+ *  (`<<<`) or arithmetic is not. Each opener records its delimiter, the source line it
+ *  sits on, and whether the command that owns it runs a shell (its body is a script)
+ *  rather than consuming the body as data. `words`/`stripPrefixes` resolve the owning
+ *  program past wrappers (`sudo bash <<EOF`). */
+function findHeredocs(src: string): Heredoc[] {
+  const found: Heredoc[] = [];
+  const stack: Array<'"' | null> = []; // saved quote state at each substitution entry
+  let quote: '"' | "'" | null = null;
+  let cmdStart = 0;
+  let line = 0;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === "\n") { line++; if (!quote) cmdStart = i + 1; continue; }
+    if (quote === "'") { if (c === "'") quote = null; continue; }
+    if (quote === '"') {
+      if (c === "\\" && n !== undefined) { i++; continue; }
+      if (c === '"') { quote = null; continue; }
+      // Command substitutions run inside double quotes; a here-doc can open there.
+      if (c === "$" && n === "(") { stack.push(quote); quote = null; cmdStart = i + 2; i++; continue; }
+      if (c === "`") { stack.push(quote); quote = null; cmdStart = i + 1; continue; }
+      continue;
+    }
+    // unquoted
+    if (c === "\\" && n !== undefined) { i++; continue; }
+    if (c === "'" || c === '"') { quote = c; continue; }
+    if (c === "$" && n === "(") { stack.push(null); cmdStart = i + 2; i++; continue; }
+    if (c === "`") { stack.push(null); cmdStart = i + 1; continue; }
+    if (c === "(") { stack.push(null); cmdStart = i + 1; continue; }
+    if (c === ")") { if (stack.length) quote = stack.pop() ?? null; cmdStart = i + 1; continue; }
+    if (c === ";" || c === "&" || c === "|") { cmdStart = i + 1; continue; }
+    if (c === "<" && n === "<") {
+      if (src[i + 2] === "<") { i += 2; continue; } // here-string, not a here-doc
+      let j = i + 2;
+      let dashed = false;
+      if (src[j] === "-") { dashed = true; j++; }
+      while (src[j] === " " || src[j] === "\t") j++;
+      let delim = "";
+      const q = src[j];
+      if (q === "'" || q === '"') {
+        const end = src.indexOf(q, j + 1);
+        if (end === -1 || src.slice(j + 1, end).includes("\n")) { i = j; continue; }
+        delim = src.slice(j + 1, end);
+        j = end + 1;
+      } else {
+        if (src[j] === "\\") j++;
+        while (j < src.length && /[A-Za-z0-9_./-]/.test(src[j])) delim += src[j++];
+      }
+      if (delim) {
+        const cmdText = src.slice(cmdStart, i);
+        const { tokens } = stripPrefixes(words(cmdText));
+        const prog = tokens.length ? canonProgram(tokens[0]) : "";
+        found.push({ line, delim, dashed, ownerIsShell: SHELLS.has(prog) });
+      }
+      i = j - 1;
+      continue;
+    }
+  }
+  return found;
+}
+
+/** Remove here-document bodies before the line-splitter runs, so their lines are
+ *  never parsed as commands. A body is inert data — a commit message, an HTTP
+ *  payload, a note written with `cat <<EOF > f` (the redirection still records the
+ *  write) — except a body fed to a shell (`bash <<EOF …`), which runs and is returned
+ *  for its own decomposition. A `<<` whose delimiter never recurs on a later line is
+ *  left untouched (it was arithmetic or otherwise not a here-doc). */
+function stripHeredocs(src: string): { text: string; scripts: string[] } {
+  if (!src.includes("<<")) return { text: src, scripts: [] };
+  const openers = findHeredocs(src);
+  if (openers.length === 0) return { text: src, scripts: [] };
+  const strip = (s: string) => s.replace(/^\t+/, "");
+  const byLine = new Map<number, Heredoc[]>();
+  for (const op of openers) { const l = byLine.get(op.line) ?? []; l.push(op); byLine.set(op.line, l); }
+  const lines = src.split("\n");
+  const out: string[] = [];
+  const scripts: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i]);
+    const ops = byLine.get(i);
+    if (!ops) continue;
+    for (const op of ops) {
+      // Only consume a body when the terminator is actually present below.
+      let end = -1;
+      for (let j = i + 1; j < lines.length; j++) {
+        if ((op.dashed ? strip(lines[j]) : lines[j]) === op.delim) { end = j; break; }
+      }
+      if (end === -1) continue;
+      const body = lines.slice(i + 1, end).map((l) => (op.dashed ? strip(l) : l));
+      if (op.ownerIsShell) scripts.push(body.join("\n"));
+      i = end; // skip the body and the terminator line
+    }
+  }
+  return { text: out.join("\n"), scripts };
+}
+
 /** Decompose a command line into the simple commands it will run. Recurses into
  *  `-c` scripts and command substitutions up to a bounded depth. */
 export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
@@ -423,8 +524,11 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
   const opaque = (raw = src): SimpleCommand[] => [{ program: "", programRaw: "", argv: [], redirects: [], raw, opaque: true }];
   if (depth > MAX_DEPTH) return opaque();
 
-  const { segments, unbalanced } = splitTopLevel(src);
-  if (unbalanced) return opaque();
+  const { text, scripts } = stripHeredocs(src);
+  const fromHeredocs = scripts.flatMap((s) => decomposeShell(s, depth + 1));
+
+  const { segments, unbalanced } = splitTopLevel(text);
+  if (unbalanced) return [...opaque(), ...fromHeredocs];
 
   const out: SimpleCommand[] = [];
   for (const seg of segments) {
@@ -484,6 +588,7 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
       for (const script of findExecCommands(argv)) out.push(...decomposeShell(script, depth + 1));
     }
   }
+  out.push(...fromHeredocs);
   return out.length ? out : opaque();
 }
 
