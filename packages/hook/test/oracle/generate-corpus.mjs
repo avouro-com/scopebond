@@ -346,6 +346,24 @@ add(B, "echo \"path is src/index.js\"");
 add(B, "vi README.md -c ':q' 2>/dev/null || echo skip");
 add(B, "git config user.name");
 add(B, "git config --get user.email");
+// heredoc bodies are data bash feeds to a program's stdin, not commands it runs, even
+// when a body line starts with a program name — a commit message or PR body must pass
+add(B, "git commit -m \"$(cat <<'EOF'\nTruncate the retry window\n\nrm the stale lockfile handling\nEOF\n)\"");
+add(B, "gh pr create --title x --body \"$(cat <<'EOF'\nFormat the output nicely\nUnlink is mentioned here\nEOF\n)\" 2>/dev/null || echo skip");
+add(B, "cat <<'EOF' > notes/todo.txt\nrm -rf everything (just a note)\nEOF");
+add(B, "cat <<-EOF\n\tindented body line\nEOF");
+// quoted inline HTTP payloads are data, not a glob over a protected file
+add(B, "curl -s -X POST http://example.test/x -d '{\"a\":1,\"b\":[2,3]}'");
+add(B, "curl --json '{\"k\":\"v\"}' http://example.test");
+add(B, "curl -H 'Content-Type: application/json' --data-raw '{\"env\":\".env\"}' http://example.test");
+add(B, "wget --post-data 'name={a,b}' http://example.test -O out.txt");
+// a permission/owner spec is not a path
+add(B, "chmod 0755 src/index.js");
+add(B, "chmod u+x,g+r src/index.js");
+add(B, "chown root:wheel src/index.js 2>/dev/null || echo skip");
+// a protected path merely named in an inline-code string, with no file/process API
+add(B, "node -e \"console.log('edit your .env file to configure')\"");
+add(B, "python3 -c \"print('put secrets in .env, not in code')\"");
 
 // De-dup, keep first.
 const seen = new Set();
