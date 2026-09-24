@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mapClaudeToolUse, mapCursorEvent, redactCommand, scrubSecrets, fillPushBranch } from "../dist/index.js";
+import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, redactCommand, scrubSecrets, fillPushBranch } from "../dist/index.js";
 
 // The mapper returns one intent per simple command. These helpers keep the common
 // single-command assertions readable.
@@ -21,9 +21,9 @@ test("Bash maps to shell.exec with the program basename and a redacted command",
   assert.equal(String(m.intent.params.command).includes("/tmp/other"), true, "short commands keep a readable head");
 });
 
-test("sudo and env prefixes are stripped when resolving the program", () => {
-  assert.equal(only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "sudo rm -rf /" } })).intent.params.program, "rm");
-  assert.equal(only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "env FOO=1 /usr/bin/node app.js" } })).intent.params.program, "node");
+test("sudo and env prefixes are resolved to the real program, and the wrapper is recorded too", () => {
+  assert.deepEqual(shellProgs(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "sudo rm -rf /" } })), ["sudo", "rm"]);
+  assert.deepEqual(shellProgs(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "env FOO=1 /usr/bin/node app.js" } })), ["env", "node"]);
   assert.equal(only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "FOO=1 BAR=2 python run.py" } })).intent.params.program, "python");
 });
 
@@ -85,6 +85,41 @@ test("Cursor events map the same way as Claude tools", () => {
   assert.equal(only(mapCursorEvent("beforeReadFile", { path: "/w/x.ts", cwd: "/w" })).intent.params.path, "x.ts");
   assert.equal(only(mapCursorEvent("beforeMCPExecution", { server: "github", tool: "merge_pr" })).intent.action_type, "mcp.tool.call");
   assert.equal(only(mapCursorEvent("somethingElse", {})).evaluated, false);
+});
+
+test("Codex Bash and MCP calls use the shared action mapping", () => {
+  assert.equal(only(mapCodexToolUse({ tool_name: "Bash", tool_input: { command: "git push origin main" } })).intent.action_type, "git.push");
+  const mcp = only(mapCodexToolUse({ tool_name: "mcp__github__create_issue", tool_input: { title: "x" } }));
+  assert.equal(mcp.intent.action_type, "mcp.tool.call");
+  assert.equal(mcp.intent.params.server, "github");
+  assert.equal(mcp.intent.params.tool, "create_issue");
+});
+
+test("Codex apply_patch maps every changed path, including moves", () => {
+  const patch = `*** Begin Patch
+*** Update File: src/app.ts
+@@
+-old
++new
+*** Add File: src/new.ts
++export {};
+*** Update File: src/old.ts
+*** Move to: src/moved.ts
+@@
+-old
++moved
+*** Delete File: src/gone.ts
+*** End Patch`;
+  const mapped = mapCodexToolUse({ tool_name: "apply_patch", tool_input: { command: patch }, cwd: "/work" });
+  assert.deepEqual(writePaths(mapped), ["src/app.ts", "src/new.ts", "src/old.ts", "src/moved.ts", "src/gone.ts"]);
+  assert.ok(mapped.every((m) => m.evaluated));
+});
+
+test("Codex apply_patch with no recognizable path is not trusted", () => {
+  const mapped = mapCodexToolUse({ tool_name: "apply_patch", tool_input: { command: "not a patch" } });
+  assert.equal(mapped.length, 1);
+  assert.equal(mapped[0].intent.action_type, "file.write");
+  assert.equal(mapped[0].evaluated, false);
 });
 
 // ---- Decomposition: a shell call is split into every simple command it runs ----
@@ -158,10 +193,10 @@ test("a separator inside quotes is not a split point", () => {
   assert.equal(m.intent.params.program, "echo");
 });
 
-test("an unbalanced command is opaque and not evaluated (fails closed at the runtime)", () => {
+test("an unbalanced command is opaque: evaluated with an empty program (the starter policy denies it)", () => {
   const m = only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: `echo "unterminated` } }));
   assert.equal(m.intent.action_type, "shell.exec");
-  assert.equal(m.evaluated, false, "opaque commands are not trusted");
+  assert.equal(m.evaluated, true, "opaque commands are evaluated, not observed");
   assert.equal(m.intent.params.program, "");
 });
 

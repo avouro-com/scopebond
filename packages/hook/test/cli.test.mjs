@@ -56,10 +56,36 @@ test("claude: invalid stdin fails closed (deny, exit 2)", () => {
   assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
 });
 
+test("codex: a protected branch push is denied and an allowed action stays silent", () => {
+  const denied = run(enrolledDir(), ["codex"], JSON.stringify({
+    hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git push origin main" },
+  }));
+  assert.equal(denied.status, 0, "Codex consumes the structured deny without treating the hook as failed");
+  assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny");
+
+  const allowed = run(enrolledDir(), ["codex"], JSON.stringify({
+    hook_event_name: "PreToolUse", tool_name: "apply_patch",
+    tool_input: { command: "*** Begin Patch\n*** Update File: src/app.ts\n@@\n-old\n+new\n*** End Patch" },
+  }));
+  assert.equal(allowed.status, 0);
+  assert.equal(allowed.stdout.trim(), "", "Codex keeps its normal approval flow");
+});
+
+test("codex: apply_patch cannot rewrite Codex's own hook configuration", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-codex-protect-"));
+  scaffold(dir);
+  const r = run(dir, ["codex"], JSON.stringify({
+    hook_event_name: "PreToolUse", tool_name: "apply_patch",
+    tool_input: { command: "*** Begin Patch\n*** Update File: .codex/hooks.json\n@@\n-old\n+new\n*** End Patch" },
+  }));
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
+});
+
 test("init scaffolds keys and a policy and auto-configures the agent", () => {
   const project = mkdtempSync(join(tmpdir(), "sb-hook-init-"));
   const dir = join(project, ".scopebond");
-  const stdout = execFileSync(process.execPath, [cli, "init"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+  const stdout = execFileSync(process.execPath, [cli, "init", "--yes"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
   assert.ok(existsSync(join(dir, "agent.key")) && existsSync(join(dir, "policy.json")), "keys and policy exist");
   const settings = join(project, ".claude", "settings.json");
   assert.ok(existsSync(settings), "init writes the Claude settings automatically");
@@ -71,16 +97,27 @@ test("init scaffolds keys and a policy and auto-configures the agent", () => {
 test("init --no-install prints the snippet instead of writing config", () => {
   const project = mkdtempSync(join(tmpdir(), "sb-hook-init-ni-"));
   const dir = join(project, ".scopebond");
-  const stdout = execFileSync(process.execPath, [cli, "init", "--no-install"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+  const stdout = execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
   assert.ok(!existsSync(join(project, ".claude", "settings.json")), "no config written with --no-install");
   assert.match(stdout, /npx -y @scopebond\/hook@\S+ claude/, "prints the pinned hook command");
+});
+
+test("init --codex configures .codex/hooks.json and prints the trust step", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-init-codex-"));
+  const dir = join(project, ".scopebond");
+  const stdout = execFileSync(process.execPath, [cli, "init", "--codex", "--yes"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+  const hooks = join(project, ".codex", "hooks.json");
+  assert.ok(existsSync(hooks));
+  const cfg = JSON.parse(readFileSync(hooks, "utf8"));
+  assert.match(cfg.hooks.PreToolUse[0].hooks[0].command, /^npx -y @scopebond\/hook@\S+ codex$/);
+  assert.match(stdout, /run `\/hooks`/i);
 });
 
 test("first-run smoke: init, a blocked command, then the receipt shows in log and verifies", () => {
   const project = mkdtempSync(join(tmpdir(), "sb-hook-e2e-"));
   const dir = join(project, ".scopebond");
   const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
-  execFileSync(process.execPath, [cli, "init", "--no-install"], { encoding: "utf8", cwd: project, env });
+  execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
   // A destructive command is blocked (exit 2) and recorded.
   const blocked = run(dir, ["claude"], JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" }, cwd: project }));
   assert.equal(blocked.status, 2, "the destructive command is denied");
@@ -97,7 +134,7 @@ test("test subcommand shows the decision without recording a receipt", () => {
   const project = mkdtempSync(join(tmpdir(), "sb-hook-test-"));
   const dir = join(project, ".scopebond");
   const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
-  execFileSync(process.execPath, [cli, "init", "--no-install"], { encoding: "utf8", cwd: project, env });
+  execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
   const denied = run(dir, ["test", "echo hi && rm -rf x"]);
   assert.equal(denied.status, 2, "a command containing rm is denied");
   assert.match(denied.stdout, /overall: deny/);
@@ -121,4 +158,19 @@ test("starter policy: a fetch and an MCP call are observed (allowed), a bare git
   assert.notEqual((await rt.evaluate(push)).decision, "deny", "a bare push on a feature branch is allowed");
   const toMain = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push" } }), "main");
   assert.equal((await rt.evaluate(toMain)).decision, "deny", "a bare push resolved to main is denied");
+});
+
+test("init, trust and uninstall refuse a non-interactive stdin without --yes (the agent's shell)", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-noninteractive-"));
+  const dir = join(project, ".scopebond");
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir, SCOPEBOND_HOME: join(project, "home"), HOME: join(project, "home"), USERPROFILE: join(project, "home") };
+  for (const args of [["init", "--no-install"], ["trust"], ["uninstall"]]) {
+    let status = 0;
+    let stderr = "";
+    try { execFileSync(process.execPath, [cli, ...args], { encoding: "utf8", cwd: project, env, input: "", stdio: ["pipe", "pipe", "pipe"] }); }
+    catch (error) { status = error.status; stderr = String(error.stderr ?? ""); }
+    assert.equal(status, 1, `${args[0]} must refuse without a TTY`);
+    assert.match(stderr, /interactive terminal/);
+  }
+  assert.ok(!existsSync(join(dir, "policy.json")), "a refused init writes nothing");
 });

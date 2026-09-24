@@ -4,13 +4,15 @@
 //
 //   scopebond-hook claude                     evaluate a Claude Code PreToolUse call (stdin JSON)
 //   scopebond-hook cursor                     evaluate a Cursor hook event (stdin JSON)
-//   scopebond-hook init [--cursor] [--no-install]  scaffold keys + starter policy and configure the agent
-//   scopebond-hook connect <url> <bundle.json> [--cursor]
+//   scopebond-hook codex                      evaluate a Codex PreToolUse call (stdin JSON)
+//   scopebond-hook init [--cursor|--codex] [--no-install] [--yes]
+//   scopebond-hook connect <url> <bundle.json> [--cursor|--codex]
 //                                             enroll with a Cloud workspace and start exporting
 //   scopebond-hook log [-n N]                 show the most recent local receipts
 //   scopebond-hook verify                     verify every local receipt offline against the attester key
 //   scopebond-hook test "<shell command>"     show the decision for a command without recording it
 //   scopebond-hook flush                      deliver any queued receipts to Cloud now
+//   scopebond-hook trust [--yes]              let this project's .scopebond policy govern here (pinned)
 //
 // Config dir: $SCOPEBOND_HOOK_DIR, else ./.scopebond
 // Fail-closed: any error denies the action with a repair message.
@@ -22,12 +24,13 @@ import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
-import { mapClaudeToolUse, mapCursorEvent, fillPushBranch } from "./map.js";
+import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime } from "./runtime.js";
 import { scaffold, harnessSnippet, installHarness } from "./init.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
-  cursorDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
+  cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
+  trustProjectPolicy, untrustedProjectPolicy,
 } from "./install.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
 import { cliCommand, hookVersion } from "./version.js";
@@ -85,22 +88,44 @@ function denyClaude(reason: string): never {
   process.exit(2);
 }
 
-async function runClaude(): Promise<void> {
+/** Codex accepts the structured deny response on a successful hook exit. Keeping
+ *  exit 0 lets its UI show a completed policy check instead of a failed hook while
+ *  still preventing the tool call. */
+function denyCodex(reason: string): never {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
+  }) + "\n");
+  process.exit(0);
+}
+
+const harnessName = (harness: Harness): string => harness === "claude" ? "Claude Code" : harness === "cursor" ? "Cursor" : "Codex";
+const harnessFileName = (harness: Harness): string => harness === "claude" ? ".claude/settings.json" : harness === "cursor" ? ".cursor/hooks.json" : ".codex/hooks.json";
+const selectedHarness = (args: string[]): Harness => args.includes("--codex") ? "codex" : args.includes("--cursor") ? "cursor" : "claude";
+const codexTrustStep = "Open Codex, run `/hooks`, review Scopebond, and choose Trust. Then start a new task.";
+
+async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude): Promise<void> {
   let input: Record<string, unknown>;
-  try { input = JSON.parse(readStdin()); } catch { denyClaude("hook received invalid JSON on stdin"); }
+  try { input = JSON.parse(readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const runtime = createHookRuntime(runtimePaths(resolveConfigDir(cwd)));
-    const decision = await runtime.evaluate(fillPushBranch(mapClaudeToolUse(input!), currentBranch(cwd)));
+    const decision = await runtime.evaluate(fillPushBranch(mapper(input!), currentBranch(cwd)));
     await runtime.flush();
-    if (decision.decision === "deny") denyClaude(decision.reason);
-    // allow and not_evaluated both DEFER to Claude Code's own permission flow: the
-    // hook records the receipt but never returns permissionDecision:"allow", which
-    // would suppress the user's normal review. Scopebond blocks; it does not approve.
+    if (decision.decision === "deny") deny(decision.reason);
+    // Stay silent on allow/not_evaluated so the coding agent's normal permission
+    // flow remains in charge. Scopebond blocks; it never silently approves.
     process.exit(0);
   } catch (error) {
-    denyClaude(`Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`);
+    deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`);
   }
+}
+
+async function runClaude(): Promise<void> {
+  await runPreToolUse(mapClaudeToolUse);
+}
+
+async function runCodex(): Promise<void> {
+  await runPreToolUse(mapCodexToolUse, denyCodex);
 }
 
 async function runCursor(): Promise<void> {
@@ -126,21 +151,41 @@ async function runCursor(): Promise<void> {
   process.exit(0);
 }
 
+/** `init`, `trust` and `uninstall` change what governs the agent, so they are for a
+ *  person at a terminal. A coding agent's shell is not interactive: without a TTY on
+ *  stdin they refuse unless `--yes` is passed (for scripts and CI). The starter policy
+ *  also denies the agent running them. */
+function requireInteractive(command: string, args: string[]): void {
+  if (process.stdin.isTTY || args.includes("--yes")) return;
+  console.error(`scopebond ${command} changes what governs your coding agent, so it must be run from an interactive terminal.`);
+  console.error(`In a script or CI, pass --yes: ${cliCommand(`${command} --yes`)}`);
+  process.exit(1);
+}
+
 function runInit(args: string[]): void {
-  const harness = args.includes("--cursor") ? "cursor" : "claude";
+  requireInteractive("init", args);
+  const harness = selectedHarness(args);
   const dir = configDir();
   const { agentKid, policyPath } = scaffold(dir, { force: args.includes("--force") });
   console.log(`Scopebond hook enrolled in ${dir}`);
   console.log(`  machine key    ${agentKid}`);
   console.log(`  policy         ${policyPath} (starter — edit the limits)`);
+  // With a user-level install present, a project policy governs only once trusted.
+  // Running init here is that decision, so pin this policy now.
+  if (!process.env.SCOPEBOND_HOOK_DIR && existsSync(join(userHome(), "policy.json"))) {
+    trustProjectPolicy(dir);
+    console.log(`  trusted        overrides ${userHome()} here; after editing it, run \`${cliCommand("trust")}\``);
+  }
   console.log("");
   // Configure the agent automatically by default (idempotent), so there is no
   // hand-editing step; --no-install prints the snippet instead.
   if (!args.includes("--no-install")) {
-    const file = installHarness(harness);
-    console.log(`✓ ${harness === "cursor" ? "Cursor" : "Claude Code"} configured in ${file}`);
+    let file: string;
+    try { file = installHarness(harness); } catch (error) { console.error((error as Error).message); process.exit(1); }
+    console.log(`✓ ${harnessName(harness)} configured in ${file}`);
+    if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
   } else {
-    console.log(`Add this to your ${harness === "cursor" ? ".cursor/hooks.json" : ".claude/settings.json"}:`);
+    console.log(`Add this to your ${harnessFileName(harness)}:`);
     console.log(harnessSnippet(harness));
   }
   console.log("");
@@ -242,9 +287,9 @@ async function runConnect(args: string[]): Promise<void> {
   const positional = args.filter((a) => !a.startsWith("--"));
   const url = positional[0];
   const bundleArg = positional[1];
-  const harness = args.includes("--cursor") ? "cursor" : "claude";
+  const harness = selectedHarness(args);
   if (!url) {
-    console.error("usage: scopebond-hook connect <workspace-url> <enrollment> [--cursor] [--no-install]");
+    console.error("usage: scopebond-hook connect <workspace-url> <enrollment> [--claude|--cursor|--codex] [--no-install]");
     process.exit(1);
   }
   const dir = configDir();
@@ -263,9 +308,10 @@ async function runConnect(args: string[]): Promise<void> {
     // caller opts out. This removes the "paste this snippet" step.
     if (!args.includes("--no-install")) {
       const file = installHarness(harness);
-      console.log(`✓ ${harness === "cursor" ? "Cursor" : "Claude Code"} configured in ${file}`);
+      console.log(`✓ ${harnessName(harness)} configured in ${file}`);
+      if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     } else {
-      console.log(`Add this to your ${harness === "cursor" ? ".cursor/hooks.json" : ".claude/settings.json"}:`);
+      console.log(`Add this to your ${harnessFileName(harness)}:`);
       console.log(harnessSnippet(harness));
     }
     console.log("");
@@ -282,8 +328,10 @@ async function runFlush(): Promise<void> {
   const runtime = createHookRuntime(runtimePaths(dir));
   await runtime.exporter?.flush();
   const status = runtime.exporter?.status();
+  runtime.exporter?.stop();
   console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
-  process.exit(status && status.pending > 0 ? 1 : 0);
+  // Let pending HTTP handles close normally (forced exit can abort on Windows).
+  process.exitCode = status && status.pending > 0 ? 1 : 0;
 }
 
 /** The absolute path to this CLI file, for registering the hook by absolute path. */
@@ -301,20 +349,24 @@ function runInstall(args: string[]): void {
   console.log(`  machine key    ${agentKid}`);
   console.log(`  policy         ${policyPath} (starter — edit the limits)`);
   console.log("");
-  const harnesses: Harness[] = args.includes("--cursor")
-    ? ["cursor"]
-    : args.includes("--claude") ? ["claude"] : (cursorDetected() ? ["claude", "cursor"] : ["claude"]);
+  const harnesses: Harness[] = args.includes("--codex") ? ["codex"]
+    : args.includes("--cursor") ? ["cursor"]
+    : args.includes("--claude") ? ["claude"]
+    : ["claude", ...(cursorDetected() ? ["cursor" as const] : []), ...(codexDetected() ? ["codex" as const] : [])];
   if (!args.includes("--no-install")) {
     for (const h of harnesses) {
-      const file = writeHarnessConfig(userHarnessFile(h), h, absoluteHookCommand(cliPath(), h));
-      console.log(`✓ ${h === "cursor" ? "Cursor" : "Claude Code"} configured in ${file}`);
+      try {
+        const file = writeHarnessConfig(userHarnessFile(h), h, absoluteHookCommand(cliPath(), h));
+        console.log(`✓ ${harnessName(h)} configured in ${file}`);
+      } catch (error) { console.error(`✗ ${harnessName(h)}: ${(error as Error).message}`); process.exitCode = 1; }
     }
   } else {
     console.log("Add this to your user-level agent config:");
     console.log(harnessSnippet(harnesses[0]));
   }
+  if (harnesses.includes("codex")) console.log(`\nOne last step for Codex: ${codexTrustStep}`);
   console.log("");
-  console.log("A project-local .scopebond still takes precedence when present.");
+  console.log(`A project's own .scopebond policy applies only after you trust it there (${cliCommand("trust")}).`);
   console.log(`Check it: ${cliCommand("doctor")} · see decisions: ${cliCommand("log")}`);
   console.log(`To send receipts to a workspace: ${cliCommand("connect <workspace-url> <enrollment>")}`);
 }
@@ -324,13 +376,17 @@ function runStatus(): void {
   const installed = existsSync(join(home, "policy.json"));
   const claude = isHarnessConfigured(userHarnessFile("claude"));
   const cursor = isHarnessConfigured(userHarnessFile("cursor"));
+  const codex = isHarnessConfigured(userHarnessFile("codex"));
   const connected = !!loadConnection(resolveConfigDir(process.cwd()));
   const dbPath = join(resolveConfigDir(process.cwd()), "receipts.db");
   console.log(`Scopebond hook ${hookVersion()}`);
   console.log(`  user home        ${home} ${installed ? "(installed)" : "(not installed — run `scopebond install`)"}`);
   console.log(`  active config    ${resolveConfigDir(process.cwd())}`);
-  console.log(`  Claude Code      ${claude ? "configured" : "not configured"}`);
+  const ignored = untrustedProjectPolicy(process.cwd());
+  if (ignored) console.log(`  project policy   ${ignored} ignored — not trusted (run \`${cliCommand("trust")}\` to use it)`);
+  console.log(`  Claude Code     ${claude ? "configured" : "not configured"}`);
   console.log(`  Cursor           ${cursor ? "configured" : cursorDetected() ? "detected, not configured" : "not detected"}`);
+  console.log(`  Codex            ${codex ? "configured (approve once with /hooks)" : codexDetected() ? "detected, not configured" : "not detected"}`);
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
   console.log(`  local receipts   ${existsSync(dbPath) ? dbPath : "none yet"}`);
 }
@@ -348,6 +404,11 @@ async function runDoctor(): Promise<void> {
   const hasPolicy = existsSync(join(active, "policy.json"));
   console.log(`  active config    ${active} ${hasPolicy ? "ok" : "no policy (run `scopebond install` or `init`)"}`);
   if (!hasPolicy) problems.push("no policy found in the active config dir");
+  const ignored = untrustedProjectPolicy(process.cwd());
+  if (ignored) console.log(`  project policy   ${ignored} IGNORED — not trusted (never trusted, or edited since). Review it, then \`${cliCommand("trust")}\``);
+  const codex = isHarnessConfigured(userHarnessFile("codex"));
+  console.log(`  Codex hook       ${codex ? "configured" : codexDetected() ? "not configured — run `scopebond install --codex`" : "not detected"}`);
+  if (codex) console.log(`  Codex approval   run /hooks in Codex and approve Scopebond once`);
   const connection = loadConnection(active);
   if (!connection) {
     console.log(`  cloud            not connected (local only) — receipts stay on this machine`);
@@ -360,17 +421,30 @@ async function runDoctor(): Promise<void> {
     console.log(`  cloud            ${connection.url} — ${reachable}`);
   }
   console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
-  process.exit(problems.length ? 1 : 0);
+  process.exitCode = problems.length ? 1 : 0;
 }
 
 function runUninstall(args: string[]): void {
+  requireInteractive("uninstall", args);
   let removed = 0;
-  for (const h of ["claude", "cursor"] as Harness[]) {
+  for (const h of ["claude", "cursor", "codex"] as Harness[]) {
     if (removeHarnessConfig(userHarnessFile(h))) { console.log(`✓ removed the Scopebond hook from ${userHarnessFile(h)}`); removed++; }
   }
   if (removed === 0) console.log("no user-level harness config found.");
   if (args.includes("--purge")) { purgeHome(); console.log(`✓ purged ${userHome()} (keys, policy, receipts)`); }
   else console.log(`Kept ${userHome()} (keys, policy, receipts). Use --purge to remove it too.`);
+}
+
+/** `trust` — let this project's .scopebond policy govern here instead of the user
+ *  home, pinned to its current contents. Run by the user, not the agent: the file it
+ *  writes lives in the user home, which the starter policy write-protects. */
+function runTrust(args: string[]): void {
+  requireInteractive("trust", args);
+  const dir = join(process.cwd(), ".scopebond");
+  if (!existsSync(join(dir, "policy.json"))) { console.error(`no project policy at ${join(dir, "policy.json")}`); process.exit(1); }
+  const digest = trustProjectPolicy(dir);
+  console.log(`✓ trusted ${join(dir, "policy.json")} (sha256 ${digest.slice(0, 12)}…)`);
+  console.log("It governs agents in this project until it changes; after any edit, review it and run trust again.");
 }
 
 function runLogin(): void {
@@ -383,6 +457,7 @@ function runLogin(): void {
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "claude") { await runClaude(); }
 else if (cmd === "cursor") { await runCursor(); }
+else if (cmd === "codex") { await runCodex(); }
 else if (cmd === "init") { runInit(rest); }
 else if (cmd === "install") { runInstall(rest); }
 else if (cmd === "connect") { await runConnect(rest); }
@@ -394,7 +469,8 @@ else if (cmd === "status") { runStatus(); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "uninstall") { runUninstall(rest); }
 else if (cmd === "login") { runLogin(); }
+else if (cmd === "trust") { runTrust(rest); }
 else {
-  console.error("usage: scopebond <claude|cursor|init|install|connect|log|verify|test|flush|status|doctor|uninstall|login> [--cursor] [--claude] [--force] [--strict] [--no-install] [--purge]");
+  console.error("usage: scopebond <claude|cursor|codex|init|install|connect|log|verify|test|flush|status|doctor|uninstall|login|trust> [--cursor] [--claude] [--codex] [--force] [--strict] [--no-install] [--purge] [--yes]");
   process.exit(1);
 }

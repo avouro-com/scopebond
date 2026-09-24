@@ -76,7 +76,8 @@
         { "$ref": "#/$defs/require_approval" },
         { "$ref": "#/$defs/sequence" },
         { "$ref": "#/$defs/oracle_condition" },
-        { "$ref": "#/$defs/key_policy" }
+        { "$ref": "#/$defs/key_policy" },
+        { "$ref": "#/$defs/force_push_guard" }
       ]
     },
     "spend_limit": {
@@ -233,6 +234,15 @@
         "active_keys": { "$ref": "#/$defs/nonEmptyStrings" },
         "rotation_delay": { "$ref": "#/$defs/duration" },
         "max_key_age": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "force_push_guard": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": {}, "mode": {}, "description": {},
+        "type": { "const": "force_push_guard" },
+        "protected_refs": { "$ref": "#/$defs/nonEmptyStrings" }
       }
     }
   }

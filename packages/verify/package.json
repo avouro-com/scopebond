@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/verify",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "scopebond-verify — the deterministic verdict library: violates(policy, receipts, claimed). The moat-bearing reference implementation.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
@@ -31,6 +31,14 @@
     ".": {
       "types": "./dist/violates.d.ts",
       "default": "./dist/violates.js"
+    },
+    "./signature": {
+      "types": "./dist/signature.d.ts",
+      "default": "./dist/signature.js"
+    },
+    "./anchor": {
+      "types": "./dist/anchor.d.ts",
+      "default": "./dist/anchor.js"
     }
   },
   "files": [

@@ -188,5 +188,41 @@
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "tx", "type": "spend_limit", "mode": "enforce", "asset": "USDC", "max_per_action": 1000000 }] },
     "claimed": { "intent": { "action_type": "data.read" }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
     "expect": { "violated": true }
+  },
+  {
+    "name": "force_push_guard: covered (monitored, executed force-push to a protected branch)",
+    "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"monitor"}]},
+    "claimed": {"intent":{"action_type":"git.push","params":{"force":true,"ref":"main"}},"executed":true,"realtime_result":"deny","timestamp":"2026-09-21T14:14:07Z"},
+    "expect": {"violated":true,"clause_id":"fpg"}
+  },
+  {
+    "name": "force_push_guard: prevented (enforce, force-push to main denied, not executed)",
+    "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"enforce"}]},
+    "claimed": {"intent":{"action_type":"git.push","params":{"force":true,"ref":"main"}},"executed":false,"realtime_result":"deny","timestamp":"2026-09-21T14:14:07Z"},
+    "expect": {"violated":false}
+  },
+  {
+    "name": "force_push_guard: ordinary push to a protected branch is allowed",
+    "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"enforce"}]},
+    "claimed": {"intent":{"action_type":"git.push","params":{"force":false,"ref":"main"}},"executed":true,"realtime_result":"allow","timestamp":"2026-09-21T14:14:07Z"},
+    "expect": {"violated":false}
+  },
+  {
+    "name": "force_push_guard: force-push to a feature branch is allowed",
+    "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"enforce"}]},
+    "claimed": {"intent":{"action_type":"git.push","params":{"force":true,"ref":"feature/checkout-fix"}},"executed":true,"realtime_result":"allow","timestamp":"2026-09-21T14:14:07Z"},
+    "expect": {"violated":false}
+  },
+  {
+    "name": "force_push_guard: custom protected_refs glob matches release/*",
+    "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"monitor","protected_refs":["release/*"]}]},
+    "claimed": {"intent":{"action_type":"git.push","params":{"force":true,"ref":"release/2026.09"}},"executed":true,"realtime_result":"deny","timestamp":"2026-09-21T14:14:07Z"},
+    "expect": {"violated":true,"clause_id":"fpg"}
+  },
+  {
+    "name": "force_push_guard: force-push with an unresolved ref fails closed",
+    "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"monitor"}]},
+    "claimed": {"intent":{"action_type":"git.push","params":{"force":true}},"executed":true,"realtime_result":"deny","timestamp":"2026-09-21T14:14:07Z"},
+    "expect": {"violated":true,"clause_id":"fpg"}
   }
 ]

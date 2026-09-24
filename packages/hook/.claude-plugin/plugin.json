@@ -1,7 +1,7 @@
 {
   "name": "scopebond",
   "description": "Scopebond checkpoint for Claude Code — blocks out-of-policy actions before they run and signs every decision into a tamper-evident receipt you can verify offline. Open source (Apache-2.0).",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": { "name": "Avouro LLC", "url": "https://scopebond.com" },
   "homepage": "https://scopebond.com",
   "repository": "https://github.com/avouro-com/scopebond",

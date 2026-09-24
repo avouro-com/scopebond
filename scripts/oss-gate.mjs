@@ -38,7 +38,7 @@ const ALLOW = [
   "README.md", "LICENSE", "NOTICE", "CHANGELOG.md",
   "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md",
   "GOVERNANCE.md", "MAINTAINERS.md", "SCOPE.md", "CLA.md", "RELEASING.md",
-  "CITATION.cff", "llms.txt", "architecture.svg",
+  "CITATION.cff", "llms.txt", "architecture.svg", "SPEC.md",
   ".claude-plugin/**",
   ".changeset/**",
   ".gitignore", ".gitattributes", ".editorconfig", ".nvmrc", ".node-version", ".npmrc",

@@ -209,6 +209,9 @@ const CLAUSE_VALIDATORS: Record<string, (c: Obj) => boolean> = {
     isNonEmptyStringArray(c.active_keys) &&
     (!("rotation_delay" in c) || isDuration(c.rotation_delay)) &&
     (!("max_key_age" in c) || isDuration(c.max_key_age)),
+  force_push_guard: (c) =>
+    onlyKeys(c, [...CLAUSE_BASE_KEYS, "protected_refs"]) &&
+    (!("protected_refs" in c) || isNonEmptyStringArray(c.protected_refs)),
 };
 
 function validateClause(c: unknown, index: number, errors: string[]): void {

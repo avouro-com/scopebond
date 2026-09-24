@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveConfigDir, writeHarnessConfig, removeHarnessConfig, isHarnessConfigured,
-  absoluteHookCommand, userHome,
+  absoluteHookCommand, userHome, trustProjectPolicy, untrustedProjectPolicy,
 } from "../dist/index.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -25,18 +25,46 @@ test("resolveConfigDir: explicit override wins", () => {
   });
 });
 
-test("resolveConfigDir: a scaffolded project dir beats the user home; a bare one does not", () => {
+test("resolveConfigDir: with a user install, a project policy governs only once trusted, and only as trusted", () => {
   const home = tmp(); const project = tmp();
   writeFileSync(join(home, "policy.json"), "{}");
   withEnv({ SCOPEBOND_HOOK_DIR: undefined, SCOPEBOND_HOME: home, CLAUDE_PROJECT_DIR: undefined }, () => {
-    // bare project (no .scopebond/policy.json) → falls through to the user home
+    // bare project (no .scopebond/policy.json) → the user home
     assert.equal(resolveConfigDir(project), home);
-    // scaffold the project → it now wins
+    // a project that brings its own policy (a cloned repo, or one the agent wrote) → still the user home
     mkdirSync(join(project, ".scopebond"), { recursive: true });
-    writeFileSync(join(project, ".scopebond", "policy.json"), "{}");
+    writeFileSync(join(project, ".scopebond", "policy.json"), '{"clauses":[]}');
+    assert.equal(resolveConfigDir(project), home, "an untrusted project policy must not override the user's");
+    assert.equal(untrustedProjectPolicy(project), join(project, ".scopebond"));
+    // the user trusts it → it governs
+    trustProjectPolicy(join(project, ".scopebond"));
+    assert.equal(resolveConfigDir(project), join(project, ".scopebond"));
+    assert.equal(untrustedProjectPolicy(project), null);
+    // it is rewritten afterwards (e.g. by the agent) → trust lapses, the user home governs again
+    writeFileSync(join(project, ".scopebond", "policy.json"), '{"clauses":[],"weakened":true}');
+    assert.equal(resolveConfigDir(project), home, "an edited policy is no longer trusted");
+  });
+  rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true });
+});
+
+test("resolveConfigDir: without a user install, a scaffolded project dir is used (per-project installs)", () => {
+  const home = tmp(); const project = tmp();
+  mkdirSync(join(project, ".scopebond"), { recursive: true });
+  writeFileSync(join(project, ".scopebond", "policy.json"), "{}");
+  withEnv({ SCOPEBOND_HOOK_DIR: undefined, SCOPEBOND_HOME: home, CLAUDE_PROJECT_DIR: undefined }, () => {
     assert.equal(resolveConfigDir(project), join(project, ".scopebond"));
   });
   rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true });
+});
+
+test("installers refuse to overwrite an agent config that is not valid JSON", () => {
+  const dir = tmp();
+  const file = join(dir, "settings.json");
+  const original = '{ "permissions": { "allow": ["Bash(npm test)"] }, // a comment makes this invalid\n}';
+  writeFileSync(file, original);
+  assert.throws(() => writeHarnessConfig(file, "claude", "node cli.js claude"), /not valid JSON/);
+  assert.equal(readFileSync(file, "utf8"), original, "the user's file is left unchanged");
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("resolveConfigDir: $CLAUDE_PROJECT_DIR is consulted when the payload cwd is bare", () => {
@@ -76,6 +104,22 @@ test("writeHarnessConfig preserves unrelated user config", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("writeHarnessConfig installs a Codex PreToolUse hook with a clear status", () => {
+  const dir = tmp(); const file = join(dir, "hooks.json");
+  writeHarnessConfig(file, "codex", absoluteHookCommand("/abs/cli.js", "codex"));
+  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(parsed.hooks.PreToolUse.length, 1);
+  assert.equal(parsed.hooks.PreToolUse[0].matcher, undefined, "no matcher means every Codex tool");
+  assert.match(parsed.hooks.PreToolUse[0].hooks[0].command, /cli\.js.* codex$/);
+  assert.equal(parsed.hooks.PreToolUse[0].hooks[0].statusMessage, "Checking this action with Scopebond");
+  assert.equal(parsed.hooks.PreToolUse[0].hooks[0].timeout, 30);
+  writeHarnessConfig(file, "codex", absoluteHookCommand("/abs/cli.js", "codex"));
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).hooks.PreToolUse.length, 1, "reinstall is idempotent");
+  removeHarnessConfig(file);
+  assert.equal(isHarnessConfigured(file), false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 // --- CLI end-to-end: install / status / doctor / uninstall against a temp HOME ---
 
 function runCli(args, env) {
@@ -104,7 +148,7 @@ test("install writes the user home + an absolute-path Claude hook, then uninstal
   const status = runCli(["status"], env);
   assert.match(status.stdout, /Claude Code\s+configured/);
 
-  const uninstall = runCli(["uninstall"], env);
+  const uninstall = runCli(["uninstall", "--yes"], env);
   assert.equal(uninstall.status, 0, uninstall.stdout);
   const after = JSON.parse(readFileSync(settings, "utf8"));
   assert.equal((after.hooks.PreToolUse ?? []).length, 0, "uninstall removes our entry");
@@ -121,6 +165,22 @@ test("doctor reports node ok and finds the installed policy", () => {
   assert.equal(doctor.status, 0, doctor.stdout);
   assert.match(doctor.stdout, /node\s+\d+\.\d+\.\d+ ok/);
   assert.match(doctor.stdout, /All good\./);
+  rmSync(home, { recursive: true, force: true }); rmSync(sbHome, { recursive: true, force: true });
+});
+
+test("install --codex writes ~/.codex/hooks.json and explains the one approval step", () => {
+  const home = tmp(); const sbHome = join(tmp(), ".scopebond");
+  const env = { HOME: home, USERPROFILE: home, SCOPEBOND_HOME: sbHome };
+  const install = runCli(["install", "--codex"], env);
+  assert.equal(install.status, 0, install.stdout);
+  const hooks = join(home, ".codex", "hooks.json");
+  assert.ok(existsSync(hooks));
+  assert.match(install.stdout, /run `\/hooks`/i);
+  assert.match(install.stdout, /choose Trust/i);
+  const status = runCli(["status"], env);
+  assert.match(status.stdout, /Codex\s+configured/);
+  runCli(["uninstall", "--yes"], env);
+  assert.equal(JSON.parse(readFileSync(hooks, "utf8")).hooks.PreToolUse.length, 0);
   rmSync(home, { recursive: true, force: true }); rmSync(sbHome, { recursive: true, force: true });
 });
 

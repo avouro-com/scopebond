@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/gateway",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Scopebond Gateway — a policy-enforcement proxy for AI agents: prevent (deny out-of-policy, fail closed), prove (Ed25519-countersigned scopebond:receipts), kill switch. HTTP + MCP ingress on Hono.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
@@ -52,7 +52,7 @@
   "dependencies": {
     "@scopebond/policy-schema": "workspace:^",
     "@scopebond/verify": "workspace:*",
-    "hono": "^4.6.0",
+    "hono": "^4.13.8",
     "@hono/node-server": "^1.13.0"
   },
   "publishConfig": {

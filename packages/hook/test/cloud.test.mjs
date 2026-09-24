@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { verify } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import { canonical, verifyReceipt } from "@scopebond/gateway";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,7 +43,7 @@ test("installHarness merges the hook into the agent config, idempotently and pre
 // enrolling attester's kid; /v1/ingest records the receipts it receives. This
 // exercises the connector's real HTTP client path (enroll + durable export) over
 // localhost, without the full Cloud Worker.
-function startFakeCloud(attesterKid) {
+function startFakeCloud(attester, agent) {
   const ingested = [];
   let authSeen = null;
   const server = http.createServer((req, res) => {
@@ -50,11 +55,15 @@ function startFakeCloud(attesterKid) {
         assert.ok(typeof parsed.enrollment_token === "string", "enroll: token");
         assert.ok(typeof parsed.public_key_pem === "string", "enroll: public key");
         assert.ok(typeof parsed.signature === "string", "enroll: signature");
+        const proof = canonical({ ...JSON.parse(canonicalProof), agent_public_key_pem: agent.publicKeyPem.trim() });
+        assert.equal(parsed.agent_public_key_pem, agent.publicKeyPem.trim());
+        assert.ok(verify(null, Buffer.from(proof), attester.publicKeyPem, Buffer.from(parsed.signature, "base64url")));
+        assert.ok(verify(null, Buffer.from(proof), agent.publicKeyPem, Buffer.from(parsed.agent_signature, "base64url")));
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({
           credential_id: "cred-1", credential: "sbm_test_credential",
           organization_id: "org-1", environment_id: "env-1", gateway_id: "gw-1",
-          attester_kid: attesterKid, scopes: ["ingest"], expires_at: "2027-01-01T00:00:00.000Z",
+          attester_kid: attester.kid, agent_kid: agent.kid, scopes: ["receipt:ingest"], expires_at: "2027-01-01T00:00:00.000Z",
         }));
         return;
       }
@@ -66,6 +75,7 @@ function startFakeCloud(attesterKid) {
         res.end(JSON.stringify({ ok: true }));
         return;
       }
+      if (req.url === "/healthz") { res.writeHead(200); res.end("ok"); return; }
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "not found" }));
     });
@@ -96,7 +106,8 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
   scaffold(dir);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
   const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
-  const cloud = await startFakeCloud(attester.kid);
+  const { attester: agent } = loadOrCreateAttester({ file: join(dir, "agent.key") });
+  const cloud = await startFakeCloud(attester, agent);
   try {
     // connect: enroll and persist the connection.
     const connection = await connectCloud(dir, cloud.url, bundle);
@@ -123,6 +134,31 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
     assert.ok(cloud.ingested.length >= 2, `expected >= 2 ingested receipts, got ${cloud.ingested.length}`);
     const results = cloud.ingested.map((r) => r.payload?.realtime_result);
     assert.ok(results.includes("deny"), "the denied action was exported");
+    for (const receipt of cloud.ingested) {
+      const result = verifyReceipt(receipt, attester.publicKeyPem, [{ kid: agent.kid, purposes: ["agent"], publicKeyPem: agent.publicKeyPem, status: "active" }]);
+      assert.equal(result.fully_valid, true, JSON.stringify(result));
+    }
+    // Network-backed diagnostics must exit normally, including on Windows.
+    const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+    for (const command of ["doctor", "flush"]) {
+      const result = await promisify(execFile)(process.execPath, [cli, command], {
+        env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, timeout: 15_000,
+      });
+      assert.doesNotMatch(result.stderr, /Assertion failed/);
+      assert.match(result.stdout, command === "doctor" ? /All good/ : /0 receipt\(s\) still pending/);
+    }
+    const child = (input) => new Promise((resolve) => {
+      const proc = execFile(process.execPath, [cli, "claude"], {
+        env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, timeout: 15_000,
+      }, (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }));
+      proc.stdin.end(JSON.stringify(input));
+    });
+    const allowed = await child({ tool_name: "Read", tool_input: { file_path: "/repo/app.ts" } });
+    assert.equal(allowed.code, 0, allowed.stderr);
+    const blocked = await child({ tool_name: "Bash", tool_input: { command: "git push origin main" } });
+    assert.equal(blocked.code, 2, blocked.stderr);
+    assert.equal(JSON.parse(blocked.stdout).hookSpecificOutput.permissionDecision, "deny");
+    runtime.exporter.stop();
   } finally {
     cloud.close();
   }
