@@ -9,6 +9,7 @@
     "@scopebond/github-action": "workspace:*",
     "@scopebond/hook": "workspace:*",
     "@scopebond/mcp": "workspace:*",
-    "@scopebond/sdk": "workspace:*"
+    "@scopebond/sdk": "workspace:*",
+    "@scopebond/verify": "workspace:*"
   }
 }
