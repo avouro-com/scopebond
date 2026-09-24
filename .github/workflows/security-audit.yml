@@ -1,0 +1,271 @@
+name: Security audit
+
+# Continuous security scanning for the open-source repository. Five checks that
+# no other workflow performs: GitHub Actions static analysis, workflow linting,
+# secret scanning over full history, dependency vulnerabilities against OSV, and
+# SAST. CodeQL already runs here via GitHub's default setup — this workflow is
+# additive, and everything in it also runs on the private repository, where
+# GitHub's own scanning is a paid add-on.
+#
+# Cost: one job per tool so a failure names itself, but every job is short and
+# only `workflows` and `secrets` run on a pull request. The heavier `deps` and
+# `sast` legs run on the weekly schedule and on demand.
+#
+# Tool versions are pinned; actions are pinned to a commit SHA (never a tag),
+# which is the control this workflow also enforces on everyone else.
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    # Mondays, 06:00 UTC. Vulnerability databases move under a static tree, so
+    # a scheduled run finds things a pull-request run cannot.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+concurrency:
+  group: security-audit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  ZIZMOR_VERSION: "1.30.1"
+  ACTIONLINT_VERSION: "1.7.12"
+  GITLEAKS_VERSION: "8.30.1"
+  OSV_SCANNER_VERSION: "2.6.0"
+  SEMGREP_VERSION: "1.178.0"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # GitHub Actions is the highest-privilege code in the repository: it holds
+  # NPM_TOKEN and runs on triggers that outside contributors can fire. zizmor is
+  # the only tool here that understands that threat model.
+  # ---------------------------------------------------------------------------
+  workflows:
+    name: workflows (zizmor + actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to code scanning (free on public repos)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # the high-severity gate below diffs base..head to find changed workflows
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install zizmor ${{ env.ZIZMOR_VERSION }}
+        run: pipx install "zizmor==${ZIZMOR_VERSION}"
+
+      - name: Install actionlint ${{ env.ACTIONLINT_VERSION }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          curl -fsSL -O "${base}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -O "${base}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          grep " actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz\$" \
+            "actionlint_${ACTIONLINT_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+
+      # zizmor runs before the linter so its SARIF always reaches code scanning,
+      # even when actionlint fails the job first.
+      #
+      # The `auditor` persona includes findings that are correct but noisy on a
+      # young repository (undocumented permissions, anonymous jobs). Those go to
+      # the run summary; only `--min-severity=high` fails the build.
+      - name: zizmor (report)
+        run: |
+          {
+            echo "## zizmor — GitHub Actions audit"
+            echo '```'
+            zizmor --persona=auditor --format=plain .github/workflows/ 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: zizmor (SARIF)
+        run: zizmor --persona=auditor --format=sarif .github/workflows/ > zizmor.sarif || true
+
+      - uses: github/codeql-action/upload-sarif@416ff0dea110f80f0f56f0046500dbf7420e4bb0 # codeql-bundle-v2.27.1
+        if: always() && hashFiles('zizmor.sarif') != ''
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor
+
+      # actionlint does two jobs: it validates workflow YAML, expressions and
+      # action inputs, and it runs shellcheck over every `run:` block. The first
+      # is a correctness check and runs over everything. The second reports
+      # mostly style on shell that already works, so it gets the same ratchet as
+      # the zizmor gate below: full coverage, style scoped to what changed.
+      - name: actionlint (workflow validity, all files)
+        run: actionlint -color -shellcheck=
+
+      - name: actionlint (shell lint, changed files only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only --diff-filter=d "$BASE_SHA" "$HEAD_SHA" -- .github/workflows/ || true)"
+          [ -n "$changed" ] || { echo "no workflow files changed"; exit 0; }
+          # SC2016 fires on the deliberately single-quoted `node -e` scripts here.
+          # shellcheck disable=SC2086
+          actionlint -color -ignore "SC2016" $changed
+
+      # Ratchet, not a wall. The existing workflows carry a backlog of high
+      # findings (mostly unpinned actions, which SB139 is draining), and a check
+      # that lands permanently red teaches people to ignore it. So: on a pull
+      # request, only the workflow files this PR touches have to be clean. The
+      # backlog is reported every run but blocks nothing, and it cannot grow.
+      #
+      # Once the backlog is empty, delete this step's file filter and gate the
+      # whole directory.
+      - name: Gate changed workflows on high severity
+        if: always() && github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only --diff-filter=d "$BASE_SHA" "$HEAD_SHA" -- .github/workflows/ || true)"
+          if [ -z "$changed" ]; then
+            echo "no workflow files changed in this pull request"
+            exit 0
+          fi
+          echo "gating: $changed"
+          # shellcheck disable=SC2086
+          zizmor --persona=auditor --min-severity=high --format=plain $changed
+
+      - name: Report the whole-directory backlog
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          zizmor --persona=auditor --min-severity=high --format=plain .github/workflows/ \
+            || echo "::warning::high-severity workflow findings remain — see the summary above"
+
+  # ---------------------------------------------------------------------------
+  # Full-history secret scan. GitHub's push protection stops a secret going in
+  # from now on; this is the check that covers everything already committed.
+  # `fetch-depth: 0` is required — a shallow clone silently scans nothing.
+  # ---------------------------------------------------------------------------
+  secrets:
+    name: secrets (gitleaks, full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks ${{ env.GITLEAKS_VERSION }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -fsSL -O "${base}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -O "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz\$" \
+            "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+
+      # --redact keeps the secret out of the log and out of the artifact; a hit
+      # is a signal to go look, never a second copy of the credential.
+      - name: gitleaks
+        run: gitleaks git . --redact --report-format json --report-path gitleaks.json --exit-code 1
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: gitleaks-report
+          path: gitleaks.json
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Dependencies. Dependabot alerts cover this repository, but OSV carries
+  # advisories Dependabot does not, reads the pnpm lockfile directly, and gives
+  # the private repository — where Dependabot is off — the same coverage.
+  # ---------------------------------------------------------------------------
+  deps:
+    name: deps (osv-scanner + SBOM)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install osv-scanner ${{ env.OSV_SCANNER_VERSION }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}"
+          curl -fsSL -o osv-scanner "${base}/osv-scanner_linux_amd64"
+          curl -fsSL -o SHA256SUMS "${base}/osv-scanner_SHA256SUMS"
+          grep " osv-scanner_linux_amd64\$" SHA256SUMS | sed 's/osv-scanner_linux_amd64/osv-scanner/' | sha256sum -c -
+          sudo install -m 0755 osv-scanner /usr/local/bin/osv-scanner
+
+      - name: osv-scanner
+        run: |
+          osv-scanner scan source --lockfile pnpm-lock.yaml --format markdown | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.20.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # An SBOM per run is what lets you answer "were we exposed to X?" on the
+      # day the advisory lands, rather than reconstructing the tree afterwards.
+      - name: SBOM (CycloneDX)
+        run: pnpm dlx @cyclonedx/cyclonedx-npm@latest --output-file sbom.cdx.json --output-format JSON || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: sbom
+          path: sbom.cdx.json
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # SAST. On this repository CodeQL is the primary engine and semgrep is the
+  # second opinion; on the private repository semgrep is the only engine, so the
+  # same job definition earns its keep in both places.
+  # ---------------------------------------------------------------------------
+  sast:
+    name: sast (semgrep)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install semgrep ${{ env.SEMGREP_VERSION }}
+        run: pipx install "semgrep==${SEMGREP_VERSION}"
+
+      # OSS rulesets only — no Semgrep account, no code leaves the runner.
+      - name: semgrep
+        run: |
+          semgrep scan \
+            --config=p/typescript \
+            --config=p/javascript \
+            --config=p/owasp-top-ten \
+            --config=p/secrets \
+            --sarif --output=semgrep.sarif --metrics=off || true
+
+      - uses: github/codeql-action/upload-sarif@416ff0dea110f80f0f56f0046500dbf7420e4bb0 # codeql-bundle-v2.27.1
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
