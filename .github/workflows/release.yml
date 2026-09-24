@@ -42,7 +42,7 @@ jobs:
         run: |
           git config user.name "avourohq"
           git config user.email "founder@avouro.com"
-      - uses: changesets/action@v1
+      - uses: changesets/action@v2
         with:
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
           setupGitUser: false
