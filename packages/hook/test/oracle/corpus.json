@@ -1230,5 +1230,57 @@
   {
     "category": "benign",
     "command": "git config --get user.email"
+  },
+  {
+    "category": "benign",
+    "command": "git commit -m \"$(cat <<'EOF'\nTruncate the retry window\n\nrm the stale lockfile handling\nEOF\n)\""
+  },
+  {
+    "category": "benign",
+    "command": "gh pr create --title x --body \"$(cat <<'EOF'\nFormat the output nicely\nUnlink is mentioned here\nEOF\n)\" 2>/dev/null || echo skip"
+  },
+  {
+    "category": "benign",
+    "command": "cat <<'EOF' > notes/todo.txt\nrm -rf everything (just a note)\nEOF"
+  },
+  {
+    "category": "benign",
+    "command": "cat <<-EOF\n\tindented body line\nEOF"
+  },
+  {
+    "category": "benign",
+    "command": "curl -s -X POST http://example.test/x -d '{\"a\":1,\"b\":[2,3]}'"
+  },
+  {
+    "category": "benign",
+    "command": "curl --json '{\"k\":\"v\"}' http://example.test"
+  },
+  {
+    "category": "benign",
+    "command": "curl -H 'Content-Type: application/json' --data-raw '{\"env\":\".env\"}' http://example.test"
+  },
+  {
+    "category": "benign",
+    "command": "wget --post-data 'name={a,b}' http://example.test -O out.txt"
+  },
+  {
+    "category": "benign",
+    "command": "chmod 0755 src/index.js"
+  },
+  {
+    "category": "benign",
+    "command": "chmod u+x,g+r src/index.js"
+  },
+  {
+    "category": "benign",
+    "command": "chown root:wheel src/index.js 2>/dev/null || echo skip"
+  },
+  {
+    "category": "benign",
+    "command": "node -e \"console.log('edit your .env file to configure')\""
+  },
+  {
+    "category": "benign",
+    "command": "python3 -c \"print('put secrets in .env, not in code')\""
   }
 ]
