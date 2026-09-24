@@ -28,6 +28,8 @@ jobs:
         run: pnpm run test:package
       - name: Run examples as a smoke (decisions asserted)
         run: pnpm run test:examples
+      - name: Test repo scripts (scope-review sanitizer, etc.)
+        run: pnpm run test:scripts
 
   install-matrix:
     name: "install (${{ matrix.os }}, node ${{ matrix.node }})"
