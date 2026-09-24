@@ -45,24 +45,30 @@ export interface Decision {
 const ci = (s: string): string => s.replace(/[A-Za-z]/g, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
 const under = (dir: string): string => `(?!(?:.*/)?${ci(dir)}(?:/|$))`;    // dir itself or anything inside it
 const named = (file: string): string => `(?!(?:.*/)?${ci(file)}$)`;         // exactly this file name
+const dir = (d: string): string => `(?!(?:.*/)?${ci(d)}/?$)`;               // the directory itself (a recursive read or copy)
 
 const PROTECTED_WRITE = "^" + [
-  under("\\.scopebond"), `(?!(?:.*/)?${ci("\\.claude/settings")})`, `(?!(?:.*/)?${ci("\\.cursor/hooks")})`,
-  named("\\.codex/hooks\\.json"), named("\\.codex/config\\.toml"),
+  under("\\.scopebond"), `(?!(?:.*/)?${ci("\\.claude/settings")})`, under("\\.claude/hooks"), under("\\.claude/agents"),
+  `(?!(?:.*/)?${ci("\\.cursor/hooks")})`, named("\\.codex/hooks\\.json"), named("\\.codex/config\\.toml"), named("\\.mcp\\.json"),
   under("\\.git/hooks"), named("\\.git/config"), under("\\.husky"),
-  under("\\.github/workflows"), under("\\.github/actions"), named("\\.gitlab-ci\\.yml"), under("\\.circleci"),
+  under("\\.github/workflows"), under("\\.github/actions"), named("\\.gitlab-ci\\.yml"), named("\\.gitlab-ci\\.yaml"), under("\\.circleci"),
   named("azure-pipelines\\.yml"), named("Jenkinsfile"),
 ].join("") + ".+";
 
 const PROTECTED_READ = "^" + [
   under("\\.scopebond"),
   `(?!.*${ci("\\.(?:key|pem|p12|pfx|jks|keystore)")}$)`,
-  `(?!(?:.*/)?${ci("\\.env")}(?:\\.(?!${ci("example")}$|${ci("sample")}$|${ci("template")}$)[^/]*)?$)`, named("\\.envrc"),
-  // Credentials outside the workspace that an agent can reach by absolute or ~ path.
-  `(?!(?:.*/)?${ci("\\.ssh")}/(?!.*${ci("\\.pub")}$)(?!${ci("known_hosts")}$)(?!${ci("config")}$))`,
-  named("\\.aws/credentials"), named("\\.npmrc"), named("\\.pypirc"), named("\\.netrc"), named("_netrc"),
-  named("\\.git-credentials"), named("\\.kube/config"), named("\\.docker/config\\.json"),
-  under("\\.config/gcloud"), under("\\.azure"),
+  // .env, .env.* — except templates whose name ends in .example/.sample/.template/.dist
+  `(?!(?:.*/)?${ci("\\.env")}(?!(?:\\.[^/]*)?\\.(?:${ci("example")}|${ci("sample")}|${ci("template")}|${ci("dist")})$)(?:\\.[^/]*)?$)`,
+  named("\\.envrc"),
+  // Credentials outside the workspace that an agent can reach by absolute or ~ path,
+  // and their directories as a whole (`cp -r ~/.ssh`, `grep -r x ~/.aws`).
+  `(?!(?:.*/)?${ci("\\.ssh")}(?:$|/(?!.*${ci("\\.pub")}$)(?!${ci("known_hosts")}$)(?!${ci("config")}$)))`,
+  `(?!(?:.*/)?${ci("\\.aws")}(?:$|/(?!${ci("config")}$)))`,
+  named("\\.npmrc"), named("\\.pypirc"), named("\\.netrc"), named("_netrc"), named("\\.git-credentials"),
+  dir("\\.kube"), named("\\.kube/config"), dir("\\.docker"), named("\\.docker/config\\.json"),
+  under("\\.config/gcloud"), under("\\.azure"), under("\\.gnupg"),
+  dir("\\.config/gh"), named("\\.config/gh/hosts\\.yml"), named("\\.claude/\\.credentials\\.json"),
 ].join("") + ".+";
 
 // Destructive programs, POSIX and Windows. The mapper records the program as typed,
@@ -73,9 +79,11 @@ const DESTRUCTIVE = [
 ];
 const SAFE_SHELL = `^(?!(?:${DESTRUCTIVE.map(ci).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?$).+`;
 
-// A push destination the starter policy refuses: main, master, release/*, and the
-// "every branch" flags (`--all`, `--mirror`, `--branches`), in any case.
-const SAFE_REF = `^(?!(?:${ci("main")}|${ci("master")})$)(?!${ci("release")}/)(?!-).+`;
+// A push destination the starter policy refuses: main, master, release/*, the
+// "every branch" flags (`--all`, `--mirror`, `--branches`) and a push whose
+// destination the mapper could not read (`--unknown`: a git alias, a configured push
+// refspec, `send-pack`), in any case. `--tags` alone pushes only tags and is allowed.
+const SAFE_REF = `^(?!(?:${ci("main")}|${ci("master")})$)(?!${ci("release")}/)(?!-(?!-${ci("tags")}$)).+`;
 
 // Patterns written by earlier starter policies (0.3–0.5), upgraded in memory when a
 // policy on disk still carries them verbatim. An operator's own edits never match
@@ -115,22 +123,22 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
       {
         id: "protect-branches", type: "action_allowlist", mode: "enforce", action_types: ["git.push"],
         param_bounds: { ref: { pattern: SAFE_REF } },
-        description: "Deny pushes to main, master and release/* (any case, any refspec spelling) and pushes of every branch at once (--all, --mirror).",
+        description: "Deny pushes to main, master and release/* (any case, any refspec spelling), pushes of every branch at once (--all, --mirror) and pushes whose destination cannot be read from the command (a git alias, a configured push refspec, send-pack). A tags-only push (--tags) is allowed.",
       },
       {
         id: "safe-shell", type: "action_allowlist", mode: "enforce", action_types: ["shell.exec"],
         param_bounds: { program: { pattern: SAFE_SHELL } },
-        description: "Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. An empty program (an unparseable command) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.",
+        description: "Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.",
       },
       {
         id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
         param_bounds: { path: { pattern: PROTECTED_WRITE } },
-        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code, Cursor or Codex hook settings, git hooks and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml, .circleci, azure-pipelines.yml, Jenkinsfile). Case-insensitive.",
+        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor or Codex hook settings, .mcp.json, git hooks and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines.yml, Jenkinsfile). Case-insensitive.",
       },
       {
         id: "protect-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
         param_bounds: { path: { pattern: PROTECTED_READ } },
-        description: "Allow workspace reads, but never signing keys and key containers (*.key, *.pem, *.p12, *.pfx, *.jks), environment secret files (.env, .env.*, .envrc — except .env.example/.sample/.template), SSH private keys, cloud/registry/git credentials (.aws/credentials, .npmrc, .pypirc, .netrc, .git-credentials, .kube/config, .docker/config.json, gcloud, Azure) or the hook's own .scopebond directory. Case-insensitive.",
+        description: "Allow workspace reads, but never signing keys and key containers (*.key, *.pem, *.p12, *.pfx, *.jks), environment secret files (.env, .env.*, .envrc — except names ending in .example/.sample/.template/.dist), SSH private keys and the .ssh directory, cloud/registry/git credentials (.aws except .aws/config, .npmrc, .pypirc, .netrc, .git-credentials, .kube/config, .docker/config.json, gcloud, Azure, GnuPG, the GitHub CLI's hosts.yml, Claude Code's .credentials.json) or the hook's own .scopebond directory. Case-insensitive.",
       },
       {
         id: "observe-net-mcp", type: "action_allowlist", mode: "monitor",

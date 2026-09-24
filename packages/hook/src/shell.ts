@@ -6,8 +6,9 @@
 // one of them is out of policy.
 //
 // It is best-effort and fail-safe: anything it cannot parse with confidence is
-// returned as a single `opaque` command, which the caller denies (strict) or
-// observes (non-strict) rather than trusting. Every scan is linear in the input
+// returned as a single `opaque` command (as is a command whose program is only known
+// at run time), which the mapper records with an empty program so the starter policy
+// denies it rather than trusting it. Every scan is linear in the input
 // length with no backtracking, so a hostile command cannot stall the hot path.
 
 export interface Redirect {
@@ -73,8 +74,14 @@ function splitTopLevel(src: string): { segments: string[]; unbalanced: boolean }
     if (c === "(") { paren++; cur += c; continue; }
     if (c === ")") { if (paren > 0) paren--; cur += c; continue; }
     if (paren > 0) { cur += c; continue; }
-    // `&>file`, `2>&1`, `<&3` and `>|file` are redirections, not separators.
     const prev = src[i - 1];
+    // An unquoted `#` at the start of a word begins a comment that runs to the end of
+    // the line (`rm -rf x # don't` must not read as an unbalanced quote).
+    if (c === "#" && (prev === undefined || /[\s;&|()]/.test(prev))) {
+      while (i + 1 < src.length && src[i + 1] !== "\n") i++;
+      continue;
+    }
+    // `&>file`, `2>&1`, `<&3` and `>|file` are redirections, not separators.
     if (c === "&" && (n === ">" || prev === ">" || prev === "<")) { cur += c; continue; }
     if (c === "|" && prev === ">") { cur += c; continue; }
     if (c === ";" || c === "\n") { flush(); continue; }
@@ -87,44 +94,53 @@ function splitTopLevel(src: string): { segments: string[]; unbalanced: boolean }
   return { segments, unbalanced: quote !== null || paren !== 0 || backtick };
 }
 
+/** What a command substitution leaves behind in the outer command: a parameter
+ *  expansion, so the word it sat in is treated as unresolved (its value is only known
+ *  at run time) — as a program name it is dynamic, as a path it is glob-tested. */
+const SUBST = "${__sb_subst}";
+
 /** Pull the contents of command substitutions and subshell groups out of one
- *  segment — `$( … )`, `` ` … ` ``, and a leading `( … )` — for recursion, and
- *  return the segment with those regions blanked so the outer command tokenizes
- *  cleanly. */
+ *  segment — `$( … )` and `` ` … ` `` (also inside double quotes, where the shell
+ *  still runs them) and `( … )` groups — for recursion. A substitution is replaced
+ *  by a placeholder expansion; a group is blanked, except an empty `()` (a function
+ *  definition), which is kept. */
 function extractSubstitutions(seg: string): { outer: string; inner: string[] } {
   const inner: string[] = [];
   let outer = "";
   let quote: '"' | "'" | null = null;
+  const group = (start: number): number => {
+    let depth = 1;
+    let j = start;
+    for (; j < seg.length && depth > 0; j++) {
+      if (seg[j] === "(") depth++;
+      else if (seg[j] === ")") depth--;
+    }
+    inner.push(seg.slice(start, depth === 0 ? j - 1 : j));
+    return j - 1;
+  };
   for (let i = 0; i < seg.length; i++) {
     const c = seg[i];
     const n = seg[i + 1];
-    if (quote) {
-      outer += c;
-      if (quote === "'") { if (c === "'") quote = null; }
-      else if (c === "\\" && n !== undefined) outer += seg[++i];
-      else if (c === '"') quote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') { quote = c; outer += c; continue; }
+    if (quote === "'") { outer += c; if (c === "'") quote = null; continue; }
     if (c === "`") {
       const end = seg.indexOf("`", i + 1);
       if (end === -1) { outer += c; continue; }
       inner.push(seg.slice(i + 1, end));
+      outer += SUBST;
       i = end;
       continue;
     }
-    if ((c === "$" && n === "(") || c === "(") {
-      const start = c === "(" ? i + 1 : i + 2;
-      let depth = 1;
-      let j = start;
-      for (; j < seg.length && depth > 0; j++) {
-        if (seg[j] === "(") depth++;
-        else if (seg[j] === ")") depth--;
-      }
-      inner.push(seg.slice(start, depth === 0 ? j - 1 : j));
-      i = j - 1;
+    if (c === "$" && n === "(") { i = group(i + 2); outer += SUBST; continue; }
+    if (quote === '"') {
+      outer += c;
+      if (c === "\\" && n !== undefined) outer += seg[++i];
+      else if (c === '"') quote = null;
       continue;
     }
+    if (c === "'" || c === '"') { quote = c; outer += c; continue; }
+    if (c === "\\" && n !== undefined) { outer += c + seg[++i]; continue; }
+    if (c === "(" && n === ")") { outer += "()"; i++; continue; }
+    if (c === "(") { i = group(i + 1); continue; }
     outer += c;
   }
   return { outer, inner };
@@ -197,35 +213,158 @@ function splitRedirects(tokens: Token[]): { words: string[]; redirects: Redirect
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
 const isAssignment = (t: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(t);
 
-// Wrappers that run the rest of their argv as a command. `busybox` and `doas` run
-// an applet/command given as the next word, like `sudo`.
-const WRAPPERS = new Set(["sudo", "doas", "env", "command", "nohup", "nice", "time", "exec", "stdbuf", "setsid", "xargs", "busybox", "timeout", "ionice", "chrt", "taskset", "caffeinate"]);
+/** How a wrapper's own options are spelled, so its option VALUES are never mistaken
+ *  for the command it runs (`time -p rm` has no value; `sudo -iu root rm` does).
+ *  `short`: letters that take a value (attached `-uroot` or the next word); `optional`:
+ *  letters whose value can only be attached (`xargs -i{}`); `long`: long options that
+ *  take the next word; `lead`: a leading operand consumed before the command
+ *  (`timeout 5`); `write`/`read`: options whose value is a file written or read. */
+interface WrapperSpec { short?: string; optional?: string; long?: string[]; lead?: RegExp; write?: string[]; read?: string[] }
+const DURATION = /^[\d.]+[smhd]?$/i;
+const WRAPPERS = new Map<string, WrapperSpec>([
+  ["sudo", { short: "ugCDhpRrTtU", long: ["--user", "--group", "--close-from", "--chdir", "--prompt", "--chroot", "--role", "--type", "--command-timeout", "--other-user", "--host"] }],
+  ["doas", { short: "uCa" }],
+  ["pkexec", { long: ["--user"] }],
+  ["env", { short: "uCSPa", long: ["--unset", "--chdir", "--split-string", "--argv0"] }],
+  ["command", {}],
+  ["builtin", {}],
+  ["nohup", {}],
+  ["nice", { short: "n", long: ["--adjustment"] }],
+  ["time", { short: "fo", long: ["--format", "--output"], write: ["-o", "--output"] }],
+  ["exec", { short: "a" }],
+  ["stdbuf", { short: "ioe", long: ["--input", "--output", "--error"] }],
+  ["setsid", {}],
+  ["xargs", { short: "ILnPsdEa", optional: "iel", long: ["--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars", "--process-slot-var"], read: ["-a", "--arg-file"] }],
+  ["busybox", {}],
+  ["timeout", { short: "sk", long: ["--signal", "--kill-after"], lead: DURATION }],
+  ["gtimeout", { short: "sk", long: ["--signal", "--kill-after"], lead: DURATION }],
+  ["ionice", { short: "cnp", long: ["--class", "--classdata", "--pid"] }],
+  ["chrt", { short: "TPD", long: ["--sched-runtime", "--sched-period", "--sched-deadline"], lead: /^\d+$/ }],
+  ["taskset", { lead: /^(?:0x[0-9a-f]+|[\d,-]+)$/i }],
+  ["caffeinate", { short: "wt" }],
+  ["strace", { short: "abeEIoOpPsSuX", long: ["--output", "--trace", "--signal", "--status", "--attach", "--string-limit", "--user", "--env"], write: ["-o", "--output"] }],
+  ["ltrace", { short: "aADeFlnopsuxw", long: ["--output", "--library"], write: ["-o", "--output"] }],
+  ["chroot", { long: ["--userspec", "--groups"], lead: /^[^-]/ }],
+  ["unbuffer", {}],
+  ["catchsegv", {}],
+  ["torsocks", { short: "uapP" }],
+  ["proxychains", { short: "f" }],
+  ["proxychains4", { short: "f" }],
+]);
 
-/** Strip a leading run of `sudo`, `env`, `command`, `nohup`, `nice`, `time`,
- *  `xargs`, `exec`, `busybox`, `timeout` … wrappers and `NAME=value` assignments, so
- *  the program is the real one about to run. `env`/`xargs` consume their own
- *  following words as the command, which is handled by simply dropping the wrapper. */
-function stripPrefixes(tokens: string[]): string[] {
+// Shell reserved words and grouping in command position. They run nothing themselves;
+// the command after them is the real one (`if rm …`, `then rm …`, `{ rm …`, `! rm …`).
+const KEYWORDS = new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "{", "}", "!", "coproc", "esac"]);
+
+interface Wrapper { name: string; raw: string; redirects: Redirect[] }
+
+/** Words of a string as the shell would split it (quotes honored, operators dropped). */
+const words = (s: string): string[] => tokenize(s).filter((t) => !t.op).map((t) => t.t);
+
+/** Strip the leading shell keywords, `NAME=value` assignments and wrappers (`sudo`,
+ *  `env`, `time`, `xargs`, `timeout`, `strace` …, each with its own option arity) so
+ *  the program is the real one about to run. `env -S "…"` splits its string into the
+ *  command. Returns the remaining words and the wrappers passed on the way. */
+function stripPrefixes(input: string[]): { tokens: string[]; wrappers: Wrapper[] } {
+  let tokens = input;
+  const wrappers: Wrapper[] = [];
   let i = 0;
-  while (i < tokens.length) {
+  for (let guard = 0; i < tokens.length && guard < 1000; guard++) {
     const t = tokens[i];
     if (isAssignment(t)) { i++; continue; }
-    const w = canonProgram(t);
-    if (WRAPPERS.has(w)) {
-      i++;
-      // `sudo -u user`, `nice -n 10`, `env -i` … skip option words and their args.
-      while (i < tokens.length && tokens[i].startsWith("-")) {
-        const opt = tokens[i];
-        i++;
-        if (/^-[unCkspg]$/.test(opt) && i < tokens.length && !tokens[i].startsWith("-")) i++;
-      }
-      // `timeout 5 cmd`, `taskset 0x1 cmd`, `chrt 10 cmd`: a leading numeric operand.
-      if ((w === "timeout" || w === "taskset" || w === "chrt") && i < tokens.length && /^[\d.]+[smhd]?$|^0x[0-9a-f]+$/i.test(tokens[i])) i++;
+    if (KEYWORDS.has(t)) { i++; continue; }
+    // `for x in …` / `select x in …`: the header runs nothing (its substitutions were
+    // already extracted); the body follows `do`.
+    if (t === "for" || t === "select") return { tokens: [], wrappers };
+    // `case WORD in PATTERN) cmd`: skip to the command after the pattern.
+    if (t === "case") {
+      const at = tokens.indexOf("in", i + 1);
+      if (at < 0) return { tokens: [], wrappers };
+      i = at + 1;
       continue;
     }
-    break;
+    // A case pattern opening a segment (`b) cmd`), or a function definition
+    // (`f() { cmd`, `function f { cmd`).
+    if (/^[^()]*\)$/.test(t) && !t.startsWith("$")) { i++; continue; }
+    if (t.length > 2 && t.endsWith("()")) { i++; if (tokens[i] === "{") i++; continue; }
+    if (t === "function" && i + 1 < tokens.length) { i += 2; if (tokens[i] === "()") i++; if (tokens[i] === "{") i++; continue; }
+    const w = canonProgram(t);
+    const spec = WRAPPERS.get(w);
+    if (!spec) break;
+    // `command -v rm` / `command -V rm` only describes rm; it runs nothing.
+    if (w === "command") {
+      let query = false;
+      for (let j = i + 1; j < tokens.length && tokens[j].startsWith("-"); j++) if (/^-[A-Za-z]*[vV]/.test(tokens[j])) query = true;
+      if (query) break;
+    }
+    const redirects: Redirect[] = [];
+    wrappers.push({ name: w, raw: t, redirects });
+    i++;
+    let split: string | undefined;
+    const value = (name: string, attached: string | undefined): void => {
+      let v = attached;
+      if (v === undefined && i < tokens.length) v = tokens[i++];
+      if (v === undefined) return;
+      if (spec.write?.includes(name)) redirects.push({ op: ">", target: v });
+      if (spec.read?.includes(name)) redirects.push({ op: "<", target: v });
+      if (w === "env" && (name === "-S" || name === "--split-string")) split = v;
+    };
+    while (i < tokens.length) {
+      const o = tokens[i];
+      if (o === "--") { i++; break; }
+      if (!o.startsWith("-") || o === "-") break;
+      i++;
+      if (o.startsWith("--")) {
+        const eq = o.indexOf("=");
+        if (eq > 0) value(o.slice(0, eq), o.slice(eq + 1));
+        else if (spec.long?.includes(o)) value(o, undefined);
+        continue;
+      }
+      for (let k = 1; k < o.length; k++) {
+        if (spec.optional?.includes(o[k])) break;
+        if (spec.short?.includes(o[k])) { value("-" + o[k], o.slice(k + 1) || undefined); break; }
+      }
+    }
+    if (split !== undefined) { tokens = [...words(split), ...tokens.slice(i)]; i = 0; continue; }
+    if (spec.lead && i < tokens.length && spec.lead.test(tokens[i])) i++;
   }
-  return tokens.slice(i);
+  return { tokens: tokens.slice(i), wrappers };
+}
+
+/** A program word whose name is only known at run time: a variable (`$r`), an
+ *  ANSI-C string (`$'\x72m'`) or a command substitution in its last path segment. */
+const isDynamicProgram = (word: string): boolean => /[$`]/.test(word.replace(/^.*\//, ""));
+
+/** The script run by `su -c …`, `script -qc …`, `runuser … -c`, `flock -c …`: the
+ *  value of `-c`/`--command` (also as the last letter of a short-option cluster). */
+function commandOption(argv: string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--command=") || a.startsWith("--session-command=")) return a.slice(a.indexOf("=") + 1);
+    if (a === "-c" || a === "--command" || a === "--session-command" || /^-[A-Za-z]+c$/.test(a)) return argv[i + 1] ?? null;  }
+  return null;
+}
+
+/** The command words `parallel` runs: everything before the first `:::`/`::::`
+ *  argument separator, after its own options. */
+function parallelCommand(argv: string[]): string | null {
+  const valued = new Set(["-j", "-P", "-S", "-a", "-d", "-I", "-E", "-C", "-N", "-n", "-L", "--jobs", "--sshlogin", "--sshloginfile", "--arg-file", "--delimiter", "--colsep", "--results", "--tmpdir", "--workdir", "--wd", "--joblog", "--halt", "--delay", "--timeout", "--retries", "--max-args", "--max-lines", "--env", "--basefile", "--return", "--transferfile"]);
+  let i = 0;
+  while (i < argv.length && argv[i].startsWith("-") && !argv[i].startsWith(":::")) { i += valued.has(argv[i]) ? 2 : 1; }
+  const cmd: string[] = [];
+  for (; i < argv.length && !/^::::?\+?$/.test(argv[i]); i++) cmd.push(argv[i]);
+  return cmd.length ? cmd.join(" ") : null;
+}
+
+/** The command `watch` re-runs: its operands joined (watch passes them to `sh -c`). */
+function watchCommand(argv: string[]): string | null {
+  let i = 0;
+  while (i < argv.length && argv[i].startsWith("-")) {
+    const o = argv[i++];
+    if (o === "--") break;
+    if (o === "-n" || o === "-q" || o === "--interval" || o === "--equexit") i++;
+  }
+  return i < argv.length ? argv.slice(i).join(" ") : null;
 }
 
 /** Find the script argument of a shell invoked with `-c`, including combined short
@@ -292,21 +431,48 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
     const { outer, inner } = extractSubstitutions(seg);
     for (const sub of inner) out.push(...decomposeShell(sub, depth + 1));
 
-    const { words, redirects } = splitRedirects(tokenize(outer));
-    const tokens = stripPrefixes(words);
+    const split = splitRedirects(tokenize(outer));
+    const { tokens, wrappers } = stripPrefixes(split.words);
+    const redirects = split.redirects;
+    // Each wrapper is recorded as a command of its own (`sudo` is a program a policy
+    // may deny), carrying any file its options name (`time -o f`, `xargs -a f`).
+    for (const w of wrappers) out.push({ program: basename(w.raw), programRaw: w.raw, argv: [], redirects: w.redirects, raw: seg, opaque: false });
     if (tokens.length === 0) {
       // A bare redirection (`> file`) still writes its target.
       if (redirects.length) out.push({ program: "", programRaw: "", argv: [], redirects, raw: seg, opaque: false });
       continue; // pure substitution/subshell — inner already handled
     }
+    // A program named by a variable, an ANSI-C string or a substitution is only known
+    // at run time: it cannot be judged by name, so it is opaque (fails closed).
+    if (isDynamicProgram(tokens[0])) { out.push(...opaque(seg)); continue; }
     const program = basename(tokens[0]);
     const argv = tokens.slice(1);
     out.push({ program, programRaw: tokens[0], argv, redirects, raw: seg, opaque: false });
 
     const canon = canonProgram(program);
+    const nested = (script: string | null | undefined) => { if (script) out.push(...decomposeShell(script, depth + 1)); };
     if (SHELLS.has(canon)) {
-      const script = shellScriptArg(argv);
-      if (script) out.push(...decomposeShell(script, depth + 1));
+      nested(shellScriptArg(argv));
+    } else if (canon === "eval") {
+      nested(argv.join(" "));
+    } else if (canon === "trap") {
+      if (argv.length >= 2 && !argv[0].startsWith("-")) nested(argv[0]);
+    } else if (canon === "su" || canon === "runuser" || canon === "script" || canon === "flock" || canon === "sg") {
+      const script = commandOption(argv);
+      if (script) nested(script);
+      else if (canon === "sg" || canon === "flock") {
+        // `sg group cmd …` / `flock [-w n] lockfile cmd …`: the words after the first operand.
+        const ops: string[] = [];
+        for (let k = 0; k < argv.length; k++) {
+          if (argv[k].startsWith("-") && ops.length === 0) { if (/^-[wEn]$/.test(argv[k])) k++; continue; }
+          ops.push(argv[k]);
+        }
+        nested(ops.slice(1).join(" "));
+      }
+    } else if (canon === "watch") {
+      nested(watchCommand(argv));
+    } else if (canon === "parallel") {
+      nested(parallelCommand(argv));
     } else if (canon === "cmd") {
       const script = cmdScriptArg(argv);
       if (script) out.push(...decomposeShell(script, depth + 1));
@@ -333,6 +499,33 @@ export function canonRef(dst: string): string | undefined {
   return d.replace(/^refs\/heads\//, "").replace(/^heads\//, "");
 }
 
+
+/** A git invocation split into its global `-c` config values, its subcommand and
+ *  the subcommand's arguments, or null if the program is not git. Global options
+ *  that take a value (`-C dir`, `-c k=v`, `--git-dir d` …) are skipped with it. */
+export function gitArgs(cmd: SimpleCommand): { sub?: string; args: string[]; configs: string[] } | null {
+  if (canonProgram(cmd.program) !== "git") return null;
+  const a = cmd.argv;
+  const configs: string[] = [];
+  let i = 0;
+  while (i < a.length) {
+    const t = a[i];
+    if (t === "-c" || t === "--config-env") { configs.push(a[i + 1] ?? ""); i += 2; continue; }
+    if (t.startsWith("--config-env=")) { configs.push(t.slice("--config-env=".length)); i++; continue; }
+    if (t === "-C" || t === "--git-dir" || t === "--work-tree" || t === "--namespace" || t === "--super-prefix") { i += 2; continue; }
+    if (t.startsWith("-")) { i++; continue; }
+    break;
+  }
+  return { sub: a[i], args: a.slice(i + 1), configs };
+}
+
+/** The ref recorded for a push whose destination cannot be read from the command
+ *  line: an alias (`git -c alias.ship=push ship`), a configured push refspec
+ *  (`-c remote.origin.push=…`, `-c push.default=matching`) or a lower-level push
+ *  (`git send-pack`, `git http-push`, `git subtree push`). It starts with `-`, which
+ *  the starter branch guard refuses, so an unreadable push fails closed. */
+export const UNKNOWN_REF = "--unknown";
+
 /** Parse a `git … push …` simple command, or null if it is not a push. Handles
  *  global options that take an argument (`-C dir`, `-c k=v`), push options that take
  *  one (`-o`, `--repo`, `--receive-pack`), every force spelling (`--force`, `-f`,
@@ -340,37 +533,48 @@ export function canonRef(dst: string): string | undefined {
  *  fully qualified refspecs, and multiple refspecs — each destination is returned,
  *  so `git push origin feature refs/heads/main` cannot hide `main` in second place.
  *  `--all`, `--mirror` and `--branches` push every branch: they return the literal
- *  flag as the ref, which the starter policy denies. `ref`/`force` mirror the first
- *  target for callers that expect a single push. */
+ *  flag as the ref, which the starter policy denies; `--tags` alone pushes only tags
+ *  and returns `--tags`, which it allows. `ref`/`force` mirror the first target for
+ *  callers that expect a single push. */
 export function parseGitPush(cmd: SimpleCommand): { force: boolean; remote?: string; ref?: string; targets: PushTarget[] } | null {
-  if (canonProgram(cmd.program) !== "git") return null;
-  const a = cmd.argv;
-  let i = 0;
-  while (i < a.length) {
-    const t = a[i];
-    if (t === "-C" || t === "-c" || t === "--git-dir" || t === "--work-tree" || t === "--namespace" || t === "--exec-path") { i += 2; continue; }
-    if (t.startsWith("-")) { i++; continue; }
-    break;
+  const g = gitArgs(cmd);
+  if (!g) return null;
+  const aliased = g.configs.some((c) => /^alias\./i.test(c));
+  const configuredPush = g.configs.some((c) => /^(?:remote\..*\.push(?:url)?|push\.default|remote\.pushdefault)(?:=|$)/i.test(c));
+  const lowLevel = g.sub === "send-pack" || g.sub === "http-push" || (g.sub === "subtree" && g.args.includes("push"));
+  if (aliased || lowLevel || (g.sub === "push" && configuredPush)) {
+    return { force: false, ref: UNKNOWN_REF, targets: [{ ref: UNKNOWN_REF, force: false }] };
   }
-  if (a[i] !== "push") return null;
-  const rest = a.slice(i + 1);
+  if (g.sub !== "push") return null;
+  const rest = g.args;
   let force = false;
   let everything: string | undefined;
+  let tags = false;
+  let repo: string | undefined;
   const positional: string[] = [];
   for (let k = 0; k < rest.length; k++) {
     const t = rest[k];
     if (t === "--force" || t === "--force-with-lease" || t.startsWith("--force-with-lease=") || t === "--force-if-includes") { force = true; continue; }
     if (/^-[A-Za-z]+$/.test(t) && t.includes("f")) { force = true; continue; } // -f, -uf, -fu
     if (t === "--all" || t === "--mirror" || t === "--branches") { everything = t; if (t === "--mirror") force = true; continue; }
-    if (t === "-o" || t === "--push-option" || t === "--repo" || t === "--receive-pack" || t === "--exec") { k++; continue; }
+    if (t === "--tags") { tags = true; continue; }
+    if (t === "--repo") { repo = rest[++k]; continue; }
+    if (t.startsWith("--repo=")) { repo = t.slice("--repo=".length); continue; }
+    if (t === "-o" || t === "--push-option" || t === "--receive-pack" || t === "--exec") { k++; continue; }
     if (t === "--") continue;
     if (t.startsWith("-")) continue;
     positional.push(t);
   }
-  const remote = positional[0];
+  // `--repo <r>` names the repository. git itself still reads a first positional as
+  // the repository when one is given, but the option's documentation reads as if the
+  // positionals were then all refspecs — so with `--repo`, every positional is checked
+  // as a refspec AND, when at most one is given, the current branch is too. Either
+  // reading of `git push --repo origin HEAD:main` is covered.
+  const remote = repo ?? positional[0];
+  const specs = repo !== undefined ? positional : positional.slice(1);
   const targets: PushTarget[] = [];
   if (everything) targets.push({ ref: everything, force });
-  for (const spec of positional.slice(1)) {
+  for (const spec of specs) {
     let s = spec;
     let f = force;
     if (s.startsWith("+")) { f = true; s = s.slice(1); }
@@ -379,7 +583,8 @@ export function parseGitPush(cmd: SimpleCommand): { force: boolean; remote?: str
     const dst = colon >= 0 ? (s.slice(colon + 1) || s.slice(0, colon)) : s;
     targets.push({ ref: canonRef(dst.replace(/^\+/, "")), force: f || dst.startsWith("+") });
   }
-  if (targets.length === 0) targets.push({ ref: undefined, force });
+  if (repo !== undefined && positional.length <= 1 && !everything && !tags) targets.push({ ref: undefined, force });
+  if (targets.length === 0) targets.push(tags ? { ref: "--tags", force } : { ref: undefined, force });
   const first = targets[0];
   return { force: targets.some((t) => t.force), ...(remote !== undefined ? { remote } : {}), ...(first.ref !== undefined ? { ref: first.ref } : {}), targets };
 }
