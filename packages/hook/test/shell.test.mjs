@@ -603,6 +603,24 @@ test("parseGitPush returns every pushed destination, canonicalized", () => {
   assert.deepEqual(targets("git push --all origin"), ["--all"]);
 });
 
+test("parseGitPush marks deletions and all-branch pushes (force_push_guard signals)", () => {
+  const flags = (cmd) => parseGitPush(decomposeShell(cmd)[0]).targets.map((t) => ({ ref: t.ref ?? null, force: !!t.force, del: !!t.del, all: !!t.all }));
+  // `:dst` and `--delete` are deletions; the ref is the branch being removed
+  assert.deepEqual(flags("git push origin :main"), [{ ref: "main", force: false, del: true, all: false }]);
+  assert.deepEqual(flags("git push origin --delete release/1"), [{ ref: "release/1", force: false, del: true, all: false }]);
+  // a normal `src:dst` is not a deletion
+  assert.deepEqual(flags("git push origin HEAD:main"), [{ ref: "main", force: false, del: false, all: false }]);
+  // --all/--branches reach every branch; --mirror also forces and prunes
+  assert.deepEqual(flags("git push --all --force origin"), [{ ref: "--all", force: true, del: false, all: true }]);
+  assert.deepEqual(flags("git push --mirror origin"), [{ ref: "--mirror", force: true, del: true, all: true }]);
+});
+
+test("the hook maps a delete and a mirror push to intents carrying the signals", () => {
+  const params = (cmd) => mapClaudeToolUse(bash(cmd)).filter((m) => m.intent.action_type === "git.push").map((m) => m.intent.params);
+  assert.deepEqual(params("git push origin :main"), [{ force: false, remote: "origin", ref: "main", delete: true }]);
+  assert.deepEqual(params("git push --mirror origin"), [{ force: true, remote: "origin", ref: "--mirror", delete: true, all: true }]);
+});
+
 test("redirections are separated from words, including without spaces", () => {
   const [c] = decomposeShell("echo a>out.txt 2>err.txt <in.txt 2>&1");
   assert.deepEqual(c.argv, ["a"]);

@@ -593,7 +593,16 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
 }
 
 /** One pushed destination: the branch it updates and whether that update is forced. */
-export interface PushTarget { ref?: string; force: boolean }
+export interface PushTarget {
+  ref?: string;
+  force: boolean;
+  /** True when the destination ref is being deleted (`:dst`, `--delete`), which
+   *  rewrites the branch's existence and so is destructive even without `--force`. */
+  del?: boolean;
+  /** True when the push targets every branch (`--all`, `--mirror`, `--branches`), so
+   *  it necessarily reaches any protected ref; `--mirror` also prunes and forces. */
+  all?: boolean;
+}
 
 /** Canonicalize a push destination to the short branch name a policy names:
  *  `refs/heads/main` → `main`, `heads/main` → `main`. `HEAD` and `@` mean the
@@ -655,12 +664,14 @@ export function parseGitPush(cmd: SimpleCommand): { force: boolean; remote?: str
   let force = false;
   let everything: string | undefined;
   let tags = false;
+  let del = false;
   let repo: string | undefined;
   const positional: string[] = [];
   for (let k = 0; k < rest.length; k++) {
     const t = rest[k];
     if (t === "--force" || t === "--force-with-lease" || t.startsWith("--force-with-lease=") || t === "--force-if-includes") { force = true; continue; }
     if (/^-[A-Za-z]+$/.test(t) && t.includes("f")) { force = true; continue; } // -f, -uf, -fu
+    if (t === "--delete" || (/^-[A-Za-z]+$/.test(t) && t.includes("d"))) { del = true; continue; } // --delete, -d, -df
     if (t === "--all" || t === "--mirror" || t === "--branches") { everything = t; if (t === "--mirror") force = true; continue; }
     if (t === "--tags") { tags = true; continue; }
     if (t === "--repo") { repo = rest[++k]; continue; }
@@ -678,18 +689,22 @@ export function parseGitPush(cmd: SimpleCommand): { force: boolean; remote?: str
   const remote = repo ?? positional[0];
   const specs = repo !== undefined ? positional : positional.slice(1);
   const targets: PushTarget[] = [];
-  if (everything) targets.push({ ref: everything, force });
+  // `--all`/`--mirror`/`--branches` reach every branch, so they hit any protected ref;
+  // `--mirror` also prunes and force-updates. The pseudo-ref keeps the starter policy's
+  // ref allowlist denying it; `all` is the signal a force_push_guard clause reads.
+  if (everything) targets.push({ ref: everything, force, all: true, ...(everything === "--mirror" ? { del: true } : {}) });
   for (const spec of specs) {
     let s = spec;
     let f = force;
     if (s.startsWith("+")) { f = true; s = s.slice(1); }
     const colon = s.indexOf(":");
     // `src:dst` pushes to dst; `:dst` deletes dst; `src:` has no destination, so src.
+    const isDelete = del || (colon >= 0 && s.slice(0, colon) === "");
     const dst = colon >= 0 ? (s.slice(colon + 1) || s.slice(0, colon)) : s;
-    targets.push({ ref: canonRef(dst.replace(/^\+/, "")), force: f || dst.startsWith("+") });
+    targets.push({ ref: canonRef(dst.replace(/^\+/, "")), force: f || dst.startsWith("+"), ...(isDelete ? { del: true } : {}) });
   }
-  if (repo !== undefined && positional.length <= 1 && !everything && !tags) targets.push({ ref: undefined, force });
-  if (targets.length === 0) targets.push(tags ? { ref: "--tags", force } : { ref: undefined, force });
+  if (repo !== undefined && positional.length <= 1 && !everything && !tags) targets.push({ ref: undefined, force, ...(del ? { del: true } : {}) });
+  if (targets.length === 0) targets.push(tags ? { ref: "--tags", force } : { ref: undefined, force, ...(del ? { del: true } : {}) });
   const first = targets[0];
   return { force: targets.some((t) => t.force), ...(remote !== undefined ? { remote } : {}), ...(first.ref !== undefined ? { ref: first.ref } : {}), targets };
 }

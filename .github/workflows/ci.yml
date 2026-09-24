@@ -37,6 +37,8 @@ jobs:
         run: pnpm run test:package
       - name: Run examples as a smoke (decisions asserted)
         run: pnpm run test:examples
+      - name: Test repo scripts (scope-review sanitizer, etc.)
+        run: pnpm run test:scripts
 
   # The hook's path, case and shell handling is Windows-sensitive (backslash paths,
   # case-insensitive names, PowerShell), so the full unit suites run there too.
