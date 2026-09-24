@@ -37,6 +37,8 @@ const pluginHooks = read("packages/hook/hooks/hooks.json");
 for (const pin of pluginHooks.match(/@scopebond\/hook@[0-9A-Za-z.+-]+/g) ?? []) {
   if (pin !== `@scopebond/hook@${hookVersion}`) failures.push(`packages/hook/hooks/hooks.json pins ${pin}; expected @scopebond/hook@${hookVersion} (run node scripts/sync-plugin-version.mjs)`);
 }
+const pluginVersion = json("packages/hook/.claude-plugin/plugin.json").version;
+if (pluginVersion !== hookVersion) failures.push(`packages/hook/.claude-plugin/plugin.json version ${pluginVersion}; expected ${hookVersion} (run node scripts/sync-plugin-version.mjs)`);
 
 const staleClaims = [
   [rootReadme, "README.md", /reviewed but unpublished|Published versions remain/i],
