@@ -4,12 +4,13 @@
 
 export { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch } from "./map.js";
 export type { Mapped, NormalizedIntent } from "./map.js";
-export { createHookRuntime, starterPolicy } from "./runtime.js";
+export { createHookRuntime, starterPolicy, upgradeStarterPolicy } from "./runtime.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export { scaffold, harnessSnippet, installHarness } from "./init.js";
 export {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome,
+  readHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile,
 } from "./install.js";
 export type { Harness } from "./install.js";
 export { connectCloud, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
