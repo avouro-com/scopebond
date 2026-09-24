@@ -8,6 +8,12 @@ on:
   pull_request:
     branches: [main]
 
+# A newer push to the same pull request supersedes the run in flight; runs on
+# main (the defense-in-depth tree scan) are never cancelled.
+concurrency:
+  group: oss-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

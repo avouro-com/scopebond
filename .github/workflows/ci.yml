@@ -1,10 +1,19 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # main requires an up-to-date branch (strict required checks) and squash-only
+  # merges, so the pull-request run already tested the exact tree that lands. A
+  # second run on push to main only re-bills the same minutes; workflow_dispatch
+  # is the manual way to re-verify main.
   pull_request:
     branches: [main]
+  workflow_dispatch: {}
+
+# A newer push to the same pull request supersedes the run in flight (the
+# install matrix is six jobs, so cancelling stale runs is the largest saving).
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
