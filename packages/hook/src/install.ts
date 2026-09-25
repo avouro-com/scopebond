@@ -26,6 +26,37 @@ export function userHarnessFile(harness: Harness): string {
   return join(homedir(), ".claude", "settings.json");
 }
 
+/** The project-level agent config file for a harness — what `init` writes, so the
+ *  hook travels with the repository rather than the machine. */
+export function projectHarnessFile(harness: Harness, cwd: string = process.cwd()): string {
+  if (harness === "cursor") return join(cwd, ".cursor", "hooks.json");
+  if (harness === "codex") return join(cwd, ".codex", "hooks.json");
+  return join(cwd, ".claude", "settings.json");
+}
+
+/** Which config files actually carry a Scopebond hook for this harness. There are two
+ *  places it can live — the project config `init` writes and the user config `install`
+ *  writes — and `status`/`doctor` must look at both: checking only the user one told
+ *  everyone who ran `init` that their install had failed. */
+export interface HarnessScopes { project: string | null; user: string | null }
+
+export function harnessScopes(harness: Harness, cwd: string = process.cwd()): HarnessScopes {
+  const project = projectHarnessFile(harness, cwd);
+  const user = userHarnessFile(harness);
+  return {
+    project: isHarnessConfigured(project) ? project : null,
+    user: isHarnessConfigured(user) ? user : null,
+  };
+}
+
+/** One word for where a harness is wired, for a status line. */
+export function harnessScopeLabel(scopes: HarnessScopes): string {
+  if (scopes.project && scopes.user) return "configured (project + user)";
+  if (scopes.project) return "configured (this project)";
+  if (scopes.user) return "configured (user-level)";
+  return "";
+}
+
 /** The file in the user home that pins trusted project policies: absolute project
  *  config dir → SHA-256 of its policy.json. It lives under the protected home, so the
  *  governed agent cannot write it. */
@@ -90,15 +121,32 @@ export function untrustedProjectPolicy(payloadCwd: string | undefined): string |
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const isScopebond = (cmd: unknown): boolean =>
+
+/** Whether a harness command string is one of ours. This is the single matcher for
+ *  every form the installer has ever written, and it is what makes re-running `init`
+ *  or `install` replace the entry instead of appending a second one:
+ *    - `npx -y @scopebond/hook@0.6.0 claude`          (portable)
+ *    - `"<node>" "<…/@scopebond/hook/dist/cli.js>" claude`  (pinned, POSIX)
+ *    - `"<node>" "<…\@scopebond\hook\dist\cli.js>" claude`  (pinned, Windows)
+ *    - `scopebond-hook claude`                        (legacy global binary)
+ *  The separator class matters: a Windows pinned path spells the scope
+ *  `@scopebond\hook`, and matching only `@scopebond/hook` let a second `init`
+ *  install a duplicate hook — which would double-check every tool call. */
+export const isScopebondHookCommand = (cmd: unknown): boolean =>
   typeof cmd === "string" && (
-    /@scopebond\/hook|scopebond-hook(\s|$)/.test(cmd) ||
-    // the user-level absolute form: `<node> <…/cli.js> claude|cursor|codex`
+    /@scopebond[\\/]hook/.test(cmd) ||
+    /scopebond-hook(\s|$)/.test(cmd) ||
+    // the absolute form: `<node> <…/cli.js> claude|cursor|codex`
     /cli\.js["']?\s+(claude|cursor|codex)\s*$/.test(cmd) ||
     /(^|["\s])scopebond(["'\s]).*\b(claude|cursor|codex)\b/.test(cmd)
   );
-const entryMatches = (e: unknown): boolean =>
+const isScopebond = isScopebondHookCommand;
+
+/** Whether a harness hook entry (either shape: a bare command, or a group with a
+ *  nested `hooks` array) is a Scopebond entry. */
+export const harnessEntryMatches = (e: unknown): boolean =>
   isRecord(e) && (isScopebond(e.command) || (Array.isArray(e.hooks) && e.hooks.some((h) => isRecord(h) && isScopebond(h.command))));
+const entryMatches = harnessEntryMatches;
 
 /** Read an agent's JSON config for merging. A missing file is an empty config; a file
  *  that exists but does not parse as a JSON object is an error — rewriting it would
@@ -167,10 +215,17 @@ export function codexDetected(): boolean {
   return existsSync(join(homedir(), ".codex"));
 }
 
-/** The absolute command a user-level harness entry runs: the current Node executable
- *  and the absolute path to this CLI, so it does not depend on PATH. */
+/** The absolute command a harness entry runs: the current Node executable and the
+ *  absolute path to this CLI, so it does not depend on PATH.
+ *
+ *  Both paths are always quoted on Windows, even without a space in them. A harness
+ *  runs this string through a shell, and that shell may be bash (Git Bash, WSL, a
+ *  dev container), where an unquoted Windows path loses every backslash and the
+ *  hook dies with MODULE_NOT_FOUND. Inside double quotes bash leaves a backslash
+ *  alone unless it precedes $ ` " \ or a newline — none of which occur in a Windows
+ *  path — and cmd.exe and PowerShell accept quoted paths too. */
 export function absoluteHookCommand(cliPath: string, harness: Harness): string {
-  const quote = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
+  const quote = (s: string) => (process.platform === "win32" || /\s/.test(s) ? `"${s}"` : s);
   return `${quote(process.execPath)} ${quote(cliPath)} ${harness}`;
 }
 
@@ -181,6 +236,44 @@ export function isHarnessConfigured(file: string): boolean {
     if (!isRecord(p) || !isRecord(p.hooks)) return false;
     return Object.values(p.hooks).some((v) => Array.isArray(v) && v.some(entryMatches));
   } catch { return false; }
+}
+
+/** Every Scopebond command string a harness config currently runs. `doctor` uses it to
+ *  check that a pinned command still resolves: a hook entry that cannot start is worse
+ *  than none, because a harness can read the failure as "no hook". */
+export function configuredHookCommands(file: string): string[] {
+  if (!existsSync(file)) return [];
+  const found: string[] = [];
+  const collect = (entry: unknown): void => {
+    if (!isRecord(entry)) return;
+    if (isScopebond(entry.command)) found.push(String(entry.command));
+    if (Array.isArray(entry.hooks)) for (const h of entry.hooks) collect(h);
+  };
+  try {
+    const p = JSON.parse(readFileSync(file, "utf8"));
+    if (!isRecord(p) || !isRecord(p.hooks)) return [];
+    for (const list of Object.values(p.hooks)) if (Array.isArray(list)) for (const e of list) collect(e);
+  } catch { return []; }
+  return found;
+}
+
+/** Whether a configured hook command can actually start. An `npx` form always can
+ *  (npm resolves it); a pinned command names two absolute paths — the Node binary and
+ *  the CLI — and either can go away: a Node version manager switching versions, or the
+ *  Scopebond home being cleared. Both are exactly what this check exists to catch. */
+export function hookCommandResolves(command: string): boolean {
+  if (/(^|\s)npx(\.cmd)?\s/.test(command)) return true;
+  // `"<node>" "<cli.js>" claude`: check every token that names a file on disk.
+  const tokens = command.match(/"[^"]+"|\S+/g) ?? [];
+  let checked = 0;
+  for (const raw of tokens) {
+    const candidate = raw.replace(/^"|"$/g, "");
+    if (!/\.(m|c)?js$|\.exe$/i.test(candidate)) continue;
+    checked += 1;
+    if (!existsSync(candidate)) return false;
+  }
+  // A bare `node cli.js` form on POSIX has no .exe to check; the .js still counted.
+  return checked > 0 || !/[\\/]/.test(command.split(/\s+/)[0] ?? "");
 }
 
 /** Remove the user-level home (keys, policy, receipts). */

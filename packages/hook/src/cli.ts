@@ -30,9 +30,12 @@ import { scaffold, harnessSnippet, installHarness } from "./init.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
+  harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
   trustProjectPolicy, untrustedProjectPolicy,
 } from "./install.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
+import { describeAction, type ExplainIntent } from "./explain.js";
+import { ensureDurableRuntime } from "./runtime-install.js";
 import { cliCommand, hookVersion } from "./version.js";
 import { fileURLToPath } from "node:url";
 
@@ -84,7 +87,9 @@ function denyClaude(reason: string): never {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
   }) + "\n");
-  process.stderr.write(`Scopebond: ${reason}\n`);
+  // A composed explanation already names Scopebond in its first line; only the
+  // bare internal messages need the prefix.
+  process.stderr.write(`${reason.startsWith("Scopebond") ? reason : `Scopebond: ${reason}`}\n`);
   process.exit(2);
 }
 
@@ -102,6 +107,18 @@ const harnessName = (harness: Harness): string => harness === "claude" ? "Claude
 const harnessFileName = (harness: Harness): string => harness === "claude" ? ".claude/settings.json" : harness === "cursor" ? ".cursor/hooks.json" : ".codex/hooks.json";
 const selectedHarness = (args: string[]): Harness => args.includes("--codex") ? "codex" : args.includes("--cursor") ? "cursor" : "claude";
 const codexTrustStep = "Open Codex, run `/hooks`, review Scopebond, and choose Trust. Then start a new task.";
+/** What Cursor can and cannot stop. Cursor has before-hooks for shell commands, MCP
+ *  calls and file reads, but reports file *edits* only after they are written, so an
+ *  out-of-policy edit is recorded and flagged rather than prevented. Said at install
+ *  time, because someone choosing a guardrail needs to know its edges up front. */
+const cursorCoverageNote = [
+  "What this covers in Cursor:",
+  "  prevented  shell commands, MCP tool calls, file reads — checked before they run",
+  "  recorded   file edits — Cursor reports an edit only after writing it, so an",
+  "             out-of-policy edit is signed and flagged, not blocked",
+  "For edits that must be blocked before they land, use the GitHub Action as a required",
+  "check on pull requests.",
+].join("\n");
 
 async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude): Promise<void> {
   let input: Record<string, unknown>;
@@ -128,24 +145,53 @@ async function runCodex(): Promise<void> {
   await runPreToolUse(mapCodexToolUse, denyCodex);
 }
 
+function denyCursor(reason: string): never {
+  process.stdout.write(JSON.stringify({ permission: "deny", agentMessage: reason }) + "\n");
+  process.exit(0);
+}
+
 async function runCursor(): Promise<void> {
-  let input: Record<string, unknown> = {};
-  try { input = JSON.parse(readStdin()); } catch { /* fall through to fail-closed deny below */ }
-  const event = String(input?.hook_event_name ?? input?.event ?? process.argv[3] ?? "");
+  // Unparseable input denies, like every other adapter. Previously this fell through
+  // to evaluation with an empty payload, which mapped to no known action and so
+  // answered "ask" — handing an unreadable request to a prompt the user would very
+  // likely accept. Deny-by-default on unparseable input is not optional.
+  let parsed: unknown;
+  try { parsed = JSON.parse(readStdin()); } catch { denyCursor("Scopebond: hook received invalid JSON on stdin"); }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    denyCursor("Scopebond: hook received a payload that is not a JSON object");
+  }
+  const input = parsed as Record<string, unknown>;
+  const event = String(input.hook_event_name ?? input.event ?? process.argv[3] ?? "");
   let permission: "allow" | "deny" | "ask" = "deny";
   let message = "Scopebond hook failed closed";
+  let postHoc = false;
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const runtime = createHookRuntime(runtimePaths(resolveConfigDir(cwd)));
-    const decision = await runtime.evaluate(fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd)));
+    const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
+    const decision = await runtime.evaluate(mapped);
     await runtime.flush();
-    // Only an out-of-policy action is denied outright; an allowed or unevaluated
-    // action defers to Cursor's own prompt ("ask"), never a silent auto-allow.
-    permission = decision.decision === "deny" ? "deny" : "ask";
+    // An `afterFileEdit` violation is real and recorded, but the edit has already
+    // landed. Say so rather than letting "blocked" imply it was stopped.
+    postHoc = mapped.some((m) => m.postHoc);
+    // Three outcomes, three answers:
+    //   deny  — out of policy, blocked outright.
+    //   allow — a rule was evaluated and permitted it. Returning "ask" here put a
+    //           confirmation prompt in front of every ordinary command, which is not
+    //           "your agent works as normal"; it also trained people to click through
+    //           prompts, which makes the real denials easier to miss. An evaluated
+    //           allow is a decision, not a silent auto-approval.
+    //   ask   — nothing was evaluated (no rule covers this action), so Cursor's own
+    //           permission flow stays in charge. That is the fail-closed case and it
+    //           keeps its prompt.
+    permission = decision.decision === "deny" ? "deny" : decision.decision === "allow" ? "allow" : "ask";
     message = decision.reason;
   } catch (error) {
     permission = "deny";
     message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`;
+  }
+  if (postHoc && permission === "deny") {
+    message = `${message}\nCursor reports a file edit only after it is written, so this edit was not prevented. Review and revert it yourself.`;
   }
   process.stdout.write(JSON.stringify({ permission, agentMessage: message }) + "\n");
   process.exit(0);
@@ -157,8 +203,13 @@ async function runCursor(): Promise<void> {
  *  also denies the agent running them. */
 function requireInteractive(command: string, args: string[]): void {
   if (process.stdin.isTTY || args.includes("--yes")) return;
-  console.error(`scopebond ${command} changes what governs your coding agent, so it must be run from an interactive terminal.`);
-  console.error(`In a script or CI, pass --yes: ${cliCommand(`${command} --yes`)}`);
+  console.error(`scopebond ${command} changes what governs your coding agent, so it does not run unattended.`);
+  console.error(`There is no terminal on stdin here — which is also what it looks like when the agent itself`);
+  console.error(`tries to run this, so the refusal is deliberate rather than a bug.`);
+  console.error(``);
+  console.error(`If you are a person: run it in your own terminal, or confirm it now with --yes:`);
+  console.error(`  ${cliCommand(`${command} --yes`)}`);
+  console.error(`Scripts, CI and container builds should always pass --yes.`);
   process.exit(1);
 }
 
@@ -176,17 +227,31 @@ function runInit(args: string[]): void {
     trustProjectPolicy(dir);
     console.log(`  trusted        overrides ${userHome()} here; after editing it, run \`${cliCommand("trust")}\``);
   }
+  // The hook command runs once per tool call, so it must start fast. `npx` re-resolves
+  // a package that is already on disk and costs ~830 ms a call; the same CLI invoked
+  // directly costs ~110 ms. Pin a durable copy and use that, and fall back to `npx`
+  // (slow, but it always starts) when no durable copy can be made. `--npx` forces the
+  // portable form for anyone who wants it.
+  const pin = args.includes("--npx") ? { cli: null, how: "unavailable" as const } : ensureDurableRuntime(cliPath(), hookVersion());
+  const command = pin.cli ? absoluteHookCommand(pin.cli, harness) : undefined;
+  // No per-action millisecond claim here: it varies by machine, and this project only
+  // states numbers it has measured. The measured comparison lives in the changelog.
+  console.log(`  hook runtime   ${pin.cli
+    ? `${pin.cli}\n                 pinned — no npx resolution per action`
+    : `npx @scopebond/hook@${hookVersion()} — portable, but re-resolves on every action`}`);
   console.log("");
   // Configure the agent automatically by default (idempotent), so there is no
   // hand-editing step; --no-install prints the snippet instead.
   if (!args.includes("--no-install")) {
     let file: string;
-    try { file = installHarness(harness); } catch (error) { console.error((error as Error).message); process.exit(1); }
+    try { file = installHarness(harness, process.cwd(), command); } catch (error) { console.error((error as Error).message); process.exit(1); }
     console.log(`✓ ${harnessName(harness)} configured in ${file}`);
     if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
+    if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
   } else {
     console.log(`Add this to your ${harnessFileName(harness)}:`);
-    console.log(harnessSnippet(harness));
+    console.log(harnessSnippet(harness, command));
+    if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
   }
   console.log("");
   // Print the runnable `npx` form: after `npx @scopebond/hook init` there is no
@@ -205,14 +270,7 @@ function decisionOf(payload: Record<string, unknown>): string {
 }
 
 function describeIntent(payload: Record<string, unknown>): string {
-  const intent = (payload.intent ?? {}) as Record<string, unknown>;
-  const p = (intent.params ?? {}) as Record<string, unknown>;
-  const bits = intent.action_type === "shell.exec" ? String(p.program ?? "")
-    : intent.action_type === "git.push" ? `${p.remote ?? ""} ${p.ref ?? ""}`.trim()
-    : intent.action_type === "file.write" || intent.action_type === "file.read" ? String(p.path ?? "")
-    : intent.action_type === "mcp.tool.call" ? `${p.server ?? ""}/${p.tool ?? ""}`
-    : intent.action_type === "net.fetch" ? String(p.host ?? "") : "";
-  return `${String(intent.action_type ?? "?")}${bits ? ` ${bits}` : ""}`;
+  return describeAction(payload.intent as ExplainIntent | undefined);
 }
 
 async function runLog(args: string[]): Promise<void> {
@@ -273,10 +331,16 @@ async function runTest(args: string[]): Promise<void> {
     console.log(`command: ${command}`);
     for (const m of mapped) {
       const d = await runtime.evaluateOne(m);
-      console.log(`  ${describeIntent({ intent: m.intent }).padEnd(28)} → ${d.decision}${d.reason ? `  (${d.reason})` : ""}`);
+      // One tidy row per action. A deny's full explanation is multi-line, so the
+      // row carries only the deciding rule and the whole message is printed once,
+      // below — exactly as the agent will receive it.
+      const note = d.decision === "deny" ? (d.clauseId ? `rule "${d.clauseId}"` : "")
+        : d.decision === "not_evaluated" ? d.reason : "";
+      console.log(`  ${describeIntent({ intent: m.intent }).padEnd(28)} → ${d.decision.padEnd(14)}${note}`);
     }
     const overall = await runtime.evaluate(mapped);
-    console.log(`\noverall: ${overall.decision}${overall.reason ? `  · ${overall.reason}` : ""}`);
+    console.log(`\noverall: ${overall.decision}`);
+    if (overall.decision === "deny" && overall.reason) console.log(`\n${overall.reason}`);
     process.exit(overall.decision === "deny" ? 2 : 0);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -374,9 +438,11 @@ function runInstall(args: string[]): void {
 function runStatus(): void {
   const home = userHome();
   const installed = existsSync(join(home, "policy.json"));
-  const claude = isHarnessConfigured(userHarnessFile("claude"));
-  const cursor = isHarnessConfigured(userHarnessFile("cursor"));
-  const codex = isHarnessConfigured(userHarnessFile("codex"));
+  // Both scopes, always: `init` writes the project config and `install` writes the
+  // user one, so a single-scope check contradicts whichever command the user ran.
+  const claude = harnessScopes("claude", process.cwd());
+  const cursor = harnessScopes("cursor", process.cwd());
+  const codex = harnessScopes("codex", process.cwd());
   const connected = !!loadConnection(resolveConfigDir(process.cwd()));
   const dbPath = join(resolveConfigDir(process.cwd()), "receipts.db");
   console.log(`Scopebond hook ${hookVersion()}`);
@@ -384,11 +450,14 @@ function runStatus(): void {
   console.log(`  active config    ${resolveConfigDir(process.cwd())}`);
   const ignored = untrustedProjectPolicy(process.cwd());
   if (ignored) console.log(`  project policy   ${ignored} ignored — not trusted (run \`${cliCommand("trust")}\` to use it)`);
-  console.log(`  Claude Code     ${claude ? "configured" : "not configured"}`);
-  console.log(`  Cursor           ${cursor ? "configured" : cursorDetected() ? "detected, not configured" : "not detected"}`);
-  console.log(`  Codex            ${codex ? "configured (approve once with /hooks)" : codexDetected() ? "detected, not configured" : "not detected"}`);
+  console.log(`  Claude Code      ${harnessScopeLabel(claude) || "not configured"}`);
+  console.log(`  Cursor           ${harnessScopeLabel(cursor) || (cursorDetected() ? "detected, not configured" : "not detected")}`);
+  console.log(`  Codex            ${codex.project || codex.user ? `${harnessScopeLabel(codex)} — approve once with /hooks` : codexDetected() ? "detected, not configured" : "not detected"}`);
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
   console.log(`  local receipts   ${existsSync(dbPath) ? dbPath : "none yet"}`);
+  for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
+    for (const file of [scopes.project, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
+  }
 }
 
 async function runDoctor(): Promise<void> {
@@ -406,9 +475,35 @@ async function runDoctor(): Promise<void> {
   if (!hasPolicy) problems.push("no policy found in the active config dir");
   const ignored = untrustedProjectPolicy(process.cwd());
   if (ignored) console.log(`  project policy   ${ignored} IGNORED — not trusted (never trusted, or edited since). Review it, then \`${cliCommand("trust")}\``);
-  const codex = isHarnessConfigured(userHarnessFile("codex"));
-  console.log(`  Codex hook       ${codex ? "configured" : codexDetected() ? "not configured — run `scopebond install --codex`" : "not detected"}`);
-  if (codex) console.log(`  Codex approval   run /hooks in Codex and approve Scopebond once`);
+  // Every harness, in both scopes, plus a check that each configured command can
+  // actually start. A pinned path that has gone missing is the one failure mode of
+  // the fast absolute-path install, so doctor is where it must surface.
+  let anyHarness = false;
+  for (const harness of ["claude", "cursor", "codex"] as const) {
+    const scopes = harnessScopes(harness, process.cwd());
+    const label = harnessScopeLabel(scopes);
+    const name = harnessName(harness);
+    if (!label) {
+      const detected = harness === "claude" || (harness === "cursor" ? cursorDetected() : codexDetected());
+      console.log(`  ${name.padEnd(15)} ${detected ? `not configured — run \`${cliCommand(`init${harness === "claude" ? "" : ` --${harness}`}`)}\`` : "not detected"}`);
+      continue;
+    }
+    anyHarness = true;
+    console.log(`  ${name.padEnd(15)} ${label}`);
+    for (const file of [scopes.project, scopes.user]) {
+      if (!file) continue;
+      for (const command of configuredHookCommands(file)) {
+        const ok = hookCommandResolves(command);
+        console.log(`    ${ok ? "ok  " : "BAD "} ${file}`);
+        if (!ok) {
+          console.log(`         command cannot start: ${command}`);
+          problems.push(`${name} hook command no longer resolves in ${file} — run \`${cliCommand("init")}\` to repair it`);
+        }
+      }
+    }
+    if (harness === "codex") console.log(`    run /hooks in Codex and approve Scopebond once`);
+  }
+  if (!anyHarness) problems.push(`no coding agent is configured — run \`${cliCommand("init")}\` in your project root`);
   const connection = loadConnection(active);
   if (!connection) {
     console.log(`  cloud            not connected (local only) — receipts stay on this machine`);

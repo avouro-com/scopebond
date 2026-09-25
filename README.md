@@ -41,10 +41,15 @@ of a `*.key` — blocked before it runs. Everything else is recorded. Look at wh
 happened and check it cryptographically, with no network and no account:
 
 ```bash
-scopebond-hook log                  # recent decisions
-scopebond-hook verify               # every receipt verifies offline
-scopebond-hook test "rm -rf /"      # see a decision without running anything
+npx @scopebond/hook log             # recent decisions
+npx @scopebond/hook verify          # every receipt verifies offline
+npx @scopebond/hook test "rm -rf /" # see a decision without running anything
 ```
+
+`npx @scopebond/hook init` does not put a `scopebond-hook` binary on your `PATH`, so
+these use the same `npx` form. A global install (`npm i -g @scopebond/hook`) gives you
+the shorter `scopebond-hook log`. In a script, CI or a container build, add `--yes` to
+`init` — it changes what governs your agent, so it will not run unattended without it.
 
 The starter policy protects release branches, blocks destructive programs, keeps the
 agent out of its own policy and keys, its CI config (`.github/workflows`, and the
@@ -183,8 +188,8 @@ record anyone can verify offline** — enforcement and evidence in one policy.
 
 **How can I see and log everything Claude Code does on my machine?**
 Install the hook (`npx @scopebond/hook init`); every tool call is mapped to a
-normalized action and written to a signed local receipt. `scopebond-hook log` shows
-recent decisions; `scopebond-hook verify` checks them offline.
+normalized action and written to a signed local receipt. `npx @scopebond/hook log`
+shows recent decisions; `npx @scopebond/hook verify` checks them offline.
 
 **How do I block Claude Code from running dangerous commands like `rm -rf` or `git push --force`?**
 The starter policy denies destructive programs and force-pushes to protected branches,

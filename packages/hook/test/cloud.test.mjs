@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { canonical, verifyReceipt } from "@scopebond/gateway";
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
@@ -139,10 +139,18 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
       assert.equal(result.fully_valid, true, JSON.stringify(result));
     }
     // Network-backed diagnostics must exit normally, including on Windows.
+    // `doctor` reports an ungoverned setup as a problem (no agent wired up means
+    // nothing is enforced), so give it a configured harness: this test is about the
+    // network path exiting cleanly, not about the health verdict.
+    const project = join(dir, "project");
+    mkdirSync(join(project, ".claude"), { recursive: true });
+    writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "npx -y @scopebond/hook claude" }] }] },
+    }));
     const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
     for (const command of ["doctor", "flush"]) {
       const result = await promisify(execFile)(process.execPath, [cli, command], {
-        env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, timeout: 15_000,
+        cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, timeout: 15_000,
       });
       assert.doesNotMatch(result.stderr, /Assertion failed/);
       assert.match(result.stdout, command === "doctor" ? /All good/ : /0 receipt\(s\) still pending/);
