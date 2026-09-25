@@ -6,11 +6,11 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
-import { starterPolicy } from "./runtime.js";
-import { readHarnessConfig, projectHarnessFile, harnessEntryMatches } from "./install.js";
+import { compile, defaultRules, loadRules, saveRules, rulesPath } from "./rules.js";
+import { readHarnessConfig, projectHarnessFile, harnessEntryMatches, backupHarnessConfig } from "./install.js";
 import { hookCommand } from "./version.js";
 
-export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKid: string; policyPath: string } {
+export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKid: string; policyPath: string; rulesPath: string } {
   mkdirSync(dir, { recursive: true });
   const keyPath = join(dir, "agent.key");
   const attesterPath = join(dir, "attester.key");
@@ -22,10 +22,17 @@ export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKi
   loadOrCreateAttester({ file: keyPath });
   loadOrCreateAttester({ file: attesterPath });
   const agent = createSigner({ privateKeyPem: readFileSync(keyPath, "utf8") });
+  // The editable rule set beside the compiled policy, so "edit the limits" means editing a
+  // readable list rather than a 700-character lookahead. `compile(defaultRules())` produces
+  // the starter policy's exact patterns — `rules.test.mjs` pins that — so writing either
+  // form enforces the same thing.
+  const rulesFile = rulesPath(dir);
+  if (!existsSync(rulesFile) || opts.force) saveRules(dir, defaultRules());
   if (!existsSync(policyPath) || opts.force) {
-    writeFileSync(policyPath, JSON.stringify(starterPolicy(agent.kid), null, 2) + "\n");
+    const rules = loadRules(dir) ?? defaultRules();
+    writeFileSync(policyPath, JSON.stringify(compile(rules, agent.kid), null, 2) + "\n");
   }
-  return { agentKid: agent.kid, policyPath };
+  return { agentKid: agent.kid, policyPath, rulesPath: rulesFile };
 }
 
 /** Install the hook into the agent's own config file, merging with anything already
@@ -42,6 +49,7 @@ export function installHarness(
   const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
   const file = projectHarnessFile(harness, cwd);
   const config = readHarnessConfig(file); // throws, leaving the file intact, if it is not a JSON object
+  backupHarnessConfig(file); // keep the user's original beside it before the first change
   mkdirSync(dirname(file), { recursive: true });
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   const forHarness = (h: "claude" | "cursor" | "codex"): string =>
