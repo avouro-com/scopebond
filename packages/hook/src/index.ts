@@ -6,6 +6,10 @@ export { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch } fro
 export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy, upgradeStarterPolicy } from "./runtime.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
+export {
+  compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE,
+} from "./rules.js";
+export type { RuleSet, PathRule } from "./rules.js";
 export { scaffold, harnessSnippet, installHarness } from "./init.js";
 export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,

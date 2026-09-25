@@ -3,13 +3,16 @@
 // signed by the machine key, decided against policy and countersigned — locally,
 // with no HTTP server and no Cloud dependency in 0.1.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createGateway, StaticPrincipalKeyRegistry, type CloudExporter } from "@scopebond/gateway";
 import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, type HookConnection } from "./cloud.js";
 import { explainDeny, type ExplainIntent } from "./explain.js";
+import { RULES_FILE } from "./rules.js";
+import { cliCommand } from "./version.js";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -45,10 +48,10 @@ export interface Decision {
 // Matching is case-insensitive — Windows and macOS open `.ENV` and `.env` as the
 // same file — by expanding each letter to a two-case class (policy patterns are
 // plain regular expressions with no flags). `ci()` is applied to literal text only.
-const ci = (s: string): string => s.replace(/[A-Za-z]/g, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
-const under = (dir: string): string => `(?!(?:.*/)?${ci(dir)}(?:/|$))`;    // dir itself or anything inside it
-const named = (file: string): string => `(?!(?:.*/)?${ci(file)}$)`;         // exactly this file name
-const dir = (d: string): string => `(?!(?:.*/)?${ci(d)}/?$)`;               // the directory itself (a recursive read or copy)
+export const ci = (s: string): string => s.replace(/[A-Za-z]/g, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
+export const under = (dir: string): string => `(?!(?:.*/)?${ci(dir)}(?:/|$))`;    // dir itself or anything inside it
+export const named = (file: string): string => `(?!(?:.*/)?${ci(file)}$)`;         // exactly this file name
+export const dir = (d: string): string => `(?!(?:.*/)?${ci(d)}/?$)`;               // the directory itself (a recursive read or copy)
 
 const PROTECTED_WRITE = "^" + [
   under("\\.scopebond"), `(?!(?:.*/)?${ci("\\.claude/settings")})`, under("\\.claude/hooks"), under("\\.claude/agents"),
@@ -76,7 +79,7 @@ const PROTECTED_READ = "^" + [
 
 // Destructive programs, POSIX and Windows. The mapper records the program as typed,
 // so the pattern accepts any case and an executable suffix (`RM.exe`, `Remove-Item`).
-const DESTRUCTIVE = [
+export const DESTRUCTIVE = [
   "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "shred", "truncate", "unlink", "wipe", "srm",
   "del", "rd", "rmdir", "erase", "deltree", "format", "diskpart", "remove-item", "ri", "clear-content", "clc", "stop-computer", "restart-computer",
 ];
@@ -162,15 +165,22 @@ export function createHookRuntime(config: RuntimeConfig) {
     { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },
   ]);
   const { attester } = loadOrCreateAttester({ file: config.attesterPath });
+  // When the project has a readable rule set, a denial names the command that edits it
+  // rather than the generated file.
+  const rulesRemedy = existsSync(join(dirname(config.policyPath), RULES_FILE))
+    ? `run \`${cliCommand("rules")}\` to see the limits in plain terms, or edit ${join(dirname(config.policyPath), RULES_FILE)}`
+    : undefined;
   const { store: baseStore } = openReceiptStore({ db: config.dbPath });
   // When connected, mirror every stored receipt to the hosted portal through a
   // durable outbox. The wrapped store's decision is unchanged; export is best-effort.
   let store = baseStore;
   let exporter: CloudExporter | undefined;
+  let outbox: { close(): void } | undefined;
   if (config.cloud) {
     const attached = attachExporter(config.dbPath + ".cloud-outbox.db", config.cloud.connection, baseStore, config.cloud.fetch);
     store = attached.store;
     exporter = attached.exporter;
+    outbox = attached.outbox;
   }
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only" });
 
@@ -182,6 +192,15 @@ export function createHookRuntime(config: RuntimeConfig) {
      *  exit. Undelivered receipts persist in the durable outbox for the next run. */
     async flush(): Promise<void> {
       if (exporter) await flushBounded(exporter, config.cloud?.flushTimeoutMs);
+    },
+    /** Release the SQLite handles. The hook is a per-tool-call process, and a writer that
+     *  exits without closing leaves its write-ahead log on disk for the next process to
+     *  extend — measured at ~11 KiB of WAL per receipt against ~1.7 KiB when closed, so a
+     *  busy session was writing tens of megabytes of pure overhead into the user's project.
+     *  Always safe to call, and every exit path should. */
+    close(): void {
+      try { baseStore.close?.(); } catch { /* the decision is already recorded */ }
+      try { outbox?.close(); } catch { /* best effort */ }
     },
     /** Decide one mapped action, recording a receipt either way. */
     async evaluateOne(mapped: Mapped): Promise<Decision> {
@@ -206,6 +225,10 @@ export function createHookRuntime(config: RuntimeConfig) {
           policy, clauseId, detail: result.reason,
           intent: signed.intent as ExplainIntent, policyPath: config.policyPath,
           postHoc: mapped.postHoc,
+          // Point at the editable surface when there is one. `policy.json` is compiled
+          // from `rules.json`, so telling someone to hand-edit it invites a change the
+          // next `rules` run would overwrite.
+          remedy: rulesRemedy,
         }),
         clauseId,
         receipt: result.receipt,

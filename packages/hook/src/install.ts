@@ -7,7 +7,7 @@
 // repository, or an agent inside it, must not be able to swap in its own policy.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -183,10 +183,26 @@ export function readHarnessConfig(file: string): Record<string, unknown> {
   return parsed;
 }
 
+/** Copy an agent config aside before changing it, once. Re-running an installer must not
+ *  overwrite the backup with the already-modified file, or the original is lost on the
+ *  second run — so an existing backup is left alone. Returns the backup path when one was
+ *  written.
+ *
+ *  This exists because these installers rewrite files the user did not create and may not
+ *  know are involved (`~/.claude/settings.json` holds their theme, plugins and
+ *  permissions), and the undo was previously "hope the merge was right". */
+export function backupHarnessConfig(file: string): string | null {
+  if (!existsSync(file)) return null;
+  const backup = `${file}.scopebond-backup`;
+  if (existsSync(backup)) return null;
+  try { copyFileSync(file, backup); return backup; } catch { return null; }
+}
+
 /** Write (idempotently) a harness hook entry pointing at an explicit command string.
  *  Shared by the project installer (npx command) and the user installer (absolute path). */
 export function writeHarnessConfig(file: string, harness: Harness, command: string): string {
   const config = readHarnessConfig(file);
+  backupHarnessConfig(file);
   mkdirSync(dirname(file), { recursive: true });
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   if (harness === "cursor") {

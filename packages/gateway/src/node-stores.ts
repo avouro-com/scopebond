@@ -89,6 +89,8 @@ export class FileReceiptStore implements ReceiptStore {
     this.cache.push(JSON.parse(serialized) as SignedReceipt);
   }
   list(): SignedReceipt[] { return structuredClone(this.cache); }
+  recent(limit: number): SignedReceipt[] { return structuredClone(this.cache.slice(-Math.max(1, Math.floor(limit))).reverse()); }
+  count(): number { return this.cache.length; }
   executed(): Receipt[] { return structuredClone(this.cache.map((r) => r.payload as unknown as Receipt)); }
   putAnchor(a: Anchor): void { this.append(this.anchorFile, JSON.stringify(a)); this.anchorLog.push(a); }
   anchors(): Anchor[] { return this.anchorLog.slice(); }
@@ -279,7 +281,60 @@ export class SqliteReceiptStore implements ReceiptStore {
     const rows = this.db.prepare(`SELECT anchor_json FROM anchors ORDER BY seq`).all() as { anchor_json: string }[];
     return rows.map((row) => JSON.parse(row.anchor_json) as Anchor);
   }
-  close(): void { this.db.close(); }
+  /** The most recent `limit` receipts, newest first. `list()` reads and parses the whole
+   *  log, which is right for verification and wasteful for "show me the last 20": a
+   *  caller that wants a tail should not pay for the history. */
+  recent(limit: number): SignedReceipt[] {
+    const rows = this.db
+      .prepare(`SELECT receipt_json FROM receipts ORDER BY id DESC LIMIT ?`)
+      .all(Math.max(1, Math.floor(limit))) as { receipt_json: string }[];
+    return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
+  }
+  /** How many receipts are stored, without reading any of them. */
+  count(): number {
+    const rows = this.db.prepare(`SELECT COUNT(*) AS n FROM receipts`).all() as { n: number }[];
+    return Number(rows[0]?.n ?? 0);
+  }
+  /** Receipts recorded strictly before an ISO timestamp — what a prune would remove.
+   *  Separate from the removal itself so a caller can archive them first, and so a
+   *  dry run costs nothing. */
+  before(isoTimestamp: string): SignedReceipt[] {
+    const rows = this.db
+      .prepare(`SELECT receipt_json FROM receipts WHERE timestamp < ? ORDER BY id`)
+      .all(isoTimestamp) as { receipt_json: string }[];
+    return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
+  }
+  /** Remove receipts recorded before an ISO timestamp, and return the space.
+   *
+   *  A receipt's position in `list()` is its anchor leaf index, so removing one changes
+   *  every later index and makes an existing anchor unverifiable. This therefore refuses
+   *  outright once anything has been anchored — the caller cannot opt out, because the
+   *  alternative is silently invalidating published evidence. */
+  removeBefore(isoTimestamp: string): { removed: number } {
+    const anchored = this.db.prepare(`SELECT COUNT(*) AS n FROM anchors`).all() as { n: number }[];
+    if (Number(anchored[0]?.n ?? 0) > 0) {
+      throw new Error(
+        "this log has anchors: a receipt's position is its anchor leaf index, so removing older receipts would make an existing anchor unverifiable. Archive the database instead of pruning it.",
+      );
+    }
+    const doomed = this.db.prepare(`SELECT COUNT(*) AS n FROM receipts WHERE timestamp < ?`).all(isoTimestamp) as { n: number }[];
+    const removed = Number(doomed[0]?.n ?? 0);
+    if (removed === 0) return { removed: 0 };
+    this.db.prepare(`DELETE FROM receipts WHERE timestamp < ?`).run(isoTimestamp);
+    // VACUUM is what actually returns the pages to the filesystem; without it the file
+    // keeps its high-water mark and the prune looks like it did nothing.
+    try { this.db.exec("VACUUM;"); } catch { /* a locked db keeps its size; rows are still gone */ }
+    return { removed };
+  }
+  close(): void {
+    // Checkpoint before releasing the handle. A short-lived writer that exits without
+    // closing leaves its WAL frames on disk, and the next process appends to the same
+    // WAL rather than starting clean: measured at ~11 KiB of WAL per receipt against
+    // ~1.7 KiB once the handle is closed. It also releases the file lock, which on
+    // Windows is what stops `.scopebond` being removable after a run.
+    try { this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* best effort */ }
+    this.db.close();
+  }
 }
 
 interface LifecycleRow {
@@ -481,7 +536,12 @@ export class SqliteCloudOutbox implements CloudOutbox {
     };
   }
 
-  close(): void { this.db.close(); }
+  close(): void {
+    // Same reason as the receipt store: a per-tool-call process that exits without
+    // closing leaves its write-ahead log behind for the next one to extend.
+    try { this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* best effort */ }
+    this.db.close();
+  }
 
   private expire(at: number): void {
     const expired = this.db.prepare(

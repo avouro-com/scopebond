@@ -79,6 +79,10 @@ export interface ExplainDenyInput {
   intent?: ExplainIntent;
   /** Where the rule lives, so the next step is a real path. */
   policyPath?: string;
+  /** How to change it, when there is something better to say than "edit this file" — the
+   *  compiled policy is generated, so pointing a reader at it invites them to hand-edit
+   *  something that will be overwritten. */
+  remedy?: string;
   /** The harness reported this action only after it happened, so the decision records
    *  and flags it but did not prevent it. The wording must not claim otherwise. */
   postHoc?: boolean;
@@ -105,7 +109,7 @@ export function explainDeny(input: ExplainDenyInput): string {
     `Scopebond ${verb} ${action || "action"} — rule "${clauseId}" (${mode}).`,
     ...(why ? [`Why: ${why}`] : []),
     ...(detail && detail !== "denied" ? [`Detail: ${detail}`] : []),
-    `Change the rule: edit clause "${clauseId}" in ${input.policyPath || "your Scopebond policy"}`,
+    `Change the rule: ${input.remedy ?? `edit clause "${clauseId}" in ${input.policyPath || "your Scopebond policy"}`}`,
   ];
   return lines.join("\n");
 }

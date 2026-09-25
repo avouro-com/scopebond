@@ -561,7 +561,14 @@ export interface ReceiptStore {
   list(): SignedReceipt[] | Promise<SignedReceipt[]>;
   /** The receipt payloads, for feeding claim-time-style evaluation to verify. */
   executed(): Receipt[] | Promise<Receipt[]>;
-  /** Release any underlying handle (e.g. a SQLite connection). Optional. */
+  /** The newest `limit` receipts, newest first — a tail without reading the whole log.
+   *  Optional: a caller must fall back to `list()` when a store does not implement it. */
+  recent?(limit: number): SignedReceipt[] | Promise<SignedReceipt[]>;
+  /** How many receipts are stored, without reading them. Optional. */
+  count?(): number | Promise<number>;
+  /** Release any underlying handle (e.g. a SQLite connection). Optional, but a
+   *  short-lived writer SHOULD call it: an unclosed SQLite handle leaves its
+   *  write-ahead log on disk for the next process to grow further. */
   close?(): void | Promise<void>;
   /** Append an anchor. Optional — a store that supports anchoring implements both. */
   putAnchor?(a: Anchor): void | Promise<void>;

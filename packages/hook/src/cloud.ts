@@ -49,10 +49,10 @@ export async function connectCloud(
  *  exported to Cloud. Returns the wrapped store and the exporter (flush + stop). */
 export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
-): { store: ReceiptStore; exporter: CloudExporter } {
+): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
   const outbox = new SqliteCloudOutbox(outboxDbPath);
   const exporter = createCloudExporter({ url: connection.url, credential: connection.credential, outbox, fetch: fetchImpl });
-  return { store: withCloudExporter(store, exporter), exporter };
+  return { store: withCloudExporter(store, exporter), exporter, outbox };
 }
 
 /** Attempt delivery with a bounded timeout so a per-invocation hook never hangs the
