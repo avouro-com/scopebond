@@ -145,4 +145,21 @@ test("every command form the installer has written is recognised as ours", () =>
   for (const other of ["echo hi", "npx -y some-other-tool claude", ""]) {
     assert.ok(!isScopebondHookCommand(other), `not ours: ${other}`);
   }
+  // A command whose last argument is not one of our subcommands is not ours, even if it
+  // mentions us — otherwise `uninstall` could strip an unrelated entry.
+  assert.ok(!isScopebondHookCommand("echo scopebond is installed"));
+  assert.ok(!isScopebondHookCommand("node ./other-cli.js build"));
+});
+
+test("the command matcher stays linear on adversarial input", () => {
+  // The previous single-regex matcher backtracked polynomially on a long run of
+  // "\tscopebond\t" (CodeQL js/polynomial-redos). A config file is not attacker input,
+  // but the check should still not be quadratic in the length of a string.
+  const hostile = `${"\tscopebond\t".repeat(20000)}claude`;
+  const started = process.hrtime.bigint();
+  isScopebondHookCommand(hostile);
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(ms < 250, `matcher must not blow up on a hostile string (took ${ms.toFixed(0)}ms)`);
+  // Oversized input is refused outright rather than scanned.
+  assert.equal(isScopebondHookCommand("x".repeat(5000)), false);
 });

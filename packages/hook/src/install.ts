@@ -131,15 +131,35 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
  *    - `scopebond-hook claude`                        (legacy global binary)
  *  The separator class matters: a Windows pinned path spells the scope
  *  `@scopebond\hook`, and matching only `@scopebond/hook` let a second `init`
- *  install a duplicate hook — which would double-check every tool call. */
-export const isScopebondHookCommand = (cmd: unknown): boolean =>
-  typeof cmd === "string" && (
-    /@scopebond[\\/]hook/.test(cmd) ||
-    /scopebond-hook(\s|$)/.test(cmd) ||
-    // the absolute form: `<node> <…/cli.js> claude|cursor|codex`
-    /cli\.js["']?\s+(claude|cursor|codex)\s*$/.test(cmd) ||
-    /(^|["\s])scopebond(["'\s]).*\b(claude|cursor|codex)\b/.test(cmd)
-  );
+ *  install a duplicate hook — which would double-check every tool call.
+ *
+ *  Written with substring and token tests rather than one regular expression: the
+ *  previous `(^|["\s])scopebond(["'\s]).*\b(claude|cursor|codex)\b` backtracked
+ *  polynomially on a long run of `\tscopebond\t` (CodeQL js/polynomial-redos). The
+ *  input is a command out of a config file rather than a request, so this was not
+ *  reachable by an attacker — but a linear check is also the clearer one. */
+const HARNESS_SUBCOMMANDS = new Set(["claude", "cursor", "codex"]);
+/** Long enough for any real command; a bound keeps the work linear and small. */
+const MAX_COMMAND = 4096;
+const unquote = (token: string): string => token.replace(/^["']+|["']+$/g, "");
+
+export const isScopebondHookCommand = (cmd: unknown): boolean => {
+  if (typeof cmd !== "string" || cmd.length === 0 || cmd.length > MAX_COMMAND) return false;
+  const lower = cmd.toLowerCase();
+  // The package itself, in either path spelling (`@scopebond/hook`, `@scopebond\hook`).
+  if (lower.includes("@scopebond/hook") || lower.includes("@scopebond\\hook")) return true;
+  // The legacy global binary, as a whole token.
+  if (/(^|[\s"'])scopebond-hook([\s"']|$)/.test(cmd)) return true;
+  // An absolute or bare form whose last argument is one of our harness subcommands:
+  // `<node> <…/cli.js> claude`, `scopebond cursor`.
+  const tokens = cmd.split(/\s+/).filter(Boolean);
+  const last = unquote(tokens[tokens.length - 1] ?? "");
+  if (!HARNESS_SUBCOMMANDS.has(last)) return false;
+  return tokens.some((token) => {
+    const t = unquote(token).toLowerCase();
+    return t.includes("scopebond") || /cli\.(m|c)?js$/.test(t);
+  });
+};
 const isScopebond = isScopebondHookCommand;
 
 /** Whether a harness hook entry (either shape: a bare command, or a group with a
