@@ -40,6 +40,7 @@ misrepresents a decision, or that a secret leaked into a receipt are in scope.
 Resolved before the first tagged release, during the alpha hardening. Full detail is
 in the [CHANGELOG](CHANGELOG.md) `### Security` entries.
 
+- **`@scopebond/hook` (≤ 0.5.0), `@scopebond/github-action` (≤ 0.3.1) — policy bypasses.** The Action read the policy from the pull request's own checkout, and the hook compared command text literally, so protected branches, keys/`.env` files, config/CI files and destructive commands could be reached by respelling the command (alternate refspecs, `cp`/`tar`/`scp`, globs, case and path variants, `cmd /c`, `pwsh -EncodedCommand`, `find -exec`, …); a project `.scopebond/policy.json` also overrode the user's install. Fixed by reading the Action's policy from the base commit, canonicalizing hook inputs before evaluation, and requiring `scopebond trust` before a project policy applies. (Fixed in `@scopebond/hook@0.6.0` and `@scopebond/github-action@0.4.0`; [GHSA-8p35-5vwf-5v93](https://github.com/avouro-com/scopebond/security/advisories/GHSA-8p35-5vwf-5v93).)
 - **`@scopebond/hook` — secret scrubber leak.** Single-token credential shapes were
   emitted as `secret***` and signed into receipts. Rewritten with explicit rules and a
   property-based regression suite. (Fixed in `@scopebond/hook@0.3.0`.)
