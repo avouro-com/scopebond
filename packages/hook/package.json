@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/hook",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Scopebond hook for Claude Code, Cursor, and OpenAI Codex — checks coding-agent actions against policy before they run and records a signed receipt locally.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
