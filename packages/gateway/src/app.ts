@@ -21,7 +21,7 @@ import {
   verifyAnchorRoot, isAnchorV2,
 } from "@scopebond/verify/anchor";
 import type { AnchorV2, AnchorV2Body } from "@scopebond/verify/anchor";
-import { validateIntent, validatePolicy } from "@scopebond/verify";
+import { validateIntent, validatePolicy, VERIFIER_VERSION as VERIFY_VERSION } from "@scopebond/verify";
 import type { Policy, Intent, Approval, Verdict } from "@scopebond/verify";
 import { authenticateRequest, AuthorizationError } from "./auth.js";
 import type {
@@ -124,7 +124,10 @@ export interface Gateway {
   reconcileAction(actionId: string): Promise<ActionLifecycleRecord>;
 }
 
-const VERIFIER_VERSION = "scopebond-verify@0.1.1";
+// Imported rather than repeated: SPEC.md says this names the violates() version that
+// produced the verdict, and the literal that used to live here drifted three releases
+// behind the real one, so every receipt misnamed its own verifier.
+const VERIFIER_VERSION = VERIFY_VERSION;
 
 export function createGateway(config: GatewayConfig): Gateway {
   if (!config.authentication) throw new Error("gateway authentication configuration is required");

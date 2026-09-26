@@ -8,6 +8,7 @@ import {
 } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import type { Intent, Receipt, Policy } from "@scopebond/verify";
+import { VERIFIER_VERSION } from "@scopebond/verify";
 import type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
 export type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
 import { validateAuthorizationEvidence, verifyAuthorizationEvidenceSignatures } from "./auth.js";
@@ -424,7 +425,10 @@ export async function buildBoundaryReceipt(input: BoundaryReceiptInput, attester
   }, attester);
 }
 
-const BOUNDARY_VERIFIER_VERSION = "scopebond-verify@0.1.1";
+// Imported rather than repeated: SPEC.md says this names the violates() version that
+// produced the verdict, and the literal that used to live here drifted three releases
+// behind the real one, so every receipt misnamed its own verifier.
+const BOUNDARY_VERIFIER_VERSION = VERIFIER_VERSION;
 
 export interface PepReceiptInput {
   /** The normalized action the proxy/PEP decided (e.g. an `mcp.tool.call`). */
@@ -561,7 +565,14 @@ export interface ReceiptStore {
   list(): SignedReceipt[] | Promise<SignedReceipt[]>;
   /** The receipt payloads, for feeding claim-time-style evaluation to verify. */
   executed(): Receipt[] | Promise<Receipt[]>;
-  /** Release any underlying handle (e.g. a SQLite connection). Optional. */
+  /** The newest `limit` receipts, newest first — a tail without reading the whole log.
+   *  Optional: a caller must fall back to `list()` when a store does not implement it. */
+  recent?(limit: number): SignedReceipt[] | Promise<SignedReceipt[]>;
+  /** How many receipts are stored, without reading them. Optional. */
+  count?(): number | Promise<number>;
+  /** Release any underlying handle (e.g. a SQLite connection). Optional, but a
+   *  short-lived writer SHOULD call it: an unclosed SQLite handle leaves its
+   *  write-ahead log on disk for the next process to grow further. */
   close?(): void | Promise<void>;
   /** Append an anchor. Optional — a store that supports anchoring implements both. */
   putAnchor?(a: Anchor): void | Promise<void>;

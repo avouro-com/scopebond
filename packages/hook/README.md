@@ -64,6 +64,25 @@ Check what it did with `npx @scopebond/hook status` (which agents are configured
 which scope) and `npx @scopebond/hook doctor` (whether each configured command can
 actually start).
 
+### Changing the rules
+
+`.scopebond/policy.json` is **generated**. The thing you edit is `.scopebond/rules.json`,
+a short readable list, and `policy.json` is compiled from it — so a limit is a line in a
+list, not a 700-character lookahead:
+
+```
+npx @scopebond/hook rules                      # what is blocked, in plain English
+npx @scopebond/hook rules allow dd             # stop blocking a program
+npx @scopebond/hook rules protect infra/       # never write there
+npx @scopebond/hook rules protect-branch production
+npx @scopebond/hook rules apply                # recompile after editing rules.json by hand
+```
+
+The compiled patterns are identical to the ones this package has always shipped — there
+is a test that pins them against the starter policy — so the readable front end cannot
+change what is enforced. Each clause description is generated from the list too, so it
+stays true after an edit, and a block message quotes it.
+
 ### The hook command `init` installs
 
 The hook runs once per tool call, so the command has to start fast. `init` copies this
@@ -145,6 +164,21 @@ Change the rule: edit clause "protect-branches" in /repo/.scopebond/policy.json
 
 Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.
+
+**Where receipts live, and how much room they take.** `.scopebond/receipts.db` in the
+project, roughly 25 KiB per tool call. Nothing is ever deleted automatically — these are
+your evidence — so `status` reports the count and size, and `prune` bounds it when you
+choose to:
+
+```
+npx @scopebond/hook prune                      # report the footprint
+npx @scopebond/hook prune --before 90d --yes   # archive, then remove, anything older
+```
+
+`prune` writes the receipts it will remove to a JSONL file beside the database first, so
+they stay verifiable, and it refuses outright once the log has been anchored — a receipt's
+position is its anchor leaf index, so removing one would make an existing anchor
+unverifiable.
 
 **What a shell command is checked for.** A command line is split into every command it
 runs (`&&`, `;`, pipes, `$( )` and backticks — also inside double quotes — `bash -c`,
