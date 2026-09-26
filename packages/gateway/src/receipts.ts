@@ -8,6 +8,7 @@ import {
 } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import type { Intent, Receipt, Policy } from "@scopebond/verify";
+import { VERIFIER_VERSION } from "@scopebond/verify";
 import type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
 export type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
 import { validateAuthorizationEvidence, verifyAuthorizationEvidenceSignatures } from "./auth.js";
@@ -424,7 +425,10 @@ export async function buildBoundaryReceipt(input: BoundaryReceiptInput, attester
   }, attester);
 }
 
-const BOUNDARY_VERIFIER_VERSION = "scopebond-verify@0.1.1";
+// Imported rather than repeated: SPEC.md says this names the violates() version that
+// produced the verdict, and the literal that used to live here drifted three releases
+// behind the real one, so every receipt misnamed its own verifier.
+const BOUNDARY_VERIFIER_VERSION = VERIFIER_VERSION;
 
 export interface PepReceiptInput {
   /** The normalized action the proxy/PEP decided (e.g. an `mcp.tool.call`). */

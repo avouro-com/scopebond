@@ -2,6 +2,13 @@
 //
 // violates(policy, receipts, claimed, opts) → Verdict  (POLICY_VOCABULARY.md §7)
 //
+// `VERIFIER_VERSION` is the string receipts carry as `verifier_version`, which SPEC.md
+// defines as "the violates() verifier version that produced the verdict". It lives here,
+// next to `violates()`, rather than as a literal in the gateway: it was hardcoded there as
+// `scopebond-verify@0.1.1` and stayed that way through 0.2, 0.3 and 0.4, so every receipt
+// named a verifier version that had not produced its verdict for three releases.
+// `version.test.mjs` asserts this matches package.json, so it cannot drift again.
+//
 // Invariants:
 //   - Pure & deterministic: no network, no wall-clock. The evaluation timestamp
 //     is an input (opts.at, default = claimed.timestamp).
@@ -182,6 +189,11 @@ function verdict(
 ): Verdict {
   return { violated, clause_id, explanation, inputs_hash: hash, ...extra };
 }
+
+/** The value receipts carry as `verifier_version`. Kept as a source constant rather than
+ *  read from package.json at runtime, because this code runs in a Worker bundle where
+ *  there is no package.json to read; `version.test.mjs` pins it to the published version. */
+export const VERIFIER_VERSION = "scopebond-verify@0.4.0";
 
 export function violates(
   policy: Policy, receipts: Receipt[] | undefined, claimed: Receipt, opts: Options = {},
