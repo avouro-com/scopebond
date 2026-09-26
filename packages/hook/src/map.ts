@@ -26,6 +26,12 @@ export interface Mapped {
   evaluated: boolean;
   /** The native tool/event name, for diagnostics. */
   source: string;
+  /** True when the harness only tells us about this action *after* it happened, so a
+   *  policy decision on it records and flags the action but did not prevent it. Cursor's
+   *  `afterFileEdit` is the case that exists today: it has no before-edit counterpart,
+   *  so a file write there is observed, not stopped. Callers must not describe such a
+   *  decision as prevention. */
+  postHoc?: boolean;
 }
 
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
@@ -752,7 +758,10 @@ export function mapCursorEvent(event: string, payload: Record<string, unknown>):
     case "beforeReadFile":
       return pathIntents("file.read", rel(p.path ?? p.file_path, cwd), event);
     case "afterFileEdit":
-      return pathIntents("file.write", rel(p.path ?? p.file_path, cwd), event);
+      // Cursor reports an edit only once it has been made; there is no before-edit
+      // hook to block at. The rule still decides and the decision is still recorded —
+      // it just cannot be called prevention.
+      return pathIntents("file.write", rel(p.path ?? p.file_path, cwd), event).map((m) => ({ ...m, postHoc: true }));
     case "beforeMCPExecution": {
       const server = String(p.server ?? p.server_name ?? "");
       const tool = String(p.tool ?? p.tool_name ?? "");

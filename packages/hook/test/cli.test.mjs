@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { scaffold } from "../dist/index.js";
+import { scaffold, hookCommandResolves } from "../dist/index.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const policy = {
@@ -90,8 +90,32 @@ test("init scaffolds keys and a policy and auto-configures the agent", () => {
   const settings = join(project, ".claude", "settings.json");
   assert.ok(existsSync(settings), "init writes the Claude settings automatically");
   const cfg = JSON.parse(readFileSync(settings, "utf8"));
-  assert.match(cfg.hooks.PreToolUse[0].hooks[0].command, /^npx -y @scopebond\/hook@\S+ claude$/);
+  const command = cfg.hooks.PreToolUse[0].hooks[0].command;
+  // The command may be either form — a pinned absolute path (fast) or the portable
+  // `npx` fallback — but it must end in the harness name and be runnable as written.
+  assert.match(command, /\sclaude$/, `hook command targets Claude Code: ${command}`);
+  assert.ok(hookCommandResolves(command), `hook command must be startable: ${command}`);
   assert.match(stdout, /configured/, "reports that the agent was configured");
+});
+
+test("init --npx forces the portable command; the default pins a startable one", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-init-npx-"));
+  const dir = join(project, ".scopebond");
+  execFileSync(process.execPath, [cli, "init", "--npx", "--yes"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+  const cfg = JSON.parse(readFileSync(join(project, ".claude", "settings.json"), "utf8"));
+  assert.match(cfg.hooks.PreToolUse[0].hooks[0].command, /^npx -y @scopebond\/hook@\S+ claude$/);
+});
+
+test("init is idempotent: re-running leaves exactly one Scopebond hook entry", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-init-twice-"));
+  const dir = join(project, ".scopebond");
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
+  for (let i = 0; i < 2; i += 1) {
+    execFileSync(process.execPath, [cli, "init", "--yes"], { encoding: "utf8", cwd: project, env });
+  }
+  const cfg = JSON.parse(readFileSync(join(project, ".claude", "settings.json"), "utf8"));
+  const entries = cfg.hooks.PreToolUse.filter((e) => JSON.stringify(e).includes("scopebond"));
+  assert.equal(entries.length, 1, "no duplicate hook entry after a second init");
 });
 
 test("init --no-install prints the snippet instead of writing config", () => {
@@ -99,7 +123,12 @@ test("init --no-install prints the snippet instead of writing config", () => {
   const dir = join(project, ".scopebond");
   const stdout = execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
   assert.ok(!existsSync(join(project, ".claude", "settings.json")), "no config written with --no-install");
-  assert.match(stdout, /npx -y @scopebond\/hook@\S+ claude/, "prints the pinned hook command");
+  // The printed snippet must be the same command init would have written, so copying
+  // it by hand gives the same result.
+  const snippet = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+  const command = snippet.hooks.PreToolUse[0].hooks[0].command;
+  assert.match(command, /\sclaude$/, `snippet targets Claude Code: ${command}`);
+  assert.ok(hookCommandResolves(command), `snippet command must be startable: ${command}`);
 });
 
 test("init --codex configures .codex/hooks.json and prints the trust step", () => {
@@ -109,7 +138,9 @@ test("init --codex configures .codex/hooks.json and prints the trust step", () =
   const hooks = join(project, ".codex", "hooks.json");
   assert.ok(existsSync(hooks));
   const cfg = JSON.parse(readFileSync(hooks, "utf8"));
-  assert.match(cfg.hooks.PreToolUse[0].hooks[0].command, /^npx -y @scopebond\/hook@\S+ codex$/);
+  const command = cfg.hooks.PreToolUse[0].hooks[0].command;
+  assert.match(command, /\scodex$/, `hook command targets Codex: ${command}`);
+  assert.ok(hookCommandResolves(command), `hook command must be startable: ${command}`);
   assert.match(stdout, /run `\/hooks`/i);
 });
 
@@ -170,7 +201,10 @@ test("init, trust and uninstall refuse a non-interactive stdin without --yes (th
     try { execFileSync(process.execPath, [cli, ...args], { encoding: "utf8", cwd: project, env, input: "", stdio: ["pipe", "pipe", "pipe"] }); }
     catch (error) { status = error.status; stderr = String(error.stderr ?? ""); }
     assert.equal(status, 1, `${args[0]} must refuse without a TTY`);
-    assert.match(stderr, /interactive terminal/);
+    // Assert the actionable content, not the prose: the refusal has to tell the reader
+    // how to proceed deliberately, which is the `--yes` flag.
+    assert.match(stderr, /--yes/, `${args[0]} must point at --yes`);
+    assert.match(stderr, new RegExp(`scopebond ${args[0]}`), `${args[0]} must name itself`);
   }
   assert.ok(!existsSync(join(dir, "policy.json")), "a refused init writes nothing");
 });

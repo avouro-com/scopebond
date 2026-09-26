@@ -60,6 +60,41 @@ countersigning key, a starter policy — "protect main and production paths" —
 `.scopebond/receipts.db`. `init`, `trust` and `uninstall` are meant for a person at a
 terminal: in a script or CI, pass `--yes`.
 
+Check what it did with `npx @scopebond/hook status` (which agents are configured, in
+which scope) and `npx @scopebond/hook doctor` (whether each configured command can
+actually start).
+
+### The hook command `init` installs
+
+The hook runs once per tool call, so the command has to start fast. `init` copies this
+package into `~/.scopebond/runtime/<version>/` once per machine and points your agent
+at that absolute path. Measured on one Windows machine, through a shell, warm cache:
+
+| Command in the agent config | Median per tool call |
+|---|---|
+| pinned absolute path (the default) | **151 ms** |
+| `npx -y @scopebond/hook@<version>` | 1053 ms |
+
+That ~900 ms is npm re-resolving a package already on disk, on every action. Pass
+`--npx` to `init` if you would rather have the portable command, and `init` falls back
+to it automatically when it cannot make a durable copy — slow beats broken. `doctor`
+re-checks that the pinned paths still resolve, so a cleared home or a switched Node
+version shows up as a problem rather than as a hook that silently cannot start.
+
+### What each agent can actually stop
+
+| | Claude Code | Cursor | Codex |
+|---|---|---|---|
+| Shell commands | prevented | prevented | prevented |
+| File reads | prevented | prevented | prevented |
+| MCP tool calls | prevented | prevented | prevented |
+| File writes / edits | prevented | **recorded, not prevented** | prevented |
+
+Cursor reports a file edit only *after* it is written (`afterFileEdit`; it has no
+before-edit hook), so an out-of-policy edit there is signed and flagged, not blocked —
+and the message says so rather than claiming otherwise. For edits that must be stopped
+before they land, make `@scopebond/github-action` a required check on pull requests.
+
 ## Connect it to your workspace (optional)
 
 To see the receipts in your hosted Scopebond workspace, create a connection from
@@ -82,8 +117,8 @@ can hand you a single copy-paste command with nothing to save.
 
 From then on every receipt is mirrored to the workspace through a **durable outbox**:
 delivery is best-effort and never blocks a tool call, and receipts are retained
-locally and retried if the workspace is unreachable. `scopebond-hook flush` delivers
-anything still queued — run it on a session-end hook (and set
+locally and retried if the workspace is unreachable. `npx @scopebond/hook flush`
+delivers anything still queued — run it on a session-end hook (and set
 `SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency.
 
 ## How it works
@@ -91,10 +126,22 @@ anything still queued — run it on a session-end hook (and set
 Each tool call is mapped to a normalized [Action Taxonomy](https://github.com/avouro-com/scopebond)
 action (`shell.exec`, `git.push`, `file.write`, `mcp.tool.call`, …), signed by the
 machine key and decided against your policy by an in-process check-only gateway.
-An allowed action is recorded and left to the coding agent's normal permission
-prompt; the hook never auto-approves it. A denied action is blocked. Unknown tools are
-recorded as *not evaluated* and grant nothing. Anything unexpected fails closed
-(deny) with a repair message.
+An allowed action is recorded and the agent proceeds. A denied action is blocked.
+Unknown tools are recorded as *not evaluated* and grant nothing — they fall through to
+the coding agent's own permission prompt, so the hook never turns an unrecognised
+action into an approval. Anything unexpected fails closed (deny) with a repair message.
+
+**What a block says.** A denial names the action, the rule that decided, why that rule
+exists (the clause's own description), the engine's technical detail and where to change
+it. The same text goes to the agent, so it can choose another approach instead of
+retrying a blocked call:
+
+```
+Scopebond blocked git.push origin main — rule "protect-branches" (enforce).
+Why: Deny pushes to main, master and release/* (any case, any refspec spelling), …
+Detail: param ref fails pattern
+Change the rule: edit clause "protect-branches" in /repo/.scopebond/policy.json
+```
 
 Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.

@@ -9,6 +9,7 @@ import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node"
 import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, type HookConnection } from "./cloud.js";
+import { explainDeny, type ExplainIntent } from "./explain.js";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -27,6 +28,8 @@ export interface RuntimeConfig {
 export interface Decision {
   decision: "allow" | "deny" | "not_evaluated";
   reason: string;
+  /** The clause that decided a deny, when the verdict named one. */
+  clauseId?: string | null;
   /** The deciding receipt (the denied one, or the first allow). */
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
@@ -192,7 +195,21 @@ export function createHookRuntime(config: RuntimeConfig) {
       // Evaluated actions, and (in strict mode) unmapped tool.<name>/opaque commands,
       // go through policy — a closed allowlist denies an unlisted action.
       const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
-      return { decision: result.allowed ? "allow" : "deny", reason: result.reason, receipt: result.receipt };
+      if (result.allowed) return { decision: "allow", reason: result.reason, receipt: result.receipt };
+      // A deny is the one message the user and their agent actually read, so it is
+      // composed from the deciding clause's own words rather than the engine's
+      // internal reason ("param ref fails pattern").
+      const clauseId = result.verdict?.clause_id ?? null;
+      return {
+        decision: "deny",
+        reason: explainDeny({
+          policy, clauseId, detail: result.reason,
+          intent: signed.intent as ExplainIntent, policyPath: config.policyPath,
+          postHoc: mapped.postHoc,
+        }),
+        clauseId,
+        receipt: result.receipt,
+      };
     },
     /** Decide a whole tool call. A shell call decomposes into several simple
      *  commands; every one is recorded, and a single deny denies the call. */

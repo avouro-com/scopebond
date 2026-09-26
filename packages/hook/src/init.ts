@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import { starterPolicy } from "./runtime.js";
-import { readHarnessConfig } from "./install.js";
+import { readHarnessConfig, projectHarnessFile, harnessEntryMatches } from "./install.js";
 import { hookCommand } from "./version.js";
 
 export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKid: string; policyPath: string } {
@@ -32,22 +32,28 @@ export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKi
  *  there (idempotent — safe to run twice). Returns the file it wrote. This is what
  *  lets `connect` finish setup without the user hand-editing JSON.
  *  `cwd` defaults to the current directory (the project root the user runs it in). */
-export function installHarness(harness: "claude" | "cursor" | "codex", cwd: string = process.cwd()): string {
+export function installHarness(
+  harness: "claude" | "cursor" | "codex",
+  cwd: string = process.cwd(),
+  /** The command to run per tool call. Defaults to the portable `npx` form; `init`
+   *  passes a pinned absolute path when it has one, which is ~7x faster to start. */
+  command?: string,
+): string {
   const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-  const file = harness === "cursor" ? join(cwd, ".cursor", "hooks.json")
-    : harness === "codex" ? join(cwd, ".codex", "hooks.json")
-    : join(cwd, ".claude", "settings.json");
+  const file = projectHarnessFile(harness, cwd);
   const config = readHarnessConfig(file); // throws, leaving the file intact, if it is not a JSON object
   mkdirSync(dirname(file), { recursive: true });
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
-  const cursorCmd = hookCommand("cursor");
-  const claudeCmd = hookCommand("claude");
-  const codexCmd = hookCommand("codex");
-  // Match any existing Scopebond hook entry (pinned or a legacy bare `scopebond-hook`)
-  // so re-running never appends a duplicate and an old bare command is replaced.
-  const isScopebond = (cmd: unknown): boolean => typeof cmd === "string" && /(^|\s)(npx\s+.*)?@scopebond\/hook|(^|\s)scopebond-hook(\s|$)/.test(cmd);
-  const entryMatches = (e: unknown): boolean =>
-    isRecord(e) && (isScopebond(e.command) || (Array.isArray(e.hooks) && e.hooks.some((h) => isRecord(h) && isScopebond(h.command))));
+  const forHarness = (h: "claude" | "cursor" | "codex"): string =>
+    command ? command.replace(/\b(claude|cursor|codex)$/, h) : hookCommand(h);
+  const cursorCmd = forHarness("cursor");
+  const claudeCmd = forHarness("claude");
+  const codexCmd = forHarness("codex");
+  // Match any existing Scopebond hook entry — npx, pinned absolute (either path
+  // separator) or a legacy bare `scopebond-hook` — so re-running replaces the entry
+  // instead of appending a second one. One shared matcher with `install`: a private
+  // copy here missed the pinned Windows form and duplicated the hook.
+  const entryMatches = harnessEntryMatches;
   if (harness === "cursor") {
     config.version = config.version ?? 1;
     for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
@@ -68,10 +74,14 @@ export function installHarness(harness: "claude" | "cursor" | "codex", cwd: stri
   return file;
 }
 
-/** The harness configuration snippet to install the hook (version-pinned npx). */
-export function harnessSnippet(harness: "claude" | "cursor" | "codex"): string {
+/** The harness configuration snippet to install the hook by hand. Defaults to the
+ *  version-pinned `npx` form; `init --no-install` passes the pinned path it chose, so
+ *  the printed snippet matches what `init` would have written. */
+export function harnessSnippet(harness: "claude" | "cursor" | "codex", command?: string): string {
+  const cmdFor = (h: "claude" | "cursor" | "codex"): string =>
+    command ? command.replace(/\b(claude|cursor|codex)$/, h) : hookCommand(h);
   if (harness === "cursor") {
-    const cmd = hookCommand("cursor");
+    const cmd = cmdFor("cursor");
     return JSON.stringify({
       version: 1,
       hooks: {
@@ -86,14 +96,14 @@ export function harnessSnippet(harness: "claude" | "cursor" | "codex"): string {
     return JSON.stringify({
       hooks: {
         PreToolUse: [{
-          hooks: [{ type: "command", command: hookCommand("codex"), timeout: 30, statusMessage: "Checking this action with Scopebond" }],
+          hooks: [{ type: "command", command: cmdFor("codex"), timeout: 30, statusMessage: "Checking this action with Scopebond" }],
         }],
       },
     }, null, 2);
   }
   return JSON.stringify({
     hooks: {
-      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: hookCommand("claude") }] }],
+      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: cmdFor("claude") }] }],
     },
   }, null, 2);
 }
