@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { VERIFIER_VERSION } from "@scopebond/verify";
 import {
   canonical,
   createAttester,
@@ -57,7 +58,11 @@ test("Node and WebCrypto receipts share the v1 contract and offline verification
     const verification = verifyReceipt(receipt, attester.publicKeyPem);
 
     assert.equal(receipt.payload.evidence_version, vectors.version);
-    assert.equal(receipt.payload.verifier_version, "scopebond-verify@0.1.1");
+    // SPEC.md: "the violates() verifier version that produced the verdict". Asserted
+    // against the verifier that actually ran, not a literal — the literal that used to be
+    // here was three releases stale, so every receipt named the wrong verifier.
+    assert.equal(receipt.payload.verifier_version, VERIFIER_VERSION);
+    assert.match(receipt.payload.verifier_version, /^scopebond-verify@\d+\.\d+\.\d+$/);
     assert.ok(vectors.execution_states.includes(receipt.payload.execution.state));
     assert.equal(verification.valid, true);
     assert.equal(verification.contract_valid, true);
