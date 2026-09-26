@@ -193,7 +193,7 @@ function verdict(
 /** The value receipts carry as `verifier_version`. Kept as a source constant rather than
  *  read from package.json at runtime, because this code runs in a Worker bundle where
  *  there is no package.json to read; `version.test.mjs` pins it to the published version. */
-export const VERIFIER_VERSION = "scopebond-verify@0.4.0";
+export const VERIFIER_VERSION = "scopebond-verify@0.4.1";
 
 export function violates(
   policy: Policy, receipts: Receipt[] | undefined, claimed: Receipt, opts: Options = {},
