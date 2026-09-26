@@ -94,13 +94,45 @@ test("pathRuleFor reads a trailing slash or a dotless name as a directory", () =
   assert.equal(pathRuleFor("infra/").kind, "under");
   assert.equal(pathRuleFor("secrets").kind, "under");
   assert.equal(pathRuleFor("deploy.sh").kind, "named");
-  // A regex metacharacter in a user-typed path is escaped, not interpreted.
-  const rule = pathRuleFor("weird+name.txt");
-  assert.match(rule.value, /weird\\\+name/);
-  const pattern = compile({ ...defaultRules(), protected_write: [rule] }, "k")
-    .clauses.find((c) => c.id === "protect-write").param_bounds.path.pattern;
-  assert.equal(new RegExp(pattern).test("weird+name.txt"), false, "the literal path is protected");
-  assert.equal(new RegExp(pattern).test("weirdXname.txt"), true, "the + is not treated as a quantifier");
+  assert.equal(pathRuleFor("./src/app.ts").label, "src/app.ts", "a leading ./ is dropped");
+  assert.equal(pathRuleFor("infra///").label, "infra/ and everything in it", "trailing separators collapse");
+  assert.equal(pathRuleFor("infra\\terraform\\").kind, "under", "a Windows path is normalised");
+  assert.equal(pathRuleFor("infra\\terraform\\").label, "infra/terraform/ and everything in it");
+});
+
+/** The value goes into a rule that decides what the agent may touch, so a typed path has to
+ *  be treated as literal text — every metacharacter escaped, none interpreted. */
+test("a user-typed path is literal: every metacharacter is escaped", () => {
+  const protectedBy = (input) => {
+    const pattern = compile({ ...defaultRules(), protected_write: [pathRuleFor(input)] }, "k")
+      .clauses.find((c) => c.id === "protect-write").param_bounds.path.pattern;
+    return (candidate) => new RegExp(pattern).test(candidate) === false;
+  };
+
+  let blocks = protectedBy("weird+name.txt");
+  assert.equal(blocks("weird+name.txt"), true, "the literal path is protected");
+  assert.equal(blocks("weirdXname.txt"), false, "the + is not a quantifier");
+
+  blocks = protectedBy("a.b.c");
+  assert.equal(blocks("a.b.c"), true);
+  assert.equal(blocks("aXbXc"), false, "the dots are not wildcards");
+
+  // A path full of metacharacters must not blow up the pattern or match anything else.
+  for (const input of ["a(b)c.txt", "x[y]z.txt", "q{1,2}.txt", "a|b.txt", "^start.txt", "end$.txt", "a*b.txt"]) {
+    const check = protectedBy(input);
+    assert.equal(check(input), true, `${input} is protected literally`);
+    assert.equal(check("unrelated/file.txt"), false, `${input} does not over-match`);
+  }
+});
+
+test("pathRuleFor stays linear on adversarial input", () => {
+  // The previous normalisation used `^[./\\]+` with a callback, which CodeQL flagged as
+  // polynomial on a path of many leading dots.
+  const hostile = `${".".repeat(50000)}/x.txt`;
+  const started = process.hrtime.bigint();
+  pathRuleFor(hostile);
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(ms < 250, `normalisation must not blow up (took ${ms.toFixed(0)}ms)`);
 });
 
 test("describeRules names every protected location in plain words", () => {

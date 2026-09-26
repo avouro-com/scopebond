@@ -903,6 +903,8 @@ function printHelp(topic: string | undefined, toStderr = false): void {
   if (topic) { out(`no such command: ${topic}`); out(""); }
   out(`scopebond-hook — govern a coding agent's tool calls against policy, before they run.`);
   out("");
+  out(`Usage: scopebond-hook <command> [options]`);
+  out("");
   out(`  ${cliCommand("init")}            set up this project`);
   out(`  ${cliCommand('test "rm -rf /"')}  see a decision without running it`);
   out(`  ${cliCommand("log --deny")}      what got blocked`);

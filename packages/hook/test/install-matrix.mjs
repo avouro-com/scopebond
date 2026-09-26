@@ -36,10 +36,14 @@ const check = (name, fn) => { try { fn(); console.log(`  ✓ ${name}`); } catch 
 
 console.log(`install-matrix on ${process.platform} node ${process.versions.node}`);
 
-// 1. Global bin is on PATH and prints usage.
+// 1. Global bin is on PATH and prints help. Asserted on what the help has to contain to be
+// useful — the invocation form and the command list — rather than one exact opening phrase.
 check("the scopebond bin is installed and runnable", () => {
   const r = sb([]);
-  assert.ok(/usage: scopebond/.test(r.out), `no usage output: ${r.out}`);
+  assert.match(r.out, /usage: scopebond-hook <command>/i, `no usage line: ${r.out}`);
+  for (const command of ["init", "status", "doctor", "log", "verify", "test"]) {
+    assert.match(r.out, new RegExp(`\\n\\s+${command}\\s{2,}\\S`), `help does not list \`${command}\`: ${r.out}`);
+  }
 });
 
 // 2. User-level install scaffolds the home and writes an absolute-path Claude hook.

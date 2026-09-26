@@ -49,15 +49,37 @@ const pathPattern = (rule: PathRule): string =>
     : rule.kind === "dir" ? dir(rule.value)
     : rule.pattern;
 
+/** Escape every regular-expression metacharacter, backslash included.
+ *
+ *  A path the user typed is literal text, and this value goes straight into a rule that
+ *  decides what the agent may touch: if one metacharacter escapes escaping, the rule
+ *  silently protects something other than what they asked for. The class is therefore
+ *  complete on its own rather than relying on an earlier step having removed backslashes
+ *  (CodeQL js/incomplete-sanitization). */
+const escapeRegex = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
+
 /** A protected-path rule from a plain path the user typed. A trailing `/` (or a path with
- *  no dot in its last segment) reads as a directory; anything else as a file name. */
+ *  no dot in its last segment) reads as a directory; anything else as a file name.
+ *
+ *  Normalisation is one obvious step at a time. The previous version folded separator
+ *  conversion and leading-`./` stripping into a single `^[./\\]+` replace with a callback,
+ *  which was both hard to read and quadratic on a path of many leading dots
+ *  (CodeQL js/polynomial-redos). */
 export function pathRuleFor(input: string): PathRule {
-  const clean = input.trim().replace(/^[./\\]+/, (m) => (m.startsWith(".") && !m.startsWith("./") ? m : "")).replace(/\\/g, "/");
-  const escaped = clean.replace(/[.*+?^${}()|[\]]/g, "\\$&").replace(/\/$/, "");
-  const isDirectory = input.trim().endsWith("/") || !/\.[^/]*$/.test(clean);
+  const trimmed = input.trim();
+  const withForwardSlashes = trimmed.split("\\").join("/");
+  const withoutDotSlash = withForwardSlashes.startsWith("./") ? withForwardSlashes.slice(2) : withForwardSlashes;
+  // Drop trailing separators without a quantifier, so the cost is plainly linear.
+  let clean = withoutDotSlash;
+  while (clean.endsWith("/")) clean = clean.slice(0, -1);
+  // A trailing slash is an explicit directory; so is a last segment with no extension.
+  // Checked by string, not by `/\.[^/]*$/`: that pattern is unanchored at the front, so it
+  // retries at every position and goes quadratic on a long path.
+  const lastSegment = clean.slice(clean.lastIndexOf("/") + 1);
+  const isDirectory = trimmed.endsWith("/") || !lastSegment.includes(".");
   return isDirectory
-    ? { kind: "under", value: escaped, label: `${clean.replace(/\/$/, "")}/ and everything in it` }
-    : { kind: "named", value: escaped, label: clean };
+    ? { kind: "under", value: escapeRegex(clean), label: `${clean}/ and everything in it` }
+    : { kind: "named", value: escapeRegex(clean), label: clean };
 }
 
 /** The branch pattern: deny the listed refs, plus the "every branch at once" flags and a
