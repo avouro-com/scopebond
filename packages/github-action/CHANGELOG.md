@@ -1,5 +1,14 @@
 # @scopebond/github-action
 
+## 0.4.1
+
+### Patch Changes
+
+- Updated dependencies [978e7a3]
+- Updated dependencies [978e7a3]
+  - @scopebond/gateway@0.8.0
+  - @scopebond/verify@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
