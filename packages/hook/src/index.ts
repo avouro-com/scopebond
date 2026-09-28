@@ -10,15 +10,17 @@ export {
   compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE,
 } from "./rules.js";
 export type { RuleSet, PathRule } from "./rules.js";
-export { scaffold, harnessSnippet, installHarness } from "./init.js";
+export { scaffold, harnessSnippet, installHarness, placeHook } from "./init.js";
+export type { HookPlacement } from "./init.js";
 export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome,
   readHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
   isScopebondHookCommand, harnessEntryMatches,
+  localHarnessFile, isMachineSpecificCommand, gitShareState, excludeFromGit, pruneHarnessEntries,
 } from "./install.js";
-export type { Harness, HarnessScopes } from "./install.js";
+export type { Harness, HarnessScopes, GitShare } from "./install.js";
 export { explainDeny, describeAction, findClause } from "./explain.js";
 export type { ExplainDenyInput, ExplainIntent, ExplainPolicy, ExplainClause } from "./explain.js";
 export {

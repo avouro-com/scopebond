@@ -9,6 +9,20 @@
 // Config dir: $SCOPEBOND_HOOK_DIR, else ./.scopebond
 // Fail-closed: any error denies the action with a repair message.
 
+// `node:sqlite` (the receipt store) is still flagged experimental on Node 22, and Node
+// prints a warning on stderr the first time it loads — on every `verify`, and into the
+// agent's transcript on every hook call. It is a notice about Node, not about the user's
+// setup, so it is dropped; every other warning still prints through Node's own handler.
+// (The store is required lazily, after this module has run, so the filter is in place.)
+{
+  const nodeWarningHandlers = process.listeners("warning");
+  process.removeAllListeners("warning");
+  process.on("warning", (warning) => {
+    if (warning.name === "ExperimentalWarning" && /sqlite/i.test(warning.message)) return;
+    for (const handler of nodeWarningHandlers) handler.call(process, warning);
+  });
+}
+
 import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -18,19 +32,19 @@ import { verifyReceipt } from "@scopebond/gateway";
 import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime } from "./runtime.js";
-import { scaffold, harnessSnippet, installHarness } from "./init.js";
+import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
-  trustProjectPolicy, untrustedProjectPolicy,
+  localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy,
 } from "./install.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { describeAction, type ExplainIntent } from "./explain.js";
-import { ensureDurableRuntime } from "./runtime-install.js";
-import { cliCommand, hookVersion } from "./version.js";
+import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
+import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { fileURLToPath } from "node:url";
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
@@ -219,9 +233,31 @@ function requireInteractive(command: string, args: string[]): void {
 }
 
 function runInit(args: string[]): void {
-  requireInteractive("init", args);
   const harness = selectedHarness(args);
   const dir = configDir();
+  // A dry run changes nothing, so it needs no terminal and no --yes.
+  if (args.includes("--dry-run")) {
+    const shared = projectHarnessFile(harness, process.cwd());
+    const local = localHarnessFile(harness, process.cwd());
+    const personal = args.includes("--shared") || args.includes("--npx") ? null
+      : local ?? (gitShareState(shared) === "tracked" ? null : shared);
+    console.log(`Dry run — nothing is written.\n`);
+    console.log(`Would scaffold      ${dir} (machine key, countersigning key, starter policy, .gitignore)`);
+    if (args.includes("--no-install")) {
+      console.log(`Would print         the ${harnessFileName(harness)} snippet instead of writing it`);
+    } else if (personal) {
+      console.log(`Would configure     ${personal} (this machine only; kept out of git)`);
+      console.log(`  adding hook       "<node>" "${pinnedCliPath(hookVersion())}" ${harness}`);
+      console.log(`                    (or the path this copy runs from, when it is already installed durably)`);
+      if (local) console.log(`  and remove        any machine-specific Scopebond entry from ${shared}`);
+    } else {
+      console.log(`Would configure     ${shared} (shared — safe to commit)`);
+      console.log(`  adding hook       ${hookCommand(harness)}`);
+    }
+    console.log(`\nNothing else in those files is changed. Run without --dry-run to apply.`);
+    process.exit(0);
+  }
+  requireInteractive("init", args);
   const { agentKid, policyPath, rulesPath: rulesFile } = scaffold(dir, { force: args.includes("--force") });
   console.log(`Scopebond hook enrolled in ${dir}`);
   console.log(`  machine key    ${agentKid}`);
@@ -238,25 +274,38 @@ function runInit(args: string[]): void {
   // directly costs ~110 ms. Pin a durable copy and use that, and fall back to `npx`
   // (slow, but it always starts) when no durable copy can be made. `--npx` forces the
   // portable form for anyone who wants it.
-  const pin = args.includes("--npx") ? { cli: null, how: "unavailable" as const } : ensureDurableRuntime(cliPath(), hookVersion());
+  const shared = args.includes("--shared");
+  const pin = args.includes("--npx") || shared ? { cli: null, how: "unavailable" as const } : ensureDurableRuntime(cliPath(), hookVersion());
   const command = pin.cli ? absoluteHookCommand(pin.cli, harness) : undefined;
-  // No per-action millisecond claim here: it varies by machine, and this project only
-  // states numbers it has measured. The measured comparison lives in the changelog.
-  console.log(`  hook runtime   ${pin.cli
-    ? `${pin.cli}\n                 pinned — no npx resolution per action`
-    : `npx @scopebond/hook@${hookVersion()} — portable, but re-resolves on every action`}`);
-  console.log("");
   // Configure the agent automatically by default (idempotent), so there is no
   // hand-editing step; --no-install prints the snippet instead.
   if (!args.includes("--no-install")) {
-    let file: string;
-    try { file = installHarness(harness, process.cwd(), command); } catch (error) { console.error((error as Error).message); process.exit(1); }
-    console.log(`✓ ${harnessName(harness)} configured in ${file}`);
+    let placed: HookPlacement;
+    try { placed = placeHook(harness, process.cwd(), command, { shared }); } catch (error) { console.error((error as Error).message); process.exit(1); }
+    // No per-action millisecond claim here: it varies by machine, and this project only
+    // states numbers it has measured. The measured comparison lives in the changelog.
+    console.log(`  hook runtime   ${placed.scope === "personal"
+      ? `${pin.cli}\n                 pinned — no npx resolution per action`
+      : `npx @scopebond/hook@${hookVersion()} — portable, but re-resolves on every action`}`);
+    console.log("");
+    console.log(`✓ ${harnessName(harness)} configured in ${placed.file}`);
+    console.log(placed.scope === "personal"
+      ? `  this machine only — kept out of git, so no teammate inherits a path that does not exist for them`
+      : `  shared — the portable command starts on any machine that clones this project`);
+    if (placed.repaired > 0) console.log(`  moved a machine-specific hook out of ${projectHarnessFile(harness, process.cwd())}; commit that change`);
+    if (placed.note) console.log(`  note: ${placed.note}`);
     if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
   } else {
+    // The snippet is for a file the user will likely commit, so it carries the portable
+    // command; the pinned one is offered separately, for a file only this machine uses.
     console.log(`Add this to your ${harnessFileName(harness)}:`);
-    console.log(harnessSnippet(harness, command));
+    console.log(harnessSnippet(harness));
+    const local = localHarnessFile(harness, process.cwd());
+    if (command && local) {
+      console.log(`\nFaster, for this machine only — use this command in ${local} instead (keep that file out of git):`);
+      console.log(`  ${command}`);
+    }
     if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
   }
   console.log("");
@@ -554,7 +603,7 @@ async function runTest(args: string[]): Promise<void> {
   const command = args.find((a) => !a.startsWith("-"));
   if (!command) { console.error('usage: scopebond-hook test "<shell command>"'); process.exit(1); }
   const dir = resolveConfigDir(process.cwd());
-  if (!existsSync(join(dir, "policy.json"))) { console.error("no policy yet — run `scopebond-hook init` first."); process.exit(1); }
+  if (!existsSync(join(dir, "policy.json"))) { console.error(`no policy yet — run \`${cliCommand("init")}\` first.`); process.exit(1); }
   // Evaluate against the real policy and keys, but a throwaway store, so `test`
   // never records a receipt or exports anything.
   const tmp = mkdtempSync(join(tmpdir(), "sb-hook-test-"));
@@ -590,7 +639,8 @@ async function runConnect(args: string[]): Promise<void> {
   const bundleArg = positional[1];
   const harness = selectedHarness(args);
   if (!url) {
-    console.error("usage: scopebond-hook connect <workspace-url> <enrollment> [--claude|--cursor|--codex] [--no-install]");
+    console.error(`usage: ${cliCommand("connect <workspace-url> <enrollment> [--claude|--cursor|--codex] [--no-install]")}`);
+    console.error(enrollmentHelp);
     process.exit(1);
   }
   const dir = configDir();
@@ -601,14 +651,20 @@ async function runConnect(args: string[]): Promise<void> {
   scaffold(dir, {});
   let bundle: CloudEnrollmentBundle;
   try { bundle = readBundleArg(bundleArg, readStdin); }
-  catch { console.error("could not read the enrollment (expected a file, inline blob, or JSON on stdin)"); process.exit(1); }
+  catch { console.error(`could not read the enrollment (expected a file, inline blob, or JSON on stdin)\n${enrollmentHelp}`); process.exit(1); }
   try {
     const c = await connectCloud(dir, url, bundle);
     console.log(`✓ Connected to ${c.url}`);
     // Configure the agent automatically (merges into the existing config), unless the
-    // caller opts out. This removes the "paste this snippet" step.
-    if (!args.includes("--no-install")) {
-      const file = installHarness(harness);
+    // caller opts out. This removes the "paste this snippet" step. A hook that is already
+    // configured — pinned by `init`, or user-level by `install` — is left as it is:
+    // connecting changes where receipts go, not how the hook starts.
+    const scopes = harnessScopes(harness, process.cwd());
+    const existing = scopes.local ?? scopes.project ?? scopes.user;
+    if (existing && !args.includes("--no-install")) {
+      console.log(`✓ ${harnessName(harness)} already configured in ${existing}`);
+    } else if (!args.includes("--no-install")) {
+      const { file } = placeHook(harness, process.cwd(), undefined);
       console.log(`✓ ${harnessName(harness)} configured in ${file}`);
       if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     } else {
@@ -618,14 +674,26 @@ async function runConnect(args: string[]): Promise<void> {
     console.log("");
     console.log("Run your agent — the first action appears in your workspace within seconds.");
   } catch (error) {
-    console.error(`connect failed: ${(error as Error).message}`);
+    const message = (error as Error).message;
+    console.error(`connect failed: ${message}`);
+    if (/enrollment|expired|401|403/i.test(message)) console.error(enrollmentHelp);
     process.exit(1);
   }
 }
 
+/** Where an enrollment comes from, for every connect error that means "this one will
+ *  not work": the bare "invalid enrollment token" told the reader nothing about what to
+ *  do next. */
+const enrollmentHelp = [
+  "An enrollment comes from your Scopebond workspace: open it, choose to connect an agent,",
+  "and copy the command it shows — it includes the workspace URL and a fresh enrollment.",
+  "Each enrollment is single-use and expires soon after it is created; if this one was",
+  "used or has expired, create a new one there.",
+].join("\n");
+
 async function runFlush(): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
-  if (!loadConnection(dir)) { console.error("not connected to a workspace; run `scopebond-hook connect` first"); process.exit(1); }
+  if (!loadConnection(dir)) { console.error(`not connected to a workspace; run \`${cliCommand("connect <workspace-url> <enrollment>")}\` first`); process.exit(1); }
   const runtime = createHookRuntime(runtimePaths(dir));
   await runtime.exporter?.flush();
   const status = runtime.exporter?.status();
@@ -645,6 +713,14 @@ function cliPath(): string {
  *  so every project a developer opens is governed without a per-repo `init`. */
 function runInstall(args: string[]): void {
   const dir = userHome();
+  // Run through `npx`, this CLI lives in npm's throwaway cache; registering that path
+  // would leave a hook that stops starting whenever npm clears it — and a hook that
+  // cannot start lets every action through. Pin the durable copy, as `init` does, and
+  // fall back to the portable `npx` command when none can be made.
+  const commandFor = (h: Harness): string => {
+    const pin = ensureDurableRuntime(cliPath(), hookVersion());
+    return pin.cli ? absoluteHookCommand(pin.cli, h) : hookCommand(h);
+  };
   const harnessesFor = (): Harness[] => args.includes("--codex") ? ["codex"]
     : args.includes("--cursor") ? ["cursor"]
     : args.includes("--claude") ? ["claude"]
@@ -660,7 +736,8 @@ function runInstall(args: string[]): void {
       const exists = existsSync(file);
       console.log(`Would ${exists ? "modify" : "create"} ${file}`);
       if (exists) console.log(`  backing it up to  ${file}.scopebond-backup`);
-      console.log(`  adding hook       ${absoluteHookCommand(cliPath(), h)}`);
+      // Previewed without copying anything: the path the real run would pin.
+      console.log(`  adding hook       ${absoluteHookCommand(isEphemeralPath(cliPath()) ? pinnedCliPath(hookVersion()) : cliPath(), h)}`);
       if (exists && isHarnessConfigured(file)) console.log(`  (a Scopebond hook is already there; it would be replaced, not duplicated)`);
     }
     console.log(`\nNothing else in those files is changed. Run without --dry-run to apply.`);
@@ -677,7 +754,7 @@ function runInstall(args: string[]): void {
       try {
         const target = userHarnessFile(h);
         const backup = existsSync(target) ? `${target}.scopebond-backup` : null;
-        const file = writeHarnessConfig(target, h, absoluteHookCommand(cliPath(), h));
+        const file = writeHarnessConfig(target, h, commandFor(h));
         console.log(`✓ ${harnessName(h)} configured in ${file}`);
         if (backup && existsSync(backup)) console.log(`  original kept at ${backup}`);
       } catch (error) { console.error(`✗ ${harnessName(h)}: ${(error as Error).message}`); process.exitCode = 1; }
@@ -719,7 +796,7 @@ function runStatus(): void {
   const connected = !!loadConnection(resolveConfigDir(process.cwd()));
   const dbPath = join(resolveConfigDir(process.cwd()), "receipts.db");
   console.log(`Scopebond hook ${hookVersion()}`);
-  console.log(`  user home        ${home} ${installed ? "(installed)" : "(not installed — run `scopebond install`)"}`);
+  console.log(`  user home        ${home} ${installed ? "(installed)" : `(not installed — run \`${cliCommand("install")}\`)`}`);
   console.log(`  active config    ${resolveConfigDir(process.cwd())}`);
   const ignored = untrustedProjectPolicy(process.cwd());
   if (ignored) console.log(`  project policy   ${ignored} ignored — not trusted (run \`${cliCommand("trust")}\` to use it)`);
@@ -729,7 +806,7 @@ function runStatus(): void {
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
   console.log(`  local receipts   ${existsSync(dbPath) ? `${dbPath} (${describeStore(dbPath)})` : "none yet"}`);
   for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
-    for (const file of [scopes.project, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
+    for (const file of [scopes.project, scopes.local, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
   }
 }
 
@@ -744,7 +821,7 @@ async function runDoctor(): Promise<void> {
   console.log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}`);
   const active = resolveConfigDir(process.cwd());
   const hasPolicy = existsSync(join(active, "policy.json"));
-  console.log(`  active config    ${active} ${hasPolicy ? "ok" : "no policy (run `scopebond install` or `init`)"}`);
+  console.log(`  active config    ${active} ${hasPolicy ? "ok" : `no policy (run \`${cliCommand("init")}\` here, or \`${cliCommand("install")}\` once for your user)`}`);
   if (!hasPolicy) problems.push("no policy found in the active config dir");
   const ignored = untrustedProjectPolicy(process.cwd());
   if (ignored) console.log(`  project policy   ${ignored} IGNORED — not trusted (never trusted, or edited since). Review it, then \`${cliCommand("trust")}\``);
@@ -763,14 +840,24 @@ async function runDoctor(): Promise<void> {
     }
     anyHarness = true;
     console.log(`  ${name.padEnd(15)} ${label}`);
-    for (const file of [scopes.project, scopes.user]) {
+    for (const file of [scopes.project, scopes.local, scopes.user]) {
       if (!file) continue;
+      // A project file git shares must not name a path on this machine: it starts here,
+      // so the resolve check below passes, but on every teammate's machine it cannot
+      // start — and a hook that cannot start is a non-blocking error, so their agent runs
+      // unchecked. Only the doctor on the machine that wrote it can see this coming.
+      const share = file === scopes.project ? gitShareState(file) : "none";
+      const shared = share === "tracked" || share === "untracked";
       for (const command of configuredHookCommands(file)) {
         const ok = hookCommandResolves(command);
-        console.log(`    ${ok ? "ok  " : "BAD "} ${file}`);
+        const leaks = ok && shared && isMachineSpecificCommand(command);
+        console.log(`    ${ok && !leaks ? "ok  " : "BAD "} ${file}`);
         if (!ok) {
           console.log(`         command cannot start: ${command}`);
           problems.push(`${name} hook command no longer resolves in ${file} — run \`${cliCommand("init")}\` to repair it`);
+        } else if (leaks) {
+          console.log(`         machine-specific command in a file git shares: ${command}`);
+          problems.push(`${name} hook in ${file} names a path on this machine and git shares that file — anyone who clones it gets a hook that cannot start, and their agent runs unchecked. Run \`${cliCommand(`init${harness === "claude" ? "" : ` --${harness}`}`)}\` to move it, then commit the change`);
         }
       }
     }
@@ -799,8 +886,8 @@ function runUninstall(args: string[]): void {
   // the install the site actually tells people to run — `uninstall` reported "no
   // user-level harness config found" and left the project hook in place.
   for (const h of ["claude", "cursor", "codex"] as Harness[]) {
-    for (const file of [projectHarnessFile(h, process.cwd()), userHarnessFile(h)]) {
-      if (removeHarnessConfig(file)) { console.log(`✓ removed the Scopebond hook from ${file}`); removed++; }
+    for (const file of [projectHarnessFile(h, process.cwd()), localHarnessFile(h, process.cwd()), userHarnessFile(h)]) {
+      if (file && removeHarnessConfig(file)) { console.log(`✓ removed the Scopebond hook from ${file}`); removed++; }
     }
   }
   if (removed === 0) console.log("no Scopebond hook found in this project or your user config.");
@@ -835,13 +922,17 @@ function runLogin(): void {
  *  single usage line listing 15 command names, which told a reader nothing about what any
  *  of them did or what arguments they take. */
 const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: string[] }> = [
-  { name: "init", args: "[--cursor|--codex] [--no-install] [--npx] [--force] [--yes]",
+  { name: "init", args: "[--cursor|--codex] [--shared] [--dry-run] [--no-install] [--npx] [--force] [--yes]",
     summary: "set this project up: keys, a starter policy, and your agent wired to the hook",
     detail: [
       "Writes .scopebond/ (machine key, countersigning key, starter policy, .gitignore) and",
-      "configures .claude/settings.json, .cursor/hooks.json or .codex/hooks.json.",
-      "Pins a durable copy of this package so the hook starts fast; --npx keeps the portable",
-      "command instead. --no-install prints the config snippet rather than writing it.",
+      "wires your agent to the hook. It pins a durable copy of this package so the hook starts",
+      "fast, and because that command names paths on this machine it goes where git will not",
+      "share it: .claude/settings.local.json (kept out of git for this clone), or for Cursor",
+      "and Codex their project file only while git does not track it. --shared writes the",
+      "portable npx command to .claude/settings.json, .cursor/hooks.json or .codex/hooks.json",
+      "instead, so everyone who clones the project gets the hook. --dry-run shows what it",
+      "would write. --no-install prints the config snippet rather than writing it.",
       "Needs a terminal, or --yes in a script, because it changes what governs your agent.",
     ] },
   { name: "install", args: "[--claude] [--cursor] [--codex] [--dry-run] [--force] [--yes]",

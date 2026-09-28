@@ -6,10 +6,11 @@
 // trusted that exact policy (`scopebond trust`, or `init` in the project): a cloned
 // repository, or an agent inside it, must not be able to swap in its own policy.
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export type Harness = "claude" | "cursor" | "codex";
 
@@ -34,27 +35,125 @@ export function projectHarnessFile(harness: Harness, cwd: string = process.cwd()
   return join(cwd, ".claude", "settings.json");
 }
 
-/** Which config files actually carry a Scopebond hook for this harness. There are two
- *  places it can live — the project config `init` writes and the user config `install`
- *  writes — and `status`/`doctor` must look at both: checking only the user one told
- *  everyone who ran `init` that their install had failed. */
-export interface HarnessScopes { project: string | null; user: string | null }
+/** The personal, per-machine project config for a harness, or null when the harness
+ *  has none. Claude Code reads `.claude/settings.local.json` beside `settings.json` and
+ *  merges the hooks of both; it is the place for anything that names a path on this
+ *  machine. Cursor and Codex have no such file. */
+export function localHarnessFile(harness: Harness, cwd: string = process.cwd()): string | null {
+  return harness === "claude" ? join(cwd, ".claude", "settings.local.json") : null;
+}
+
+/** Which config files actually carry a Scopebond hook for this harness. There are three
+ *  places it can live — the shared project config, the personal project config (Claude
+ *  Code's `settings.local.json`, where `init` pins the fast command) and the user config
+ *  `install` writes — and `status`/`doctor` must look at all of them: checking only the
+ *  user one told everyone who ran `init` that their install had failed. */
+export interface HarnessScopes { project: string | null; local: string | null; user: string | null }
 
 export function harnessScopes(harness: Harness, cwd: string = process.cwd()): HarnessScopes {
   const project = projectHarnessFile(harness, cwd);
+  const local = localHarnessFile(harness, cwd);
   const user = userHarnessFile(harness);
   return {
     project: isHarnessConfigured(project) ? project : null,
+    local: local && isHarnessConfigured(local) ? local : null,
     user: isHarnessConfigured(user) ? user : null,
   };
 }
 
 /** One word for where a harness is wired, for a status line. */
 export function harnessScopeLabel(scopes: HarnessScopes): string {
-  if (scopes.project && scopes.user) return "configured (project + user)";
-  if (scopes.project) return "configured (this project)";
-  if (scopes.user) return "configured (user-level)";
-  return "";
+  const where = [
+    scopes.project ? "project" : "",
+    scopes.local ? "this machine" : "",
+    scopes.user ? "user" : "",
+  ].filter(Boolean);
+  if (where.length === 0) return "";
+  if (where.length === 1 && scopes.project) return "configured (this project)";
+  if (where.length === 1 && scopes.local) return "configured (this project, this machine only)";
+  if (where.length === 1 && scopes.user) return "configured (user-level)";
+  return `configured (${where.join(" + ")})`;
+}
+
+/** Whether a hook command names a path that exists only on this machine — the pinned
+ *  `"<node>" "<…/cli.js>" claude` form — rather than the portable `npx` form. */
+export function isMachineSpecificCommand(command: string): boolean {
+  if (/(^|\s)npx(\.cmd)?\s/.test(command)) return false;
+  const first = (command.match(/"[^"]+"|\S+/) ?? [""])[0].replace(/^"|"$/g, "");
+  return isAbsolute(first) || /^[A-Za-z]:[\\/]/.test(first);
+}
+
+/** How git treats a config file: committed (`tracked`), kept out (`ignored`), neither
+ *  yet (`untracked`, so a `git add .` would commit it), or not in a repository / no git
+ *  on this machine (`none`). A file git shares must never carry a machine-specific
+ *  command: on a teammate's machine the path does not exist, the command cannot start,
+ *  and Claude Code, Cursor and Codex all treat a hook that cannot start as a non-blocking
+ *  error — the agent runs with no check at all. */
+export type GitShare = "tracked" | "ignored" | "untracked" | "none";
+
+export function gitShareState(file: string): GitShare {
+  const cwd = dirname(file);
+  const git = (args: string[]): number => {
+    try {
+      mkdirSync(cwd, { recursive: true });
+      execFileSync("git", args, { cwd, stdio: "ignore", timeout: 5000 });
+      return 0;
+    } catch (error) {
+      const status = (error as { status?: number | null }).status;
+      return typeof status === "number" ? status : -1;
+    }
+  };
+  if (git(["rev-parse", "--is-inside-work-tree"]) !== 0) return "none";
+  if (git(["ls-files", "--error-unmatch", "--", file]) === 0) return "tracked";
+  return git(["check-ignore", "-q", "--", file]) === 0 ? "ignored" : "untracked";
+}
+
+/** Keep a file out of git for this clone only, through `.git/info/exclude` — never the
+ *  repository's own `.gitignore`, which is the team's file. Returns true when the file is
+ *  ignored afterwards. */
+export function excludeFromGit(file: string): boolean {
+  try {
+    const cwd = dirname(file);
+    mkdirSync(cwd, { recursive: true });
+    // The entry is built from git's own view of where this directory sits in the work
+    // tree (`--show-prefix`), not from comparing file-system paths: the same directory
+    // can be spelled two ways (a Windows 8.3 short name, a symlinked temp dir), and a
+    // path computed across the two spellings excludes the wrong file.
+    const prefix = execFileSync("git", ["rev-parse", "--show-prefix"], { cwd, encoding: "utf8", timeout: 5000 }).trim();
+    const exclude = resolve(cwd, execFileSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd, encoding: "utf8", timeout: 5000 }).trim());
+    const entry = "/" + prefix + basename(file);
+    const existing = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+    if (!existing.split(/\r?\n/).includes(entry)) {
+      mkdirSync(dirname(exclude), { recursive: true });
+      writeFileSync(exclude, `${existing}${existing && !existing.endsWith("\n") ? "\n" : ""}${entry}\n`);
+    }
+    return gitShareState(file) === "ignored";
+  } catch { return false; }
+}
+
+/** Remove the Scopebond entries whose command `remove` selects, leaving every other
+ *  setting alone. Returns the number of entries removed. */
+export function pruneHarnessEntries(file: string, remove: (command: string) => boolean): number {
+  if (!existsSync(file)) return 0;
+  let config: Record<string, unknown>;
+  try { config = readHarnessConfig(file); } catch { return 0; }
+  const hooks = isRecord(config.hooks) ? config.hooks : null;
+  if (!hooks) return 0;
+  let removed = 0;
+  const commandsOf = (e: unknown): string[] => {
+    if (!isRecord(e)) return [];
+    const own = isScopebond(e.command) ? [String(e.command)] : [];
+    const nested = Array.isArray(e.hooks) ? e.hooks.flatMap(commandsOf) : [];
+    return [...own, ...nested];
+  };
+  for (const [event, value] of Object.entries(hooks)) {
+    if (!Array.isArray(value)) continue;
+    const kept = value.filter((e) => !(entryMatches(e) && commandsOf(e).some(remove)));
+    removed += value.length - kept.length;
+    (hooks as Record<string, unknown[]>)[event] = kept;
+  }
+  if (removed > 0) writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+  return removed;
 }
 
 /** The file in the user home that pins trusted project policies: absolute project

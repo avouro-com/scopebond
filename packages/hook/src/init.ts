@@ -7,7 +7,10 @@ import { dirname, join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import { compile, defaultRules, loadRules, saveRules, rulesPath } from "./rules.js";
-import { readHarnessConfig, projectHarnessFile, harnessEntryMatches, backupHarnessConfig } from "./install.js";
+import {
+  readHarnessConfig, projectHarnessFile, localHarnessFile, harnessEntryMatches, backupHarnessConfig,
+  gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
+} from "./install.js";
 import { hookCommand } from "./version.js";
 
 export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKid: string; policyPath: string; rulesPath: string } {
@@ -35,19 +38,104 @@ export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKi
   return { agentKid: agent.kid, policyPath, rulesPath: rulesFile };
 }
 
+/** Where `init` put the hook, and why — for the lines it prints. */
+export interface HookPlacement {
+  /** The config file written. */
+  file: string;
+  /** The command written into it. */
+  command: string;
+  /** `shared`: the project config a team commits (portable command only).
+   *  `personal`: a file only this clone uses (the pinned, machine-specific command). */
+  scope: "shared" | "personal";
+  /** One line for the user when the placement differs from what they might expect. */
+  note?: string;
+  /** Machine-specific entries moved out of a shared config file (a repair). */
+  repaired: number;
+}
+
+/** Place the hook for a project so that nothing machine-specific reaches a file git
+ *  shares. A pinned command (`"<node>" "<…/cli.js>" claude`) is fast but names paths that
+ *  exist only here; in a committed `.claude/settings.json` it cannot start on a
+ *  teammate's machine, and an agent treats a hook that cannot start as a non-blocking
+ *  error — so the agent there would run unchecked, while the file says it is governed.
+ *
+ *  - `shared` (or no pinned command): the portable `npx` form in the project config.
+ *  - Claude Code, pinned: `.claude/settings.local.json`, kept out of git for this clone;
+ *    any machine-specific entry an older `init` wrote into `settings.json` is removed.
+ *  - Cursor / Codex, pinned: they have no personal file, so the project file is used
+ *    only if git does not already track it (then excluded for this clone); a tracked
+ *    file gets the portable form. */
+export function placeHook(
+  harness: "claude" | "cursor" | "codex",
+  cwd: string,
+  pinned: string | undefined,
+  opts: { shared?: boolean } = {},
+): HookPlacement {
+  const shared = projectHarnessFile(harness, cwd);
+  const portable = hookCommand(harness);
+  const local = localHarnessFile(harness, cwd);
+  if (opts.shared || !pinned) {
+    const file = installHarness(harness, cwd, portable);
+    // One hook per project: a personal copy beside a shared one would check every action twice.
+    if (local) pruneHarnessEntries(local, () => true);
+    return { file, command: portable, scope: "shared", repaired: 0 };
+  }
+  if (local) {
+    const state = gitShareState(local);
+    if (state === "tracked") {
+      const file = installHarness(harness, cwd, portable);
+      return { file, command: portable, scope: "shared", repaired: 0,
+        note: `${local} is committed to git, so the portable command was used (it starts on any machine)` };
+    }
+    // An existing portable hook in the shared file is the team's; leave it rather than
+    // running two hooks, and say how to get the fast one.
+    if (configuredHookCommands(shared).some((c) => !isMachineSpecificCommand(c))) {
+      return { file: shared, command: portable, scope: "shared", repaired: 0,
+        note: `kept the shared hook already in ${shared}; remove it there to pin a faster one on this machine` };
+    }
+    // A personal file git would still add is not personal: if it cannot be excluded,
+    // fall back to the portable command rather than leave a pinned path to be committed.
+    if (state === "untracked" && !excludeFromGit(local)) {
+      const file = installHarness(harness, cwd, portable);
+      pruneHarnessEntries(local, () => true);
+      pruneHarnessEntries(shared, isMachineSpecificCommand);
+      return { file, command: portable, scope: "shared", repaired: 0,
+        note: `${local} could not be kept out of git, so the portable command was used` };
+    }
+    const file = installHarness(harness, cwd, pinned, local);
+    const repaired = pruneHarnessEntries(shared, isMachineSpecificCommand);
+    return { file, command: pinned, scope: "personal", repaired };
+  }
+  const state = gitShareState(shared);
+  if (state === "tracked") {
+    const file = installHarness(harness, cwd, portable);
+    return { file, command: portable, scope: "shared", repaired: 0,
+      note: `${shared} is committed to git, so the portable command was used (it starts on any machine)` };
+  }
+  if (state === "untracked" && !excludeFromGit(shared)) {
+    const file = installHarness(harness, cwd, portable);
+    return { file, command: portable, scope: "shared", repaired: 0,
+      note: `${shared} could not be kept out of git, so the portable command was used` };
+  }
+  const file = installHarness(harness, cwd, pinned);
+  return { file, command: pinned, scope: "personal", repaired: 0 };
+}
+
 /** Install the hook into the agent's own config file, merging with anything already
  *  there (idempotent — safe to run twice). Returns the file it wrote. This is what
  *  lets `connect` finish setup without the user hand-editing JSON.
- *  `cwd` defaults to the current directory (the project root the user runs it in). */
+ *  `cwd` defaults to the current directory (the project root the user runs it in).
+ *  Writes exactly where it is told; `placeHook` decides where a command may go. */
 export function installHarness(
   harness: "claude" | "cursor" | "codex",
   cwd: string = process.cwd(),
-  /** The command to run per tool call. Defaults to the portable `npx` form; `init`
-   *  passes a pinned absolute path when it has one, which is ~7x faster to start. */
+  /** The command to run per tool call. Defaults to the portable `npx` form. */
   command?: string,
+  /** The file to write; defaults to the shared project config. */
+  target?: string,
 ): string {
   const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-  const file = projectHarnessFile(harness, cwd);
+  const file = target ?? projectHarnessFile(harness, cwd);
   const config = readHarnessConfig(file); // throws, leaving the file intact, if it is not a JSON object
   backupHarnessConfig(file); // keep the user's original beside it before the first change
   mkdirSync(dirname(file), { recursive: true });

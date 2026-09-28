@@ -55,10 +55,27 @@ npx @scopebond/hook init --codex    # Codex, then approve it once with /hooks
 
 `init` scaffolds `.scopebond/` in the current project (a machine signing key, a
 countersigning key, a starter policy — "protect main and production paths" — and a
-`.gitignore` so none of it is committed) and configures `.claude/settings.json`,
-`.cursor/hooks.json`, or `.codex/hooks.json`. Then run one safe command in the agent and see the receipt in
-`.scopebond/receipts.db`. `init`, `trust` and `uninstall` are meant for a person at a
-terminal: in a script or CI, pass `--yes`.
+`.gitignore` so none of it is committed) and wires your agent to the hook. Then run one
+safe command in the agent and see the receipt in `.scopebond/receipts.db`. `init`, `trust`
+and `uninstall` are meant for a person at a terminal: in a script or CI, pass `--yes`.
+`npx @scopebond/hook init --dry-run` shows what it would write, and changes nothing.
+
+**Where the hook goes, and why.** `init` pins a copy of the hook on this machine so it
+starts fast on every tool call. That command names paths that exist only here, so it
+never goes into a file your team shares: for Claude Code it goes into
+`.claude/settings.local.json`, which `init` keeps out of git for this clone; for Cursor
+and Codex it goes into `.cursor/hooks.json` or `.codex/hooks.json` only while git does not
+already track that file, and a tracked file gets the portable command instead. A hook
+command that cannot start is treated by the agent as a non-blocking error — the agent
+carries on with no check — so a machine-specific path in a committed file would leave
+every teammate unprotected while the file says otherwise. `doctor` reports that case, and
+running `init` again moves an entry an older version wrote into `.claude/settings.json`.
+
+To give everyone who clones the project the hook, use `init --shared`: it writes the
+portable command (`npx -y @scopebond/hook@<version> claude`) to `.claude/settings.json`,
+`.cursor/hooks.json` or `.codex/hooks.json`. It starts on any machine, more slowly, and
+until a teammate runs `init` themselves it blocks their agent's actions with a message
+saying how to set it up.
 
 Check what it did with `npx @scopebond/hook status` (which agents are configured, in
 which scope) and `npx @scopebond/hook doctor` (whether each configured command can
