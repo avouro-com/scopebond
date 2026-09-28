@@ -184,9 +184,8 @@ test("install --codex writes ~/.codex/hooks.json and explains the one approval s
   rmSync(home, { recursive: true, force: true }); rmSync(sbHome, { recursive: true, force: true });
 });
 
-test("login points at connect and does not pretend device flow works", () => {
+test("login without a workspace URL explains what it needs (the flow itself: login.test.mjs)", () => {
   const r = runCli(["login"], {});
-  assert.equal(r.status, 0);
-  assert.match(r.stdout, /not available yet/i);
-  assert.match(r.stdout, /connect/);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /usage: .*login <workspace-url>/);
 });

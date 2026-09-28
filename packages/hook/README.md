@@ -133,9 +133,21 @@ before they land, make `@scopebond/github-action` a required check on pull reque
 
 ## Connect it to your workspace (optional)
 
-To see the receipts in your hosted Scopebond workspace, create a connection from
-the portal's **Connect** step (it gives you a one-use enrollment bundle), save it
-as `scopebond-enrollment.json`, then:
+To see the receipts in your hosted Scopebond workspace, sign this computer in:
+
+```
+npx @scopebond/hook login https://<your-workspace>
+```
+
+It prints a short code and a link. Someone who manages the workspace opens the link,
+checks that the code matches, and approves it for an environment and agent. The
+command then finishes connecting on its own: nothing is copied or pasted, and the
+code expires after 10 minutes if nobody approves it. Add `--cursor` or `--codex`
+for those agents, or `--no-install` to leave the agent's settings alone.
+
+If your workspace does not offer sign-in codes, create a connection from the
+portal's **Connect** step (it gives you a one-use enrollment bundle), save it as
+`scopebond-enrollment.json`, then:
 
 ```
 npx @scopebond/hook connect https://<your-workspace> scopebond-enrollment.json

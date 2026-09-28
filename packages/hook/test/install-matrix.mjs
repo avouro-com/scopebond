@@ -86,10 +86,10 @@ check("connect exists and rejects an unreadable enrollment fast (exit 1, no hang
 });
 
 // 6. login is honest that device flow is not available yet.
-check("login points at connect instead of pretending device flow works", () => {
+check("login without a workspace URL explains what it needs", () => {
   const r = sb(["login"], { env: baseEnv });
-  assert.equal(r.status, 0, r.out);
-  assert.ok(/not available yet/i.test(r.out) && /connect/.test(r.out), r.out);
+  assert.equal(r.status, 1, r.out);
+  assert.ok(/login <workspace-url>/.test(r.out), r.out);
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : `\nall checks passed`);
