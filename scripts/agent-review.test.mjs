@@ -52,3 +52,12 @@ test("LABELS covers exactly the three verdicts and out-of-scope routes to a main
   assert.deepEqual(Object.keys(LABELS).sort(), ["ALIGNED", "NEEDS-CHANGES", "OUT-OF-SCOPE"]);
   assert.ok(LABELS["OUT-OF-SCOPE"].includes("needs-maintainer"));
 });
+
+test("sanitize leaves no tag behind when stripping one would form another", () => {
+  // A single pass over `<scr<b>ipt>` removes `<b>` and joins the rest into `<script>`.
+  for (const input of ["<scr<b>ipt>alert(1)</scr<b>ipt>", "<<img>img src=x onerror=alert(1)>", "a <b>bold</b> c", "1 < 2 > 0"]) {
+    const out = sanitize(input);
+    assert.equal(/[<>]/.test(out), false, `no angle bracket survives: ${JSON.stringify(input)} → ${JSON.stringify(out)}`);
+  }
+  assert.equal(sanitize("a <b>bold</b> c"), "a bold c");
+});

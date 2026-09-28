@@ -44,14 +44,25 @@ export function parseVerdict(text) {
   try { return JSON.parse(m ? m[0] : String(text ?? "")); } catch { return null; }
 }
 
+/** Remove HTML tags until none are left, then drop any stray angle bracket. One pass is
+ * not enough: removing the inner tag of `<scr<b>ipt>` joins the outside into a new
+ * `<script>`. Repeating to a fixed point and then removing every remaining `<`/`>`
+ * leaves nothing a renderer could read as a tag. */
+export function stripTags(text) {
+  let out = text;
+  for (let previous = ""; previous !== out; ) {
+    previous = out;
+    out = out.replace(/<[^<>]*>/g, "");
+  }
+  return out.replace(/[<>]/g, "");
+}
+
 /** Neutralize markdown/HTML that a prompt-injected verdict field could carry before the
  * bot posts it with its write token: strip HTML tags, reduce images to their alt text
  * (no remote fetch), defang script/data link schemes, break `@`-mentions and team
  * pings, collapse to a single line and cap the length. */
 export function sanitize(s, max = 300) {
-  return String(s ?? "")
-    .replace(/[\r\n]+/g, " ")
-    .replace(/<[^>]*>/g, "")
+  return stripTags(String(s ?? "").replace(/[\r\n]+/g, " "))
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\]\(\s*(?:javascript|data|vbscript):/gi, "](")
     .replace(/@(?=[A-Za-z0-9_-])/g, "@​")
