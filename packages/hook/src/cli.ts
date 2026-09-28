@@ -25,7 +25,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
@@ -652,6 +652,12 @@ async function runConnect(args: string[]): Promise<void> {
   let bundle: CloudEnrollmentBundle;
   try { bundle = readBundleArg(bundleArg, readStdin); }
   catch { console.error(`could not read the enrollment (expected a file, inline blob, or JSON on stdin)\n${enrollmentHelp}`); process.exit(1); }
+  await finishConnect(dir, url, bundle, harness, args);
+}
+
+/** Enroll with a bundle and wire the agent: shared by `connect` (a pasted enrollment)
+ *  and `login` (one received through device-code approval). */
+async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBundle, harness: Harness, args: string[]): Promise<void> {
   try {
     const c = await connectCloud(dir, url, bundle);
     console.log(`✓ Connected to ${c.url}`);
@@ -911,11 +917,68 @@ function runTrust(args: string[]): void {
   console.log("It governs agents in this project until it changes; after any edit, review it and run trust again.");
 }
 
-function runLogin(): void {
-  console.log("Device-code login is not available yet.");
-  console.log(`For now, connect with a one-time enrollment from your workspace:`);
-  console.log(`  ${cliCommand("connect <workspace-url> <enrollment>")}`);
-  process.exit(0);
+/** `login <workspace-url>` — connect this computer without pasting anything. It asks
+ *  the workspace for a short code, shows it with the page to open, and waits while a
+ *  person who can manage the workspace approves it there for an environment and agent.
+ *  The approval hands back a single-use enrollment, which completes exactly as
+ *  `connect` does. Nothing secret is printed: the device code stays in memory. */
+async function runLogin(args: string[]): Promise<void> {
+  const positional = args.filter((a) => !a.startsWith("--"));
+  const harness = selectedHarness(args);
+  let origin: string;
+  try {
+    const parsed = new URL(positional[0] ?? "");
+    const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+    if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) throw new Error("https required");
+    origin = parsed.origin;
+  } catch {
+    console.error(`usage: ${cliCommand("login <workspace-url> [--claude|--cursor|--codex] [--no-install]")}`);
+    console.error("The workspace URL is the address of your Scopebond workspace, for example https://cloud.scopebond.com.");
+    process.exit(1);
+  }
+  const post = async (path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> => {
+    const response = await fetch(new URL(path, origin), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      redirect: "error", signal: AbortSignal.timeout(15_000),
+    });
+    return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, unknown> };
+  };
+  let start: { status: number; json: Record<string, unknown> };
+  try { start = await post("/v1/device/code", { client_name: hostname(), harness }); }
+  catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}`); process.exit(1); }
+  const deviceCode = typeof start.json.device_code === "string" ? start.json.device_code : "";
+  if (start.status !== 200 || !deviceCode) {
+    console.error(`${origin} did not start a login (HTTP ${start.status}). Check the workspace URL, or use ${cliCommand("connect <workspace-url> <enrollment>")}.`);
+    process.exit(1);
+  }
+  const userCode = String(start.json.user_code ?? "");
+  const verify = String(start.json.verification_uri_complete ?? start.json.verification_uri ?? origin);
+  let intervalMs = Math.max(1, Number(start.json.interval ?? 5)) * 1000;
+  const deadline = Date.now() + Math.max(60, Number(start.json.expires_in ?? 600)) * 1000;
+  console.log(`To connect this computer, open:\n\n  ${verify}\n\nand check that it shows the code  ${userCode}\n`);
+  console.log("Waiting for approval (the code expires in 10 minutes; Ctrl+C to stop)…");
+  const dir = configDir();
+  scaffold(dir, {});
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    let polled: { status: number; json: Record<string, unknown> };
+    try { polled = await post("/v1/device/token", { device_code: deviceCode }); }
+    catch { continue; } // a transient network error: keep waiting until the deadline
+    if (polled.status === 200 && polled.json.enrollment && typeof polled.json.enrollment === "object") {
+      console.log("✓ Approved");
+      await finishConnect(dir, origin, polled.json.enrollment as CloudEnrollmentBundle, harness, args);
+      return;
+    }
+    const error = polled.json.error;
+    if (error === "authorization_pending") continue;
+    if (error === "slow_down") { intervalMs += 5_000; continue; }
+    if (error === "access_denied") { console.error("The request was denied in the workspace. Nothing was connected."); process.exit(1); }
+    if (error === "expired_token") break;
+    console.error(`login failed (${String(error ?? `HTTP ${polled.status}`)}). Run the command again for a new code.`);
+    process.exit(1);
+  }
+  console.error("The code expired before it was approved. Run the command again for a new one.");
+  process.exit(1);
 }
 
 /** What each command does, its arguments, and one example. The whole help used to be a
@@ -970,6 +1033,12 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "With no --before it only reports. With one, it archives the receipts it will remove",
       "to a JSONL file beside the database, then removes them. Refuses once the log has been",
       "anchored, because a receipt's position is its anchor leaf index.",
+    ] },
+  { name: "login", args: "<workspace-url> [--claude|--cursor|--codex] [--no-install]",
+    summary: "connect this computer to a Scopebond Cloud workspace by approving a short code there",
+    detail: [
+      "Prints a code and a link; someone who manages the workspace opens it, checks the code",
+      "and approves it for an environment and agent. Nothing is copied or pasted.",
     ] },
   { name: "connect", args: "<workspace-url> <enrollment> [--claude|--cursor|--codex]",
     summary: "send receipts to a Scopebond Cloud workspace as well as keeping them locally" },
@@ -1028,7 +1097,7 @@ else if (cmd === "flush") { await runFlush(); }
 else if (cmd === "status") { runStatus(); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "uninstall") { runUninstall(rest); }
-else if (cmd === "login") { runLogin(); }
+else if (cmd === "login") { await runLogin(rest); }
 else if (cmd === "trust") { runTrust(rest); }
 else if (cmd === "prune") { await runPrune(rest); }
 else if (cmd === "rules") { runRules(rest); }
