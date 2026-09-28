@@ -32,6 +32,7 @@ import { verifyReceipt } from "@scopebond/gateway";
 import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime } from "./runtime.js";
+import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
@@ -134,7 +135,9 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
-    runtime = createHookRuntime(runtimePaths(resolveConfigDir(cwd)));
+    const dir = resolveConfigDir(cwd);
+    runtime = createHookRuntime(runtimePaths(dir));
+    useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate(fillPushBranch(mapper(input!), currentBranch(cwd)));
     await runtime.flush();
     // Close before deciding: the receipt is already committed, and leaving the handle
@@ -182,7 +185,9 @@ async function runCursor(): Promise<void> {
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
-    runtime = createHookRuntime(runtimePaths(resolveConfigDir(cwd)));
+    const dir = resolveConfigDir(cwd);
+    runtime = createHookRuntime(runtimePaths(dir));
+    useDigestKey(loadOrCreateDigestKey(dir));
     const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
     const decision = await runtime.evaluate(mapped);
     await runtime.flush();

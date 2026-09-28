@@ -12,6 +12,7 @@ import {
   gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
 } from "./install.js";
 import { hookCommand } from "./version.js";
+import { loadOrCreateDigestKey } from "./minimize.js";
 
 export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKid: string; policyPath: string; rulesPath: string } {
   mkdirSync(dir, { recursive: true });
@@ -24,6 +25,8 @@ export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKi
   // Machine signing key (agent) + gateway countersigning key (attester). Reused if present.
   loadOrCreateAttester({ file: keyPath });
   loadOrCreateAttester({ file: attesterPath });
+  // The per-machine key for keyed command and argument digests (see minimize.ts).
+  loadOrCreateDigestKey(dir);
   const agent = createSigner({ privateKeyPem: readFileSync(keyPath, "utf8") });
   // The editable rule set beside the compiled policy, so "edit the limits" means editing a
   // readable list rather than a 700-character lookahead. `compile(defaultRules())` produces

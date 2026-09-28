@@ -60,7 +60,7 @@ test("an MCP tool name maps to mcp.tool.call with a digested arg set", () => {
   assert.equal(m.intent.action_type, "mcp.tool.call");
   assert.equal(m.intent.params.server, "github");
   assert.equal(m.intent.params.tool, "create_issue");
-  assert.match(String(m.intent.params.args_digest), /^sha256:[0-9a-f]{64}$/);
+  assert.match(String(m.intent.params.args_digest), /^hmac-sha256:[0-9a-f]{64}$/);
 });
 
 test("WebFetch maps to net.fetch; an unknown tool falls back to tool.<name>, not evaluated", () => {

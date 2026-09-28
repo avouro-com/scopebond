@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   mapClaudeToolUse, mapCursorEvent, createHookRuntime, scaffold,
-  scrubSecrets, scrubParam, redactCommand, sha256,
+  scrubSecrets, scrubParam, redactCommand, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey,
 } from "../dist/index.js";
 
 // Secret-shaped values are built at runtime so no token literal sits in this source.
@@ -129,12 +129,42 @@ test("N-031: the command digest is taken over the scrubbed text, not the secret-
   const rand = rng(31);
   const password = pick(rand, ALNUM, 20);
   const command = `mysql -p${password} -e 'select 1'`;
+  useDigestKey(KEY_A);
   const redacted = redactCommand(command, 4096);
-  // The digest embedded in the redacted string equals the hash of the scrubbed command,
-  // so an attacker holding the receipt cannot brute-force the password from the digest.
+  // The digest embedded in the redacted string is the keyed digest of the scrubbed
+  // command, so the password is not an input to it at all.
   const scrubbed = scrubSecrets(command);
-  assert.equal(redacted.includes(sha256(scrubbed)), true, "digest is not over the scrubbed text");
-  assert.equal(redacted.includes(sha256(command)), false, "digest still leaks the original");
+  assert.equal(redacted.includes(keyedDigest(scrubbed)), true, "digest is not over the scrubbed text");
+  assert.equal(redacted.includes(keyedDigest(command)), false, "digest still leaks the original");
+  useDigestKey(null);
+});
+
+const KEY_A = "a".repeat(64);
+const KEY_B = "b".repeat(64);
+
+test("command and argument digests are keyed: not a plain hash, stable per key, different across keys", () => {
+  // A plain hash of a command whose head is printed beside it leaves only the rest to
+  // guess; a short secret the scrubber missed could be recovered offline from a receipt.
+  // Keyed, the digest cannot be tested against guesses without the machine's key.
+  const command = `deploy --target prod ${"x".repeat(80)} hunter2`;
+  useDigestKey(KEY_A);
+  const a1 = redactCommand(command);
+  const a2 = redactCommand(command);
+  useDigestKey(KEY_B);
+  const b = redactCommand(command);
+  useDigestKey(null);
+  assert.equal(a1, a2, "the same command on the same machine gives the same digest");
+  assert.notEqual(a1, b, "a different machine key gives a different digest");
+  assert.equal(a1.includes(sha256(scrubSecrets(command)).slice("sha256:".length)), false, "not the plain SHA-256");
+  assert.match(a1, /\(hmac-sha256:[0-9a-f]{64}\)$/, "labelled as keyed");
+});
+
+test("scaffold creates a per-machine digest key and reuses it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-digest-key-"));
+  scaffold(dir);
+  const key = readFileSync(join(dir, "digest.key"), "utf8").trim();
+  assert.match(key, /^[0-9a-f]{64}$/);
+  assert.equal(loadOrCreateDigestKey(dir), key, "an existing key is reused, not replaced");
 });
 
 test("a private key block is removed whole, even when unterminated", () => {
@@ -178,7 +208,7 @@ test("ordinary values a policy matches on are left alone", () => {
   assert.equal(scrubParam("npm"), "npm");
   const [m] = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "npm test -- --watch=false" } });
   assert.equal(m.intent.params.program, "npm");
-  assert.match(m.intent.params.command, /^npm test -- --watch=false \(sha256:/);
+  assert.match(m.intent.params.command, /^npm test -- --watch=false \(hmac-sha256:/);
   assert.equal(scrubSecrets("NODE_ENV=production PORT=8080 node server.js"), "NODE_ENV=production PORT=8080 node server.js");
 });
 
