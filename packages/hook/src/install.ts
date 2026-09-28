@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export type Harness = "claude" | "cursor" | "codex";
 
@@ -115,9 +115,13 @@ export function excludeFromGit(file: string): boolean {
   try {
     const cwd = dirname(file);
     mkdirSync(cwd, { recursive: true });
-    const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", timeout: 5000 }).trim();
+    // The entry is built from git's own view of where this directory sits in the work
+    // tree (`--show-prefix`), not from comparing file-system paths: the same directory
+    // can be spelled two ways (a Windows 8.3 short name, a symlinked temp dir), and a
+    // path computed across the two spellings excludes the wrong file.
+    const prefix = execFileSync("git", ["rev-parse", "--show-prefix"], { cwd, encoding: "utf8", timeout: 5000 }).trim();
     const exclude = resolve(cwd, execFileSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd, encoding: "utf8", timeout: 5000 }).trim());
-    const entry = "/" + relative(root, file).replace(/\\/g, "/");
+    const entry = "/" + prefix + basename(file);
     const existing = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
     if (!existing.split(/\r?\n/).includes(entry)) {
       mkdirSync(dirname(exclude), { recursive: true });

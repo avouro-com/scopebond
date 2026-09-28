@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { scaffold, hookCommandResolves, configuredHookCommands, isMachineSpecificCommand, gitShareState } from "../dist/index.js";
+import { scaffold, hookCommandResolves, configuredHookCommands, isMachineSpecificCommand, gitShareState, excludeFromGit } from "../dist/index.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const policy = {
@@ -134,14 +134,36 @@ test("init in a git repository pins the fast command in settings.local.json and 
   execFileSync(process.execPath, [cli, "init", "--yes"], { encoding: "utf8", cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
   const hooks = claudeHookCommands(project);
   assert.equal(hooks.length, 1);
+  // The invariant, whichever form init chose: nothing git would commit carries a
+  // machine-specific command.
+  const shareable = git(project, "ls-files", "--cached", "--others", "--exclude-standard").split(/\r?\n/).filter(Boolean);
+  for (const rel of shareable) {
+    for (const command of configuredHookCommands(join(project, rel))) {
+      assert.equal(isMachineSpecificCommand(command), false, `${rel} would be committed with ${command}`);
+    }
+  }
   if (isMachineSpecificCommand(hooks[0].command)) {
     assert.ok(hooks[0].file.endsWith("settings.local.json"));
     // `git check-ignore -q` exits 0 (no throw) when the file is ignored.
     git(project, "check-ignore", "-q", "--", ".claude/settings.local.json");
     assert.equal(gitShareState(hooks[0].file), "ignored");
-    // The team's .gitignore is not touched; the exclusion is this clone's own.
-    assert.ok(!existsSync(join(project, ".gitignore")), "the repository .gitignore is left alone");
   }
+  // The team's .gitignore is not touched; any exclusion is this clone's own.
+  assert.ok(!existsSync(join(project, ".gitignore")), "the repository .gitignore is left alone");
+});
+
+test("excludeFromGit uses git's own path for the directory, so a second spelling of it still works", { skip: !hasGit }, () => {
+  const project = gitProject("sb-hook-exclude-");
+  mkdirSync(join(project, ".claude"), { recursive: true });
+  const file = join(project, ".claude", "settings.local.json");
+  writeFileSync(file, "{}\n");
+  assert.equal(gitShareState(file), "untracked");
+  assert.equal(excludeFromGit(file), true);
+  assert.equal(gitShareState(file), "ignored");
+  const exclude = readFileSync(join(project, ".git", "info", "exclude"), "utf8");
+  assert.match(exclude, /^\/\.claude\/settings\.local\.json$/m, "a root-anchored entry for exactly this file");
+  assert.equal(excludeFromGit(file), true, "idempotent");
+  assert.equal(exclude.split("/.claude/settings.local.json").length, readFileSync(join(project, ".git", "info", "exclude"), "utf8").split("/.claude/settings.local.json").length, "no duplicate entry");
 });
 
 test("init repairs a pinned command an older init committed to .claude/settings.json", { skip: !hasGit }, () => {

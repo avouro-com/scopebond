@@ -93,7 +93,15 @@ export function placeHook(
       return { file: shared, command: portable, scope: "shared", repaired: 0,
         note: `kept the shared hook already in ${shared}; remove it there to pin a faster one on this machine` };
     }
-    if (state === "untracked") excludeFromGit(local);
+    // A personal file git would still add is not personal: if it cannot be excluded,
+    // fall back to the portable command rather than leave a pinned path to be committed.
+    if (state === "untracked" && !excludeFromGit(local)) {
+      const file = installHarness(harness, cwd, portable);
+      pruneHarnessEntries(local, () => true);
+      pruneHarnessEntries(shared, isMachineSpecificCommand);
+      return { file, command: portable, scope: "shared", repaired: 0,
+        note: `${local} could not be kept out of git, so the portable command was used` };
+    }
     const file = installHarness(harness, cwd, pinned, local);
     const repaired = pruneHarnessEntries(shared, isMachineSpecificCommand);
     return { file, command: pinned, scope: "personal", repaired };
@@ -104,7 +112,11 @@ export function placeHook(
     return { file, command: portable, scope: "shared", repaired: 0,
       note: `${shared} is committed to git, so the portable command was used (it starts on any machine)` };
   }
-  if (state === "untracked") excludeFromGit(shared);
+  if (state === "untracked" && !excludeFromGit(shared)) {
+    const file = installHarness(harness, cwd, portable);
+    return { file, command: portable, scope: "shared", repaired: 0,
+      note: `${shared} could not be kept out of git, so the portable command was used` };
+  }
   const file = installHarness(harness, cwd, pinned);
   return { file, command: pinned, scope: "personal", repaired: 0 };
 }
