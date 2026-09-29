@@ -24,7 +24,7 @@
 }
 
 import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
@@ -666,6 +666,14 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
   try {
     const c = await connectCloud(dir, url, bundle);
     console.log(`✓ Connected to ${c.url}`);
+    // With a user-level install present, the hook ignores a project policy until it is
+    // trusted, and would fall back to the user home, which holds no cloud.json: the agent
+    // stays governed, but nothing reaches the workspace. Connecting this project is the
+    // user's decision to use it, exactly as running `init` here is, so pin it the same way.
+    if (!process.env.SCOPEBOND_HOOK_DIR && resolve(dir) !== resolve(userHome()) && existsSync(join(userHome(), "policy.json"))) {
+      trustProjectPolicy(dir);
+      console.log(`✓ This project's rules are trusted (they override ${userHome()} here)`);
+    }
     // Configure the agent automatically (merges into the existing config), unless the
     // caller opts out. This removes the "paste this snippet" step. A hook that is already
     // configured — pinned by `init`, or user-level by `install` — is left as it is:
@@ -823,8 +831,7 @@ function runStatus(): void {
 
 async function runDoctor(): Promise<void> {
   const problems: string[] = [];
-  const [major, minor] = process.versions.node.split(".").map(Number);
-  const nodeOk = major > 22 || (major === 22 && minor >= 13);
+  const nodeOk = nodeSupported();
   console.log(`Scopebond doctor`);
   console.log(`  node             ${process.versions.node} ${nodeOk ? "ok" : "TOO OLD (need >=22.13)"}`);
   if (!nodeOk) problems.push("node >=22.13 is required (the Cloud outbox uses node:sqlite)");
@@ -1088,7 +1095,21 @@ function printHelp(topic: string | undefined, toStderr = false): void {
   out(`unless you run \`connect\`. Docs: https://github.com/avouro-com/scopebond`);
 }
 
+/** Whether this Node can run the receipt store (`node:sqlite`, 22.13+). */
+function nodeSupported(version = process.versions.node): boolean {
+  const [major, minor] = version.split(".").map(Number);
+  return major > 22 || (major === 22 && minor >= 13);
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
+// A setup command on an older Node would scaffold and wire the agent, then fail on the
+// first action with an error about a missing module. Stop before changing anything, and
+// say what to do. The hook subcommands are left alone: they already fail closed.
+if (["init", "install", "connect", "login"].includes(cmd ?? "") && !nodeSupported()) {
+  console.error(`Scopebond needs Node.js 22.13 or later; this is Node ${process.versions.node}.`);
+  console.error("Install the current Node.js LTS from https://nodejs.org, open a new terminal, and run the command again.");
+  process.exit(1);
+}
 if (cmd === "claude") { await runClaude(); }
 else if (cmd === "cursor") { await runCursor(); }
 else if (cmd === "codex") { await runCodex(); }

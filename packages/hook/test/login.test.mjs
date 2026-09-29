@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold } from "../dist/index.js";
+import { scaffold, isTrustedProject, resolveConfigDir } from "../dist/index.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
@@ -95,6 +95,36 @@ test("login: a code, then approval, then the enrollment completes as connect wou
     assert.doesNotMatch(r.stdout, /dc_x/, "the device code is never printed");
     assert.doesNotMatch(readFileSync(join(dir, "cloud.json"), "utf8"), /dc_x/, "and never written");
   } finally { workspace.close(); }
+});
+
+test("login: with a user-level install, the connected project governs, so its receipts reach the workspace", async () => {
+  // A user-level install makes the hook ignore an untrusted project policy. Before this
+  // was fixed, `login` and `connect` scaffolded the project without trusting it: the hook
+  // then resolved to the user home, which holds no cloud.json, and nothing was reported.
+  const home = mkdtempSync(join(tmpdir(), "sb-hook-login-home-"));
+  scaffold(home);
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-login-trust-"));
+  const dir = join(project, ".scopebond");
+  scaffold(dir);
+  const kids = {
+    attester: loadOrCreateAttester({ file: join(dir, "attester.key") }).attester.kid,
+    agent: loadOrCreateAttester({ file: join(dir, "agent.key") }).attester.kid,
+  };
+  const workspace = await startFakeWorkspace({ pendingPolls: 0, kids });
+  const env = { ...process.env, SCOPEBOND_HOME: home };
+  delete env.SCOPEBOND_HOOK_DIR;
+  const previousHome = process.env.SCOPEBOND_HOME;
+  try {
+    const r = await runCli(["login", workspace.url, "--no-install"], env, project);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(join(dir, "cloud.json")), "the connection is saved in the project");
+    process.env.SCOPEBOND_HOME = home;
+    assert.equal(isTrustedProject(dir), true, "the project policy is trusted");
+    assert.equal(resolveConfigDir(project), dir, "the hook resolves to the connected project");
+  } finally {
+    if (previousHome === undefined) delete process.env.SCOPEBOND_HOME; else process.env.SCOPEBOND_HOME = previousHome;
+    workspace.close();
+  }
 });
 
 test("login: a denied request connects nothing and says so", async () => {
