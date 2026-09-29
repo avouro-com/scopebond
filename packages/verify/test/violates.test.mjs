@@ -215,6 +215,38 @@ test("force_push_guard: a force-push with an unresolved target ref fails closed"
   assert.equal(v.clause_id, "fpg");
 });
 
+test("force_push_guard: deleting a protected branch is a violation, even without force (N-038)", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "monitor" }] });
+  const v = violates(policy, [], push({ force: false, delete: true, ref: "main" }, "2026-09-21T14:14:07Z", { rr: "deny" }));
+  assert.equal(v.violated, true);
+  assert.equal(v.clause_id, "fpg");
+});
+
+test("force_push_guard: deleting a feature branch is allowed", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "enforce" }] });
+  assert.equal(violates(policy, [], push({ force: false, delete: true, ref: "feature/old" }, "2026-09-21T14:14:07Z")).violated, false);
+});
+
+test("force_push_guard: a force-push to all branches (--all --force / --mirror) is a violation (N-039)", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "monitor" }] });
+  // --all --force carries the all flag with no single ref
+  assert.equal(violates(policy, [], push({ force: true, all: true, ref: "--all" }, "2026-09-21T14:14:07Z", { rr: "deny" })).violated, true);
+  // --mirror force-updates and prunes every ref
+  assert.equal(violates(policy, [], push({ force: true, all: true, delete: true, ref: "--mirror" }, "2026-09-21T14:14:07Z", { rr: "deny" })).violated, true);
+});
+
+test("force_push_guard: --all without force is an ordinary multi-branch push, allowed", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "enforce" }] });
+  assert.equal(violates(policy, [], push({ force: false, all: true, ref: "--all" }, "2026-09-21T14:14:07Z")).violated, false);
+});
+
+test("force_push_guard: the default protected set covers nested release branches (N-040)", () => {
+  const policy = valid({ clauses: [{ id: "fpg", type: "force_push_guard", mode: "monitor" }] });
+  // release/1.0/hotfix is nested; release/* would miss it, release/** catches it
+  assert.equal(violates(policy, [], push({ force: true, ref: "release/1.0/hotfix" }, "2026-09-21T14:14:07Z", { rr: "deny" })).violated, true);
+  assert.equal(violates(policy, [], push({ force: true, delete: true, ref: "release/2026/09/hotfix" }, "2026-09-21T14:14:07Z", { rr: "deny" })).violated, true);
+});
+
 test("force_push_guard: validates as a policy clause (with and without protected_refs)", () => {
   assert.equal(validatePolicy(valid({ clauses: [{ id: "fpg", type: "force_push_guard" }] })).valid, true);
   assert.equal(validatePolicy(valid({ clauses: [{ id: "fpg", type: "force_push_guard", protected_refs: ["main", "release/*"] }] })).valid, true);

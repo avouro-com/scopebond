@@ -26,7 +26,11 @@ export function hookCommand(harness: "claude" | "cursor" | "codex"): string {
 /** The command a user runs by hand for a CLI subcommand (`log`, `verify`, `test`,
  *  `init`, `connect`). After `npx @scopebond/hook init` there is no `scopebond-hook`
  *  binary on PATH, so printed guidance must use the same version-pinned `npx` form,
- *  which also resolves to a global install when one exists. */
+ *  which also resolves to a global install when one exists.
+ *
+ *  Always plain `npx`, on every platform: this string is copied into a terminal, and
+ *  `npx` works in cmd, PowerShell and every POSIX shell. The `.cmd` suffix is only
+ *  needed to spawn the shim without a shell, which is never what a reader is doing. */
 export function cliCommand(sub: string): string {
-  return `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/hook@${hookVersion()} ${sub}`;
+  return `npx -y @scopebond/hook@${hookVersion()} ${sub}`;
 }

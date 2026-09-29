@@ -249,3 +249,51 @@ test("attesterFromPrivateKeyPem round-trips a persisted key", () => {
     assert.equal(rebuilt.publicKeyPem, attester.publicKeyPem);
   } finally { cleanup(); }
 });
+
+test("FileReceiptStore tolerates a torn final line and keeps appending on a fresh line", async () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const { appendFileSync, readFileSync: read } = await import("node:fs");
+    const file = join(dir, "r.jsonl");
+    const store = new FileReceiptStore(file);
+    const receipt = { payload: { n: 1 }, signature: { sig: "x" } };
+    store.put(receipt);
+    appendFileSync(file, '{"payload":{"n":2},"sig'); // crash mid-append
+    const reopened = new FileReceiptStore(file);
+    assert.equal(reopened.list().length, 1, "the torn record is dropped, not fatal");
+    reopened.put({ payload: { n: 3 }, signature: { sig: "y" } });
+    const again = new FileReceiptStore(file);
+    assert.deepEqual(again.list().map((r) => r.payload.n), [1, 3], "the next record starts on its own line");
+    assert.ok(read(file, "utf8").endsWith("\n"));
+  } finally { cleanup(); }
+});
+
+test("FileReceiptStore refuses a corrupt record that is not the last line", async () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const { writeFileSync } = await import("node:fs");
+    const file = join(dir, "r.jsonl");
+    writeFileSync(file, '{"payload":{"n":1}}\n{broken\n{"payload":{"n":3}}\n');
+    assert.throws(() => new FileReceiptStore(file), /corrupt record on line 2/);
+  } finally { cleanup(); }
+});
+
+test("openReceiptStore uses SQLite with WAL and a busy timeout, and never falls back to a cwd file", async () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const { existsSync } = await import("node:fs");
+    const db = join(dir, "receipts.db");
+    const opened = openReceiptStore({ db });
+    assert.equal(opened.kind, "sqlite");
+    assert.equal(opened.path, db);
+    // Two stores on one file (two hook processes) can both write.
+    const other = openReceiptStore({ db }).store;
+    const fake = (n) => ({ payload: { n, intent_hash: `h${n}`, policy_hash: "p", realtime_result: "allow", executed: false, timestamp: "2026-09-23T00:00:00Z" }, signature: {} });
+    opened.store.put(fake(1));
+    other.put(fake(2));
+    assert.equal(opened.store.list().length, 2);
+    assert.equal(existsSync(join(process.cwd(), "scopebond-receipts.jsonl")), false);
+    // A path that cannot be opened is an error, not a silent switch to another log.
+    assert.throws(() => openReceiptStore({ db: dir }));
+  } finally { try { cleanup(); } catch { /* Windows keeps an open database locked */ } }
+});

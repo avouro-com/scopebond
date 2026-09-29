@@ -2,7 +2,7 @@
 // lives in the core with an in-memory implementation; these are durable local
 // implementations for the Node server. On Cloudflare, D1/KV are the edge ones.)
 
-import { appendFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
 import { canonical, sha256 } from "./crypto.js";
@@ -18,6 +18,48 @@ function ensureDir(file: string): void {
   if (dir) mkdirSync(dir, { recursive: true });
 }
 
+/** Parse a JSONL log. A torn final line (a crash mid-append, so the file does not end
+ *  in a newline) is not a record: it is truncated away so the log stays well formed.
+ *  A corrupt line anywhere else is an error: skipping it would hide a rewritten record. */
+function readJsonl<T>(file: string): T[] {
+  const text = readFileSync(file, "utf8");
+  const lines = text.split("\n");
+  const items: T[] = [];
+  let torn = false;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    try { items.push(JSON.parse(t) as T); }
+    catch (error) {
+      const isLast = lines.slice(i + 1).every((rest) => !rest.trim());
+      if (!isLast || text.endsWith("\n")) throw new Error(`${file}: corrupt record on line ${i + 1}: ${(error as Error).message}`);
+      torn = true;
+    }
+  }
+  if (torn) truncateSync(file, Buffer.byteLength(text.slice(0, text.lastIndexOf("\n") + 1)));
+  return items;
+}
+
+type SqliteDb = { exec(sql: string): void; prepare(sql: string): { run(...a: unknown[]): unknown; all(...a: unknown[]): unknown[] }; close(): void };
+
+/** Open a node:sqlite database that tolerates concurrent writers: coding agents run
+ *  tool calls in parallel, so several hook processes can append at once. WAL lets
+ *  readers and a writer proceed together, and busy_timeout waits for the write lock
+ *  instead of failing immediately with SQLITE_BUSY. */
+function openSqlite(path: string): SqliteDb {
+  ensureDir(path);
+  const require = createRequire(import.meta.url);
+  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
+  const db = new DatabaseSync(path);
+  db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+  return db;
+}
+
+/** Whether this Node has the built-in `node:sqlite` module. */
+function sqliteAvailable(): boolean {
+  try { createRequire(import.meta.url)("node:sqlite"); return true; } catch { return false; }
+}
+
 /** Append-only JSONL receipt log: durable, dependency-free, append-only (so the
  *  record is not silently rewritten). Loads the log into memory on open. */
 export class FileReceiptStore implements ReceiptStore {
@@ -30,39 +72,31 @@ export class FileReceiptStore implements ReceiptStore {
     ensureDir(file);
     this.anchorFile = file + ".anchors";
     this.stopFile = file + ".stops";
-    if (existsSync(file)) {
-      for (const line of readFileSync(file, "utf8").split("\n")) {
-        const t = line.trim();
-        if (t) this.cache.push(JSON.parse(t) as SignedReceipt);
-      }
-    }
-    if (existsSync(this.anchorFile)) {
-      for (const line of readFileSync(this.anchorFile, "utf8").split("\n")) {
-        const t = line.trim();
-        if (t) this.anchorLog.push(JSON.parse(t) as Anchor);
-      }
-    }
+    if (existsSync(file)) this.cache.push(...readJsonl<SignedReceipt>(file));
+    if (existsSync(this.anchorFile)) this.anchorLog.push(...readJsonl<Anchor>(this.anchorFile));
     if (existsSync(this.stopFile)) {
-      for (const line of readFileSync(this.stopFile, "utf8").split("\n")) {
-        const text = line.trim();
-        if (!text) continue;
-        const event = JSON.parse(text) as { target: string; stopped: boolean };
+      for (const event of readJsonl<{ target: string; stopped: boolean }>(this.stopFile)) {
         if (event.stopped) this.stops.add(event.target); else this.stops.delete(event.target);
       }
     }
   }
+  private append(file: string, line: string): void {
+    appendFileSync(file, line + "\n");
+  }
   put(r: SignedReceipt): void {
     const serialized = JSON.stringify(r);
-    appendFileSync(this.file, serialized + "\n");
+    this.append(this.file, serialized);
     this.cache.push(JSON.parse(serialized) as SignedReceipt);
   }
   list(): SignedReceipt[] { return structuredClone(this.cache); }
+  recent(limit: number): SignedReceipt[] { return structuredClone(this.cache.slice(-Math.max(1, Math.floor(limit))).reverse()); }
+  count(): number { return this.cache.length; }
   executed(): Receipt[] { return structuredClone(this.cache.map((r) => r.payload as unknown as Receipt)); }
-  putAnchor(a: Anchor): void { appendFileSync(this.anchorFile, JSON.stringify(a) + "\n"); this.anchorLog.push(a); }
+  putAnchor(a: Anchor): void { this.append(this.anchorFile, JSON.stringify(a)); this.anchorLog.push(a); }
   anchors(): Anchor[] { return this.anchorLog.slice(); }
   getStopState(): StopState { return { global: this.stops.has("global"), agents: [...this.stops].filter((key) => key !== "global") }; }
   setStopped(target: "global" | string, stopped: boolean): void {
-    appendFileSync(this.stopFile, JSON.stringify({ target, stopped }) + "\n");
+    this.append(this.stopFile, JSON.stringify({ target, stopped }));
     if (stopped) this.stops.add(target); else this.stops.delete(target);
   }
 }
@@ -70,12 +104,9 @@ export class FileReceiptStore implements ReceiptStore {
 /** SQLite-backed receipt store using Node's built-in `node:sqlite` (no native
  *  dependency). Durable and queryable; mirrors the D1 store used at the edge. */
 export class SqliteReceiptStore implements ReceiptStore {
-  private readonly db: { exec(sql: string): void; prepare(sql: string): { run(...a: unknown[]): unknown; all(...a: unknown[]): unknown[] }; close(): void };
+  private readonly db: SqliteDb;
   constructor(path: string) {
-    ensureDir(path);
-    const require = createRequire(import.meta.url);
-    const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteReceiptStore["db"] };
-    this.db = new DatabaseSync(path);
+    this.db = openSqlite(path);
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS receipts (
          id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,7 +281,60 @@ export class SqliteReceiptStore implements ReceiptStore {
     const rows = this.db.prepare(`SELECT anchor_json FROM anchors ORDER BY seq`).all() as { anchor_json: string }[];
     return rows.map((row) => JSON.parse(row.anchor_json) as Anchor);
   }
-  close(): void { this.db.close(); }
+  /** The most recent `limit` receipts, newest first. `list()` reads and parses the whole
+   *  log, which is right for verification and wasteful for "show me the last 20": a
+   *  caller that wants a tail should not pay for the history. */
+  recent(limit: number): SignedReceipt[] {
+    const rows = this.db
+      .prepare(`SELECT receipt_json FROM receipts ORDER BY id DESC LIMIT ?`)
+      .all(Math.max(1, Math.floor(limit))) as { receipt_json: string }[];
+    return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
+  }
+  /** How many receipts are stored, without reading any of them. */
+  count(): number {
+    const rows = this.db.prepare(`SELECT COUNT(*) AS n FROM receipts`).all() as { n: number }[];
+    return Number(rows[0]?.n ?? 0);
+  }
+  /** Receipts recorded strictly before an ISO timestamp — what a prune would remove.
+   *  Separate from the removal itself so a caller can archive them first, and so a
+   *  dry run costs nothing. */
+  before(isoTimestamp: string): SignedReceipt[] {
+    const rows = this.db
+      .prepare(`SELECT receipt_json FROM receipts WHERE timestamp < ? ORDER BY id`)
+      .all(isoTimestamp) as { receipt_json: string }[];
+    return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
+  }
+  /** Remove receipts recorded before an ISO timestamp, and return the space.
+   *
+   *  A receipt's position in `list()` is its anchor leaf index, so removing one changes
+   *  every later index and makes an existing anchor unverifiable. This therefore refuses
+   *  outright once anything has been anchored — the caller cannot opt out, because the
+   *  alternative is silently invalidating published evidence. */
+  removeBefore(isoTimestamp: string): { removed: number } {
+    const anchored = this.db.prepare(`SELECT COUNT(*) AS n FROM anchors`).all() as { n: number }[];
+    if (Number(anchored[0]?.n ?? 0) > 0) {
+      throw new Error(
+        "this log has anchors: a receipt's position is its anchor leaf index, so removing older receipts would make an existing anchor unverifiable. Archive the database instead of pruning it.",
+      );
+    }
+    const doomed = this.db.prepare(`SELECT COUNT(*) AS n FROM receipts WHERE timestamp < ?`).all(isoTimestamp) as { n: number }[];
+    const removed = Number(doomed[0]?.n ?? 0);
+    if (removed === 0) return { removed: 0 };
+    this.db.prepare(`DELETE FROM receipts WHERE timestamp < ?`).run(isoTimestamp);
+    // VACUUM is what actually returns the pages to the filesystem; without it the file
+    // keeps its high-water mark and the prune looks like it did nothing.
+    try { this.db.exec("VACUUM;"); } catch { /* a locked db keeps its size; rows are still gone */ }
+    return { removed };
+  }
+  close(): void {
+    // Checkpoint before releasing the handle. A short-lived writer that exits without
+    // closing leaves its WAL frames on disk, and the next process appends to the same
+    // WAL rather than starting clean: measured at ~11 KiB of WAL per receipt against
+    // ~1.7 KiB once the handle is closed. It also releases the file lock, which on
+    // Windows is what stops `.scopebond` being removable after a run.
+    try { this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* best effort */ }
+    this.db.close();
+  }
 }
 
 interface LifecycleRow {
@@ -286,15 +370,16 @@ function rowToLifecycle(row: LifecycleRow): ActionLifecycleRecord {
   };
 }
 
-/** Open a durable store: SQLite when `db` is given (falls back to the JSONL file
- *  if node:sqlite is unavailable), otherwise the append-only file. */
+/** Open a durable store: SQLite when `db` is given, otherwise the append-only file.
+ *  Only a Node without `node:sqlite` falls back to a JSONL file, placed beside the
+ *  requested database (never in the current directory, where it could be committed
+ *  or missed by `verify`). A database that exists but cannot be opened — locked,
+ *  corrupt, unwritable — is an error, not a silent switch to a different log. */
 export function openReceiptStore(opts: { db?: string; file?: string }): { store: ReceiptStore; kind: "sqlite" | "file"; path: string } {
   if (opts.db) {
-    try {
-      return { store: new SqliteReceiptStore(opts.db), kind: "sqlite", path: opts.db };
-    } catch {
-      // node:sqlite not available (older Node) — fall back to the file store.
-    }
+    if (sqliteAvailable()) return { store: new SqliteReceiptStore(opts.db), kind: "sqlite", path: opts.db };
+    const beside = opts.file ?? opts.db.replace(/\.db$/i, "") + ".jsonl";
+    return { store: new FileReceiptStore(beside), kind: "file", path: beside };
   }
   const file = opts.file ?? "scopebond-receipts.jsonl";
   return { store: new FileReceiptStore(file), kind: "file", path: file };
@@ -311,11 +396,7 @@ export interface SqliteCloudOutboxOptions {
 /** Durable, bounded Cloud delivery queue. Rejections and expiry are retained as
  * explicit gap rows so a local receipt never disappears without evidence. */
 export class SqliteCloudOutbox implements CloudOutbox {
-  private readonly db: {
-    exec(sql: string): void;
-    prepare(sql: string): { run(...args: unknown[]): unknown; all(...args: unknown[]): unknown[] };
-    close(): void;
-  };
+  private readonly db: SqliteDb;
   private readonly maxPending: number;
   private readonly maxBytes: number;
   private readonly maxAgeMs: number;
@@ -323,10 +404,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
   private readonly now: () => number;
 
   constructor(path: string, options: SqliteCloudOutboxOptions = {}) {
-    ensureDir(path);
-    const require = createRequire(import.meta.url);
-    const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (value: string) => SqliteCloudOutbox["db"] };
-    this.db = new DatabaseSync(path);
+    this.db = openSqlite(path);
     this.maxPending = positiveInteger(options.maxPending, 10_000);
     this.maxBytes = positiveInteger(options.maxBytes, 64 * 1024 * 1024);
     this.maxAgeMs = positiveInteger(options.maxAgeMs, 7 * 24 * 60 * 60 * 1000);
@@ -458,7 +536,12 @@ export class SqliteCloudOutbox implements CloudOutbox {
     };
   }
 
-  close(): void { this.db.close(); }
+  close(): void {
+    // Same reason as the receipt store: a per-tool-call process that exits without
+    // closing leaves its write-ahead log behind for the next one to extend.
+    try { this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* best effort */ }
+    this.db.close();
+  }
 
   private expire(at: number): void {
     const expired = this.db.prepare(

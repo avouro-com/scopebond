@@ -1,5 +1,49 @@
 # @scopebond/verify
 
+## 0.4.1
+
+### Patch Changes
+
+- 978e7a3: Fix `verifier_version`: receipts named a verifier that did not produce their verdict.
+
+  `SPEC.md` defines the receipt field `verifier_version` as "the `violates()` verifier version
+  that produced the verdict". It was a hardcoded literal `"scopebond-verify@0.1.1"` in
+  `@scopebond/gateway`, and it stayed that literal through `@scopebond/verify` 0.2, 0.3 and
+  0.4 — so for three releases every signed receipt asserted a verifier version that had not
+  evaluated it. This is visible in the wild: a receipt from the live demo today reports
+  `scopebond-verify@0.1.1` while the gateway there runs verify 0.4.0.
+
+  The value now comes from `VERIFIER_VERSION`, exported by `@scopebond/verify` next to
+  `violates()` itself, and a test pins it to that package's published version so it cannot
+  drift again. The identifier keeps its established `scopebond-verify@<version>` spelling —
+  only the wrong version is corrected, since receipts already in the wild carry that shape.
+
+  Receipts signed before this change are unaffected and still verify; they simply carry the
+  old, incorrect version string. Nothing else in the envelope, the canonicalization or the
+  signature changes.
+
+## 0.4.0
+
+### Minor Changes
+
+- df4fc67: Add `@scopebond/verify/anchor`: WebCrypto-only verification for receipt-log anchors. v2 (`algo: "rfc9162-sha256"`) implements the RFC 9162 §2.1 Merkle Tree Hash with domain-separated leaves (`0x00`) and nodes (`0x01`) and no odd-node duplication, inclusion proofs (`inclusionProof`, `verifyInclusionProof`), consistency proofs (`consistencyProof`, `verifyConsistencyProof`), and Ed25519-signed anchors (`verifyAnchorSignature`, `verifyAnchorChain`). Legacy v1 (`sha256-merkle`) roots and anchor hashes keep verifying (`merkleRootV1`, `anchorHash`, `verifyAnchorRoot`). RFC 9162 reference vectors ship in `vectors/merkle-rfc9162.json`.
+- 792c40f: Security: `force_push_guard` now covers branch deletion and all-branch pushes, and its default protects nested release branches.
+
+  The clause previously fired only on a `--force` push whose single resolved ref matched the protected set. Three destructive pushes slipped through:
+
+  - **Deletion** (`git push origin :main`, `git push origin --delete main`) removes a protected branch and is destructive even without `--force`; it was treated as an ordinary push.
+  - **All-branch force pushes** (`git push --all --force`, `git push --mirror`) reach every branch — so they necessarily rewrite the protected ones, and `--mirror` also prunes — but their whole-repo push carried no single protected ref to match.
+  - The default protected set was `["main", "master", "release/*"]`; the single-star glob does not cross `/`, so `release/1.0/hotfix` was unprotected. The default is now `release/**`.
+
+  The hook mapper marks these on the `git.push` intent it emits (`delete` for `:dst`/`--delete`, `all` for `--all`/`--mirror`/`--branches`), and `force_push_guard` denies a delete of a protected ref (regardless of `force`), a force-push to all branches, and a force-push to a protected ref, still allowing ordinary pushes, feature-branch force-pushes and a non-forced `--all`. A destructive push whose target ref cannot be resolved still fails closed. The hook's own starter policy already denied these through its stricter ref allowlist; this closes the gap for customer policies that use the `force_push_guard` clause.
+
+- a488918: Add `@scopebond/verify/signature`: `verifyReceiptSignature(receipt, publicKey)` verifies a receipt's Ed25519 attester signature over the RFC 8785 canonical payload and checks the attester key binding, using WebCrypto only so it runs in Node, browsers and Cloudflare Workers. Accepts SPKI PEM or an Ed25519 JWK; reserved algorithms and attester kinds are reported as unsupported. SPEC.md now states that v1 verifiers accept only Ed25519 from `gateway` attesters.
+
+### Patch Changes
+
+- Updated dependencies [f2e4d62]
+  - @scopebond/policy-schema@0.4.1
+
 ## 0.3.0
 
 ### Minor Changes

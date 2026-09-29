@@ -34,6 +34,18 @@
   command redacted), and an unmapped tool observed as `not_evaluated` — never a silent
   allow.
 
+- **`verify-receipt-offline.mjs`** — offline receipt verification
+  (`@scopebond/verify/signature`): the gateway issues a receipt, then a WebCrypto-only
+  verifier (no `node:` imports; runs as-is in a browser or Worker) checks the Ed25519
+  signature and the attester kid binding. Shows the receipt valid with the JWK and PEM
+  key, and a tampered copy and a different attester key both rejected.
+
+- **`verify-anchor-inclusion.mjs`** — receipt-log anchors (`@scopebond/verify/anchor`):
+  five receipts are anchored in a signed v2 (RFC 9162) anchor, the gateway serves an
+  inclusion proof for one of them, and the client verifies the anchor signature and the
+  audit path offline (and recomputes the path locally). Shows the same proof at the wrong
+  leaf index and an edited anchor both rejected.
+
 ```bash
 pnpm install && pnpm -r build
 node examples/quickstart.mjs
@@ -41,6 +53,8 @@ node examples/framework-guard.mjs
 node examples/github-pr-gate.mjs
 node examples/mcp-proxy.mjs
 node examples/hook-map.mjs
+node examples/verify-receipt-offline.mjs
+node examples/verify-anchor-inclusion.mjs
 ```
 
 `policy.json` is a small sample policy (per-action cap, monitored daily cap, key policy).

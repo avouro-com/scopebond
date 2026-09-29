@@ -36,10 +36,14 @@ const check = (name, fn) => { try { fn(); console.log(`  ✓ ${name}`); } catch 
 
 console.log(`install-matrix on ${process.platform} node ${process.versions.node}`);
 
-// 1. Global bin is on PATH and prints usage.
+// 1. Global bin is on PATH and prints help. Asserted on what the help has to contain to be
+// useful — the invocation form and the command list — rather than one exact opening phrase.
 check("the scopebond bin is installed and runnable", () => {
   const r = sb([]);
-  assert.ok(/usage: scopebond/.test(r.out), `no usage output: ${r.out}`);
+  assert.match(r.out, /usage: scopebond-hook <command>/i, `no usage line: ${r.out}`);
+  for (const command of ["init", "status", "doctor", "log", "verify", "test"]) {
+    assert.match(r.out, new RegExp(`\\n\\s+${command}\\s{2,}\\S`), `help does not list \`${command}\`: ${r.out}`);
+  }
 });
 
 // 2. User-level install scaffolds the home and writes an absolute-path Claude hook.
@@ -82,10 +86,10 @@ check("connect exists and rejects an unreadable enrollment fast (exit 1, no hang
 });
 
 // 6. login is honest that device flow is not available yet.
-check("login points at connect instead of pretending device flow works", () => {
+check("login without a workspace URL explains what it needs", () => {
   const r = sb(["login"], { env: baseEnv });
-  assert.equal(r.status, 0, r.out);
-  assert.ok(/not available yet/i.test(r.out) && /connect/.test(r.out), r.out);
+  assert.equal(r.status, 1, r.out);
+  assert.ok(/login <workspace-url>/.test(r.out), r.out);
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : `\nall checks passed`);

@@ -5,11 +5,11 @@ branding:
   color: orange
 inputs:
   policy:
-    description: "Path to the policy JSON in the repository."
+    description: "Path to the policy JSON in the repository. It is read from the pull request's base commit, so a pull request cannot change the policy it is checked against."
     required: false
     default: "scopebond.policy.json"
   version:
-    description: "The @scopebond/github-action version to run."
+    description: "The @scopebond/github-action version to run. Pin an exact version for reproducible checks."
     required: false
     default: "latest"
   workspace-url:
@@ -21,14 +21,43 @@ runs:
   steps:
     - name: Determine the changed paths
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
       run: |
-        git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.ref }}" || true
-        git diff --name-only "origin/${{ github.event.pull_request.base.ref }}...HEAD" > "$RUNNER_TEMP/scopebond-pr-paths.txt" || true
+        set -uo pipefail
+        out="$RUNNER_TEMP/scopebond-pr-paths.txt"
+        : > "$out"
+        # Preferred: the pull request's own file list from the API (exact, includes the
+        # old name of a renamed file). The API stops at 3000 files: a list with fewer
+        # files than the PR changed is discarded. Fallback: a diff from the merge base
+        # (with rename detection off, so both names of a rename are listed). If neither
+        # yields the full list, the check fails closed.
+        if command -v gh >/dev/null 2>&1 && [ -n "${PR_NUMBER:-}" ]; then
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)' > "$out" 2>/dev/null || : > "$out"
+          listed=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' 2>/dev/null | wc -l | tr -d ' ')
+          if [ -n "${CHANGED_FILES:-}" ] && [ "${listed:-0}" -lt "$CHANGED_FILES" ]; then
+            echo "Scopebond: the files API listed $listed of $CHANGED_FILES changed files; using a git diff instead"
+            : > "$out"
+          fi
+        fi
+        if [ ! -s "$out" ] && [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
+          git fetch --no-tags --quiet origin "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true
+          git fetch --no-tags --quiet --deepen=200 origin 2>/dev/null || true
+          git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA" > "$out" 2>/dev/null || : > "$out"
+        fi
+        echo "Scopebond: $(wc -l < "$out" | tr -d ' ') changed path(s) resolved"
     - name: Scopebond policy check
       shell: bash
       env:
         SCOPEBOND_PR_PATHS: ${{ runner.temp }}/scopebond-pr-paths.txt
         SCOPEBOND_CLOUD_URL: ${{ inputs.workspace-url }}
+        SCOPEBOND_POLICY_SOURCE: base
       run: >
         npx --yes -p "@scopebond/github-action@${{ inputs.version }}" scopebond-verify-pr
         --policy "${{ inputs.policy }}"

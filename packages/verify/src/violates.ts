@@ -2,6 +2,13 @@
 //
 // violates(policy, receipts, claimed, opts) → Verdict  (POLICY_VOCABULARY.md §7)
 //
+// `VERIFIER_VERSION` is the string receipts carry as `verifier_version`, which SPEC.md
+// defines as "the violates() verifier version that produced the verdict". It lives here,
+// next to `violates()`, rather than as a literal in the gateway: it was hardcoded there as
+// `scopebond-verify@0.1.1` and stayed that way through 0.2, 0.3 and 0.4, so every receipt
+// named a verifier version that had not produced its verdict for three releases.
+// `version.test.mjs` asserts this matches package.json, so it cannot drift again.
+//
 // Invariants:
 //   - Pure & deterministic: no network, no wall-clock. The evaluation timestamp
 //     is an input (opts.at, default = claimed.timestamp).
@@ -182,6 +189,11 @@ function verdict(
 ): Verdict {
   return { violated, clause_id, explanation, inputs_hash: hash, ...extra };
 }
+
+/** The value receipts carry as `verifier_version`. Kept as a source constant rather than
+ *  read from package.json at runtime, because this code runs in a Worker bundle where
+ *  there is no package.json to read; `version.test.mjs` pins it to the published version. */
+export const VERIFIER_VERSION = "scopebond-verify@0.4.1";
 
 export function violates(
   policy: Policy, receipts: Receipt[] | undefined, claimed: Receipt, opts: Options = {},
@@ -427,18 +439,36 @@ export function violates(
     }
 
     else if (t === "force_push_guard") {
-      // Deny a force-push to a protected branch while still allowing ordinary
+      // Deny a destructive push to a protected branch while still allowing ordinary
       // pushes to those branches and force-pushes to feature branches — the one
-      // predicate a per-field action_allowlist bound cannot express (it cannot
-      // AND `force` with a protected-ref set). A force-push whose target ref
-      // cannot be resolved is denied (fail closed): it cannot be shown to avoid
-      // the protected set.
-      if (c.intent?.action_type === "git.push" && p.force === true) {
+      // predicate a per-field action_allowlist bound cannot express (it cannot AND a
+      // destructive push with a protected-ref set). Three things are destructive to a
+      // protected branch: a force-push (rewrites history), a delete (`:main`,
+      // `--delete` — removes the branch, destructive even without `--force`), and an
+      // all-branches push under force (`--all --force`, `--mirror` — necessarily
+      // reaches every protected ref and, for `--mirror`, prunes). A push whose target
+      // ref cannot be resolved is denied (fail closed): it cannot be shown to avoid
+      // the protected set. The default `release/**` protects nested release branches
+      // (`release/1.0/hotfix`), which `release/*` would miss.
+      if (c.intent?.action_type === "git.push") {
         const refs: string[] = Array.isArray(clause.protected_refs) && clause.protected_refs.length > 0
           ? clause.protected_refs
-          : ["main", "master", "release/*"];
+          : ["main", "master", "release/**"];
         const ref = typeof p.ref === "string" ? p.ref : undefined;
-        if (ref === undefined || refs.some((g) => globMatch(g, ref))) {
+        const hitsProtected = ref === undefined || refs.some((g) => globMatch(g, ref));
+        // `--all`/`--mirror` under force reach every branch: they hit the protected set
+        // whatever its members are.
+        if (p.all === true && p.force === true) {
+          record(clause, "force-push to all branches (--all/--mirror) reaches protected refs and is denied");
+          continue;
+        }
+        if (p.delete === true && hitsProtected) {
+          record(clause, ref === undefined
+            ? "delete of an unresolved target ref is denied"
+            : `delete of protected ref ${ref} is denied`);
+          continue;
+        }
+        if (p.force === true && hitsProtected) {
           record(clause, ref === undefined
             ? "force-push with an unresolved target ref is denied"
             : `force-push to protected ref ${ref} is denied`);

@@ -2,11 +2,44 @@
 // are reduced to a scrubbed head plus a digest, and common secret shapes are
 // removed before anything is written or signed (SB09).
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { canonical } from "@scopebond/policy-schema/canonical";
 
+/** A plain SHA-256 content hash, for values that are not secret. */
 export const sha256 = (value: string): string => "sha256:" + createHash("sha256").update(value).digest("hex");
-export const digest = (value: unknown): string => sha256(canonical(value as never));
+
+// Digests of what an agent ran — a scrubbed shell command, an MCP tool's arguments — are
+// keyed. The scrubber cannot recognise every secret, and a plain hash of a command whose
+// head is shown beside it leaves only the unseen remainder to guess: a short password the
+// scrubber missed could be recovered offline by anyone holding the receipt. Keyed with a
+// per-machine secret that never leaves `.scopebond/`, the digest still tells two identical
+// actions on this machine apart from different ones, but cannot be tested against guesses.
+let digestKey: Buffer | null = null;
+
+/** Set the key for keyed digests (32 random bytes, hex). Without one, a random key for
+ *  this process is used — safe, but digests then compare only within the process. */
+export function useDigestKey(key: string | null): void {
+  digestKey = key ? Buffer.from(key, "hex") : null;
+}
+
+/** The per-machine digest key in a config dir, created on first use. */
+export function loadOrCreateDigestKey(dir: string): string {
+  const file = join(dir, "digest.key");
+  if (existsSync(file)) {
+    const key = readFileSync(file, "utf8").trim();
+    if (/^[0-9a-f]{64}$/.test(key)) return key;
+  }
+  const key = randomBytes(32).toString("hex");
+  writeFileSync(file, key + "\n", { mode: 0o600 });
+  return key;
+}
+
+/** HMAC-SHA-256 under the digest key, labelled so it is never mistaken for a plain hash. */
+export const keyedDigest = (value: string): string =>
+  "hmac-sha256:" + createHmac("sha256", (digestKey ??= randomBytes(32))).update(value).digest("hex");
+export const digest = (value: unknown): string => keyedDigest(canonical(value as never));
 
 const MASK = "***";
 // A flag or header value: a quoted string or a run of non-whitespace.
@@ -33,6 +66,22 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bAIza[0-9A-Za-z_-]{30,}/g, MASK],                               // Google API keys
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, MASK],                          // AWS access key ids
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, MASK], // JWTs
+];
+
+// Free-text-only rules (the command head), never applied to structured parameters a
+// policy matches on. These cover common shapes that carry a secret on argv without a
+// recognizable token format:
+//  - an attached `-p`/`-u` value (`mysql -phunter2`, `psql -uadmin`) — the single most
+//    common way a password reaches a shell. A space-separated `-p value` (the mkdir
+//    flag, or `-u origin`) is not attached and is left alone; the `--password`/`--user`
+//    forms are handled by the labelled rules above.
+//  - a header whose name looks like a credential (`X-Custom-Secret: …`, `My-Token: …`).
+//    Bare `key:` is deliberately excluded so ordinary `key: value` text is untouched.
+const HEAD_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/(^|\s)(-[pu])[^\s=-]\S*/g, `$1$2${MASK}`],
+  // `auth` is omitted: `Authorization:` is handled above (with its Bearer/Basic label),
+  // and other auth headers (`X-Auth-Token`) still match on `token`.
+  [/(\b[\w-]*(?:secret|token|api[-_]?key|apikey|password|passwd|credential)[\w-]*\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
 ];
 
 // Generic high-entropy shapes. Applied to free text only (the command head), never to
@@ -66,17 +115,21 @@ export function scrubParam(text: string): string {
   return out;
 }
 
-/** Scrub free text: everything `scrubParam` removes plus generic high-entropy blobs. */
+/** Scrub free text: everything `scrubParam` removes, plus the free-text-only argv and
+ *  header shapes and generic high-entropy blobs. */
 export function scrubSecrets(text: string): string {
   let out = scrubParam(text);
+  for (const [re, replacement] of HEAD_RULES) out = out.replace(re, replacement);
   for (const [re, replacement] of BLOB_RULES) out = out.replace(re, replacement);
   return out;
 }
 
-/** A privacy-preserving representation of a shell command: a scrubbed, truncated
- *  head plus a digest of the full original. The full command is never retained. */
+/** A privacy-preserving representation of a shell command: a scrubbed, truncated head
+ *  plus a keyed digest of the scrubbed command. The full original is never retained; the
+ *  digest is taken over the scrubbed text so a secret the head removed is not in it, and
+ *  it is keyed so a secret the scrubber missed cannot be guessed back from it. */
 export function redactCommand(command: string, headLen = 64): string {
   const scrubbed = scrubSecrets(command);
   const head = scrubbed.length > headLen ? `${scrubbed.slice(0, headLen)}…` : scrubbed;
-  return `${head} (${sha256(command)})`;
+  return `${head} (${keyedDigest(scrubbed)})`;
 }

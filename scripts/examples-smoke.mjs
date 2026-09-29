@@ -54,6 +54,26 @@ const cases = [
       "not_evaluated", // an unmapped tool is observed, never silently allowed
     ],
   },
+  {
+    file: "examples/verify-receipt-offline.mjs",
+    expect: [
+      "original receipt, JWK key: VALID", // WebCrypto verifier accepts the gateway's receipt
+      "original receipt, PEM key: VALID", // same result with the PEM form of the key
+      "tampered receipt (amount 500000 -> 9900000): INVALID", // edited payload fails
+      "original receipt, another gateway's key: INVALID", // wrong attester key fails
+    ],
+  },
+  {
+    file: "examples/verify-anchor-inclusion.mjs",
+    expect: [
+      "algo=rfc9162-sha256", // the gateway emits a v2 (RFC 9162, signed) anchor
+      "anchor signature: VALID", // Ed25519 anchor signature + kid binding
+      "inclusion proof:  VALID", // the receipt is in the anchored tree
+      "matches the server's: yes", // server proof equals the locally computed RFC 9162 path
+      "wrong leaf_index (3): INVALID", // the same path at another position fails
+      "anchor with tree_size edited: INVALID", // a modified anchor fails its signature
+    ],
+  },
 ];
 
 let failures = 0;

@@ -8,6 +8,9 @@ import {
 } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import type { Intent, Receipt, Policy } from "@scopebond/verify";
+import { VERIFIER_VERSION } from "@scopebond/verify";
+import type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
+export type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
 import { validateAuthorizationEvidence, verifyAuthorizationEvidenceSignatures } from "./auth.js";
 import type { AuthorizationEvidence, PrincipalKeyRecord } from "./auth.js";
 import { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
@@ -422,7 +425,10 @@ export async function buildBoundaryReceipt(input: BoundaryReceiptInput, attester
   }, attester);
 }
 
-const BOUNDARY_VERIFIER_VERSION = "scopebond-verify@0.1.1";
+// Imported rather than repeated: SPEC.md says this names the violates() version that
+// produced the verdict, and the literal that used to live here drifted three releases
+// behind the real one, so every receipt misnamed its own verifier.
+const BOUNDARY_VERIFIER_VERSION = VERIFIER_VERSION;
 
 export interface PepReceiptInput {
   /** The normalized action the proxy/PEP decided (e.g. an `mcp.tool.call`). */
@@ -544,26 +550,29 @@ export function ed25519JwkToSpkiPem(x: string): string {
 
 /** Public: derive the stable, key-fingerprint kid from a public JWK. */
 
-/** A tamper-evidence anchor: a Merkle root committing to the first `count`
- *  receipts (append-only order), chained to the previous anchor. */
-export interface Anchor {
-  seq: number;
-  algo: "sha256-merkle";
-  merkle_root: string;
-  count: number;
-  from: string | null;
-  to: string;
-  prev_anchor_hash: string | null;
-  anchor_hash: string;
-  timestamp: string;
-}
+/** A tamper-evidence anchor: a Merkle root committing to the first receipts of
+ *  the log (append order), chained to the previous anchor. Verifiers dispatch on
+ *  `algo`: v1 `"sha256-merkle"` (legacy, unsigned) or v2 `"rfc9162-sha256"`
+ *  (RFC 9162 tree, Ed25519-signed by the attester). See SPEC.md "Anchors". */
+export type Anchor = AnchorV1 | AnchorV2;
 
 export interface ReceiptStore {
   put(r: SignedReceipt): void | Promise<void>;
+  /** Every receipt in append order. The position in this list is the receipt's
+   *  stable log sequence (its anchor leaf index); a store MUST NOT reorder,
+   *  remove or insert before existing receipts. Anchoring refuses to sign a log
+   *  that no longer matches the previous anchor. */
   list(): SignedReceipt[] | Promise<SignedReceipt[]>;
   /** The receipt payloads, for feeding claim-time-style evaluation to verify. */
   executed(): Receipt[] | Promise<Receipt[]>;
-  /** Release any underlying handle (e.g. a SQLite connection). Optional. */
+  /** The newest `limit` receipts, newest first — a tail without reading the whole log.
+   *  Optional: a caller must fall back to `list()` when a store does not implement it. */
+  recent?(limit: number): SignedReceipt[] | Promise<SignedReceipt[]>;
+  /** How many receipts are stored, without reading them. Optional. */
+  count?(): number | Promise<number>;
+  /** Release any underlying handle (e.g. a SQLite connection). Optional, but a
+   *  short-lived writer SHOULD call it: an unclosed SQLite handle leaves its
+   *  write-ahead log on disk for the next process to grow further. */
   close?(): void | Promise<void>;
   /** Append an anchor. Optional — a store that supports anchoring implements both. */
   putAnchor?(a: Anchor): void | Promise<void>;

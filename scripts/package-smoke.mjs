@@ -72,7 +72,14 @@ try {
     import { evaluatePullRequest } from "@scopebond/github-action";
     import { mapMcpToolCall } from "@scopebond/mcp";
     import { wrapVercelTools } from "@scopebond/framework";
+    import { merkleTreeHash, leafHash, inclusionProof, verifyInclusionProof, verifyAnchorSignature } from "@scopebond/verify/anchor";
     if (merkleRoot([sha256("candidate")]).length !== 64) process.exit(1);
+    {
+      const leaves = await Promise.all(["a", "b", "c"].map((x) => leafHash(x)));
+      const root = await merkleTreeHash(leaves);
+      const p = await inclusionProof(leaves, 2);
+      if (!(await verifyInclusionProof({ leaf_hash: leaves[2], ...p, root }))) process.exit(1);
+    }
     const canonicalVector = { numbers: [333333333.33333329, 1e30, 4.50, 2e-3, 1e-27], nested: { z: null, a: true } };
     const canonicalBytes = [schemaCanonical, verifyCanonical, gatewayCanonical, sdkCanonical].map((fn) => fn(canonicalVector));
     if (!canonicalBytes.every((value) => value === canonicalBytes[0])) process.exit(1);
@@ -84,6 +91,8 @@ try {
     const gateway = createGateway({ policy, authentication: { keys } });
     const result = await gateway.handleAction(agent.sign({ action_type: "smoke.call" }));
     if (!result.allowed || result.receipt.payload.authorization.mode !== "authenticated") process.exit(1);
+    const anchor = await gateway.anchor();
+    if (anchor.algo !== "rfc9162-sha256" || !(await verifyAnchorSignature(anchor, gateway.attester.publicKeyJwk))) process.exit(1);
     // The taxonomy registry and the hook connector resolve and agree.
     if (!validateActionParams("git.push", { ref: "main" }).valid) process.exit(1);
     if (mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push origin main" } })[0].intent.action_type !== "git.push") process.exit(1);

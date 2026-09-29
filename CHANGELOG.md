@@ -8,11 +8,33 @@ tagged release.
 ## [Unreleased]
 
 Per-package versions and notes are managed with changesets; this section is a
-human summary. The published set is policy-schema 0.3.0, verify 0.2.0, gateway
-0.6.0, sdk 0.1.1 and the connectors hook, mcp, framework and github-action at 0.3.0.
-Past security advisories are summarized in [SECURITY.md](SECURITY.md).
+human summary. The published set is policy-schema 0.4.1, verify 0.4.0, gateway
+0.7.0, sdk 0.1.2, hook 0.6.0, github-action 0.4.0 and mcp and framework at 0.3.2.
+Per-release detail lives in each package's own `CHANGELOG.md`; past security
+advisories are summarized in [SECURITY.md](SECURITY.md).
 
 ### Security
+- **github-action:** the Action read `scopebond.policy.json` from the pull request's
+  own checkout, so a pull request could rewrite the policy it was checked against.
+  It now reads the policy from the base commit. Fixed in github-action 0.4.0.
+- **hook:** the mapper compared command text literally, so a governed agent could do
+  what the starter policy forbids by spelling it differently — protected branches via
+  `refs/heads/main`, a second refspec or `--all`; keys and `.env` files via `cp`,
+  `tar`, `scp`, `curl -T`, globs, variables, case variants or Windows paths; config
+  and CI files via copies, `tee`, `sed -i` or spaceless redirections; destructive
+  commands under `cmd /c`, `pwsh -EncodedCommand`, `find -exec` or `busybox`. Inputs
+  are canonicalized before evaluation, and a project's own `.scopebond/policy.json`
+  no longer takes precedence over the user's install. Fixed in hook 0.6.0.
+- **verify, hook:** `force_push_guard` fired only on a `--force` push whose single
+  resolved ref matched the protected set, so branch deletion (`git push origin :main`,
+  `--delete`), all-branch pushes (`--all --force`, `--mirror`) and nested release
+  branches slipped through. Fixed in verify 0.4.0 and hook 0.6.0.
+- **hook:** the command digest was computed before scrubbing, so a receipt's digest
+  leaked the credential the scrubber had removed; the scrubber also missed `-p`/`-u`
+  flag values and custom auth headers. Fixed in hook 0.6.0.
+- **policy-schema:** `canonical()` escaped lone surrogates instead of refusing them,
+  so two distinct inputs could canonicalize to the same bytes. It now rejects them.
+  Fixed in policy-schema 0.4.1.
 - **hook:** the secret scrubber leaked credentials — single-token shapes (GitHub,
   AWS, Slack, Stripe, npm, OpenAI/Anthropic, Google keys, JWTs, high-entropy blobs)
   were emitted as `secret***` and signed into receipts. Rewritten with explicit
@@ -29,12 +51,22 @@ Past security advisories are summarized in [SECURITY.md](SECURITY.md).
   it now throws rather than silently pass a tool through with no policy check.
 
 ### Fixed
+- **gateway:** local stores tolerate concurrent writers and crashes — SQLite opens
+  with WAL and a busy timeout so parallel hook processes wait for the lock instead of
+  failing, a database that exists but cannot be opened is an error rather than a
+  silent switch to another log, and the JSONL fallback truncates a torn final line.
 - **github-action:** governs `claude[bot]` and `github-actions[bot]`, and evaluates
   at a real timestamp so `time_window` clauses bind (was epoch 0).
 - Reconciled public package status and enrollment examples with the published
   release set; CI rejects release metadata that drifts from package manifests.
 
 ### Added
+- **verify:** offline WebCrypto verification of receipt signatures, and `SPEC.md`
+  states exactly which verifiers support what.
+- **gateway, verify:** RFC 9162 Merkle anchors v2 — signed, versioned and chained to
+  the last v1 anchor, with audit-path and consistency proofs the client verifies
+  itself. `gateway.anchor()` refuses to sign when the receipt log no longer
+  reproduces the previous anchor.
 - A bounded `scopebond-gateway enroll` handoff that reads a one-use Cloud bundle,
   proves possession with the local attester key, and prints the scoped exporter
   credential only to the gateway terminal.

@@ -3,22 +3,24 @@ name: Publish
 # Deliberate, manual publish of versioned packages to npm (uses the NPM_TOKEN
 # secret). Run from the Actions tab (or `gh workflow run publish.yml`) after the
 # versions are bumped (via a changeset + `pnpm version:packages`). Publishes only
-# packages whose version isn't already on npm. `sdk` and `examples` are `private`
-# and are never published by this.
+# packages whose version isn't already on npm; `examples` is `private` and is never
+# published. The normal path is release.yml (publish on merging the Version PR); this
+# workflow is the manual fallback. Both publish with npm provenance.
 
 on:
   workflow_dispatch: {}
 
 permissions:
   contents: read
+  id-token: write # npm provenance
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22.20.0
           cache: pnpm
@@ -29,3 +31,4 @@ jobs:
         run: pnpm exec changeset publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

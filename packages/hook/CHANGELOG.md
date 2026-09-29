@@ -1,5 +1,183 @@
 # @scopebond/hook
 
+## 0.8.0
+
+### Minor Changes
+
+- 3167b96: `login <workspace-url>` connects this computer to a Scopebond Cloud workspace without pasting anything. It asks the workspace for a short code, prints it with the page to open, and waits while someone who manages the workspace approves it for an environment and agent; the approval hands back a single-use enrollment that completes exactly as `connect` does (the same agent wiring, `--cursor`, `--codex`, `--no-install`). `slow_down`, denial and expiry are handled; the device code is kept in memory and never printed or written. `connect` is unchanged.
+- d3ab02c: Command and MCP-argument digests in receipts are now keyed (HMAC-SHA-256 under a per-machine `.scopebond/digest.key`, created by `init` or on first use) and labelled `hmac-sha256:`. A plain SHA-256 of a command whose scrubbed head is printed beside it left only the unseen remainder to guess, so a short secret the scrubber missed could be recovered offline from a receipt; MCP arguments were digested unscrubbed. Digests still match for identical actions on the same machine. The starter policy already denies agent reads of `.scopebond/` and `*.key`.
+- 86782ee: `init` no longer writes a machine-specific hook command into a file your team shares. The fast, pinned command names paths that exist only on the machine that ran `init`; in a committed `.claude/settings.json` it could not start on a teammate's machine, and Claude Code, Cursor and Codex treat a hook that cannot start as a non-blocking error — so the teammate's agent ran with no check while the file said it was governed.
+
+  - Claude Code: the pinned command goes to `.claude/settings.local.json`, kept out of git for this clone through `.git/info/exclude` (the repository's `.gitignore` is not touched). Running `init` again removes a pinned entry an older version wrote into `.claude/settings.json`.
+  - Cursor and Codex: the pinned command goes into the project file only while git does not already track it; a tracked file gets the portable `npx` command.
+  - `init --shared` writes the portable command to the shared file so everyone who clones the project gets the hook (it fails closed with a setup message until they run `init`).
+  - `doctor` flags a machine-specific command in a file git shares, even when it starts on this machine.
+  - `install` pins a durable copy instead of registering npm's temporary `npx` cache path, which npm may clear.
+  - `connect` leaves an already-configured hook as it is.
+  - `init --dry-run` shows what it would write; `connect` errors say where an enrollment comes from; `status`/`doctor` hints print a runnable command; Node's experimental SQLite warning is no longer printed.
+
+## 0.7.0
+
+### Minor Changes
+
+- 2b03b41: Make the connector do what the site says: a readable block message, a hook that starts
+  fast, diagnostics that tell the truth, and honest Cursor coverage.
+
+  - **`init` pins the hook to a durable path instead of `npx`.** The command it installed
+    ran `npx -y @scopebond/hook@<version>` on every tool call, which re-resolves a package
+    already on disk. `init` now copies this package to `~/.scopebond/runtime/<version>/`
+    once per machine and points the agent at that absolute path. Measured on one Windows
+    machine, through a shell, warm cache: **151 ms per tool call, down from 1053 ms.** Pass
+    `--npx` to keep the portable command; `init` falls back to it automatically when no
+    durable copy can be made, and `doctor` now verifies that a pinned command still
+    resolves, so a cleared home or a switched Node version surfaces as a problem rather
+    than a hook that cannot start.
+  - **A denial explains itself.** The message was the engine's internal reason — `param
+program fails pattern`. It now names the action, the deciding rule, that rule's own
+    description, the technical detail and the file to edit. The same text reaches the
+    coding agent, so it can choose another approach instead of retrying a blocked call.
+  - **`status` and `doctor` no longer contradict `init`.** Both checked only the
+    user-level agent config, so after a per-project `init` they reported "Claude Code: not
+    configured". They now report both scopes and name the files, and `doctor` treats "no
+    agent configured at all" as a problem, because nothing is enforced in that state.
+  - **Cursor: an allowed action no longer prompts.** The adapter answered `ask` even for
+    an action a rule had evaluated and permitted, putting a confirmation dialog in front
+    of every ordinary command. An evaluated allow now answers `allow`; `ask` is reserved
+    for actions no rule covers, which still defer to Cursor's own prompt.
+  - **Cursor: file edits are described as recorded, not prevented.** Cursor reports an
+    edit only after writing it (`afterFileEdit`), so an out-of-policy edit cannot be
+    blocked there. Such a decision is now flagged post-hoc, worded as "recorded an
+    out-of-policy …" rather than "blocked", and `init --cursor` prints what is prevented
+    and what is only recorded.
+  - **Fixed: unparseable input to the Cursor adapter answered `ask`.** Invalid JSON on
+    stdin fell through to evaluation with an empty payload and became an `ask`, so an
+    unreadable request reached a prompt the user would likely accept. It now denies, like
+    every other adapter.
+  - **Fixed: a user-level `install` on Windows wrote a command that bash could not run.**
+    Absolute paths were quoted only when they contained a space, so an unquoted Windows
+    path lost its separators under Git Bash, WSL or a dev container and the hook died with
+    `MODULE_NOT_FOUND`. Both paths are now always quoted on Windows.
+  - **Fixed: re-running `init` could install a second hook entry.** The duplicate check
+    did not recognise a pinned Windows path (`@scopebond\hook`), so a repeat `init` would
+    have left the hook checking every tool call twice. There is now one shared matcher for
+    every command form the installer has ever written.
+  - Printed guidance uses plain `npx` on every platform instead of `npx.cmd`, and the
+    non-interactive refusal explains why it refuses and how to proceed.
+
+- 978e7a3: Make the limits editable, bound what the hook writes to disk, and make `install` safe to
+  try.
+
+  - **`rules` — the limits in plain terms.** `policy.json` is 6.7 KB of generated regular
+    expression (the `safe-shell` clause alone is a ~700-character case-folded negative
+    lookahead), so "it is a plain JSON file — edit the limits" was not true in practice and
+    the starter policy was effectively the only policy. The lists those patterns are built
+    from now live in `.scopebond/rules.json`, and `policy.json` is compiled from them:
+
+    ```
+    scopebond-hook rules                    # what is blocked, in plain English
+    scopebond-hook rules allow dd
+    scopebond-hook rules protect infra/
+    scopebond-hook rules protect-branch production
+    scopebond-hook rules apply              # recompile after editing rules.json by hand
+    ```
+
+    The compiled patterns are **identical** to the ones already shipped — a test pins them
+    against `starterPolicy()`, so the readable front end cannot change what is enforced.
+    Clause descriptions are now generated from the lists, so they stay true after an edit
+    (and the block message quotes them).
+
+  - **The local store stops growing without bound.** The hook is one short-lived process per
+    tool call, and it never closed its SQLite handle — so each process left its write-ahead
+    log on disk for the next one to extend. Measured: **~11 KiB of WAL per receipt, against
+    ~1.7 KiB once the handle is closed**, and the WAL file is now gone entirely after a run.
+    (It also released a Windows file lock that stopped `.scopebond` being removable.)
+    `ReceiptStore` gains optional `recent(limit)` and `count()`; both stores implement
+    `close()` with a truncating checkpoint.
+
+  - **`prune` bounds the store, without ever losing evidence quietly.** `status` now reports
+    the receipt count and size, and `prune --before 90d` archives the receipts it will
+    remove to a JSONL file beside the database before removing them, then VACUUMs. It
+    refuses outright once the log has been anchored, because a receipt's position is its
+    anchor leaf index and removing one would make an existing anchor unverifiable. Nothing
+    is ever deleted automatically.
+
+  - **`log` answers "what got blocked this week".** It had no filters and read every receipt
+    ever recorded in order to print the last 20. It now takes `--deny` and `--since 7d`, and
+    reads a tail (`ORDER BY id DESC LIMIT`) with a bounded scan when filtering. `verify`
+    still reads everything — that is the point of it — but reports progress instead of
+    looking hung on a long history.
+
+  - **`install --dry-run`, and a backup before any change.** `install` rewrites agent config
+    files the user did not create (`~/.claude/settings.json` holds their theme, plugins and
+    permissions) and the undo was "hope the merge was right". It now prints exactly which
+    files it would touch with `--dry-run`, and copies each config to
+    `<file>.scopebond-backup` before its first modification.
+
+  - **Fixed: `uninstall` ignored the project hook.** Like `status` and `doctor` before it, it
+    looked only at the user-level config — so after the per-project `init` the site tells
+    people to run, it reported "no user-level harness config found" and left the hook in
+    place. It now removes both scopes and says what it kept.
+
+  - **Per-command help.** `--help` was a single line listing 15 command names. `help` now
+    describes each command, and `help <command>` gives its arguments and an example.
+
+  Known remaining inefficiency: the authority tables store the policy snapshot per action,
+  so a tool call costs ~25 KiB rather than the ~2 KiB of the receipt itself. Deduplicating
+  it by digest needs a schema migration in the authority storage that backs duplicate-action
+  detection, so it is deliberately left for its own change rather than bundled here.
+
+### Patch Changes
+
+- Updated dependencies [978e7a3]
+- Updated dependencies [978e7a3]
+  - @scopebond/gateway@0.8.0
+
+## 0.6.0
+
+### Minor Changes
+
+- 792c40f: Security: `force_push_guard` now covers branch deletion and all-branch pushes, and its default protects nested release branches.
+
+  The clause previously fired only on a `--force` push whose single resolved ref matched the protected set. Three destructive pushes slipped through:
+
+  - **Deletion** (`git push origin :main`, `git push origin --delete main`) removes a protected branch and is destructive even without `--force`; it was treated as an ordinary push.
+  - **All-branch force pushes** (`git push --all --force`, `git push --mirror`) reach every branch — so they necessarily rewrite the protected ones, and `--mirror` also prunes — but their whole-repo push carried no single protected ref to match.
+  - The default protected set was `["main", "master", "release/*"]`; the single-star glob does not cross `/`, so `release/1.0/hotfix` was unprotected. The default is now `release/**`.
+
+  The hook mapper marks these on the `git.push` intent it emits (`delete` for `:dst`/`--delete`, `all` for `--all`/`--mirror`/`--branches`), and `force_push_guard` denies a delete of a protected ref (regardless of `force`), a force-push to all branches, and a force-push to a protected ref, still allowing ordinary pushes, feature-branch force-pushes and a non-forced `--all`. A destructive push whose target ref cannot be resolved still fails closed. The hook's own starter policy already denied these through its stricter ref allowlist; this closes the gap for customer policies that use the `force_push_guard` clause.
+
+- a42fc81: Security: canonicalize shell and path inputs before policy evaluation, and stop a project policy from overriding the user's.
+
+  - A project `.scopebond/policy.json` no longer overrides an existing user-level install unless the user trusted that exact policy (`scopebond trust`, or `init` in the project). A later edit un-trusts it, so neither a cloned repository nor the governed agent can swap in a weaker policy.
+  - `git push` destinations are checked in the common spellings: `refs/heads/main`, `HEAD:main`, a second refspec, `-o`/`--repo` options, combined `-uf` flags, `--all` and `--mirror`. A push whose destination is not on the command line (a git alias, a configured push refspec, `send-pack`, `subtree push`) is denied; a tags-only push (`--tags`) is allowed.
+  - Shell commands are decomposed through keywords and grouping (`if`/`for`/`while`/`{ }`/`!`/`case`), `eval`, `trap`, substitutions inside double quotes, `env -S`, `su -c`, `script -c`, `watch`, `parallel`, `cmd /c`, `pwsh -Command`/`-EncodedCommand` and `find -exec`, and through wrappers (`sudo`, `time`, `nice`, `xargs`, `timeout`, `strace` …) with their own option arities; wrappers such as `sudo` are checked as programs too. Trailing `#` comments are handled.
+  - Files read or written through the shell reach the same guards as the Read and Write tools in the common spellings: copies and moves, writers and editors (`tee`, `sed -i`, `yq -i`, `ed`, `vim`), git's own writes (`checkout -- p`, `restore`, `mv`, `rm`, `config core.hooksPath`), secrets sent or staged (`curl -T`, `-d @file`, `gh gist create`, `git add`), redirections without spaces, a directory reached with `cd`, protected directories given as operands (`cp -r ~/.ssh`), and globs, variables or brace lists that could name a protected file (`.*/*`). Existence and metadata checks (`ls`, `test -f`, `stat`) and a secret file's name in a string no longer count as reads.
+  - Everyday agent commands are no longer misread as policy violations: a here-document body is inert data (a commit message or PR body written with `git commit -m "$(cat <<EOF …)"`, a note written with `cat <<EOF > f`), never a sequence of commands — but a body fed to a shell (`bash <<EOF …`) still runs and is evaluated, and a here-doc redirected to a protected file is still a write. An inline HTTP payload is data, not a filename: `curl -d '{…}'`, `--data-raw`, `--json` and `wget --post-data` values are inline unless they name a file with `@` (`-d @.env`, `-F up=@secret` still read). A protected path named in inline interpreter code (`node -e`, `python -c`) is recorded only when the same snippet also calls a file or process API, so a path merely mentioned in a log string is not a finding. A `chmod`/`chown` mode or owner (`+x`, `0755`, `root:wheel`) is not recorded as a written path.
+  - Paths and program names are matched case-insensitively; `.exe` suffixes, Windows backslash paths, 8.3 short names (`CLAUDE~1`), PowerShell backtick escapes, `::$DATA` streams and trailing dots are normalized.
+  - The starter policy now also protects SSH, AWS, Kubernetes, Docker, GnuPG, gcloud and Azure credentials (and their directories), the GitHub CLI's `hosts.yml`, Claude Code's `.credentials.json`, key containers (`*.pem`, `*.p12`, `*.pfx`), `.envrc`, `.git/config`, Husky hooks, `.claude/hooks`, `.claude/agents`, `.mcp.json` and `.gitlab-ci.yaml`, and denies `shred`, `truncate`, `unlink`, `wipe`, `diskpart` and `Clear-Content`. `.env` templates ending in `.example`, `.sample`, `.template` or `.dist` stay readable. Starter policies written by earlier versions are upgraded in memory.
+  - Behaviour change: a shell command that cannot be parsed, or whose program is only known at run time (`$cmd`, `$(…) args`), is now evaluated with an empty program and denied by the starter policy in normal mode too (it was previously recorded as not evaluated).
+  - The agent running the hook's own `init`, `install`, `trust`, `uninstall` or `connect` is denied, and `init`, `trust` and `uninstall` refuse a non-interactive stdin unless `--yes` is passed.
+  - `init` and `install` refuse to overwrite an agent settings file that is not valid JSON instead of replacing it.
+  - The Claude Code plugin pins the current hook version, and its manifest version follows the hook version.
+
+  Documented limits: the hook reads the command text only. It cannot see a variable's value, a path built inside a script, aliases or functions from an earlier call, git aliases in a config file, or recursive reads of a parent of a protected directory. Writes named only inside a patch or archive (`patch`, `git apply`, `tar x`, `unzip`) are recorded as not evaluated (denied in strict mode). Reading any `*.pem` file is denied, public certificates included.
+
+- 8332610: Privacy: the command digest no longer hands back what the scrubber removed, and the scrubber catches two more common secret shapes.
+
+  - **Digest over scrubbed text.** `redactCommand` recorded a scrubbed, truncated head followed by a SHA-256 of the _original_ command, so a secret the head removed (`psql --password hunter2 …`) was still brute-forceable from the retained digest. The digest is now taken over the scrubbed command, so the receipt reveals nothing the head already hid.
+  - **Attached `-p`/`-u` values.** `mysql -phunter2` / `psql -uadmin` put a password or user on argv with no separator, and passed through unchanged. The scrubber now masks an attached `-p`/`-u` value in the command head; a space-separated operand (`mkdir -p dir`, `-p value`) is untouched, and the `--password`/`--user` forms remain handled as before.
+  - **Custom secret-named headers.** A header whose name looks like a credential (`X-Custom-Secret:`, `My-Token:`) now has its value masked, alongside the existing `Authorization`/`X-API-Key` rules. Bare `key:` is deliberately excluded so ordinary `key: value` text is left alone.
+
+  Both new rules apply to free text (the command head) only, never to the structured parameters a policy matches on, so policy evaluation is unchanged. Command scrubbing remains best-effort — secrets should not be passed on argv in the first place.
+
+### Patch Changes
+
+- Updated dependencies [df4fc67]
+- Updated dependencies [f2e4d62]
+- Updated dependencies [5329932]
+  - @scopebond/gateway@0.7.0
+  - @scopebond/policy-schema@0.4.1
+
 ## 0.5.0
 
 ### Minor Changes
