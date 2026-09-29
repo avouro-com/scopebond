@@ -11,7 +11,9 @@ import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, type HookConnection } from "./cloud.js";
 import { explainDeny, type ExplainIntent } from "./explain.js";
-import { RULES_FILE } from "./rules.js";
+import { RULES_FILE, loadRules } from "./rules.js";
+import { applyRootScope } from "./paths.js";
+import { withActionGroup, actionGroupId } from "./group.js";
 import { cliCommand } from "./version.js";
 
 export interface RuntimeConfig {
@@ -23,6 +25,9 @@ export interface RuntimeConfig {
    *  allowlist) instead of observed. Fail-closed for tools with no taxonomy
    *  mapping; default false (observe, matching the connector conformance vector). */
   strict?: boolean;
+  /** The working directory the harness reported, used to resolve workspace roots when
+   *  the rule set lists `allowed_roots`. Defaults to the process directory. */
+  cwd?: string;
   /** When connected to a Cloud workspace, receipts are auto-exported to the portal.
    *  Export is best-effort and never changes the local decision. */
   cloud?: { connection: HookConnection; fetch?: typeof fetch; flushTimeoutMs?: number };
@@ -53,13 +58,27 @@ export const under = (dir: string): string => `(?!(?:.*/)?${ci(dir)}(?:/|$))`;  
 export const named = (file: string): string => `(?!(?:.*/)?${ci(file)}$)`;         // exactly this file name
 export const dir = (d: string): string => `(?!(?:.*/)?${ci(d)}/?$)`;               // the directory itself (a recursive read or copy)
 
-const PROTECTED_WRITE = "^" + [
+// The protected-write set, in two typed groups the catalog classifies separately:
+// guardrail/hook configuration (C02) and CI configuration (H03).
+const GUARDRAIL_WRITE_PREV = [
   under("\\.scopebond"), `(?!(?:.*/)?${ci("\\.claude/settings")})`, under("\\.claude/hooks"), under("\\.claude/agents"),
   `(?!(?:.*/)?${ci("\\.cursor/hooks")})`, named("\\.codex/hooks\\.json"), named("\\.codex/config\\.toml"), named("\\.mcp\\.json"),
   under("\\.git/hooks"), named("\\.git/config"), under("\\.husky"),
+];
+const CI_WRITE_PREV = [
   under("\\.github/workflows"), under("\\.github/actions"), named("\\.gitlab-ci\\.yml"), named("\\.gitlab-ci\\.yaml"), under("\\.circleci"),
   named("azure-pipelines\\.yml"), named("Jenkinsfile"),
-].join("") + ".+";
+];
+const GUARDRAIL_WRITE = [...GUARDRAIL_WRITE_PREV, named("\\.cursor/mcp\\.json"), under("\\.githooks")];
+const CI_WRITE = [
+  ...CI_WRITE_PREV,
+  named("azure-pipelines\\.yaml"), named("bitbucket-pipelines\\.yml"), named("\\.travis\\.yml"), named("\\.drone\\.yml"),
+  named("cloudbuild\\.yaml"), named("cloudbuild\\.yml"), under("\\.buildkite"),
+];
+// What 0.8 compiled, kept so an installed policy that still carries it verbatim is
+// upgraded in memory (see LEGACY_STARTER_PATTERNS).
+const PROTECTED_WRITE_PREV = "^" + [...GUARDRAIL_WRITE_PREV, ...CI_WRITE_PREV].join("") + ".+";
+const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
 
 const PROTECTED_READ = "^" + [
   under("\\.scopebond"),
@@ -95,6 +114,7 @@ const SAFE_REF = `^(?!(?:${ci("main")}|${ci("master")})$)(?!${ci("release")}/)(?
 // policy on disk still carries them verbatim. An operator's own edits never match
 // these strings and are left untouched.
 const LEGACY_STARTER_PATTERNS: Record<string, string> = {
+  [PROTECTED_WRITE_PREV]: PROTECTED_WRITE,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+": SAFE_SHELL,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+": SAFE_SHELL,
@@ -139,7 +159,7 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
       {
         id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
         param_bounds: { path: { pattern: PROTECTED_WRITE } },
-        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor or Codex hook settings, .mcp.json, git hooks and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines.yml, Jenkinsfile). Case-insensitive.",
+        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor or Codex hook settings, .mcp.json and .cursor/mcp.json, git hooks (.git/hooks, .githooks) and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines, bitbucket-pipelines.yml, .travis.yml, .drone.yml, cloudbuild, .buildkite, Jenkinsfile). Case-insensitive.",
       },
       {
         id: "protect-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
@@ -182,6 +202,7 @@ export function createHookRuntime(config: RuntimeConfig) {
     exporter = attached.exporter;
     outbox = attached.outbox;
   }
+  const scopeRoots = loadRules(dirname(config.policyPath))?.allowed_roots ?? [];
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only" });
 
   return {
@@ -236,9 +257,15 @@ export function createHookRuntime(config: RuntimeConfig) {
     },
     /** Decide a whole tool call. A shell call decomposes into several simple
      *  commands; every one is recorded, and a single deny denies the call. */
-    async evaluate(mapped: Mapped | Mapped[]): Promise<Decision> {
-      const list = Array.isArray(mapped) ? mapped : [mapped];
-      if (list.length === 0) return { decision: "not_evaluated", reason: "no action", receipts: [] };
+    async evaluate(mapped: Mapped | Mapped[], options: { groupKey?: string } = {}): Promise<Decision> {
+      const raw = Array.isArray(mapped) ? mapped : [mapped];
+      if (raw.length === 0) return { decision: "not_evaluated", reason: "no action", receipts: [] };
+      // Every intent of one tool call carries one parent group id, so the receipts of a
+      // decomposed call (a command, its file reads and writes, a rename destination)
+      // link to each other and count once as an action. It is part of the signed
+      // intent, so it is authenticated by the same signature as the rest.
+      const scoped = scopeRoots.length ? applyRootScope(raw, { cwd: config.cwd ?? process.cwd(), roots: scopeRoots }) : raw;
+      const list = withActionGroup(scoped, actionGroupId(options.groupKey));
       const receipts: unknown[] = [];
       let allow: Decision | null = null;
       let notEvaluated: Decision | null = null;

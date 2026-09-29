@@ -10,6 +10,17 @@ export {
   compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE,
 } from "./rules.js";
 export type { RuleSet, PathRule } from "./rules.js";
+export { pathRuleMatches, isDestructiveProgram, isProtectedBranch } from "./rules.js";
+export { classifyIntent, classificationBlocks, BLOCKING } from "./classify.js";
+export type { CatalogId, Classification } from "./classify.js";
+export { classifyRoot, applyRootScope } from "./paths.js";
+export type { RootScope, RootOptions } from "./paths.js";
+export { actionGroupId, withActionGroup, distinctTargets, ACTION_GROUP_PARAM, ACTION_GROUP_SIZE_PARAM, ACTION_GROUP_SEQ_PARAM } from "./group.js";
+export { computeManifest, renderManifest, cellState, cellKey, vectorsForCell, vectorDigest } from "./capabilities.js";
+export type { Manifest, CapabilityCell, CapabilityState, ProofRecord, HostVariant, EventPhase, ManifestInput } from "./capabilities.js";
+export { runProofFixtures, loadProofs, saveProofs, PROOF_FILE } from "./proof.js";
+export { VECTORS, mapVector } from "./vectors.js";
+export type { Vector, VectorAgent, Dialect } from "./vectors.js";
 export { scaffold, harnessSnippet, installHarness, placeHook } from "./init.js";
 export type { HookPlacement } from "./init.js";
 export {
