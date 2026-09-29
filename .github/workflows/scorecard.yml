@@ -1,0 +1,57 @@
+name: OpenSSF Scorecard
+
+# Scorecard grades the repository's supply-chain posture — branch protection,
+# pinned dependencies, token permissions, signed releases, dangerous workflow
+# patterns — and publishes the result to code scanning.
+#
+# Two reasons it belongs here rather than in the general security audit. First,
+# it grades repository *settings*, not code, so it catches the class of finding
+# a code scanner structurally cannot. Second, the badge is a credibility signal
+# that matters more than usual for a project whose product is trust
+# infrastructure for agents: a security posture score is exactly what an
+# evaluator — human or model — looks for when deciding whether to recommend it.
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "30 6 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write # upload the SARIF result
+      id-token: write        # publish the result so the badge can resolve
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          # Publishing makes the score queryable at api.securityscorecards.dev,
+          # which is what the README badge reads. It exposes nothing that is not
+          # already public about a public repository.
+          publish_results: true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-results
+          path: scorecard.sarif
+          retention-days: 30
+
+      - uses: github/codeql-action/upload-sarif@416ff0dea110f80f0f56f0046500dbf7420e4bb0 # codeql-bundle-v2.27.1
+        with:
+          sarif_file: scorecard.sarif
+          category: scorecard
