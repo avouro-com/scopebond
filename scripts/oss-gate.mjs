@@ -41,6 +41,7 @@ const ALLOW = [
   "CITATION.cff", "llms.txt", "architecture.svg", "SPEC.md",
   ".claude-plugin/**",
   ".changeset/**",
+  ".gitleaks.toml",
   ".gitignore", ".gitattributes", ".editorconfig", ".nvmrc", ".node-version", ".npmrc",
   "package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml",
   "tsconfig.json", "tsconfig.*.json", "vitest.config.*", "eslint.config.*",

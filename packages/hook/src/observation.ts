@@ -305,12 +305,29 @@ const plain = (value: string): boolean => SAFE_NAME.test(value) && scrubParam(va
 const stringParam = (params: Record<string, unknown>, key: string): string | undefined =>
   typeof params[key] === "string" ? (params[key] as string) : undefined;
 
+const CREDENTIAL_DIRS = new Set([".ssh", ".aws", ".gnupg", ".kube", ".docker"]);
+const CREDENTIAL_FILES = new Set([".npmrc", ".pypirc", ".netrc", ".git-credentials"]);
+const CI_FILES = new Set([".gitlab-ci.yml", ".gitlab-ci.yaml", "jenkinsfile", "azure-pipelines.yml", "azure-pipelines.yaml"]);
+const GUARDRAIL_DIRS = new Set([".scopebond", ".claude", ".cursor", ".codex", ".husky", ".githooks"]);
+const CREDENTIAL_EXT = /\.(key|pem|p12|pfx|jks|keystore)$/;
+
+/** Trailing slashes removed by a scan, so no backtracking regex runs over a caller-supplied path. */
+const trimTrailingSlashes = (s: string): string => {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end--;
+  return s.slice(0, end);
+};
+
+// Classified by path segment rather than by one large pattern: a path is caller-supplied, so
+// nothing here can backtrack on it.
 const pathClass = (path: string): "ordinary" | "credential" | "ci" | "guardrail" | "unknown" => {
   const p = path.replace(/\\/g, "/").toLowerCase();
   if (p === "") return "unknown";
-  if (/(^|\/)\.env(\..*)?$|\.(key|pem|p12|pfx|jks|keystore)$|(^|\/)\.(ssh|aws|gnupg|kube|docker)(\/|$)|(^|\/)\.(npmrc|pypirc|netrc|git-credentials)$/.test(p)) return "credential";
-  if (/(^|\/)\.(github\/(workflows|actions)|circleci|buildkite)(\/|$)|(^|\/)(\.gitlab-ci\.ya?ml|jenkinsfile|azure-pipelines\.ya?ml)$/.test(p)) return "ci";
-  if (/(^|\/)\.(scopebond|claude|cursor|codex|husky|githooks)(\/|$)|(^|\/)\.git\/(hooks|config)|(^|\/)\.mcp\.json$/.test(p)) return "guardrail";
+  const segs = p.split("/");
+  const base = segs[segs.length - 1];
+  if (base === ".env" || base.startsWith(".env.") || CREDENTIAL_EXT.test(base) || CREDENTIAL_FILES.has(base) || segs.some((s) => CREDENTIAL_DIRS.has(s))) return "credential";
+  if (CI_FILES.has(base) || segs.some((s, i) => s === ".circleci" || s === ".buildkite" || (s === ".github" && (segs[i + 1] === "workflows" || segs[i + 1] === "actions")))) return "ci";
+  if (base === ".mcp.json" || segs.some((s, i) => GUARDRAIL_DIRS.has(s) || (s === ".git" && (segs[i + 1]?.startsWith("hooks") === true || segs[i + 1]?.startsWith("config") === true)))) return "guardrail";
   return "ordinary";
 };
 
@@ -395,7 +412,7 @@ export function buildOperation(action: DispatchedAction, context: OperationConte
 }
 
 function isInside(root: string, path: string): boolean {
-  const norm = (s: string): string => s.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const norm = (s: string): string => trimTrailingSlashes(s.replace(/\\/g, "/")).toLowerCase();
   const r = norm(root);
   const p = norm(path);
   return p === r || p.startsWith(`${r}/`);
