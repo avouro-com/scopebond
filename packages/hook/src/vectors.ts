@@ -40,6 +40,8 @@ export interface Vector {
   gap?: string;
   /** Capability cell this vector is a proof fixture for. */
   cell?: { action_type: string; role: "allow" | "deny" | "after_action" };
+  /** The typed operation the adapter must derive from this input (proof runner and tests). */
+  typed?: { type: string; verb?: string };
 }
 
 const claude = (tool_name: string, tool_input: Record<string, unknown>, cwd = "/w"): Record<string, unknown> => ({ tool_name, tool_input, cwd });
@@ -197,11 +199,32 @@ add({ rule: "I05", agent: "claude", dialect: "posix", input: claude("Bash", { co
 add({ rule: "I05", agent: "codex", dialect: "posix", input: { tool_name: "Bash", tool_input: { command: "pnpm test" }, cwd: "/w" }, expect: "allow", catalog: [], cell: { action_type: "shell.exec", role: "allow" } });
 add({ rule: "I05", agent: "claude", dialect: "posix", input: claude("Write", { file_path: "/w/src/app.ts" }), expect: "allow", catalog: [], cell: { action_type: "file.write", role: "allow" } });
 add({ rule: "I05", agent: "claude", dialect: "posix", input: claude("Write", { file_path: "/w/.github/workflows/ci.yml" }), expect: "deny", catalog: ["H03"], cell: { action_type: "file.write", role: "deny" } });
-add({ rule: "I05", agent: "claude", dialect: "posix", input: claude("Bash", { command: "git push origin feature/x" }), expect: "allow", catalog: [], cell: { action_type: "git.push", role: "allow" } });
+add({ rule: "I05", agent: "claude", dialect: "posix", input: claude("Bash", { command: "git push origin feature/x" }), expect: "allow", catalog: [], cell: { action_type: "git.push", role: "allow" }, typed: { type: "git", verb: "push" } });
 add({ rule: "I05", agent: "codex", dialect: "posix", input: { tool_name: "Bash", tool_input: { command: "git push origin feature/x" }, cwd: "/w" }, expect: "allow", catalog: [], cell: { action_type: "git.push", role: "allow" } });
 add({ rule: "I05", agent: "codex", dialect: "posix", input: { tool_name: "Bash", tool_input: { command: "git push origin main" }, cwd: "/w" }, expect: "deny", catalog: ["H01"], cell: { action_type: "git.push", role: "deny" } });
 add({ rule: "I05", agent: "cursor", dialect: "posix", event: "beforeShellExecution", input: { command: "git push origin feature/x", cwd: "/w" }, expect: "allow", catalog: [], cell: { action_type: "git.push", role: "allow" } });
 add({ rule: "I05", agent: "cursor", dialect: "posix", event: "beforeShellExecution", input: { command: "git push origin main", cwd: "/w" }, expect: "deny", catalog: ["H01"], cell: { action_type: "git.push", role: "deny" } });
+
+// Typed operations (git, package, github_resource): the same inputs must derive a closed
+// operation from the actual command. Observation-only cells: nothing here blocks anything.
+const typedShell = (cell: string, command: string, typed: NonNullable<Vector["typed"]>, agent: VectorAgent = "claude", dialect: Dialect = "posix"): void => {
+  const cwd = dialect === "powershell" ? WIN : "/w";
+  const tool = agent === "claude" && dialect === "powershell" ? "PowerShell" : "Bash";
+  const input = agent === "cursor" ? { command, cwd } : agent === "codex" ? { tool_name: tool, tool_input: { command }, cwd } : claude(tool, { command }, cwd);
+  add({ rule: "MP10", agent, dialect, ...(agent === "cursor" ? { event: "beforeShellExecution" } : {}), input, expect: "allow", catalog: [], cell: { action_type: cell, role: "allow" }, typed });
+};
+typedShell("git.commit", 'git commit -m "fixture"', { type: "git", verb: "commit" });
+typedShell("git.commit", 'git commit -m "fixture"', { type: "git", verb: "commit" }, "claude", "powershell");
+typedShell("git.commit", 'git commit -m "fixture"', { type: "git", verb: "commit" }, "codex");
+typedShell("git.commit", 'git commit -m "fixture"', { type: "git", verb: "commit" }, "cursor");
+typedShell("package.install", "pnpm add left-pad", { type: "package", verb: "add" });
+typedShell("package.install", "npm install left-pad@1.3.0", { type: "package", verb: "install" }, "claude", "powershell");
+typedShell("package.install", "pip install requests==2.31.0", { type: "package", verb: "install" }, "codex");
+typedShell("package.install", "uv add httpx", { type: "package", verb: "add" }, "cursor");
+typedShell("github.resource", "gh pr create --title fixture --body fixture", { type: "github_resource", verb: "pr_create" });
+typedShell("github.resource", "gh pr create --title fixture --body fixture", { type: "github_resource", verb: "pr_create" }, "claude", "powershell");
+typedShell("github.resource", "gh pr create --title fixture --body fixture", { type: "github_resource", verb: "pr_create" }, "codex");
+typedShell("github.resource", "gh pr create --title fixture --body fixture", { type: "github_resource", verb: "pr_create" }, "cursor");
 
 export const VECTORS: readonly Vector[] = out;
 

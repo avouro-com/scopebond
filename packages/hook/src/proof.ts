@@ -28,7 +28,8 @@ import { createHookRuntime } from "./runtime.js";
 import { ACTION_GROUP_PARAM } from "./group.js";
 import { computeManifest, specForCell, vectorDigest, vectorsForCell, type Adapter, type CapabilityCell, type ProofRecord } from "./capabilities.js";
 import { mapVector, type Vector } from "./vectors.js";
-import { sourceReceiptHash } from "./observation.js";
+import { bindingKeyFromHex, operationsForCall, sourceReceiptHash } from "./observation.js";
+import { callRequestOf, fixtureProbe } from "./typed-ops.js";
 import type { HookConnection } from "./cloud.js";
 
 export const PROOF_FILE = "capability-proof.json";
@@ -52,7 +53,18 @@ const receiptParams = (receipt: unknown): Record<string, unknown> => {
   return payload?.intent?.params ?? {};
 };
 
-interface Outcome { decision: string; receipts: unknown[]; valid: boolean; grouped: boolean }
+interface Outcome { decision: string; receipts: unknown[]; valid: boolean; grouped: boolean; typed?: boolean }
+
+const FIXTURE_KEY = bindingKeyFromHex("00".repeat(32));
+
+/** Whether the adapter derives the typed operation a vector expects, from the same dispatched
+ *  actions and raw request the hook uses, against a deterministic fixture repository. */
+function typedDerived(vector: Vector, dispatched: Array<{ action: { action_type: string; params: Record<string, unknown> } }> | undefined): boolean {
+  if (!vector.typed) return true;
+  const request = callRequestOf(vector.input);
+  const operations = operationsForCall({ dispatched: dispatched ?? [], request }, { key: FIXTURE_KEY, cwd: "/fixture", repositoryId: "sbr_fixture", probe: fixtureProbe, packageManagerVersion: () => undefined });
+  return operations.some((op) => op?.type === vector.typed!.type && (vector.typed!.verb === undefined || op.verb === vector.typed!.verb));
+}
 
 async function run(vector: Vector, runtime: ReturnType<typeof createHookRuntime>, attesterPem: string): Promise<Outcome> {
   const decision = await runtime.evaluate(fillPushBranch(mapVector(vector), "feature/work"), { groupKey: `proof:${vector.id}` });
@@ -60,7 +72,7 @@ async function run(vector: Vector, runtime: ReturnType<typeof createHookRuntime>
   const valid = receipts.length > 0 && receipts.every((r) => (verifyReceipt(r as Parameters<typeof verifyReceipt>[0], attesterPem) as unknown as { valid: boolean }).valid);
   const groups = new Set(receipts.map((r) => receiptParams(r)[ACTION_GROUP_PARAM]));
   const grouped = receipts.length > 0 && groups.size === 1 && typeof [...groups][0] === "string" && String([...groups][0]) !== "";
-  return { decision: decision.decision, receipts, valid, grouped };
+  return { decision: decision.decision, receipts, valid, grouped, typed: typedDerived(vector, decision.dispatched) };
 }
 
 /** Run one cell's fixtures in a temp hook home. Returns null when the cell has no vectors. */
@@ -99,6 +111,7 @@ async function proveCell(adapter: Adapter, actionType: string, phase: "pre_actio
       signature: all.length > 0 && all.every((o) => o.valid),
       grouping: all.length > 0 && all.every((o) => o.grouped),
       cloud_ack: "not_checked", observation_only: observationOnly, proof_digests: proofDigests,
+      ...(vectors.some((v) => v.typed) ? { typed_operation: all.length > 0 && all.every((o) => o.typed !== false) } : {}),
     } };
   } finally {
     try { runtime?.close(); } catch { /* the temp home is removed next */ }

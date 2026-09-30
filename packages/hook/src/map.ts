@@ -678,7 +678,7 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
   return out;
 }
 
-function parseMcpName(name: string): { server: string; tool: string } | null {
+export function parseMcpName(name: string): { server: string; tool: string } | null {
   if (!name.startsWith("mcp__")) return null;
   const parts = name.split("__");
   if (parts.length < 3) return null;
