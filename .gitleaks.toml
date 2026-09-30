@@ -10,3 +10,11 @@ useDefault = true
 description = "Conformance vector fixtures (fixed test identifiers, not credentials)"
 targetRules = ["generic-api-key"]
 paths = ['''^packages/policy-schema/vectors/[^/]+\.json$''']
+
+# The typed-infrastructure tests feed the curl parser made-up commands such as
+# `curl -H 'Authorization: Bearer <placeholder>'` to prove that header values are
+# never recorded. They are fixtures, not credentials.
+[[allowlists]]
+description = "Hook classifier test fixtures (placeholder curl auth headers, not credentials)"
+targetRules = ["curl-auth-header"]
+paths = ['''^packages/hook/test/typed-infrastructure\.test\.mjs$''']
