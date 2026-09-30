@@ -41,3 +41,13 @@ export type { PinResult } from "./runtime-install.js";
 export { connectCloud, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
 export type { HookConnection } from "./cloud.js";
 export { scrubSecrets, scrubParam, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
+export {
+  AGENT_KINDS, assertAgentKind, observationSigner, signObservation, observationHash, sourceReceiptHash, signingBytes,
+  buildPayload, buildOperation, bindingKeyFromHex, loadOrCreateBindingKey, digestPolicy,
+  REQUEST_BINDING_DOMAIN, MAX_OBSERVATION_BYTES, MAX_BATCH_ITEMS, MAX_BATCH_BODY_BYTES,
+} from "./observation.js";
+export type { ObservationPayload, SignedObservation, ObservationSigner, BindingKey, AgentKind } from "./observation.js";
+export { ObservationStore, OBSERVATION_DB } from "./obs-store.js";
+export { uploadPending, parseRetryAfter, OBSERVATIONS_PATH } from "./obs-upload.js";
+export { openObservations, observationStatus, describeObservations, ObservationEmitter, OBSERVATIONS_SCOPE } from "./obs-emitter.js";
+export { wireLifecycleHooks, unwireLifecycleHooks } from "./install.js";

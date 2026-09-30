@@ -31,7 +31,7 @@ import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
-import { createHookRuntime } from "./runtime.js";
+import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
 import {
@@ -39,7 +39,14 @@ import {
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
   localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy,
+  wireLifecycleHooks, unwireLifecycleHooks,
 } from "./install.js";
+import {
+  openObservations, describeObservations, observationStatus, stopReasonFromClaude, exitFromClaudeFailure,
+  HEARTBEAT_INTERVAL_MS, OBSERVATIONS_SCOPE, type ObservationEmitter,
+} from "./obs-emitter.js";
+import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
+import { uploadPending } from "./obs-upload.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
@@ -141,9 +148,24 @@ const cursorCoverageNote = [
   "check on pull requests.",
 ].join("\n");
 
-async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude): Promise<void> {
+/** Record what was dispatched as observations, when this workspace enrolled for them. Purely
+ *  additive: it runs after the decision is made and can neither change it nor fail it. */
+function recordObservations(dir: string, cwd: string, input: Record<string, unknown>, decision: Decision, harness: Harness): ObservationEmitter | undefined {
+  try {
+    const { emitter } = openObservations(dir, { adapterVersion: hookVersion() });
+    if (!emitter) return undefined;
+    const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
+    // Session lifecycle is Claude Code only: its SessionStart/SessionEnd hooks are the ones
+    // the tested mapping covers. Other hosts still get tool intents from their PreToolUse.
+    if (harness === "claude" && sessionId) emitter.activity(sessionId, cwd);
+    emitter.toolIntents({ harnessSessionId: sessionId, callId: callId(input), cwd, dispatched: decision.dispatched ?? [] });
+    return emitter;
+  } catch { return undefined; }
+}
+
+async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude, raw?: string, harness: Harness = "claude"): Promise<void> {
   let input: Record<string, unknown>;
-  try { input = JSON.parse(readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
+  try { input = JSON.parse(raw ?? readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
@@ -151,7 +173,9 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     runtime = createHookRuntime(runtimePaths(dir, cwd));
     useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate(fillPushBranch(mapper(input!), currentBranch(cwd)), { groupKey: callId(input!) });
-    await runtime.flush();
+    const observer = recordObservations(dir, cwd, input!, decision, harness);
+    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve()]);
+    observer?.close();
     // Close before deciding: the receipt is already committed, and leaving the handle
     // open is what made the write-ahead log grow without bound.
     runtime.close();
@@ -166,12 +190,40 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
   }
 }
 
+/** Claude Code events other than PreToolUse: session start and end, and the after-action
+ *  events. They only feed observations; they never print a decision and always exit 0. */
+async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never> {
+  try {
+    const cwd = input.cwd ? String(input.cwd) : process.cwd();
+    const { emitter } = openObservations(resolveConfigDir(cwd), { adapterVersion: hookVersion() });
+    const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
+    if (emitter) {
+      try {
+        switch (input.hook_event_name) {
+          case "SessionStart": if (sessionId) emitter.sessionStart(sessionId, cwd); break;
+          case "SessionEnd": if (sessionId) emitter.sessionStop(sessionId, stopReasonFromClaude(input.reason)); break;
+          case "PostToolUse": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, "ok"); break; }
+          case "PostToolUseFailure": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, exitFromClaudeFailure(input.is_interrupt)); break; }
+        }
+        await emitter.flush(input.hook_event_name === "SessionEnd" ? 1500 : 800);
+      } finally { emitter.close(); }
+    }
+  } catch { /* observations are best effort; nothing here may affect the agent */ }
+  process.exit(0);
+}
+
+const CLAUDE_OBSERVATION_EVENTS = new Set(["SessionStart", "SessionEnd", "PostToolUse", "PostToolUseFailure"]);
+
 async function runClaude(): Promise<void> {
-  await runPreToolUse(mapClaudeToolUse);
+  const raw = readStdin();
+  let event: unknown; let input: Record<string, unknown> | undefined;
+  try { input = JSON.parse(raw) as Record<string, unknown>; event = input?.hook_event_name; } catch { /* PreToolUse reports invalid input */ }
+  if (input && typeof event === "string" && CLAUDE_OBSERVATION_EVENTS.has(event)) await runClaudeLifecycle(input);
+  await runPreToolUse(mapClaudeToolUse, denyClaude, raw, "claude");
 }
 
 async function runCodex(): Promise<void> {
-  await runPreToolUse(mapCodexToolUse, denyCodex);
+  await runPreToolUse(mapCodexToolUse, denyCodex, undefined, "codex");
 }
 
 function denyCursor(reason: string): never {
@@ -202,7 +254,9 @@ async function runCursor(): Promise<void> {
     useDigestKey(loadOrCreateDigestKey(dir));
     const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
     const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
-    await runtime.flush();
+    const observer = recordObservations(dir, cwd, input, decision, "cursor");
+    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve()]);
+    observer?.close();
     // An `afterFileEdit` violation is real and recorded, but the edit has already
     // landed. Say so rather than letting "blocked" imply it was stopped.
     postHoc = mapped.some((m) => m.postHoc);
@@ -702,6 +756,16 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
       console.log(`Add this to your ${harnessFileName(harness)}:`);
       console.log(harnessSnippet(harness));
     }
+    // Session and after-action observations are opt-in through the enrollment: wired only
+    // when this workspace granted observations:write and Claude Code is the host. Off is
+    // silent here (`status` says why); a granted scope the hook cannot use is worth a line.
+    const observing = observationStatus(loadConnection(dir));
+    if (observing.state === "on" && harness === "claude" && !args.includes("--no-install")) {
+      const placed = harnessScopes("claude", process.cwd());
+      const target = placed.local ?? placed.project ?? placed.user;
+      const command = target ? configuredHookCommands(target)[0] : undefined;
+      if (target && command) { wireLifecycleHooks(target, command); console.log(`✓ Session and after-action observations enabled in ${target}`); }
+    } else if (observing.state === "unsupported") console.log(`Observations: ${observing.reason}`);
     console.log("");
     console.log("Run your agent — the first action appears in your workspace within seconds.");
   } catch (error) {
@@ -732,6 +796,79 @@ async function runFlush(): Promise<void> {
   console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
   // Let pending HTTP handles close normally (forced exit can abort on Windows).
   process.exitCode = status && status.pending > 0 ? 1 : 0;
+}
+
+/** `observations`: what the observation emitters are doing, and the local queue. */
+async function runObservations(args: string[]): Promise<void> {
+  const sub = args[0] ?? "status";
+  const dir = resolveConfigDir(process.cwd());
+  if (sub === "heartbeat") { await runHeartbeatLoop(args[1] ?? ""); return; }
+  if (sub === "status") {
+    const lines = describeObservations(dir);
+    console.log(`observations: ${lines[0]}`);
+    for (const line of lines.slice(1)) console.log(`  ${line}`);
+    const file = join(dir, OBSERVATION_DB);
+    if (args.includes("--refused") && existsSync(file)) {
+      const store = new ObservationStore(file);
+      try { for (const row of store.terminal()) console.log(`  refused  #${row.sequence} gen ${row.generation} ${row.kind} ${row.observation_id} ${row.code} ${new Date(row.at).toISOString()}`); }
+      finally { store.close(); }
+    }
+    return;
+  }
+  if (sub === "wire" || sub === "unwire") {
+    const scopes = harnessScopes("claude", process.cwd());
+    if (sub === "unwire") {
+      let removed = 0;
+      for (const file of [scopes.project, scopes.local, scopes.user]) if (file) removed += unwireLifecycleHooks(file);
+      console.log(`removed ${removed} lifecycle hook entr${removed === 1 ? "y" : "ies"}`);
+      return;
+    }
+    const target = scopes.local ?? scopes.project ?? scopes.user;
+    const command = target ? configuredHookCommands(target)[0] : undefined;
+    if (!target || !command) { console.error("Claude Code is not configured with this hook; run install or init first"); process.exit(1); }
+    wireLifecycleHooks(target, command);
+    console.log(`session and after-action hooks wired in ${target}`);
+    return;
+  }
+  const opened = openObservations(dir, { adapterVersion: hookVersion(), spawnHeartbeat: false });
+  if (!opened.emitter) {
+    console.error(`observations are ${opened.status.state}${"reason" in opened.status ? `: ${opened.status.reason}` : ""}`);
+    process.exit(1);
+  }
+  const emitter = opened.emitter;
+  try {
+    if (sub === "flush") {
+      const outcome = await uploadPending(emitter.store, { url: emitter.connection.url, credential: emitter.connection.credential, timeoutMs: 10_000 });
+      const left = emitter.store.pendingSummary().count;
+      console.log(`${outcome.result}: ${outcome.acknowledged} acknowledged, ${outcome.deferred} deferred, ${outcome.rejected} refused; ${left} still pending${outcome.detail ? ` (${outcome.detail})` : ""}`);
+      process.exitCode = left > 0 ? 1 : 0;
+    } else if (sub === "retry") {
+      const state = emitter.store.state();
+      if (state?.capability === "unsupported") { emitter.store.setCapability("active", null); console.log("will try the workspace again"); }
+      else console.log("nothing to retry (a stale generation clears when you reconnect)");
+    } else { console.error("usage: observations [status [--refused]|flush|retry|wire|unwire]"); process.exit(1); }
+  } finally { emitter.close(); }
+}
+
+/** The single heartbeat helper for one active session (started by the hook, never by hand). */
+async function runHeartbeatLoop(sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  const dir = resolveConfigDir(process.cwd());
+  const { emitter } = openObservations(dir, { adapterVersion: hookVersion(), spawnHeartbeat: false, flushTimeoutMs: 3000 });
+  if (!emitter) return;
+  const override = Number(process.env.SCOPEBOND_HEARTBEAT_INTERVAL_MS);
+  const interval = Number.isFinite(override) && override >= 100 ? override : HEARTBEAT_INTERVAL_MS;
+  const endsAt = Date.now() + 24 * 60 * 60 * 1000;
+  let last = Date.now();
+  try {
+    for (;;) {
+      const verdict = emitter.heartbeatTick(sessionId, last);
+      await emitter.flush();
+      if (verdict === "stop" || Date.now() > endsAt) break;
+      last = Date.now();
+      await new Promise<void>((resolve) => setTimeout(resolve, interval));
+    }
+  } finally { emitter.store.releaseHeartbeat(sessionId); emitter.close(); }
 }
 
 /** The absolute path to this CLI file, for registering the hook by absolute path. */
@@ -835,6 +972,9 @@ function runStatus(): void {
   console.log(`  Cursor           ${harnessScopeLabel(cursor) || (cursorDetected() ? "detected, not configured" : "not detected")}`);
   console.log(`  Codex            ${codex.project || codex.user ? `${harnessScopeLabel(codex)} — approve once with /hooks` : codexDetected() ? "detected, not configured" : "not detected"}`);
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
+  const observationLines = describeObservations(resolveConfigDir(process.cwd()));
+  console.log(`  observations     ${observationLines[0]}`);
+  for (const line of observationLines.slice(1)) console.log(`                   ${line}`);
   console.log(`  local receipts   ${existsSync(dbPath) ? `${dbPath} (${describeStore(dbPath)})` : "none yet"}`);
   for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
     for (const file of [scopes.project, scopes.local, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
@@ -864,6 +1004,17 @@ async function runCapabilities(args: string[]): Promise<void> {
         failed = true;
         console.error(`fixture failed: ${cell.key} (allow ${proof.safe_allow}, deny ${proof.safe_deny}, signature ${proof.signature}, grouping ${proof.grouping})`);
       }
+    }
+    const observed = openObservations(dir, { adapterVersion: version, spawnHeartbeat: false });
+    if (observed.emitter) {
+      try {
+        const queued = observed.emitter.capabilityProofs(proven.cells.flatMap((cell) => {
+          const proof = cell.state === "unsupported" ? undefined : fresh[cell.key];
+          return proof ? [{ adapterVersion: cell.adapter_version, hostVariant: cell.host_variant, actionType: cell.action_type, phase: cell.event_phase, requiredFields: cell.emitted_required_fields, fixtureVersion: `fixture/${proof.test_vector_digest}`, passed: proofPassed(proof, cell) }] : [];
+        }));
+        await observed.emitter.flush(3000);
+        console.error(`queued ${queued} capability proof observation(s) (fixture origin)`);
+      } finally { observed.emitter.close(); }
     }
     if (args.includes("--save")) {
       if (!existsSync(dir)) { console.error(`no ${dir} to record into - run \`${cliCommand("init")}\` first.`); process.exit(1); }
@@ -1089,6 +1240,15 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "--prove runs safe fixtures (allow, deny, signature, action group) in temporary",
       "directories; it does not read or change any agent settings. --save records the result.",
     ] },
+  { name: "observations", args: "[status [--refused]|flush|retry|wire|unwire]",
+    summary: "session, health and action observations sent to your workspace (opt-in)",
+    detail: [
+      `On only when your workspace enrollment grants ${OBSERVATIONS_SCOPE}; otherwise off, and status says why.`,
+      "Local enforcement never depends on it: uploads are best effort and bounded. status shows",
+      "what is pending and what the workspace refused (kept locally, never retried). flush",
+      "sends now; retry re-checks a workspace that lacked the route; wire and unwire add or",
+      "remove the Claude Code session and after-action hook entries.",
+    ] },
   { name: "doctor", summary: "check the setup and whether each configured hook command can start",
     detail: ["Exits non-zero when something is wrong, so it works in a script."] },
   { name: "log", args: "[-n N] [--deny] [--since 7d]",
@@ -1183,6 +1343,7 @@ else if (cmd === "flush") { await runFlush(); }
 else if (cmd === "status") { runStatus(); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "capabilities") { await runCapabilities(rest); }
+else if (cmd === "observations") { await runObservations(rest); }
 else if (cmd === "uninstall") { runUninstall(rest); }
 else if (cmd === "login") { await runLogin(rest); }
 else if (cmd === "trust") { runTrust(rest); }

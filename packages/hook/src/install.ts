@@ -415,3 +415,47 @@ export function hookCommandResolves(command: string): boolean {
 export function purgeHome(): void {
   rmSync(userHome(), { recursive: true, force: true });
 }
+
+/** The Claude Code events the observation emitters listen to, beyond PreToolUse. */
+export const LIFECYCLE_EVENTS = ["SessionStart", "SessionEnd", "PostToolUse", "PostToolUseFailure"] as const;
+
+/** Add (idempotently) the session lifecycle and after-action hook entries to a Claude Code
+ *  config file, running the same Scopebond command that already handles PreToolUse: the
+ *  command tells the events apart. Only Claude Code is wired: its lifecycle events are the
+ *  ones the hook's tested mapping covers. Nothing else in the file changes. */
+export function wireLifecycleHooks(file: string, command: string): string {
+  const config = readHarnessConfig(file);
+  backupHarnessConfig(file);
+  mkdirSync(dirname(file), { recursive: true });
+  const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
+  for (const event of LIFECYCLE_EVENTS) {
+    const list = Array.isArray((hooks as Record<string, unknown>)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
+    const at = list.findIndex(entryMatches);
+    const entry = event.startsWith("Session")
+      ? { hooks: [{ type: "command", command }] }
+      : { matcher: "*", hooks: [{ type: "command", command }] };
+    if (at >= 0) list[at] = entry; else list.push(entry);
+  }
+  writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+  return file;
+}
+
+/** Remove only the lifecycle entries `wireLifecycleHooks` added, leaving PreToolUse and every
+ *  other setting alone. Returns the number removed. */
+export function unwireLifecycleHooks(file: string): number {
+  if (!existsSync(file)) return 0;
+  let config: Record<string, unknown>;
+  try { config = readHarnessConfig(file); } catch { return 0; }
+  const hooks = isRecord(config.hooks) ? config.hooks : null;
+  if (!hooks) return 0;
+  let removed = 0;
+  for (const event of LIFECYCLE_EVENTS) {
+    const value = (hooks as Record<string, unknown>)[event];
+    if (!Array.isArray(value)) continue;
+    const kept = value.filter((e) => !entryMatches(e));
+    removed += value.length - kept.length;
+    if (kept.length) (hooks as Record<string, unknown[]>)[event] = kept; else delete (hooks as Record<string, unknown>)[event];
+  }
+  if (removed > 0) writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+  return removed;
+}
