@@ -113,7 +113,18 @@ function common(ctx: TypedContext, request: unknown): Operation {
 export function normalizeRemote(url: string): { host: string; path: string } | null {
   const text = url.trim();
   if (text === "" || /[$`\s]/.test(text)) return null;
-  const strip = (p: string): string => p.replace(/[?#].*$/, "").replace(/\\/g, "/").replace(/\/+$/, "").replace(/\.git$/, "").replace(/^\/+/, "");
+  // Slashes are trimmed by scanning, and the query is cut at its first marker, so no
+  // backtracking pattern runs over a remote a caller supplied.
+  const strip = (p: string): string => {
+    const cut = p.search(/[?#]/);
+    const s = (cut === -1 ? p : p.slice(0, cut)).replace(/\\/g, "/");
+    let end = s.length;
+    while (end > 0 && s.charCodeAt(end - 1) === 47) end--;
+    let start = 0;
+    const body = s.slice(0, end).replace(/\.git$/, "");
+    while (start < body.length && body.charCodeAt(start) === 47) start++;
+    return body.slice(start);
+  };
   let m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(text);
   if (m && !/^file$/i.test(text.slice(0, 4))) return { host: m[1].toLowerCase(), path: strip(m[2]) };
   m = /^(?:[^@/\s]+@)?([^/:\s]+):(?!\/\/)([^\s]+)$/.exec(text);
