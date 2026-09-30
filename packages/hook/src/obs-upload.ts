@@ -13,7 +13,8 @@
 //   no result for an item, an unknown status, or an item id that does not match the one
 //   sent at that index: treated as NOT acknowledged and kept
 //
-// Request-level answers: 429 keeps everything and waits for Retry-After; 401/403 keep
+// Request-level answers: 429 keeps everything and waits for Retry-After; 402 (plan-paused agent)
+// keeps everything and looks again in half an hour or more; 401/403 keep
 // everything and back off (credential or plan problem, reported honestly); 413 halves the
 // batch size; 400 keeps everything and backs off; 422 (unsupported batch version) and
 // 404/405 (no such route: an older workspace) mark the capability unsupported. A stale
@@ -66,7 +67,7 @@ export function parseRetryAfter(header: string | null, now: number): number | un
 
 const backoffFor = (attempts: number): number => Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** Math.min(attempts, 12));
 
-interface ItemResult { index: number; observation_id: string; status: string; code?: string; retryable?: boolean }
+interface ItemResult { index: number; observation_id: string | null; status: string; code?: string; retryable?: boolean }
 
 function parseResults(body: unknown, sent: PendingRow[]): { results: Map<number, ItemResult>; retryAfterSeconds?: number } | null {
   if (typeof body !== "object" || body === null) return null;
@@ -77,9 +78,13 @@ function parseResults(body: unknown, sent: PendingRow[]): { results: Map<number,
     if (typeof raw !== "object" || raw === null) continue;
     const r = raw as Partial<ItemResult>;
     if (!Number.isInteger(r.index) || (r.index as number) < 0 || (r.index as number) >= sent.length) continue;
-    if (typeof r.observation_id !== "string" || typeof r.status !== "string") continue;
-    // A result only counts for the item it names at that index.
-    if (r.observation_id !== sent[r.index as number]!.observation_id) continue;
+    if (typeof r.status !== "string") continue;
+    // A result only counts for the item it names at that index. The workspace reports a null
+    // id only for an item it refused before it could read one, and only as refused or
+    // deferred; that answer is bound to the item by its index. A durable acknowledgement
+    // always names the item.
+    if (r.observation_id === null) { if (r.status !== "rejected" && r.status !== "deferred") continue; }
+    else if (typeof r.observation_id !== "string" || r.observation_id !== sent[r.index as number]!.observation_id) continue;
     if (!results.has(r.index as number)) results.set(r.index as number, r as ItemResult);
   }
   const retryAfterSeconds = typeof b.retry_after_seconds === "number" && Number.isFinite(b.retry_after_seconds) && b.retry_after_seconds >= 0 ? b.retry_after_seconds : undefined;
@@ -146,6 +151,14 @@ export async function uploadPending(store: ObservationStore, options: UploadOpti
       store.release(batch.map((r) => r.observation_id));
       store.setBatchLimit(Math.floor(batch.length / 2));
       continue;
+    }
+    if (response.status === 402) {
+      // The workspace's plan has paused this agent. Nothing is lost: keep the queue, look again later.
+      const attempts = Math.max(...batch.map((r) => r.attempts)) + 1;
+      const wait = Math.max(backoffFor(attempts), 30 * 60 * 1000);
+      store.defer(batch.map((r) => r.observation_id), wait);
+      store.setBackoff(now() + wait, "the workspace plan has paused this agent (HTTP 402)");
+      return { ...outcome, result: "error", detail: "HTTP 402: the workspace plan has paused this agent" };
     }
     if (response.status === 401 || response.status === 403 || response.status === 400 || response.status >= 500 || response.status !== 200) {
       const attempts = Math.max(...batch.map((r) => r.attempts)) + 1;

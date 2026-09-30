@@ -67,7 +67,15 @@ test("emission is opt-in: off without observations:write, unsupported without an
   assert.equal(status.state, "unsupported");
   assert.match(status.reason, /generation/);
   assert.equal(existsSync(join(noGen.dir, "observations.db")), false, "a generation is never guessed");
-  assert.equal(openObservations(makeHome({ installation_id: null }).dir).status.state, "unsupported");
+  // The installation id is the enrollment's `gateway_id` when the explicit field is absent; the generation has no fallback.
+  const noId = makeHome({ installation_id: null });
+  assert.equal(openObservations(noId.dir).status.state, "on");
+  assert.equal(openObservations(noId.dir).emitter.connection.installation_id, "gw-1");
+  openObservations(noId.dir).emitter.close();
+  const noEither = makeHome({ installation_id: null });
+  const bare = JSON.parse(readFileSync(join(noEither.dir, "cloud.json"), "utf8")); delete bare.gateway_id;
+  writeFileSync(join(noEither.dir, "cloud.json"), JSON.stringify(bare));
+  assert.equal(openObservations(noEither.dir).status.state, "unsupported");
 
   assert.equal(observationStatus(null).state, "off");
   const { connection } = makeHome();

@@ -17,10 +17,10 @@
 // calls) are proven with a known successful after-action fixture, labelled
 // observation-only. No deny fixture is run for them and none is claimed.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { verifyReceipt } from "@scopebond/gateway";
+import { createCloudExporter, createMemoryCloudOutbox, verifyReceipt, type SignedReceipt } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { fillPushBranch } from "./map.js";
 import { scaffold } from "./init.js";
@@ -28,8 +28,24 @@ import { createHookRuntime } from "./runtime.js";
 import { ACTION_GROUP_PARAM } from "./group.js";
 import { computeManifest, specForCell, vectorDigest, vectorsForCell, type Adapter, type CapabilityCell, type ProofRecord } from "./capabilities.js";
 import { mapVector, type Vector } from "./vectors.js";
+import { sourceReceiptHash } from "./observation.js";
+import type { HookConnection } from "./cloud.js";
 
 export const PROOF_FILE = "capability-proof.json";
+
+const receiptActionType = (receipt: unknown): string | undefined =>
+  (receipt as { payload?: { intent?: { action_type?: unknown } } } | undefined)?.payload?.intent?.action_type as string | undefined;
+
+/** Options for a fixture run. */
+export interface ProofRunOptions {
+  /** A real hook config dir whose machine and countersigning keys the fixtures should be
+   *  signed with (copied into the temp home, never modified), so the workspace can accept
+   *  the fixture receipts and resolve a proof's digests against them. Without it the
+   *  fixtures use throwaway keys and produce no digests a workspace could resolve. */
+  identityDir?: string;
+  /** Receives every fixture receipt produced, once each, for delivery. */
+  collect?: unknown[];
+}
 
 const receiptParams = (receipt: unknown): Record<string, unknown> => {
   const payload = (receipt as { payload?: { intent?: { params?: Record<string, unknown> } } } | undefined)?.payload;
@@ -48,13 +64,19 @@ async function run(vector: Vector, runtime: ReturnType<typeof createHookRuntime>
 }
 
 /** Run one cell's fixtures in a temp hook home. Returns null when the cell has no vectors. */
-async function proveCell(adapter: Adapter, actionType: string, phase: "pre_action" | "after_action", observationOnly: boolean, adapterVersion: string): Promise<Omit<ProofRecord, "cell"> | null> {
+async function proveCell(adapter: Adapter, actionType: string, phase: "pre_action" | "after_action", observationOnly: boolean, adapterVersion: string, options: ProofRunOptions): Promise<{ proof: Omit<ProofRecord, "cell">; receipts: unknown[] } | null> {
   const vectors = vectorsForCell(adapter, actionType, phase);
   const digest = vectorDigest(vectors);
   if (digest === null) return null;
   const dir = mkdtempSync(join(tmpdir(), "scopebond-proof-"));
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
   try {
+    if (options.identityDir) {
+      for (const name of ["agent.key", "attester.key"]) {
+        const source = join(options.identityDir, name);
+        if (existsSync(source)) copyFileSync(source, join(dir, name));
+      }
+    }
     scaffold(dir);
     const attesterPath = join(dir, "attester.key");
     const { attester } = loadOrCreateAttester({ file: attesterPath });
@@ -66,14 +88,18 @@ async function proveCell(adapter: Adapter, actionType: string, phase: "pre_actio
     const denied: Outcome[] = [];
     if (!observationOnly) for (const v of deny) denied.push(await run(v, runtime, attester.publicKeyPem));
     const all = [...allowed, ...denied];
-    return {
+    const receipts = all.flatMap((o) => o.receipts);
+    // Only receipts of the cell's own action type stand as its proof (a compound command can
+    // also produce receipts of other types), and each is named by the workspace's projection.
+    const proofDigests = [...new Set(receipts.filter((r) => receiptActionType(r) === actionType).map((r) => sourceReceiptHash(r)))];
+    return { receipts, proof: {
       ran_at: new Date().toISOString(), adapter_version: adapterVersion, test_vector_digest: digest, origin: "fixture",
       safe_allow: allowed.length > 0 && allowed.every((o) => o.decision !== "deny" && o.receipts.length > 0),
       safe_deny: observationOnly ? "not_applicable" : denied.length > 0 && denied.every((o) => o.decision === "deny"),
       signature: all.length > 0 && all.every((o) => o.valid),
       grouping: all.length > 0 && all.every((o) => o.grouped),
-      cloud_ack: "not_checked", observation_only: observationOnly,
-    };
+      cloud_ack: "not_checked", observation_only: observationOnly, proof_digests: proofDigests,
+    } };
   } finally {
     try { runtime?.close(); } catch { /* the temp home is removed next */ }
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); } catch { /* a handle still open on Windows; the OS temp dir is cleaned later */ }
@@ -84,7 +110,7 @@ async function proveCell(adapter: Adapter, actionType: string, phase: "pre_actio
  *  result under each host variant's key. A fixture exercises the adapter, so it cannot
  *  tell Codex desktop from Codex CLI: both keys get the same fixture proof, and neither
  *  becomes verified (see `cellState`). */
-export async function runProofFixtures(adapterVersion: string): Promise<Record<string, ProofRecord>> {
+export async function runProofFixtures(adapterVersion: string, options: ProofRunOptions = {}): Promise<Record<string, ProofRecord>> {
   const cells = computeManifest({ adapterVersion, configured: { claude: true, codex: true, cursor: true } }).cells;
   const records: Record<string, ProofRecord> = {};
   const cache = new Map<string, Omit<ProofRecord, "cell"> | null>();
@@ -93,7 +119,11 @@ export async function runProofFixtures(adapterVersion: string): Promise<Record<s
     const spec = specForCell(cell);
     if (!spec) continue;
     const id = `${spec.adapter}/${spec.action_type}/${spec.phase}`;
-    if (!cache.has(id)) cache.set(id, await proveCell(spec.adapter, spec.action_type, spec.phase, cell.observation_only, adapterVersion));
+    if (!cache.has(id)) {
+      const run = await proveCell(spec.adapter, spec.action_type, spec.phase, cell.observation_only, adapterVersion, options);
+      if (run) options.collect?.push(...run.receipts);
+      cache.set(id, run?.proof ?? null);
+    }
     const proof = cache.get(id);
     if (proof) records[cell.key] = { cell: cell.key, ...proof };
   }
@@ -118,3 +148,26 @@ export function saveProofs(configDir: string, proofs: Record<string, ProofRecord
 /** Whether a cell's fixture proof passed, for a summary line. */
 export const proofPassed = (proof: ProofRecord, cell: CapabilityCell): boolean =>
   proof.safe_allow && (cell.observation_only ? proof.safe_deny === "not_applicable" : proof.safe_deny === true) && proof.signature && proof.grouping;
+
+/** Deliver fixture receipts to the workspace's receipt route and report whether every one was
+ *  accepted. A proof names these receipts by digest, so it is only worth sending after they
+ *  landed; anything short of full delivery leaves the proof unsent, never half-claimed. */
+export async function deliverProofReceipts(connection: HookConnection, receipts: unknown[], options: { fetch?: typeof fetch; timeoutMs?: number } = {}): Promise<boolean> {
+  if (receipts.length === 0) return true;
+  const exporter = createCloudExporter({
+    url: connection.url, credential: connection.credential, outbox: createMemoryCloudOutbox({ maxPending: Math.max(1000, receipts.length) }),
+    fetch: options.fetch, flushMs: 60_000,
+  });
+  try {
+    for (const receipt of receipts) exporter.enqueue(receipt as SignedReceipt);
+    const deadline = Date.now() + (options.timeoutMs ?? 15_000);
+    while (exporter.pending() > 0 && Date.now() < deadline) {
+      await exporter.flush();
+      if (exporter.pending() > 0) {
+        if (exporter.status().consecutiveFailures > 0) return false;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    return exporter.pending() === 0;
+  } finally { exporter.stop(); }
+}

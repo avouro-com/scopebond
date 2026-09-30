@@ -48,13 +48,14 @@ import {
 import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
 import { uploadPending } from "./obs-upload.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
+import { loadPolicyExport } from "./policy-load.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { computeManifest, renderManifest } from "./capabilities.js";
-import { runProofFixtures, loadProofs, saveProofs, proofPassed } from "./proof.js";
+import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofReceipts } from "./proof.js";
 import { fileURLToPath } from "node:url";
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
@@ -799,6 +800,41 @@ async function runFlush(): Promise<void> {
 }
 
 /** `observations`: what the observation emitters are doing, and the local queue. */
+/** `policy load <export.json> [--yes]`: check a policy exported from the workspace and, with
+ *  `--yes`, make it the active policy here; then acknowledge it (or its refusal) to the workspace. */
+async function runPolicy(args: string[]): Promise<void> {
+  const [sub, file] = args;
+  if (sub !== "load" || !file) { console.error(`usage: ${cliCommand("policy load <export.json> [--yes]")}`); process.exitCode = 2; return; }
+  const dir = resolveConfigDir(process.cwd());
+  const apply = args.includes("--yes");
+  const connection = loadConnection(dir);
+  const outcome = loadPolicyExport(dir, file, { apply, environmentId: connection?.environment_id });
+  let ack: Parameters<ObservationEmitter["policyAck"]>[0] | undefined;
+  if (outcome.state === "rejected") {
+    console.error(`refused: ${outcome.message} (${outcome.error})`);
+    if (outcome.ack) ack = { ...outcome.ack, error: outcome.error };
+    process.exitCode = 1;
+  } else if (outcome.state === "would_load") {
+    console.log(`This export checks out (policy ${outcome.facts.policyId} v${outcome.facts.policyVersion}, digest ${outcome.facts.policyDigest.slice(0, 12)}...).`);
+    console.log(`Loading it REPLACES the active policy at ${join(dir, "policy.json")} (the old one is kept as policy.previous.json), so the starter protections apply only if the export includes them.`);
+    console.log("Run again with --yes to load it.");
+    return;
+  } else {
+    console.log(`loaded policy ${outcome.facts.policyId} v${outcome.facts.policyVersion} (digest ${outcome.facts.policyDigest.slice(0, 12)}...) from export ${outcome.facts.exportId}`);
+    console.log(`  active policy   ${outcome.policyPath}${outcome.previous ? `  (previous kept at ${outcome.previous})` : ""}`);
+    console.log(`  note            \`${cliCommand("rules apply")}\` recompiles policy.json from rules.json and would replace it`);
+    ack = { exportId: outcome.facts.exportId, policyId: outcome.facts.policyId, policyVersion: outcome.facts.policyVersion, policyDigest: outcome.facts.policyDigest, scopeDigest: outcome.facts.scopeDigest };
+  }
+  if (!ack) return;
+  const observed = openObservations(dir, { adapterVersion: hookVersion(), spawnHeartbeat: false });
+  if (!observed.emitter) { console.error(`not acknowledged to the workspace: observations are ${observed.status.state}${"reason" in observed.status ? ` (${observed.status.reason})` : ""}`); return; }
+  try {
+    const queued = observed.emitter.policyAck(ack);
+    await observed.emitter.flush(3000);
+    console.error(queued?.queued ? `queued the ${ack.error ? "rejection" : "load"} acknowledgement for the workspace` : "could not queue the acknowledgement");
+  } finally { observed.emitter.close(); }
+}
+
 async function runObservations(args: string[]): Promise<void> {
   const sub = args[0] ?? "status";
   const dir = resolveConfigDir(process.cwd());
@@ -996,8 +1032,13 @@ async function runCapabilities(args: string[]): Promise<void> {
   let proofs = loadProofs(dir);
   let failed = false;
   if (args.includes("--prove")) {
-    const fresh = await runProofFixtures(version);
-    const proven = computeManifest({ adapterVersion: version, configured: { claude: true, cursor: true, codex: true }, proofs: fresh });
+    // When the workspace accepts observations, the fixtures are signed with this machine's
+    // own keys (copied into the temp home) and their receipts are delivered first, so the
+    // proof can name them and the workspace can resolve them. Otherwise a fixture stays local.
+    const observed = openObservations(dir, { adapterVersion: version, spawnHeartbeat: false });
+    const collected: unknown[] = [];
+    const fresh = await runProofFixtures(version, observed.emitter ? { identityDir: dir, collect: collected } : {});
+    const proven = computeManifest({ adapterVersion: version, configured: { claude: true, codex: true, cursor: true }, proofs: fresh });
     for (const cell of proven.cells) {
       const proof = fresh[cell.key];
       if (proof && !proofPassed(proof, cell)) {
@@ -1005,15 +1046,18 @@ async function runCapabilities(args: string[]): Promise<void> {
         console.error(`fixture failed: ${cell.key} (allow ${proof.safe_allow}, deny ${proof.safe_deny}, signature ${proof.signature}, grouping ${proof.grouping})`);
       }
     }
-    const observed = openObservations(dir, { adapterVersion: version, spawnHeartbeat: false });
     if (observed.emitter) {
       try {
-        const queued = observed.emitter.capabilityProofs(proven.cells.flatMap((cell) => {
-          const proof = cell.state === "unsupported" ? undefined : fresh[cell.key];
-          return proof ? [{ adapterVersion: cell.adapter_version, hostVariant: cell.host_variant, actionType: cell.action_type, phase: cell.event_phase, requiredFields: cell.emitted_required_fields, fixtureVersion: `fixture/${proof.test_vector_digest}`, passed: proofPassed(proof, cell) }] : [];
-        }));
-        await observed.emitter.flush(3000);
-        console.error(`queued ${queued} capability proof observation(s) (fixture origin)`);
+        const delivered = await deliverProofReceipts(observed.emitter.connection, collected);
+        if (!delivered) console.error("could not deliver the fixture receipts to the workspace; the capability proofs were not sent (run it again when it is reachable)");
+        else {
+          const queued = observed.emitter.capabilityProofs(proven.cells.flatMap((cell) => {
+            const proof = cell.state === "unsupported" ? undefined : fresh[cell.key];
+            return proof ? [{ adapterVersion: cell.adapter_version, hostVariant: cell.host_variant, actionType: cell.action_type, phase: cell.event_phase, requiredFields: cell.emitted_required_fields, fixtureVersion: `fixture/${proof.test_vector_digest}`, passed: proofPassed(proof, cell), proofDigests: proof.proof_digests }] : [];
+          }));
+          await observed.emitter.flush(3000);
+          console.error(`queued ${queued} capability proof observation(s) (fixture origin, ${collected.length} fixture receipt(s) delivered)`);
+        }
       } finally { observed.emitter.close(); }
     }
     if (args.includes("--save")) {
@@ -1026,7 +1070,7 @@ async function runCapabilities(args: string[]): Promise<void> {
   if (args.includes("--json")) console.log(JSON.stringify(manifest, null, 2));
   else {
     console.log(renderManifest(manifest));
-    if (args.includes("--prove")) console.log(`\nFixture run ${failed ? "FAILED - see degraded cells" : "passed"}. It used temporary directories only; no agent setting, policy or key was read or changed.`);
+    if (args.includes("--prove")) console.log(`\nFixture run ${failed ? "FAILED - see degraded cells" : "passed"}. It used temporary directories only; no agent setting or policy was changed and no key was modified.`);
   }
   process.exitCode = failed ? 1 : 0;
 }
@@ -1240,6 +1284,16 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "--prove runs safe fixtures (allow, deny, signature, action group) in temporary",
       "directories; it does not read or change any agent settings. --save records the result.",
     ] },
+  { name: "policy", args: "load <export.json> [--yes]",
+    summary: "check a policy exported from your workspace and make it the active policy here",
+    detail: [
+      "Without --yes it only checks the export (its policy hash and scope digest, and that the",
+      "gateway can load it) and says what loading would replace. With --yes the policy is",
+      "written atomically as policy.json, the old one kept as policy.previous.json. If this",
+      "machine is enrolled for observations, the load (or the refusal) is then acknowledged to",
+      "the workspace, echoing the export's digests exactly. An export carries no signature;",
+      "get the file from your workspace.",
+    ] },
   { name: "observations", args: "[status [--refused]|flush|retry|wire|unwire]",
     summary: "session, health and action observations sent to your workspace (opt-in)",
     detail: [
@@ -1344,6 +1398,7 @@ else if (cmd === "status") { runStatus(); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "capabilities") { await runCapabilities(rest); }
 else if (cmd === "observations") { await runObservations(rest); }
+else if (cmd === "policy") { await runPolicy(rest); }
 else if (cmd === "uninstall") { runUninstall(rest); }
 else if (cmd === "login") { await runLogin(rest); }
 else if (cmd === "trust") { runTrust(rest); }

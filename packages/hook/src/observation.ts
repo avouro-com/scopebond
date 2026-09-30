@@ -265,6 +265,11 @@ export interface CapabilityProofInput {
   /** `fixture/<digest>` for a local fixture run, so a fixture is never read as live. */
   fixtureVersion: string;
   passed: boolean;
+  /** `source_receipt_hash` of each fixture receipt (the allow fixture and, for a before-action
+   *  cell, the deny fixture) this proof stands on. The workspace resolves them against the
+   *  receipts it accepted for this installation, so they are sent only once those receipts
+   *  were delivered. */
+  proofDigests?: string[];
 }
 
 export const capabilityProofData = (input: CapabilityProofInput) => ({
@@ -272,6 +277,8 @@ export const capabilityProofData = (input: CapabilityProofInput) => ({
   action_type: input.actionType, phase: input.phase === "pre_action" ? "pre" : "after",
   required_fields: input.requiredFields.slice(0, 100).map((f) => f.slice(0, 200)),
   fixture_version: input.fixtureVersion.slice(0, 200), proof_result: input.passed ? "verified" : "failed",
+  ...(input.proofDigests && input.proofDigests.length > 0
+    ? { proof_digests: [...new Set(input.proofDigests.filter((d) => /^[0-9a-f]{64}$/.test(d)))].slice(0, 100) } : {}),
 });
 
 // ---- typed operations for tool_intent / tool_outcome -------------------------------------------

@@ -11,7 +11,7 @@
 //   session      start / stop, from Claude Code's SessionStart and SessionEnd hooks
 //   health       heartbeat (60 s while a session is explicitly active), queue telemetry
 //   capability   proof, from the `capabilities --prove` runner
-//   policy_ack   loaded / rejected, once an exported policy has been verified or refused
+//   policy_ack   loaded / rejected, from `policy load` once an exported policy is verified or refused
 //   tool_intent  the request binding of each dispatched action, linked to its receipt
 //   tool_outcome the after-action result, echoing the stored binding (Claude Code)
 //
@@ -51,9 +51,18 @@ export type ObservationStatus =
   | { state: "unsupported"; reason: string }
   | { state: "on" };
 
+/** The installation id is the enrollment's `installation_id`, or its `gateway_id` (the same
+ *  identifier, which is what an enrollment answer carries today). The generation has no such
+ *  fallback: only the workspace can say what it is. */
+export function withInstallationId(connection: HookConnection): HookConnection {
+  return connection.installation_id === undefined && typeof connection.gateway_id === "string"
+    ? { ...connection, installation_id: connection.gateway_id } : connection;
+}
+
 /** Decide from the connection alone whether emission is enabled. Pure; reads nothing. */
-export function observationStatus(connection: HookConnection | null, keyKid?: string): ObservationStatus {
-  if (!connection) return { state: "off", reason: "not connected to a workspace" };
+export function observationStatus(input: HookConnection | null, keyKid?: string): ObservationStatus {
+  if (!input) return { state: "off", reason: "not connected to a workspace" };
+  const connection = withInstallationId(input);
   if (!Array.isArray(connection.scopes) || !connection.scopes.includes(OBSERVATIONS_SCOPE)) {
     return { state: "off", reason: `this enrollment does not grant ${OBSERVATIONS_SCOPE}` };
   }
@@ -90,9 +99,10 @@ export interface OpenResult {
 /** Open the emitter for a hook config dir, or explain why not. Never throws: an
  *  unreadable key or store simply leaves observations off. */
 export function openObservations(dir: string, options: EmitterOptions = {}): OpenResult {
-  const connection = loadConnection(dir);
-  const early = observationStatus(connection);
-  if (early.state !== "on" || !connection) return { status: early };
+  const loaded = loadConnection(dir);
+  const early = observationStatus(loaded);
+  if (early.state !== "on" || !loaded) return { status: early };
+  const connection = withInstallationId(loaded);
   let store: ObservationStore | undefined;
   try {
     const keyPem = readFileSync(join(dir, "agent.key"), "utf8");

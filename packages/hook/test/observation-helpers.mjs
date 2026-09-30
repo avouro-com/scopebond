@@ -52,8 +52,8 @@ export async function startServer(handler) {
     observations: () => requests.filter((r) => r.url === "/v1/observations").flatMap((r) => r.json?.items ?? []) };
 }
 
-export const results = (items, status = "accepted", code = "ok") =>
-  ({ version: "1.0", results: items.map((item, index) => ({ index, observation_id: item.payload.observation_id, status, code, retryable: status === "deferred" })) });
+export const results = (items, status = "accepted", code = undefined) =>
+  ({ version: "1.0", results: items.map((item, index) => ({ index, observation_id: item.payload.observation_id, status, code: code ?? (status === "deferred" ? "unavailable" : status), retryable: status === "deferred" })) });
 export const acceptAll = (items) => ({ status: 200, body: results(items) });
 
 export const readPending = (dir) => {
