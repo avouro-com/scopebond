@@ -1,5 +1,0 @@
----
-"@scopebond/hook": minor
----
-
-Typed git, GitHub and package operations on `tool_intent`. The hook reads the raw command (or the GitHub MCP tool input) it is about to allow and sends a closed `git` (commit, push, delete, mirror), `github_resource` (pr_create, release_create) or `package` (install, add, update for npm, pnpm, yarn, pip and uv) operation in place of the generic shell one, linked to the receipt of that command. Refs, remotes and repositories are keyed opaque ids (credentials in a remote URL are dropped); an unresolved ref or remote, unpinned versions, unknown integrity and lifecycle-script status stay unknown; a command that names no packages, follows a `cd`, or names a pull request only by number is not described. Pushes now carry a `remote_id` and the delete and mirror verbs. New observation-only capability cells (`git.commit`, `package.install`, `github.resource`) are fixture-proven at most; `github.pr_change` and `deploy.run` are listed as unsupported. `scopebond observations id <kind> <value>` prints the keyed id for a ref, remote, repository or MCP tool, for writing reference sets.

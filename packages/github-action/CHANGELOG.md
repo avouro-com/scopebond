@@ -1,5 +1,22 @@
 # @scopebond/github-action
 
+## 0.5.0
+
+### Minor Changes
+
+- d5ba4cb: Optional `evidence-out` input and `--evidence-out` flag. Writes JSON with the exact pull request head commit, the policy digest, the boundary receipt hash when one was signed, the check result and the run ids, for a workspace collector that has registered the runner. The document states it is not independent and carries no key, source text or path list.
+
+### Patch Changes
+
+- Updated dependencies [b65261d]
+- Updated dependencies [b08c8df]
+- Updated dependencies [b08c8df]
+- Updated dependencies [7c6fa19]
+- Updated dependencies [aac4f6f]
+  - @scopebond/gateway@0.9.0
+  - @scopebond/policy-schema@0.5.0
+  - @scopebond/verify@0.4.2
+
 ## 0.4.1
 
 ### Patch Changes

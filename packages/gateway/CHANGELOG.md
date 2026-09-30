@@ -1,5 +1,20 @@
 # @scopebond/gateway
 
+## 0.9.0
+
+### Minor Changes
+
+- b65261d: Dispatch boundary. A new `dispatchGuard` on `createGateway`, and `createDispatchGuard` / `DispatchStore` in `@scopebond/gateway/node`, decide three things atomically in one SQLite transaction immediately before an allowed action is dispatched: single-use approvals (bound to actor, action type, target, policy digest, the canonical hash of the actual request and a five-minute expiry), delegated child scope (a subset of its parent, never outliving it, with cascading revocation checked on every action) and per-agent action budgets (a persistent count of dispatched parent actions per window, monitor or enforce). A denial dispatches nothing and spends nothing; an unreadable counter, an unacknowledged or expired enforce policy, or a system clock set backwards never grants unlimited dispatch. A `shared_gateway` budget is refused by independent installations. The gateway's existing signed-approval path is unchanged and now has replay, changed-action, expiry and wrong-agent tests that assert the upstream is never invoked.
+- b08c8df: Align the dispatch boundary with the workspace. Scope entries use a closed kind vocabulary (`action`, `privilege`; `scopeEntryDigest` throws on another) and `actionScopeEntry(action_type, target | null)` builds the exact and any-target entries over the opaque target id, refusing an invalid type or target. A delegation check sends the action and target id and uses the workspace's `covers` answer when it gives one. A required approval with no reference in the inbox is looked up with `GET /v1/monitoring/approvals/active` and consumed as before. New: `dispatchApprovalBinding`, `openApprovalBinder`, `SCOPE_ENTRY_KINDS`, `actionScopeEntry`, `CLOUD_ACTIVE_APPROVAL_PATH`.
+- 7c6fa19: Workspace source for the dispatch boundary. A guard given a `cloud` source (created by `createCloudDispatchSource`, opened automatically by `openDispatchGuard` when `cloud.json` grants `observations:write`) consumes a person's workspace approval at dispatch with `POST /v1/monitoring/approvals/consume` (strict body, closed refusal reasons; anything but a 200 is not approved), after checking that nothing else would refuse the action so a refusal for another reason does not spend the approval. The local signed-file path is unchanged and is tried first; when it holds no valid approval and the workspace cannot be reached an enforced action is denied (`approval_unavailable`). Delegated sessions the local store does not know are resolved from `GET /v1/monitoring/delegations?session_id=`, cached for 15 seconds (an active grant only), and any state other than an active, covering, unexpired grant, or an answer whose scope digest does not bind its entries, grants nothing. New exports: `delegationScopeDigest`, `scopeEntryDigest`, `privilegeScopeEntry`, `actionScopeEntries` (pinned by literal vectors), `createCloudDispatchSource`, `openCloudSource`, `targetIdFor`. Targets are sent to the workspace only as keyed opaque ids.
+
+### Patch Changes
+
+- Updated dependencies [b08c8df]
+- Updated dependencies [aac4f6f]
+  - @scopebond/policy-schema@0.5.0
+  - @scopebond/verify@0.4.2
+
 ## 0.8.0
 
 ### Minor Changes
