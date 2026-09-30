@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import {
   computeManifest, cellState, cellKey, vectorsForCell, vectorDigest, runProofFixtures, saveProofs, loadProofs, renderManifest,
   mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, createHookRuntime, scaffold, actionGroupId, withActionGroup, distinctTargets,
-  VECTORS, mapVector,
+  VECTORS, mapVector, TYPED_ACTION_TYPES,
 } from "../dist/index.js";
 import { verifyReceipt } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
@@ -252,6 +252,8 @@ test("distinct physical targets are counted once per group", () => {
 test("vector table and manifest agree on which agents each action type is proven for", () => {
   for (const v of VECTORS.filter((x) => x.cell)) {
     const mapped = mapVector(v);
-    assert.ok(mapped.some((m) => m.intent.action_type === v.cell.action_type), `${v.id} maps to ${v.cell.action_type}`);
+    // Typed-operation cells are proven on the command the mapper already evaluates as shell or push.
+    const types = TYPED_ACTION_TYPES.has(v.cell.action_type) ? ["shell.exec", "git.push"] : [v.cell.action_type];
+    assert.ok(mapped.some((m) => types.includes(m.intent.action_type)), `${v.id} maps to ${v.cell.action_type}`);
   }
 });

@@ -19,7 +19,9 @@
 import { createHash, createHmac, createPrivateKey, randomBytes, randomUUID, sign as edSign, type KeyObject } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { scrubParam } from "./minimize.js";
+import { redactCommand, scrubParam } from "./minimize.js";
+import { deriveTypedOperations, gitPushOperation, type CallRequest, type GitProbe, type TypedContext } from "./typed-ops.js";
+export type { CallRequest } from "./typed-ops.js";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import {
   OBSERVATION_DOMAIN, OBSERVATION_LIMITS, OBSERVATION_TYPE, OBSERVATION_VERSION, SOURCE_RECEIPT_DOMAIN,
@@ -339,7 +341,17 @@ export interface OperationContext {
   headSha?: string | null;
   /** Keyed id of the workspace repository. */
   repositoryId?: string;
+  /** Read-only view of the local repository; the system git when absent. */
+  probe?: GitProbe;
+  /** Whether a pushed ref is protected under the loaded rules; the default names main, master and release/*. */
+  isProtectedRef?: (ref: string) => boolean;
 }
+
+/** The context the typed-operation builders take, from an operation context. */
+export const typedContext = (context: OperationContext): TypedContext => ({
+  key: context.key, cwd: context.cwd, repositoryId: context.repositoryId ?? "", referenceSetVersion: REFERENCE_SET_VERSION,
+  ...(context.probe ? { probe: context.probe } : {}), ...(context.isProtectedRef ? { isProtectedRef: context.isProtectedRef } : {}),
+});
 
 /**
  * Reduce one dispatched action to its closed typed operation, or null when this hook
@@ -378,15 +390,8 @@ export function buildOperation(action: DispatchedAction, context: OperationConte
       };
     }
     case "git.push": {
-      const ref = stringParam(params, "ref") ?? "";
-      if (!context.headSha || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(context.headSha) || !context.repositoryId) return null;
-      const resolved = ref !== "" && !ref.startsWith("-");
-      return {
-        type: "git", resource_id: context.repositoryId, ...common,
-        verb: "push", repository_id: context.repositoryId,
-        refs: resolved ? [{ ref_id: key.resourceId("ref", ref), protected: /^(main|master)$|^release\//i.test(ref) }] : [],
-        force: params.force === true, head_sha: context.headSha, resolution: resolved ? "resolved" : "unresolved",
-      };
+      if (!context.repositoryId) return null;
+      return gitPushOperation(params, typedContext(context), context.headSha, { action_type: action.action_type, params });
     }
     // A WebFetch reaches the hook as host, path and method only. The typed network operation
     // also needs a scheme and port, which the tool call does not carry, and an unknown value
@@ -411,6 +416,27 @@ function isInside(root: string, path: string): boolean {
   const r = norm(root);
   const p = norm(path);
   return p === r || p.startsWith(`${r}/`);
+}
+
+/**
+ * One operation (or null) per dispatched item of a tool call. A typed operation derived from
+ * the actual request (git commit, package install, GitHub pull request or release) replaces
+ * the plain one for the same item; every other item keeps the operation `buildOperation` gives it.
+ */
+export function operationsForCall(
+  input: { dispatched: Array<{ action: DispatchedAction }>; request?: CallRequest },
+  context: OperationContext & { requiredCheckPolicyVersion?: string; resolvePullRequest?: TypedContext["resolvePullRequest"]; packageManagerVersion?: TypedContext["packageManagerVersion"] },
+): Array<Record<string, unknown> | null> {
+  let typed = new Map<number, Record<string, unknown>>();
+  try {
+    typed = deriveTypedOperations({ ...input.request, dispatched: input.dispatched, redact: redactCommand }, {
+      ...typedContext(context),
+      ...(context.requiredCheckPolicyVersion ? { requiredCheckPolicyVersion: context.requiredCheckPolicyVersion } : {}),
+      ...(context.resolvePullRequest ? { resolvePullRequest: context.resolvePullRequest } : {}),
+      ...(context.packageManagerVersion ? { packageManagerVersion: context.packageManagerVersion } : {}),
+    });
+  } catch { /* a derivation that fails leaves the plain operations */ }
+  return input.dispatched.map((item, index) => typed.get(index) ?? buildOperation(item.action, context));
 }
 
 export const intentData = (operation: Record<string, unknown>) => ({

@@ -30,6 +30,43 @@ pass through — so a server that exposes data as resources rather than tools is
 covered by a tool policy. Govern such data at the server, or front only servers
 whose sensitive operations are tools.
 
+## Typed adapter (optional, off by default)
+
+`--typed typed.json` adds an adapter that describes each `tools/call` from the request the proxy actually
+forwards (the proxy digests and dispatches one private copy of the message) and can refuse what it cannot
+bind before anything reaches the upstream:
+
+```json
+{
+  "mode": "enforce",
+  "requireResourceBinding": true,
+  "approvedResources": { "repository": ["acme/widgets"] },
+  "manifest": {
+    "hash": "sha256:…",
+    "tools": {
+      "get_issue": { "operation_class": "read_only", "resources": [{ "arg": "repository", "kind": "repository" }] },
+      "delete_branch": { "operation_class": "mutation", "resources": [{ "arg": "repository", "kind": "repository" }] }
+    }
+  }
+}
+```
+
+- `manifest.hash` pins the server's tool list (`manifestHash(tools)`). The proxy reads the live list (from the
+  client's own `tools/list` or by asking the upstream) and treats the manifest as valid only while it still
+  hashes to the pin; a changed server is `unverified` and every tool on it is `unknown`.
+- Under `enforce`, an unknown tool or revision is denied. Under `monitor` (use it to start) nothing is denied
+  and unknowns are recorded as unknown.
+- A manifest says what a tool is, not which resource a call touches, so it cannot authorize a resource-specific
+  call on its own. With `requireResourceBinding`, a mutation, or a tool that names resources, is denied
+  unless every resource named at its argument paths was read from the dispatched arguments and is in
+  `approvedResources` for its kind.
+- When the hook is installed and enrolled for observations (`--observations-dir` or `SCOPEBOND_HOOK_DIR`), a
+  `tool_intent` (before dispatch, also for a denied call) and a `tool_outcome` (after a forwarded call) go to its
+  outbox as a closed `mcp` operation: server, tool, manifest revision, operation class, keyed resource ids and an
+  HMAC request digest under the hook's installation-local key. Without the hook the adapter still runs with a
+  local binding key beside your signing key and nothing is queued. The library takes any sink with an
+  `emit(draft)` method, so no vendor SDK is involved.
+
 ## Policy
 
 Bound MCP calls with the Action Taxonomy's `mcp.tool.call` type — "read-only

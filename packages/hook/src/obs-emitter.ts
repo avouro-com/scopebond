@@ -28,11 +28,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConnection, type HookConnection } from "./cloud.js";
 import {
-  buildOperation, capabilityProofData, digestPolicy, heartbeatData, intentData, loadOrCreateBindingKey, observationSigner,
+  operationsForCall, capabilityProofData, digestPolicy, heartbeatData, intentData, loadOrCreateBindingKey, observationSigner,
   outcomeData, policyAckData, queueData, sessionStartData, sessionStopData, sourceReceiptHash,
-  type BindingKey, type ExitCategory, type ObservationSigner, type PolicyAckInput, type SessionStopReason, type CapabilityProofInput,
+  type BindingKey, type CallRequest, type ExitCategory, type ObservationSigner, type PolicyAckInput, type SessionStopReason, type CapabilityProofInput,
 } from "./observation.js";
 import { OBSERVATION_DB, ObservationStore, type EnqueueResult } from "./obs-store.js";
+import type { GitProbe } from "./typed-ops.js";
+import { isProtectedBranch, loadRules } from "./rules.js";
 import { uploadPending, type UploadOutcome } from "./obs-upload.js";
 
 export const OBSERVATIONS_SCOPE = "observations:write";
@@ -265,21 +267,29 @@ export class ObservationEmitter {
    * the operation so the after-action hook can echo it. `dispatched` is what was actually
    * evaluated: the final intent (after root scoping and grouping) and its receipt.
    */
-  toolIntents(input: { harnessSessionId?: string; callId?: string; cwd: string; dispatched: Array<{ action: { action_type: string; params: Record<string, unknown> }; receipt?: unknown }> }): void {
+  toolIntents(input: {
+    harnessSessionId?: string; callId?: string; cwd: string;
+    dispatched: Array<{ action: { action_type: string; params: Record<string, unknown> }; receipt?: unknown }>;
+    /** The tool call as sent, so typed operations read the actual request: a shell tool's raw
+     *  command, or an MCP tool's server, name and input. */
+    request?: CallRequest;
+    probe?: GitProbe;
+  }): void {
     const sessionId = input.harnessSessionId ? this.sessionIdOf(input.harnessSessionId) : undefined;
-    let head: string | null | undefined;
-    const headSha = (): string | null => (head === undefined ? (head = gitHead(input.cwd)) : head);
     const repositoryId = this.binding.resourceId("repo", input.cwd);
+    const rules = loadRules(this.dir);
+    const operations = operationsForCall({ dispatched: input.dispatched, request: input.request }, {
+      key: this.binding, cwd: input.cwd, repositoryId,
+      ...(input.probe ? { probe: input.probe } : {}), ...(rules ? { isProtectedRef: (ref: string) => isProtectedBranch(rules, ref) } : {}),
+      ...(process.env.SCOPEBOND_REQUIRED_CHECK_POLICY_VERSION ? { requiredCheckPolicyVersion: process.env.SCOPEBOND_REQUIRED_CHECK_POLICY_VERSION.slice(0, 200) } : {}),
+    });
     let recorded = 0;
     input.dispatched.forEach((item, index) => {
       const receipt = item.receipt as { payload?: { action_ref?: { action_id?: unknown } } } | undefined;
       const actionId = receipt?.payload?.action_ref?.action_id;
       if (typeof actionId !== "string" || actionId === "" || actionId.length > 200) return;
       if (recorded >= MAX_INTENTS_PER_CALL) { this.store.mark("omitted_intents", (this.store.getMark("omitted_intents") ?? 0) + 1); return; }
-      const operation = buildOperation(item.action, {
-        key: this.binding, cwd: input.cwd, repositoryId,
-        headSha: item.action.action_type === "git.push" ? headSha() : null,
-      });
+      const operation = operations[index];
       if (!operation) return;
       const linked = sourceReceiptHash(item.receipt);
       const result = this.emit({ kind: "tool_intent", occurredAt: this.now(), sessionId, parentActionId: actionId, sourceReceiptHash: linked, data: intentData(operation) });

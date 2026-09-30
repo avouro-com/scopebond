@@ -262,6 +262,36 @@ reason, echoing the export's policy hash, policy id, policy version and scope di
 exactly. The export itself carries no signature, so get the file from your workspace.
 `scopebond rules apply` recompiles `policy.json` from `rules.json` and would replace a loaded policy.
 
+#### Typed operations: git, GitHub and package installs
+
+A `tool_intent` carries one closed typed operation read from the request the hook is about to
+allow: the raw shell command or the MCP tool input, never a model-written summary. It replaces the
+generic shell operation for the same receipt when it can be described:
+
+| Operation | From | What it carries |
+|---|---|---|
+| `git` commit | `git commit` | repository id, current branch as a keyed ref id with a protected flag, HEAD before the commit |
+| `git` push, delete, mirror | `git push` (`--delete`, `:ref`, `--mirror`) | the same, plus `force`, the remote as a keyed id (a name and its URL give one id; credentials in a URL are dropped) and `resolution` |
+| `github_resource` pr_create, release_create | `gh pr create`, `gh release create`, the GitHub MCP `create_pull_request` | keyed repository id and the base and head commits, or the release commit, read from the local clone; `required_check_policy_version` is `unbound` unless `SCOPEBOND_REQUIRED_CHECK_POLICY_VERSION` is set |
+| `package` install, add, update | `npm`, `pnpm`, `yarn`, `pip`, `uv` with named packages | manager, the version pinned in `package.json`'s `packageManager` when it names that manager, and per package the name, an exact version only when the request pinned one, and the registry host only when the command named one |
+
+Unknown facts stay unknown. An unresolved ref or remote is `resolution: "unresolved"`;
+`integrity_status` is always `unknown` because nothing is verified before the install runs; lifecycle
+scripts are `blocked` only for `--ignore-scripts`, `unknown` for npm, pnpm and yarn otherwise, and
+`not_supported` for pip and uv. A command that installs whatever a lockfile or requirements file lists
+(`npm ci`, `pnpm install`, `pip install -r`, `uv sync`) names no packages and stays a plain shell
+operation; so does anything after a `cd` in the same command line, `git -C`, a pull request from a fork
+or another repository, and `gh pr edit` or `gh pr merge`, whose pull request is named only by number and
+has no head or base commit without a platform read-back this hook does not do (the capability manifest lists
+`github.pr_change` and `deploy.run` as unsupported). Non-registry package sources are named `url:`,
+`git:` or `local:` with credentials and queries dropped. These cells are observation-only and stay
+`configured_unverified` after `capabilities --prove` (a fixture proves the derivation on this machine, not the host);
+no proof is sent for them because they have no receipt of their own action type to name.
+
+Reference sets refer to refs, remotes and repositories by these keyed ids. `scopebond observations id ref main`,
+`observations id remote <url>`, `observations id ghrepo owner/name` and `observations id mcp <server> <tool>`
+print the id this installation gives a value; it reads the local key and sends nothing.
+
 Codex and Cursor have no tested session or after-action mapping, so those kinds are not
 sent for them. Nothing is sent from a sleeping host: a heartbeat gap is recorded as a stop
 with reason `sleep`, and an idle session releases its lease with one final heartbeat.

@@ -56,6 +56,8 @@ export interface ProofRecord {
   /** `source_receipt_hash` of the fixture receipts whose action type is this cell's (allow
    *  fixtures, and deny fixtures for a before-action cell). Empty when none matched. */
   proof_digests?: string[];
+  /** Typed-operation cells only: every fixture derived the closed operation it expects. */
+  typed_operation?: boolean;
 }
 
 export interface CapabilityCell {
@@ -135,6 +137,26 @@ const SPECS: CellSpec[] = [
   { adapter: "cursor", host_variants: ["cursor"], action_type: "net.fetch", phase: "pre_action", via: "(no fetch hook)", supported: false, unsupported_reason: "Cursor sends no network-fetch event to this adapter", fields: [], operations: [] },
   { adapter: "cursor", host_variants: ["cursor"], action_type: "mcp.tool.call", phase: "pre_action", via: "beforeMCPExecution", supported: true, observation_only: true, fields: ["server", "tool", "args_digest", ...GROUP_FIELDS], operations: ["tool_call"] },
   { adapter: "cursor", host_variants: ["cursor"], action_type: NESTED, phase: "pre_action", via: "nested tool wrappers", supported: false, unsupported_reason: "nested calls made inside a tool are not shown to this adapter and are not claimed", fields: [], operations: [] },
+  // Typed operations (observations, not receipts): the closed git, package and github_resource
+  // operations derived from the actual command before it runs. They are observation-only:
+  // they describe what was dispatched and never gate it. A fixture proves the derivation on
+  // this machine only; it does not prove the host delivers the event or that the workspace
+  // accepted it, so these cells stay configured_unverified until a real-host proof exists.
+  { adapter: "claude", host_variants: CLAUDE_HOSTS, action_type: "git.commit", phase: "pre_action", via: "PreToolUse Bash/PowerShell (git commit)", supported: true, observation_only: true, fields: ["repository_id","refs","force","head_sha","resolution","remote_id"], operations: ["commit"] },
+  { adapter: "claude", host_variants: CLAUDE_HOSTS, action_type: "package.install", phase: "pre_action", via: "PreToolUse Bash/PowerShell (npm, pnpm, yarn, pip, uv with named packages)", supported: true, observation_only: true, fields: ["manager","manager_version","packages","lifecycle_scripts"], operations: ["install","add","update"] },
+  { adapter: "claude", host_variants: CLAUDE_HOSTS, action_type: "github.resource", phase: "pre_action", via: "PreToolUse Bash/PowerShell (gh) and mcp__github__ tools", supported: true, observation_only: true, fields: ["repository_id","base_sha","head_sha","release_digest","required_check_policy_version"], operations: ["pr_create","release_create"] },
+  { adapter: "claude", host_variants: CLAUDE_HOSTS, action_type: "github.pr_change", phase: "pre_action", via: "gh pr edit / gh pr merge, merge_pull_request", supported: false, unsupported_reason: "a pull request named only by number has no head or base commit in the request; recording pr_update and pr_merge needs a platform read-back this hook does not perform", fields: [], operations: [] },
+  { adapter: "claude", host_variants: CLAUDE_HOSTS, action_type: "deploy.run", phase: "pre_action", via: "(no deploy adapter)", supported: false, unsupported_reason: "a deploy operation carries check results that only an independent platform source can supply; this hook is not one", fields: [], operations: [] },
+  { adapter: "codex", host_variants: CODEX_HOSTS, action_type: "git.commit", phase: "pre_action", via: "PreToolUse Bash (git commit)", supported: true, observation_only: true, fields: ["repository_id","refs","force","head_sha","resolution","remote_id"], operations: ["commit"] },
+  { adapter: "codex", host_variants: CODEX_HOSTS, action_type: "package.install", phase: "pre_action", via: "PreToolUse Bash (npm, pnpm, yarn, pip, uv with named packages)", supported: true, observation_only: true, fields: ["manager","manager_version","packages","lifecycle_scripts"], operations: ["install","add","update"] },
+  { adapter: "codex", host_variants: CODEX_HOSTS, action_type: "github.resource", phase: "pre_action", via: "PreToolUse Bash (gh) and mcp__github__ tools", supported: true, observation_only: true, fields: ["repository_id","base_sha","head_sha","release_digest","required_check_policy_version"], operations: ["pr_create","release_create"] },
+  { adapter: "codex", host_variants: CODEX_HOSTS, action_type: "github.pr_change", phase: "pre_action", via: "gh pr edit / gh pr merge, merge_pull_request", supported: false, unsupported_reason: "a pull request named only by number has no head or base commit in the request; recording pr_update and pr_merge needs a platform read-back this hook does not perform", fields: [], operations: [] },
+  { adapter: "codex", host_variants: CODEX_HOSTS, action_type: "deploy.run", phase: "pre_action", via: "(no deploy adapter)", supported: false, unsupported_reason: "a deploy operation carries check results that only an independent platform source can supply; this hook is not one", fields: [], operations: [] },
+  { adapter: "cursor", host_variants: ["cursor"], action_type: "git.commit", phase: "pre_action", via: "beforeShellExecution (git commit)", supported: true, observation_only: true, fields: ["repository_id","refs","force","head_sha","resolution","remote_id"], operations: ["commit"] },
+  { adapter: "cursor", host_variants: ["cursor"], action_type: "package.install", phase: "pre_action", via: "beforeShellExecution (npm, pnpm, yarn, pip, uv with named packages)", supported: true, observation_only: true, fields: ["manager","manager_version","packages","lifecycle_scripts"], operations: ["install","add","update"] },
+  { adapter: "cursor", host_variants: ["cursor"], action_type: "github.resource", phase: "pre_action", via: "beforeShellExecution (gh) and beforeMCPExecution github tools", supported: true, observation_only: true, fields: ["repository_id","base_sha","head_sha","release_digest","required_check_policy_version"], operations: ["pr_create","release_create"] },
+  { adapter: "cursor", host_variants: ["cursor"], action_type: "github.pr_change", phase: "pre_action", via: "gh pr edit / gh pr merge, merge_pull_request", supported: false, unsupported_reason: "a pull request named only by number has no head or base commit in the request; recording pr_update and pr_merge needs a platform read-back this hook does not perform", fields: [], operations: [] },
+  { adapter: "cursor", host_variants: ["cursor"], action_type: "deploy.run", phase: "pre_action", via: "(no deploy adapter)", supported: false, unsupported_reason: "a deploy operation carries check results that only an independent platform source can supply; this hook is not one", fields: [], operations: [] },
 ];
 
 export const cellKey = (adapterVersion: string, host: HostVariant, actionType: string, phase: EventPhase): string =>
@@ -188,8 +210,8 @@ export function cellState(input: {
     return { state: "configured_unverified", reason: "the recorded proof is for a different adapter version or vector set; run it again" };
   }
   const denyOk = input.observationOnly ? proof.safe_deny === "not_applicable" : proof.safe_deny === true;
-  if (!proof.safe_allow || !denyOk || !proof.signature || !proof.grouping) {
-    return { state: "degraded", reason: `the current proof failed: ${[!proof.safe_allow && "safe allow", !denyOk && "safe deny", !proof.signature && "signature", !proof.grouping && "grouping"].filter(Boolean).join(", ")}` };
+  if (!proof.safe_allow || !denyOk || !proof.signature || !proof.grouping || proof.typed_operation === false) {
+    return { state: "degraded", reason: `the current proof failed: ${[!proof.safe_allow && "safe allow", !denyOk && "safe deny", !proof.signature && "signature", !proof.grouping && "grouping", proof.typed_operation === false && "typed operation"].filter(Boolean).join(", ")}` };
   }
   if (proof.origin !== "live_harness") {
     return { state: "configured_unverified", reason: `${input.observationOnly ? "observation-only fixture" : "local fixture"} passed; a real ${"host"} run and Cloud acknowledgement are still outstanding` };

@@ -30,6 +30,7 @@ import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
@@ -46,6 +47,7 @@ import {
   HEARTBEAT_INTERVAL_MS, OBSERVATIONS_SCOPE, type ObservationEmitter,
 } from "./obs-emitter.js";
 import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
+import { loadOrCreateBindingKey } from "./observation.js";
 import { uploadPending } from "./obs-upload.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
 import { loadPolicyExport } from "./policy-load.js";
@@ -159,7 +161,7 @@ function recordObservations(dir: string, cwd: string, input: Record<string, unkn
     // Session lifecycle is Claude Code only: its SessionStart/SessionEnd hooks are the ones
     // the tested mapping covers. Other hosts still get tool intents from their PreToolUse.
     if (harness === "claude" && sessionId) emitter.activity(sessionId, cwd);
-    emitter.toolIntents({ harnessSessionId: sessionId, callId: callId(input), cwd, dispatched: decision.dispatched ?? [] });
+    emitter.toolIntents({ harnessSessionId: sessionId, callId: callId(input), cwd, dispatched: decision.dispatched ?? [], request: callRequestOf(input) });
     return emitter;
   } catch { return undefined; }
 }
@@ -851,6 +853,14 @@ async function runObservations(args: string[]): Promise<void> {
     }
     return;
   }
+  if (sub === "id") {
+    // The opaque id this installation gives a ref, remote or repository, for writing reference
+    // sets. Local only: it reads the binding key and prints; nothing is sent anywhere.
+    const id = keyedIdFor(loadOrCreateBindingKey(dir), args[1] ?? "", args.slice(2));
+    if (!id) { console.error("usage: observations id <ref <name> | remote <url> | ghrepo <owner/name> | repo <workspace-path> | mcp <server> <tool> | mcp-resource <kind> <value>>"); process.exit(1); }
+    console.log(id);
+    return;
+  }
   if (sub === "wire" || sub === "unwire") {
     const scopes = harnessScopes("claude", process.cwd());
     if (sub === "unwire") {
@@ -1052,6 +1062,8 @@ async function runCapabilities(args: string[]): Promise<void> {
         if (!delivered) console.error("could not deliver the fixture receipts to the workspace; the capability proofs were not sent (run it again when it is reachable)");
         else {
           const queued = observed.emitter.capabilityProofs(proven.cells.flatMap((cell) => {
+            // A typed-operation cell has no receipt of its own action type for a proof to name, so no proof is sent for it.
+            if (TYPED_ACTION_TYPES.has(cell.action_type)) return [];
             const proof = cell.state === "unsupported" ? undefined : fresh[cell.key];
             return proof ? [{ adapterVersion: cell.adapter_version, hostVariant: cell.host_variant, actionType: cell.action_type, phase: cell.event_phase, requiredFields: cell.emitted_required_fields, fixtureVersion: `fixture/${proof.test_vector_digest}`, passed: proofPassed(proof, cell), proofDigests: proof.proof_digests }] : [];
           }));
@@ -1294,7 +1306,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "the workspace, echoing the export's digests exactly. An export carries no signature;",
       "get the file from your workspace.",
     ] },
-  { name: "observations", args: "[status [--refused]|flush|retry|wire|unwire]",
+  { name: "observations", args: "[status [--refused]|flush|retry|wire|unwire|id <kind> <value>]",
     summary: "session, health and action observations sent to your workspace (opt-in)",
     detail: [
       `On only when your workspace enrollment grants ${OBSERVATIONS_SCOPE}; otherwise off, and status says why.`,

@@ -108,6 +108,10 @@ importers:
       '@scopebond/verify':
         specifier: workspace:^
         version: link:../verify
+    devDependencies:
+      '@scopebond/hook':
+        specifier: workspace:^
+        version: link:../hook
 
   packages/policy-schema: {}
 

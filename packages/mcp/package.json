@@ -51,5 +51,16 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "@scopebond/hook": "workspace:^"
+  },
+  "peerDependencies": {
+    "@scopebond/hook": ">=0.8.1"
+  },
+  "peerDependenciesMeta": {
+    "@scopebond/hook": {
+      "optional": true
+    }
   }
 }

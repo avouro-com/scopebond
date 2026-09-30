@@ -120,6 +120,17 @@ never fails the required check, which already gated the merge:
           SCOPEBOND_CLOUD_CREDENTIAL: ${{ secrets.SCOPEBOND_CLOUD_CREDENTIAL }}
 ```
 
+## Evidence for a workspace collector (optional)
+
+Set `evidence-out` (or `--evidence-out <file>`) to write JSON naming the exact head commit this run
+checked, the SHA-256 of the policy it checked against, the hash of the boundary receipt when one was
+signed, the check result (`success`, `failure`, `neutral`) and the run and workflow ids. The path is
+also the `evidence-path` output. It is written for a deny too, before the check fails.
+
+This is a report from your own runner, not an independent verification: the document says
+`"independent": false`, and a collector decides whether to trust it by whether the run came from a runner
+class it has registered. It holds no key or source text, and no list of paths.
+
 ## Not in this release
 
 The GitHub App's Cloud-side webhook/check-run posting (identity linking + the
