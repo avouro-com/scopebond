@@ -16,6 +16,14 @@ import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
 export interface HookConnection extends CloudEnrollmentResult {
   url: string;
+  /** The workspace's installation id for this machine. An enrollment answer names it
+   *  `installation_id`, or (older answers) as `gateway_id`, which is the same identifier;
+   *  observations use `gateway_id` when the explicit field is absent. */
+  installation_id?: string;
+  /** The installation generation the enrollment created. Only the workspace can say what it
+   *  is, so there is no fallback: without it the hook reports observations unsupported
+   *  rather than guessing a generation. */
+  installation_generation?: number;
 }
 
 export const connectionPath = (dir: string): string => join(dir, "cloud.json");

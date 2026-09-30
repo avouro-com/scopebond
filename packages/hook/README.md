@@ -216,6 +216,66 @@ locally and retried if the workspace is unreachable. `npx @scopebond/hook flush`
 delivers anything still queued — run it on a session-end hook (and set
 `SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency.
 
+### Session, health and action observations (opt-in)
+
+Beyond receipts, the hook can send a second kind of signed record, an *observation*,
+to a workspace that supports them. It is **off unless your workspace enrollment grants
+`observations:write`**, and it needs the enrollment to give an installation id (the
+enrollment's `gateway_id`, or an explicit `installation_id`) and an
+`installation_generation`; without those the hook says so in `scopebond status` and
+emits nothing. It never guesses a generation. It
+never affects a decision: sending is best effort, bounded, and runs after the decision is
+made, so an unreachable workspace, a missing route or a rate limit changes nothing about
+what is allowed or denied.
+
+Each observation is Ed25519-signed with the enrolled agent key over the domain
+`scopebond:observation/v1` plus a newline and the canonical (RFC 8785) payload, and sent
+in batches to `POST /v1/observations` as `{ version: "1.0", items: [{ payload, signature }] }`.
+A separate keyed digest binds each tool-call observation to the request the hook actually
+evaluated; the key stays on this machine and is never uploaded. Paths, commands, hosts and
+session ids never leave the machine: they are reduced to keyed opaque ids or closed enums.
+
+| Kind | Sent when | Hosts |
+|---|---|---|
+| `session` start / stop | Claude Code `SessionStart` / `SessionEnd` (stop reasons: completed, cancelled, unknown; sleep is inferred) | Claude Code |
+| `health` heartbeat | every 60 seconds while a session is explicitly active, from one short helper per session that ends with the session | Claude Code |
+| `health` queue | oldest pending receipt time and count, at most every five minutes while a backlog exists | Claude Code |
+| `tool_intent` | each evaluated action, linked to its receipt | Claude Code, Codex, Cursor (shell, file, git push, MCP) |
+| `tool_outcome` | Claude Code `PostToolUse` / `PostToolUseFailure`, echoing the intent's binding | Claude Code |
+| `capability` proof | `scopebond capabilities --prove` (marked as a fixture run, never live) | all |
+| `policy_ack` | `scopebond policy load <export.json>`, once an exported policy is loaded or refused | all |
+
+With observations on, `capabilities --prove` signs its fixtures with this machine's own keys
+(copied into the temporary directory; the originals are never changed), delivers the fixture
+receipts to the workspace first, and only then sends each proof, naming those receipts by
+`proof_digests`: the SHA-256 of `scopebond:source-receipt/v1` plus a newline plus the
+canonical full signed receipt. Only receipts of the cell's own action type are named. If the
+receipts cannot be delivered, no proof is sent. The fixture receipts are real receipts in
+the workspace's log.
+
+`scopebond policy load <export.json>` checks a policy exported from the workspace (its
+policy hash must match the policy, its scope digest must match the export, agent and
+environment, and the environment must be the one this machine is connected to) and says
+what loading would replace; `--yes` writes it atomically as `policy.json` (the old one is
+kept as `policy.previous.json`). It then acknowledges the load, or the refusal with a
+reason, echoing the export's policy hash, policy id, policy version and scope digest
+exactly. The export itself carries no signature, so get the file from your workspace.
+`scopebond rules apply` recompiles `policy.json` from `rules.json` and would replace a loaded policy.
+
+Codex and Cursor have no tested session or after-action mapping, so those kinds are not
+sent for them. Nothing is sent from a sleeping host: a heartbeat gap is recorded as a stop
+with reason `sleep`, and an idle session releases its lease with one final heartbeat.
+
+Delivery follows the workspace's answers: only acknowledged items are removed, deferred
+items are retried with the same id and sequence, and items the workspace refuses stay in a
+local terminal-error queue shown by `scopebond observations status --refused` (an
+unsupported version or a stale generation is never retried; a rate limit, a paused plan
+(HTTP 402) and a refusal without an item id are handled as the workspace reports them). A workspace without the route
+is marked unsupported and nothing more is queued until `scopebond observations retry`.
+`scopebond observations wire` adds the Claude Code session and after-action hook entries
+(`connect` does it automatically when the enrollment grants the scope); `unwire` removes
+only those. `SCOPEBOND_OBSERVATIONS_HEARTBEAT=off` keeps everything except the heartbeat helper.
+
 ## How it works
 
 Each tool call is mapped to a normalized [Action Taxonomy](https://github.com/avouro-com/scopebond)

@@ -14,6 +14,11 @@ evidence, and coverage all share — published before the proxy (D27).
 - `schema/receipt.schema.json` — evidence contract v1 for `scopebond:receipt`.
 - `schema/receipt-legacy.schema.json` — the prior unversioned envelope, retained only
   for explicit compatibility handling.
+- `schema/observation.schema.json` — the closed `scopebond:observation` v1 envelope
+  and its kind-specific data union (session, capability, health, policy acknowledgement,
+  tool intent/outcome, platform outcome, verification, integrity, export), the typed
+  operation union and the signed wrapper/batch shapes. It is separate from the receipt:
+  receipts, their canonicalization and their signatures are unchanged.
 - `src/index.ts` — loads the schemas and exports the policy and evidence constants.
 - `registry/actions-1.0.json` — Action Taxonomy v1: the coding, GitHub, MCP and HTTP
   action types and their parameter bounds (machine source; the human index lives in
@@ -28,7 +33,32 @@ evidence, and coverage all share — published before the proxy (D27).
 - `vectors/evidence-contract.json` — shared execution-state, legacy/unknown-version
   and synthetic-secret cases used by Node, WebCrypto and offline verification tests.
 - `vectors/canonicalization.json` — shared canonical-byte vectors used across packages.
+- `vectors/observation-contract.json` — deterministic observation vectors: canonical
+  bytes, `observation_hash`, Ed25519 signatures under a test-only public key, and
+  negative cases (changed payload, wrong signer, missing domain, unknown field, unknown
+  version, unknown event). No private key is published.
 - `vectors/example-policy.json` — example policy input.
+
+## Observation envelope
+
+An observation is signed as Ed25519 over the UTF-8 bytes of the literal domain
+`scopebond:observation/v1` followed by one LF byte, then the RFC 8785 canonical payload
+(`observationSigningInput`). `observation_hash` is the SHA-256 of those bytes, as 64
+lowercase hex characters. The wire wrapper is
+`{ "payload": …, "signature": { "alg": "Ed25519", "kid": "…", "value": "<unpadded base64url>" } }`
+with no other keys. `source_receipt_hash` is the SHA-256 of `scopebond:source-receipt/v1`
+plus LF plus the canonical **full signed receipt envelope**.
+
+The schema fixes shape and closedness; there are no free-form or raw-content fields.
+A verifier also enforces these cross-field rules: repeated `session_id`,
+`installation_generation`, `sequence`, `parent_action_id` and `source_receipt_hash`
+must equal the envelope; a `tool_intent` `request_digest` must equal its operation's;
+integrity results must agree with their hashes (`unavailable` never carries an actual
+hash); and each typed operation obeys its own field rules (for example `outside_root`
+only when a file path is resolved). Limits: at most 100 observations per batch, 16 KiB per
+observation and 1 MiB per request. An observation is evidence of its source's assertion,
+not proof of an external effect; the receiving service derives tenant and agent identity
+from the credential, never from the payload.
 
 ## Status
 

@@ -53,6 +53,9 @@ export interface ProofRecord {
   /** Cloud acknowledgement. Never `acknowledged` from a local fixture run. */
   cloud_ack: "not_checked" | "acknowledged" | "failed";
   observation_only: boolean;
+  /** `source_receipt_hash` of the fixture receipts whose action type is this cell's (allow
+   *  fixtures, and deny fixtures for a before-action cell). Empty when none matched. */
+  proof_digests?: string[];
 }
 
 export interface CapabilityCell {

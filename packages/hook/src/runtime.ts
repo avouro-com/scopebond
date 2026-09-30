@@ -42,6 +42,9 @@ export interface Decision {
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
   receipts?: unknown[];
+  /** Each action as actually evaluated (after root scoping and grouping), with its
+   *  receipt: what the observation emitters bind a request digest to. */
+  dispatched?: Array<{ action: { action_type: string; params: Record<string, unknown> }; receipt?: unknown }>;
 }
 
 // The hook's own config and keys must be off-limits to the agent it governs:
@@ -267,18 +270,20 @@ export function createHookRuntime(config: RuntimeConfig) {
       const scoped = scopeRoots.length ? applyRootScope(raw, { cwd: config.cwd ?? process.cwd(), roots: scopeRoots }) : raw;
       const list = withActionGroup(scoped, actionGroupId(options.groupKey));
       const receipts: unknown[] = [];
+      const dispatched: NonNullable<Decision["dispatched"]> = [];
       let allow: Decision | null = null;
       let notEvaluated: Decision | null = null;
       for (const m of list) {
         const d = await this.evaluateOne(m);
         if (d.receipt !== undefined) receipts.push(d.receipt);
-        if (d.decision === "deny") return { ...d, receipts };            // any deny denies the call
+        dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params as Record<string, unknown> }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
+        if (d.decision === "deny") return { ...d, receipts, dispatched };            // any deny denies the call
         if (d.decision === "allow" && !allow) allow = d;
         if (d.decision === "not_evaluated" && !notEvaluated) notEvaluated = d;
       }
       // No deny: allow if any command was evaluated-and-allowed, else not_evaluated.
       const chosen = allow ?? notEvaluated!;
-      return { ...chosen, receipts };
+      return { ...chosen, receipts, dispatched };
     },
   };
 }
