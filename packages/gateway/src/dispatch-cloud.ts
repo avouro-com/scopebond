@@ -6,7 +6,10 @@
 // grant), both fail-closed:
 //
 //   POST /v1/monitoring/approvals/consume   200 { ok: true }  = approved; anything else = not approved
-//   GET  /v1/monitoring/delegations?session_id=   the CURRENT resolved delegation
+//   GET  /v1/monitoring/delegations?session_id=[&action_type=&target_id=]   the CURRENT resolved delegation
+//        (with an action and a target, also `covers`: the workspace's own answer for that one action)
+//   GET  /v1/monitoring/approvals/active?request_hash=&action_type=&target_id=   the id of the active
+//        approval bound to exactly that request, when there is one, so nobody has to copy it by hand
 //
 // Nothing here decides anything; it reports what the workspace said, or that it could not be
 // reached. The guard treats "could not be reached" as "not approved" and "not granted".
@@ -15,6 +18,7 @@ import { delegationScopeDigest } from "./dispatch.js";
 
 export const CLOUD_CONSUME_PATH = "/v1/monitoring/approvals/consume";
 export const CLOUD_DELEGATIONS_PATH = "/v1/monitoring/delegations";
+export const CLOUD_ACTIVE_APPROVAL_PATH = "/v1/monitoring/approvals/active";
 export const CLOUD_DISPATCH_SCOPE = "observations:write";
 
 /** The closed reasons the workspace gives for refusing a consume. */
@@ -55,14 +59,26 @@ export interface CloudDelegation {
 }
 
 export type DelegationAnswer =
-  | { ok: true; delegation: CloudDelegation }
+  /** `covers` is present only when the question named an action and a target: the workspace's own answer for that action. */
+  | { ok: true; delegation: CloudDelegation; covers?: boolean }
+  | { ok: false; reason: "server_refused"; status: number }
+  | { ok: false; reason: "bad_response"; detail: string }
+  | { ok: false; reason: "unreachable"; detail: string };
+
+export interface ActiveApprovalQuery { request_hash: string; action_type: string; target_id: string }
+
+export type ActiveApprovalAnswer =
+  | { ok: true; approval_id: string | null }
   | { ok: false; reason: "server_refused"; status: number }
   | { ok: false; reason: "bad_response"; detail: string }
   | { ok: false; reason: "unreachable"; detail: string };
 
 export interface CloudDispatchSource {
   consume(request: ConsumeRequest): Promise<ConsumeAnswer>;
-  delegation(sessionId: string): Promise<DelegationAnswer>;
+  /** The resolved delegation of a session; with `ask`, also whether it covers that one ordinary action (`target_id` is the opaque id, never the raw target). */
+  delegation(sessionId: string, ask?: { action_type: string; target_id: string }): Promise<DelegationAnswer>;
+  /** The active approval for exactly this request, action type and target id, if any. Only an id is returned; consuming it is still the only thing that approves. */
+  activeApproval(query: ActiveApprovalQuery): Promise<ActiveApprovalAnswer>;
   /** The opaque id this installation gives a target, so no path or ref leaves the machine. */
   targetId(target: string): string;
 }
@@ -89,9 +105,12 @@ export function parseDelegationAnswer(body: unknown): DelegationAnswer {
   if (typeof d.effective_scope_digest !== "string" || d.effective_scope_digest !== delegationScopeDigest(entries as string[])) return { ok: false, reason: "bad_response", detail: "the scope digest does not bind the listed entries" };
   const expires = d.effective_expires_at;
   if (expires !== null && (typeof expires !== "number" || !Number.isFinite(expires))) return { ok: false, reason: "bad_response", detail: "malformed expiry" };
+  if ((body as Record<string, unknown>).covers !== undefined && typeof (body as Record<string, unknown>).covers !== "boolean") return { ok: false, reason: "bad_response", detail: "malformed covers" };
+  const covers = (body as Record<string, unknown>).covers as boolean | undefined;
   return {
     ok: true,
     delegation: { state: state as CloudDelegationState, grants: d.grants === true, effective_entries: entries as string[], effective_scope_digest: d.effective_scope_digest, effective_expires_at: expires as number | null },
+    ...(covers !== undefined ? { covers } : {}),
   };
 }
 
@@ -124,9 +143,22 @@ export function createCloudDispatchSource(options: CloudSourceOptions): CloudDis
       if (answer.status >= 500) return { ok: false, reason: "unreachable", detail: `status ${answer.status}` };
       return { ok: false, reason: "server_refused", status: answer.status };
     },
-    async delegation(sessionId: string): Promise<DelegationAnswer> {
+    async activeApproval(query: ActiveApprovalQuery): Promise<ActiveApprovalAnswer> {
       let answer: { status: number; body: unknown };
-      try { answer = await call(`${CLOUD_DELEGATIONS_PATH}?session_id=${encodeURIComponent(sessionId)}`, { method: "GET" }); }
+      const qs = `request_hash=${encodeURIComponent(query.request_hash)}&action_type=${encodeURIComponent(query.action_type)}&target_id=${encodeURIComponent(query.target_id)}`;
+      try { answer = await call(`${CLOUD_ACTIVE_APPROVAL_PATH}?${qs}`, { method: "GET" }); }
+      catch (error) { return { ok: false, reason: "unreachable", detail: (error as Error).name }; }
+      if (answer.status >= 500) return { ok: false, reason: "unreachable", detail: `status ${answer.status}` };
+      if (answer.status !== 200) return { ok: false, reason: "server_refused", status: answer.status };
+      const b = answer.body;
+      if (!isRecord(b) || b.version !== 1 || typeof b.active !== "boolean") return { ok: false, reason: "bad_response", detail: "malformed active-approval answer" };
+      if (!b.active) return { ok: true, approval_id: null };
+      return typeof b.approval_id === "string" && /^[!-~]{1,100}$/.test(b.approval_id) ? { ok: true, approval_id: b.approval_id } : { ok: false, reason: "bad_response", detail: "active approval without a usable id" };
+    },
+    async delegation(sessionId: string, ask?: { action_type: string; target_id: string }): Promise<DelegationAnswer> {
+      let answer: { status: number; body: unknown };
+      const extra = ask ? `&action_type=${encodeURIComponent(ask.action_type)}&target_id=${encodeURIComponent(ask.target_id)}` : "";
+      try { answer = await call(`${CLOUD_DELEGATIONS_PATH}?session_id=${encodeURIComponent(sessionId)}${extra}`, { method: "GET" }); }
       catch (error) { return { ok: false, reason: "unreachable", detail: (error as Error).name }; }
       if (answer.status >= 500) return { ok: false, reason: "unreachable", detail: `status ${answer.status}` };
       if (answer.status !== 200) return { ok: false, reason: "server_refused", status: answer.status };

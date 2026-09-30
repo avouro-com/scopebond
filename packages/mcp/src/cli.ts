@@ -40,7 +40,7 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
 import { scaffold } from "./init.js";
-import { openDispatchGuard } from "@scopebond/gateway/node";
+import { openApprovalBinder, openDispatchGuard } from "@scopebond/gateway/node";
 import { connectCloud, loadMcpConnection, connectionFileFor, openExporter } from "./cloud.js";
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -177,12 +177,12 @@ if (typedPath) {
 // The dispatch boundary is opt-in. A directory that is named but cannot be read is a setup error: it says what may be spent.
 const dispatchDir = arg("--dispatch-dir", process.env.SCOPEBOND_DISPATCH_DIR);
 const delegationId = arg("--delegation", process.env.SCOPEBOND_DELEGATION);
-let dispatch: { guard: NonNullable<ReturnType<typeof openDispatchGuard>>; delegationId?: string } | undefined;
+let dispatch: { guard: NonNullable<ReturnType<typeof openDispatchGuard>>; delegationId?: string; binder?: ReturnType<typeof openApprovalBinder> & object } | undefined;
 if (delegationId && !dispatchDir) die("--delegation needs --dispatch-dir (a delegation is checked against its shared store)");
 if (dispatchDir) {
   try {
     const guard = openDispatchGuard(dispatchDir ?? ".", { delegated: !!delegationId });
-    if (guard) dispatch = { guard, ...(delegationId ? { delegationId } : {}) };
+    if (guard) { const binder = openApprovalBinder(dispatchDir ?? "."); dispatch = { guard, ...(delegationId ? { delegationId } : {}), ...(binder ? { binder } : {}) }; }
   } catch (e) { die(`could not read the dispatch settings in ${dispatchDir ?? "."}: ${(e as Error).message}`); }
 
 }

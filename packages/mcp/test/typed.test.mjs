@@ -221,3 +221,33 @@ test("manifestHash ignores presentation order and detects a changed tool", () =>
   assert.equal(manifestHash([...TOOLS].reverse()), manifestHash(TOOLS));
   assert.notEqual(manifestHash(TOOLS.map((t) => (t.name === "search" ? { ...t, description: "search everything" } : t))), manifestHash(TOOLS));
 });
+
+test("with a dispatch guard requiring approval, the typed operation carries the hash the guard consumes with and its resource id is the guard's target id", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { requestHash, createDispatchGuard: _unused } = await import("@scopebond/gateway");
+  const { createDispatchGuard, openApprovalBinder, targetIdFor } = await import("@scopebond/gateway/node");
+  const dir = mkdtempSync(join(tmpdir(), "sb-mcp-bind-"));
+  const settings = (s) => { writeFileSync(join(dir, "dispatch.json"), JSON.stringify(s)); return openApprovalBinder(dir); };
+  const guard = createDispatchGuard({ dbPath: join(dir, "d.db") });
+  const args = { repository: "acme/widgets", branch: "x" };
+  const run = async (binderOf) => {
+    const upstream = upstreamWith();
+    const { proxy, drafts } = build(upstream, {}, binderOf ? { dispatch: { guard, binder: binderOf } } : {});
+    await list(proxy);
+    await proxy.handle(call("delete_branch", args));
+    return drafts.find((d) => d.kind === "tool_intent").data.operation;
+  };
+  const op = await run(settings({ require_approval: ["mcp.tool.call"] }));
+  assert.equal(op.approval_request_hash, requestHash({ server: "github", method: "tools/call", params: { name: "delete_branch", arguments: args } }));
+  assert.equal(op.resource_id, targetIdFor(dir)("github/delete_branch"));
+  assert.notEqual(op.resource_id, binder.resourceId("mcp", "github\0delete_branch"), "the keyed id is replaced by the guard's target id");
+  // A different tool call, a different hash.
+  assert.notEqual(op.approval_request_hash, requestHash({ server: "github", method: "tools/call", params: { name: "delete_branch", arguments: { ...args, branch: "y" } } }));
+  // An action type that needs no approval, or no binder: the plain operation.
+  for (const binderOf of [settings({ require_approval: ["git.push"] }), settings({ require_approval: ["mcp.tool.call"], cloud: false }), null]) {
+    assert.equal(Object.hasOwn(await run(binderOf), "approval_request_hash"), false);
+  }
+  guard.close();
+});

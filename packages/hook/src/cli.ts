@@ -888,11 +888,13 @@ async function runBudgetLoad(args: string[]): Promise<void> {
     process.exitCode = 1;
   } else if (outcome.state === "would_load") {
     const p = outcome.facts.policy;
+    for (const w of outcome.warnings) console.error(`warning: ${w}`);
     console.log(`This export checks out: ${p.mode} budget ${outcome.facts.budgetId} v${outcome.facts.budgetVersion}, ${p.max_dispatch} dispatches in ${p.window_seconds}s for this agent on this installation.`);
     console.log(`Loading it writes the budget to ${join(dir, "dispatch.json")} as acknowledged, and replaces an older workspace budget for this agent. Run again with --yes to load it.`);
     return;
   } else {
     const p = outcome.facts.policy;
+    for (const w of outcome.warnings) console.error(`warning: ${w}`);
     console.log(`loaded ${p.mode} budget ${outcome.facts.budgetId} v${outcome.facts.budgetVersion} from export ${outcome.facts.exportId}: ${p.max_dispatch} dispatches in ${p.window_seconds}s`);
     if (outcome.replaced.length > 0) console.log(`  replaced        ${outcome.replaced.join(", ")}`);
     console.log(`  valid until     ${new Date(outcome.facts.validUntil).toISOString()} (after that an enforced budget denies new dispatch until you load a new export)`);

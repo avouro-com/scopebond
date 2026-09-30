@@ -46,7 +46,7 @@ const FAIL_CLOSED = {
 
 function goldenExport(over = {}) {
   return {
-    type: "scopebond:action-budget-export", version: 1, export_id: "exp-1", budget_id: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", budget_version: 2, agent_id: "agent-1", environment_id: "env-1",
+    type: "scopebond:action-budget-export", version: 1, export_id: "exp-1", budget_id: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", budget_version: 2, agent_id: "agent-1", agent_kid: null, environment_id: "env-1",
     created_at: 1_790_000_000_000, valid_until: FAR, policy: GOLDEN.policy, policy_digest: GOLDEN.policy_digest, scope_digest: GOLDEN.scope_digest,
     acknowledgement: { status: "pending", required: "a signed policy_ack.loaded observation", note: "pending" },
     enforcement: { eligible: true, reason: "acknowledged_installation_scope_enforce_budget", authority_scope: "installation", shared_gateway: { registered: false }, fail_closed: FAIL_CLOSED, enforced_by_cloud: false },
@@ -184,4 +184,44 @@ test("the workspace's { version, export } answer loads; a newer version replaces
   ids = settings(home.dir).budgets.map((b) => b.budget_id);
   assert.deepEqual(ids, ["manual-budget-1", "budget-v3-bbbb"]);
   await server.close();
+});
+
+test("the export's agent_kid must be this machine's agent key: a match loads as that actor, a mismatch is refused and acknowledged, null loads with a warning", async () => {
+  {
+    const server = await startServer();
+    const home = makeHome({ url: server.url });
+    const ok = await run(home.dir, ["budget", "load", writeExport(home.dir, goldenExport({ agent_kid: home.agent.kid })), "--yes"]);
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.doesNotMatch(ok.stderr, /warning/);
+    assert.equal(settings(home.dir).budgets[0].actor, home.agent.kid, "the actor is the export's agent_kid");
+    await server.close();
+  }
+  {
+    const server = await startServer();
+    const home = makeHome({ url: server.url });
+    const bad = await run(home.dir, ["budget", "load", writeExport(home.dir, goldenExport({ agent_kid: "sbk_someone_else" })), "--yes"]);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /this export is for the agent key sbk_someone_else, but this machine's agent key is /);
+    assert.throws(() => readFileSync(join(home.dir, "dispatch.json"), "utf8"), "nothing written");
+    assert.equal(acks(server)[0].payload.data.error, "scope_mismatch");
+    await server.close();
+  }
+  {
+    const server = await startServer();
+    const home = makeHome({ url: server.url });
+    const unbound = await run(home.dir, ["budget", "load", writeExport(home.dir, goldenExport({ agent_kid: null })), "--yes"]);
+    assert.equal(unbound.status, 0, unbound.stderr);
+    assert.match(unbound.stderr, /warning: .*could not be bound to this machine's agent identity/);
+    assert.equal(settings(home.dir).budgets[0].actor, home.agent.kid, "a null kid falls back to this machine's key");
+    await server.close();
+  }
+  {
+    const server = await startServer();
+    const home = makeHome({ url: server.url });
+    const { agent_kid, ...old } = goldenExport();
+    const missing = await run(home.dir, ["budget", "load", writeExport(home.dir, old), "--yes"]);
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /agent_kid is missing/);
+    await server.close();
+  }
 });

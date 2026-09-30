@@ -297,8 +297,15 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
             const ref = cloudRefs.find((id) => ![...cloudChosen.values()].includes(id));
             if (ref !== undefined) cloudChosen.set(i, ref);
           }
+          // No hand-copied reference: ask the workspace whether an approval for exactly this request is active. Its id is only a candidate; the consume decides.
+          let lookupNote = "";
+          if (!chosen.has(i) && !cloudChosen.has(i) && config.cloud) {
+            const found = await config.cloud.activeApproval({ request_hash: subject.request_hash, action_type: intent.action_type, target_id: config.cloud.targetId(intent.target) });
+            if (found.ok && found.approval_id !== null && !cloudChosen.has(i) && ![...cloudChosen.values()].includes(found.approval_id)) cloudChosen.set(i, found.approval_id);
+            else if (!found.ok) lookupNote = `; the workspace could not be asked for an active approval (${found.reason})`;
+          }
           if (!chosen.has(i) && !cloudChosen.has(i)) {
-            const hint = config.cloud ? `; to approve it in the workspace use request_hash ${subject.request_hash} and target_id ${config.cloud.targetId(intent.target)}` : "";
+            const hint = config.cloud ? `; to approve it in the workspace use request_hash ${subject.request_hash} and target_id ${config.cloud.targetId(intent.target)}${lookupNote}` : "";
             approvalFailure = candidates.length === 0 || !config.keys
               ? { reason: "approval_required", detail: `${intent.action_type} needs a single-use approval and none was presented${hint}` }
               : { reason: "approval_rejected", detail: `no presented approval is valid for this exact ${intent.action_type} (${lastReject ?? "no match"})${hint}` };
@@ -406,13 +413,17 @@ async function checkWorkspaceDelegation(
 ): Promise<{ reason: DispatchReason; detail: string } | null> {
   const { now } = db.effectiveNow();
   let resolved = db.cachedDelegation(sessionId, now, ttlMs);
+  // The workspace's own answer for the FIRST intent, when it gave one; every other intent is judged from the entries it listed.
+  let covers: boolean | undefined;
   if (!resolved) {
-    const answer = await cloud.delegation(sessionId);
+    const first = intents[0];
+    const answer = await cloud.delegation(sessionId, first ? { action_type: first.action_type, target_id: cloud.targetId(first.target) } : undefined);
     if (!answer.ok) {
       const why = answer.reason === "server_refused" ? `status ${answer.status}` : answer.detail;
       return { reason: "delegation_unknown", detail: `the session delegation ${sessionId} could not be resolved (${answer.reason}: ${why}); unknown ancestry grants nothing` };
     }
     resolved = answer.delegation;
+    covers = answer.covers;
     db.dropCachedDelegation(sessionId);
     // Only an active grant is reused; a refusal is always asked again.
     if (resolved.state === "active" && resolved.grants) db.putCachedDelegation(sessionId, resolved, db.effectiveNow().now);
@@ -423,9 +434,12 @@ async function checkWorkspaceDelegation(
   if (state !== "active" || !resolved.grants) return { reason: "delegation_unknown", detail: `the session delegation ${sessionId} grants nothing (${state})` };
   if (resolved.effective_expires_at !== null && resolved.effective_expires_at <= now) return { reason: "delegation_expired", detail: `the session delegation ${sessionId} expired` };
   const held = new Set(resolved.effective_entries);
-  for (const i of intents) {
-    const wanted = actionScopeEntries(i.action_type, i.target);
-    if (!held.has(wanted.exact) && !held.has(wanted.anyTarget)) return { reason: "delegation_out_of_scope", detail: `the session delegation ${sessionId} does not cover ${i.action_type} on this target` };
+  for (const [n, i] of intents.entries()) {
+    // Entries are over the opaque target id the workspace also receives, never the raw path or ref.
+    let covered = false;
+    if (n === 0 && covers !== undefined) covered = covers;
+    else { try { const wanted = actionScopeEntries(i.action_type, cloud.targetId(i.target)); covered = held.has(wanted.exact) || held.has(wanted.anyTarget); } catch { covered = false; } }
+    if (!covered) return { reason: "delegation_out_of_scope", detail: `the session delegation ${sessionId} does not cover ${i.action_type} on this target` };
   }
   return null;
 }

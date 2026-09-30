@@ -75,7 +75,11 @@ export interface McpProxyConfig {
   /** The dispatch boundary: single-use approvals, the session's delegated scope and per-agent action
    *  budgets, decided once per `tools/call` after policy allows it and immediately before it is
    *  forwarded. A denial is never forwarded and spends nothing. Absent, the proxy behaves as before. */
-  dispatch?: { guard: DispatchGuard; /** The delegation this session runs under, if it is a delegated child. */ delegationId?: string };
+  dispatch?: {
+    guard: DispatchGuard; /** The delegation this session runs under, if it is a delegated child. */ delegationId?: string;
+    /** Adds the approval hash and target id the guard uses to a typed operation, so a consumed approval can be correlated to its intent. */
+    binder?: { bindDispatched<T extends Record<string, unknown>>(operation: T, intent: { action_type: string; target: string; request: unknown }): T };
+  };
 }
 
 export interface McpProxy {
@@ -151,9 +155,11 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
 
       // The boundary, for a call policy has allowed. The exact request forwarded below is what an approval is bound to.
       let boundary: DispatchDecision | undefined;
+      const guardTarget = `${config.server}/${String(intent.params.tool)}`;
+      const guardRequest = { server: config.server, method: "tools/call", params: dispatched.params ?? {} };
       if (decision === "allow" && config.dispatch) {
-        const target = `${config.server}/${String(intent.params.tool)}`;
-        const request = { server: config.server, method: "tools/call", params: dispatched.params ?? {} };
+        const target = guardTarget;
+        const request = guardRequest;
         // One transport request keeps one group, so a retry of it is not a second dispatch; a new invocation is.
         const group = `mcp:${requestHash({ id: dispatched.id ?? null, request, session: config.dispatch.delegationId ?? null })}`;
         try {
@@ -177,7 +183,9 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       // The intent is recorded before dispatch, whatever the decision. Emission can never
       // change the decision or fail the call.
       const startedAt = nowMs();
-      const operation = description?.operation ?? null;
+      const plainOperation = description?.operation ?? null;
+      const operation = plainOperation && config.dispatch?.binder
+        ? config.dispatch.binder.bindDispatched(plainOperation as Record<string, unknown>, { action_type: "mcp.tool.call", target: guardTarget, request: guardRequest }) : plainOperation;
       if (typed?.sink && operation) { try { typed.sink.emit(intentDraft(operation, startedAt, receipt)); } catch { /* observations are best effort */ } }
 
       if (decision === "deny") {

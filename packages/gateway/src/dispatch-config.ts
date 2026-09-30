@@ -12,7 +12,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { createCloudDispatchSource, CLOUD_DISPATCH_SCOPE, type CloudDispatchSource } from "./dispatch-cloud.js";
 import { createDispatchGuard, DISPATCH_DB } from "./dispatch-store.js";
 import { StaticPrincipalKeyRegistry } from "./auth.js";
-import { validateBudgetPolicy, type ActionBudgetPolicy, type DispatchGuard } from "./dispatch.js";
+import { dispatchApprovalBinding, requestHash, validateBudgetPolicy, type ActionBudgetPolicy, type DispatchGuard } from "./dispatch.js";
 
 export const DISPATCH_FILE = "dispatch.json";
 export const APPROVAL_INBOX = "approvals";
@@ -100,4 +100,38 @@ export function openDispatchGuard(dir: string, options: { delegated?: boolean; c
     budgets: () => readDispatchFile(dir)?.budgets ?? [],
     sharedGatewayConfigured: false,
   });
+}
+
+/** Adds to a typed operation what lets the workspace correlate a consumed approval to it: `approval_request_hash` (the hash the guard asks the workspace to consume)
+ *  and a `resource_id` equal to the guard's `target_id`. Only for an action type this installation requires an approval for, only when approvals may be held in
+ *  the workspace; every other operation is returned as it was. The claim authorizes nothing: only a consumed approval in the workspace does. */
+export interface ApprovalBinder {
+  bind<T extends Record<string, unknown>>(operation: T, intent: { action_type: string; params?: Record<string, unknown>; asset?: string; amount?: number }): T;
+  /** The same for a guard intent an adapter built itself (an MCP proxy hashes its own request): the exact `{ action_type, target, request }` it passes to the guard. */
+  bindDispatched<T extends Record<string, unknown>>(operation: T, intent: { action_type: string; target: string; request: unknown }): T;
+}
+
+export function openApprovalBinder(dir: string): ApprovalBinder | null {
+  let file: DispatchFile | null;
+  try { file = readDispatchFile(dir); } catch { return null; }
+  if (!file || file.cloud === false || !file.require_approval?.length) return null;
+  const required = file.require_approval;
+  let targetId: ((t: string) => string) | undefined;
+  return {
+    bind(operation, intent) {
+      if (!required.some((t) => t === "*" || t === intent.action_type)) return operation;
+      try {
+        const b = dispatchApprovalBinding(intent);
+        targetId ??= targetIdFor(dir);
+        return { ...operation, approval_request_hash: b.request_hash, resource_id: targetId(b.target) };
+      } catch { return operation; }
+    },
+    bindDispatched(operation, intent) {
+      if (!required.some((t) => t === "*" || t === intent.action_type)) return operation;
+      try {
+        targetId ??= targetIdFor(dir);
+        return { ...operation, approval_request_hash: requestHash(intent.request), resource_id: targetId(intent.target) };
+      } catch { return operation; }
+    },
+  };
 }

@@ -269,14 +269,25 @@ fail-closed contract, and refuses a budget an independent installation cannot en
 shared across installations). `--yes` writes it into `dispatch.json` as an acknowledged
 budget for this agent (replacing an older workspace budget, never a newer one) and queues
 the acknowledgement with the export id, budget id and version, and digests the workspace
-expects. An enforced budget denies new dispatch once its export has expired, until you load
-a new one.
+expects. The export names the agent key it is for (`agent_kid`): a different key than this
+machine's is refused (and acknowledged as rejected); an export whose key the workspace could not
+state (null) loads with a warning that its identity could not be bound, and an export without
+the field is refused. The budget's actor is that key. An enforced budget denies new dispatch
+once its export has expired, until you load a new one.
 
 When this machine is connected with `observations:write`, the dispatch boundary can also use
-the workspace: leave `{ "cloud_approval_id": "<id>" }` in `approvals/` and the approval is
-consumed there at dispatch (the denial message prints the request hash and target id to
-approve), and a delegated session this machine does not know is resolved from the workspace
-and cached for 15 seconds. If the workspace cannot be reached and no valid local approval is
+the workspace: an approval granted there for exactly the request is found and consumed at
+dispatch with nothing to copy (the guard asks `GET /v1/monitoring/approvals/active` with the
+request hash, action type and opaque target id; the denial message still prints the request
+hash and target id to approve). Leaving `{ "cloud_approval_id": "<id>" }` in `approvals/`
+still works and is used first. Only the consume approves: a lookup that finds nothing, fails
+or finds another request approves nothing. A delegated session this machine does not know is resolved from the workspace
+(scope entries are digests of `action_type NUL target-id` or `action_type NUL *`, over the
+same opaque target id; the workspace's own `covers` answer for the action decides when it
+gives one) and cached for 15 seconds. With approvals required for an action type in
+`dispatch.json`, each typed operation also carries `approval_request_hash` (the hash the guard
+consumes with) and a `resource_id` equal to the guard's target id, so a consumed approval can be
+matched to its intent; the field is a claim and authorizes nothing. If the workspace cannot be reached and no valid local approval is
 presented, an enforced action is denied. Targets reach the workspace only as keyed opaque ids.
 Set `"cloud": false` in `dispatch.json` to keep everything local.
 

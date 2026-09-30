@@ -206,16 +206,32 @@ export const SCOPE_ENTRY_DOMAIN = "scopebond:scope-entry/v1\u0000";
 export const delegationScopeDigest = (entries: readonly string[]): string =>
   sha256(DELEGATION_SCOPE_DOMAIN + canonical([...new Set(entries)].sort() as never));
 
-/** One scope entry: SHA-256 of the domain, the kind and the value, separated by NUL. */
-export const scopeEntryDigest = (kind: string, value: string): string => sha256(`${SCOPE_ENTRY_DOMAIN}${kind}\u0000${value}`);
+/** The closed vocabulary of scope entry kinds. `privilege`: `resource_scope NUL permission`. `action`: an ordinary dispatched action, see `actionScopeEntry`. */
+export const SCOPE_ENTRY_KINDS = ["action", "privilege"] as const;
+export type ScopeEntryKind = (typeof SCOPE_ENTRY_KINDS)[number];
+
+/** One scope entry: SHA-256 of the domain, the kind and the value, separated by NUL. An unknown kind throws: the vocabulary is closed. */
+export const scopeEntryDigest = (kind: ScopeEntryKind, value: string): string => {
+  if (!(SCOPE_ENTRY_KINDS as readonly string[]).includes(kind)) throw new Error(`unknown scope entry kind: ${String(kind)}`);
+  return sha256(`${SCOPE_ENTRY_DOMAIN}${kind} ${value}`);
+};
 
 /** The entry that authorizes granting `permission` on `resourceScope`. */
-export const privilegeScopeEntry = (resourceScope: string, permission: string): string => scopeEntryDigest("privilege", `${resourceScope}\u0000${permission}`);
+export const privilegeScopeEntry = (resourceScope: string, permission: string): string => scopeEntryDigest("privilege", `${resourceScope} ${permission}`);
 
-/** The entries that would cover one dispatch intent: the exact action on the exact target, or every target of the action type (`*`). */
+const ACTION_ENTRY_TYPE = /^[a-z][a-z0-9_]{0,40}(?:.[a-z][a-z0-9_]{0,40}){0,2}$/;
+/** The entry for an ordinary action: kind `action`, value `<action_type> NUL <target>` (exact target) or `<action_type> NUL *` (any target, `target = null`).
+ *  The target is the opaque target id the dispatch boundary sends (never the raw path or ref): a non-empty string of at most 200 characters without NUL;
+ *  the literal `*` is refused because it would collide with the any-target entry. Anything invalid throws. */
+export function actionScopeEntry(actionType: string, target: string | null): string {
+  if (!ACTION_ENTRY_TYPE.test(actionType)) throw new Error("invalid action_type for a scope entry");
+  if (target !== null && (target.length < 1 || target.length > 200 || target.includes(" ") || target === "*")) throw new Error("invalid target for a scope entry");
+  return scopeEntryDigest("action", `${actionType} ${target ?? "*"}`);
+}
+
+/** The entries that would cover one dispatch intent: the exact action on the exact target id, or every target of the action type (`*`). Throws on invalid input. */
 export const actionScopeEntries = (actionType: string, target: string): { exact: string; anyTarget: string } => ({
-  exact: scopeEntryDigest("action", `${actionType}\u0000${target}`),
-  anyTarget: scopeEntryDigest("action", `${actionType}\u0000*`),
+  exact: actionScopeEntry(actionType, target), anyTarget: actionScopeEntry(actionType, null),
 });
 
 // ── Action budgets (§4.1) ─────────────────────────────────────────────────────
@@ -345,6 +361,13 @@ export function dispatchIntentOf(intent: { action_type: string; params?: Record<
     action_type: intent.action_type, target: intentTarget(intent),
     request: { action_type: intent.action_type, params: requestParams(intent.params), ...(intent.asset !== undefined ? { asset: intent.asset } : {}), ...(intent.amount !== undefined ? { amount: intent.amount } : {}) },
   };
+}
+
+/** What an adapter records beside a typed operation so a consumed approval can be correlated to it: the hash the guard asks the workspace to consume
+ *  (`request_hash`) and the resource the guard names (`target`, which the adapter maps through the same opaque target id it gives the workspace). */
+export function dispatchApprovalBinding(intent: { action_type: string; params?: Record<string, unknown>; asset?: string; amount?: number }): { request_hash: string; target: string } {
+  const d = dispatchIntentOf(intent);
+  return { request_hash: requestHash(d.request), target: d.target };
 }
 
 /** Sign an approval. This is what the approver's tooling runs; it is here so the wire format has one reference. */

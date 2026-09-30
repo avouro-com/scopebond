@@ -5,5 +5,5 @@ export { FileReceiptStore, SqliteReceiptStore, SqliteCloudOutbox, openReceiptSto
 export type { SqliteCloudOutboxOptions } from "./node-stores.js";
 export { DispatchStore, createDispatchGuard, DISPATCH_DB, CLOCK_TOLERANCE_MS } from "./dispatch-store.js";
 export type { DispatchGuardConfig } from "./dispatch-store.js";
-export { openDispatchGuard, openCloudSource, targetIdFor, BINDING_KEY_FILE, TARGET_ID_DOMAIN, readDispatchFile, readApprovalInbox, DISPATCH_FILE, APPROVAL_INBOX, DELEGATION_ENV } from "./dispatch-config.js";
-export type { DispatchFile } from "./dispatch-config.js";
+export { openApprovalBinder, openDispatchGuard, openCloudSource, targetIdFor, BINDING_KEY_FILE, TARGET_ID_DOMAIN, readDispatchFile, readApprovalInbox, DISPATCH_FILE, APPROVAL_INBOX, DELEGATION_ENV } from "./dispatch-config.js";
+export type { DispatchFile, ApprovalBinder } from "./dispatch-config.js";

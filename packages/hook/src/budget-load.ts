@@ -37,6 +37,8 @@ export interface BudgetExportFacts {
   policyDigest: string;
   scopeDigest: string;
   agentId: string;
+  /** The key the workspace says this agent signs with, or null when it could not say (no enrolled key). */
+  agentKid: string | null;
   environmentId: string;
   validUntil: number;
   policy: { operation_set: string[]; authority_scope: "installation" | "shared_gateway"; max_dispatch: number; window_seconds: number; mode: "monitor" | "enforce"; version: number };
@@ -61,6 +63,11 @@ export function inspectBudgetExport(raw: unknown, context: { environmentId?: str
   if (exp.version !== 1) return { ok: false, error: "unsupported", message: `unsupported export version ${String(exp.version)}` };
   const { export_id: exportId, budget_id: budgetId, budget_version: budgetVersion, agent_id: agentId, environment_id: environmentId, valid_until: validUntil } = exp;
   const policy = exp.policy;
+  const agentKid = exp.agent_kid;
+  // `agent_kid` is always present in an export (a key id, or null when the workspace has no enrolled key for the agent); an export without it predates identity binding.
+  if (agentKid === undefined || (agentKid !== null && (typeof agentKid !== "string" || !OPAQUE.test(agentKid)))) {
+    return { ok: false, error: "schema_invalid", message: "the export does not say which agent key it is for (agent_kid is missing or malformed); export the budget again from the workspace" };
+  }
   if (typeof exportId !== "string" || !OPAQUE.test(exportId) || typeof budgetId !== "string" || !OPAQUE.test(budgetId) || !Number.isInteger(budgetVersion) || (budgetVersion as number) < 1
     || (budgetVersion as number) > 2_147_483_647 || typeof agentId !== "string" || !OPAQUE.test(agentId) || typeof environmentId !== "string" || !OPAQUE.test(environmentId)
     || typeof validUntil !== "number" || !Number.isFinite(validUntil) || !isObject(policy) || typeof exp.policy_digest !== "string" || !HEX64.test(exp.policy_digest)
@@ -103,7 +110,7 @@ export function inspectBudgetExport(raw: unknown, context: { environmentId?: str
   return {
     ok: true,
     facts: {
-      exportId, budgetId, budgetVersion: budgetVersion as number, policyDigest: exp.policy_digest, scopeDigest: exp.scope_digest, agentId, environmentId, validUntil,
+      agentKid: agentKid as string | null, exportId, budgetId, budgetVersion: budgetVersion as number, policyDigest: exp.policy_digest, scopeDigest: exp.scope_digest, agentId, environmentId, validUntil,
       policy: policy as unknown as BudgetExportFacts["policy"],
     },
   };
@@ -112,7 +119,8 @@ export function inspectBudgetExport(raw: unknown, context: { environmentId?: str
 /** The budget policy this machine enforces for an export: the reviewed limits, acting as this installation's agent, valid until the export says. */
 export function localBudgetOf(facts: BudgetExportFacts, agentKid: string, acknowledgedAt: string): ActionBudgetPolicy & { source_export_id: string } {
   const policy: ActionBudgetPolicy & { source_export_id: string } = {
-    budget_id: facts.budgetId, actor: agentKid, operations: [...facts.policy.operation_set], authority_scope: facts.policy.authority_scope, max: facts.policy.max_dispatch,
+    // The actor is the export's agent key; a null one (unverifiable identity) falls back to this installation's key, which is the only agent this machine dispatches as.
+    budget_id: facts.budgetId, actor: facts.agentKid ?? agentKid, operations: [...facts.policy.operation_set], authority_scope: facts.policy.authority_scope, max: facts.policy.max_dispatch,
     window_seconds: facts.policy.window_seconds, mode: facts.policy.mode, version: facts.budgetVersion, expires_at: new Date(facts.validUntil).toISOString(),
     acknowledgement: null, source_export_id: facts.exportId,
   };
@@ -122,8 +130,8 @@ export function localBudgetOf(facts: BudgetExportFacts, agentKid: string, acknow
 }
 
 export type BudgetLoadOutcome =
-  | { state: "loaded"; facts: BudgetExportFacts; replaced: string[] }
-  | { state: "would_load"; facts: BudgetExportFacts }
+  | { state: "loaded"; facts: BudgetExportFacts; replaced: string[]; warnings: string[] }
+  | { state: "would_load"; facts: BudgetExportFacts; warnings: string[] }
   | { state: "rejected"; error: PolicyLoadError | "expired"; message: string; ack?: Omit<PolicyAckInput, "error"> };
 
 /** Read an export file, check it, and (with `apply`) write it into `dispatch.json` as an acknowledged budget. */
@@ -140,6 +148,10 @@ export function loadBudgetExport(dir: string, file: string, options: { apply: bo
   const { facts } = inspected;
   const ack = { exportId: facts.exportId, policyId: facts.budgetId, policyVersion: facts.budgetVersion, policyDigest: facts.policyDigest, scopeDigest: facts.scopeDigest };
   if (!options.agentKid) return { state: "rejected", error: "unsupported", message: "this machine has no agent key to act as; run init first", ack };
+  if (facts.agentKid !== null && facts.agentKid !== options.agentKid) {
+    return { state: "rejected", error: "scope_mismatch", message: `this export is for the agent key ${facts.agentKid}, but this machine's agent key is ${options.agentKid}; it was exported for a different agent or installation`, ack };
+  }
+  const warnings = facts.agentKid === null ? ["the workspace has no enrolled key for this agent, so the export could not be bound to this machine's agent identity; it is loaded for this machine's key on your say-so"] : [];
   const current = readDispatchFile(dir) ?? {};
   const existing = (current.budgets ?? []) as Array<ActionBudgetPolicy & { source_export_id?: string }>;
   // Workspace budgets are per agent and versioned; a same or newer version is never replaced by an older export.
@@ -148,7 +160,7 @@ export function loadBudgetExport(dir: string, file: string, options: { apply: bo
   if (newer) return { state: "rejected", error: "unsupported", message: `a same or newer workspace budget (version ${newer.version}) is already loaded; an older export cannot replace it`, ack };
   const same = workspace.find((b) => b.budget_id === facts.budgetId);
   if (same && same.version > facts.budgetVersion) return { state: "rejected", error: "unsupported", message: `version ${same.version} of this budget is already loaded`, ack };
-  if (!options.apply) return { state: "would_load", facts };
+  if (!options.apply) return { state: "would_load", facts, warnings };
   mkdirSync(dir, { recursive: true });
   const replaced = workspace.filter((b) => b.budget_id !== facts.budgetId).map((b) => b.budget_id);
   const kept = existing.filter((b) => !workspace.includes(b));
@@ -157,6 +169,6 @@ export function loadBudgetExport(dir: string, file: string, options: { apply: bo
   const temp = `${target}.${randomBytes(6).toString("hex")}.tmp`;
   try { writeFileSync(temp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 }); renameSync(temp, target); }
   catch (error) { try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ } throw error; }
-  return { state: "loaded", facts, replaced };
+  return { state: "loaded", facts, replaced, warnings };
 }
 

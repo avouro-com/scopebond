@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync, sign as edSign } from "node:crypto";
 import {
-  actionScopeEntries, budgetDigest, canonical, createCloudDispatchSource, createGateway, defaultBudgetTemplate, delegationScopeDigest, deriveKid, dispatchIntentOf,
+  actionScopeEntry, actionScopeEntries, SCOPE_ENTRY_KINDS, dispatchApprovalBinding, budgetDigest, canonical, createCloudDispatchSource, createGateway, defaultBudgetTemplate, delegationScopeDigest, deriveKid, dispatchIntentOf,
   intentHash, privilegeScopeEntry, requestHash, scopeEntryDigest, signDispatchApproval, StaticPrincipalKeyRegistry,
 } from "../dist/index.js";
 import { createDispatchGuard, DispatchStore } from "../dist/node.js";
@@ -42,7 +42,7 @@ function fakeWorkspace(c) {
   const ws = {
     approvals: new Map(), // id -> { action_type, policy_digest, request_hash, target_id, state, expires }
     delegations: new Map(), // session -> resolved delegation (server field names)
-    consumes: [], delegationCalls: 0, down: false, status: null, credentials: [],
+    consumes: [], delegationCalls: 0, delegationQueries: [], activeQueries: [], covers: "server", noActive: false, down: false, status: null, credentials: [],
   };
   ws.fetch = async (url, init) => {
     ws.credentials.push(init.headers.authorization);
@@ -68,8 +68,18 @@ function fakeWorkspace(c) {
     }
     if (u.pathname === "/v1/monitoring/delegations" && init.method === "GET") {
       ws.delegationCalls++;
-      const d = ws.delegations.get(u.searchParams.get("session_id"));
-      return Response.json({ version: 1, delegation: d ?? resolved("not_found", []) }, { status: 200 });
+      const d = ws.delegations.get(u.searchParams.get("session_id")) ?? resolved("not_found", []);
+      ws.delegationQueries.push(Object.fromEntries(u.searchParams));
+      const at = u.searchParams.get("action_type"), tid = u.searchParams.get("target_id");
+      // The server's own convention (actionScopeEntry over the target id it was sent).
+      const covers = at !== null && tid !== null ? { covers: ws.covers === "server" ? (d.grants && [actionScopeEntry(at, tid), actionScopeEntry(at, null)].some((e) => d.effective_entries.includes(e))) : ws.covers } : {};
+      return Response.json({ version: 1, delegation: d, ...(ws.omitCovers ? {} : covers) }, { status: 200 });
+    }
+    if (u.pathname === "/v1/monitoring/approvals/active" && init.method === "GET") {
+      const q = Object.fromEntries(u.searchParams);
+      ws.activeQueries.push(q);
+      const found = ws.noActive ? undefined : [...ws.approvals.values()].find((a) => a.state === "active" && a.expires > c.t && a.request_hash === q.request_hash && a.action_type === q.action_type && a.target_id === q.target_id);
+      return Response.json({ version: 1, active: !!found, ...(found ? { approval_id: found.id, expires_at: found.expires } : {}) }, { status: 200 });
     }
     return new Response("nope", { status: 404 });
   };
@@ -96,8 +106,9 @@ function setup(extra = {}) {
   const guard = createDispatchGuard({ dbPath: join(dirOf(), "d.db"), requireApproval: ["git.push"], approvals: () => inbox, now: c.now, cloud, ...extra });
   const r = req();
   const grant = (id = "appr-0001", over = {}) => {
-    ws.approvals.set(id, { id, action_type: "git.push", policy_digest: r.policy_digest, request_hash: requestHash(r.intents[0].request), target_id: targetId(r.intents[0].target), state: "active", expires: c.t + 60_000, ...over });
-    inbox.push({ cloud_approval_id: id });
+    const { discover, ...rest } = over;
+    if (!discover) inbox.push({ cloud_approval_id: id });
+    ws.approvals.set(id, { id, action_type: "git.push", policy_digest: r.policy_digest, request_hash: requestHash(r.intents[0].request), target_id: targetId(r.intents[0].target), state: "active", expires: c.t + 60_000, ...rest });
   };
   return { c, ws, inbox, guard, r, grant };
 }
@@ -255,7 +266,7 @@ test("through the gateway a workspace-refused approval never reaches the upstrea
 
 // ── delegation resolved by the workspace ─────────────────────────────────────────────────────
 
-function delegated(entriesFor = () => [actionScopeEntries("git.push", "feature/x").exact]) {
+function delegated(entriesFor = () => [actionScopeEntries("git.push", targetId("feature/x")).exact]) {
   const s = setup({ requireApproval: [], cloud: undefined });
   s.guard.close();
   const c = s.c, ws = s.ws;
@@ -272,7 +283,7 @@ test("a session the workspace resolves as active and covering is allowed; anythi
   const out = await guard.authorize(other);
   assert.equal(out.allow, false);
   assert.equal(out.reason, "delegation_out_of_scope");
-  ws.delegations.set("sess-any", resolved("active", [actionScopeEntries("git.push", "").anyTarget]));
+  ws.delegations.set("sess-any", resolved("active", [actionScopeEntries("git.push", "x").anyTarget]));
   assert.equal((await guard.authorize({ ...other, delegation_id: "sess-any", action_group: "g3" })).allow, true, "an any-target entry covers every target of that action type");
   guard.close();
 });
@@ -280,7 +291,7 @@ test("a session the workspace resolves as active and covering is allowed; anythi
 test("revoked, ended, expired, unknown ancestry, invalid scope and unknown sessions grant nothing", async () => {
   for (const [state, reason] of [["revoked", "delegation_revoked"], ["ended", "delegation_expired"], ["expired", "delegation_expired"], ["unknown_ancestry", "delegation_unknown"], ["invalid_scope", "delegation_unknown"], ["not_found", "delegation_unknown"]]) {
     const { ws, guard, r } = delegated();
-    ws.delegations.set("sess-1", resolved(state, [actionScopeEntries("git.push", "feature/x").exact]));
+    ws.delegations.set("sess-1", resolved(state, [actionScopeEntries("git.push", targetId("feature/x")).exact]));
     const d = await guard.authorize(r);
     assert.equal(d.allow, false, state);
     assert.equal(d.reason, reason, state);
@@ -293,13 +304,13 @@ test("an unreachable workspace, a malformed answer, a digest that does not bind 
   ws.down = true;
   assert.equal((await guard.authorize(r)).reason, "delegation_unknown");
   ws.down = false;
-  ws.delegations.set("sess-1", { ...resolved("active", [actionScopeEntries("git.push", "feature/x").exact]), effective_scope_digest: "0".repeat(64) });
+  ws.delegations.set("sess-1", { ...resolved("active", [actionScopeEntries("git.push", targetId("feature/x")).exact]), effective_scope_digest: "0".repeat(64) });
   const forged = await guard.authorize({ ...r, action_group: "g2" });
   assert.equal(forged.allow, false);
   assert.match(forged.detail, /does not bind/);
   ws.delegations.set("sess-1", resolved("active", ["not-hex"]));
   assert.equal((await guard.authorize({ ...r, action_group: "g3" })).allow, false);
-  ws.delegations.set("sess-1", resolved("active", [actionScopeEntries("git.push", "feature/x").exact], { effective_expires_at: c.t - 1 }));
+  ws.delegations.set("sess-1", resolved("active", [actionScopeEntries("git.push", targetId("feature/x")).exact], { effective_expires_at: c.t - 1 }));
   assert.equal((await guard.authorize({ ...r, action_group: "g4" })).reason, "delegation_expired");
   guard.close();
 });
@@ -319,7 +330,7 @@ test("a resolved grant is cached for a short while, and a revocation is honoured
   await guard.authorize({ ...r, action_group: "g4" });
   assert.equal(ws.delegationCalls, 3);
   // With the workspace down and the cache stale, a previously fine session is refused.
-  ws.delegations.set("sess-1", resolved("active", [actionScopeEntries("git.push", "feature/x").exact]));
+  ws.delegations.set("sess-1", resolved("active", [actionScopeEntries("git.push", targetId("feature/x")).exact]));
   assert.equal((await guard.authorize({ ...r, action_group: "g5" })).allow, true);
   c.t += 16_000; ws.down = true;
   assert.equal((await guard.authorize({ ...r, action_group: "g6" })).allow, false);
@@ -340,4 +351,114 @@ test("a delegation the local store knows is judged locally, unchanged, and never
   assert.equal((await guard.authorize(req({ delegation_id: "local-deleg-1" }))).allow, true);
   assert.equal(ws.delegationCalls, 0);
   guard.close();
+});
+
+// ── closed scope-entry vocabulary and the ordinary-action entries (the workspace's vectors) ──────
+
+test("scope entries: a closed kind vocabulary, exact and any-target action entries, invalid input refused", () => {
+  assert.deepEqual([...SCOPE_ENTRY_KINDS], ["action", "privilege"]);
+  assert.equal(actionScopeEntry("git.push", "repo-1"), "40ea10884218f819489ca2c4e46327f3849c5269b18825588eb71201e929d893");
+  assert.equal(actionScopeEntry("git.push", null), "44917e984d2eb56ec5d91f85ab79890f364b89471017933ba1642665bb16c3ed");
+  assert.equal(actionScopeEntry("git.push", "repo-1"), scopeEntryDigest("action", "git.push\u0000repo-1"));
+  assert.throws(() => scopeEntryDigest("secret", "x"));
+  assert.throws(() => actionScopeEntry("Git Push", "x"));
+  assert.throws(() => actionScopeEntry("git.push", "*"), /target/);
+  assert.throws(() => actionScopeEntry("git.push", "a\u0000b"));
+  assert.throws(() => actionScopeEntry("git.push", ""));
+  assert.throws(() => actionScopeEntry("git.push", "x".repeat(201)));
+  assert.deepEqual(actionScopeEntries("git.push", "repo-1"), { exact: actionScopeEntry("git.push", "repo-1"), anyTarget: actionScopeEntry("git.push", null) });
+});
+
+test("the approval hash an adapter repeats on its typed operation equals the hash the guard consumes with; golden vectors match the workspace's", () => {
+  assert.equal(requestHash({ params: { ref: "main", force: true }, action_type: "git.push" }), "a519d84d7d539f2c2957e5abdb2e4b3e27a3dea671ecf38b7846d50e46131d19");
+  assert.equal(requestHash({ server: "gh", method: "tools/call", params: { name: "t", arguments: { a: 1 } } }), "0fb7eee795d973ea21d2288f13da29c03fa7ab8541b70b2beb3a853c197a6064");
+  const item = { action_type: "git.push", params: { ref: "main", force: true, action_group: "g", action_group_seq: 2 } };
+  const binding = dispatchApprovalBinding(item);
+  assert.equal(binding.request_hash, "a519d84d7d539f2c2957e5abdb2e4b3e27a3dea671ecf38b7846d50e46131d19", "the group linkage is not part of the hash");
+  assert.equal(binding.target, "main");
+  assert.equal(binding.request_hash, requestHash(dispatchIntentOf(item).request));
+});
+
+// ── delegation: the workspace's own `covers` answer ──────────────────────────────────────────
+
+test("a delegation check asks with the action and the OPAQUE target id, and the workspace's covers answer decides that action", async () => {
+  const { ws, guard, r } = delegated();
+  ws.covers = "server";
+  assert.equal((await guard.authorize(r)).allow, true);
+  assert.deepEqual(ws.delegationQueries[0], { session_id: "sess-1", action_type: "git.push", target_id: targetId("feature/x") });
+  assert.ok(!JSON.stringify(ws.delegationQueries).includes("feature/x"), "no raw target leaves the machine");
+  // covers false from the workspace is out of scope even though the listed entries would cover it (the workspace's answer governs)
+  ws.covers = false;
+  ws.delegations.set("sess-2", resolved("active", [actionScopeEntries("git.push", targetId("feature/x")).exact]));
+  const no = await guard.authorize({ ...r, delegation_id: "sess-2", action_group: "g9" });
+  assert.equal(no.allow, false);
+  assert.equal(no.reason, "delegation_out_of_scope");
+  // covers true does not revive a revoked delegation
+  ws.covers = true;
+  ws.delegations.set("sess-3", resolved("revoked", []));
+  assert.equal((await guard.authorize({ ...r, delegation_id: "sess-3", action_group: "g10" })).reason, "delegation_revoked");
+  guard.close();
+});
+
+test("a workspace that gives no covers is judged from the listed entries over the target id; a malformed covers is a bad answer", async () => {
+  const { ws, guard, r } = delegated();
+  ws.omitCovers = true;
+  assert.equal((await guard.authorize(r)).allow, true);
+  const other = await guard.authorize({ ...r, action_group: "g2", intents: [intent({ params: { ref: "main" } })] });
+  assert.equal(other.reason, "delegation_out_of_scope");
+  const bare = createCloudDispatchSource({ url: "https://cloud.test", credential: "x", targetId, fetch: async () => Response.json({ version: 1, delegation: resolved("active", [actionScopeEntry("git.push", null)]) }) });
+  assert.equal((await bare.delegation("s", { action_type: "git.push", target_id: "t" })).covers, undefined);
+  const bad = createCloudDispatchSource({ url: "https://cloud.test", credential: "x", targetId, fetch: async () => Response.json({ version: 1, covers: "yes", delegation: resolved("active", [actionScopeEntry("git.push", null)]) }) });
+  assert.equal((await bad.delegation("s")).reason, "bad_response");
+  guard.close();
+});
+
+// ── active approval discovery ────────────────────────────────────────────────────────────────
+
+test("with no reference in the inbox the guard finds the active approval for exactly this request and consumes it", async () => {
+  const { ws, guard, r, grant } = setup();
+  grant("appr-auto-1", { discover: true });
+  const d = await guard.authorize(r);
+  assert.equal(d.allow, true, d.detail);
+  assert.deepEqual(d.consumed_approvals, ["appr-auto-1"]);
+  assert.deepEqual(ws.activeQueries[0], { request_hash: requestHash(r.intents[0].request), action_type: "git.push", target_id: targetId("feature/x") });
+  assert.ok(!JSON.stringify(ws.activeQueries).includes("feature/x"));
+  assert.equal(ws.consumes.length, 1);
+  assert.equal((await guard.authorize({ ...r, action_group: "again" })).allow, false, "single use: found once, consumed once");
+  guard.close();
+});
+
+test("discovery never approves by itself: none found, another request, an unreachable workspace and a manual reference", async () => {
+  {
+    const { ws, guard, r } = setup();
+    const d = await guard.authorize(r);
+    assert.equal(d.reason, "approval_required");
+    assert.match(d.detail, /request_hash [0-9a-f]{64}/);
+    assert.equal(ws.consumes.length, 0);
+    guard.close();
+  }
+  {
+    const { ws, guard, r, grant } = setup();
+    grant("appr-other", { discover: true, request_hash: "c".repeat(64) });
+    assert.equal((await guard.authorize(r)).reason, "approval_required");
+    assert.equal(ws.consumes.length, 0);
+    guard.close();
+  }
+  {
+    const { ws, guard, r, grant } = setup();
+    grant("appr-down", { discover: true });
+    ws.status = 503;
+    const d = await guard.authorize(r);
+    assert.equal(d.allow, false);
+    assert.match(d.detail, /could not be asked for an active approval/);
+    guard.close();
+  }
+  {
+    // the hand-copied reference still works and is used before any lookup
+    const { ws, guard, r, grant } = setup();
+    grant("appr-manual");
+    assert.equal((await guard.authorize(r)).allow, true);
+    assert.equal(ws.activeQueries.length, 0);
+    guard.close();
+  }
 });
