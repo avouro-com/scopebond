@@ -10,3 +10,10 @@ useDefault = true
 description = "Conformance vector fixtures (fixed test identifiers, not credentials)"
 targetRules = ["generic-api-key"]
 paths = ['''^packages/policy-schema/vectors/[^/]+\.json$''']
+
+# Tests that assert the hook scrubs credentials feed it deliberately fake curl commands
+# (CANARY-* values, example.test hosts) and check none of it survives into a record.
+[[allowlists]]
+description = "Hook test fixtures with fake curl credentials"
+targetRules = ["curl-auth-header"]
+paths = ['''^packages/hook/test/[^/]+\.test\.mjs$''']
