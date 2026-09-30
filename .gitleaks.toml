@@ -11,10 +11,9 @@ description = "Conformance vector fixtures (fixed test identifiers, not credenti
 targetRules = ["generic-api-key"]
 paths = ['''^packages/policy-schema/vectors/[^/]+\.json$''']
 
-# The typed-infrastructure tests feed the curl parser made-up commands such as
-# `curl -H 'Authorization: Bearer <placeholder>'` to prove that header values are
-# never recorded. They are fixtures, not credentials.
+# Tests that assert the hook scrubs credentials feed it deliberately fake curl commands
+# (CANARY-* values, example.test hosts) and check none of it survives into a record.
 [[allowlists]]
-description = "Hook classifier test fixtures (placeholder curl auth headers, not credentials)"
+description = "Hook test fixtures with fake curl credentials"
 targetRules = ["curl-auth-header"]
-paths = ['''^packages/hook/test/typed-infrastructure\.test\.mjs$''']
+paths = ['''^packages/hook/test/[^/]+\.test\.mjs$''']
