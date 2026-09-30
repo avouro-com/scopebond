@@ -131,6 +131,53 @@ before-edit hook), so an out-of-policy edit there is signed and flagged, not blo
 and the message says so rather than claiming otherwise. For edits that must be stopped
 before they land, make `@scopebond/github-action` a required check on pull requests.
 
+Codex has no native file-read event: reads it makes through shell commands are derived
+from the command (`cat .env`) and checked, but a read that never goes through a shell
+is not seen. Run `capabilities` (below) for the exact per-cell picture.
+
+### What this hook can honestly claim: `capabilities`
+
+```
+npx @scopebond/hook capabilities            # the manifest, per agent host / action / phase
+npx @scopebond/hook capabilities --prove    # run the safe fixtures in temp directories
+npx @scopebond/hook capabilities --prove --save   # and record the result beside the policy
+npx @scopebond/hook capabilities --json
+```
+
+Each cell is one connector version, agent host (Claude terminal / desktop, Codex CLI /
+desktop, Cursor), action type and phase (before or after the action), in one of these
+states:
+
+| State | Meaning |
+|---|---|
+| `unsupported` | no hook for it, or it is known to escape interception (nested tool wrappers) |
+| `inactive` | the hook could cover it but that agent is not configured |
+| `configured_unverified` | configured; never proven, or proven only by a local fixture |
+| `degraded` | the current fixtures failed |
+| `verified_reporting` | a current proof from a real agent run, acknowledged by Cloud |
+
+`--prove` checks, for every supported cell, that a safe action is allowed and signed, a
+violating one is denied at the hook, every receipt verifies against the countersigning
+key, and every receipt of a tool call carries one action group. It uses temporary
+directories only and never reads or changes agent settings, policy or keys. A local
+fixture proves the adapter and policy on this machine; it cannot prove that Codex
+desktop or Cursor delivers the event, nor that Cloud received a receipt, so it never
+produces `verified_reporting`. Actions the agent only reports after they happened
+(Cursor's `afterFileEdit`) and actions the default policy only observes (fetches, MCP
+calls) are proven with a known successful fixture, labelled observation-only; no
+"denied" result is claimed for them.
+
+**Action groups.** A shell call can produce several receipts (the command, each file it
+reads or writes, every pushed ref). They now carry `action_group`, `action_group_size`
+and `action_group_seq` inside the signed intent's `params`, so they can be linked and
+counted once without guessing; the id comes from the agent's own tool-call id when it
+sends one.
+
+**Workspace roots (optional).** `rules.json` accepts `"allowed_roots": ["."]`. With it,
+a write whose physical target (symlinks and junctions followed; rename and link
+destinations included) is outside the roots, or cannot be resolved, is denied. Without
+it nothing changes. Run `rules apply` after adding it.
+
 ## Connect it to your workspace (optional)
 
 To see the receipts in your hosted Scopebond workspace, sign this computer in:

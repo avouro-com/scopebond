@@ -358,6 +358,22 @@ function gitPositionals(args: string[], valued: string[] = []): { before: string
 const isPathWord = (t: string): boolean => t !== "" && !/^\d+$/.test(t) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(t);
 const isSensitiveOperand = (w: string): boolean => SENSITIVE.test(w) || (UNRESOLVED.test(w) && protectedCandidate(normPath(w)) !== undefined);
 
+/** Where a link-creating command points, or undefined when the command makes no link. */
+function linkTargetOf(prog: string, args: string[], operands: string[]): string | undefined {
+  if (prog === "ln") return operands.length >= 1 ? operands[0] : undefined;
+  if (prog === "mklink") { const o = operands.filter((x) => !/^\/[a-z]$/i.test(x)); return o.length >= 2 ? o[1] : undefined; }
+  if (prog === "new-item" || prog === "ni") {
+    const flag = (names: RegExp): string | undefined => {
+      const at = args.findIndex((a) => names.test(a));
+      return at >= 0 ? args[at + 1] : undefined;
+    };
+    const kind = flag(/^-(?:itemtype|type|i)$/i);
+    if (kind === undefined || !/^(?:symboliclink|symlink|junction|hardlink)$/i.test(kind)) return undefined;
+    return flag(/^-(?:target|value|v)$/i);
+  }
+  return undefined;
+}
+
 /** Derive the file.read / file.write intents a simple shell command implies —
  *  operands of reader, copier, writer and editor programs, flag values that name
  *  files, redirection targets, the sensitive operands of uploaders and `git add`, and
@@ -537,6 +553,15 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     }
   } else if (UPLOADERS.has(prog)) {
     operands.filter(isSensitiveOperand).forEach(read);
+  }
+
+  // A link (`ln -s T L`, `New-Item -ItemType Junction -Target T`, `mklink L T`) makes
+  // T reachable through the workspace. The link itself is recorded above; T is recorded
+  // as a write target too, flagged `link_target`, so the workspace-root and protected-
+  // path checks see where the link leads rather than only where it sits.
+  const linkTarget = linkTargetOf(prog, args, operands);
+  if (linkTarget !== undefined && isPathWord(linkTarget)) {
+    ops.push(...fileIntent("file.write", linkTarget, dir, cwd).map((m) => ({ ...m, intent: { ...m.intent, params: { ...m.intent.params, link_target: true } } })));
   }
 
   for (const r of sc.redirects) {

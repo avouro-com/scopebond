@@ -46,6 +46,8 @@ import { createSigner } from "@scopebond/sdk";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
+import { computeManifest, renderManifest } from "./capabilities.js";
+import { runProofFixtures, loadProofs, saveProofs, proofPassed } from "./proof.js";
 import { fileURLToPath } from "node:url";
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
@@ -73,13 +75,14 @@ function readBundleArg(bundleArg: string | undefined, stdin: () => string): Clou
 function configDir(): string {
   return process.env.SCOPEBOND_HOOK_DIR ?? join(process.cwd(), ".scopebond");
 }
-function runtimePaths(dir: string) {
+function runtimePaths(dir: string, cwd?: string) {
   const connection = loadConnection(dir);
   return {
     policyPath: join(dir, "policy.json"),
     keyPath: join(dir, "agent.key"),
     attesterPath: join(dir, "attester.key"),
     dbPath: join(dir, "receipts.db"),
+    ...(cwd ? { cwd } : {}),
     // Strict: deny (not just observe) tools with no taxonomy mapping.
     strict: process.argv.includes("--strict") || process.env.SCOPEBOND_HOOK_STRICT === "1",
     // When connected, auto-export receipts. A short bounded flush keeps the hot path
@@ -87,6 +90,15 @@ function runtimePaths(dir: string) {
     // (or via `scopebond-hook flush`, e.g. on a session-end hook).
     ...(connection ? { cloud: { connection, flushTimeoutMs: Number(process.env.SCOPEBOND_HOOK_FLUSH_MS ?? 800) } } : {}),
   };
+}
+/** The harness's own id for this tool call, when it gives one (Claude Code and Codex send
+ *  `tool_use_id`), so the receipts of one call share a stable action group. */
+function callId(input: Record<string, unknown>): string | undefined {
+  for (const key of ["tool_use_id", "tool_call_id", "call_id"]) {
+    const value = input?.[key];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return undefined;
 }
 function readStdin(): string {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
@@ -136,9 +148,9 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
-    runtime = createHookRuntime(runtimePaths(dir));
+    runtime = createHookRuntime(runtimePaths(dir, cwd));
     useDigestKey(loadOrCreateDigestKey(dir));
-    const decision = await runtime.evaluate(fillPushBranch(mapper(input!), currentBranch(cwd)));
+    const decision = await runtime.evaluate(fillPushBranch(mapper(input!), currentBranch(cwd)), { groupKey: callId(input!) });
     await runtime.flush();
     // Close before deciding: the receipt is already committed, and leaving the handle
     // open is what made the write-ahead log grow without bound.
@@ -186,10 +198,10 @@ async function runCursor(): Promise<void> {
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
-    runtime = createHookRuntime(runtimePaths(dir));
+    runtime = createHookRuntime(runtimePaths(dir, cwd));
     useDigestKey(loadOrCreateDigestKey(dir));
     const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
-    const decision = await runtime.evaluate(mapped);
+    const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
     await runtime.flush();
     // An `afterFileEdit` violation is real and recorded, but the edit has already
     // landed. Say so rather than letting "blocked" imply it was stopped.
@@ -829,6 +841,45 @@ function runStatus(): void {
   }
 }
 
+/** `capabilities`: the manifest of what this hook can honestly claim, cell by cell.
+ *  `--prove` runs the safe fixtures in temp directories (never touching agent settings);
+ *  `--save` records the result beside the policy; `--json` prints the manifest. */
+async function runCapabilities(args: string[]): Promise<void> {
+  const cwd = process.cwd();
+  const dir = resolveConfigDir(cwd);
+  const configured = {
+    claude: !!harnessScopeLabel(harnessScopes("claude", cwd)),
+    cursor: !!harnessScopeLabel(harnessScopes("cursor", cwd)),
+    codex: !!harnessScopeLabel(harnessScopes("codex", cwd)),
+  };
+  const version = hookVersion();
+  let proofs = loadProofs(dir);
+  let failed = false;
+  if (args.includes("--prove")) {
+    const fresh = await runProofFixtures(version);
+    const proven = computeManifest({ adapterVersion: version, configured: { claude: true, cursor: true, codex: true }, proofs: fresh });
+    for (const cell of proven.cells) {
+      const proof = fresh[cell.key];
+      if (proof && !proofPassed(proof, cell)) {
+        failed = true;
+        console.error(`fixture failed: ${cell.key} (allow ${proof.safe_allow}, deny ${proof.safe_deny}, signature ${proof.signature}, grouping ${proof.grouping})`);
+      }
+    }
+    if (args.includes("--save")) {
+      if (!existsSync(dir)) { console.error(`no ${dir} to record into - run \`${cliCommand("init")}\` first.`); process.exit(1); }
+      console.error(`recorded fixture proofs in ${saveProofs(dir, fresh)}`);
+    }
+    proofs = fresh;
+  }
+  const manifest = computeManifest({ adapterVersion: version, configured, proofs });
+  if (args.includes("--json")) console.log(JSON.stringify(manifest, null, 2));
+  else {
+    console.log(renderManifest(manifest));
+    if (args.includes("--prove")) console.log(`\nFixture run ${failed ? "FAILED - see degraded cells" : "passed"}. It used temporary directories only; no agent setting, policy or key was read or changed.`);
+  }
+  process.exitCode = failed ? 1 : 0;
+}
+
 async function runDoctor(): Promise<void> {
   const problems: string[] = [];
   const nodeOk = nodeSupported();
@@ -1029,6 +1080,15 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "  rules apply                   recompile after editing rules.json by hand",
     ] },
   { name: "status", summary: "what is configured, where, and how big the local log is" },
+  { name: "capabilities", args: "[--prove [--save]] [--json]",
+    summary: "what this hook can honestly claim, per agent host, action and phase",
+    detail: [
+      "Prints the capability manifest: for Claude Code, Codex and Cursor, each action type and",
+      "phase is unsupported, inactive, configured_unverified, degraded or verified_reporting.",
+      "Unsupported stays unsupported. A cell is never verified from a local run alone.",
+      "--prove runs safe fixtures (allow, deny, signature, action group) in temporary",
+      "directories; it does not read or change any agent settings. --save records the result.",
+    ] },
   { name: "doctor", summary: "check the setup and whether each configured hook command can start",
     detail: ["Exits non-zero when something is wrong, so it works in a script."] },
   { name: "log", args: "[-n N] [--deny] [--since 7d]",
@@ -1122,6 +1182,7 @@ else if (cmd === "test") { await runTest(rest); }
 else if (cmd === "flush") { await runFlush(); }
 else if (cmd === "status") { runStatus(); }
 else if (cmd === "doctor") { await runDoctor(); }
+else if (cmd === "capabilities") { await runCapabilities(rest); }
 else if (cmd === "uninstall") { runUninstall(rest); }
 else if (cmd === "login") { await runLogin(rest); }
 else if (cmd === "trust") { runTrust(rest); }

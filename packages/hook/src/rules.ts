@@ -39,6 +39,11 @@ export interface RuleSet {
   protected_read: PathRule[];
   /** Action types recorded but not blocked. */
   observe: string[];
+  /** Optional workspace scope. When set, a write whose physical target (symlinks and
+   *  junctions followed, rename and link destinations included) is outside these roots,
+   *  or cannot be resolved, is denied. `.` means the project directory. Absent = not
+   *  enforced, which is the default. */
+  allowed_roots?: string[];
 }
 
 export const RULES_FILE = "rules.json";
@@ -139,6 +144,11 @@ export function compile(rules: RuleSet, agentKid: string): Record<string, unknow
         action_types: rules.observe,
         description: `Observe ${sentence(rules.observe)} — recorded, not blocked. Add bounds to enforce. Change this list in .scopebond/${RULES_FILE}.`,
       },
+      ...(rules.allowed_roots?.length ? [{
+        id: "protect-root", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
+        param_bounds: { root_scope: { pattern: "^inside$" } },
+        description: `Deny writes whose physical target is outside ${sentence(rules.allowed_roots)} — symlinks, junctions, rename and link destinations followed — and writes whose target cannot be resolved. Change these in .scopebond/${RULES_FILE}.`,
+      }] : []),
       { id: "keys", type: "key_policy", active_keys: [agentKid], description: "Only the enrolled machine key may sign." },
     ],
   };
@@ -163,6 +173,8 @@ export function defaultRules(): RuleSet {
       { kind: "under", value: "\\.git/hooks", label: "git hooks" },
       { kind: "named", value: "\\.git/config", label: "git config" },
       { kind: "under", value: "\\.husky", label: "Husky hooks" },
+      { kind: "named", value: "\\.cursor/mcp\\.json", label: "Cursor MCP config" },
+      { kind: "under", value: "\\.githooks", label: "git hooks (.githooks)" },
       { kind: "under", value: "\\.github/workflows", label: "GitHub workflows" },
       { kind: "under", value: "\\.github/actions", label: "GitHub actions" },
       { kind: "named", value: "\\.gitlab-ci\\.yml", label: ".gitlab-ci.yml" },
@@ -170,6 +182,13 @@ export function defaultRules(): RuleSet {
       { kind: "under", value: "\\.circleci", label: "CircleCI config" },
       { kind: "named", value: "azure-pipelines\\.yml", label: "azure-pipelines.yml" },
       { kind: "named", value: "Jenkinsfile", label: "Jenkinsfile" },
+      { kind: "named", value: "azure-pipelines\\.yaml", label: "azure-pipelines.yaml" },
+      { kind: "named", value: "bitbucket-pipelines\\.yml", label: "bitbucket-pipelines.yml" },
+      { kind: "named", value: "\\.travis\\.yml", label: ".travis.yml" },
+      { kind: "named", value: "\\.drone\\.yml", label: ".drone.yml" },
+      { kind: "named", value: "cloudbuild\\.yaml", label: "cloudbuild.yaml" },
+      { kind: "named", value: "cloudbuild\\.yml", label: "cloudbuild.yml" },
+      { kind: "under", value: "\\.buildkite", label: "Buildkite pipelines" },
     ],
     protected_read: [
       { kind: "under", value: "\\.scopebond", label: "the hook's own policy and keys (.scopebond)" },
@@ -224,6 +243,31 @@ export function saveRules(configDir: string, rules: RuleSet): string {
   return file;
 }
 
+/** Whether `path` is inside the location a protected-path rule names. This is the same
+ *  pattern the compiled policy evaluates (the rule allows a path when the pattern's
+ *  negative lookahead matches), tested rule by rule so a classification can say which
+ *  kind of location it was. */
+export function pathRuleMatches(rule: PathRule, path: string): boolean {
+  if (path === "") return false;
+  return !new RegExp(`^${pathPattern(rule)}.+`).test(path);
+}
+
+/** Whether a shell program is on the destructive list, folded the way the compiled
+ *  policy folds it: case-insensitive, without an executable suffix. */
+export function isDestructiveProgram(rules: RuleSet, program: string): boolean {
+  const name = program.toLowerCase().replace(/\.(?:exe|cmd|bat|com|ps1)$/, "");
+  return name !== "" && rules.destructive_programs.some((p) => p.toLowerCase() === name);
+}
+
+/** Whether a push destination is one of the protected refs (`release/*` is a prefix). */
+export function isProtectedBranch(rules: RuleSet, ref: string): boolean {
+  const name = ref.toLowerCase();
+  return rules.protected_branches.some((b) => {
+    const p = b.toLowerCase();
+    return p.endsWith("/*") ? name.startsWith(p.slice(0, -1)) : name === p;
+  });
+}
+
 /** Plain English, for `scopebond-hook rules`. */
 export function describeRules(rules: RuleSet): string {
   const lines: string[] = [];
@@ -239,6 +283,10 @@ export function describeRules(rules: RuleSet): string {
   lines.push(`  reads of           ${rules.protected_read.length} protected location(s):`);
   for (const rule of rules.protected_read) lines.push(`                       ${rule.label}`);
   lines.push("");
+  if (rules.allowed_roots?.length) {
+    lines.push(`  writes outside     ${rules.allowed_roots.join(", ")} (physical target; unresolved targets too)`);
+    lines.push("");
+  }
   lines.push("Recorded, not blocked:");
   lines.push(`  ${rules.observe.join(", ")}`);
   return lines.join("\n");
