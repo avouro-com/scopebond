@@ -115,7 +115,9 @@ export function parseDelegationAnswer(body: unknown): DelegationAnswer {
 }
 
 export function createCloudDispatchSource(options: CloudSourceOptions): CloudDispatchSource {
-  const base = options.url.replace(/\/+$/, "");
+  let end = options.url.length;
+  while (end > 0 && options.url.charCodeAt(end - 1) === 47) end--;
+  const base = options.url.slice(0, end);
   const doFetch = options.fetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? 3000;
   const headers = { authorization: `Bearer ${options.credential}`, "content-type": "application/json" };

@@ -325,16 +325,23 @@ test("concurrent uses of one approval from separate processes dispatch exactly o
     version: "1.0", approval_id: "approval:concurrent-0001", approver: { kid: approver.kid, alg: "Ed25519" }, actor: r.actor, action_type: "git.push",
     target: r.intents[0].target, policy_digest: r.policy_digest, request_hash: requestHash(r.intents[0].request), issued_at: iso(now), expires_at: iso(now + 120_000),
   });
+  // The child reads its inputs as JSON from argv, so no data is interpolated into its source.
   const script = `
-    import { createDispatchGuard } from ${JSON.stringify(pathToFileURL(join(import.meta.dirname, "../dist/node.js")).href)};
-    import { StaticPrincipalKeyRegistry } from ${JSON.stringify(pathToFileURL(join(import.meta.dirname, "../dist/index.js")).href)};
-    const g = createDispatchGuard({ dbPath: ${JSON.stringify(join(dir, "d.db"))}, requireApproval: ["git.push"], approvals: () => [${JSON.stringify(a)}],
-      keys: new StaticPrincipalKeyRegistry([{ kid: ${JSON.stringify(approver.kid)}, publicKeyPem: ${JSON.stringify(approver.publicKeyPem)}, purposes: ["approver"], status: "active" }]) });
-    const d = await g.authorize({ ...${JSON.stringify(r)}, action_group: process.argv[1] });
+    const cfg = JSON.parse(process.argv[1]);
+    const { createDispatchGuard } = await import(cfg.nodeUrl);
+    const { StaticPrincipalKeyRegistry } = await import(cfg.indexUrl);
+    const g = createDispatchGuard({ dbPath: cfg.dbPath, requireApproval: ["git.push"], approvals: () => [cfg.approval],
+      keys: new StaticPrincipalKeyRegistry([{ kid: cfg.kid, publicKeyPem: cfg.publicKeyPem, purposes: ["approver"], status: "active" }]) });
+    const d = await g.authorize({ ...cfg.request, action_group: process.argv[2] });
     console.log(d.allow ? "allow" : d.reason); g.close();
   `;
+  const cfg = JSON.stringify({
+    nodeUrl: pathToFileURL(join(import.meta.dirname, "../dist/node.js")).href,
+    indexUrl: pathToFileURL(join(import.meta.dirname, "../dist/index.js")).href,
+    dbPath: join(dir, "d.db"), approval: a, request: r, kid: approver.kid, publicKeyPem: approver.publicKeyPem,
+  });
   new DispatchStore(join(dir, "d.db")).close();
-  const run = (i) => new Promise((resolve, reject) => execFile(process.execPath, ["--input-type=module", "-e", script, `g${i}`], (e, out, err) => e ? reject(new Error(err || e.message)) : resolve(out.trim())));
+  const run = (i) => new Promise((resolve, reject) => execFile(process.execPath, ["--input-type=module", "-e", script, cfg, `g${i}`], (e, out, err) => e ? reject(new Error(err || e.message)) : resolve(out.trim())));
   const outcomes = await Promise.all(Array.from({ length: 8 }, (_, i) => run(i)));
   assert.equal(outcomes.filter((o) => o === "allow").length, 1, JSON.stringify(outcomes));
   assert.equal(outcomes.filter((o) => o === "approval_replayed").length, 7);
