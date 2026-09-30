@@ -192,6 +192,32 @@ export function validateDelegation(d: unknown): d is Delegation {
     validTime(d.issued_at) && validTime(d.expires_at) && Date.parse(d.expires_at) > Date.parse(d.issued_at);
 }
 
+// ── Workspace delegation scope (declared by a session, resolved by the workspace) ──
+//
+// A session may declare its scope as a list of opaque entries, each the digest of a kind and a value,
+// plus one digest binding the sorted list. The workspace resolves the effective scope down the whole
+// ancestor chain. These formulas are shared with the workspace byte for byte; the vectors in the
+// tests pin them.
+
+export const DELEGATION_SCOPE_DOMAIN = "scopebond:delegation-scope/v1\n";
+export const SCOPE_ENTRY_DOMAIN = "scopebond:scope-entry/v1\u0000";
+
+/** SHA-256 of the domain plus the canonical (RFC 8785) sorted, de-duplicated entry list. */
+export const delegationScopeDigest = (entries: readonly string[]): string =>
+  sha256(DELEGATION_SCOPE_DOMAIN + canonical([...new Set(entries)].sort() as never));
+
+/** One scope entry: SHA-256 of the domain, the kind and the value, separated by NUL. */
+export const scopeEntryDigest = (kind: string, value: string): string => sha256(`${SCOPE_ENTRY_DOMAIN}${kind}\u0000${value}`);
+
+/** The entry that authorizes granting `permission` on `resourceScope`. */
+export const privilegeScopeEntry = (resourceScope: string, permission: string): string => scopeEntryDigest("privilege", `${resourceScope}\u0000${permission}`);
+
+/** The entries that would cover one dispatch intent: the exact action on the exact target, or every target of the action type (`*`). */
+export const actionScopeEntries = (actionType: string, target: string): { exact: string; anyTarget: string } => ({
+  exact: scopeEntryDigest("action", `${actionType}\u0000${target}`),
+  anyTarget: scopeEntryDigest("action", `${actionType}\u0000*`),
+});
+
 // ── Action budgets (§4.1) ─────────────────────────────────────────────────────
 
 export type BudgetMode = "monitor" | "enforce";
@@ -269,7 +295,7 @@ export interface DispatchRequest {
 }
 
 export type DispatchReason =
-  | "ok" | "approval_required" | "approval_rejected" | "approval_replayed" | "delegation_unknown" | "delegation_revoked"
+  | "ok" | "approval_required" | "approval_rejected" | "approval_replayed" | "approval_unavailable" | "delegation_unknown" | "delegation_revoked"
   | "delegation_expired" | "delegation_out_of_scope" | "delegation_wrong_actor" | "budget_exceeded" | "budget_unacknowledged"
   | "budget_expired" | "budget_revoked" | "budget_capability_unsupported" | "clock_rollback" | "counter_unavailable";
 

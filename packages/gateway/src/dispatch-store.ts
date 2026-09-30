@@ -13,8 +13,9 @@ import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { PrincipalKeyRegistry } from "./auth.js";
+import type { CloudDelegation, CloudDispatchSource, ConsumeAnswer } from "./dispatch-cloud.js";
 import {
-  actionInScope, budgetAcknowledged, budgetDigest, checkApproval, isSubScope, requestHash, scopeDigest, validateDelegation,
+  actionInScope, actionScopeEntries, budgetAcknowledged, budgetDigest, checkApproval, isSubScope, requestHash, scopeDigest, validateDelegation,
   MAX_DELEGATION_DEPTH,
   type ActionBudgetPolicy, type BudgetObservation, type Delegation, type DelegationProblem, type DispatchApproval, type DispatchDecision,
   type DispatchGuard, type DispatchReason, type DispatchRequest,
@@ -51,6 +52,7 @@ export class DispatchStore {
         delegation_id TEXT PRIMARY KEY, parent_id TEXT, actor TEXT NOT NULL, scope_json TEXT NOT NULL,
         scope_digest TEXT NOT NULL, issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS delegation_cache (session_id TEXT PRIMARY KEY, body TEXT NOT NULL, fetched_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS revocations (delegation_id TEXT PRIMARY KEY, revoked_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS budget_reservations (
         budget_id TEXT NOT NULL, action_group TEXT NOT NULL, reserved_at INTEGER NOT NULL, policy_version INTEGER NOT NULL,
@@ -122,6 +124,22 @@ export class DispatchStore {
       return { commit: true, value: { ok: true } };
     });
   }
+
+  hasDelegation(id: string): boolean { return this.delegation(id) !== null; }
+
+  /** The workspace's resolved delegation for a session, when it was fetched no longer than `ttlMs` ago. Only an active grant is ever stored. */
+  cachedDelegation(sessionId: string, now: number, ttlMs: number): CloudDelegation | null {
+    const row = this.db.prepare("SELECT body, fetched_at FROM delegation_cache WHERE session_id = ?").get(sessionId) as { body: string; fetched_at: number } | undefined;
+    if (!row || now < row.fetched_at || now - row.fetched_at > ttlMs) return null;
+    try { return JSON.parse(row.body) as CloudDelegation; } catch { return null; }
+  }
+
+  putCachedDelegation(sessionId: string, delegation: CloudDelegation, now: number): void {
+    this.db.prepare("INSERT INTO delegation_cache (session_id, body, fetched_at) VALUES (?,?,?) ON CONFLICT(session_id) DO UPDATE SET body = excluded.body, fetched_at = excluded.fetched_at")
+      .run(sessionId, JSON.stringify(delegation), now);
+  }
+
+  dropCachedDelegation(sessionId: string): void { this.db.prepare("DELETE FROM delegation_cache WHERE session_id = ?").run(sessionId); }
 
   /** Revoke a delegation and, through the chain walk on every check, everything below it. */
   revoke(id: string): void {
@@ -213,6 +231,10 @@ export interface DispatchGuardConfig {
   approvals?: () => unknown[];
   /** Narrower approval lifetime than the five-minute maximum. */
   approvalMaxLifetimeMs?: number;
+  /** The workspace as an approval and delegation source. Absent, only local approvals and delegations exist. */
+  cloud?: CloudDispatchSource;
+  /** How long a resolved workspace delegation may be reused before it is asked for again (default 15 seconds). A revocation is honoured within this. */
+  delegationCacheMs?: number;
   /** The reviewed budget policies in force, re-read on each call so a withdrawal takes effect at once. */
   budgets?: () => ActionBudgetPolicy[];
   /** True only where this process is, or is behind, a customer-controlled shared in-path gateway that
@@ -252,7 +274,11 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
       }
       // Approvals are checked (signature, binding, lifetime) before the transaction; their single use is decided inside it.
       const chosen = new Map<number, DispatchApproval>();
-      const candidates = needsApproval ? (config.approvals?.() ?? []) : [];
+      const presented = needsApproval ? (config.approvals?.() ?? []) : [];
+      // A reference to an approval held in the workspace is not a signed approval; the two never mix.
+      const cloudRefs = presented.filter(isCloudApprovalRef).map((c) => c.cloud_approval_id);
+      const candidates = presented.filter((c) => !isCloudApprovalRef(c));
+      const cloudChosen = new Map<number, string>();
       let approvalFailure: { reason: DispatchReason; detail: string } | null = null;
       if (needsApproval) {
         for (let i = 0; i < req.intents.length; i++) {
@@ -266,20 +292,33 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
             if (checked.ok && ![...chosen.values()].some((c) => c.approval_id === checked.approval.approval_id)) { chosen.set(i, checked.approval); break; }
             if (!checked.ok) lastReject = checked.reason;
           }
-          if (!chosen.has(i)) {
+          // The offline path is unchanged and is tried first; only when no local approval is valid is the workspace asked.
+          if (!chosen.has(i) && config.cloud) {
+            const ref = cloudRefs.find((id) => ![...cloudChosen.values()].includes(id));
+            if (ref !== undefined) cloudChosen.set(i, ref);
+          }
+          if (!chosen.has(i) && !cloudChosen.has(i)) {
+            const hint = config.cloud ? `; to approve it in the workspace use request_hash ${subject.request_hash} and target_id ${config.cloud.targetId(intent.target)}` : "";
             approvalFailure = candidates.length === 0 || !config.keys
-              ? { reason: "approval_required", detail: `${intent.action_type} needs a single-use approval and none was presented` }
-              : { reason: "approval_rejected", detail: `no presented approval is valid for this exact ${intent.action_type} (${lastReject ?? "no match"})` };
+              ? { reason: "approval_required", detail: `${intent.action_type} needs a single-use approval and none was presented${hint}` }
+              : { reason: "approval_rejected", detail: `no presented approval is valid for this exact ${intent.action_type} (${lastReject ?? "no match"})${hint}` };
             break;
           }
         }
       }
       if (approvalFailure) return deny(approvalFailure.reason, approvalFailure.detail);
 
-      try {
-        return db.transaction<DispatchDecision>(() => {
+      // A delegation the local store does not know is asked of the workspace, when there is one. Unknown ancestry grants nothing.
+      let workspaceDelegation = false;
+      if (req.delegation_id !== undefined && config.cloud && !db.hasDelegation(req.delegation_id)) {
+        workspaceDelegation = true;
+        const verdict = await checkWorkspaceDelegation(db, config.cloud, req.delegation_id, req.intents, config.delegationCacheMs ?? DELEGATION_CACHE_MS);
+        if (verdict) return deny(verdict.reason, verdict.detail);
+      }
+
+      const decide = (): { commit: boolean; value: DispatchDecision } => {
           const { now, rolledBack } = db.effectiveNow();
-          if (req.delegation_id !== undefined) {
+          if (req.delegation_id !== undefined && !workspaceDelegation) {
             const verdict = db.checkDelegation(req.delegation_id, req.actor, now, req.intents);
             if (verdict !== "ok") return { commit: false, value: deny(verdict, `the session delegation ${req.delegation_id} does not permit this action (${verdict})`) };
           }
@@ -321,12 +360,74 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
           for (const p of toInsert) db.insertReservation(p, req.action_group, now);
           for (const [, a] of chosen) db.consumeApproval(a, req.action_group, now);
           return { commit: true, value: { allow: true, reason: "ok", consumed_approvals: [...chosen.values()].map((a) => a.approval_id), budgets: observations } };
-        });
+      };
+
+      try {
+        const consumedInWorkspace: string[] = [];
+        if (cloudChosen.size > 0 && config.cloud) {
+          // Look before spending: a refusal by the delegation, a replay or a budget must not burn a person's approval.
+          const dry = db.transaction<DispatchDecision>(() => ({ commit: false, value: decide().value }));
+          if (!dry.allow) return dry;
+          for (const [i, approvalId] of cloudChosen) {
+            const intent = req.intents[i]!;
+            const answer = await config.cloud.consume({
+              approval_id: approvalId, request_hash: requestHash(intent.request), action_type: intent.action_type, policy_digest: req.policy_digest,
+              target_id: config.cloud.targetId(intent.target), client_time: new Date(nowFn()).toISOString(),
+            });
+            if (!answer.ok) return deny(...workspaceRefusal(answer, intent.action_type, approvalId));
+            consumedInWorkspace.push(approvalId);
+          }
+        }
+        const decision = db.transaction<DispatchDecision>(decide);
+        return consumedInWorkspace.length > 0 && decision.allow ? { ...decision, consumed_approvals: [...decision.consumed_approvals, ...consumedInWorkspace] } : decision;
       } catch (error) {
         return unavailable(policies, enforcing || needsApproval || req.delegation_id !== undefined, (error as Error).message);
       }
     },
   };
+}
+
+/** A person's approval held in the workspace, left in the inbox by id. It carries nothing that authorizes; the workspace decides. */
+export const isCloudApprovalRef = (v: unknown): v is { cloud_approval_id: string } =>
+  typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 1 &&
+  typeof (v as { cloud_approval_id?: unknown }).cloud_approval_id === "string" && /^[\x21-\x7e]{1,100}$/.test((v as { cloud_approval_id: string }).cloud_approval_id);
+
+export const DELEGATION_CACHE_MS = 15_000;
+
+function workspaceRefusal(answer: Exclude<ConsumeAnswer, { ok: true }>, actionType: string, approvalId: string): [DispatchReason, string] {
+  if (answer.reason === "unreachable") return ["approval_unavailable", `the workspace could not be reached to consume approval ${approvalId} for ${actionType}, and no valid local approval was presented (${answer.detail})`];
+  if (answer.reason === "consumed") return ["approval_replayed", `approval ${approvalId} was already used`];
+  return ["approval_rejected", `the workspace did not approve ${actionType} with ${approvalId} (${answer.reason === "server_refused" ? `status ${answer.status}` : answer.reason})`];
+}
+
+/** Whether a workspace-resolved delegation permits every intent, or why not. Asks the workspace unless a fresh answer is cached. */
+async function checkWorkspaceDelegation(
+  db: DispatchStore, cloud: CloudDispatchSource, sessionId: string, intents: Array<{ action_type: string; target: string }>, ttlMs: number,
+): Promise<{ reason: DispatchReason; detail: string } | null> {
+  const { now } = db.effectiveNow();
+  let resolved = db.cachedDelegation(sessionId, now, ttlMs);
+  if (!resolved) {
+    const answer = await cloud.delegation(sessionId);
+    if (!answer.ok) {
+      const why = answer.reason === "server_refused" ? `status ${answer.status}` : answer.detail;
+      return { reason: "delegation_unknown", detail: `the session delegation ${sessionId} could not be resolved (${answer.reason}: ${why}); unknown ancestry grants nothing` };
+    }
+    resolved = answer.delegation;
+    db.dropCachedDelegation(sessionId);
+    // Only an active grant is reused; a refusal is always asked again.
+    if (resolved.state === "active" && resolved.grants) db.putCachedDelegation(sessionId, resolved, db.effectiveNow().now);
+  }
+  const state = resolved.state;
+  if (state === "revoked") return { reason: "delegation_revoked", detail: `the session delegation ${sessionId} was revoked` };
+  if (state === "expired" || state === "ended") return { reason: "delegation_expired", detail: `the session delegation ${sessionId} is ${state}` };
+  if (state !== "active" || !resolved.grants) return { reason: "delegation_unknown", detail: `the session delegation ${sessionId} grants nothing (${state})` };
+  if (resolved.effective_expires_at !== null && resolved.effective_expires_at <= now) return { reason: "delegation_expired", detail: `the session delegation ${sessionId} expired` };
+  const held = new Set(resolved.effective_entries);
+  for (const i of intents) {
+    const wanted = actionScopeEntries(i.action_type, i.target);
+    if (!held.has(wanted.exact) && !held.has(wanted.anyTarget)) return { reason: "delegation_out_of_scope", detail: `the session delegation ${sessionId} does not cover ${i.action_type} on this target` };
+  }
+  return null;
 }
 
 function unavailable(policies: ActionBudgetPolicy[], mustDeny: boolean, detail: string): DispatchDecision {

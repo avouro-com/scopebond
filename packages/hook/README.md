@@ -262,6 +262,24 @@ reason, echoing the export's policy hash, policy id, policy version and scope di
 exactly. The export itself carries no signature, so get the file from your workspace.
 `scopebond rules apply` recompiles `policy.json` from `rules.json` and would replace a loaded policy.
 
+`scopebond budget load <export.json>` does the same for an action budget exported from the
+workspace: it checks the document type and version, the policy digest (over the policy
+without its acknowledgement), the scope digest, the environment, the validity window and the
+fail-closed contract, and refuses a budget an independent installation cannot enforce (one
+shared across installations). `--yes` writes it into `dispatch.json` as an acknowledged
+budget for this agent (replacing an older workspace budget, never a newer one) and queues
+the acknowledgement with the export id, budget id and version, and digests the workspace
+expects. An enforced budget denies new dispatch once its export has expired, until you load
+a new one.
+
+When this machine is connected with `observations:write`, the dispatch boundary can also use
+the workspace: leave `{ "cloud_approval_id": "<id>" }` in `approvals/` and the approval is
+consumed there at dispatch (the denial message prints the request hash and target id to
+approve), and a delegated session this machine does not know is resolved from the workspace
+and cached for 15 seconds. If the workspace cannot be reached and no valid local approval is
+presented, an enforced action is denied. Targets reach the workspace only as keyed opaque ids.
+Set `"cloud": false` in `dispatch.json` to keep everything local.
+
 #### Typed operations: git, GitHub and package installs
 
 A `tool_intent` carries one closed typed operation read from the request the hook is about to
