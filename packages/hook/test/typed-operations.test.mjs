@@ -281,10 +281,10 @@ test("capability manifest: typed cells are observation-only, fixture-proven at m
   assert.deepEqual([...hosts].sort(), ["claude_desktop", "claude_terminal", "codex_cli", "codex_desktop", "cursor"]);
   for (const host of hosts) {
     const mine = cells.filter((c) => c.host_variant === host);
-    assert.deepEqual(mine.map((c) => c.action_type).sort(), ["deploy.run", "git.commit", "github.pr_change", "github.resource", "package.install"]);
+    assert.deepEqual(mine.map((c) => c.action_type).sort(), ["browser.action", "cloudflare.resource", "communication.send", "database.exec", "deploy.run", "git.commit", "github.pr_change", "github.resource", "network.request", "package.install", "visibility.change"]);
     for (const c of mine) {
       assert.equal(c.boundary, "none", "typed operations never gate anything");
-      if (c.action_type === "deploy.run" || c.action_type === "github.pr_change") {
+      if (["deploy.run", "github.pr_change", "browser.action", "communication.send", "visibility.change"].includes(c.action_type)) {
         assert.equal(c.state, "unsupported");
         assert.equal(c.supported_operations.length, 0);
       } else {

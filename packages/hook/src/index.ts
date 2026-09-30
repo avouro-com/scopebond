@@ -56,3 +56,7 @@ export {
   deriveTypedOperations, keyedIdFor, callRequestOf, TYPED_ACTION_TYPES, fixtureProbe, gitPushOperation, githubOperation, packageOperation, parseGh, parseGithubMcp, normalizeRemote, systemGit, UNBOUND,
 } from "./typed-ops.js";
 export type { CallRequest, GitProbe, TypedContext, GithubRepo, GithubRequest, DeriveInput } from "./typed-ops.js";
+export { deriveInfraOperation, databaseFacts, databaseGuardActions, parseDestination, fetchOperation, systemFiles, fixtureFiles } from "./typed-infra.js";
+export type { FileProbe, InfraContext, ReadContext, DatabaseFacts, DatabaseGuardAction } from "./typed-infra.js";
+export { classifySql } from "./sql-classify.js";
+export type { SqlClass, SqlVerb } from "./sql-classify.js";

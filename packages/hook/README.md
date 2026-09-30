@@ -292,6 +292,50 @@ Reference sets refer to refs, remotes and repositories by these keyed ids. `scop
 `observations id remote <url>`, `observations id ghrepo owner/name` and `observations id mcp <server> <tool>`
 print the id this installation gives a value; it reads the local key and sends nothing.
 
+#### Typed operations: network, Cloudflare and databases
+
+The same rules apply: the operation is read from the raw command (or a Claude Code `WebFetch` input),
+unknown facts stay unknown, and a command the reader cannot place fully stays a plain shell operation.
+
+| Operation | From | What it carries |
+|---|---|---|
+| `network` | `WebFetch` (Claude Code), `curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod` and their aliases | scheme, lowercase IDNA host, effective port, method, and `read` (GET, HEAD, OPTIONS), `write` (DELETE, or a POST, PUT or PATCH with no body) or `upload` (a POST, PUT or PATCH with a body or file) |
+| `cloudflare_resource` | `wrangler` (also through `npx`, `pnpm exec`, `npm exec`): `deploy`, `delete`, `pages deploy`, `pages project create/delete`, `d1 create/delete`, `r2 bucket create/delete`, `r2 bucket dev-url enable/disable`, `r2 object put/delete` | resource kind and verb, keyed account and resource ids, the `--env` as an environment class and keyed binding, and a SHA-256 of the directory a Pages deploy sends or the file an R2 put sends |
+| `database` | `wrangler d1 execute` and `d1 migrations apply`, `psql` (`-c`, `-f`), `sqlite3` | provider, verb (read, insert, update, delete, delete_all, create, alter, drop, migrate), `predicate_class` bounded, all or not_applicable, a keyed database id and a keyed digest of the statement or of the local migration set |
+
+What never leaves the machine: the URL path, query and credentials, headers and request bodies; SQL text,
+table and column names, literals and rows; recipient details; file contents. The database digest is an HMAC under
+the installation key, so another installation cannot reproduce it. The SQL classifier is deliberately
+conservative: an `UPDATE` or `DELETE` counts as bounded only when a top-level AND-ed condition is selective (an OR,
+a tautology such as `1=1`, `LIKE '%'` or `IS NOT NULL` alone counts as every row), and SQL it cannot place (dynamic
+SQL, `CALL`, `VACUUM`, a `CTE` that writes, an unbalanced quote) produces no database operation at all, because the
+closed schema has no unknown verb.
+
+Known limits, said plainly: a redirect hop is never followed or bound (`redirect_binding` is always omitted, so a
+redirected request is not qualified against the origin's approval); a request sent through a proxy,
+`--resolve`, `--connect-to`, a config file or more than one URL is not described; IPv6 literals and non-HTTP
+schemes are not described; `wrangler` has no DNS command, so `dns_record` changes are not seen; `d1 execute` records
+the environment only from `--local` or `--env`, and `environment_class` is otherwise `unknown` (the hook cannot tell which database
+is production); a `d1 migrations apply` digest covers the whole local migrations directory, not only the pending files;
+account ids come from an inline `CLOUDFLARE_ACCOUNT_ID=`, the Wrangler config or this process's environment and are
+`unbound` when none names one. The shell receipt of a command still carries the redacted command head the hook has
+always recorded (a scrubbed prefix of up to 64 characters), which can include the start of an inline SQL statement.
+
+Capability cells `network.request`, `cloudflare.resource` and `database.exec` are observation-only and stay
+`configured_unverified` without a real-host proof. `browser.action`, `communication.send` and `visibility.change`
+are registered as `unsupported` with their reasons: no host this hook supports sends an approved browser or
+communications event (a browser or mail tool arrives as a generic MCP call with no origin, verb, destination or
+attachment set), and no supported source reports a resource's visibility before and after.
+`observations id net-dest <host> <port>`, `observations id cf <kind> <name>` and `observations id database <pg|sqlite> <key>`
+print the keyed ids for writing reference sets.
+
+**Optional enforcement.** `scopebond-hook rules protect-remote-database` (off by default; `rules.json` field
+`protect_remote_database`) adds an enforce clause that denies, before the command runs, SQL against a remote
+database (a `wrangler d1` command without `--local`, or `psql` to a host other than this machine) that drops a table,
+deletes or updates every row, drops or renames inside an `ALTER`, or cannot be read. The hook cannot tell which
+database is production, so every remote database is covered; `wrangler d1 execute` with neither `--local` nor `--remote`
+is treated as remote because Wrangler's default has differed between versions. Everything else stays observation.
+
 Codex and Cursor have no tested session or after-action mapping, so those kinds are not
 sent for them. Nothing is sent from a sleeping host: a heartbeat gap is recorded as a stop
 with reason `sleep`, and an idle session releases its lease with one final heartbeat.

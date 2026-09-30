@@ -31,6 +31,7 @@ import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
+import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
@@ -166,6 +167,23 @@ function recordObservations(dir: string, cwd: string, input: Record<string, unkn
   } catch { return undefined; }
 }
 
+/** The remote-database actions of a shell call, only when the rule set opts in (`protect_remote_database`).
+ *  They are extra evaluated intents read from the raw command, so the deny happens before it runs. */
+function databaseGuard(dir: string, cwd: string, input: Record<string, unknown>): Mapped[] {
+  let enabled = false;
+  try { enabled = loadRules(dir)?.protect_remote_database === true; } catch { return []; }
+  if (!enabled) return [];
+  const request = callRequestOf(input);
+  if (request?.command === undefined) return [];
+  const intent = (params: Record<string, unknown>): Mapped => ({ intent: { action_type: "db.exec", params }, evaluated: true, source: "shell" });
+  try {
+    return databaseGuardActions(request.command, request.dialect ?? "posix", { cwd }).map((action) => intent({ ...action }));
+  } catch {
+    // The rule is on and the reader failed: a command that names a database tool is not waved through.
+    return /(?:wrangler|psql)/i.test(request.command) ? [intent({ provider: "unknown", verb: "unknown", scope: "unknown", risk: "unknown" })] : [];
+  }
+}
+
 async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude, raw?: string, harness: Harness = "claude"): Promise<void> {
   let input: Record<string, unknown>;
   try { input = JSON.parse(raw ?? readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
@@ -175,7 +193,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const dir = resolveConfigDir(cwd);
     runtime = createHookRuntime(runtimePaths(dir, cwd));
     useDigestKey(loadOrCreateDigestKey(dir));
-    const decision = await runtime.evaluate(fillPushBranch(mapper(input!), currentBranch(cwd)), { groupKey: callId(input!) });
+    const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), currentBranch(cwd)), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
     const observer = recordObservations(dir, cwd, input!, decision, harness);
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve()]);
     observer?.close();
@@ -485,6 +503,7 @@ function runRules(args: string[]): void {
     console.log(`  ${cliCommand("rules unprotect <path>")}       allow writing there again`);
     console.log(`  ${cliCommand("rules protect-branch <name>")}  never push there`);
     console.log(`  ${cliCommand("rules unprotect-branch <name>")}`);
+    console.log(`  ${cliCommand("rules protect-remote-database")}  block destructive or unreadable SQL on a remote database (off by default)`);
     console.log(`Or edit ${rulesPath(dir)} directly, then \`${cliCommand("rules apply")}\`.`);
     process.exit(0);
   }
@@ -542,6 +561,16 @@ function runRules(args: string[]): void {
       changed = `pushes to ${value} are allowed again`;
       break;
     }
+    case "protect-remote-database":
+      if (rules.protect_remote_database === true) { console.log("Remote databases are already protected."); process.exit(0); }
+      rules.protect_remote_database = true;
+      changed = "remote SQL that drops, deletes or updates every row, or cannot be read, is now blocked";
+      break;
+    case "unprotect-remote-database":
+      if (rules.protect_remote_database !== true) { console.log("Remote databases were not protected; nothing to change."); process.exit(0); }
+      delete rules.protect_remote_database;
+      changed = "remote SQL is no longer checked";
+      break;
     case "apply":
       changed = `recompiled from ${rulesPath(dir)}`;
       break;
@@ -857,7 +886,7 @@ async function runObservations(args: string[]): Promise<void> {
     // The opaque id this installation gives a ref, remote or repository, for writing reference
     // sets. Local only: it reads the binding key and prints; nothing is sent anywhere.
     const id = keyedIdFor(loadOrCreateBindingKey(dir), args[1] ?? "", args.slice(2));
-    if (!id) { console.error("usage: observations id <ref <name> | remote <url> | ghrepo <owner/name> | repo <workspace-path> | mcp <server> <tool> | mcp-resource <kind> <value>>"); process.exit(1); }
+    if (!id) { console.error("usage: observations id <ref <name> | remote <url> | ghrepo <owner/name> | repo <workspace-path> | mcp <server> <tool> | mcp-resource <kind> <value> | net-dest <host> <port> | cf <kind> <name> | database <pg|sqlite> <key>>"); process.exit(1); }
     console.log(id);
     return;
   }
@@ -1275,7 +1304,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "--dry-run prints exactly which files it would touch and changes nothing. Each config",
       "is copied to <file>.scopebond-backup before its first modification.",
     ] },
-  { name: "rules", args: "[show|allow|block|protect|unprotect|protect-branch|unprotect-branch|apply] [value]",
+  { name: "rules", args: "[show|allow|block|protect|unprotect|protect-branch|unprotect-branch|protect-remote-database|unprotect-remote-database|apply] [value]",
     summary: "read and change the limits in plain terms",
     detail: [
       "With no arguments, prints what is blocked in plain English — no regular expressions.",

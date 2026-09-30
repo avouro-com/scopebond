@@ -223,7 +223,12 @@ test("privacy canary: secrets seeded into every untrusted field never appear in 
     assert.ok(!pending.includes(canary));
   }
   assert.ok(!uploaded.includes("canary-secret-path"), "a path segment is not uploaded");
-  assert.ok(!uploaded.includes("host.example"), "no host from an untrusted URL is uploaded (no network operation is built)");
+  // A WebFetch and a curl now carry a typed network operation: the destination host is one of its closed fields;
+  // the credentials, path, query and body are not.
+  const network = server.observations().filter((i) => i.payload.data.operation?.type === "network");
+  assert.ok(network.some((i) => i.payload.data.operation.host === "host.example"), "the WebFetch destination is a typed field");
+  assert.ok(network.every((i) => Object.keys(i.payload.data.operation).every((k) => !/path|query|user|password|token|body|header/i.test(k))));
+  assert.ok(!uploaded.includes("/path"), "the URL path is not uploaded");
   // The secret-shaped MCP server name produced no operation; the plain one did.
   const mcp = server.observations().filter((i) => i.payload.data.operation?.type === "mcp");
   assert.equal(mcp.length >= 1, true);
