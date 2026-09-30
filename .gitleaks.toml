@@ -1,0 +1,12 @@
+title = "scopebond gitleaks config"
+
+[extend]
+useDefault = true
+
+# The conformance vectors contain fixed, non-secret identifiers. `key:0123456789abcdef`
+# is a made-up historical key id used to exercise the observation schema; it is not a
+# credential and matches the generic-api-key entropy heuristic only by shape.
+[[allowlists]]
+description = "Conformance vector fixtures (fixed test identifiers, not credentials)"
+targetRules = ["generic-api-key"]
+paths = ['''^packages/policy-schema/vectors/[^/]+\.json$''']

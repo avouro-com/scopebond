@@ -85,7 +85,7 @@ test("git push: verbs, force, protected flag, resolved remote, and no credential
   assert.equal(push({ ref: "trunk", remote: "origin" }, ctx({ isProtectedRef: (r) => r === "trunk" })).refs[0].protected, true);
   assert.equal(gitPushOperation({ ref: "main" }, ctx({ probe: fakeProbe({ head: () => null }) }), undefined), null, "no HEAD, no git operation");
   const text = JSON.stringify([plain, main, mirror, unknown]);
-  assert.ok(!text.includes("secret-token") && !text.includes("Widgets") && !text.includes("github.com"), "no raw remote, host or credential");
+  assert.ok(!text.includes("secret-token") && !text.includes("Widgets") && !/github\.com/.test(text), "no raw remote, host or credential");
 });
 
 test("buildOperation routes a dispatched push through the git builder, with remote_id", () => {
