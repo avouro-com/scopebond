@@ -30,6 +30,7 @@ import { computeManifest, specForCell, vectorDigest, vectorsForCell, type Adapte
 import { mapVector, type Vector } from "./vectors.js";
 import { bindingKeyFromHex, operationsForCall, sourceReceiptHash } from "./observation.js";
 import { callRequestOf, fixtureProbe } from "./typed-ops.js";
+import { fixtureFiles } from "./typed-infra.js";
 import type { HookConnection } from "./cloud.js";
 
 export const PROOF_FILE = "capability-proof.json";
@@ -62,7 +63,7 @@ const FIXTURE_KEY = bindingKeyFromHex("00".repeat(32));
 function typedDerived(vector: Vector, dispatched: Array<{ action: { action_type: string; params: Record<string, unknown> } }> | undefined): boolean {
   if (!vector.typed) return true;
   const request = callRequestOf(vector.input);
-  const operations = operationsForCall({ dispatched: dispatched ?? [], request }, { key: FIXTURE_KEY, cwd: "/fixture", repositoryId: "sbr_fixture", probe: fixtureProbe, packageManagerVersion: () => undefined });
+  const operations = operationsForCall({ dispatched: dispatched ?? [], request }, { key: FIXTURE_KEY, cwd: "/fixture", repositoryId: "sbr_fixture", probe: fixtureProbe, packageManagerVersion: () => undefined, files: fixtureFiles, env: () => undefined });
   return operations.some((op) => op?.type === vector.typed!.type && (vector.typed!.verb === undefined || op.verb === vector.typed!.verb));
 }
 

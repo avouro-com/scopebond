@@ -226,6 +226,22 @@ typedShell("github.resource", "gh pr create --title fixture --body fixture", { t
 typedShell("github.resource", "gh pr create --title fixture --body fixture", { type: "github_resource", verb: "pr_create" }, "codex");
 typedShell("github.resource", "gh pr create --title fixture --body fixture", { type: "github_resource", verb: "pr_create" }, "cursor");
 
+// Network, Cloudflare and database operations (MP11). WebFetch reaches only Claude Code; the
+// shell fetchers, Wrangler and the database CLIs reach every host through its shell event.
+add({ rule: "MP11", agent: "claude", dialect: "posix", input: claude("WebFetch", { url: "https://example.test/docs?token=abc" }), expect: "allow", catalog: [], cell: { action_type: "network.request", role: "allow" }, typed: { type: "network" } });
+typedShell("network.request", "curl -s https://example.test/data.json", { type: "network" });
+typedShell("network.request", "Invoke-WebRequest https://example.test/data.json -Method Get", { type: "network" }, "claude", "powershell");
+typedShell("network.request", "curl -s -X POST -d @payload.json https://example.test/upload", { type: "network" }, "codex");
+typedShell("network.request", "wget https://example.test/file.tgz", { type: "network" }, "cursor");
+typedShell("cloudflare.resource", "wrangler pages deploy dist --project-name fixture", { type: "cloudflare_resource", verb: "create" });
+typedShell("cloudflare.resource", "npx wrangler r2 bucket create fixture-bucket", { type: "cloudflare_resource", verb: "create" }, "claude", "powershell");
+typedShell("cloudflare.resource", "wrangler deploy --env staging", { type: "cloudflare_resource", verb: "update" }, "codex");
+typedShell("cloudflare.resource", "wrangler d1 create fixture-db", { type: "cloudflare_resource", verb: "create" }, "cursor");
+typedShell("database.exec", 'wrangler d1 execute fixture-db --local --command "SELECT 1"', { type: "database", verb: "read" });
+typedShell("database.exec", 'psql -h localhost -d fixture -c "SELECT 1"', { type: "database", verb: "read" }, "claude", "powershell");
+typedShell("database.exec", 'sqlite3 fixture.db "SELECT 1"', { type: "database", verb: "read" }, "codex");
+typedShell("database.exec", 'psql -h localhost -d fixture -c "INSERT INTO t VALUES (1)"', { type: "database", verb: "insert" }, "cursor");
+
 export const VECTORS: readonly Vector[] = out;
 
 const fill = (value: unknown, cwd: string): unknown => {

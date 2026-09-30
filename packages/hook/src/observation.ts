@@ -20,6 +20,7 @@ import { createHash, createHmac, createPrivateKey, randomBytes, randomUUID, sign
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactCommand, scrubParam } from "./minimize.js";
+import type { FileProbe } from "./typed-infra.js";
 import { deriveTypedOperations, gitPushOperation, type CallRequest, type GitProbe, type TypedContext } from "./typed-ops.js";
 export type { CallRequest } from "./typed-ops.js";
 import { canonical } from "@scopebond/policy-schema/canonical";
@@ -345,12 +346,16 @@ export interface OperationContext {
   probe?: GitProbe;
   /** Whether a pushed ref is protected under the loaded rules; the default names main, master and release/*. */
   isProtectedRef?: (ref: string) => boolean;
+  /** Local files and environment the Cloudflare, database and network derivations read; the real ones when absent. */
+  files?: FileProbe;
+  env?: (name: string) => string | undefined;
 }
 
 /** The context the typed-operation builders take, from an operation context. */
 export const typedContext = (context: OperationContext): TypedContext => ({
   key: context.key, cwd: context.cwd, repositoryId: context.repositoryId ?? "", referenceSetVersion: REFERENCE_SET_VERSION,
   ...(context.probe ? { probe: context.probe } : {}), ...(context.isProtectedRef ? { isProtectedRef: context.isProtectedRef } : {}),
+  ...(context.files ? { files: context.files } : {}), ...(context.env ? { env: context.env } : {}),
 });
 
 /**
@@ -393,9 +398,9 @@ export function buildOperation(action: DispatchedAction, context: OperationConte
       if (!context.repositoryId) return null;
       return gitPushOperation(params, typedContext(context), context.headSha, { action_type: action.action_type, params });
     }
-    // A WebFetch reaches the hook as host, path and method only. The typed network operation
-    // also needs a scheme and port, which the tool call does not carry, and an unknown value
-    // is not guessed: no operation, so no tool_intent for a fetch.
+    // A WebFetch reaches the mapper as host, path and method only. The typed network operation
+    // needs the scheme and port, which only the raw tool call carries, so it is derived from that
+    // request (deriveTypedOperations) and never guessed here: no request, no operation.
     case "net.fetch": return null;
     case "mcp.tool.call": {
       const server = stringParam(params, "server") ?? "";

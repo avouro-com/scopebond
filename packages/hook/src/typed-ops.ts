@@ -23,6 +23,8 @@ import { join } from "node:path";
 import { parseMcpName } from "./map.js";
 import { decomposeShell, gitArgs, canonProgram, type SimpleCommand } from "./shell.js";
 import { scrubParam } from "./minimize.js";
+import { scan, flagValue } from "./scan.js";
+import { deriveInfraOperation, fetchOperation, parseDestination, type FileProbe } from "./typed-infra.js";
 import type { BindingKey } from "./observation.js";
 
 export type Operation = Record<string, unknown>;
@@ -77,6 +79,9 @@ export interface TypedContext {
   resolvePullRequest?: (repo: GithubRepo, number: string) => { head_sha: string; base_sha: string } | null;
   /** The pinned `packageManager` of the project, when it names this manager. */
   packageManagerVersion?: (cwd: string, manager: string) => string | undefined;
+  /** Local files and environment the Cloudflare, database and network derivations read. The real ones by default. */
+  files?: FileProbe;
+  env?: (name: string) => string | undefined;
 }
 
 export const UNBOUND = "unbound";
@@ -84,7 +89,7 @@ export const UNBOUND = "unbound";
 /** The opaque id this installation gives a value, so a reference set (protected refs, approved
  *  remotes and repositories) can be written in the ids observations carry. Null for a value
  *  that cannot be read as that kind. Kinds: ref, remote, ghrepo, repo (a workspace path as the
- *  hook sees it), mcp (server, tool) and mcp-resource (kind, value). */
+ *  hook sees it), mcp (server, tool) and mcp-resource (kind, value), net-dest (host, port), cf (resource kind, name) and database (pg or sqlite, key). */
 export function keyedIdFor(key: BindingKey, kind: string, values: string[]): string | null {
   const [a, b] = values;
   if (kind === "ref" && a) return key.resourceId("ref", a.replace(/^refs\/heads\//, ""));
@@ -93,6 +98,10 @@ export function keyedIdFor(key: BindingKey, kind: string, values: string[]): str
   if (kind === "repo" && a) return key.resourceId("repo", a);
   if (kind === "mcp" && a && b) return key.resourceId("mcp", `${a}\0${b}`);
   if (kind === "mcp-resource" && a && b) return key.resourceId(`mcp:${a}`, b);
+  // Destinations and Cloudflare resources, as the network, cloudflare_resource and database operations key them.
+  if (kind === "net-dest" && a && b && /^[0-9]{1,5}$/.test(b)) { const d = parseDestination(`https://${a}`, false); return d ? key.resourceId("net-dest", `${d.host}:${b}`) : null; }
+  if (kind === "cf" && a && b && ["worker", "pages_project", "pages_deployment", "d1_database", "r2_bucket", "r2_object"].includes(a)) return key.resourceId(`cf:${a}`, b);
+  if (kind === "database" && a && b && (a === "pg" || a === "sqlite")) return key.resourceId(a, b);
   return null;
 }
 const defaultProtected = (ref: string): boolean => /^(main|master)$|^release\//i.test(ref);
@@ -154,32 +163,6 @@ function parseRepoFlag(value: string): GithubRepo | null {
   if (parts.length === 3) return { host: parts[0].toLowerCase(), owner: parts[1], repo: parts[2] };
   return null;
 }
-
-// ---- option scanning ---------------------------------------------------------------------------------
-
-interface Scanned { positionals: string[]; flags: Map<string, string | true> }
-
-function scan(argv: string[], valued: readonly string[]): Scanned {
-  const positionals: string[] = [];
-  const flags = new Map<string, string | true>();
-  const takes = new Set(valued);
-  for (let i = 0; i < argv.length; i++) {
-    const t = argv[i];
-    if (t === "--") { positionals.push(...argv.slice(i + 1)); break; }
-    if (t.startsWith("--") && t.includes("=")) { const at = t.indexOf("="); flags.set(t.slice(0, at), t.slice(at + 1)); continue; }
-    if (t.startsWith("-") && t.length > 1) {
-      if (takes.has(t)) { flags.set(t, argv[i + 1] ?? ""); i += 1; } else flags.set(t, true);
-      continue;
-    }
-    positionals.push(t);
-  }
-  return { positionals, flags };
-}
-
-const flagValue = (s: Scanned, ...names: string[]): string | undefined => {
-  for (const n of names) { const v = s.flags.get(n); if (typeof v === "string" && v !== "") return v; }
-  return undefined;
-};
 
 // ---- git -----------------------------------------------------------------------------------------------
 
@@ -462,7 +445,7 @@ export function packageOperation(sc: SimpleCommand, ctx: TypedContext, request: 
 // ---- deriving operations for one dispatched call ----------------------------------------------------------------------
 
 /** The request a tool call was dispatched with, as the harness sent it: a shell tool's raw command or an MCP tool's input. */
-export interface CallRequest { command?: string; dialect?: "posix" | "powershell"; mcp?: { server: string; tool: string; input: Record<string, unknown> } }
+export interface CallRequest { command?: string; dialect?: "posix" | "powershell"; fetch?: { url: string }; mcp?: { server: string; tool: string; input: Record<string, unknown> } }
 
 /** The tool call as the harness sent it, for typed operations: a shell tool's raw command
  *  (Claude Code, Codex and Cursor each name it differently) or an MCP tool's actual input. */
@@ -472,6 +455,7 @@ export function callRequestOf(input: Record<string, unknown>): CallRequest | und
   const text = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
   if (name === "PowerShell") { const command = text(ti.command ?? ti.cmd); return command === undefined ? undefined : { command, dialect: "powershell" }; }
   if (name === "Bash" || name === "Shell" || name === "exec_command" || name === "unified_exec") { const command = text(ti.command ?? ti.cmd); return command === undefined ? undefined : { command }; }
+  if (name === "WebFetch") { const url = text(ti.url); return url === undefined ? undefined : { fetch: { url } }; }
   const mcp = parseMcpName(name);
   if (mcp) return { mcp: { ...mcp, input: ti } };
   // Cursor's shell hook carries the command at the top level.
@@ -492,6 +476,8 @@ export interface DeriveInput {
   /** The raw command of a shell tool call, as sent. */
   command?: string;
   dialect?: "posix" | "powershell";
+  /** A WebFetch tool call: the URL as sent. */
+  fetch?: { url: string };
   /** MCP tool call: server and tool names with the actual input. */
   mcp?: { server: string; tool: string; input: Record<string, unknown> };
   dispatched: DispatchedItem[];
@@ -517,6 +503,14 @@ export function deriveTypedOperations(input: DeriveInput, ctx: TypedContext): Ma
     }
     return out;
   }
+  if (input.fetch) {
+    const at = input.dispatched.findIndex((d) => d.action.action_type === "net.fetch");
+    if (at >= 0) {
+      const op = fetchOperation(input.fetch.url, { key: ctx.key, cwd: ctx.cwd, referenceSetVersion: ctx.referenceSetVersion }, { action_type: "net.fetch", params: { url: input.fetch.url, method: "GET" } });
+      if (op) out.set(at, op);
+    }
+    return out;
+  }
   if (input.command === undefined) return out;
   const src = input.dialect === "powershell" ? input.command.replace(/`(.)/g, "$1").replace(/\\/g, "/") : input.command;
   const commands = decomposeShell(src);
@@ -526,13 +520,15 @@ export function deriveTypedOperations(input: DeriveInput, ctx: TypedContext): Ma
     if (sc.opaque) continue;
     const program = canonProgram(sc.program);
     if (/^(?:cd|pushd|chdir|set-location|sl)$/.test(program)) { moved = true; continue; }
-    if (moved) continue;
+    // After a `cd` the workspace is not where later commands run: only the destination of a fetch, which does not
+    // depend on it, is still read.
     const redacted = input.redact(sc.raw);
     const at = input.dispatched.findIndex((d, i) => !used.has(i) && d.action.action_type === "shell.exec" && d.action.params.command === redacted);
     if (at < 0) continue;
     const request = { action_type: "shell.exec", params: { command: sc.raw, cwd: ctx.cwd } };
     const gh = parseGh(sc);
-    const op = (gh ? githubOperation(gh, ctx, request) : null) ?? gitCommitOperation(sc, ctx, request) ?? packageOperation(sc, ctx, request);
+    const op = (moved ? null : (gh ? githubOperation(gh, ctx, request) : null) ?? gitCommitOperation(sc, ctx, request) ?? packageOperation(sc, ctx, request))
+      ?? deriveInfraOperation(sc, { key: ctx.key, cwd: ctx.cwd, referenceSetVersion: ctx.referenceSetVersion, ...(ctx.files ? { files: ctx.files } : {}), ...(ctx.env ? { env: ctx.env } : {}) }, request, input.dialect ?? "posix", moved);
     if (op) { out.set(at, op); used.add(at); }
   }
   return out;
@@ -547,4 +543,4 @@ export const fixtureProbe: GitProbe = {
 
 /** Capability cells for typed operations. These describe observations, not receipts, so a
  *  proof for one has no receipt of its own action type to name and is never sent to a workspace. */
-export const TYPED_ACTION_TYPES: ReadonlySet<string> = new Set(["git.commit", "package.install", "github.resource", "github.pr_change", "deploy.run"]);
+export const TYPED_ACTION_TYPES: ReadonlySet<string> = new Set(["git.commit", "package.install", "github.resource", "github.pr_change", "deploy.run", "network.request", "cloudflare.resource", "database.exec", "browser.action", "communication.send", "visibility.change"]);

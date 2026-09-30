@@ -253,7 +253,7 @@ test("vector table and manifest agree on which agents each action type is proven
   for (const v of VECTORS.filter((x) => x.cell)) {
     const mapped = mapVector(v);
     // Typed-operation cells are proven on the command the mapper already evaluates as shell or push.
-    const types = TYPED_ACTION_TYPES.has(v.cell.action_type) ? ["shell.exec", "git.push"] : [v.cell.action_type];
+    const types = TYPED_ACTION_TYPES.has(v.cell.action_type) ? ["shell.exec", "git.push", "net.fetch"] : [v.cell.action_type];
     assert.ok(mapped.some((m) => types.includes(m.intent.action_type)), `${v.id} maps to ${v.cell.action_type}`);
   }
 });

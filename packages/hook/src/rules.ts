@@ -44,6 +44,11 @@ export interface RuleSet {
    *  or cannot be resolved, is denied. `.` means the project directory. Absent = not
    *  enforced, which is the default. */
   allowed_roots?: string[];
+  /** Optional. When true, a shell command that runs SQL against a remote database (a Wrangler
+   *  D1 command without --local, or psql to a host other than this machine) is denied before it
+   *  runs if the SQL drops a table, deletes or updates every row, drops or renames in an ALTER, or
+   *  cannot be read. Absent = not enforced, which is the default. */
+  protect_remote_database?: boolean;
 }
 
 export const RULES_FILE = "rules.json";
@@ -148,6 +153,11 @@ export function compile(rules: RuleSet, agentKid: string): Record<string, unknow
         id: "protect-root", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
         param_bounds: { root_scope: { pattern: "^inside$" } },
         description: `Deny writes whose physical target is outside ${sentence(rules.allowed_roots)} — symlinks, junctions, rename and link destinations followed — and writes whose target cannot be resolved. Change these in .scopebond/${RULES_FILE}.`,
+      }] : []),
+      ...(rules.protect_remote_database ? [{
+        id: "protect-remote-database", type: "action_allowlist", mode: "enforce", action_types: ["db.exec"],
+        param_bounds: { risk: { pattern: "^ordinary$" } },
+        description: `Deny shell commands that run SQL against a remote database (a wrangler d1 command without --local, or psql to a host other than this machine) when the SQL drops a table, deletes or updates every row, drops or renames inside an ALTER, or cannot be read. The hook cannot tell which database is production, so every remote database is covered. Change this in .scopebond/${RULES_FILE}.`,
       }] : []),
       { id: "keys", type: "key_policy", active_keys: [agentKid], description: "Only the enrolled machine key may sign." },
     ],
@@ -283,6 +293,10 @@ export function describeRules(rules: RuleSet): string {
   lines.push(`  reads of           ${rules.protected_read.length} protected location(s):`);
   for (const rule of rules.protected_read) lines.push(`                       ${rule.label}`);
   lines.push("");
+  if (rules.protect_remote_database) {
+    lines.push(`  remote SQL         that drops a table, deletes or updates every row, or cannot be read`);
+    lines.push("");
+  }
   if (rules.allowed_roots?.length) {
     lines.push(`  writes outside     ${rules.allowed_roots.join(", ")} (physical target; unresolved targets too)`);
     lines.push("");
