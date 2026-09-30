@@ -113,6 +113,14 @@ each `kid`; do not put private keys in this file:
 ]
 ```
 
+## Dispatch boundary: approvals, delegation and action budgets
+
+`createGateway({ dispatchGuard })` (and the hook and MCP proxy, through the same guard) checks three things once per parent action, after policy has allowed it and immediately before it is dispatched. They are decided in one SQLite transaction (`dispatch.db`), so two processes cannot both take the last slot or the same approval, and a refusal spends nothing.
+
+- **Single-use approval.** A `DispatchApproval` is signed by an approver key and binds the actor, action type, target, policy digest, `requestHash()` of the actual request (SHA-256 over `scopebond:dispatch-request/v1\n` plus the canonical request) and an expiry of at most five minutes. It is verified and consumed at the boundary; replay, a changed request, another actor, expiry or an unknown approver is rejected and nothing is dispatched. `signDispatchApproval` is the reference signer.
+- **Delegation.** A child scope must be a subset of its parent (action types and targets; a target ending in `*` is a prefix) and end no later than it. Every action is checked against the whole chain for scope, expiry and revocation, so revoking a parent refuses its children on the next action. `DispatchStore.revoke` and `importRevocations` (add-only) feed the local list; syncing that list from a workspace is not automatic yet.
+- **Action budgets.** An `ActionBudgetPolicy` (actor, operations, `installation` or `shared_gateway`, positive `max`, `window_seconds`, `monitor` or `enforce`, version, expiry, acknowledgement of its exact digest) counts dispatched parent actions, not paths or receipts, in a sliding window kept across processes. A retry of the same call (same `action_group`) does not use a second slot. Enforcement denies on an unacknowledged, expired or withdrawn policy, an unreadable counter, or a clock set behind the last time the store saw; monitor mode never denies and reports the state. A `shared_gateway` limit is refused unless a shared in-path gateway is configured (`sharedGatewayConfigured`): counters on independent installations are independent.
+
 ## Optional: mirror receipts to Scopebond Cloud
 
 Create an organization/environment gateway enrollment in Cloud, prove possession of

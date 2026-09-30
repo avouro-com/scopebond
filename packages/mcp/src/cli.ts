@@ -7,8 +7,13 @@
 //
 //   scopebond-mcp init --server <id>          scaffold a key + starter policy
 //   scopebond-mcp --server <id> [--policy p.json] [--key k.pem] [--principal sub] \
-//       [--receipts log.jsonl] [--typed typed.json] -- <upstream-command...>
+//       [--receipts log.jsonl] [--typed typed.json] [--dispatch-dir dir] [--delegation id] -- <upstream-command...>
 //
+// --dispatch-dir turns on the dispatch boundary (off by default): the directory holds dispatch.json
+// (require_approval, approver_keys, budgets), an approvals/ inbox and the shared dispatch.db. Each
+// tools/call that policy allows then needs its single-use approval, its delegated scope and its
+// action-budget slot before it is forwarded; without them it is denied and never sent upstream.
+// --delegation (or SCOPEBOND_DELEGATION) runs the proxy under a delegated child scope.
 //
 // --typed turns on the typed adapter (off by default): a JSON file with
 //   { "mode": "monitor" | "enforce", "manifest": { "hash": "sha256:…", "tools": { "<tool>":
@@ -35,6 +40,7 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
 import { scaffold } from "./init.js";
+import { openDispatchGuard } from "@scopebond/gateway/node";
 import { connectCloud, loadMcpConnection, connectionFileFor, openExporter } from "./cloud.js";
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -168,9 +174,22 @@ if (typedPath) {
   typed = { ...(raw as object), mode: raw.mode, binder, ...(sink ? { sink } : {}) } as TypedAdapterConfig;
 }
 
+// The dispatch boundary is opt-in. A directory that is named but cannot be read is a setup error: it says what may be spent.
+const dispatchDir = arg("--dispatch-dir", process.env.SCOPEBOND_DISPATCH_DIR);
+const delegationId = arg("--delegation", process.env.SCOPEBOND_DELEGATION);
+let dispatch: { guard: NonNullable<ReturnType<typeof openDispatchGuard>>; delegationId?: string } | undefined;
+if (delegationId && !dispatchDir) die("--delegation needs --dispatch-dir (a delegation is checked against its shared store)");
+if (dispatchDir) {
+  try {
+    const guard = openDispatchGuard(dispatchDir ?? ".", { delegated: !!delegationId });
+    if (guard) dispatch = { guard, ...(delegationId ? { delegationId } : {}) };
+  } catch (e) { die(`could not read the dispatch settings in ${dispatchDir ?? "."}: ${(e as Error).message}`); }
+
+}
+
 const proxy = createMcpProxy({
   policy, principal: { subject: `client:${principal}`, issuer: "scopebond:mcp-proxy" }, server: server as string,
-  attesterKeyPem, upstream, ...(typed ? { typed, adapterVersion: "scopebond-mcp" } : {}),
+  attesterKeyPem, upstream, ...(dispatch ? { dispatch } : {}), ...(typed ? { typed, adapterVersion: "scopebond-mcp" } : {}),
   onReceipt: (r: SignedReceipt) => {
     if (receiptsPath) { try { appendFileSync(receiptsPath, JSON.stringify(r) + "\n"); } catch { /* best effort */ } }
     exporter?.enqueue(r); // mirror to the workspace when connected

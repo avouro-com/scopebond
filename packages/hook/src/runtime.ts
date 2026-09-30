@@ -13,8 +13,10 @@ import { attachExporter, flushBounded, type HookConnection } from "./cloud.js";
 import { explainDeny, type ExplainIntent } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
 import { applyRootScope } from "./paths.js";
-import { withActionGroup, actionGroupId } from "./group.js";
+import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
+import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
+import { dispatchIntentOf, type DispatchDecision, type DispatchGuard } from "@scopebond/gateway";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -44,6 +46,8 @@ export interface Decision {
   receipts?: unknown[];
   /** Each action as actually evaluated (after root scoping and grouping), with its
    *  receipt: what the observation emitters bind a request digest to. */
+  /** What the dispatch boundary spent or refused for this call, when one is configured. */
+  dispatch?: DispatchDecision;
   dispatched?: Array<{ action: { action_type: string; params: Record<string, unknown> }; receipt?: unknown }>;
 }
 
@@ -206,7 +210,12 @@ export function createHookRuntime(config: RuntimeConfig) {
     outbox = attached.outbox;
   }
   const scopeRoots = loadRules(dirname(config.policyPath))?.allowed_roots ?? [];
-  const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only" });
+  // The dispatch boundary is checked once per tool call, after every intent has been allowed, so the
+  // gateway's own per-intent hook only reports what the runtime already decided for this call.
+  const boundary = openDispatchGuard(dirname(config.policyPath));
+  let boundaryVerdict: DispatchDecision | null = null;
+  const gatewayGuard: DispatchGuard = { authorize: async () => boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] } };
+  const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only", dispatchGuard: gatewayGuard });
 
   return {
     gateway,
@@ -225,6 +234,7 @@ export function createHookRuntime(config: RuntimeConfig) {
     close(): void {
       try { baseStore.close?.(); } catch { /* the decision is already recorded */ }
       try { outbox?.close(); } catch { /* best effort */ }
+      try { boundary?.close(); } catch { /* best effort */ }
     },
     /** Decide one mapped action, recording a receipt either way. */
     async evaluateOne(mapped: Mapped): Promise<Decision> {
@@ -283,6 +293,29 @@ export function createHookRuntime(config: RuntimeConfig) {
       }
       // No deny: allow if any command was evaluated-and-allowed, else not_evaluated.
       const chosen = allow ?? notEvaluated!;
+      if (boundary) {
+        // Immediately before permitted dispatch: approvals are consumed and the budget slot is reserved
+        // atomically, once for the whole parent action, or nothing is spent and the call is denied.
+        const group = String(list[0]!.intent.params[ACTION_GROUP_PARAM]);
+        const delegation = process.env[DELEGATION_ENV] ?? "";
+        const verdict = await boundary.authorize({
+          actor: agent.kid, action_group: group, policy_digest: gateway.policyHash,
+          intents: list.map((m) => dispatchIntentOf(m.intent as never)),
+          ...(delegation !== "" ? { delegation_id: delegation } : {}),
+        });
+        if (!verdict.allow) {
+          // Record the refusal as its own denied receipt, then deny the call.
+          boundaryVerdict = verdict;
+          try {
+            const last = list[list.length - 1]!;
+            const signed = agent.sign(last.intent);
+            const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
+            if (result.receipt !== undefined) receipts.push(result.receipt);
+          } finally { boundaryVerdict = null; }
+          return { decision: "deny", reason: `Scopebond blocked this before it ran: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`, receipts, dispatched, dispatch: verdict };
+        }
+        return { ...chosen, receipts, dispatched, dispatch: verdict };
+      }
       return { ...chosen, receipts, dispatched };
     },
   };

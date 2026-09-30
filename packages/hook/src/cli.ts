@@ -54,6 +54,7 @@ import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
 import { loadPolicyExport } from "./policy-load.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
+import { runDispatchCommand } from "./dispatch-cli.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
@@ -1344,6 +1345,22 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "sends now; retry re-checks a workspace that lacked the route; wire and unwire add or",
       "remove the Claude Code session and after-action hook entries.",
     ] },
+  { name: "budget", args: "init|ack <id>|status",
+    summary: "per-agent action budgets: how many actions this agent may dispatch in a window",
+    detail: [
+      "init writes the suggested 100 actions per 60 seconds, monitor-only (nothing is limited).",
+      "Enforcing needs the mode set to enforce and an acknowledgement of the exact policy (ack).",
+      "Counters persist across hook processes and restarts. They count dispatched parent actions on",
+      "THIS installation only; a limit shared across installations needs a shared in-path gateway,",
+      "which an independent hook is not, so it refuses to enforce one.",
+    ] },
+  { name: "delegation", args: "add <file>|list|revoke <id>|import <file>",
+    summary: "delegated child scopes: a child may do no more than its parent and never outlives it",
+    detail: [
+      "A session runs under one with SCOPEBOND_DELEGATION=<id>. Every action is checked against it,",
+      "and against every ancestor, for scope, expiry and revocation. revoke takes effect on the next action.",
+      "import adds revoked ids from a file exported from your workspace (add-only).",
+    ] },
   { name: "doctor", summary: "check the setup and whether each configured hook command can start",
     detail: ["Exits non-zero when something is wrong, so it works in a script."] },
   { name: "log", args: "[-n N] [--deny] [--since 7d]",
@@ -1440,6 +1457,13 @@ else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "capabilities") { await runCapabilities(rest); }
 else if (cmd === "observations") { await runObservations(rest); }
 else if (cmd === "policy") { await runPolicy(rest); }
+else if (cmd === "budget" || cmd === "delegation") {
+  // These change what the agent may do, so they are for a person at a terminal.
+  if (rest[0] !== "status" && rest[0] !== "list") requireInteractive(cmd, rest);
+  const dir = resolveConfigDir(process.cwd());
+  const kid = (() => { try { return createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid; } catch { return ""; } })();
+  process.exit(runDispatchCommand(cmd, rest, dir, kid));
+}
 else if (cmd === "uninstall") { runUninstall(rest); }
 else if (cmd === "login") { await runLogin(rest); }
 else if (cmd === "trust") { runTrust(rest); }

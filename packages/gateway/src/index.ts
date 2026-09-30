@@ -59,3 +59,13 @@ export type {
   CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus,
   CloudOutbox, CloudOutboxEntry, CloudOutboxStatus, MemoryCloudOutboxOptions,
 } from "./cloud.js";
+export {
+  requestHash, requestParams, checkApproval, validateDispatchApproval, approvalClaims as dispatchApprovalClaims,
+  scopeDigest, isSubScope, actionInScope, targetInScope, validateDelegation, budgetDigest, budgetAcknowledged,
+  validateBudgetPolicy, defaultBudgetTemplate, intentTarget, dispatchIntentOf, signDispatchApproval,
+  REQUEST_HASH_DOMAIN, DISPATCH_APPROVAL_VERSION, APPROVAL_MAX_LIFETIME_MS, APPROVAL_MAX_SKEW_MS, MAX_DELEGATION_DEPTH,
+} from "./dispatch.js";
+export type {
+  DispatchApproval, ApprovalRejection, ApprovalSubject, DelegatedScope, Delegation, DelegationProblem, ActionBudgetPolicy,
+  BudgetMode, BudgetAuthority, DispatchIntent, DispatchRequest, DispatchReason, DispatchDecision, DispatchGuard, BudgetObservation,
+} from "./dispatch.js";
