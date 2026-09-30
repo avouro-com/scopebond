@@ -1,5 +1,0 @@
----
-"@scopebond/gateway": minor
----
-
-Dispatch boundary. A new `dispatchGuard` on `createGateway`, and `createDispatchGuard` / `DispatchStore` in `@scopebond/gateway/node`, decide three things atomically in one SQLite transaction immediately before an allowed action is dispatched: single-use approvals (bound to actor, action type, target, policy digest, the canonical hash of the actual request and a five-minute expiry), delegated child scope (a subset of its parent, never outliving it, with cascading revocation checked on every action) and per-agent action budgets (a persistent count of dispatched parent actions per window, monitor or enforce). A denial dispatches nothing and spends nothing; an unreadable counter, an unacknowledged or expired enforce policy, or a system clock set backwards never grants unlimited dispatch. A `shared_gateway` budget is refused by independent installations. The gateway's existing signed-approval path is unchanged and now has replay, changed-action, expiry and wrong-agent tests that assert the upstream is never invoked.

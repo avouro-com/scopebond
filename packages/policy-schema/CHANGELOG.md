@@ -1,5 +1,15 @@
 # @scopebond/policy-schema
 
+## 0.5.0
+
+### Minor Changes
+
+- aac4f6f: Add the `scopebond:observation` v1 envelope: a closed JSON Schema (kind-specific data and typed operations), the domain-separated signing constants and `observationSigningInput`, and deterministic signature and hash vectors with negative cases. Receipts are unchanged.
+
+### Patch Changes
+
+- b08c8df: Every typed operation in the observation schema accepts an optional `approval_request_hash` (64 lowercase hex).
+
 ## 0.4.1
 
 ### Patch Changes

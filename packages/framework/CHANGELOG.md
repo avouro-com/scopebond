@@ -1,5 +1,18 @@
 # @scopebond/framework
 
+## 0.3.4
+
+### Patch Changes
+
+- Updated dependencies [b65261d]
+- Updated dependencies [b08c8df]
+- Updated dependencies [b08c8df]
+- Updated dependencies [7c6fa19]
+- Updated dependencies [aac4f6f]
+  - @scopebond/gateway@0.9.0
+  - @scopebond/policy-schema@0.5.0
+  - @scopebond/sdk@0.1.3
+
 ## 0.3.3
 
 ### Patch Changes
