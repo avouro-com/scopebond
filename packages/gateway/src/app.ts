@@ -5,6 +5,9 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { evaluate } from "./engine.js";
+import type { Decision } from "./engine.js";
+import { dispatchIntentOf } from "./dispatch.js";
+import type { DispatchGuard } from "./dispatch.js";
 import {
   buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash,
   minimizeIntentForEvidence, REDACTION_PROFILE,
@@ -72,6 +75,10 @@ export interface GatewayConfig {
    * allowed action is recorded as `cooperative_allow` (executed: false) and the
    * agent performs it itself. Must be selected explicitly; it is never implicit. */
   mode?: "enforce" | "check_only";
+  /** The dispatch boundary: single-use approvals, delegated scope and action budgets, decided
+   *  immediately before an allowed action is dispatched (or, in check-only mode, allowed). A denial
+   *  here is a denial: nothing is dispatched and nothing it would have spent is spent. */
+  dispatchGuard?: DispatchGuard;
 }
 
 export interface ActionRequest {
@@ -291,7 +298,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       { intent: req.intent, approval: authenticated.approvalForPolicy, intent_hash: ih },
       ts, { gatewaysComplete: config.gatewaysComplete ?? false, cooperative: checkOnly },
     );
-    let d;
+    let d: Decision;
     if (store.reserveAction) {
       const attempt = await store.reserveAction(reservation, decide);
       if (attempt.duplicate) return await duplicateActionResult(actionId);
@@ -299,6 +306,26 @@ export function createGateway(config: GatewayConfig): Gateway {
     } else {
       if (executor.mode === "dispatch") throw new AuthorityUnavailableError();
       d = decide(await store.executed());
+    }
+
+    // The dispatch boundary. It runs only for an action policy has already allowed, after the kill
+    // switch and before any executor, and it answers with everything it spent or nothing at all.
+    let guardDenied: string | null = null;
+    if (d.allow && config.dispatchGuard && !(await isStopped(req.intent.signer))) {
+      const group = (req.intent.params as Record<string, unknown> | undefined)?.action_group;
+      let verdict;
+      try {
+        verdict = await config.dispatchGuard.authorize({
+          actor: req.intent.signer ?? "", action_group: typeof group === "string" && group !== "" ? group : actionId,
+          policy_digest: activePolicyHash, intents: [dispatchIntentOf(req.intent as never)],
+        });
+      } catch (error) {
+        verdict = { allow: false, reason: "counter_unavailable" as const, detail: (error as Error).message, consumed_approvals: [], budgets: [] };
+      }
+      if (!verdict.allow) {
+        guardDenied = `dispatch boundary: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`;
+        d = { ...d, allow: false, realtime_result: "deny", clause_mode: "enforce" };
+      }
     }
 
     let ref: string | null = null;
@@ -350,7 +377,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     if (store.finalizeAction && store.reserveAction) await store.finalizeAction(actionId, receipt, finalState);
     else await store.put(receipt);
 
-    const reason = d.allow
+    const reason = guardDenied ? guardDenied : d.allow
       ? (d.clause_mode === "monitor" ? "allowed (monitored, out of policy — covered at claim time)" : "allowed")
       : (d.verdict.explanation || "denied");
     return {

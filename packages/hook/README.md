@@ -262,6 +262,35 @@ reason, echoing the export's policy hash, policy id, policy version and scope di
 exactly. The export itself carries no signature, so get the file from your workspace.
 `scopebond rules apply` recompiles `policy.json` from `rules.json` and would replace a loaded policy.
 
+`scopebond budget load <export.json>` does the same for an action budget exported from the
+workspace: it checks the document type and version, the policy digest (over the policy
+without its acknowledgement), the scope digest, the environment, the validity window and the
+fail-closed contract, and refuses a budget an independent installation cannot enforce (one
+shared across installations). `--yes` writes it into `dispatch.json` as an acknowledged
+budget for this agent (replacing an older workspace budget, never a newer one) and queues
+the acknowledgement with the export id, budget id and version, and digests the workspace
+expects. The export names the agent key it is for (`agent_kid`): a different key than this
+machine's is refused (and acknowledged as rejected); an export whose key the workspace could not
+state (null) loads with a warning that its identity could not be bound, and an export without
+the field is refused. The budget's actor is that key. An enforced budget denies new dispatch
+once its export has expired, until you load a new one.
+
+When this machine is connected with `observations:write`, the dispatch boundary can also use
+the workspace: an approval granted there for exactly the request is found and consumed at
+dispatch with nothing to copy (the guard asks `GET /v1/monitoring/approvals/active` with the
+request hash, action type and opaque target id; the denial message still prints the request
+hash and target id to approve). Leaving `{ "cloud_approval_id": "<id>" }` in `approvals/`
+still works and is used first. Only the consume approves: a lookup that finds nothing, fails
+or finds another request approves nothing. A delegated session this machine does not know is resolved from the workspace
+(scope entries are digests of `action_type NUL target-id` or `action_type NUL *`, over the
+same opaque target id; the workspace's own `covers` answer for the action decides when it
+gives one) and cached for 15 seconds. With approvals required for an action type in
+`dispatch.json`, each typed operation also carries `approval_request_hash` (the hash the guard
+consumes with) and a `resource_id` equal to the guard's target id, so a consumed approval can be
+matched to its intent; the field is a claim and authorizes nothing. If the workspace cannot be reached and no valid local approval is
+presented, an enforced action is denied. Targets reach the workspace only as keyed opaque ids.
+Set `"cloud": false` in `dispatch.json` to keep everything local.
+
 #### Typed operations: git, GitHub and package installs
 
 A `tool_intent` carries one closed typed operation read from the request the hook is about to

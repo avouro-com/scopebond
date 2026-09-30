@@ -340,3 +340,42 @@ test("`observations id` prints the opaque ids the operations carry, without need
   assert.equal(id("mcp-resource", "repository", "acme/widgets").out, key.resourceId("mcp:repository", "acme/widgets"));
   assert.equal(id("nonsense", "x").status, 1);
 });
+
+test("emitter: with approvals held in the workspace, a typed operation carries the hash the dispatch guard consumes with, and its resource id is the guard's target id", async () => {
+  const { makeHome, readPending } = await import("./observation-helpers.mjs");
+  const { openObservations, createHookRuntime } = await import("../dist/index.js");
+  const { requestHash, dispatchIntentOf } = await import("@scopebond/gateway");
+  const { targetIdFor } = await import("@scopebond/gateway/node");
+  const { writeFileSync } = await import("node:fs");
+  const run = async (settings) => {
+    const home = makeHome();
+    const runtime = createHookRuntime({ policyPath: join(home.dir, "policy.json"), keyPath: join(home.dir, "agent.key"), attesterPath: join(home.dir, "attester.key"), dbPath: join(home.dir, "receipts.db") });
+    try {
+      const command = "git commit -m wip && pnpm add zod";
+      const decision = await runtime.evaluate(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command }, cwd: home.dir }), { groupKey: "call-bind" });
+      if (settings) writeFileSync(join(home.dir, "dispatch.json"), JSON.stringify(settings));
+      const { emitter } = openObservations(home.dir, { spawnHeartbeat: false });
+      emitter.toolIntents({ harnessSessionId: "s", callId: "call-bind", cwd: home.dir, dispatched: decision.dispatched, request: { command }, probe: fakeProbe() });
+      emitter.close();
+      const rows = (await readPending(home.dir)).filter((r) => r.payload.kind === "tool_intent");
+      return { home, decision, ops: rows.map((r) => r.payload.data.operation), rows };
+    } finally { runtime.close(); }
+  };
+  const { home, decision, ops, rows } = await run({ require_approval: ["shell.exec"] });
+  assert.deepEqual(ops.map((o) => o.type), ["git", "package"]);
+  const target = targetIdFor(home.dir);
+  ops.forEach((op, i) => {
+    const item = decision.dispatched[i].action;
+    const d = dispatchIntentOf(item);
+    assert.equal(op.approval_request_hash, requestHash(d.request), "the same hash the guard sends to consume");
+    assert.match(op.approval_request_hash, /^[0-9a-f]{64}$/);
+    assert.equal(op.resource_id, target(d.target), "resource_id equals the guard's target_id");
+    assert.ok(!Object.hasOwn(d.request.params, "action_group"), "the group linkage is not part of what is hashed");
+  });
+  for (const row of rows) assert.equal(validObservation(row.payload), true, JSON.stringify(row.payload).slice(0, 1500));
+  // Not required, workspace approvals switched off, or no dispatch settings: the operation is untouched.
+  for (const settings of [{ require_approval: ["net.fetch"] }, { require_approval: ["shell.exec"], cloud: false }, null]) {
+    const r = await run(settings);
+    for (const op of r.ops) assert.equal(Object.hasOwn(op, "approval_request_hash"), false);
+  }
+});

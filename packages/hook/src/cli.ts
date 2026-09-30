@@ -52,8 +52,10 @@ import { loadOrCreateBindingKey } from "./observation.js";
 import { uploadPending } from "./obs-upload.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
 import { loadPolicyExport } from "./policy-load.js";
+import { loadBudgetExport } from "./budget-load.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
+import { runDispatchCommand } from "./dispatch-cli.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
@@ -857,6 +859,11 @@ async function runPolicy(args: string[]): Promise<void> {
     ack = { exportId: outcome.facts.exportId, policyId: outcome.facts.policyId, policyVersion: outcome.facts.policyVersion, policyDigest: outcome.facts.policyDigest, scopeDigest: outcome.facts.scopeDigest };
   }
   if (!ack) return;
+  await sendPolicyAck(dir, ack);
+}
+
+/** Queue a `policy_ack` (loaded or rejected) through the observation outbox and try to deliver it now. */
+async function sendPolicyAck(dir: string, ack: Parameters<ObservationEmitter["policyAck"]>[0]): Promise<void> {
   const observed = openObservations(dir, { adapterVersion: hookVersion(), spawnHeartbeat: false });
   if (!observed.emitter) { console.error(`not acknowledged to the workspace: observations are ${observed.status.state}${"reason" in observed.status ? ` (${observed.status.reason})` : ""}`); return; }
   try {
@@ -864,6 +871,37 @@ async function runPolicy(args: string[]): Promise<void> {
     await observed.emitter.flush(3000);
     console.error(queued?.queued ? `queued the ${ack.error ? "rejection" : "load"} acknowledgement for the workspace` : "could not queue the acknowledgement");
   } finally { observed.emitter.close(); }
+}
+
+/** `budget load <export.json> [--yes]`: check an action budget exported from the workspace and, with `--yes`,
+ *  make it the budget this machine enforces; then acknowledge it (or its refusal) to the workspace. */
+async function runBudgetLoad(args: string[]): Promise<void> {
+  const file = args.find((a) => !a.startsWith("--"));
+  if (!file) { console.error(`usage: ${cliCommand("budget load <export.json> [--yes]")}`); process.exitCode = 2; return; }
+  const dir = resolveConfigDir(process.cwd());
+  const agentKid = (() => { try { return createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid; } catch { return ""; } })();
+  const outcome = loadBudgetExport(dir, file, { apply: args.includes("--yes"), agentKid, environmentId: loadConnection(dir)?.environment_id });
+  let ack: Parameters<ObservationEmitter["policyAck"]>[0] | undefined;
+  if (outcome.state === "rejected") {
+    console.error(`refused: ${outcome.message} (${outcome.error})`);
+    if (outcome.ack && outcome.error !== "expired") ack = { ...outcome.ack, error: outcome.error };
+    process.exitCode = 1;
+  } else if (outcome.state === "would_load") {
+    const p = outcome.facts.policy;
+    for (const w of outcome.warnings) console.error(`warning: ${w}`);
+    console.log(`This export checks out: ${p.mode} budget ${outcome.facts.budgetId} v${outcome.facts.budgetVersion}, ${p.max_dispatch} dispatches in ${p.window_seconds}s for this agent on this installation.`);
+    console.log(`Loading it writes the budget to ${join(dir, "dispatch.json")} as acknowledged, and replaces an older workspace budget for this agent. Run again with --yes to load it.`);
+    return;
+  } else {
+    const p = outcome.facts.policy;
+    for (const w of outcome.warnings) console.error(`warning: ${w}`);
+    console.log(`loaded ${p.mode} budget ${outcome.facts.budgetId} v${outcome.facts.budgetVersion} from export ${outcome.facts.exportId}: ${p.max_dispatch} dispatches in ${p.window_seconds}s`);
+    if (outcome.replaced.length > 0) console.log(`  replaced        ${outcome.replaced.join(", ")}`);
+    console.log(`  valid until     ${new Date(outcome.facts.validUntil).toISOString()} (after that an enforced budget denies new dispatch until you load a new export)`);
+    ack = { exportId: outcome.facts.exportId, policyId: outcome.facts.budgetId, policyVersion: outcome.facts.budgetVersion, policyDigest: outcome.facts.policyDigest, scopeDigest: outcome.facts.scopeDigest };
+  }
+  if (!ack) return;
+  await sendPolicyAck(dir, ack);
 }
 
 async function runObservations(args: string[]): Promise<void> {
@@ -1344,6 +1382,24 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "sends now; retry re-checks a workspace that lacked the route; wire and unwire add or",
       "remove the Claude Code session and after-action hook entries.",
     ] },
+  { name: "budget", args: "init|ack <id>|status|load <export.json>",
+    summary: "per-agent action budgets: how many actions this agent may dispatch in a window",
+    detail: [
+      "load checks a budget exported from your workspace (digests, environment, validity, fail-closed contract) and, with --yes,",
+      "makes it the acknowledged budget here, then acknowledges it to the workspace so its export stops showing as pending.",
+      "init writes the suggested 100 actions per 60 seconds, monitor-only (nothing is limited).",
+      "Enforcing needs the mode set to enforce and an acknowledgement of the exact policy (ack).",
+      "Counters persist across hook processes and restarts. They count dispatched parent actions on",
+      "THIS installation only; a limit shared across installations needs a shared in-path gateway,",
+      "which an independent hook is not, so it refuses to enforce one.",
+    ] },
+  { name: "delegation", args: "add <file>|list|revoke <id>|import <file>",
+    summary: "delegated child scopes: a child may do no more than its parent and never outlives it",
+    detail: [
+      "A session runs under one with SCOPEBOND_DELEGATION=<id>. Every action is checked against it,",
+      "and against every ancestor, for scope, expiry and revocation. revoke takes effect on the next action.",
+      "import adds revoked ids from a file exported from your workspace (add-only).",
+    ] },
   { name: "doctor", summary: "check the setup and whether each configured hook command can start",
     detail: ["Exits non-zero when something is wrong, so it works in a script."] },
   { name: "log", args: "[-n N] [--deny] [--since 7d]",
@@ -1440,6 +1496,14 @@ else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "capabilities") { await runCapabilities(rest); }
 else if (cmd === "observations") { await runObservations(rest); }
 else if (cmd === "policy") { await runPolicy(rest); }
+else if (cmd === "budget" && rest[0] === "load") { await runBudgetLoad(rest.slice(1)); }
+else if (cmd === "budget" || cmd === "delegation") {
+  // These change what the agent may do, so they are for a person at a terminal.
+  if (rest[0] !== "status" && rest[0] !== "list") requireInteractive(cmd, rest);
+  const dir = resolveConfigDir(process.cwd());
+  const kid = (() => { try { return createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid; } catch { return ""; } })();
+  process.exit(runDispatchCommand(cmd, rest, dir, kid));
+}
 else if (cmd === "uninstall") { runUninstall(rest); }
 else if (cmd === "login") { await runLogin(rest); }
 else if (cmd === "trust") { runTrust(rest); }

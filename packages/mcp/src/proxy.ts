@@ -8,7 +8,8 @@
 
 import { violates } from "@scopebond/verify";
 import { buildPepReceipt, attesterFromPrivateKeyPem } from "@scopebond/gateway";
-import type { SignedReceipt, Attester } from "@scopebond/gateway";
+import { requestHash } from "@scopebond/gateway";
+import type { SignedReceipt, Attester, DispatchGuard, DispatchDecision } from "@scopebond/gateway";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { createHash } from "node:crypto";
 import { describeToolCall, intentDraft, manifestHash, outcomeDraft, type ExitCategory, type TypedAdapterConfig } from "./typed.js";
@@ -71,6 +72,14 @@ export interface McpProxyConfig {
   typed?: TypedAdapterConfig;
   /** Recorded as the adapter version on tool_outcome observations. */
   adapterVersion?: string;
+  /** The dispatch boundary: single-use approvals, the session's delegated scope and per-agent action
+   *  budgets, decided once per `tools/call` after policy allows it and immediately before it is
+   *  forwarded. A denial is never forwarded and spends nothing. Absent, the proxy behaves as before. */
+  dispatch?: {
+    guard: DispatchGuard; /** The delegation this session runs under, if it is a delegated child. */ delegationId?: string;
+    /** Adds the approval hash and target id the guard uses to a typed operation, so a consumed approval can be correlated to its intent. */
+    binder?: { bindDispatched<T extends Record<string, unknown>>(operation: T, intent: { action_type: string; target: string; request: unknown }): T };
+  };
 }
 
 export interface McpProxy {
@@ -142,7 +151,28 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       // The adapter's own decision: unknown tools, revisions and unbound resources.
       const description = typed ? describeToolCall(typed, config.server, dispatched, await manifestVerified()) : undefined;
       const adapterDeny = typed?.mode === "enforce" && description !== undefined && !description.allow;
-      const decision = verdict.violated || adapterDeny ? "deny" : "allow";
+      let decision: "allow" | "deny" = verdict.violated || adapterDeny ? "deny" : "allow";
+
+      // The boundary, for a call policy has allowed. The exact request forwarded below is what an approval is bound to.
+      let boundary: DispatchDecision | undefined;
+      const guardTarget = `${config.server}/${String(intent.params.tool)}`;
+      const guardRequest = { server: config.server, method: "tools/call", params: dispatched.params ?? {} };
+      if (decision === "allow" && config.dispatch) {
+        const target = guardTarget;
+        const request = guardRequest;
+        // One transport request keeps one group, so a retry of it is not a second dispatch; a new invocation is.
+        const group = `mcp:${requestHash({ id: dispatched.id ?? null, request, session: config.dispatch.delegationId ?? null })}`;
+        try {
+          boundary = await config.dispatch.guard.authorize({
+            actor: config.principal.subject, action_group: dispatched.id === undefined || dispatched.id === null ? `mcp:${globalThis.crypto.randomUUID()}` : group,
+            policy_digest: digest(config.policy).slice(7), intents: [{ action_type: "mcp.tool.call", target, request }],
+            ...(config.dispatch.delegationId ? { delegation_id: config.dispatch.delegationId } : {}),
+          });
+        } catch (error) {
+          boundary = { allow: false, reason: "counter_unavailable", detail: (error as Error).message, consumed_approvals: [], budgets: [] };
+        }
+        if (!boundary.allow) decision = "deny";
+      }
 
       const receipt = await buildPepReceipt(
         { intent, policy: config.policy as never, principal: config.principal, realtimeResult: decision, now: config.now },
@@ -153,11 +183,15 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       // The intent is recorded before dispatch, whatever the decision. Emission can never
       // change the decision or fail the call.
       const startedAt = nowMs();
-      const operation = description?.operation ?? null;
+      const plainOperation = description?.operation ?? null;
+      const operation = plainOperation && config.dispatch?.binder
+        ? config.dispatch.binder.bindDispatched(plainOperation as Record<string, unknown>, { action_type: "mcp.tool.call", target: guardTarget, request: guardRequest }) : plainOperation;
       if (typed?.sink && operation) { try { typed.sink.emit(intentDraft(operation, startedAt, receipt)); } catch { /* observations are best effort */ } }
 
       if (decision === "deny") {
-        const why = verdict.violated ? (verdict.explanation || "out of policy") : `the typed adapter could not bind it (${description!.reasons.join("; ")})`;
+        const why = verdict.violated ? (verdict.explanation || "out of policy")
+          : boundary && !boundary.allow ? `dispatch boundary: ${boundary.reason}${boundary.detail ? ` (${boundary.detail})` : ""}`
+          : `the typed adapter could not bind it (${description!.reasons.join("; ")})`;
         return {
           jsonrpc: "2.0",
           id: message.id ?? null,

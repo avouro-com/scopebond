@@ -64,9 +64,11 @@ export function operationProblem(op) {
   if (!variant) return `unknown type ${op.type}`;
   const { type, ...rest } = op;
   const shape = { ...COMMON, ...variant.req };
+  // Optional on every variant: the hash the dispatch guard consumes an approval with.
+  if ("approval_request_hash" in rest && !HEX64(rest.approval_request_hash)) return "field approval_request_hash invalid";
   for (const [key, check] of Object.entries(shape)) if (!(key in rest) || !check(rest[key])) return `field ${key} invalid`;
   for (const [key, value] of Object.entries(rest)) {
-    if (key in shape) continue;
+    if (key in shape || key === "approval_request_hash") continue;
     if (!(key in variant.opt)) return `unknown key ${key}`;
     if (!variant.opt[key](value)) return `field ${key} invalid`;
   }

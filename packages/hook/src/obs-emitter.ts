@@ -32,6 +32,7 @@ import {
   outcomeData, policyAckData, queueData, sessionStartData, sessionStopData, sourceReceiptHash,
   type BindingKey, type CallRequest, type ExitCategory, type ObservationSigner, type PolicyAckInput, type SessionStopReason, type CapabilityProofInput,
 } from "./observation.js";
+import { openApprovalBinder } from "@scopebond/gateway/node";
 import { OBSERVATION_DB, ObservationStore, type EnqueueResult } from "./obs-store.js";
 import type { GitProbe } from "./typed-ops.js";
 import { isProtectedBranch, loadRules } from "./rules.js";
@@ -283,14 +284,17 @@ export class ObservationEmitter {
       ...(input.probe ? { probe: input.probe } : {}), ...(rules ? { isProtectedRef: (ref: string) => isProtectedBranch(rules, ref) } : {}),
       ...(process.env.SCOPEBOND_REQUIRED_CHECK_POLICY_VERSION ? { requiredCheckPolicyVersion: process.env.SCOPEBOND_REQUIRED_CHECK_POLICY_VERSION.slice(0, 200) } : {}),
     });
+    // With approvals held in the workspace, an operation carries the hash the dispatch guard asks it to consume, so a consumed approval can be correlated.
+    const binder = openApprovalBinder(this.dir);
     let recorded = 0;
     input.dispatched.forEach((item, index) => {
       const receipt = item.receipt as { payload?: { action_ref?: { action_id?: unknown } } } | undefined;
       const actionId = receipt?.payload?.action_ref?.action_id;
       if (typeof actionId !== "string" || actionId === "" || actionId.length > 200) return;
       if (recorded >= MAX_INTENTS_PER_CALL) { this.store.mark("omitted_intents", (this.store.getMark("omitted_intents") ?? 0) + 1); return; }
-      const operation = operations[index];
-      if (!operation) return;
+      const plain = operations[index];
+      if (!plain) return;
+      const operation = binder ? binder.bind(plain, item.action) : plain;
       const linked = sourceReceiptHash(item.receipt);
       const result = this.emit({ kind: "tool_intent", occurredAt: this.now(), sessionId, parentActionId: actionId, sourceReceiptHash: linked, data: intentData(operation) });
       recorded += 1;

@@ -59,3 +59,18 @@ export type {
   CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus,
   CloudOutbox, CloudOutboxEntry, CloudOutboxStatus, MemoryCloudOutboxOptions,
 } from "./cloud.js";
+export {
+  requestHash, requestParams, checkApproval, validateDispatchApproval, approvalClaims as dispatchApprovalClaims,
+  scopeDigest, isSubScope, actionInScope, targetInScope, validateDelegation, budgetDigest, budgetAcknowledged,
+  delegationScopeDigest, scopeEntryDigest, privilegeScopeEntry, actionScopeEntry, actionScopeEntries, SCOPE_ENTRY_KINDS, dispatchApprovalBinding, DELEGATION_SCOPE_DOMAIN, SCOPE_ENTRY_DOMAIN,
+  validateBudgetPolicy, defaultBudgetTemplate, intentTarget, dispatchIntentOf, signDispatchApproval,
+  REQUEST_HASH_DOMAIN, DISPATCH_APPROVAL_VERSION, APPROVAL_MAX_LIFETIME_MS, APPROVAL_MAX_SKEW_MS, MAX_DELEGATION_DEPTH,
+} from "./dispatch.js";
+export type {
+  ScopeEntryKind, DispatchApproval, ApprovalRejection, ApprovalSubject, DelegatedScope, Delegation, DelegationProblem, ActionBudgetPolicy,
+  BudgetMode, BudgetAuthority, DispatchIntent, DispatchRequest, DispatchReason, DispatchDecision, DispatchGuard, BudgetObservation,
+} from "./dispatch.js";
+export {
+  createCloudDispatchSource, parseDelegationAnswer, CLOUD_CONSUME_PATH, CLOUD_DELEGATIONS_PATH, CLOUD_ACTIVE_APPROVAL_PATH, CLOUD_DISPATCH_SCOPE, CONSUME_REFUSALS, DELEGATION_STATES,
+} from "./dispatch-cloud.js";
+export type { CloudDispatchSource, CloudDelegation, CloudSourceOptions, ConsumeAnswer, ConsumeRefusal, ConsumeRequest, DelegationAnswer, ActiveApprovalQuery, ActiveApprovalAnswer } from "./dispatch-cloud.js";
