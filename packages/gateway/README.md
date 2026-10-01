@@ -239,6 +239,15 @@ const { app } = createGateway({
 });
 ```
 
+Each evaluation asks the store only for the history the policy can read: `executed(scope)`
+and `reserveAction(reservation, decide, scope)` take a `PriorScope` — `none` (a policy of
+allowlists and guards reads no history, so no query runs), `since` (a windowed
+`rate_limit` / `spend_limit` / `sequence`; an ISO timestamp a day earlier than the window
+start, compared as text) or `all`. A store may return more than the scope and the gateway
+trims it with `boundPrior`, so a custom store that ignores `scope` stays correct, only
+slower. `SqliteReceiptStore` answers `since` from an index on `receipts.timestamp`
+(created on open), so the cost of a decision no longer grows with the log.
+
 ### Constrained support refund adapter
 
 `createSupportRefundExecutor` is the first narrow dispatch integration. It accepts

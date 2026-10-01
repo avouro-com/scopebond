@@ -434,9 +434,10 @@ Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.
 
 **Where receipts live, and how much room they take.** `.scopebond/receipts.db` in the
-project, roughly 25 KiB per tool call. Nothing is ever deleted automatically — these are
-your evidence — so `status` reports the count and size, and `prune` bounds it when you
-choose to:
+project, roughly 25 KiB per tool call. A tool call's decision does not read that log
+unless the policy has a windowed limit, and then only the window, so a large log does not
+slow the agent down. Nothing is ever deleted automatically — these are your evidence — so
+`status` reports the count and size, and `prune` bounds it when you choose to:
 
 ```
 npx @scopebond/hook prune                      # report the footprint

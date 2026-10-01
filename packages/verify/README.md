@@ -34,6 +34,54 @@ SDK signatures; cross-package vectors pin the resulting bytes.
 - **`global` scope** returns `undetermined` (not `violated`) when the caller signals
   the cross-gateway receipt set is incomplete.
 
+## Bounded prior history
+
+A live evaluation does not need every receipt ever recorded: only `spend_limit` with a
+`max_per_window`, `rate_limit` and `sequence` (with `min_gap` / `forbidden_within`) read
+prior receipts, and each reads only a window ending at the evaluation time. Two exports
+let a caller load just that much:
+
+```js
+import { historyNeed, boundPrior, violates } from "@scopebond/verify";
+
+const need = historyNeed(policy);
+// { kind: "none" }              no clause reads prior receipts
+// { kind: "window", ms }        the longest window / sequence gap, in milliseconds
+// { kind: "all" }               anything else (see below)
+const v = violates(policy, boundPrior(need, receipts, at), claimed, { at });
+```
+
+- **`historyNeed(policy)`** is `none` when every clause is one that reads only the
+  claimed action (`action_allowlist`, `require_approval`, `time_window`, the endpoint /
+  address / contract lists, `key_policy`, `force_push_guard`); `window` with the largest
+  `window` of a windowed `spend_limit` or `rate_limit` and the largest sequence gap
+  (`max(min_gap, forbidden_within)`); and `all` for an invalid policy, a duration it cannot
+  convert, or any other clause type — including `oracle_condition` and any type added
+  later, so a new stateful clause cannot silently lose history. `scope: "global"` does
+  not widen the window: a global clause is still windowed, and its scope only decides
+  `undetermined`.
+- **`boundPrior(need, receipts, at)`** is the bounded set, defined exactly: for `none`,
+  no receipts; for `window`, every receipt in order except those whose timestamp parses to
+  a time **at or before `at − ms`**; for `all`, every receipt. A receipt with an
+  unparseable timestamp is kept. Envelopes (`{ payload, signature }`) are read through
+  their payload.
+
+**Same decision.** Windows are half-open — `rate_limit` / `spend_limit` count receipts in
+`(at − window, at]` and `sequence` looks for a first action in `(at − gap, at]` — so a
+receipt `boundPrior` drops can never be counted. Copies of one action (a reconciled
+outcome) share its timestamp, so de-duplication sees all of them or none. For any prior
+set whose executed receipts are well formed, `violated`, `clause_id`, `explanation` and
+`undetermined` are identical with and without the bound; the test suite checks this for
+every conformance and taxonomy vector, every verdict test, and randomized histories.
+The one input the bound can change is a malformed executed receipt outside the window:
+the `invalid executed receipt in policy input` check applies to the set passed in.
+
+**`inputs_hash`.** `inputs_hash` commits to the receipts actually passed. A gateway
+that bounds its history returns a verdict whose hash commits to `boundPrior(...)`, which
+anyone can recompute from the same log, policy and `at`. No receipt records
+`inputs_hash` — receipts carry `policy_hash`, `intent_hash` and `verifier_version` — so
+claim-time verification over the full receipt set is unaffected.
+
 ## Implemented
 
 `spend_limit` (per-action + windowed, principal/global), `rate_limit`,
@@ -110,7 +158,8 @@ Runnable end to end against a real gateway (asserted in CI by `pnpm run test:exa
 ## Types
 
 Written in TypeScript; ships `.d.ts`. Public types include `Policy`, `Clause`,
-`Receipt`, `Intent`, `Approval`, `Verdict`, `Options`, and `ValidationResult`.
+`Receipt`, `Intent`, `Approval`, `Verdict`, `Options`, `HistoryNeed`, and
+`ValidationResult`.
 
 ## Test
 

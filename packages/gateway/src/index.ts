@@ -21,7 +21,7 @@ export type {
   ReceiptStore, SignedReceipt, ReceiptPayload, Attester, RealtimeResult, ReceiptVerification, Anchor,
   ExecutionState, ExecutionEvidence, PolicyReference, ActionReference, RedactionEvidence,
   AuthorityReservation, AuthorityFinalState, AuthorityReservationResult, ReceiptContext,
-  AuthorityLifecycleState, ActionLifecycleRecord, StopState,
+  AuthorityLifecycleState, ActionLifecycleRecord, StopState, PriorScope,
   EvidenceClass, BoundaryGate, AttributionKind, PepPrincipal, BoundaryEvidence, BoundaryReceiptInput, PepReceiptInput,
 } from "./receipts.js";
 export {

@@ -563,8 +563,11 @@ export interface ReceiptStore {
    *  remove or insert before existing receipts. Anchoring refuses to sign a log
    *  that no longer matches the previous anchor. */
   list(): SignedReceipt[] | Promise<SignedReceipt[]>;
-  /** The receipt payloads, for feeding claim-time-style evaluation to verify. */
-  executed(): Receipt[] | Promise<Receipt[]>;
+  /** The receipt payloads (and held authority candidates), for feeding claim-time-style
+   *  evaluation to verify. `scope` says which of them the caller's policy can read: a
+   *  store MAY return a superset (the gateway trims it with `boundPrior`), but MUST NOT
+   *  omit one the scope includes. Omitted = every receipt. */
+  executed(scope?: PriorScope): Receipt[] | Promise<Receipt[]>;
   /** The newest `limit` receipts, newest first — a tail without reading the whole log.
    *  Optional: a caller must fall back to `list()` when a store does not implement it. */
   recent?(limit: number): SignedReceipt[] | Promise<SignedReceipt[]>;
@@ -583,6 +586,7 @@ export interface ReceiptStore {
   reserveAction?<T extends { allow: boolean }>(
     reservation: AuthorityReservation,
     decide: (prior: Receipt[]) => T,
+    scope?: PriorScope,
   ): AuthorityReservationResult<T> | Promise<AuthorityReservationResult<T>>;
   /** Atomically persist the terminal receipt and move the write-ahead record out
    * of reserved state. Unknown outcomes remain charged conservatively. */
@@ -598,6 +602,11 @@ export interface ReceiptStore {
 }
 
 export interface StopState { global: boolean; agents: string[]; }
+
+/** Which prior receipts an evaluation can read, from the policy's `historyNeed`
+ *  (@scopebond/verify): none, those whose stored timestamp is at or after `since`
+ *  (compared as ISO text, so `since` carries a margin; see app.ts), or all. */
+export type PriorScope = { kind: "none" } | { kind: "since"; since: string } | { kind: "all" };
 
 export interface AuthorityReservation {
   action_id: string;
@@ -649,19 +658,20 @@ export class MemoryReceiptStore implements ReceiptStore {
   private stops = new Set<string>();
   put(r: SignedReceipt): void { this.all.push(structuredClone(r)); }
   list(): SignedReceipt[] { return structuredClone(this.all); }
-  executed(): Receipt[] {
+  executed(scope?: PriorScope): Receipt[] {
+    if (scope?.kind === "none") return [];
     const receipts = this.all.map((r) => r.payload as unknown as Receipt);
     const held = [...this.authority.values()]
       .filter((record) => record.state === "reserved" || record.state === "dispatching" || record.state === "outcome_unknown")
       .map((record) => record.reservation.candidate);
     return structuredClone([...receipts, ...held]);
   }
-  reserveAction<T extends { allow: boolean }>(reservation: AuthorityReservation, decide: (prior: Receipt[]) => T): AuthorityReservationResult<T> {
+  reserveAction<T extends { allow: boolean }>(reservation: AuthorityReservation, decide: (prior: Receipt[]) => T, scope?: PriorScope): AuthorityReservationResult<T> {
     if (this.authority.has(reservation.action_id)) return { duplicate: true };
     for (const id of Object.values(reservation.authorization_ids ?? {})) {
       if (id && this.consumedAuthorizationIds.has(id)) return { duplicate: true };
     }
-    const decision = decide(this.executed());
+    const decision = decide(this.executed(scope));
     this.authority.set(reservation.action_id, {
       reservation: structuredClone(reservation),
       state: decision.allow ? "reserved" : "denied",
