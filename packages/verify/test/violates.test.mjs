@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { violates, durationToMs, validateIntent, validatePolicy } from "../dist/violates.js";
+import { durationToMs, validateIntent, validatePolicy } from "../dist/violates.js";
+// Every verdict here is also checked against the bounded prior set (bounded.mjs).
+import { violatesBoth as violates } from "./bounded.mjs";
 
 const rcpt = (o) => ({
   intent: o.intent, executed: o.executed ?? true, realtime_result: o.rr ?? "allow",

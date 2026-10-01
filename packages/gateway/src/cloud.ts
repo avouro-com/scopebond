@@ -219,7 +219,7 @@ export function withCloudExporter(store: ReceiptStore, exporter: CloudExporter):
   return {
     put: async (r) => { await store.put(r); exporter.enqueue(r); },
     list: () => store.list(),
-    executed: () => store.executed(),
+    executed: (scope) => store.executed(scope),
     ...(store.close ? { close: () => store.close!() } : {}),
     ...(store.putAnchor ? { putAnchor: (a) => store.putAnchor!(a) } : {}),
     ...(store.anchors ? { anchors: () => store.anchors!() } : {}),

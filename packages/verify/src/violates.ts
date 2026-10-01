@@ -190,6 +190,60 @@ function verdict(
   return { violated, clause_id, explanation, inputs_hash: hash, ...extra };
 }
 
+/** How much prior history a policy's verdict can depend on.
+ *  - `none`: no clause reads prior receipts; the verdict is the same for any prior set.
+ *  - `window`: no clause reads a prior receipt timestamped at or before `at - ms`.
+ *  - `all`: the policy needs the whole history (or could not be analysed). */
+export type HistoryNeed = { kind: "none" } | { kind: "window"; ms: number } | { kind: "all" };
+
+// Clause types whose evaluation reads only the claimed action. Any type not listed
+// here and not handled in `historyNeed` (including a future stateful one, and the
+// unevaluated `oracle_condition`) is treated as needing all history, so a new clause
+// cannot be silently starved of the receipts it reads.
+const STATELESS_CLAUSES = new Set([
+  "action_allowlist", "require_approval", "time_window", "endpoint_allowlist", "endpoint_denylist",
+  "address_allowlist", "address_denylist", "contract_allowlist", "key_policy", "force_push_guard",
+]);
+
+/** The history `violates()` reads for this policy: the longest `window` of a windowed
+ *  spend_limit or rate_limit, and the longest sequence gap. Global scope does not
+ *  widen it — a global clause is still windowed; scope only decides `undetermined`. */
+export function historyNeed(policy: Policy): HistoryNeed {
+  if (!validatePolicy(policy).valid) return { kind: "all" };
+  let horizon = 0;
+  try {
+    for (const clause of (policy.clauses ?? []) as AnyClause[]) {
+      const t = clause.type;
+      if (t === "rate_limit") horizon = Math.max(horizon, durationToMs(clause.window));
+      else if (t === "spend_limit") {
+        if (clause.max_per_window != null) horizon = Math.max(horizon, durationToMs(clause.window));
+      } else if (t === "sequence") {
+        if (clause.min_gap || clause.forbidden_within) {
+          horizon = Math.max(horizon,
+            clause.min_gap ? durationToMs(clause.min_gap) : 0,
+            clause.forbidden_within ? durationToMs(clause.forbidden_within) : 0);
+        }
+      } else if (!STATELESS_CLAUSES.has(t)) return { kind: "all" };
+    }
+  } catch { return { kind: "all" }; }
+  if (!Number.isSafeInteger(horizon)) return { kind: "all" };
+  return horizon > 0 ? { kind: "window", ms: horizon } : { kind: "none" };
+}
+
+/** The prior set a bounded evaluation passes to `violates()`: for `none`, no receipts;
+ *  for `window`, every receipt except those whose timestamp parses to at or before
+ *  `at - ms` (an unparseable timestamp is kept, so the invalid-receipt check still sees
+ *  it); for `all`, every receipt. Order is preserved. `violates(policy, boundPrior(
+ *  historyNeed(policy), prior, at), claimed, { at })` reaches the same decision as the
+ *  unbounded call; `inputs_hash` commits to this bounded set. */
+export function boundPrior<T>(need: HistoryNeed, receipts: T[], at: string): T[] {
+  if (need.kind === "none") return [];
+  const atMs = ms(at);
+  if (need.kind === "all" || !Number.isFinite(atMs)) return receipts.slice();
+  const from = atMs - need.ms;
+  return receipts.filter((r) => !(ms(norm(r).timestamp) <= from));
+}
+
 /** The value receipts carry as `verifier_version`. Kept as a source constant rather than
  *  read from package.json at runtime, because this code runs in a Worker bundle where
  *  there is no package.json to read; `version.test.mjs` pins it to the published version. */

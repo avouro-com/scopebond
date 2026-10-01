@@ -15,7 +15,7 @@ import {
 } from "./receipts.js";
 import type {
   Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
-  AuthorityFinalState, ActionLifecycleRecord, ReceiptContext,
+  AuthorityFinalState, ActionLifecycleRecord, ReceiptContext, PriorScope,
 } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleProof } from "./anchor.js";
@@ -24,8 +24,8 @@ import {
   verifyAnchorRoot, isAnchorV2,
 } from "@scopebond/verify/anchor";
 import type { AnchorV2, AnchorV2Body } from "@scopebond/verify/anchor";
-import { validateIntent, validatePolicy, VERIFIER_VERSION as VERIFY_VERSION } from "@scopebond/verify";
-import type { Policy, Intent, Approval, Verdict } from "@scopebond/verify";
+import { validateIntent, validatePolicy, historyNeed, boundPrior, VERIFIER_VERSION as VERIFY_VERSION } from "@scopebond/verify";
+import type { Policy, Intent, Approval, Verdict, HistoryNeed } from "@scopebond/verify";
 import { authenticateRequest, AuthorizationError } from "./auth.js";
 import type {
   AuthorizationEvidence, GatewayAuthentication, SignedApproval, SignedIntentAuthorization,
@@ -148,6 +148,7 @@ export function createGateway(config: GatewayConfig): Gateway {
   let policy = structuredClone(config.policy);
   let policyHash = sha256(canonical(policy));
   let policyVersion = (policy.version as number) ?? 1;
+  let policyHistory = historyNeed(policy);
   const now = config.now ?? (() => new Date().toISOString());
   const state = { killed: false };
 
@@ -213,6 +214,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     const activePolicy = structuredClone(policy);
     const activePolicyHash = policyHash;
     const activePolicyVersion = policyVersion;
+    const activeHistory = policyHistory;
     const policyRef = {
       id: typeof activePolicy.policy_id === "string" ? activePolicy.policy_id : null,
       version: activePolicyVersion,
@@ -282,7 +284,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     // Fail closed: while killed, deny everything and record the denial.
     if (await isStopped(req.intent.signer)) {
       if (store.reserveAction) {
-        const attempt = await store.reserveAction(reservation, () => ({ allow: false }));
+        const attempt = await store.reserveAction(reservation, () => ({ allow: false }), { kind: "none" });
         if (attempt.duplicate) return await duplicateActionResult(actionId);
       }
       const receipt = await buildReceipt({
@@ -293,19 +295,23 @@ export function createGateway(config: GatewayConfig): Gateway {
       return { allowed: false, reason: "kill switch active (fail closed)", receipt };
     }
 
+    // Read only the history this policy can see: a store loads the scope (or more), and
+    // `boundPrior` trims it to the exact set, so the verdict and its `inputs_hash` do not
+    // depend on which store answered.
+    const scope = priorScope(activeHistory, ts);
     const decide = (prior: Awaited<ReturnType<ReceiptStore["executed"]>>) => evaluate(
-      activePolicy, prior,
+      activePolicy, boundPrior(activeHistory, prior, ts),
       { intent: req.intent, approval: authenticated.approvalForPolicy, intent_hash: ih },
       ts, { gatewaysComplete: config.gatewaysComplete ?? false, cooperative: checkOnly },
     );
     let d: Decision;
     if (store.reserveAction) {
-      const attempt = await store.reserveAction(reservation, decide);
+      const attempt = await store.reserveAction(reservation, decide, scope);
       if (attempt.duplicate) return await duplicateActionResult(actionId);
       d = attempt.decision;
     } else {
       if (executor.mode === "dispatch") throw new AuthorityUnavailableError();
-      d = decide(await store.executed());
+      d = decide(await store.executed(scope));
     }
 
     // The dispatch boundary. It runs only for an action policy has already allowed, after the kill
@@ -474,6 +480,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     policy = snapshot;
     policyHash = nextHash;
     policyVersion = nextVersion;
+    policyHistory = historyNeed(snapshot);
   }
 
   async function observeAction(req: ActionRequest): Promise<ObservationResult> {
@@ -741,6 +748,22 @@ function constantTimeTextEqual(left: string, right: string): boolean {
     difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
   }
   return difference === 0;
+}
+
+// Stores compare `since` against stored timestamps as text. Those are ISO strings from
+// `now()`, which a caller may override with any parseable form (an offset rather than
+// `Z`, a different precision), so the text cutoff is a day earlier than the exact one:
+// a superset, trimmed exactly by `boundPrior`.
+const SINCE_MARGIN_MS = 24 * 60 * 60 * 1000;
+
+/** The store query for a policy's history need at evaluation time `at`. */
+function priorScope(need: HistoryNeed, at: string): PriorScope {
+  if (need.kind !== "window") return { kind: need.kind };
+  const from = Date.parse(at) - need.ms - SINCE_MARGIN_MS;
+  const since = new Date(from);
+  // A window wider than the representable date range reads everything.
+  if (!Number.isFinite(since.getTime()) || since.getUTCFullYear() < 1) return { kind: "all" };
+  return { kind: "since", since: since.toISOString() };
 }
 
 function assertValidPolicy(policy: unknown): asserts policy is Policy {
