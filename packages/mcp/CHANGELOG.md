@@ -1,5 +1,12 @@
 # @scopebond/mcp
 
+## 1.0.0
+
+### Patch Changes
+
+- Updated dependencies [c37c604]
+  - @scopebond/hook@0.10.0
+
 ## 0.4.0
 
 ### Minor Changes
