@@ -238,41 +238,49 @@ function seeded(count) {
   return { store, signer, count };
 }
 
-test("results are read as the workspace writes them: a null observation id on a refused item is bound by its index", async () => {
+// These open the emitter in this process, so they start no real heartbeat helper: one would add
+// heartbeats to the outbox under test. Servers close in t.after, so a failed assertion cannot
+// leave one listening and keep the test file from exiting.
+test("results are read as the workspace writes them: a null observation id on a refused item is bound by its index", async (t) => {
   const home = makeHome();
-  const opened = openObservations(home.dir);
+  const opened = openObservations(home.dir, { spawnHeartbeat: false });
   const emitter = opened.emitter;
+  t.after(() => emitter.close());
   for (let i = 0; i < 3; i += 1) emitter.sessionStart(`s${i}`, home.dir);
   const server = await startServer((items) => ({ status: 200, body: { version: "1.0", results: [
     { index: 0, observation_id: items[0].payload.observation_id, status: "accepted", code: "accepted", retryable: false, observation_hash: "a".repeat(64) },
     { index: 1, observation_id: null, status: "rejected", code: "schema_invalid", retryable: false },
     { index: 2, observation_id: items[2].payload.observation_id, status: "deferred", code: "quota_deferred", retryable: true },
   ], retry_after_seconds: 120 } }));
+  t.after(() => server.close());
   const outcome = await uploadPending(emitter.store, { url: server.url, credential: "sbm_x" });
   assert.deepEqual([outcome.acknowledged, outcome.rejected, outcome.deferred], [1, 1, 1]);
   assert.equal(emitter.store.terminal()[0].code, "schema_invalid");
   assert.equal(emitter.store.pendingSummary().count, 1, "only the deferred item remains");
   // A null id is never accepted as a durable acknowledgement.
   const again = await startServer((items) => ({ status: 200, body: { version: "1.0", results: [{ index: 0, observation_id: null, status: "accepted", code: "accepted", retryable: false }] } }));
+  t.after(() => again.close());
   const later = await uploadPending(emitter.store, { url: again.url, credential: "sbm_x", now: () => Date.now() + 3_600_000 });
   assert.equal(later.acknowledged, 0);
   assert.equal(emitter.store.pendingSummary().count, 1);
-  await server.close(); await again.close(); emitter.close();
 });
 
-test("429 with the workspace's body and Retry-After, 402 for a paused agent, and the accepted/duplicate/pending_link codes", async () => {
+test("429 with the workspace's body and Retry-After, 402 for a paused agent, and the accepted/duplicate/pending_link codes", async (t) => {
   const home = makeHome();
   let now = Date.now();
-  const { emitter } = openObservations(home.dir, { now: () => now });
+  const { emitter } = openObservations(home.dir, { now: () => now, spawnHeartbeat: false });
+  t.after(() => emitter.close());
   for (let i = 0; i < 3; i += 1) emitter.sessionStart(`s${i}`, home.dir);
   const opts = (url) => ({ url, credential: "sbm_x", now: () => now });
 
   const limited = await startServer(() => ({ status: 429, headers: { "Retry-After": "45" }, body: { error: "too many observation requests", code: "rate_limited" } }));
+  t.after(() => limited.close());
   assert.equal((await uploadPending(emitter.store, opts(limited.url))).result, "backoff");
   assert.equal(emitter.store.pendingSummary().count, 3);
   now += 46_000;
 
   const paused = await startServer(() => ({ status: 402, body: { error: "plan paused" } }));
+  t.after(() => paused.close());
   const p = await uploadPending(emitter.store, opts(paused.url));
   assert.equal(p.result, "error");
   assert.match(p.detail, /402/);
@@ -280,11 +288,10 @@ test("429 with the workspace's body and Retry-After, 402 for a paused agent, and
   now += 31 * 60_000;
 
   const ok = await startServer((items) => ({ status: 200, body: { version: "1.0", results: items.map((item, index) => ({ index, observation_id: item.payload.observation_id, status: ["accepted", "duplicate", "pending_link"][index], code: ["accepted", "duplicate", "pending_link"][index], retryable: false, observation_hash: "b".repeat(64) })) } }));
+  t.after(() => ok.close());
   const done = await uploadPending(emitter.store, opts(ok.url));
   assert.equal(done.acknowledged, 3);
   assert.equal(emitter.store.pendingSummary().count, 0);
-  for (const s of [limited, paused, ok]) await s.close();
-  emitter.close();
 });
 
 test("the workspace's real result shape is acknowledged by the helper's acceptAll", () => {
