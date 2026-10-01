@@ -404,10 +404,7 @@ test("one heartbeat helper per session: the lease is claimed once, renewed by th
   c.emitter.close();
 });
 
-// On GitHub's Windows runners the detached heartbeat helper can keep this test's output pipe open until it idles out, so
-// the run stalls; it passes on Windows locally and on Linux and macOS everywhere. Tracked separately; the helper's logic
-// is covered by the clocked-emitter tests above on every platform.
-test("the real helper: heartbeats flow while a session is active, from one process, and stop when the session ends", { skip: process.platform === "win32" && process.env.CI ? "detached helper holds the output pipe on CI Windows runners" : false }, async () => {
+test("the real helper: heartbeats flow while a session is active, from one process, and stop when the session ends", async () => {
   const server = await startServer();
   const home = makeHome({ url: server.url });
   const env = { SCOPEBOND_OBSERVATIONS_HEARTBEAT: "on", SCOPEBOND_HEARTBEAT_INTERVAL_MS: "250" };
