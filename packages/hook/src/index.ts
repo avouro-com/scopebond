@@ -26,7 +26,7 @@ export {
   MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE,
 } from "./managed.js";
 export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason } from "./managed.js";
-export { syncPolicy, maybeStartPolicySync, SYNC_INTERVAL_MS } from "./policy-sync.js";
+export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS } from "./policy-sync.js";
 export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";
 export type { Vector, VectorAgent, Dialect } from "./vectors.js";

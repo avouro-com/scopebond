@@ -53,7 +53,7 @@ import { uploadPending } from "./obs-upload.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { isManaged, readMeta, MANAGED_DOC_FILE } from "./managed.js";
-import { maybeStartPolicySync, releaseSyncLock, syncPolicy, type SyncOutcome } from "./policy-sync.js";
+import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
@@ -199,14 +199,13 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), currentBranch(cwd)), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
     const observer = recordObservations(dir, cwd, input!, decision, harness);
-    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve()]);
+    // Workspace rules: at most every five minutes, a capped check alongside the record delivery. It never fails the call.
+    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
     observer?.close();
     // Close before deciding: the receipt is already committed, and leaving the handle
     // open is what made the write-ahead log grow without bound.
     runtime.close();
     runtime = undefined;
-    // Workspace rules: at most every five minutes, a detached background check. Never waits, never fails the call.
-    maybeStartPolicySync(dir);
     if (decision.decision === "deny") deny(decision.reason);
     // Stay silent on allow/not_evaluated so the coding agent's normal permission
     // flow remains in charge. Scopebond blocks; it never silently approves.
@@ -282,9 +281,8 @@ async function runCursor(): Promise<void> {
     const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
     const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
-    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve()]);
+    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
     observer?.close();
-    maybeStartPolicySync(dir);
     // An `afterFileEdit` violation is real and recorded, but the edit has already
     // landed. Say so rather than letting "blocked" imply it was stopped.
     postHoc = mapped.some((m) => m.postHoc);
@@ -878,20 +876,23 @@ async function runPolicy(args: string[]): Promise<void> {
   await sendPolicyAck(dir, ack);
 }
 
-/** `policy sync`: bring this computer's rules in line with its workspace now (the hook also does this in the background). */
+/** What a rules check needs for this config directory. A project policy governs only once trusted, so it is re-pinned after a
+ *  write, exactly when `rules apply` would. */
+function syncOptionsFor(dir: string): SyncOptions {
+  const home = userHome();
+  const repin = dir !== home && existsSync(join(home, "policy.json")) && isTrustedProject(dir);
+  const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
+  return { agentKid, hookVersion: hookVersion(), policyBuilds, afterPolicyWrite: repin ? (d) => { trustProjectPolicy(d); } : undefined };
+}
+
+/** `policy sync`: bring this computer's rules in line with its workspace now (the hook also checks every five minutes). */
 async function runPolicySync(background: boolean): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
-  const home = userHome();
-  // A project policy governs only once trusted; re-pin it after writing, exactly when `rules apply` would.
-  const repin = dir !== home && existsSync(join(home, "policy.json")) && isTrustedProject(dir);
   let outcome: SyncOutcome;
   try {
-    const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
-    outcome = await syncPolicy(dir, { agentKid, hookVersion: hookVersion(), policyBuilds, afterPolicyWrite: repin ? (d) => { trustProjectPolicy(d); } : undefined });
+    outcome = await syncPolicy(dir, syncOptionsFor(dir));
   } catch (error) {
     outcome = { state: "unavailable", message: (error as Error).message };
-  } finally {
-    releaseSyncLock(dir);
   }
   if (background) return;
   const lines: Record<SyncOutcome["state"], string> = {

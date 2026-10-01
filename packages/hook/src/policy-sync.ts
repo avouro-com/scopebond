@@ -1,10 +1,12 @@
 // Keep a connected computer's rules in step with its Scopebond Cloud workspace.
 //
 // `syncPolicy` asks the workspace for this computer's rules (`GET /v1/policy`), installs a newer version when there is one, and
-// tells the workspace exactly what it loaded or why it could not (`POST /v1/policy/ack`). It never runs on an agent's critical
-// path: a tool call only checks two small files and, at most every five minutes, starts `policy sync` as a detached background
-// process (`maybeStartPolicySync`). A change made in the workspace therefore applies within a few minutes of the agent's next
-// action. Any failure keeps the rules already in force.
+// tells the workspace exactly what it loaded or why it could not (`POST /v1/policy/ack`). A tool call checks two small files;
+// at most every five minutes it also runs the check (`syncIfDue`), in parallel with the delivery of its activity record and
+// capped at about one and a half seconds, so a change made in the workspace applies within a few minutes of the agent's next
+// action. It runs in the hook's own process on purpose: a detached helper process inherits the hook's output pipe on Windows,
+// which makes the coding agent wait for the helper. Any failure or timeout keeps the rules already in force; an interrupted
+// write cannot leave a half-written policy, because every write is a temp file and a rename.
 //
 // Answers from the workspace:
 //   204  the workspace does not set rules for this computer: use (or go back to) its own rules
@@ -14,8 +16,6 @@
 
 import { closeSync, existsSync, openSync, rmSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { connectionPath, loadConnection } from "./cloud.js";
 import {
   inspectManaged, installManaged, isManaged, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
@@ -25,6 +25,8 @@ export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";
 const LOCK_STALE_MS = 2 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 5_000;
+/** How long a tool call may spend on the five-minute check, at most (`SCOPEBOND_POLICY_SYNC_MS` overrides). */
+export const INLINE_BUDGET_MS = 1_500;
 const UNMANAGED_DIGEST = "0".repeat(64);
 
 export type SyncOutcome =
@@ -44,6 +46,8 @@ export interface SyncOptions {
   now?: () => Date;
   /** Recompute a project's trust pin after its policy.json changed (the same step `rules apply` takes). */
   afterPolicyWrite?: (dir: string) => void;
+  /** Per-request timeout; defaults to five seconds. */
+  timeoutMs?: number;
 }
 
 export async function syncPolicy(dir: string, options: SyncOptions): Promise<SyncOutcome> {
@@ -60,7 +64,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
       const res = await fetchImpl(`${base}/v1/policy/ack`, {
-        method: "POST", headers: { ...auth, "content-type": "application/json" }, redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        method: "POST", headers: { ...auth, "content-type": "application/json" }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
         body: JSON.stringify({ ...body, reason: body.reason ?? null, hook_version: options.hookVersion }),
       });
       return res.ok ? { revision: body.revision, result: body.result, at: now.toISOString() } : meta.last_ack;
@@ -77,7 +81,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   try {
     res = await fetchImpl(`${base}/v1/policy`, {
       headers: { ...auth, ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}) },
-      redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
     save({ last_error: `could not reach the workspace (${(error as Error).name}); the rules in force stay` });
@@ -140,30 +144,35 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   return { state: "applied", revision: doc.revision };
 }
 
-/** Called on every tool call, after the decision: start a background sync when this computer is connected and has not checked in
- *  five minutes. Two file checks and, rarely, one detached process; it never waits and never throws. */
-export function maybeStartPolicySync(dir: string, now = Date.now()): boolean {
+/** Called on every tool call: when this computer is connected and has not checked in five minutes, run the check, capped at
+ *  `budgetMs`. Resolves `null` when no check was due, another one is running, or the cap was reached first (the check then
+ *  finishes if the process lives long enough, else runs again on a later call). Never throws. `makeOptions` is called only when a
+ *  check is due, so an ordinary call pays nothing but two file reads. */
+export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, budgetMs = Number(process.env.SCOPEBOND_POLICY_SYNC_MS ?? INLINE_BUDGET_MS), now = Date.now()): Promise<SyncOutcome | null> {
   try {
-    if (process.env.SCOPEBOND_POLICY_SYNC === "off") return false;
-    if (!existsSync(connectionPath(dir))) return false;
+    if (process.env.SCOPEBOND_POLICY_SYNC === "off") return null;
+    if (!existsSync(connectionPath(dir))) return null;
     const checked = readMeta(dir).checked_at;
-    if (checked && now - Date.parse(checked) < SYNC_INTERVAL_MS) return false;
+    if (checked && now - Date.parse(checked) < SYNC_INTERVAL_MS) return null;
     const lock = join(dir, LOCK_FILE);
     if (existsSync(lock)) {
-      if (now - statSync(lock).mtimeMs < LOCK_STALE_MS) return false;
+      if (now - statSync(lock).mtimeMs < LOCK_STALE_MS) return null;
       rmSync(lock, { force: true });
     }
     const fd = openSync(lock, "wx");
     writeSync(fd, String(process.pid));
     closeSync(fd);
-    const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
-    const child = spawn(process.execPath, [cli, "policy", "sync", "--background"], {
-      detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir },
-    });
-    child.on("error", () => { try { rmSync(lock, { force: true }); } catch { /* the stale lock expires */ } });
-    child.unref();
-    return true;
-  } catch { return false; }
+    const budget = Number.isFinite(budgetMs) && budgetMs > 0 ? budgetMs : INLINE_BUDGET_MS;
+    const work = Promise.resolve()
+      .then(() => syncPolicy(dir, { ...makeOptions(), timeoutMs: budget }))
+      .catch((): SyncOutcome => ({ state: "unavailable", message: "the check failed" }))
+      .finally(() => releaseSyncLock(dir));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const capped = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), budget); });
+    const outcome = await Promise.race([work, capped]);
+    if (timer) clearTimeout(timer);
+    return outcome;
+  } catch { return null; }
 }
 
 export function releaseSyncLock(dir: string): void {
