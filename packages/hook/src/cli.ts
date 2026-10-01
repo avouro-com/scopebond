@@ -40,7 +40,7 @@ import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
-  localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy,
+  localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy, isTrustedProject,
   wireLifecycleHooks, unwireLifecycleHooks,
 } from "./install.js";
 import {
@@ -51,7 +51,9 @@ import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
 import { loadOrCreateBindingKey } from "./observation.js";
 import { uploadPending } from "./obs-upload.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
-import { loadPolicyExport } from "./policy-load.js";
+import { loadPolicyExport, policyBuilds } from "./policy-load.js";
+import { isManaged, readMeta, MANAGED_DOC_FILE } from "./managed.js";
+import { maybeStartPolicySync, releaseSyncLock, syncPolicy, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
@@ -203,6 +205,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // open is what made the write-ahead log grow without bound.
     runtime.close();
     runtime = undefined;
+    // Workspace rules: at most every five minutes, a detached background check. Never waits, never fails the call.
+    maybeStartPolicySync(dir);
     if (decision.decision === "deny") deny(decision.reason);
     // Stay silent on allow/not_evaluated so the coding agent's normal permission
     // flow remains in charge. Scopebond blocks; it never silently approves.
@@ -280,6 +284,7 @@ async function runCursor(): Promise<void> {
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve()]);
     observer?.close();
+    maybeStartPolicySync(dir);
     // An `afterFileEdit` violation is real and recorded, but the edit has already
     // landed. Say so rather than letting "blocked" imply it was stopped.
     postHoc = mapped.some((m) => m.postHoc);
@@ -582,6 +587,11 @@ function runRules(args: string[]): void {
       process.exit(1);
   }
 
+  if (isManaged(dir)) {
+    console.error("The rules on this computer are set by your Scopebond workspace, so they cannot be changed here.");
+    console.error("Change them in the workspace (Rules), or disconnect this computer to manage its rules locally again.");
+    process.exit(1);
+  }
   // Changing what governs the agent is the same class of action as `init`.
   requireInteractive("rules", args);
   const policyPath = join(dir, "policy.json");
@@ -837,8 +847,14 @@ async function runFlush(): Promise<void> {
  *  `--yes`, make it the active policy here; then acknowledge it (or its refusal) to the workspace. */
 async function runPolicy(args: string[]): Promise<void> {
   const [sub, file] = args;
-  if (sub !== "load" || !file) { console.error(`usage: ${cliCommand("policy load <export.json> [--yes]")}`); process.exitCode = 2; return; }
+  if (sub === "sync") { await runPolicySync(args.includes("--background")); return; }
+  if (sub !== "load" || !file) { console.error(`usage: ${cliCommand("policy sync")} | ${cliCommand("policy load <export.json> [--yes]")}`); process.exitCode = 2; return; }
   const dir = resolveConfigDir(process.cwd());
+  if (isManaged(dir)) {
+    console.error("The rules on this computer are set by your Scopebond workspace; a policy file cannot replace them here.");
+    process.exitCode = 1;
+    return;
+  }
   const apply = args.includes("--yes");
   const connection = loadConnection(dir);
   const outcome = loadPolicyExport(dir, file, { apply, environmentId: connection?.environment_id });
@@ -860,6 +876,35 @@ async function runPolicy(args: string[]): Promise<void> {
   }
   if (!ack) return;
   await sendPolicyAck(dir, ack);
+}
+
+/** `policy sync`: bring this computer's rules in line with its workspace now (the hook also does this in the background). */
+async function runPolicySync(background: boolean): Promise<void> {
+  const dir = resolveConfigDir(process.cwd());
+  const home = userHome();
+  // A project policy governs only once trusted; re-pin it after writing, exactly when `rules apply` would.
+  const repin = dir !== home && existsSync(join(home, "policy.json")) && isTrustedProject(dir);
+  let outcome: SyncOutcome;
+  try {
+    const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
+    outcome = await syncPolicy(dir, { agentKid, hookVersion: hookVersion(), policyBuilds, afterPolicyWrite: repin ? (d) => { trustProjectPolicy(d); } : undefined });
+  } catch (error) {
+    outcome = { state: "unavailable", message: (error as Error).message };
+  } finally {
+    releaseSyncLock(dir);
+  }
+  if (background) return;
+  const lines: Record<SyncOutcome["state"], string> = {
+    not_connected: "This computer is not connected to a Scopebond workspace; it uses its own rules.",
+    own_rules: "Your workspace does not set rules for this computer; it uses its own rules.",
+    unchanged: "Up to date with your workspace.",
+    applied: "Updated to your workspace's latest rules.",
+    refused: "Could not apply your workspace's rules; the rules already in force stay.",
+    disconnected: "The workspace connection is no longer valid; this computer now uses its own rules.",
+    unavailable: "Could not reach your workspace; the rules already in force stay.",
+  };
+  console.log(lines[outcome.state]);
+  if (outcome.state === "refused" || outcome.state === "unavailable") { console.log(`  ${outcome.message}`); process.exitCode = 1; }
 }
 
 /** Queue a `policy_ack` (loaded or rejected) through the observation outbox and try to deliver it now. */
@@ -1085,6 +1130,15 @@ function runStatus(): void {
   console.log(`  Cursor           ${harnessScopeLabel(cursor) || (cursorDetected() ? "detected, not configured" : "not detected")}`);
   console.log(`  Codex            ${codex.project || codex.user ? `${harnessScopeLabel(codex)} — approve once with /hooks` : codexDetected() ? "detected, not configured" : "not detected"}`);
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
+  {
+    const activeDir = resolveConfigDir(process.cwd());
+    const meta = readMeta(activeDir);
+    const managed = existsSync(join(activeDir, MANAGED_DOC_FILE));
+    const checked = meta.checked_at ? `, last checked ${meta.checked_at}` : "";
+    console.log(`  rules            ${managed ? `set by your workspace (version ${meta.revision})${checked}` : `this computer's own (${rulesPath(activeDir)})${connected ? checked : ""}`}`);
+    console.log(`                   always on: protection of Scopebond's own settings and the agents' hook settings`);
+    if (meta.last_error) console.log(`                   last problem: ${meta.last_error}`);
+  }
   const observationLines = describeObservations(resolveConfigDir(process.cwd()));
   console.log(`  observations     ${observationLines[0]}`);
   for (const line of observationLines.slice(1)) console.log(`                   ${line}`);
