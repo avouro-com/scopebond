@@ -86,6 +86,9 @@ const CI_WRITE = [
 // upgraded in memory (see LEGACY_STARTER_PATTERNS).
 const PROTECTED_WRITE_PREV = "^" + [...GUARDRAIL_WRITE_PREV, ...CI_WRITE_PREV].join("") + ".+";
 const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
+/** The write protection that is always on, whoever manages the rules: the hook's own settings and those of the agents it
+ *  guards. A workspace can relax CI-configuration writes; it can never relax these. */
+export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + ".+";
 
 const PROTECTED_READ = "^" + [
   under("\\.scopebond"),

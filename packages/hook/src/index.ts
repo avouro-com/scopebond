@@ -21,6 +21,13 @@ export type { Manifest, CapabilityCell, CapabilityState, ProofRecord, HostVarian
 export { runProofFixtures, deliverProofReceipts, loadProofs, saveProofs, PROOF_FILE } from "./proof.js";
 export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYPE } from "./budget-load.js";
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
+export {
+  inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules,
+  MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE,
+} from "./managed.js";
+export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason } from "./managed.js";
+export { syncPolicy, maybeStartPolicySync, SYNC_INTERVAL_MS } from "./policy-sync.js";
+export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";
 export type { Vector, VectorAgent, Dialect } from "./vectors.js";
 export { scaffold, harnessSnippet, installHarness, placeHook } from "./init.js";

@@ -216,6 +216,32 @@ locally and retried if the workspace is unreachable. `npx @scopebond/hook flush`
 delivers anything still queued — run it on a session-end hook (and set
 `SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency.
 
+### Rules set by your workspace
+
+A connected computer keeps its own rules (`.scopebond/rules.json`) until someone who manages
+the workspace changes a rule for it there. From then on the workspace decides, rule by rule,
+whether a matching action is **blocked** or only **recorded**, and can add entries to this
+computer's lists (protected branches, programs, allowed sites). The workspace never sends
+patterns: the hook compiles its choices with the same compiler as `rules apply`.
+
+- **When it applies.** The hook checks for changes in the background at most every five
+  minutes, so a change applies within a few minutes of the agent's next action. No tool call
+  waits on the network. `npx @scopebond/hook policy sync` checks right now.
+- **What is checked.** A rules document must be complete, issued for this computer, match its
+  digest and be newer than the one in force; the resulting policy must load. Anything else is
+  refused, the rules already in force stay, and the refusal is reported to the workspace.
+- **What is confirmed.** After loading, the hook tells the workspace exactly which version it
+  loaded, so the workspace shows *Applied* only for computers that confirmed it.
+- **What the workspace cannot change.** Protection of Scopebond's own settings and of the
+  agents' hook settings, the machine key policy, fail-closed handling of anything unreadable,
+  and this computer's own opt-ins (`allowed_roots`, `protect_remote_database`).
+- **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
+  refused here. If the connection is revoked, or the workspace stops setting rules for this
+  computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left
+  without rules. `status` shows which rules are in force and when they were last checked.
+
+Set `SCOPEBOND_POLICY_SYNC=off` to stop the background check (the rules in force stay).
+
 ### Session, health and action observations (opt-in)
 
 Beyond receipts, the hook can send a second kind of signed record, an *observation*,
