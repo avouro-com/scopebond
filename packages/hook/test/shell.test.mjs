@@ -13,7 +13,9 @@ function starterRuntime(extra = {}) {
   scaffold(dir);
   return createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"),
-    attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"),
+    // In memory: these tests check decisions, not storage, and hundreds of on-disk receipt writes made this file take
+    // minutes on slow CI disks. Storage is covered by store.test.mjs and cli.test.mjs.
+    attesterPath: join(dir, "attester.key"), dbPath: ":memory:",
     ...extra,
   });
 }
@@ -639,7 +641,10 @@ test("parseGitPush ignores non-push git commands", () => {
 // Generated corpus: every protected target × every spelling × every way to reach it.
 // A deterministic cross-product (no randomness) so a failure names its exact command.
 test("generated corpus: protected reads/writes survive no spelling, quoting, prefix or wrapper", async () => {
-  const rt = starterRuntime();
+  // A fresh runtime every 100 commands: one runtime re-reads every stored receipt on each evaluation, so ~1,000 commands
+  // through a single runtime grew quadratically and took minutes on slow CI runners. Every case still runs.
+  let rt = starterRuntime();
+  let sinceFresh = 0;
   const readTargets = [".scopebond/agent.key", ".env", "secrets/deploy.key", "~/.ssh/id_rsa", "~/.aws/credentials"];
   const writeTargets = [".scopebond/policy.json", ".claude/settings.json", ".github/workflows/ci.yml", ".git/hooks/pre-push"];
   const spell = (p) => [
@@ -660,6 +665,7 @@ test("generated corpus: protected reads/writes survive no spelling, quoting, pre
   for (const [targets, via] of [[readTargets, readVia], [writeTargets, writeVia]]) {
     for (const t of targets) for (const s of spell(t)) for (const q of quote(s)) for (const cmd of via(q)) {
       total += 1;
+      if (++sinceFresh > 100) { rt.close(); rt = starterRuntime(); sinceFresh = 1; }
       const d = await evalCmd(rt, cmd);
       if (d.decision !== "deny") survived.push(`${cmd} -> ${d.decision}`);
     }
