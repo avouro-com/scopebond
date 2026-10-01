@@ -7,9 +7,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import http from "node:http";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, compile, defaultRules, policyBuilds,
-  inspectManaged, compileManaged, digestRules, syncPolicy, maybeStartPolicySync, isManaged, readMeta, MANAGED_RULE_IDS,
+  inspectManaged, compileManaged, digestRules, syncPolicy, syncIfDue, isManaged, readMeta, MANAGED_RULE_IDS,
 } from "../dist/index.js";
 
 const INSTALLATION = "gw-test-1";
@@ -168,22 +171,74 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the per-call trigger is cheap and quiet: only when connected, at most every five minutes, one at a time", () => {
-  const { dir } = home();
+test("the five-minute check is cheap when not due, one at a time, and capped when the workspace is slow", async () => {
+  const { dir, agentKid } = connected();
   const was = process.env.SCOPEBOND_POLICY_SYNC;
+  const never = () => new Promise(() => {});
+  const optionsWith = (fetchImpl) => () => ({ agentKid, hookVersion: "0.10.0", policyBuilds, fetchImpl });
   try {
-    assert.equal(maybeStartPolicySync(dir), false, "not connected");
-    writeFileSync(join(dir, "cloud.json"), "{}");
+    const bare = home();
+    let made = 0;
+    assert.equal(await syncIfDue(bare.dir, () => { made++; return {}; }), null, "not connected");
+    rmSync(bare.dir, { recursive: true, force: true });
     writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ checked_at: new Date().toISOString() }));
-    assert.equal(maybeStartPolicySync(dir), false, "checked recently");
+    assert.equal(await syncIfDue(dir, () => { made++; return {}; }), null, "checked recently");
+    assert.equal(made, 0, "nothing is prepared unless a check is due");
     writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ checked_at: new Date(Date.now() - 10 * 60_000).toISOString() }));
     writeFileSync(join(dir, "managed-sync.lock"), "123");
-    assert.equal(maybeStartPolicySync(dir), false, "another sync is running");
-    process.env.SCOPEBOND_POLICY_SYNC = "off";
+    assert.equal(await syncIfDue(dir, optionsWith(never)), null, "another check is running");
     rmSync(join(dir, "managed-sync.lock"));
-    assert.equal(maybeStartPolicySync(dir), false, "switched off");
+    process.env.SCOPEBOND_POLICY_SYNC = "off";
+    assert.equal(await syncIfDue(dir, optionsWith(never)), null, "switched off");
+    delete process.env.SCOPEBOND_POLICY_SYNC;
+    // A workspace that never answers costs the call at most the cap, and the rules in force stay.
+    const before = readFileSync(join(dir, "policy.json"), "utf8");
+    const started = Date.now();
+    const slow = await syncIfDue(dir, optionsWith((_url, init) => new Promise((_r, reject) => init.signal.addEventListener("abort", () => reject(new Error("aborted"))))), 150);
+    assert.ok(Date.now() - started < 1000, `capped (${Date.now() - started} ms)`);
+    assert.ok(slow === null || slow.state === "unavailable");
+    assert.equal(readFileSync(join(dir, "policy.json"), "utf8"), before);
+    // When due and the workspace answers, the check applies the new rules.
+    rmSync(join(dir, "managed-sync.lock"), { force: true });
+    writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ checked_at: new Date(Date.now() - 10 * 60_000).toISOString() }));
+    const d1 = doc(1, { "secret-read": { mode: "monitor" } });
+    const w = fakeWorkspace([{ status: 200, body: d1 }]);
+    assert.deepEqual(await syncIfDue(dir, optionsWith(w.fetchImpl), 2000), { state: "applied", revision: 1 });
+    assert.equal(existsSync(join(dir, "managed-sync.lock")), false, "the lock is released");
   } finally {
     if (was === undefined) delete process.env.SCOPEBOND_POLICY_SYNC; else process.env.SCOPEBOND_POLICY_SYNC = was;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a tool call finishes promptly when the workspace never answers: no helper process holds the agent's pipe", async () => {
+  // Regression: a detached helper inherited the hook's output pipe on Windows, so the agent waited for it.
+  const server = http.createServer(() => { /* accept and never answer */ });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { dir } = connected();
+  const conn = JSON.parse(readFileSync(join(dir, "cloud.json"), "utf8"));
+  writeFileSync(join(dir, "cloud.json"), JSON.stringify({ ...conn, url: `http://127.0.0.1:${server.address().port}` }));
+  const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+  const userHomeDir = mkdtempSync(join(tmpdir(), "sb-managed-home-"));
+  try {
+    const started = Date.now();
+    const result = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [cli, "claude"], {
+        cwd: dir, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, SCOPEBOND_HOME: userHomeDir, HOME: userHomeDir, USERPROFILE: userHomeDir,
+          SCOPEBOND_OBSERVATIONS_HEARTBEAT: "off", SCOPEBOND_HOOK_FLUSH_MS: "300", SCOPEBOND_POLICY_SYNC_MS: "400" },
+      });
+      let stdout = "";
+      child.stdout.on("data", (d) => { stdout += d; });
+      child.on("close", (status) => resolve({ status, stdout }));
+      child.stdin.end(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: join(dir, "README.md") }, cwd: dir }));
+    });
+    const took = Date.now() - started;
+    assert.equal(result.status, 0, result.stdout);
+    assert.ok(took < 8000, `the call took ${took} ms`);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(userHomeDir, { recursive: true, force: true });
   }
 });

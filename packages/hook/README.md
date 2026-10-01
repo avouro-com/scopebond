@@ -224,9 +224,12 @@ whether a matching action is **blocked** or only **recorded**, and can add entri
 computer's lists (protected branches, programs, allowed sites). The workspace never sends
 patterns: the hook compiles its choices with the same compiler as `rules apply`.
 
-- **When it applies.** The hook checks for changes in the background at most every five
-  minutes, so a change applies within a few minutes of the agent's next action. No tool call
-  waits on the network. `npx @scopebond/hook policy sync` checks right now.
+- **When it applies.** At most once every five minutes, a tool call also checks for changes,
+  alongside sending its activity record and capped at about one and a half seconds
+  (`SCOPEBOND_POLICY_SYNC_MS`); every other call only reads two small files. A change therefore
+  applies within a few minutes of the agent's next action, and a workspace that is slow or
+  unreachable never holds up the agent for longer than the cap. The new rules govern from the
+  next action. `npx @scopebond/hook policy sync` checks right now.
 - **What is checked.** A rules document must be complete, issued for this computer, match its
   digest and be newer than the one in force; the resulting policy must load. Anything else is
   refused, the rules already in force stay, and the refusal is reported to the workspace.
@@ -240,7 +243,7 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left
   without rules. `status` shows which rules are in force and when they were last checked.
 
-Set `SCOPEBOND_POLICY_SYNC=off` to stop the background check (the rules in force stay).
+Set `SCOPEBOND_POLICY_SYNC=off` to stop the five-minute check (the rules in force stay).
 
 ### Session, health and action observations (opt-in)
 
