@@ -89,6 +89,8 @@ const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
 /** The write protection that is always on, whoever manages the rules: the hook's own settings and those of the agents it
  *  guards. A workspace can relax CI-configuration writes; it can never relax these. */
 export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + ".+";
+/** The always-on floor as bare lookaheads, for a pattern that must also refuse these paths (the hook's own folder included). */
+export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("");
 
 const PROTECTED_READ = "^" + [
   under("\\.scopebond"),
