@@ -107,6 +107,34 @@ test("Monitor records and allows; Block stops; the guardrail floor never relaxes
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("an exclusion skips exactly the named path or branch, and never the guardrail floor", async () => {
+  const { dir, agentKid } = home();
+  try {
+    const skip = compileManaged(defaultRules(), doc(6, {
+      "secret-read": { mode: "block", excluded_paths: ["test/fixtures/.env", "fixtures/keys/**"] },
+      "ci-config-write": { mode: "block", excluded_paths: [".github/workflows/docs.yml", ".scopebond/policy.json", ".claude/settings.json"] },
+      "push-protected": { mode: "block", excluded_branches: ["release/approved-repair"] },
+    }), agentKid);
+    assert.ok(policyBuilds(skip));
+    // Exactly the named file or folder; a sibling, a different case or a longer name stays protected.
+    assert.deepEqual(await decide(dir, skip, [read("/repo/test/fixtures/.env"), read("/repo/test/other/.env"), read("/repo/fixtures/keys/a.pem"), read("/repo/.env")]), ["allow", "deny", "allow", "deny"]);
+    assert.deepEqual(await decide(dir, skip, [write("/repo/.github/workflows/docs.yml"), write("/repo/.github/workflows/DOCS.yml"), write("/repo/.github/workflows/ci.yml")]), ["allow", "deny", "deny"]);
+    // The floor never relaxes, whatever the workspace names.
+    assert.deepEqual(await decide(dir, skip, [write("/repo/.scopebond/policy.json"), write("/repo/.claude/settings.json")]), ["deny", "deny"]);
+    // Pushes: only the named branch; main and other release branches stay protected.
+    assert.deepEqual(await decide(dir, skip, [bash("git push origin release/approved-repair"), bash("git push origin main"), bash("git push origin release/approved-repair-2")]), ["allow", "deny", "deny"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an exclusion list is checked like any other setting", () => {
+  const at = (rules) => inspectManaged(doc(7, rules), { installationId: INSTALLATION, currentRevision: null });
+  assert.equal(at({ "secret-read": { mode: "block", excluded_paths: ["/etc/passwd"] } }).ok, false);
+  assert.equal(at({ "secret-read": { mode: "block", excluded_paths: ["a/../b"] } }).ok, false);
+  assert.equal(at({ "destructive-shell": { mode: "block", excluded_paths: ["x"] } }).ok, false, "only the rules that take paths accept them");
+  assert.equal(at({ "push-protected": { mode: "block", excluded_branches: ["release/*"] } }).ok, false, "an exclusion names one branch, not a pattern");
+  assert.equal(at({ "secret-read": { mode: "block", excluded_paths: ["config/dev.key"] } }).ok, true);
+});
+
 function fakeWorkspace(responses) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {

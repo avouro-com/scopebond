@@ -5,6 +5,10 @@
 // to the computer's own lists (protected branches, programs, allowed sites). It never sends a pattern: this module compiles the
 // workspace's choices with the same compiler `rules apply` uses, so what decides a block lives in one place.
 //
+// A workspace may also name exact targets one rule skips: paths for the secret-read and CI-configuration rules, branches for the
+// push rule. An exclusion matches exactly (same case; a trailing `/**` covers a folder), so it is never broader than what was typed,
+// and an exclusion that would touch the always-on protection of the hook's own settings is dropped when the policy is compiled.
+//
 // What a workspace cannot change: the protection of the hook's own settings (and the settings of the agents it guards), the
 // machine key policy, fail-closed handling of anything unparseable, and the computer's own opt-in extras (`allowed_roots`,
 // `protect_remote_database`). A rule set to Monitor is still covered by an allow clause, so the action is recorded and passes;
@@ -28,6 +32,7 @@ export const PREVIOUS_POLICY_FILE = "policy.previous.json";
 export const MANAGED_RULE_IDS = ["force-push-protected", "push-protected", "destructive-shell", "secret-read", "ci-config-write", "network-egress"] as const;
 export type ManagedRuleId = (typeof MANAGED_RULE_IDS)[number];
 type ListKey = "protected_branches" | "destructive_programs" | "allowed_hosts";
+type ExclusionKey = "excluded_paths" | "excluded_branches";
 const LIST_OF: Partial<Record<ManagedRuleId, ListKey>> = {
   "force-push-protected": "protected_branches", "push-protected": "protected_branches",
   "destructive-shell": "destructive_programs", "network-egress": "allowed_hosts",
@@ -37,10 +42,19 @@ const LIST_PATTERN: Record<ListKey, RegExp> = {
   destructive_programs: /^[a-z0-9][a-z0-9._-]{0,63}$/,
   allowed_hosts: /^(?=.{1,253}$)(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
 };
+/** The exact targets a rule may skip, and the one list each rule accepts. */
+const EXCLUSIONS_OF: Partial<Record<ManagedRuleId, ExclusionKey>> = {
+  "secret-read": "excluded_paths", "ci-config-write": "excluded_paths", "push-protected": "excluded_branches",
+};
+const EXCLUSION_PATTERN: Record<ExclusionKey, RegExp> = {
+  // A relative path with forward slashes, no empty segment, optionally ending in /** for a folder.
+  excluded_paths: /^(?!\/)(?!.*\/\/)[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]{0,199}?(?:\/\*\*)?$/,
+  excluded_branches: /^[A-Za-z0-9._/-]{1,100}$/,
+};
 const HEX64 = /^[0-9a-f]{64}$/;
 const OPAQUE = /^[A-Za-z0-9._:-]{1,128}$/;
 
-export type ManagedRule = { mode: "monitor" | "block" } & Partial<Record<ListKey, string[]>>;
+export type ManagedRule = { mode: "monitor" | "block" } & Partial<Record<ListKey | ExclusionKey, string[]>>;
 export interface ManagedDocument {
   type: "scopebond:managed-rules";
   version: 1;
@@ -85,9 +99,11 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
     for (const key of Object.keys(rule)) {
       if (key === "mode") continue;
       const listKey = LIST_OF[id];
-      if (key !== listKey) return bad(`rule ${id} has an unknown setting`);
+      const exclusionKey = EXCLUSIONS_OF[id];
+      const pattern = key === listKey ? LIST_PATTERN[listKey] : key === exclusionKey ? EXCLUSION_PATTERN[exclusionKey] : null;
+      if (!pattern) return bad(`rule ${id} has an unknown setting`);
       const list = rule[key];
-      if (!Array.isArray(list) || list.length > 50 || !list.every((v) => typeof v === "string" && LIST_PATTERN[listKey].test(v) && !v.includes(".."))) {
+      if (!Array.isArray(list) || list.length > 50 || !list.every((v) => typeof v === "string" && pattern.test(v) && !v.includes(".."))) {
         return bad(`rule ${id} has an invalid list`);
       }
     }
@@ -107,6 +123,21 @@ const hostPattern = (hosts: readonly string[]): string =>
   `^(?:${hosts.map((h) => (h.startsWith("*.") ? `(?:[^.]+\\.)+${ci(h.slice(2).replace(/\./g, "\\."))}` : ci(h.replace(/\./g, "\\.")))).join("|")})$`;
 
 type Clause = Record<string, unknown> & { id: string };
+
+const escapeRegex = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
+/** Paths a rule skips, minus any the always-on settings protection covers: that floor is never relaxed. */
+const safeExclusions = (paths: readonly string[] | undefined): string[] => {
+  const floor = new RegExp(GUARDRAIL_WRITE_PATTERN);
+  return (paths ?? []).filter((path) => floor.test(path.endsWith("/**") ? `${path.slice(0, -3)}/x` : path) && floor.test(path.endsWith("/**") ? path.slice(0, -3) : path));
+};
+/** An allow pattern that also allows exactly these paths (a trailing /** allows everything under the folder). */
+const withPathExclusions = (pattern: string, paths: readonly string[]): string => paths.length === 0 ? pattern
+  : `^(?:${paths.map((p) => p.endsWith("/**") ? `${escapeRegex(p.slice(0, -3))}/.+` : escapeRegex(p)).join("|")})$|${pattern}`;
+/** An allow pattern for pushes that also allows exactly these branches. */
+const withBranchExclusions = (pattern: string, branches: readonly string[]): string => branches.length === 0 ? pattern
+  : `^(?:refs/heads/)?(?:${branches.map(escapeRegex).join("|")})$|${pattern}`;
+const boundPattern = (clause: Clause, key: string): string => String(((clause.param_bounds as Record<string, { pattern: string }> | undefined)?.[key])?.pattern ?? "");
+const withBound = (clause: Clause, key: string, pattern: string): Clause => ({ ...clause, param_bounds: { ...(clause.param_bounds as Record<string, unknown>), [key]: { pattern } } });
 
 /** The policy this computer enforces under workspace rules: its own compiled rules, adjusted rule by rule. Pure. */
 export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: string): Record<string, unknown> {
@@ -131,6 +162,12 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
     else if (clause.id === "protect-write" && r["ci-config-write"].mode === "monitor") {
       clauses.push({ ...clause, param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
         description: "Allow workspace writes, but never to Scopebond's own settings or the agents' hook settings (always on). Other protected files are recorded, not blocked: set by your workspace." });
+    } else if (clause.id === "protect-read" && r["secret-read"].excluded_paths?.length) {
+      clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["secret-read"].excluded_paths))));
+    } else if (clause.id === "protect-write" && r["ci-config-write"].excluded_paths?.length) {
+      clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["ci-config-write"].excluded_paths))));
+    } else if (clause.id === "protect-branches" && r["push-protected"].excluded_branches?.length) {
+      clauses.push(withBound(clause, "ref", withBranchExclusions(boundPattern(clause, "ref"), r["push-protected"].excluded_branches)));
     } else clauses.push(clause);
   }
   if (r["network-egress"].mode === "block") {
