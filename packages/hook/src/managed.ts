@@ -22,7 +22,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
-import { GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
+import { GUARDRAIL_LOOKAHEADS, GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet } from "./rules.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
@@ -47,9 +47,10 @@ const EXCLUSIONS_OF: Partial<Record<ManagedRuleId, ExclusionKey>> = {
   "secret-read": "excluded_paths", "ci-config-write": "excluded_paths", "push-protected": "excluded_branches",
 };
 const EXCLUSION_PATTERN: Record<ExclusionKey, RegExp> = {
-  // A relative path with forward slashes, no empty segment, optionally ending in /** for a folder.
-  excluded_paths: /^(?!\/)(?!.*\/\/)[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]{0,199}?(?:\/\*\*)?$/,
-  excluded_branches: /^[A-Za-z0-9._/-]{1,100}$/,
+  // A relative path with forward slashes: no empty, "." or ".." segment, optionally ending in /** for a folder.
+  excluded_paths: /^(?!\/)(?!.*\/\/)(?!(?:.*\/)?\.{1,2}(?:\/|$))[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]{0,199}?(?:\/\*\*)?$/,
+  // One exact branch name; it starts with a letter or digit, so it can never be a push flag such as --all.
+  excluded_branches: /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/,
 };
 const HEX64 = /^[0-9a-f]{64}$/;
 const OPAQUE = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -75,7 +76,7 @@ export const digestRules = (rules: unknown): string => createHash("sha256").upda
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Check a document from the workspace without touching disk. Pure. */
-export function inspectManaged(raw: unknown, context: { installationId: string; currentRevision: number | null }): Inspection {
+export function inspectManaged(raw: unknown, context: { installationId: string; currentRevision: number | null; currentDigest?: string | null }): Inspection {
   const bad = (message: string): Inspection => ({ ok: false, reason: "invalid_document", message });
   if (!isObject(raw) || raw.type !== "scopebond:managed-rules") return bad("this is not a Scopebond workspace rules document");
   if (raw.version !== 1) return { ok: false, reason: "unsupported", message: `unsupported rules document version ${String(raw.version)}` };
@@ -111,7 +112,10 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   const network = rules["network-egress"] as ManagedRule;
   if (network.mode === "block" && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
   if (digestRules(rules) !== rulesDigest) return bad("the rules do not match their digest; the document was changed or damaged");
-  if (context.currentRevision !== null && (revision as number) <= context.currentRevision) {
+  // The same version with different rules is a newer document too: the workspace can change what reaches this computer without a new
+  // version (an agent moved to another team, or this hook started reading a setting it did not read before). The export id binds it here.
+  const sameVersionChanged = context.currentRevision !== null && revision === context.currentRevision && !!context.currentDigest && rulesDigest !== context.currentDigest;
+  if (context.currentRevision !== null && (revision as number) <= context.currentRevision && !sameVersionChanged) {
     return { ok: false, reason: "stale_revision", message: `version ${String(revision)} is not newer than the version in force (${context.currentRevision})` };
   }
   return { ok: true, doc: raw as unknown as ManagedDocument };
@@ -125,14 +129,13 @@ const hostPattern = (hosts: readonly string[]): string =>
 type Clause = Record<string, unknown> & { id: string };
 
 const escapeRegex = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
-/** Paths a rule skips, minus any the always-on settings protection covers: that floor is never relaxed. */
-const safeExclusions = (paths: readonly string[] | undefined): string[] => {
-  const floor = new RegExp(GUARDRAIL_WRITE_PATTERN);
-  return (paths ?? []).filter((path) => floor.test(path.endsWith("/**") ? `${path.slice(0, -3)}/x` : path) && floor.test(path.endsWith("/**") ? path.slice(0, -3) : path));
-};
-/** An allow pattern that also allows exactly these paths (a trailing /** allows everything under the folder). */
+/** Exclusions that passed validation (the document check refuses the rest; this is a second line of defence). */
+const safeExclusions = (paths: readonly string[] | undefined): string[] => (paths ?? []).filter((path) => EXCLUSION_PATTERN.excluded_paths.test(path) && !path.includes(".."));
+/** An allow pattern that also allows exactly these paths (a trailing /** allows everything under the folder). The added alternative
+ *  carries the always-on floor and refuses any path with a "." or ".." segment, so no exclusion — however it is written — can reach
+ *  Scopebond's own settings or the agents' hook settings, or climb out of the folder it names. */
 const withPathExclusions = (pattern: string, paths: readonly string[]): string => paths.length === 0 ? pattern
-  : `^(?:${paths.map((p) => p.endsWith("/**") ? `${escapeRegex(p.slice(0, -3))}/.+` : escapeRegex(p)).join("|")})$|${pattern}`;
+  : `^(?!(?:.*/)?\\.{1,2}(?:/|$))${GUARDRAIL_LOOKAHEADS}(?:${paths.map((p) => p.endsWith("/**") ? `${escapeRegex(p.slice(0, -3))}/.+` : escapeRegex(p)).join("|")})$|${pattern}`;
 /** An allow pattern for pushes that also allows exactly these branches. */
 const withBranchExclusions = (pattern: string, branches: readonly string[]): string => branches.length === 0 ? pattern
   : `^(?:refs/heads/)?(?:${branches.map(escapeRegex).join("|")})$|${pattern}`;
@@ -168,6 +171,11 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
       clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["ci-config-write"].excluded_paths))));
     } else if (clause.id === "protect-branches" && r["push-protected"].excluded_branches?.length) {
       clauses.push(withBound(clause, "ref", withBranchExclusions(boundPattern(clause, "ref"), r["push-protected"].excluded_branches)));
+      // Skipping ordinary pushes to a branch never skips history protection: force-pushes, deletions and mirror pushes stay stopped.
+      if (r["force-push-protected"].mode === "block") {
+        clauses.push({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
+          description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch. Set by your workspace." });
+      }
     } else clauses.push(clause);
   }
   if (r["network-egress"].mode === "block") {

@@ -125,7 +125,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     save({ etag, last_ack: confirmed, last_error: null });
     return { state: "unchanged", revision: meta.revision };
   }
-  const inspected = inspectManaged(raw, { installationId, currentRevision: isManaged(dir) ? meta.revision : null });
+  const inspected = inspectManaged(raw, { installationId, currentRevision: isManaged(dir) ? meta.revision : null, currentDigest: isManaged(dir) ? meta.rules_digest : null });
   const echo = typeof r.export_id === "string" && Number.isInteger(r.revision) && typeof r.rules_digest === "string" && /^[0-9a-f]{64}$/.test(r.rules_digest)
     ? { export_id: r.export_id, revision: r.revision as number, rules_digest: r.rules_digest } : null;
   if (!inspected.ok) {
