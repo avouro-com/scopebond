@@ -80,7 +80,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let res: Response;
   try {
     res = await fetchImpl(`${base}/v1/policy`, {
-      headers: { ...auth, ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}) },
+      // The hook's version tells the workspace which settings this computer understands (for example exact-target
+      // exclusions), so it is never sent a document an older hook would refuse.
+      headers: { ...auth, ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
