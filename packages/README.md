@@ -7,12 +7,12 @@ The Scopebond monorepo packages. Landing incrementally; entries marked
 |---|---|---|
 | `policy-schema` | The policy vocabulary as JSON Schema, canonical types and shared evidence vectors. | **experimental** (published 0.5.0) |
 | `verify` | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` library used by the gateway and offline verification. | **experimental** (published 0.4.2) |
-| `gateway` | Policy gateway with authenticated HTTP/MCP ingress, durable authority/lifecycle state, signed evidence, constrained execution and optional bounded Cloud export. Default execution is a simulation. `npx @scopebond/gateway`. | **experimental alpha** (published 0.11.0; not production-qualified) |
+| `gateway` | Policy gateway with authenticated HTTP/MCP ingress, durable authority/lifecycle state, signed evidence, constrained execution and optional bounded Cloud export. Default execution is a simulation. `npx @scopebond/gateway`. | **experimental alpha** (published 0.12.0; not production-qualified) |
 | `sdk` | Signing SDK for authenticated action intents and approvals plus a thin gateway client. | **experimental** (published 0.1.3) |
-| `hook` | `scopebond-hook` — the Claude Code + Cursor connector (leaf): maps each tool call to a taxonomy action and checks it against policy in-path (cooperative M0) with a signed local receipt. | **experimental** (published 0.13.0) |
-| `github-action` | `scopebond-verify-pr` — the GitHub connector's boundary-lane runner (leaf): checks an agent pull request against policy in your own Actions runner before it can merge. | **experimental** (published 0.5.2) |
-| `mcp` | `scopebond-mcp` — the MCP proxy connector (leaf): one policy for every Model Context Protocol tool call, in-path in front of the upstream server, with a signed PEP-authorized receipt. | **experimental** (published 2.0.1) |
-| `framework` | The framework plugins (leaf): a cooperative (M0) in-process tool guard with Vercel AI SDK and LangGraph/LangChain adapters — policy checked before every tool call, with a signed-intent receipt. | **experimental** (published 0.3.6) |
+| `hook` | `scopebond-hook` — the Claude Code + Cursor connector (leaf): maps each tool call to a taxonomy action and checks it against policy in-path (cooperative M0) with a signed local receipt. | **experimental** (published 0.14.0) |
+| `github-action` | `scopebond-verify-pr` — the GitHub connector's boundary-lane runner (leaf): checks an agent pull request against policy in your own Actions runner before it can merge. | **experimental** (published 0.5.3) |
+| `mcp` | `scopebond-mcp` — the MCP proxy connector (leaf): one policy for every Model Context Protocol tool call, in-path in front of the upstream server, with a signed PEP-authorized receipt. | **experimental** (published 2.0.2) |
+| `framework` | The framework plugins (leaf): a cooperative (M0) in-process tool guard with Vercel AI SDK and LangGraph/LangChain adapters — policy checked before every tool call, with a signed-intent receipt. | **experimental** (published 0.3.7) |
 | `attest` | Countersignature / receipt emission (ACTA envelope, `scopebond:receipt`). | `[PLANNED]` |
 | `contracts` | The on-chain vault, registry, and claim contracts (written fresh on OpenZeppelin primitives), verified on-chain. | `[PLANNED]` |
 | `conformance` | The conformance suite a build must pass to use the "Scopebond Gateway" name. | `[PLANNED]` |

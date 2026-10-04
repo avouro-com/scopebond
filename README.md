@@ -160,7 +160,7 @@ and merge) keeps non-public material out of this repository by design.
 ## Status
 
 Experimental alpha. Published set: `@scopebond/policy-schema@0.5.0`,
-`@scopebond/verify@0.4.2`, `@scopebond/gateway@0.11.0`, `@scopebond/sdk@0.1.3`, and the
+`@scopebond/verify@0.4.2`, `@scopebond/gateway@0.12.0`, `@scopebond/sdk@0.1.3`, and the
 connectors `@scopebond/hook`, `@scopebond/mcp`, `@scopebond/framework`,
 `@scopebond/github-action`. The source tree matches that release set. Use controlled
 test systems only until the documented safety, integration and operational gates

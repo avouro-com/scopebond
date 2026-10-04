@@ -1,5 +1,12 @@
 # @scopebond/mcp
 
+## 2.0.2
+
+### Patch Changes
+
+- Updated dependencies [3308250]
+  - @scopebond/gateway@0.12.0
+
 ## 2.0.1
 
 ### Patch Changes
