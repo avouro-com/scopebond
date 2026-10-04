@@ -7,3 +7,5 @@
 The delivery queue no longer drops records: no 10,000-record or 64 MiB cap and no 7-day expiry. A record leaves the queue only when the workspace accepts it, or when a key change sets it aside for `recover`.
 
 Signing in again leaves an agent settings file that already holds the right hook entry byte-for-byte untouched (no rewrite, no backup), and `login` notes when it is run inside a coding agent's own terminal. Commands the hook prints use `npx.cmd` on Windows, where PowerShell's default script policy refuses `npx`.
+
+`login` and `connect` for this computer (the default) now put the hook in the user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.codex/hooks.json`), so every project is checked. Before, with no existing setup they wrote the current folder's project settings, so a sign-in run from a scratch folder governed only that folder. `--project` keeps a per-project connection and placement.

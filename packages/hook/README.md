@@ -211,7 +211,7 @@ removed), `status` says **NOT DELIVERING** with the time it stopped and the one 
 it, which is signing in again. `doctor` also checks that the workspace still accepts the connection,
 not only that it is reachable, and fails when it does not.
 
-Signing in again never rewrites an agent's settings file that already holds the right hook entry.
+Signing in puts the hook in your user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json` or `~/.codex/hooks.json`), so every project on this computer is checked; `--project` connects one project instead. Signing in again never rewrites a settings file that already holds the right hook entry.
 
 Enrollment registers both the gateway attester and the hook's separate agent signing key with proof of possession, so Cloud can verify authenticated receipts.
 

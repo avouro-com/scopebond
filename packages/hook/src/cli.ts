@@ -796,7 +796,14 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     if (existing && !args.includes("--no-install")) {
       console.log(`✓ ${harnessName(harness)} already configured in ${existing}`);
     } else if (!args.includes("--no-install")) {
-      const { file } = placeHook(harness, process.cwd(), undefined);
+      // A connection for this computer (the user home, the default) covers every project,
+      // so the hook goes into the user-level agent settings. Placing it in the current
+      // folder's project settings — what this did before — left every other project
+      // unchecked, and a sign-in run from a scratch folder governed only that folder.
+      // `--project` (a per-project connection) keeps the project placement.
+      const file = dir === userHome()
+        ? writeHarnessConfig(userHarnessFile(harness), harness, durableHookCommand(harness))
+        : placeHook(harness, process.cwd(), undefined).file;
       console.log(`✓ ${harnessName(harness)} configured in ${file}`);
       if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     } else {
@@ -1082,16 +1089,18 @@ function cliPath(): string {
 /** `install` — the once-per-machine, user-level install (SB112). Scaffolds the
  *  user home and registers the hook by absolute path in the user-level agent config,
  *  so every project a developer opens is governed without a per-repo `init`. */
+/** The command a user-level agent setting runs. Run through `npx`, this CLI lives in npm's
+ *  throwaway cache; registering that path would leave a hook that stops starting whenever
+ *  npm clears it — and a hook that cannot start lets every action through. Pin the durable
+ *  copy, as `init` does, and fall back to the portable `npx` command when none can be made. */
+function durableHookCommand(h: Harness): string {
+  const pin = ensureDurableRuntime(cliPath(), hookVersion());
+  return pin.cli ? absoluteHookCommand(pin.cli, h) : hookCommand(h);
+}
+
 function runInstall(args: string[]): void {
   const dir = userHome();
-  // Run through `npx`, this CLI lives in npm's throwaway cache; registering that path
-  // would leave a hook that stops starting whenever npm clears it — and a hook that
-  // cannot start lets every action through. Pin the durable copy, as `init` does, and
-  // fall back to the portable `npx` command when none can be made.
-  const commandFor = (h: Harness): string => {
-    const pin = ensureDurableRuntime(cliPath(), hookVersion());
-    return pin.cli ? absoluteHookCommand(pin.cli, h) : hookCommand(h);
-  };
+  const commandFor = durableHookCommand;
   const harnessesFor = (): Harness[] => args.includes("--codex") ? ["codex"]
     : args.includes("--cursor") ? ["cursor"]
     : args.includes("--claude") ? ["claude"]
