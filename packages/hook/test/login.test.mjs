@@ -127,6 +127,29 @@ test("login: with a user-level install, the connected project governs, so its re
   }
 });
 
+test("login: from a folder with no project setup, it repairs the user-level connection instead of creating a second one", async () => {
+  // A computer set up once for the user: reconnecting from whatever folder the terminal
+  // happens to be in must fix the connection the hook actually uses.
+  const home = mkdtempSync(join(tmpdir(), "sb-hook-login-home-"));
+  scaffold(home);
+  const folder = mkdtempSync(join(tmpdir(), "sb-hook-login-bare-"));
+  const kids = {
+    attester: loadOrCreateAttester({ file: join(home, "attester.key") }).attester.kid,
+    agent: loadOrCreateAttester({ file: join(home, "agent.key") }).attester.kid,
+  };
+  const workspace = await startFakeWorkspace({ pendingPolls: 0, kids });
+  const env = { ...process.env, SCOPEBOND_HOME: home };
+  delete env.SCOPEBOND_HOOK_DIR;
+  try {
+    const r = await runCli(["login", workspace.url, "--no-install"], env, folder);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(join(home, "cloud.json")), "the user-level connection is the one repaired");
+    assert.ok(!existsSync(join(folder, ".scopebond")), "no second, project-level setup appears");
+  } finally {
+    workspace.close();
+  }
+});
+
 test("login: a denied request connects nothing and says so", async () => {
   const workspace = await startFakeWorkspace({ pendingPolls: 0, outcome: "deny" });
   const project = mkdtempSync(join(tmpdir(), "sb-hook-login-deny-"));

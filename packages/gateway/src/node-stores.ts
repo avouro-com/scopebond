@@ -290,6 +290,14 @@ export class SqliteReceiptStore implements ReceiptStore {
       .all(Math.max(1, Math.floor(limit))) as { receipt_json: string }[];
     return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
   }
+  /** Receipts in log order after the row `afterId`, at most `limit` of them, with their row
+   *  ids — for walking a large log without holding it in memory. */
+  page(afterId: number, limit: number): Array<{ id: number; receipt: SignedReceipt }> {
+    const rows = this.db
+      .prepare(`SELECT id, receipt_json FROM receipts WHERE id > ? ORDER BY id LIMIT ?`)
+      .all(Math.max(0, Math.floor(afterId)), Math.max(1, Math.floor(limit))) as { id: number; receipt_json: string }[];
+    return rows.map((row) => ({ id: Number(row.id), receipt: JSON.parse(row.receipt_json) as SignedReceipt }));
+  }
   /** How many receipts are stored, without reading any of them. */
   count(): number {
     const rows = this.db.prepare(`SELECT COUNT(*) AS n FROM receipts`).all() as { n: number }[];
@@ -510,6 +518,29 @@ export class SqliteCloudOutbox implements CloudOutbox {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  /** After the machine's countersigning key is replaced, queued receipts signed by an earlier
+   *  key can never be delivered by the new connection: the workspace refuses them, and a
+   *  refused batch would hold up every newer receipt behind it. They are taken out of the
+   *  queue as `rekeyed` gaps; the receipts themselves stay in the local log, from which
+   *  `recover` delivers them once the workspace approves. Returns how many were set aside. */
+  discardNotSignedBy(kid: string): number {
+    const at = this.now();
+    const rows = this.db.prepare(
+      "SELECT event_id FROM cloud_outbox WHERE json_extract(receipt_json, '$.payload.attester.kid') IS NOT ?",
+    ).all(kid) as Array<{ event_id: string }>;
+    if (!rows.length) return 0;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const remove = this.db.prepare("DELETE FROM cloud_outbox WHERE event_id = ?");
+      for (const row of rows) { remove.run(row.event_id); this.gap(row.event_id, "rekeyed", at); }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return rows.length;
   }
 
   status(): CloudOutboxStatus {
