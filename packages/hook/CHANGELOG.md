@@ -1,5 +1,28 @@
 # @scopebond/hook
 
+## 0.11.0
+
+### Minor Changes
+
+- 0a30e9c: Workspace rules can name exact targets a rule skips: paths for the secret-read and CI-configuration rules (an exact path, or a folder ending in `/**`) and branches for the push rule. An exclusion matches exactly, same case, so it is never broader than what was typed, and an exclusion that would touch the always-on protection of Scopebond's own settings or the agents' hook settings is dropped when the policy is compiled. The rules fetch now sends the hook's version (`x-scopebond-hook-version`), so a workspace can send these lists only to computers that understand them; earlier hook versions refuse a document that carries them.
+
+  A document with the same version as the one in force but different rules is now accepted (the workspace can change what reaches a computer without a new version, for example when an agent moves to another team); an older version, or the same rules again, is still refused. An exclusion can never reach Scopebond's own settings or the agents' hook settings or climb out of its folder (no "." or ".." segments), a branch exclusion is one exact name starting with a letter or digit, and skipping ordinary pushes to a branch keeps its force-push, deletion and mirror protection.
+
+- 1b8be99: Reconnecting a computer always works now. When the workspace refuses this computer's countersigning key because the computer was replaced or disconnected there, `login` and `connect` replace the key and enroll again with the same, unspent token. The old key is kept in `retired-keys/`. Queued receipts signed by the earlier key leave the delivery queue as `rekeyed` gaps, so they no longer hold up newer receipts, and they stay in the local log.
+
+  New `recover` command: it finds the local records an earlier key signed, asks the workspace to accept them, waits while an owner or admin approves it there, then sends them in bounded batches and reports how many were recovered, already present or refused. Nothing is re-signed.
+
+  `login` and `connect` run from a folder without its own project setup now repair the connection the hook actually uses, usually the user-level one, instead of creating a second, project-level setup beside it. `--project` sets up the current folder explicitly.
+
+  Gateway changes: enrollment refusals are a `CloudEnrollmentError` that carries the HTTP status and the workspace's code. `SqliteReceiptStore.page()` walks a large log without loading it into memory. `SqliteCloudOutbox.discardNotSignedBy()` sets aside queued receipts signed by another key.
+
+- 4242eda: A connected computer sends its records to the address its workspace names at enrollment. When the enrollment answer carries `ingest_url` (a workspace's regional ingest address), the hook keeps it in `cloud.json` and uses it for record delivery, observations, proof receipts, `flush` and `recover`; sign-in, rules and the portal still use the workspace URL. Only an HTTPS origin without credentials is accepted (or `http://localhost` for development); anything else is ignored and the workspace URL is used, as are connections made before this version.
+
+### Patch Changes
+
+- Updated dependencies [1b8be99]
+  - @scopebond/gateway@0.10.0
+
 ## 0.10.0
 
 ### Minor Changes
