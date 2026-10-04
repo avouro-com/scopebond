@@ -26,8 +26,8 @@ async function record(dir, paths) {
 
 /** A workspace that refuses `revokedPem` at enrollment (as Cloud does for a revoked key) and
  *  runs the recovery flow: pending until polled `approveAfter` times, then approved. */
-function fakeCloud(dir, revokedPem, { approveAfter = 1, keyStatus = "revoked" } = {}) {
-  const state = { enrolls: 0, uploaded: [], completed: false, polls: 0, asked: null };
+function fakeCloud(dir, revokedPem, { approveAfter = 1, keyStatus = "revoked", failUploads = 0 } = {}) {
+  const state = { enrolls: 0, uploaded: [], completed: false, polls: 0, asked: null, failed: 0 };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => { body += c; });
@@ -55,6 +55,10 @@ function fakeCloud(dir, revokedPem, { approveAfter = 1, keyStatus = "revoked" } 
       if (req.url === "/v1/recover/r1" && req.method === "GET") {
         state.polls += 1;
         return send(200, { id: "r1", status: state.polls >= approveAfter ? "approved" : "pending" });
+      }
+      if (req.url === "/v1/recover/r1/receipts" && state.failed < failUploads) {
+        state.failed += 1;
+        return send(503, { error: "evidence is durable but its read projection is pending" });
       }
       if (req.url === "/v1/recover/r1/receipts") {
         const receipts = JSON.parse(body).receipts;
@@ -151,6 +155,25 @@ test("a connection whose key is accepted is not rotated", async () => {
     assert.equal(connection.rotatedFrom, undefined);
     assert.equal(loadOrCreateAttester({ file: join(dir, "attester.key") }).attester.kid, before.kid);
     assert.equal(existsSync(join(dir, "retired-keys")), false);
+  } finally {
+    cloud.close();
+  }
+});
+
+test("recover resends a batch through temporary failures instead of stopping", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-recover-"));
+  scaffold(dir);
+  writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
+  const old = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
+  await record(dir, ["/repo/a.ts", "/repo/b.ts"]);
+  const cloud = await fakeCloud(dir, old.publicKeyPem, { failUploads: 7 });
+  try {
+    const connection = await connectCloud(dir, cloud.url, bundle);
+    const lines = [];
+    const result = await recoverEarlierReceipts(dir, connection, io(lines), { wait: true, waitMs: 60_000, pollMs: 1 });
+    assert.equal(cloud.state.failed, 7);
+    assert.deepEqual({ accepted: result.accepted, failed: result.failed }, { accepted: 2, failed: false });
+    assert.ok(lines.some((l) => l.includes("trying the same batch again")));
   } finally {
     cloud.close();
   }

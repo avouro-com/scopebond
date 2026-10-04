@@ -16,6 +16,8 @@ const MAX_BATCH_BYTES = 900 * 1024;
 const MAX_BATCH_COUNT = 100;
 const MAX_RECEIPT_BYTES = 128 * 1024;
 const PAGE = 500;
+/** How long one batch is retried through lost connections and server errors. */
+const RETRY_FOR_MS = 15 * 60_000;
 
 export interface KeyGroup { kid: string; count: number; first: string | null; last: string | null }
 
@@ -129,6 +131,7 @@ async function uploadGroup(
   const send = async (): Promise<boolean> => {
     if (!batch.length) return true;
     const body = `{"receipts":[${batch.join(",")}]}`;
+    const started = io.now();
     for (let attempt = 1; ; attempt++) {
       const answer = await call(io, connection, `/v1/recover/${encodeURIComponent(id)}/receipts`, body).catch((error: Error) => ({ status: 0, json: { error: error.message } } as Answer));
       if (answer.status === 200) {
@@ -138,7 +141,14 @@ async function uploadGroup(
         break;
       }
       // Durable but not yet readable, or a network error: the same batch is safe to resend.
-      if ((answer.status === 503 || answer.status === 0 || answer.status >= 500) && attempt < 6) { await io.sleep(2_000 * attempt); continue; }
+      // A laptop that sleeps or changes networks loses the connection for minutes, not
+      // seconds: keep resending with backoff for up to RETRY_FOR_MS before giving up.
+      if ((answer.status === 0 || answer.status >= 500) && io.now() - started < RETRY_FOR_MS) {
+        const wait = Math.min(60_000, 2_000 * 2 ** Math.min(attempt - 1, 5));
+        io.log(`  ${answer.status === 0 ? "Connection lost" : `The workspace answered ${answer.status}`}; trying the same batch again in ${Math.round(wait / 1000)} s…`);
+        await io.sleep(wait);
+        continue;
+      }
       io.log(`  Stopped: ${String(answer.json.error ?? `HTTP ${answer.status}`)}. Records already sent stay recovered; run recover again to continue.`);
       totals.stopped = true;
       return false;
