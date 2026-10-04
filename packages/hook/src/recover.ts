@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SignedReceipt } from "@scopebond/gateway";
 import { SqliteReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
-import type { HookConnection } from "./cloud.js";
+import { ingestUrl, type HookConnection } from "./cloud.js";
 
 /** The workspace accepts at most 1 MiB and 100 receipts per request. */
 const MAX_BATCH_BYTES = 900 * 1024;
@@ -57,7 +57,7 @@ export function groupByEarlierKey(store: SqliteReceiptStore, currentKid: string)
 interface Answer { status: number; json: Record<string, unknown> }
 
 async function call(io: RecoverIo, connection: HookConnection, path: string, body?: unknown): Promise<Answer> {
-  const response = await io.fetch(new URL(path, connection.url), {
+  const response = await io.fetch(new URL(path, ingestUrl(connection)), {
     method: body === undefined ? "GET" : "POST",
     headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
     ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),

@@ -24,6 +24,26 @@ export interface HookConnection extends CloudEnrollmentResult {
    *  is, so there is no fallback: without it the hook reports observations unsupported
    *  rather than guessing a generation. */
   installation_generation?: number;
+  /** Where this machine sends its records: the workspace's regional ingest address, named by
+   *  the enrollment answer. Absent from older answers and connections; `url` is used then. */
+  ingest_url?: string;
+}
+
+/** The address records, observations and recovery go to: the enrollment's `ingest_url` when it
+ *  is a valid HTTPS origin (or localhost in development), otherwise the workspace URL. Sign-in,
+ *  policy and the portal always use `url`. */
+export function ingestUrl(connection: Pick<HookConnection, "url" | "ingest_url">): string {
+  return safeIngestOrigin(connection.ingest_url) ?? connection.url;
+}
+
+function safeIngestOrigin(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 2048) return null;
+  try {
+    const parsed = new URL(value);
+    const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    if ((parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) || parsed.username || parsed.password) return null;
+    return parsed.origin;
+  } catch { return null; }
 }
 
 export const connectionPath = (dir: string): string => join(dir, "cloud.json");
@@ -65,7 +85,9 @@ export async function connectCloud(
     attester = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
     result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: fetchImpl });
   }
-  const connection: HookConnection = { url, ...result };
+  const { ingest_url: offered, ...enrolled } = result as typeof result & { ingest_url?: unknown };
+  const ingest = safeIngestOrigin(offered);
+  const connection: HookConnection = { url, ...enrolled, ...(ingest ? { ingest_url: ingest } : {}) };
   writeFileSync(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n", { mode: 0o600 });
   let setAside = 0;
   const outboxPath = join(dir, "receipts.db.cloud-outbox.db");
@@ -95,7 +117,7 @@ export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
 ): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
   const outbox = new SqliteCloudOutbox(outboxDbPath);
-  const exporter = createCloudExporter({ url: connection.url, credential: connection.credential, outbox, fetch: fetchImpl });
+  const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }
 
