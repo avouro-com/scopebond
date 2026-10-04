@@ -64,6 +64,7 @@ import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { recordRulesCredential } from "./delivery-state.js";
 import { describeDelivery } from "./delivery-report.js";
+import { buildStatusJson } from "./status-json.js";
 import { computeManifest, renderManifest } from "./capabilities.js";
 import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofReceipts } from "./proof.js";
 import { fileURLToPath } from "node:url";
@@ -1165,7 +1166,18 @@ function describeStore(dbPath: string): string {
   return count === null ? human : `${count} receipt(s), ${human}`;
 }
 
-function runStatus(): void {
+function runStatus(args: string[] = []): void {
+  if (args.includes("--json")) {
+    const cwd = process.cwd();
+    const active = resolveConfigDir(cwd);
+    const configured = (h: Harness) => !!harnessScopeLabel(harnessScopes(h, cwd));
+    console.log(JSON.stringify(buildStatusJson({
+      version: hookVersion(), activeDir: active, candidateDirs: [userHome(), join(cwd, ".scopebond")],
+      hasPolicy: existsSync(join(active, "policy.json")),
+      agents: { claude: configured("claude"), cursor: configured("cursor"), codex: configured("codex") },
+    }), null, 2));
+    return;
+  }
   const home = userHome();
   const installed = existsSync(join(home, "policy.json"));
   // Both scopes, always: `init` writes the project config and `install` writes the
@@ -1637,7 +1649,7 @@ else if (cmd === "verify") { await runVerify(); }
 else if (cmd === "test") { await runTest(rest); }
 else if (cmd === "flush") { await runFlush(); }
 else if (cmd === "recover") { await runRecover(rest); }
-else if (cmd === "status") { runStatus(); }
+else if (cmd === "status") { runStatus(rest); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "capabilities") { await runCapabilities(rest); }
 else if (cmd === "observations") { await runObservations(rest); }

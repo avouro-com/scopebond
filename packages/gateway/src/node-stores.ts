@@ -582,6 +582,17 @@ export class SqliteCloudOutbox implements CloudOutbox {
     this.db.prepare("DELETE FROM cloud_outbox WHERE enqueued_at < ?").run(at - this.maxAgeMs);
   }
 
+  /** Delivery gaps by reason, over the retained gap records (for a machine-readable status). */
+  gapsByReason(): Record<string, number> {
+    const rows = this.db.prepare("SELECT reason, COUNT(*) AS n FROM cloud_delivery_gaps GROUP BY reason").all() as Array<{ reason: string; n: number }>;
+    return Object.fromEntries(rows.map((r) => [r.reason, Number(r.n)]));
+  }
+
+  /** A gap learned from the workspace (a record refused on its own). */
+  recordGap(id: string | null, reason: CloudDeliveryGap["reason"]): CloudDeliveryGap {
+    return this.gap(id, reason, this.now());
+  }
+
   private gap(id: string | null, reason: CloudDeliveryGap["reason"], at: number): CloudDeliveryGap {
     this.db.prepare(
       "INSERT INTO cloud_delivery_gaps (event_id, reason, created_at) VALUES (?, ?, ?)",
