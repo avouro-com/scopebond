@@ -4,10 +4,10 @@
 // durable exporter (D40 — no new transport). The machine credential and the complete
 // receipt log stay local-first; export is best-effort and never blocks a tool call.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  completeCloudEnrollment, createCloudExporter, withCloudExporter,
+  CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,
   type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter, type ReceiptStore,
 } from "@scopebond/gateway";
 import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
@@ -41,16 +41,52 @@ export function loadConnection(dir: string): HookConnection | null {
 
 /** Enroll the machine's attester with a workspace using the portal's one-use handoff,
  *  then persist the scoped machine credential. The attester whose possession is proved
- *  here is the same key the hook countersigns receipts with, so ingest accepts them. */
+ *  here is the same key the hook countersigns receipts with, so ingest accepts them.
+ *
+ *  A workspace refuses a key it already knows — one revoked when the computer was
+ *  replaced or disconnected, or one already enrolled elsewhere — without spending the
+ *  token. Reconnecting then replaces the key and enrolls again with the same token, so a
+ *  second `login` always works; the old key is kept under retired-keys/, and queued
+ *  receipts it signed leave the delivery queue (they stay in the local log for
+ *  `recover`), because the new connection can never deliver them. */
 export async function connectCloud(
   dir: string, url: string, bundle: CloudEnrollmentBundle, fetchImpl?: typeof fetch,
-): Promise<HookConnection> {
-  const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
+): Promise<HookConnection & { rotatedFrom?: string; setAside?: number }> {
+  let { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
   const { attester: agent } = loadOrCreateAttester({ file: join(dir, "agent.key") });
-  const result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: fetchImpl });
+  let rotatedFrom: string | undefined;
+  let result;
+  try {
+    result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: fetchImpl });
+  } catch (error) {
+    if (!(error instanceof CloudEnrollmentError) || error.code !== "gateway_key_conflict") throw error;
+    rotatedFrom = attester.kid;
+    retireAttesterKey(dir, attester.kid);
+    attester = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
+    result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: fetchImpl });
+  }
   const connection: HookConnection = { url, ...result };
   writeFileSync(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n", { mode: 0o600 });
-  return connection;
+  let setAside = 0;
+  const outboxPath = join(dir, "receipts.db.cloud-outbox.db");
+  if (existsSync(outboxPath)) {
+    const outbox = new SqliteCloudOutbox(outboxPath);
+    try { setAside = outbox.discardNotSignedBy(attester.kid); } finally { outbox.close(); }
+  }
+  return { ...connection, ...(rotatedFrom ? { rotatedFrom } : {}), ...(setAside ? { setAside } : {}) };
+}
+
+/** Where a replaced countersigning key is kept: receipts it signed stay verifiable, and
+ *  `recover` can still deliver the ones the workspace never received. */
+export const retiredKeysDir = (dir: string): string => join(dir, "retired-keys");
+
+/** Move the current countersigning key aside so the next load creates a fresh one. */
+export function retireAttesterKey(dir: string, kid: string): string {
+  const target = join(retiredKeysDir(dir), `${kid.replace(/[^A-Za-z0-9_-]/g, "-")}.key`);
+  const destination = existsSync(target) ? `${target}.${Date.now()}` : target;
+  mkdirSync(retiredKeysDir(dir), { recursive: true });
+  renameSync(join(dir, "attester.key"), destination);
+  return destination;
 }
 
 /** Wrap a receipt store so every stored receipt is enqueued to a durable outbox and

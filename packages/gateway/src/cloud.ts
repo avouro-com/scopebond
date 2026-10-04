@@ -14,7 +14,7 @@ export interface CloudOutboxEntry {
 
 export interface CloudDeliveryGap {
   id: string | null;
-  reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error";
+  reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error" | "rekeyed";
   at: number;
 }
 

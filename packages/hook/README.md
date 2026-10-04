@@ -216,6 +216,19 @@ locally and retried if the workspace is unreachable. `npx @scopebond/hook flush`
 delivers anything still queued — run it on a session-end hook (and set
 `SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency.
 
+**Reconnecting.** Run `login` again from any folder: unless that folder has its own project
+setup, it repairs the connection the hook actually uses (usually the user-level one) instead
+of creating a second one; pass `--project` to set up the folder you are in. If the workspace
+no longer accepts this computer's countersigning key (the computer was replaced or
+disconnected there), `login` replaces the key and keeps the old one in
+`.scopebond/retired-keys/`.
+
+**Records signed by an earlier key.** The new connection cannot deliver records the earlier
+key signed, so they leave the delivery queue but stay in the local log.
+`npx @scopebond/hook recover` asks the workspace to accept them, waits while an owner or
+admin approves it there, then sends them; the workspace checks each signature against the
+key it kept and labels the records as recovered.
+
 ### Rules set by your workspace
 
 A connected computer keeps its own rules (`.scopebond/rules.json`) until someone who manages

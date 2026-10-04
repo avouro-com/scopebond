@@ -51,6 +51,7 @@ import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
 import { loadOrCreateBindingKey } from "./observation.js";
 import { uploadPending } from "./obs-upload.js";
 import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
+import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { isManaged, readMeta, MANAGED_DOC_FILE } from "./managed.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
@@ -752,11 +753,11 @@ async function runConnect(args: string[]): Promise<void> {
   const bundleArg = positional[1];
   const harness = selectedHarness(args);
   if (!url) {
-    console.error(`usage: ${cliCommand("connect <workspace-url> <enrollment> [--claude|--cursor|--codex] [--no-install]")}`);
+    console.error(`usage: ${cliCommand("connect <workspace-url> <enrollment> [--claude|--cursor|--codex] [--no-install] [--project]")}`);
     console.error(enrollmentHelp);
     process.exit(1);
   }
-  const dir = configDir();
+  const dir = connectDir(args);
   // One command sets everything up: scaffold the key, attester and starter policy if
   // they do not exist, then enroll and persist the scoped machine credential. The
   // enrollment can be a file, an inline base64 blob (what the portal hands out) or
@@ -774,6 +775,8 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
   try {
     const c = await connectCloud(dir, url, bundle);
     console.log(`✓ Connected to ${c.url}`);
+    if (c.rotatedFrom) console.log(`✓ This computer's earlier key (${c.rotatedFrom}) was no longer accepted, so it was replaced; the old key is kept in ${join(dir, "retired-keys")}`);
+    if (c.setAside) console.log(`  ${c.setAside.toLocaleString()} queued record(s) signed by an earlier key cannot go through this connection. To deliver them, run: ${cliCommand("recover")}`);
     // With a user-level install present, the hook ignores a project policy until it is
     // trusted, and would fall back to the user home, which holds no cloud.json: the agent
     // stays governed, but nothing reaches the workspace. Connecting this project is the
@@ -827,6 +830,45 @@ const enrollmentHelp = [
   "Each enrollment is single-use and expires soon after it is created; if this one was",
   "used or has expired, create a new one there.",
 ].join("\n");
+
+/** Where `connect` and `login` write. A project someone set up here with `init` (it has a
+ *  policy) is connected, as before. Otherwise the configuration the hook itself uses from
+ *  here — usually the user-level install — so reconnecting from any folder repairs the
+ *  connection that is actually failing instead of creating a second, project-level one
+ *  beside it. `--project` asks for a new per-project setup explicitly. */
+function connectDir(args: string[]): string {
+  const project = configDir();
+  return args.includes("--project") || existsSync(join(project, "policy.json")) ? project : resolveConfigDir(process.cwd());
+}
+
+/** `recover [--no-wait]`: deliver receipts that an earlier, since-revoked key of this computer
+ *  signed and the workspace never received, after an owner or admin approves it there. */
+async function runRecover(args: string[]): Promise<void> {
+  const dir = resolveConfigDir(process.cwd());
+  const connection = loadConnection(dir);
+  if (!connection) {
+    console.error(`not connected to a workspace; run \`${cliCommand("login <workspace-url>")}\` first`);
+    process.exit(1);
+  }
+  console.log(`Recovering from ${dir}`);
+  const result = await recoverEarlierReceipts(dir, connection, {
+    log: (line) => console.log(line),
+    fetch,
+    now: Date.now,
+    sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+  }, { wait: !args.includes("--no-wait"), waitMs: 15 * 60_000, pollMs: 5_000 });
+  if (result.groups) {
+    const parts = [
+      `recovered ${result.accepted.toLocaleString()}`,
+      `already present ${result.duplicates.toLocaleString()}`,
+      `refused ${result.rejected.toLocaleString()}`,
+      ...(result.pending ? [`waiting for approval ${result.pending.toLocaleString()}`] : []),
+      ...(result.skipped ? [`skipped ${result.skipped.toLocaleString()}`] : []),
+    ];
+    console.log(`\nDone: ${parts.join(", ")}.`);
+  }
+  process.exitCode = result.failed || result.pending ? 1 : 0;
+}
 
 async function runFlush(): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
@@ -1324,7 +1366,7 @@ async function runLogin(args: string[]): Promise<void> {
     if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) throw new Error("https required");
     origin = parsed.origin;
   } catch {
-    console.error(`usage: ${cliCommand("login <workspace-url> [--claude|--cursor|--codex] [--no-install]")}`);
+    console.error(`usage: ${cliCommand("login <workspace-url> [--claude|--cursor|--codex] [--no-install] [--project]")}`);
     console.error("The workspace URL is the address of your Scopebond workspace, for example https://cloud.scopebond.com.");
     process.exit(1);
   }
@@ -1349,7 +1391,7 @@ async function runLogin(args: string[]): Promise<void> {
   const deadline = Date.now() + Math.max(60, Number(start.json.expires_in ?? 600)) * 1000;
   console.log(`To connect this computer, open:\n\n  ${verify}\n\nand check that it shows the code  ${userCode}\n`);
   console.log("Waiting for approval (the code expires in 10 minutes; Ctrl+C to stop)…");
-  const dir = configDir();
+  const dir = connectDir(args);
   scaffold(dir, {});
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -1481,6 +1523,12 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
   { name: "connect", args: "<workspace-url> <enrollment> [--claude|--cursor|--codex]",
     summary: "send receipts to a Scopebond Cloud workspace as well as keeping them locally" },
   { name: "flush", summary: "deliver any receipts still queued for the workspace now" },
+  { name: "recover", args: "[--no-wait]", summary: "deliver records an earlier, revoked key signed, once the workspace approves",
+    detail: [
+      "When this computer was replaced or disconnected while records were still queued, the",
+      "workspace refuses them from the new connection. This asks the workspace to accept them,",
+      "waits while an owner or admin approves it on Activity, then sends them, labelled Recovered.",
+    ] },
   { name: "trust", args: "[--yes]", summary: "let this project's .scopebond policy govern here (pinned by hash)" },
   { name: "uninstall", args: "[--purge] [--yes]", summary: "remove the hook from your agent config; --purge also deletes the home" },
   { name: "claude", summary: "(internal) decide one Claude Code PreToolUse call, JSON on stdin" },
@@ -1546,6 +1594,7 @@ else if (cmd === "log") { await runLog(rest); }
 else if (cmd === "verify") { await runVerify(); }
 else if (cmd === "test") { await runTest(rest); }
 else if (cmd === "flush") { await runFlush(); }
+else if (cmd === "recover") { await runRecover(rest); }
 else if (cmd === "status") { runStatus(); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "capabilities") { await runCapabilities(rest); }
