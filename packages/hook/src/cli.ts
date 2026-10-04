@@ -50,7 +50,7 @@ import {
 import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
 import { loadOrCreateBindingKey } from "./observation.js";
 import { uploadPending } from "./obs-upload.js";
-import { connectCloud, loadConnection, connectionPath } from "./cloud.js";
+import { connectCloud, ingestUrl, loadConnection, connectionPath } from "./cloud.js";
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { isManaged, readMeta, MANAGED_DOC_FILE } from "./managed.js";
@@ -1039,7 +1039,7 @@ async function runObservations(args: string[]): Promise<void> {
   const emitter = opened.emitter;
   try {
     if (sub === "flush") {
-      const outcome = await uploadPending(emitter.store, { url: emitter.connection.url, credential: emitter.connection.credential, timeoutMs: 10_000 });
+      const outcome = await uploadPending(emitter.store, { url: ingestUrl(emitter.connection), credential: emitter.connection.credential, timeoutMs: 10_000 });
       const left = emitter.store.pendingSummary().count;
       console.log(`${outcome.result}: ${outcome.acknowledged} acknowledged, ${outcome.deferred} deferred, ${outcome.rejected} refused; ${left} still pending${outcome.detail ? ` (${outcome.detail})` : ""}`);
       process.exitCode = left > 0 ? 1 : 0;

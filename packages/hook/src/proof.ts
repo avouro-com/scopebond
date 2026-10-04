@@ -31,7 +31,7 @@ import { mapVector, type Vector } from "./vectors.js";
 import { bindingKeyFromHex, operationsForCall, sourceReceiptHash } from "./observation.js";
 import { callRequestOf, fixtureProbe } from "./typed-ops.js";
 import { fixtureFiles } from "./typed-infra.js";
-import type { HookConnection } from "./cloud.js";
+import { ingestUrl, type HookConnection } from "./cloud.js";
 
 export const PROOF_FILE = "capability-proof.json";
 
@@ -169,7 +169,7 @@ export const proofPassed = (proof: ProofRecord, cell: CapabilityCell): boolean =
 export async function deliverProofReceipts(connection: HookConnection, receipts: unknown[], options: { fetch?: typeof fetch; timeoutMs?: number } = {}): Promise<boolean> {
   if (receipts.length === 0) return true;
   const exporter = createCloudExporter({
-    url: connection.url, credential: connection.credential, outbox: createMemoryCloudOutbox({ maxPending: Math.max(1000, receipts.length) }),
+    url: ingestUrl(connection), credential: connection.credential, outbox: createMemoryCloudOutbox({ maxPending: Math.max(1000, receipts.length) }),
     fetch: options.fetch, flushMs: 60_000,
   });
   try {
