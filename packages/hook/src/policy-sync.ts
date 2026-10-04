@@ -80,7 +80,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let res: Response;
   try {
     res = await fetchImpl(`${base}/v1/policy`, {
-      headers: { ...auth, ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}) },
+      // The hook's version tells the workspace which settings this computer understands (for example exact-target
+      // exclusions), so it is never sent a document an older hook would refuse.
+      headers: { ...auth, ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -123,7 +125,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     save({ etag, last_ack: confirmed, last_error: null });
     return { state: "unchanged", revision: meta.revision };
   }
-  const inspected = inspectManaged(raw, { installationId, currentRevision: isManaged(dir) ? meta.revision : null });
+  const inspected = inspectManaged(raw, { installationId, currentRevision: isManaged(dir) ? meta.revision : null, currentDigest: isManaged(dir) ? meta.rules_digest : null });
   const echo = typeof r.export_id === "string" && Number.isInteger(r.revision) && typeof r.rules_digest === "string" && /^[0-9a-f]{64}$/.test(r.rules_digest)
     ? { export_id: r.export_id, revision: r.revision as number, rules_digest: r.rules_digest } : null;
   if (!inspected.ok) {
