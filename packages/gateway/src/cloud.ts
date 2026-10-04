@@ -141,6 +141,22 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
   };
 }
 
+/** "ingest failed: HTTP 401" plus, when the workspace named one, its refusal code and the one
+ *  thing to do ("ingest failed: HTTP 401 (credential_refused): Sign it in again ..."). The prefix
+ *  never changes, so anything that reads the status from it keeps working. Bounded and never throws. */
+async function refusalMessage(res: Response): Promise<string> {
+  const base = "ingest failed: HTTP " + res.status;
+  try {
+    const text = (await res.text()).slice(0, 4096);
+    const body = JSON.parse(text) as { code?: unknown; remediation?: unknown };
+    const code = typeof body.code === "string" && /^[a-z_]{1,40}$/.test(body.code) ? body.code : null;
+    const remediation = typeof body.remediation === "string" ? body.remediation.replace(/[^\x20-\x7e]/g, " ").slice(0, 240) : null;
+    return code ? `${base} (${code})${remediation ? ": " + remediation : ""}` : base;
+  } catch {
+    return base;
+  }
+}
+
 export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   if (!opts.url.trim()) throw new TypeError("Cloud export URL is required");
   if (!opts.credential.trim()) throw new TypeError("Cloud machine credential is required");
@@ -179,7 +195,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json" },
           body: JSON.stringify({ receipts: batch.map((entry) => entry.receipt) }),
         });
-        if (!res.ok) throw new Error("ingest failed: HTTP " + res.status);
+        if (!res.ok) throw new Error(await refusalMessage(res));
         opts.outbox.acknowledge(batch.map(({ id, payloadHash }) => ({ id, payloadHash })));
         consecutiveFailures = 0;
         nextAttemptAt = null;
