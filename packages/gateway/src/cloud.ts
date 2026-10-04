@@ -14,7 +14,7 @@ export interface CloudOutboxEntry {
 
 export interface CloudDeliveryGap {
   id: string | null;
-  reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error" | "rekeyed";
+  reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error" | "rekeyed" | "rejected";
   at: number;
 }
 
@@ -32,6 +32,8 @@ export interface CloudOutbox {
   peek(limit: number, now: number): CloudOutboxEntry[];
   acknowledge(entries: Array<{ id: string; payloadHash: string }>): void;
   status(): CloudOutboxStatus;
+  /** Record a delivery gap the exporter learned of (a record the workspace refused on its own). */
+  recordGap?(id: string | null, reason: CloudDeliveryGap["reason"]): CloudDeliveryGap;
   close?(): void;
 }
 
@@ -138,6 +140,7 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
       }
     },
     status,
+    recordGap,
   };
 }
 
@@ -155,6 +158,16 @@ async function refusalMessage(res: Response): Promise<string> {
   } catch {
     return base;
   }
+}
+
+/** The action ids of records a successful response lists as refused (`rejected[].index`). */
+async function refusedIn(res: Response, batch: CloudOutboxEntry[]): Promise<string[]> {
+  try {
+    if (typeof res.json !== "function") return [];
+    const body = await res.json() as { rejected?: Array<{ index?: unknown }> };
+    if (!Array.isArray(body?.rejected)) return [];
+    return body.rejected.flatMap((r) => typeof r?.index === "number" && batch[r.index] ? [batch[r.index].id] : []);
+  } catch { return []; }
 }
 
 export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
@@ -196,7 +209,15 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           body: JSON.stringify({ receipts: batch.map((entry) => entry.receipt) }),
         });
         if (!res.ok) throw new Error(await refusalMessage(res));
+        // A record the workspace refused on its own (the rest of the batch was stored) can never be
+        // accepted as it is: it leaves the queue as a "rejected" gap, so it never holds up the records
+        // behind it. It stays in the local log.
+        const refused = await refusedIn(res, batch);
         opts.outbox.acknowledge(batch.map(({ id, payloadHash }) => ({ id, payloadHash })));
+        for (const id of refused) {
+          const gap = opts.outbox.recordGap?.(id, "rejected") ?? { id, reason: "rejected" as const, at: now() };
+          opts.onGap?.(gap);
+        }
         consecutiveFailures = 0;
         nextAttemptAt = null;
         lastError = null;

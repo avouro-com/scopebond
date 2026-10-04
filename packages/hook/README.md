@@ -208,7 +208,7 @@ In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy
 last problem. Records are never dropped from the queue while they wait: a long outage only makes
 the queue longer. If the workspace refuses this computer's connection (it was revoked, replaced or
 removed), `status` says **NOT DELIVERING** with the time it stopped and the one command that fixes
-it, which is signing in again. `doctor` also checks that the workspace still accepts the connection,
+it, which is signing in again. `status --json` prints the same in one machine-readable shape (`scopebond.status.v1`) for tools and support. `doctor` also checks that the workspace still accepts the connection,
 not only that it is reachable, and fails when it does not.
 
 The connection renews itself: in the last 30 days of its 90-day credential the hook renews it during its rules check, proving it still holds the key it enrolled with. With each rules check it also tells the workspace how many records wait to send (counts and one error line, never a record), so the portal can show a computer that checks in but is not delivering.
