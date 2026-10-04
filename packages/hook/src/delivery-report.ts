@@ -13,6 +13,19 @@ export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
 /** The queue opened without limits, so reading it never expires or drops anything. */
 export const LOSSLESS_OUTBOX = { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER } as const;
 
+/** How many records wait to send and since when, read without changing the queue. */
+export function queueStatus(dir: string): { pending: number; oldest: number | null } {
+  const outboxPath = join(dir, OUTBOX_FILE);
+  if (!existsSync(outboxPath)) return { pending: 0, oldest: null };
+  try {
+    const outbox = new SqliteCloudOutbox(outboxPath, LOSSLESS_OUTBOX);
+    try {
+      const status = outbox.status();
+      return { pending: status.pending, oldest: status.oldestEnqueuedAt };
+    } finally { outbox.close(); }
+  } catch { return { pending: 0, oldest: null }; }
+}
+
 export interface DeliveryReport {
   lines: string[];
   problems: string[];
@@ -24,19 +37,7 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   const state = readDeliveryState(dir);
   const lines: string[] = [];
   const problems: string[] = [];
-  let pending = 0;
-  let oldest: number | null = null;
-  const outboxPath = join(dir, OUTBOX_FILE);
-  if (existsSync(outboxPath)) {
-    try {
-      const outbox = new SqliteCloudOutbox(outboxPath, LOSSLESS_OUTBOX);
-      try {
-        const status = outbox.status();
-        pending = status.pending;
-        oldest = status.oldestEnqueuedAt;
-      } finally { outbox.close(); }
-    } catch { /* an unreadable queue leaves the count at zero */ }
-  }
+  const { pending, oldest } = queueStatus(dir);
   let fix: string | null = null;
   if (state.invalid_since !== null) {
     fix = cliCommand(`login ${connection.url}`);

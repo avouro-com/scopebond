@@ -207,6 +207,7 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
     w = fakeWorkspace([{ status: 200, body: d1, etag: `"1:${d1.rules_digest}"` }]);
     assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "applied", revision: 1 });
     assert.equal(w.calls[0].headers["x-scopebond-hook-version"], "0.10.0", "the fetch says which hook version asks, so the workspace sends only settings it understands");
+    assert.equal(w.calls[0].headers["x-scopebond-pending"], "0", "the rules check reports how many records wait to send, so the portal can tell checking in from delivering");
     assert.ok(isManaged(dir));
     assert.notEqual(readFileSync(join(dir, "policy.json"), "utf8"), localPolicy);
     assert.ok(existsSync(join(dir, "policy.previous.json")));

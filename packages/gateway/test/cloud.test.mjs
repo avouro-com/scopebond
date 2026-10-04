@@ -166,3 +166,22 @@ test("SQLite gap detail is bounded while its cumulative count survives restart",
   reopened.close();
   rmSync(directory, { recursive: true, force: true });
 });
+
+test("a refusal keeps the workspace's code and remediation after the unchanged HTTP prefix", async () => {
+  const ex = createCloudExporter({
+    url: "https://c", credential: "sbm_k", outbox: createMemoryCloudOutbox(), batchSize: 10, flushMs: 1e9,
+    fetch: async () => new Response(JSON.stringify({ error: "unauthorized", code: "credential_refused", remediation: "Sign it in again." }), { status: 401 }),
+  });
+  ex.enqueue(receipt("action:cloud-refused-0001"));
+  await ex.flush();
+  assert.equal(ex.status().lastError, "ingest failed: HTTP 401 (credential_refused): Sign it in again.");
+  ex.stop();
+  const plain = createCloudExporter({
+    url: "https://c", credential: "sbm_k", outbox: createMemoryCloudOutbox(), batchSize: 10, flushMs: 1e9,
+    fetch: async () => new Response("<html>bad gateway</html>", { status: 502 }),
+  });
+  plain.enqueue(receipt("action:cloud-refused-0002"));
+  await plain.flush();
+  assert.equal(plain.status().lastError, "ingest failed: HTTP 502");
+  plain.stop();
+});
