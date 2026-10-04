@@ -264,6 +264,7 @@ const MUST_DENY_REVIEW = [
   "rm -rf src # don't",
   // the agent switching the hook off or re-scoping it
   "npx -y @scopebond/hook uninstall",
+  "npx.cmd -y @scopebond/hook@0.12.0 uninstall",
   "npx @scopebond/hook@0.5.0 trust",
   "scopebond uninstall",
   "scopebond trust",

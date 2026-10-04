@@ -200,7 +200,20 @@ portal's **Connect** step (it gives you a one-use enrollment bundle), save it as
 npx @scopebond/hook connect https://<your-workspace> scopebond-enrollment.json
 ```
 
-In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Enrollment registers both the gateway attester and the hook's separate agent signing key with proof of possession, so Cloud can verify authenticated receipts.
+In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Every command the hook prints for you to run uses `npx.cmd` on Windows.
+
+### Is it delivering?
+
+`status` shows when this computer last delivered records, how many are waiting to send and the
+last problem. Records are never dropped from the queue while they wait: a long outage only makes
+the queue longer. If the workspace refuses this computer's connection (it was revoked, replaced or
+removed), `status` says **NOT DELIVERING** with the time it stopped and the one command that fixes
+it, which is signing in again. `doctor` also checks that the workspace still accepts the connection,
+not only that it is reachable, and fails when it does not.
+
+Signing in puts the hook in your user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json` or `~/.codex/hooks.json`), so every project on this computer is checked; `--project` connects one project instead. Signing in again never rewrites a settings file that already holds the right hook entry.
+
+Enrollment registers both the gateway attester and the hook's separate agent signing key with proof of possession, so Cloud can verify authenticated receipts.
 
 `connect` does the whole setup in one command: it scaffolds `.scopebond/` if needed,
 enrolls this machine's countersigning key, stores a scoped machine credential in

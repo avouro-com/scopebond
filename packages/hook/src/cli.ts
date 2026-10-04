@@ -62,6 +62,8 @@ import { runDispatchCommand } from "./dispatch-cli.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
+import { recordRulesCredential } from "./delivery-state.js";
+import { describeDelivery } from "./delivery-report.js";
 import { computeManifest, renderManifest } from "./capabilities.js";
 import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofReceipts } from "./proof.js";
 import { fileURLToPath } from "node:url";
@@ -794,7 +796,14 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     if (existing && !args.includes("--no-install")) {
       console.log(`✓ ${harnessName(harness)} already configured in ${existing}`);
     } else if (!args.includes("--no-install")) {
-      const { file } = placeHook(harness, process.cwd(), undefined);
+      // A connection for this computer (the user home, the default) covers every project,
+      // so the hook goes into the user-level agent settings. Placing it in the current
+      // folder's project settings — what this did before — left every other project
+      // unchecked, and a sign-in run from a scratch folder governed only that folder.
+      // `--project` (a per-project connection) keeps the project placement.
+      const file = dir === userHome()
+        ? writeHarnessConfig(userHarnessFile(harness), harness, durableHookCommand(harness))
+        : placeHook(harness, process.cwd(), undefined).file;
       console.log(`✓ ${harnessName(harness)} configured in ${file}`);
       if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     } else {
@@ -1080,16 +1089,18 @@ function cliPath(): string {
 /** `install` — the once-per-machine, user-level install (SB112). Scaffolds the
  *  user home and registers the hook by absolute path in the user-level agent config,
  *  so every project a developer opens is governed without a per-repo `init`. */
+/** The command a user-level agent setting runs. Run through `npx`, this CLI lives in npm's
+ *  throwaway cache; registering that path would leave a hook that stops starting whenever
+ *  npm clears it — and a hook that cannot start lets every action through. Pin the durable
+ *  copy, as `init` does, and fall back to the portable `npx` command when none can be made. */
+function durableHookCommand(h: Harness): string {
+  const pin = ensureDurableRuntime(cliPath(), hookVersion());
+  return pin.cli ? absoluteHookCommand(pin.cli, h) : hookCommand(h);
+}
+
 function runInstall(args: string[]): void {
   const dir = userHome();
-  // Run through `npx`, this CLI lives in npm's throwaway cache; registering that path
-  // would leave a hook that stops starting whenever npm clears it — and a hook that
-  // cannot start lets every action through. Pin the durable copy, as `init` does, and
-  // fall back to the portable `npx` command when none can be made.
-  const commandFor = (h: Harness): string => {
-    const pin = ensureDurableRuntime(cliPath(), hookVersion());
-    return pin.cli ? absoluteHookCommand(pin.cli, h) : hookCommand(h);
-  };
+  const commandFor = durableHookCommand;
   const harnessesFor = (): Harness[] => args.includes("--codex") ? ["codex"]
     : args.includes("--cursor") ? ["cursor"]
     : args.includes("--claude") ? ["claude"]
@@ -1173,6 +1184,11 @@ function runStatus(): void {
   console.log(`  Cursor           ${harnessScopeLabel(cursor) || (cursorDetected() ? "detected, not configured" : "not detected")}`);
   console.log(`  Codex            ${codex.project || codex.user ? `${harnessScopeLabel(codex)} — approve once with /hooks` : codexDetected() ? "detected, not configured" : "not detected"}`);
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
+  {
+    const activeDir = resolveConfigDir(process.cwd());
+    const connection = loadConnection(activeDir);
+    if (connection) for (const line of describeDelivery(activeDir, connection).lines) console.log(`                   ${line}`);
+  }
   {
     const activeDir = resolveConfigDir(process.cwd());
     const meta = readMeta(activeDir);
@@ -1314,6 +1330,26 @@ async function runDoctor(): Promise<void> {
       reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
     } catch (error) { reachable = `unreachable (${(error as Error).message})`; }
     console.log(`  cloud            ${connection.url} — ${reachable}`);
+    // SB273: an authenticated check. Reaching the workspace says nothing about whether it
+    // still accepts this computer; the rules endpoint answers 401 when it does not.
+    let accepted = "unknown";
+    try {
+      const res = await fetch(new URL("/v1/policy", connection.url).toString(), {
+        headers: { authorization: `Bearer ${connection.credential}`, "x-scopebond-hook-version": hookVersion() },
+        redirect: "error", signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status === 401) {
+        accepted = "REFUSED (401)";
+        recordRulesCredential(active, false, Date.now());
+      } else if (res.ok || res.status === 204 || res.status === 304) {
+        accepted = "accepted";
+        recordRulesCredential(active, true, Date.now());
+      } else accepted = `unknown (HTTP ${res.status})`;
+    } catch (error) { accepted = `not checked (${(error as Error).message})`; }
+    console.log(`  connection       ${accepted}`);
+    const delivery = describeDelivery(active, connection);
+    for (const line of delivery.lines) console.log(`                   ${line}`);
+    problems.push(...delivery.problems);
   }
   console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
   process.exitCode = problems.length ? 1 : 0;
@@ -1377,6 +1413,12 @@ async function runLogin(args: string[]): Promise<void> {
     });
     return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, unknown> };
   };
+  // SB276: run from inside an agent session (its own terminal or tool call), a sign-in can
+  // land in the agent's working folder rather than this person's, and the person may never
+  // see the code to approve. Say so plainly; the hook settings are left alone either way.
+  if (process.env.CLAUDECODE || process.env.CODEX_SANDBOX || process.env.CURSOR_AGENT) {
+    console.error("Note: this looks like a coding agent's own terminal. Signing in works best from your own terminal window, outside the agent.");
+  }
   let start: { status: number; json: Record<string, unknown> };
   try { start = await post("/v1/device/code", { client_name: hostname(), harness }); }
   catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}`); process.exit(1); }

@@ -11,6 +11,7 @@ import {
   type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter, type ReceiptStore,
 } from "@scopebond/gateway";
 import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { LOSSLESS_OUTBOX } from "./delivery-report.js";
 
 /** The persisted connection between this machine and a Cloud workspace. Holds the
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
@@ -116,7 +117,11 @@ export function retireAttesterKey(dir: string, kid: string): string {
 export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
 ): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
-  const outbox = new SqliteCloudOutbox(outboxDbPath);
+  // Lossless (SB275): no cap and no expiry. A record leaves the queue only when the workspace
+  // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
+  // gateway's defaults (10,000 records, 64 MiB, 7 days) dropped the newest records once a long
+  // outage filled the queue.
+  const outbox = new SqliteCloudOutbox(outboxDbPath, LOSSLESS_OUTBOX);
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }

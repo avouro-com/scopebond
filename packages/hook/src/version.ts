@@ -28,9 +28,9 @@ export function hookCommand(harness: "claude" | "cursor" | "codex"): string {
  *  binary on PATH, so printed guidance must use the same version-pinned `npx` form,
  *  which also resolves to a global install when one exists.
  *
- *  Always plain `npx`, on every platform: this string is copied into a terminal, and
- *  `npx` works in cmd, PowerShell and every POSIX shell. The `.cmd` suffix is only
- *  needed to spawn the shim without a shell, which is never what a reader is doing. */
-export function cliCommand(sub: string): string {
-  return `npx -y @scopebond/hook@${hookVersion()} ${sub}`;
+ *  On Windows it is `npx.cmd`: PowerShell's default script policy refuses `npx` (which
+ *  resolves to `npx.ps1`) with "running scripts is disabled on this system", while
+ *  `npx.cmd` runs in both PowerShell and cmd. Everywhere else it is plain `npx`. */
+export function cliCommand(sub: string, platform: NodeJS.Platform = process.platform): string {
+  return `${platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/hook@${hookVersion()} ${sub}`;
 }

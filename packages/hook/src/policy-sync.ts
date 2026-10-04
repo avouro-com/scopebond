@@ -17,6 +17,7 @@
 import { closeSync, existsSync, openSync, rmSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { connectionPath, loadConnection } from "./cloud.js";
+import { recordRulesCredential } from "./delivery-state.js";
 import {
   inspectManaged, installManaged, isManaged, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
@@ -90,6 +91,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     return { state: "unavailable", message: "could not reach the workspace" };
   }
 
+  recordRulesCredential(dir, res.status !== 401, now.getTime());
   if (res.status === 401) {
     backToOwnRules();
     save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules" });
