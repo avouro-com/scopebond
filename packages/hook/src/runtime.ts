@@ -15,6 +15,7 @@ import { RULES_FILE, loadRules } from "./rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
+import { recordDeliveryAttempt } from "./delivery-state.js";
 import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard } from "@scopebond/gateway";
 
@@ -229,7 +230,11 @@ export function createHookRuntime(config: RuntimeConfig) {
     /** Deliver queued receipts to Cloud with a bounded timeout, then it is safe to
      *  exit. Undelivered receipts persist in the durable outbox for the next run. */
     async flush(): Promise<void> {
-      if (exporter) await flushBounded(exporter, config.cloud?.flushTimeoutMs);
+      if (!exporter) return;
+      const before = exporter.status().lastSuccessAt;
+      await flushBounded(exporter, config.cloud?.flushTimeoutMs);
+      // The process exits after this call; keep what the attempt saw for `status` and `doctor`.
+      try { recordDeliveryAttempt(dirname(config.dbPath), exporter.status(), Date.now(), before); } catch { /* diagnostic only */ }
     },
     /** Release the SQLite handles. The hook is a per-tool-call process, and a writer that
      *  exits without closing leaves its write-ahead log on disk for the next process to

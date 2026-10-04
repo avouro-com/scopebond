@@ -62,6 +62,8 @@ import { runDispatchCommand } from "./dispatch-cli.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
+import { recordRulesCredential } from "./delivery-state.js";
+import { describeDelivery } from "./delivery-report.js";
 import { computeManifest, renderManifest } from "./capabilities.js";
 import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofReceipts } from "./proof.js";
 import { fileURLToPath } from "node:url";
@@ -1175,6 +1177,11 @@ function runStatus(): void {
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
   {
     const activeDir = resolveConfigDir(process.cwd());
+    const connection = loadConnection(activeDir);
+    if (connection) for (const line of describeDelivery(activeDir, connection).lines) console.log(`                   ${line}`);
+  }
+  {
+    const activeDir = resolveConfigDir(process.cwd());
     const meta = readMeta(activeDir);
     const managed = existsSync(join(activeDir, MANAGED_DOC_FILE));
     const checked = meta.checked_at ? `, last checked ${meta.checked_at}` : "";
@@ -1314,6 +1321,26 @@ async function runDoctor(): Promise<void> {
       reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
     } catch (error) { reachable = `unreachable (${(error as Error).message})`; }
     console.log(`  cloud            ${connection.url} — ${reachable}`);
+    // SB273: an authenticated check. Reaching the workspace says nothing about whether it
+    // still accepts this computer; the rules endpoint answers 401 when it does not.
+    let accepted = "unknown";
+    try {
+      const res = await fetch(new URL("/v1/policy", connection.url).toString(), {
+        headers: { authorization: `Bearer ${connection.credential}`, "x-scopebond-hook-version": hookVersion() },
+        redirect: "error", signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status === 401) {
+        accepted = "REFUSED (401)";
+        recordRulesCredential(active, false, Date.now());
+      } else if (res.ok || res.status === 204 || res.status === 304) {
+        accepted = "accepted";
+        recordRulesCredential(active, true, Date.now());
+      } else accepted = `unknown (HTTP ${res.status})`;
+    } catch (error) { accepted = `not checked (${(error as Error).message})`; }
+    console.log(`  connection       ${accepted}`);
+    const delivery = describeDelivery(active, connection);
+    for (const line of delivery.lines) console.log(`                   ${line}`);
+    problems.push(...delivery.problems);
   }
   console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
   process.exitCode = problems.length ? 1 : 0;
@@ -1377,6 +1404,12 @@ async function runLogin(args: string[]): Promise<void> {
     });
     return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, unknown> };
   };
+  // SB276: run from inside an agent session (its own terminal or tool call), a sign-in can
+  // land in the agent's working folder rather than this person's, and the person may never
+  // see the code to approve. Say so plainly; the hook settings are left alone either way.
+  if (process.env.CLAUDECODE || process.env.CODEX_SANDBOX || process.env.CURSOR_AGENT) {
+    console.error("Note: this looks like a coding agent's own terminal. Signing in works best from your own terminal window, outside the agent.");
+  }
   let start: { status: number; json: Record<string, unknown> };
   try { start = await post("/v1/device/code", { client_name: hostname(), harness }); }
   catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}`); process.exit(1); }

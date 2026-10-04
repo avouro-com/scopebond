@@ -301,8 +301,7 @@ export function backupHarnessConfig(file: string): string | null {
  *  Shared by the project installer (npx command) and the user installer (absolute path). */
 export function writeHarnessConfig(file: string, harness: Harness, command: string): string {
   const config = readHarnessConfig(file);
-  backupHarnessConfig(file);
-  mkdirSync(dirname(file), { recursive: true });
+  const before = existsSync(file) ? JSON.stringify(config) : null;
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   if (harness === "cursor") {
     config.version = config.version ?? 1;
@@ -322,6 +321,12 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
       : { matcher: "*", hooks: [{ type: "command", command }] };
     if (at >= 0) list[at] = entry; else list.push(entry);
   }
+  // SB276: a settings file that already holds exactly this entry is left byte-for-byte
+  // untouched — no rewrite, no backup. A running agent session watches this file, and
+  // rewriting it (even with the same content) is what disturbed a live session on re-login.
+  if (before !== null && JSON.stringify(config) === before) return file;
+  backupHarnessConfig(file);
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return file;
 }
