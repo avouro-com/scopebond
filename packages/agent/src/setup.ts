@@ -51,7 +51,11 @@ export function globalBinDir(prefix: string, platform: NodeJS.Platform = process
 
 /** Whether `dir` is on PATH (case-insensitive on Windows, ignoring a trailing separator). */
 export function onPath(dir: string, pathEnv = process.env.PATH ?? process.env.Path ?? "", platform: NodeJS.Platform = process.platform): boolean {
-  const norm = (p: string) => { const t = p.trim().replace(/[\\/]+$/, ""); return platform === "win32" ? t.toLowerCase().replace(/\//g, "\\") : t; };
+  const norm = (p: string) => {
+    let t = p.trim();
+    while (t.endsWith("/") || t.endsWith("\\")) t = t.slice(0, -1); // a loop, not a regex: PATH entries are untrusted input
+    return platform === "win32" ? t.toLowerCase().replace(/\//g, "\\") : t;
+  };
   const target = norm(dir);
   return pathEnv.split(platform === "win32" ? ";" : ":").some((p) => p && norm(p) === target);
 }
