@@ -39,7 +39,8 @@ export interface CloudOutboxStatus {
 
 export interface CloudOutbox {
   enqueue(receipt: SignedReceipt): { queued: boolean; duplicate: boolean; gap?: CloudDeliveryGap };
-  peek(limit: number, now: number): CloudOutboxEntry[];
+  /** The oldest records first; `exclude` leaves out records this flush already kept back (a clock ahead). */
+  peek(limit: number, now: number, exclude?: ReadonlySet<string>): CloudOutboxEntry[];
   acknowledge(entries: Array<{ id: string; payloadHash: string }>): void;
   status(): CloudOutboxStatus;
   /** Record a delivery gap the exporter learned of (a record the workspace refused on its own). */
@@ -143,9 +144,9 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
       entries.set(id, { id, payloadHash, receipt: structuredClone(receipt), enqueuedAt: now(), bytes, seq: nextSeq++ });
       return { queued: true, duplicate: false };
     },
-    peek(limit, at) {
+    peek(limit, at, exclude) {
       expire(at);
-      return [...entries.values()].slice(0, Math.max(1, Math.min(100, Math.trunc(limit))));
+      return [...entries.values()].filter((e) => !exclude?.has(e.id)).slice(0, Math.max(1, Math.min(100, Math.trunc(limit))));
     },
     acknowledge(sent) {
       for (const item of sent) {
@@ -227,6 +228,17 @@ async function refusedIn(res: Response, batch: CloudOutboxEntry[]): Promise<Arra
   } catch { return []; }
 }
 
+/** A refusal (400, or 409 for a key) that lists every record of the batch as refused for a reason that
+ *  can pass, each still within CLOCK_AHEAD_KEEP_MS: the batch is kept back, not retried at once. */
+function allRetryable(status: number, text: string, batch: Array<Pick<CloudOutboxEntry, "enqueuedAt">>, at: number): boolean {
+  if (status !== 400 && status !== 409) return false;
+  let body: { rejected?: unknown };
+  try { body = JSON.parse(text) as { rejected?: unknown }; } catch { return false; }
+  if (!Array.isArray(body?.rejected)) return false;
+  const byIndex = new Map((body.rejected as Array<{ index?: unknown; code?: unknown }>).flatMap((r) => (typeof r?.index === "number" ? [[r.index, r.code] as const] : [])));
+  return batch.length > 0 && batch.every((entry, i) => byIndex.has(i) && keepForClock(entry, byIndex.get(i), at));
+}
+
 /** Refusals that can pass: a timestamp ahead of the workspace's clock (accepted once the time passes)
  *  and a key the connection did not enroll (delivered after signing in again). */
 const RETRYABLE = new Set(["future_timestamp", "attester_mismatch"]);
@@ -269,9 +281,13 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     // After a 409 id_conflict on a batch, the rest of this flush goes one record at a time.
     let isolate = false;
     let queue: string | undefined | null = null;
+    // Records kept back this flush (refused for a reason that can pass) are not sent again in it, so
+    // they never hold up the records behind them or go out once per batch.
+    const keptThisFlush = new Set<string>();
+    let movedThisFlush = false;
     try {
       for (;;) {
-        const batch = opts.outbox.peek(isolate ? 1 : batchSize, now());
+        const batch = opts.outbox.peek(isolate ? 1 : batchSize, now(), keptThisFlush.size ? keptThisFlush : undefined);
         if (!batch.length) break;
         const numbered = batch.some((entry) => entry.seq !== undefined);
         if (numbered && queue === null) queue = opts.outbox.status().queueId;
@@ -295,10 +311,11 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           // A record refused for a reason that can pass (a clock ahead, a key not enrolled) stays queued and is sent again.
           kept = new Set(listed.filter((r) => keepForClock(r.entry, r.code, now())).map((r) => r.entry.id));
           refused = listed.filter((r) => !kept.has(r.entry.id)).map((r) => ({ id: r.entry.id, reason: "rejected" as const }));
-          // Nothing in the batch moved: wait and retry rather than send the same records at once again.
-          if (kept.size >= batch.length) throw new Error("ingest refused every record for a reason that can pass (a clock ahead, a key not enrolled); retrying");
+          for (const id of kept) keptThisFlush.add(id);
         } else {
           const text = (typeof res.text === "function" ? await res.text().catch(() => "") : "").slice(0, 262_144);
+          // Every record refused for a reason that can pass: keep them back and go on with the rest.
+          if (allRetryable(res.status, text, batch, now())) { for (const entry of batch) keptThisFlush.add(entry.id); continue; }
           const settled = settleRefusal(res.status, text, batch, now());
           if (settled === "isolate") { isolate = true; continue; }
           if (!settled) throw Object.assign(new Error(refusalMessage(res.status, text.slice(0, 4096))), { retryAfterMs: retryAfter(res, now()) });
@@ -311,11 +328,17 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           const gap = opts.outbox.recordGap?.(id, reason) ?? { id, reason, at: now() };
           opts.onGap?.(gap);
         }
-        consecutiveFailures = 0;
-        nextAttemptAt = null;
-        lastError = null;
-        lastSuccessAt = now();
+        // Only a batch where something left the queue counts as progress.
+        if (kept.size < batch.length) {
+          consecutiveFailures = 0;
+          nextAttemptAt = null;
+          lastError = null;
+          lastSuccessAt = now();
+          movedThisFlush = true;
+        }
       }
+      // Only records that are kept back remain and nothing moved: wait before sending them again.
+      if (keptThisFlush.size && !movedThisFlush) throw new Error("ingest refused every waiting record for a reason that can pass (a clock ahead, a key not enrolled); retrying");
     } catch (error) {
       fail(error, (error as { retryAfterMs?: number } | null)?.retryAfterMs ?? 0);
     } finally {

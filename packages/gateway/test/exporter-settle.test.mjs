@@ -51,7 +51,7 @@ test("a timestamp ahead of the workspace's clock is retried, not dropped: it is 
   ex.stop();
   assert.equal(gaps.length, 0);
   assert.equal(ex.status().pending, 1);
-  assert.match(ex.status().lastError, /HTTP 400/);
+  assert.match(ex.status().lastError, /clock ahead/);
 });
 
 test("a 409 id_conflict finds the one record by sending one at a time; the others deliver", async () => {
@@ -149,7 +149,7 @@ test("a record refused only because this computer's clock is ahead stays queued 
   await ex.flush();
   assert.equal(gaps.length, 0, "not settled as lost");
   assert.equal(ex.status().pending, 1, "the newer record went through; the one ahead waits");
-  assert.equal(requests.length, 2, "one batch, then the record ahead alone, refused, and the flush waits");
+  assert.equal(requests.length, 1, "the record ahead is not sent again in the same flush");
   void ahead;
   ex.stop();
   assert.ok(delivered.includes("action:ahead-0002"));
@@ -195,4 +195,22 @@ test("in a batch with valid records, one refused for a key the connection did no
   assert.equal(gaps.length, 0);
   assert.equal(ex.status().pending, 1);
   assert.ok(delivered.includes("action:key-mix-0002"));
+});
+
+test("more kept records than a batch at the head of the queue never hold up the records behind them", async () => {
+  const { ex, outbox, gaps, delivered, requests } = setup((ids) => {
+    const ahead = ids.filter((id) => id.startsWith("action:head-"));
+    const rejected = ids.flatMap((id, index) => (ahead.includes(id) ? [{ index, action_id: id, code: "future_timestamp" }] : []));
+    if (ahead.length === ids.length) return json(400, { code: "invalid_receipt", rejected });
+    return json(200, { ok: true, rejected });
+  });
+  // Queued directly: enqueue() would start its own flush at 100 records.
+  for (let i = 0; i < 120; i += 1) outbox.enqueue(receipt(`action:head-${String(i).padStart(4, "0")}`));
+  for (let i = 0; i < 5; i += 1) outbox.enqueue(receipt(`action:tail-${String(i).padStart(4, "0")}`));
+  await ex.flush();
+  ex.stop();
+  assert.equal(delivered.filter((id) => id.startsWith("action:tail-")).length, 5, "the records behind are delivered in the same flush");
+  assert.equal(gaps.length, 0);
+  assert.equal(ex.status().pending, 120);
+  assert.ok(requests.length <= 3, `each record goes out at most once per flush (${requests.length} requests)`);
 });
