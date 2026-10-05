@@ -107,6 +107,7 @@ function Invoke-HookEvent([string] $Command, [string] $Payload) {
   $psi.RedirectStandardInput = $true
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
+  try { [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
   $proc = [System.Diagnostics.Process]::Start($psi)
   $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Payload)
   $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
