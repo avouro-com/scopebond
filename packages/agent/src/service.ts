@@ -34,6 +34,8 @@ export interface ServiceOptions {
   prompter?: Prompter;
   /** The Windows tray icon (default on Windows; SCOPEBOND_AGENT_TRAY=off turns it off). */
   tray?: boolean;
+  /** Called once the agent has stopped because `stop` (or `autostart off`) asked it to; the CLI exits. */
+  onStopped?: () => void;
 }
 
 export interface Service {
@@ -164,6 +166,12 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return { repaired };
     },
     "POST /maintain": async () => ({ maintenance: await maintain(true) }),
+    // `scopebond-agent stop` and `autostart off`: answer first, then stop, so the caller hears back.
+    "POST /stop": () => {
+      log("stopping: asked to by this computer's user");
+      setTimeout(() => { void stop().finally(() => options.onStopped?.()); }, 50);
+      return { stopping: true };
+    },
     // Warn mode: the hook asks; only the window answers. The caller learns the answer, never decides it.
     "POST /override": async (body) => {
       const question = parseQuestion(body);
