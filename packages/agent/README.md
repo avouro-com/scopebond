@@ -42,9 +42,10 @@ Scopebond hook to your user-level agent settings), installs the agent for your u
 same workspace (`--relogin` signs in again), does not reinstall the same version, and only puts back what is missing.
 If npm's global folder is not on PATH, it says which folder and how to add it.
 
-Or step by step:
+Or step by step (from your home folder; on Windows type `npx.cmd`, `npm.cmd` and `scopebond-agent.cmd`):
 
 ```bash
+npx -y @scopebond/hook@latest login https://cloud.scopebond.com   # sign in first: the agent delivers what the hook records
 npm install -g @scopebond/agent@latest
 scopebond-agent autostart on      # start with your sign-in (Windows Run entry, macOS LaunchAgent, Linux systemd user unit)
 scopebond-agent status            # what it reports about this computer

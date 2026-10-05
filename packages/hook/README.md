@@ -25,6 +25,9 @@ scopebond install                   # detects Cursor and Codex
 scopebond install --codex           # set up Codex only
 ```
 
+In Windows PowerShell type `npm.cmd` and `scopebond.cmd` (PowerShell's default script policy blocks
+the plain names; the `.cmd` forms work without changing it).
+
 `install` sets Scopebond up **once per developer machine**, not per repository: it
 scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
