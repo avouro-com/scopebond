@@ -50,6 +50,16 @@ test("claude: an in-policy action defers to Claude Code's own prompt (exit 0, no
   assert.equal(r.stdout.trim(), "", "an allowed action produces no permission decision");
 });
 
+test("claude: an event that starts with a UTF-8 byte-order mark is read as the event", () => {
+  // Windows PowerShell 5.1 and other .NET Framework programs write a BOM before piped text.
+  const bom = "﻿";
+  const allowed = run(enrolledDir(), ["claude"], bom + JSON.stringify({ tool_name: "Write", tool_input: { file_path: "src/app.ts" } }));
+  assert.equal(allowed.status, 0, `an allowed action is not refused as invalid JSON: ${allowed.stdout}`);
+  const denied = run(enrolledDir(), ["claude"], bom + JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin main" } }));
+  assert.equal(denied.status, 2);
+  assert.doesNotMatch(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /invalid JSON/);
+});
+
 test("claude: invalid stdin fails closed (deny, exit 2)", () => {
   const r = run(enrolledDir(), ["claude"], "not json");
   assert.equal(r.status, 2);

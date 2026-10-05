@@ -122,7 +122,9 @@ function callId(input: Record<string, unknown>): string | undefined {
   return undefined;
 }
 function readStdin(): string {
-  try { return readFileSync(0, "utf8"); } catch { return ""; }
+  // A UTF-8 byte-order mark is not part of the event: Windows PowerShell 5.1 and other .NET Framework
+  // programs write one before what they pipe in, and JSON.parse refuses it.
+  try { return readFileSync(0, "utf8").replace(/^\uFEFF/, ""); } catch { return ""; }
 }
 
 /** How long a hook waits for a person in the Scopebond window: well inside each agent's hook timeout (Claude Code 60 s by
