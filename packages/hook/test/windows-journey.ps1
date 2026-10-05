@@ -166,6 +166,9 @@ try {
     Assert ($code -eq 2) "expected a block (exit 2), got $code`: $out"
     $flush = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'flush')
     Assert ($flush.Code -eq 0) "flush exited $($flush.Code): $($flush.Out)"
+    # Delivery runs beside the hook, so give the record a moment to arrive.
+    for ($i = 0; $i -lt 40; $i++) { $state = Get-CloudState; if ($state.ingested -ge 1) { break }; Start-Sleep -Milliseconds 250 }
+    Start-Sleep -Milliseconds 500
     $state = Get-CloudState
     Assert ($state.ingested -eq 1) "expected one delivered record, the workspace has $($state.ingested)"
     Assert ($state.ingested_results[0] -eq 'deny') "the delivered record says $($state.ingested_results[0])"
@@ -182,7 +185,12 @@ try {
       $install = Invoke-Published 'npm.cmd' @('install', '-g', $AgentPackage)
       Assert ($install.Code -eq 0) "npm.cmd install -g exited $($install.Code):`n$($install.Out)"
       $prefix = ((& npm.cmd prefix -g) 2>$null | Select-Object -First 1).Trim()
-      Assert (Test-Path (Join-Path $prefix 'scopebond-agent.cmd')) "npm installed no scopebond-agent.cmd in its global folder $prefix"
+      $shim = Join-Path $prefix 'scopebond-agent.cmd'
+      if (-not (Test-Path $shim)) {
+        $where = Get-ChildItem -Path $prefix, (Join-Path $prefix 'bin') -Filter 'scopebond-agent*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+        $npmEnv = Get-ChildItem Env: | Where-Object { $_.Name -like 'npm_config_*prefix*' -or $_.Name -like 'npm_config_global*' } | ForEach-Object { "$($_.Name)=$($_.Value)" }
+        throw "npm installed no scopebond-agent.cmd in its global folder $prefix (found: $($where -join ', '); env: $($npmEnv -join ', '))`n$($install.Out)"
+      }
       if (-not (Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue)) {
         # Found on real computers too (nvm-windows, a custom prefix): npm's global folder is not on
         # PATH, so the next published command is "not recognized". Continue as a person who added it.
