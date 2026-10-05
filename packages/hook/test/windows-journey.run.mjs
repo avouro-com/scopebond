@@ -72,7 +72,10 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
   test(`the Windows journey passes in ${shell}`, { skip: !enabled ? "Windows CI only (set SCOPEBOND_WINDOWS_JOURNEY=1 to run it here)" : !hasShell(shell) && `${shell} is not installed`, timeout: 15 * 60_000 }, () => {
     packed ??= pack();
     // -ExecutionPolicy Bypass only lets this file start; the journey then sets Restricted for itself.
-    const r = spawnSync(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-HookPackage", packed.hook, "-AgentPackage", packed.agent], {
+    // Outside CI (SCOPEBOND_WINDOWS_JOURNEY=1 on a developer's computer) the journey uses a throwaway profile
+    // folder and leaves the agent alone: it never touches that person's own Run key, agent or settings.
+    const local = process.env.CI !== "true" ? ["-IsolatedHome", "-SkipAgent"] : [];
+    const r = spawnSync(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-HookPackage", packed.hook, "-AgentPackage", packed.agent, ...local], {
       encoding: "utf8", timeout: 14 * 60_000, env: journeyEnv(),
     });
     process.stdout.write(r.stdout ?? "");
