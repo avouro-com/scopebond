@@ -18,7 +18,7 @@ See the [root README](../README.md) for product scope and hosted versus local se
 | `github-action` | Agent pull-request checks in your own runner. Make the check required to gate merge; signing is configurable. | **experimental** (published 0.5.4) |
 | `mcp` | Checks routed MCP tools/call requests before forwarding; other MCP operations are outside the tool-call policy. | **experimental** (published 2.0.3) |
 | `framework` | Guards supported tools in Vercel AI SDK, LangGraph/LangChain, and custom loops; the application must honor the decision. | **experimental** (published 0.3.8) |
-| `agent` | Open-source companion for delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.3.1) |
+| `agent` | Open-source companion for delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.3.2) |
 
 **Core-package rule:** `policy-schema`, `verify`, `gateway`, and `sdk` carry no
 vendor or agent-framework SDK dependencies. External services sit behind an
