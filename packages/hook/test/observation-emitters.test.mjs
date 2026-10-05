@@ -36,8 +36,11 @@ const kindsOf = (items) => items.map((i) => `${i.payload.kind}:${i.payload.data.
 const settled = async (predicate, ms = 4000) => { const end = Date.now() + ms; while (Date.now() < end) { if (predicate()) return true; await new Promise((r) => setTimeout(r, 50)); } return predicate(); };
 
 function assertWellFormed(items, publicKeyPem, installationId = "inst-test-1", generation = 1) {
-  const seqs = items.map((i) => i.payload.sequence);
-  assert.deepEqual(seqs, Array.from({ length: items.length }, (_, i) => i + 1), "sequences contiguous from 1");
+  // The heartbeat helper and the hook calls upload on their own, so records can arrive out of order
+  // (the workspace accepts any order and refuses only a reused number). What must hold: every number
+  // once, none skipped, starting at 1.
+  const seqs = items.map((i) => i.payload.sequence).sort((a, b) => a - b);
+  assert.deepEqual(seqs, Array.from({ length: items.length }, (_, i) => i + 1), "sequences unique and contiguous from 1");
   for (const item of items) {
     assert.equal(validSigned(item), true, `${item.payload.kind}:${item.payload.data.event} matches the closed schema`);
     assert.ok(verifyWrapper(item, publicKeyPem), "signature verifies over domain + canonical payload");
@@ -406,6 +409,8 @@ test("one heartbeat helper per session: the lease is claimed once, renewed by th
 
 test("the real helper: heartbeats flow while a session is active, from one process, and stop when the session ends", async () => {
   const server = await startServer();
+  // A failed assertion must not leave the server open: the file would then hang until its time limit.
+  try {
   const home = makeHome({ url: server.url });
   const env = { SCOPEBOND_OBSERVATIONS_HEARTBEAT: "on", SCOPEBOND_HEARTBEAT_INTERVAL_MS: "250" };
   await run(home.dir, ["claude"], claudeEvent(home.dir, "SessionStart"), env);
@@ -421,7 +426,9 @@ test("the real helper: heartbeats flow while a session is active, from one proce
   const beats = afterStop.filter((i) => i.payload.kind === "health").length;
   assert.ok(beats <= 20, "one helper, not one per hook call");
   assertWellFormed(afterStop, publicKeyOf(home.dir));
-  await server.close();
+  } finally {
+    await server.close();
+  }
 });
 
 // ---- queue telemetry, policy acknowledgement, capability proof ---------------------------------------------

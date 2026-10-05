@@ -6,7 +6,7 @@
 // so upgrading Node or switching versions never leaves an autostart entry pointing at nothing.
 // On Windows it runs under `conhost --headless`, so no window opens at sign-in.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -33,7 +33,7 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
     `set "CLI=${noQuotes(cli)}"`,
     `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
     `if not defined NODE exit /b 1`,
-    `"%NODE%" "%CLI%" run >> "${noQuotes(logFile)}" 2>&1`,
+    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "${noQuotes(logFile)}" 2>&1`,
     "",
   ].join("\r\n");
 }
@@ -54,7 +54,7 @@ fi
 CLI=${q(cli)}
 [ -f "$CLI" ] || CLI="$(npm root -g 2>/dev/null)/@scopebond/agent/dist/cli.js"
 [ -n "$NODE" ] || exit 1
-exec "$NODE" "$CLI" run
+exec "$NODE" --disable-warning=ExperimentalWarning "$CLI" run
 `;
 }
 
@@ -110,6 +110,20 @@ function writeLauncher(scopebondHome: string, node: string, cli: string, platfor
   writeFileSync(launcher, platform === "win32" ? windowsLauncher(node, cli, log) : posixLauncher(node, cli), { mode: 0o700 });
   if (platform !== "win32") chmodSync(launcher, 0o700);
   return launcher;
+}
+
+/** Start the agent now, the way sign-in will (Windows: the launcher under a headless console, detached from this terminal).
+ *  macOS and Linux start it themselves when autostart is turned on (RunAtLoad, enable --now). Returns whether it started one. */
+export function startNow(scopebondHome: string, platform = process.platform): boolean {
+  if (platform !== "win32") return false;
+  const launcher = launcherPath(scopebondHome, platform);
+  if (!existsSync(launcher)) return false;
+  try {
+    const child = spawn("conhost.exe", ["--headless", "cmd.exe", "/d", "/c", launcher], { detached: true, stdio: "ignore", windowsHide: true });
+    child.on("error", () => { /* it starts at the next sign-in instead */ });
+    child.unref();
+    return true;
+  } catch { return false; }
 }
 
 /** Turn autostart on for this user. Returns a one-line description of what changed. */
