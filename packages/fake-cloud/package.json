@@ -1,6 +1,7 @@
 {
   "name": "@scopebond/fake-cloud",
   "version": "0.1.0",
+  "private": true,
   "description": "A stand-in Scopebond workspace for tests: device sign-in, enrollment, delivery, rules, self-check and client version, with fault injection.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
