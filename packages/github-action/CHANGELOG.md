@@ -1,5 +1,72 @@
 # @scopebond/github-action
 
+## 0.5.5
+
+### Patch Changes
+
+- Updated dependencies [c4514ca]
+- Updated dependencies [7736223]
+- Updated dependencies [8e42db0]
+- Updated dependencies [2a9b060]
+- Updated dependencies [6c3b253]
+  - @scopebond/gateway@0.14.0
+
+## 0.5.4
+
+### Patch Changes
+
+- Updated dependencies [433c8df]
+  - @scopebond/gateway@0.13.0
+  - @scopebond/policy-schema@0.6.0
+  - @scopebond/verify@0.4.3
+
+## 0.5.3
+
+### Patch Changes
+
+- Updated dependencies [3308250]
+  - @scopebond/gateway@0.12.0
+
+## 0.5.2
+
+### Patch Changes
+
+- Updated dependencies [6e61a3b]
+  - @scopebond/gateway@0.11.0
+
+## 0.5.1
+
+### Patch Changes
+
+- Updated dependencies [1b8be99]
+  - @scopebond/gateway@0.10.0
+
+## 0.5.0
+
+### Minor Changes
+
+- d5ba4cb: Optional `evidence-out` input and `--evidence-out` flag. Writes JSON with the exact pull request head commit, the policy digest, the boundary receipt hash when one was signed, the check result and the run ids, for a workspace collector that has registered the runner. The document states it is not independent and carries no key, source text or path list.
+
+### Patch Changes
+
+- Updated dependencies [b65261d]
+- Updated dependencies [b08c8df]
+- Updated dependencies [b08c8df]
+- Updated dependencies [7c6fa19]
+- Updated dependencies [aac4f6f]
+  - @scopebond/gateway@0.9.0
+  - @scopebond/policy-schema@0.5.0
+  - @scopebond/verify@0.4.2
+
+## 0.4.1
+
+### Patch Changes
+
+- Updated dependencies [978e7a3]
+- Updated dependencies [978e7a3]
+  - @scopebond/gateway@0.8.0
+  - @scopebond/verify@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes

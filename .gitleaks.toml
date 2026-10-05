@@ -1,0 +1,19 @@
+title = "scopebond gitleaks config"
+
+[extend]
+useDefault = true
+
+# The conformance vectors contain fixed, non-secret identifiers. `key:0123456789abcdef`
+# is a made-up historical key id used to exercise the observation schema; it is not a
+# credential and matches the generic-api-key entropy heuristic only by shape.
+[[allowlists]]
+description = "Conformance vector fixtures (fixed test identifiers, not credentials)"
+targetRules = ["generic-api-key"]
+paths = ['''^packages/policy-schema/vectors/[^/]+\.json$''']
+
+# Tests that assert the hook scrubs credentials feed it deliberately fake curl commands
+# (CANARY-* values, example.test hosts) and check none of it survives into a record.
+[[allowlists]]
+description = "Hook test fixtures with fake curl credentials"
+targetRules = ["curl-auth-header"]
+paths = ['''^packages/hook/test/[^/]+\.test\.mjs$''']

@@ -42,6 +42,24 @@ importers:
         specifier: workspace:*
         version: link:../packages/verify
 
+  packages/agent:
+    dependencies:
+      '@scopebond/gateway':
+        specifier: workspace:*
+        version: link:../gateway
+      '@scopebond/hook':
+        specifier: workspace:*
+        version: link:../hook
+      '@scopebond/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@scopebond/fake-cloud':
+        specifier: workspace:*
+        version: link:../fake-cloud
+
+  packages/fake-cloud: {}
+
   packages/framework:
     dependencies:
       '@scopebond/gateway':
@@ -69,6 +87,9 @@ importers:
         specifier: ^4.13.8
         version: 4.13.8
     devDependencies:
+      '@scopebond/fake-cloud':
+        specifier: workspace:*
+        version: link:../fake-cloud
       '@scopebond/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -96,6 +117,10 @@ importers:
       '@scopebond/sdk':
         specifier: workspace:^
         version: link:../sdk
+    devDependencies:
+      '@scopebond/fake-cloud':
+        specifier: workspace:*
+        version: link:../fake-cloud
 
   packages/mcp:
     dependencies:
@@ -108,6 +133,13 @@ importers:
       '@scopebond/verify':
         specifier: workspace:^
         version: link:../verify
+    devDependencies:
+      '@scopebond/fake-cloud':
+        specifier: workspace:*
+        version: link:../fake-cloud
+      '@scopebond/hook':
+        specifier: workspace:^
+        version: link:../hook
 
   packages/policy-schema: {}
 

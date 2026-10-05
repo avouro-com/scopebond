@@ -13,7 +13,9 @@ function starterRuntime(extra = {}) {
   scaffold(dir);
   return createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"),
-    attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"),
+    // In memory: these tests check decisions, not storage, and hundreds of on-disk receipt writes made this file take
+    // minutes on slow CI disks. Storage is covered by store.test.mjs and cli.test.mjs.
+    attesterPath: join(dir, "attester.key"), dbPath: ":memory:",
     ...extra,
   });
 }
@@ -262,11 +264,31 @@ const MUST_DENY_REVIEW = [
   "rm -rf src # don't",
   // the agent switching the hook off or re-scoping it
   "npx -y @scopebond/hook uninstall",
+  "npx.cmd -y @scopebond/hook@0.12.0 uninstall",
   "npx @scopebond/hook@0.5.0 trust",
   "scopebond uninstall",
   "scopebond trust",
   "scopebond-hook init --force",
   "pnpm dlx @scopebond/hook install --force",
+  // the agent re-pointing this computer at another workspace
+  "npx @scopebond/hook login https://other.example",
+  "npx.cmd -y @scopebond/hook@0.16.0 login https://other.example --claude",
+  "scopebond login https://other.example",
+  // the agent switching off the Scopebond Agent
+  "scopebond-agent autostart off",
+  "scopebond-agent.cmd autostart OFF",
+  "npx -y @scopebond/agent autostart off",
+  "pkill -f scopebond-agent",
+  "taskkill /F /FI \"COMMANDLINE eq scopebond-agent\"",
+  "wmic process where \"CommandLine like '%scopebond-agent%'\" call terminate",
+  "kill $(jq .pid ~/.scopebond/agent.json)",
+  "npm uninstall -g @scopebond/agent",
+  "npm.cmd uninstall -g @scopebond/agent",
+  "npm rm --global @scopebond/agent@0.3.0",
+  "npm uninstall --location=global @scopebond/hook",
+  "pnpm remove -g @scopebond/agent",
+  "yarn global remove @scopebond/agent",
+  "bun remove -g @scopebond/agent",
 ];
 
 test(`review corpus: all ${MUST_DENY_REVIEW.length} attempts are denied`, async () => {
@@ -327,6 +349,17 @@ const MUST_ALLOW_REVIEW = [
   "echo \"$(date)\"",
   "scopebond test \"rm -rf /\"",
   "npx @scopebond/hook log",
+  // keeping the Scopebond Agent working, and looking at it
+  "scopebond-agent status",
+  "scopebond-agent status --json",
+  "scopebond-agent flush",
+  "scopebond-agent check",
+  "scopebond-agent repair",
+  "scopebond-agent autostart on",
+  "npm install -g @scopebond/agent",
+  "ps aux | grep scopebond-agent",
+  "npm uninstall -g typescript",
+  "npm uninstall @scopebond/hook",
 ];
 
 test(`review allow-list: none of the ${MUST_ALLOW_REVIEW.length} ordinary commands is denied`, async () => {
@@ -639,7 +672,10 @@ test("parseGitPush ignores non-push git commands", () => {
 // Generated corpus: every protected target × every spelling × every way to reach it.
 // A deterministic cross-product (no randomness) so a failure names its exact command.
 test("generated corpus: protected reads/writes survive no spelling, quoting, prefix or wrapper", async () => {
-  const rt = starterRuntime();
+  // A fresh runtime every 100 commands: one runtime re-reads every stored receipt on each evaluation, so ~1,000 commands
+  // through a single runtime grew quadratically and took minutes on slow CI runners. Every case still runs.
+  let rt = starterRuntime();
+  let sinceFresh = 0;
   const readTargets = [".scopebond/agent.key", ".env", "secrets/deploy.key", "~/.ssh/id_rsa", "~/.aws/credentials"];
   const writeTargets = [".scopebond/policy.json", ".claude/settings.json", ".github/workflows/ci.yml", ".git/hooks/pre-push"];
   const spell = (p) => [
@@ -660,6 +696,7 @@ test("generated corpus: protected reads/writes survive no spelling, quoting, pre
   for (const [targets, via] of [[readTargets, readVia], [writeTargets, writeVia]]) {
     for (const t of targets) for (const s of spell(t)) for (const q of quote(s)) for (const cmd of via(q)) {
       total += 1;
+      if (++sinceFresh > 100) { rt.close(); rt = starterRuntime(); sinceFresh = 1; }
       const d = await evalCmd(rt, cmd);
       if (d.decision !== "deny") survived.push(`${cmd} -> ${d.decision}`);
     }

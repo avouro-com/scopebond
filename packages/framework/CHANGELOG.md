@@ -1,5 +1,67 @@
 # @scopebond/framework
 
+## 0.3.9
+
+### Patch Changes
+
+- Updated dependencies [c4514ca]
+- Updated dependencies [7736223]
+- Updated dependencies [8e42db0]
+- Updated dependencies [2a9b060]
+- Updated dependencies [6c3b253]
+  - @scopebond/gateway@0.14.0
+
+## 0.3.8
+
+### Patch Changes
+
+- Updated dependencies [433c8df]
+  - @scopebond/gateway@0.13.0
+  - @scopebond/policy-schema@0.6.0
+  - @scopebond/sdk@0.1.4
+
+## 0.3.7
+
+### Patch Changes
+
+- Updated dependencies [3308250]
+  - @scopebond/gateway@0.12.0
+
+## 0.3.6
+
+### Patch Changes
+
+- Updated dependencies [6e61a3b]
+  - @scopebond/gateway@0.11.0
+
+## 0.3.5
+
+### Patch Changes
+
+- Updated dependencies [1b8be99]
+  - @scopebond/gateway@0.10.0
+
+## 0.3.4
+
+### Patch Changes
+
+- Updated dependencies [b65261d]
+- Updated dependencies [b08c8df]
+- Updated dependencies [b08c8df]
+- Updated dependencies [7c6fa19]
+- Updated dependencies [aac4f6f]
+  - @scopebond/gateway@0.9.0
+  - @scopebond/policy-schema@0.5.0
+  - @scopebond/sdk@0.1.3
+
+## 0.3.3
+
+### Patch Changes
+
+- Updated dependencies [978e7a3]
+- Updated dependencies [978e7a3]
+  - @scopebond/gateway@0.8.0
+
 ## 0.3.2
 
 ### Patch Changes

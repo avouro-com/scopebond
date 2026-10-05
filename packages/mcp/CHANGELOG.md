@@ -1,5 +1,93 @@
 # @scopebond/mcp
 
+## 2.0.4
+
+### Patch Changes
+
+- Updated dependencies [c4514ca]
+- Updated dependencies [7736223]
+- Updated dependencies [8e42db0]
+- Updated dependencies [2a9b060]
+- Updated dependencies [6c3b253]
+  - @scopebond/gateway@0.14.0
+
+## 2.0.3
+
+### Patch Changes
+
+- Updated dependencies [433c8df]
+  - @scopebond/gateway@0.13.0
+  - @scopebond/policy-schema@0.6.0
+  - @scopebond/verify@0.4.3
+
+## 2.0.2
+
+### Patch Changes
+
+- Updated dependencies [3308250]
+  - @scopebond/gateway@0.12.0
+
+## 2.0.1
+
+### Patch Changes
+
+- Updated dependencies [6e61a3b]
+  - @scopebond/gateway@0.11.0
+
+## 2.0.0
+
+### Patch Changes
+
+- Updated dependencies [0a30e9c]
+- Updated dependencies [1b8be99]
+- Updated dependencies [4242eda]
+  - @scopebond/hook@0.11.0
+  - @scopebond/gateway@0.10.0
+
+## 1.0.0
+
+### Patch Changes
+
+- Updated dependencies [c37c604]
+  - @scopebond/hook@0.10.0
+
+## 0.4.0
+
+### Minor Changes
+
+- b65261d: Optional dispatch boundary (`--dispatch-dir`, `--delegation`, off by default). Each `tools/call` that policy allows is checked for its single-use approval (bound to the exact request forwarded), its delegated scope and its action-budget slot immediately before it is forwarded; otherwise it is answered with an error and never sent upstream. A retry of the same JSON-RPC request does not use a second slot.
+- d5ba4cb: Optional typed adapter (`--typed typed.json`, off by default). Each `tools/call` is described from the request actually forwarded: server, tool, a pinned manifest revision verified against the upstream's live tool list, read-only or mutation class, and resource ids read from the dispatched arguments, with an HMAC request digest under an installation-local key. Under `enforce` an unknown tool, a drifted server, or (with `requireResourceBinding`) a resource that cannot be bound or is not approved is denied before the upstream is invoked; under `monitor` nothing is denied. `tool_intent` and `tool_outcome` observations go to any sink with an `emit` method, including the hook's outbox when it is installed and enrolled.
+
+### Patch Changes
+
+- b08c8df: The typed adapter adds `approval_request_hash` and the guard's target id as `resource_id` to its operation when the dispatch guard requires approval for MCP calls.
+- 7c6fa19: The optional dispatch boundary also uses the workspace as an approval and delegation source when `cloud.json` beside `--dispatch-dir` grants `observations:write` (through the gateway's guard); local signed approvals and delegations work as before.
+- Updated dependencies [b65261d]
+- Updated dependencies [b65261d]
+- Updated dependencies [b08c8df]
+- Updated dependencies [b08c8df]
+- Updated dependencies [b08c8df]
+- Updated dependencies [7c6fa19]
+- Updated dependencies [7c6fa19]
+- Updated dependencies [aa4db1c]
+- Updated dependencies [7ffed9c]
+- Updated dependencies [5a86ea0]
+- Updated dependencies [d5ba4cb]
+- Updated dependencies [aac4f6f]
+  - @scopebond/gateway@0.9.0
+  - @scopebond/hook@0.9.0
+  - @scopebond/policy-schema@0.5.0
+  - @scopebond/verify@0.4.2
+
+## 0.3.3
+
+### Patch Changes
+
+- Updated dependencies [978e7a3]
+- Updated dependencies [978e7a3]
+  - @scopebond/gateway@0.8.0
+  - @scopebond/verify@0.4.1
+
 ## 0.3.2
 
 ### Patch Changes

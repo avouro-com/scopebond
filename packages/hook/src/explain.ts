@@ -44,7 +44,8 @@ export function describeAction(intent: ExplainIntent | undefined): string {
     : type === "git.push" ? `${str(p.remote)} ${str(p.ref)}`.trim()
     : type === "file.write" || type === "file.read" ? str(p.path)
     : type === "mcp.tool.call" ? `${str(p.server)}/${str(p.tool)}`
-    : type === "net.fetch" ? str(p.host) : "";
+    : type === "net.fetch" ? str(p.host)
+    : type === "db.exec" ? `${str(p.scope)} ${str(p.provider)} ${str(p.verb)}`.trim() : "";
   return `${type || "?"}${bits ? ` ${bits}` : ""}`;
 }
 

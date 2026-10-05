@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/policy-schema",
-  "version": "0.4.1",
-  "description": "Scopebond policy vocabulary — JSON Schema for the policy document and the scopebond:receipt envelope, plus test vectors.",
+  "version": "0.6.0",
+  "description": "Open-source Scopebond policy, action, receipt, and observation schemas with shared conformance vectors.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/policy-schema#readme",
@@ -44,8 +44,10 @@
     "./action.schema.json": "./schema/action.schema.json",
     "./receipt.schema.json": "./schema/receipt.schema.json",
     "./receipt-legacy.schema.json": "./schema/receipt-legacy.schema.json",
+    "./observation.schema.json": "./schema/observation.schema.json",
     "./vectors/evidence-contract.json": "./vectors/evidence-contract.json",
-    "./vectors/canonicalization.json": "./vectors/canonicalization.json"
+    "./vectors/canonicalization.json": "./vectors/canonicalization.json",
+    "./vectors/observation-contract.json": "./vectors/observation-contract.json"
   },
   "files": [
     "dist",

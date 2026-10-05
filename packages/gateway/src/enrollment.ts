@@ -20,6 +20,14 @@ export interface CloudEnrollmentResult {
   expires_at: string;
 }
 
+/** A refusal from the workspace's enrollment endpoint, with its HTTP status and code. */
+export class CloudEnrollmentError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+    this.name = "CloudEnrollmentError";
+  }
+}
+
 export async function completeCloudEnrollment(options: {
   url: string;
   bundle: CloudEnrollmentBundle;
@@ -71,10 +79,14 @@ export async function completeCloudEnrollment(options: {
   if (declaredLength > 65_536) throw new Error("Cloud enrollment response exceeded 64 KiB");
   const text = await response.text();
   if (text.length > 65_536) throw new Error("Cloud enrollment response exceeded 64 KiB");
-  let result: Partial<CloudEnrollmentResult> & { error?: string };
-  try { result = JSON.parse(text) as Partial<CloudEnrollmentResult> & { error?: string }; }
+  let result: Partial<CloudEnrollmentResult> & { error?: string; code?: string };
+  try { result = JSON.parse(text) as Partial<CloudEnrollmentResult> & { error?: string; code?: string }; }
   catch { throw new Error(`Cloud enrollment returned an invalid response (${response.status})`); }
-  if (!response.ok) throw new Error(result.error ?? `Cloud enrollment failed (${response.status})`);
+  if (!response.ok) {
+    // Keep the workspace's machine-readable code: "gateway_key_conflict" means this key is
+    // already known (or was revoked) and a fresh key can enroll with the same, unspent token.
+    throw new CloudEnrollmentError(result.error ?? `Cloud enrollment failed (${response.status})`, response.status, typeof result.code === "string" ? result.code : undefined);
+  }
   if (!result.credential?.startsWith("sbm_") || result.attester_kid !== options.attester.kid) {
     throw new Error("Cloud enrollment returned an invalid credential binding");
   }

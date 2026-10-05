@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openReceiptStore } from "@scopebond/gateway/node";
+import { isHarnessConfigured } from "../dist/index.js";
 import { DatabaseSync } from "node:sqlite";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -180,11 +181,14 @@ test("uninstall removes the project hook, not only the user-level one", () => {
   const home = join(dir, "home");
   const env = { ...process.env, SCOPEBOND_HOOK_DIR: config, SCOPEBOND_HOME: home, HOME: home, USERPROFILE: home };
   execFileSync(process.execPath, [cli, "init", "--yes"], { cwd: dir, encoding: "utf8", env });
-  const settings = join(dir, ".claude", "settings.json");
-  assert.ok(readFileSync(settings, "utf8").includes("scopebond"), "precondition: the project hook is installed");
+  // `init` pins the fast command in the personal settings.local.json; either project
+  // file may hold it. Matched by the hook matcher, not by a substring: a path check for
+  // "scopebond" passed only when the checkout folder happened to be named that.
+  const files = [join(dir, ".claude", "settings.json"), join(dir, ".claude", "settings.local.json")];
+  assert.ok(files.some(isHarnessConfigured), "precondition: the project hook is installed");
   const out = execFileSync(process.execPath, [cli, "uninstall", "--yes"], { cwd: dir, encoding: "utf8", env });
   assert.match(out, /removed the Scopebond hook from/);
-  assert.ok(!readFileSync(settings, "utf8").includes("scopebond"), "the project hook is gone");
+  assert.ok(!files.some(isHarnessConfigured), "the project hook is gone");
 });
 
 test("init backs up an existing agent config before changing it", () => {
@@ -194,7 +198,8 @@ test("init backs up an existing agent config before changing it", () => {
   execFileSync(process.execPath, ["-e", `require("fs").mkdirSync(${JSON.stringify(join(dir, ".claude"))},{recursive:true})`]);
   const original = JSON.stringify({ theme: "light", permissions: { allow: ["Bash(npm test)"] } }, null, 2);
   writeFileSync(settings, original);
-  execFileSync(process.execPath, [cli, "init", "--yes"], {
+  // --shared writes into settings.json itself, which is the file with the user's settings.
+  execFileSync(process.execPath, [cli, "init", "--shared", "--yes"], {
     cwd: dir, encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: config },
   });
   const backup = `${settings}.scopebond-backup`;

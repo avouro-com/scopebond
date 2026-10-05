@@ -1,5 +1,162 @@
 # @scopebond/gateway
 
+## 0.14.0
+
+### Minor Changes
+
+- c4514ca: Each delivery queue has its own id, made once when the queue is created, and the exporter sends it beside the record numbers. The hook's rules check reports the queue id and the highest number the queue has given a record (`x-scopebond-queue-id`, `x-scopebond-seq-assigned`), so a workspace can tell numbering that restarted because the queue was removed from a resend, and count the records that queue never delivered.
+- 7736223: Sequenced delivery: the Cloud outbox gives each queued record this computer's number for it (1, 2, 3… in queue order, kept across restarts and never reused), and the exporter sends the numbers beside the receipts (`{ receipts, seq }`; the signed receipts are unchanged). A workspace that reads them can show records lost on the computer, for example aged out of the queue, as missing instead of silently absent. Queues made before this are upgraded in place; their waiting records stay unnumbered.
+
+### Patch Changes
+
+- 8e42db0: A record the workspace refuses only because this computer's clock is ahead of its own (`future_timestamp`) stays in the queue and is sent again, since it is accepted once the time passes; the records around it still deliver. Before, it was settled as a lost record when it shared a batch with others. After a day it is settled as a gap, so a clock that is badly wrong cannot hold the queue for ever. A record refused for a key the connection did not enroll (`attester_mismatch`) is kept the same way, since signing in again delivers it.
+- 2a9b060: A refused batch that no retry can deliver no longer holds up the records behind it. When the workspace refuses every record of a batch on its own as `invalid_receipt` (HTTP 400 with `rejected`), each becomes a "rejected" delivery gap, as inside an accepted batch. Any other code is retried: a timestamp ahead of the workspace's clock is accepted once the time passes, and a key the connection did not enroll is delivered after signing in again. A 409 `id_conflict` sends records one at a time until it finds the record that conflicts, which becomes an "id_conflict" gap; the rest go in batches again. Before, the exporter sent the same batch forever and every newer record waited. Every other refusal is retried with backoff, as before. A workspace that answers 429 or 503 with `Retry-After` is not asked again sooner (at most an hour).
+- 6c3b253: A Cloud delivery queue that cannot be set up (a full disk, a read-only file) closes its database handle before it reports the error, instead of leaving it open.
+
+## 0.13.0
+
+### Minor Changes
+
+- 433c8df: Warn mode. A workspace can set a rule to "Block, user may override": the hook then blocks a matching action until the person at the computer allows it once, with a reason, in the Scopebond Agent's window, or, where the workspace allows it and Claude Code's permission mode really asks the person, offers Claude Code's own prompt. Scopebond's own protection, rules on Block and the kill switch are never overridable; the workspace's daily limit and repeat window hold. The gateway takes an optional override handler on `handleAction` and signs an `override` record (rule, method, state, reason digest) into an approved receipt; `validateOverrideRecord` and the receipt schema define its exact shape.
+
+### Patch Changes
+
+- Updated dependencies [433c8df]
+  - @scopebond/policy-schema@0.6.0
+  - @scopebond/verify@0.4.3
+
+## 0.12.0
+
+### Minor Changes
+
+- 3308250: `status --json` prints the delivery and identity status in one machine-readable shape (`scopebond.status.v1`): `state` (`delivering`, `recording_locally` or `not_governing`), the last delivery and its error code, records waiting and the age of the oldest, delivery gaps by reason, this computer's installation, generation, key and credential expiry, and which configurations exist. The desktop agent and support read this, not the human text.
+
+  A record the workspace refuses on its own (the rest of the batch stored) now leaves the delivery queue as a `rejected` gap instead of being retried with every batch, so one bad record can never hold up the ones behind it; it stays in the local log. The SQLite outbox gains `recordGap` and `gapsByReason`.
+
+  A delivery conformance suite runs the real runtime and queue against a workspace that refuses the connection, fails with 5xx, stays unreachable for eight days, and refuses single records: in every case each record is delivered or accounted for.
+
+## 0.11.0
+
+### Minor Changes
+
+- 6e61a3b: When the workspace refuses an upload and says why, the exporter keeps its refusal code and remediation after the unchanged `ingest failed: HTTP <status>` prefix, for example `ingest failed: HTTP 401 (credential_refused): Sign it in again ...`. A refusal without a JSON body reads as before.
+
+## 0.10.0
+
+### Minor Changes
+
+- 1b8be99: Reconnecting a computer always works now. When the workspace refuses this computer's countersigning key because the computer was replaced or disconnected there, `login` and `connect` replace the key and enroll again with the same, unspent token. The old key is kept in `retired-keys/`. Queued receipts signed by the earlier key leave the delivery queue as `rekeyed` gaps, so they no longer hold up newer receipts, and they stay in the local log.
+
+  New `recover` command: it finds the local records an earlier key signed, asks the workspace to accept them, waits while an owner or admin approves it there, then sends them in bounded batches and reports how many were recovered, already present or refused. Nothing is re-signed.
+
+  `login` and `connect` run from a folder without its own project setup now repair the connection the hook actually uses, usually the user-level one, instead of creating a second, project-level setup beside it. `--project` sets up the current folder explicitly.
+
+  Gateway changes: enrollment refusals are a `CloudEnrollmentError` that carries the HTTP status and the workspace's code. `SqliteReceiptStore.page()` walks a large log without loading it into memory. `SqliteCloudOutbox.discardNotSignedBy()` sets aside queued receipts signed by another key.
+
+## 0.9.0
+
+### Minor Changes
+
+- b65261d: Dispatch boundary. A new `dispatchGuard` on `createGateway`, and `createDispatchGuard` / `DispatchStore` in `@scopebond/gateway/node`, decide three things atomically in one SQLite transaction immediately before an allowed action is dispatched: single-use approvals (bound to actor, action type, target, policy digest, the canonical hash of the actual request and a five-minute expiry), delegated child scope (a subset of its parent, never outliving it, with cascading revocation checked on every action) and per-agent action budgets (a persistent count of dispatched parent actions per window, monitor or enforce). A denial dispatches nothing and spends nothing; an unreadable counter, an unacknowledged or expired enforce policy, or a system clock set backwards never grants unlimited dispatch. A `shared_gateway` budget is refused by independent installations. The gateway's existing signed-approval path is unchanged and now has replay, changed-action, expiry and wrong-agent tests that assert the upstream is never invoked.
+- b08c8df: Align the dispatch boundary with the workspace. Scope entries use a closed kind vocabulary (`action`, `privilege`; `scopeEntryDigest` throws on another) and `actionScopeEntry(action_type, target | null)` builds the exact and any-target entries over the opaque target id, refusing an invalid type or target. A delegation check sends the action and target id and uses the workspace's `covers` answer when it gives one. A required approval with no reference in the inbox is looked up with `GET /v1/monitoring/approvals/active` and consumed as before. New: `dispatchApprovalBinding`, `openApprovalBinder`, `SCOPE_ENTRY_KINDS`, `actionScopeEntry`, `CLOUD_ACTIVE_APPROVAL_PATH`.
+- 7c6fa19: Workspace source for the dispatch boundary. A guard given a `cloud` source (created by `createCloudDispatchSource`, opened automatically by `openDispatchGuard` when `cloud.json` grants `observations:write`) consumes a person's workspace approval at dispatch with `POST /v1/monitoring/approvals/consume` (strict body, closed refusal reasons; anything but a 200 is not approved), after checking that nothing else would refuse the action so a refusal for another reason does not spend the approval. The local signed-file path is unchanged and is tried first; when it holds no valid approval and the workspace cannot be reached an enforced action is denied (`approval_unavailable`). Delegated sessions the local store does not know are resolved from `GET /v1/monitoring/delegations?session_id=`, cached for 15 seconds (an active grant only), and any state other than an active, covering, unexpired grant, or an answer whose scope digest does not bind its entries, grants nothing. New exports: `delegationScopeDigest`, `scopeEntryDigest`, `privilegeScopeEntry`, `actionScopeEntries` (pinned by literal vectors), `createCloudDispatchSource`, `openCloudSource`, `targetIdFor`. Targets are sent to the workspace only as keyed opaque ids.
+
+### Patch Changes
+
+- Updated dependencies [b08c8df]
+- Updated dependencies [aac4f6f]
+  - @scopebond/policy-schema@0.5.0
+  - @scopebond/verify@0.4.2
+
+## 0.8.0
+
+### Minor Changes
+
+- 978e7a3: Make the limits editable, bound what the hook writes to disk, and make `install` safe to
+  try.
+
+  - **`rules` — the limits in plain terms.** `policy.json` is 6.7 KB of generated regular
+    expression (the `safe-shell` clause alone is a ~700-character case-folded negative
+    lookahead), so "it is a plain JSON file — edit the limits" was not true in practice and
+    the starter policy was effectively the only policy. The lists those patterns are built
+    from now live in `.scopebond/rules.json`, and `policy.json` is compiled from them:
+
+    ```
+    scopebond-hook rules                    # what is blocked, in plain English
+    scopebond-hook rules allow dd
+    scopebond-hook rules protect infra/
+    scopebond-hook rules protect-branch production
+    scopebond-hook rules apply              # recompile after editing rules.json by hand
+    ```
+
+    The compiled patterns are **identical** to the ones already shipped — a test pins them
+    against `starterPolicy()`, so the readable front end cannot change what is enforced.
+    Clause descriptions are now generated from the lists, so they stay true after an edit
+    (and the block message quotes them).
+
+  - **The local store stops growing without bound.** The hook is one short-lived process per
+    tool call, and it never closed its SQLite handle — so each process left its write-ahead
+    log on disk for the next one to extend. Measured: **~11 KiB of WAL per receipt, against
+    ~1.7 KiB once the handle is closed**, and the WAL file is now gone entirely after a run.
+    (It also released a Windows file lock that stopped `.scopebond` being removable.)
+    `ReceiptStore` gains optional `recent(limit)` and `count()`; both stores implement
+    `close()` with a truncating checkpoint.
+
+  - **`prune` bounds the store, without ever losing evidence quietly.** `status` now reports
+    the receipt count and size, and `prune --before 90d` archives the receipts it will
+    remove to a JSONL file beside the database before removing them, then VACUUMs. It
+    refuses outright once the log has been anchored, because a receipt's position is its
+    anchor leaf index and removing one would make an existing anchor unverifiable. Nothing
+    is ever deleted automatically.
+
+  - **`log` answers "what got blocked this week".** It had no filters and read every receipt
+    ever recorded in order to print the last 20. It now takes `--deny` and `--since 7d`, and
+    reads a tail (`ORDER BY id DESC LIMIT`) with a bounded scan when filtering. `verify`
+    still reads everything — that is the point of it — but reports progress instead of
+    looking hung on a long history.
+
+  - **`install --dry-run`, and a backup before any change.** `install` rewrites agent config
+    files the user did not create (`~/.claude/settings.json` holds their theme, plugins and
+    permissions) and the undo was "hope the merge was right". It now prints exactly which
+    files it would touch with `--dry-run`, and copies each config to
+    `<file>.scopebond-backup` before its first modification.
+
+  - **Fixed: `uninstall` ignored the project hook.** Like `status` and `doctor` before it, it
+    looked only at the user-level config — so after the per-project `init` the site tells
+    people to run, it reported "no user-level harness config found" and left the hook in
+    place. It now removes both scopes and says what it kept.
+
+  - **Per-command help.** `--help` was a single line listing 15 command names. `help` now
+    describes each command, and `help <command>` gives its arguments and an example.
+
+  Known remaining inefficiency: the authority tables store the policy snapshot per action,
+  so a tool call costs ~25 KiB rather than the ~2 KiB of the receipt itself. Deduplicating
+  it by digest needs a schema migration in the authority storage that backs duplicate-action
+  detection, so it is deliberately left for its own change rather than bundled here.
+
+### Patch Changes
+
+- 978e7a3: Fix `verifier_version`: receipts named a verifier that did not produce their verdict.
+
+  `SPEC.md` defines the receipt field `verifier_version` as "the `violates()` verifier version
+  that produced the verdict". It was a hardcoded literal `"scopebond-verify@0.1.1"` in
+  `@scopebond/gateway`, and it stayed that literal through `@scopebond/verify` 0.2, 0.3 and
+  0.4 — so for three releases every signed receipt asserted a verifier version that had not
+  evaluated it. This is visible in the wild: a receipt from the live demo today reports
+  `scopebond-verify@0.1.1` while the gateway there runs verify 0.4.0.
+
+  The value now comes from `VERIFIER_VERSION`, exported by `@scopebond/verify` next to
+  `violates()` itself, and a test pins it to that package's published version so it cannot
+  drift again. The identifier keeps its established `scopebond-verify@<version>` spelling —
+  only the wrong version is corrected, since receipts already in the wild carry that shape.
+
+  Receipts signed before this change are unaffected and still verify; they simply carry the
+  old, incorrect version string. Nothing else in the envelope, the canonicalization or the
+  signature changes.
+
+- Updated dependencies [978e7a3]
+  - @scopebond/verify@0.4.1
+
 ## 0.7.0
 
 ### Minor Changes

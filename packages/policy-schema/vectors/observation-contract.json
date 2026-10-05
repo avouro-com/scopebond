@@ -1,0 +1,366 @@
+{
+  "note": "Deterministic vectors. Keys are TEST-ONLY public keys; no private key is published here and no production key is ever a fixture.",
+  "domain": "scopebond:observation/v1\n",
+  "source_receipt_domain": "scopebond:source-receipt/v1\n",
+  "kid": "key:test-only-0001",
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAr5Bwv5h+9s702CPGiETbmmzMu/olGfIgmXrbwWz2l3A=\n-----END PUBLIC KEY-----\n",
+  "wrong_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4jh9UVtEa5uQ7aG6Q1LOGVHYDVE/2yYnM4q8GBLCUKk=\n-----END PUBLIC KEY-----\n",
+  "limits": {
+    "max_observation_bytes": 16384,
+    "max_batch_items": 100,
+    "max_batch_body_bytes": 1048576
+  },
+  "restricted_kinds": [
+    "verification",
+    "platform_outcome",
+    "integrity"
+  ],
+  "positive": [
+    {
+      "name": "session_start",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "sess-0001",
+        "kind": "session",
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1,
+        "data": {
+          "event": "start",
+          "session_id": "sess-0001",
+          "sequence": 1
+        }
+      },
+      "canonical": "{\"data\":{\"event\":\"start\",\"sequence\":1,\"session_id\":\"sess-0001\"},\"installation_generation\":1,\"installation_id\":\"inst-test-0001\",\"kind\":\"session\",\"observation_id\":\"11111111-1111-4111-8111-111111111111\",\"occurred_at\":\"2026-01-01T00:00:00Z\",\"sequence\":1,\"session_id\":\"sess-0001\",\"type\":\"scopebond:observation\",\"version\":\"1.0\"}",
+      "observation_hash": "f416928c8d661a7305cdcea82f9bd9e7b11c1fc04dda636d71b6b1c28fbc0b21",
+      "signature": {
+        "alg": "Ed25519",
+        "kid": "key:test-only-0001",
+        "value": "JiZpYVqTXSauPgZGT2wVnLaUsaocLDMPyEtcJbpeGpjOppZAlziiZ8hZuoA3lwXoubDIiZVOIXjtM3OVU1l8CA"
+      }
+    },
+    {
+      "name": "health_heartbeat",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "22222222-2222-4222-8222-222222222222",
+        "session_id": "sess-0001",
+        "kind": "health",
+        "occurred_at": "2026-01-01T00:01:00.250Z",
+        "sequence": 2,
+        "data": {
+          "event": "heartbeat",
+          "session_id": "sess-0001",
+          "lease_active": true,
+          "policy_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "canonical": "{\"data\":{\"event\":\"heartbeat\",\"lease_active\":true,\"policy_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"session_id\":\"sess-0001\"},\"installation_generation\":1,\"installation_id\":\"inst-test-0001\",\"kind\":\"health\",\"observation_id\":\"22222222-2222-4222-8222-222222222222\",\"occurred_at\":\"2026-01-01T00:01:00.250Z\",\"sequence\":2,\"session_id\":\"sess-0001\",\"type\":\"scopebond:observation\",\"version\":\"1.0\"}",
+      "observation_hash": "3de8d188782e96c89828885766ef1e7730fc92815a3cd27db6ee07a3d60920d4",
+      "signature": {
+        "alg": "Ed25519",
+        "kid": "key:test-only-0001",
+        "value": "gmNmiQY39OkIWY1ht8KW4P5IhSQVvNaM2FE6EtDNejxaSy28NnCqwLNlyZzYXj7p-BWWquLq9hnSg57FYlHhCw"
+      }
+    },
+    {
+      "name": "tool_intent_file_write",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "sess-0001",
+        "parent_action_id": "act-0001",
+        "source_receipt_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "kind": "tool_intent",
+        "occurred_at": "2026-01-01T00:02:00Z",
+        "sequence": 3,
+        "data": {
+          "event": "requested",
+          "parent_action_id": "act-0001",
+          "source_receipt_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "request_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "operation": {
+            "type": "file",
+            "resource_id": "repo-opaque-1",
+            "environment_class": "development",
+            "reference_set_version": "refs-1",
+            "request_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "digest_key_generation": "kg-1",
+            "verb": "write",
+            "target_ids": [
+              "t-1",
+              "t-2"
+            ],
+            "root_id": "root-1",
+            "resolution": "resolved",
+            "path_class": "ordinary",
+            "outside_root": false
+          }
+        }
+      },
+      "canonical": "{\"data\":{\"event\":\"requested\",\"operation\":{\"digest_key_generation\":\"kg-1\",\"environment_class\":\"development\",\"outside_root\":false,\"path_class\":\"ordinary\",\"reference_set_version\":\"refs-1\",\"request_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"resolution\":\"resolved\",\"resource_id\":\"repo-opaque-1\",\"root_id\":\"root-1\",\"target_ids\":[\"t-1\",\"t-2\"],\"type\":\"file\",\"verb\":\"write\"},\"parent_action_id\":\"act-0001\",\"request_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"source_receipt_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"installation_generation\":1,\"installation_id\":\"inst-test-0001\",\"kind\":\"tool_intent\",\"observation_id\":\"33333333-3333-4333-8333-333333333333\",\"occurred_at\":\"2026-01-01T00:02:00Z\",\"parent_action_id\":\"act-0001\",\"sequence\":3,\"session_id\":\"sess-0001\",\"source_receipt_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"type\":\"scopebond:observation\",\"version\":\"1.0\"}",
+      "observation_hash": "bc3622853d6efe7858676661c8d2e47e47d0ec752c8ab049060d9b56543e4abf",
+      "signature": {
+        "alg": "Ed25519",
+        "kid": "key:test-only-0001",
+        "value": "9dm1UlWiR9AdQPHqGPsUEx01M3RHXB6IJjA23dtR-f80rMOl6izFLc3uZISZUyaZeyLJW6QuhuNS8pO3sGerDw"
+      }
+    },
+    {
+      "name": "integrity_valid",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "44444444-4444-4444-8444-444444444444",
+        "kind": "integrity",
+        "occurred_at": "2026-01-01T00:03:00Z",
+        "sequence": 4,
+        "data": {
+          "event": "checked",
+          "source_id": "src-opaque-1",
+          "source_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "historical_key_id": "key:0123456789abcdef",
+          "schema_version": "1.0",
+          "verifier_version": "verifier-1",
+          "result": "valid",
+          "expected_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "actual_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "canonical": "{\"data\":{\"actual_hash\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"event\":\"checked\",\"expected_hash\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"historical_key_id\":\"key:0123456789abcdef\",\"result\":\"valid\",\"schema_version\":\"1.0\",\"source_hash\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"source_id\":\"src-opaque-1\",\"verifier_version\":\"verifier-1\"},\"installation_generation\":1,\"installation_id\":\"inst-test-0001\",\"kind\":\"integrity\",\"observation_id\":\"44444444-4444-4444-8444-444444444444\",\"occurred_at\":\"2026-01-01T00:03:00Z\",\"sequence\":4,\"type\":\"scopebond:observation\",\"version\":\"1.0\"}",
+      "observation_hash": "2742ed856f675733c37dff441e9221e9efb4e4b8f7b27f0e76879d17b1179218",
+      "signature": {
+        "alg": "Ed25519",
+        "kid": "key:test-only-0001",
+        "value": "vf-KycZJow_s11zXs20mMqu9jKZ7hg-dWLa4zTA87QupjkkHNFyPrV8bHgyudaebeTnuKVbYjJbs9tXWpFLgBg"
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "tampered_payload",
+      "description": "A changed payload has a different observation_hash and the original signature no longer verifies.",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "sess-0001",
+        "kind": "session",
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 99,
+        "data": {
+          "event": "start",
+          "session_id": "sess-0001",
+          "sequence": 99
+        }
+      },
+      "signature": {
+        "alg": "Ed25519",
+        "kid": "key:test-only-0001",
+        "value": "JiZpYVqTXSauPgZGT2wVnLaUsaocLDMPyEtcJbpeGpjOppZAlziiZ8hZuoA3lwXoubDIiZVOIXjtM3OVU1l8CA"
+      },
+      "expect": {
+        "hash_differs": true,
+        "signature_valid": false
+      }
+    },
+    {
+      "name": "wrong_signer",
+      "description": "A valid signature verified with a different public key fails.",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "sess-0001",
+        "kind": "session",
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1,
+        "data": {
+          "event": "start",
+          "session_id": "sess-0001",
+          "sequence": 1
+        }
+      },
+      "signature": {
+        "alg": "Ed25519",
+        "kid": "key:test-only-0001",
+        "value": "JiZpYVqTXSauPgZGT2wVnLaUsaocLDMPyEtcJbpeGpjOppZAlziiZ8hZuoA3lwXoubDIiZVOIXjtM3OVU1l8CA"
+      },
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4jh9UVtEa5uQ7aG6Q1LOGVHYDVE/2yYnM4q8GBLCUKk=\n-----END PUBLIC KEY-----\n",
+      "expect": {
+        "signature_valid": false
+      }
+    },
+    {
+      "name": "signature_without_domain",
+      "description": "A signature over the bare canonical bytes, without the domain prefix, does not verify.",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "sess-0001",
+        "kind": "session",
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1,
+        "data": {
+          "event": "start",
+          "session_id": "sess-0001",
+          "sequence": 1
+        }
+      },
+      "signature": {
+        "alg": "Ed25519",
+        "kid": "key:test-only-0001",
+        "value": "vH4cjYGXCcDWdhmiyLHUAWUv1uHZtnVvHNiEG8N9RyicFjRqAF_Gf9kh4Kyy6Zh1q4uPrsx5aqIR-vPUGDO3BA"
+      },
+      "expect": {
+        "signature_valid": false
+      }
+    },
+    {
+      "name": "unknown_field",
+      "description": "An undeclared envelope field is rejected by the closed schema.",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "sess-0001",
+        "kind": "session",
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1,
+        "data": {
+          "event": "start",
+          "session_id": "sess-0001",
+          "sequence": 1
+        },
+        "tenant_id": "t-1"
+      },
+      "expect": {
+        "schema_valid": false
+      }
+    },
+    {
+      "name": "unknown_nested_field",
+      "description": "An undeclared field inside a typed operation is rejected.",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "sess-0001",
+        "parent_action_id": "act-0001",
+        "source_receipt_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "kind": "tool_intent",
+        "occurred_at": "2026-01-01T00:02:00Z",
+        "sequence": 3,
+        "data": {
+          "event": "requested",
+          "parent_action_id": "act-0001",
+          "source_receipt_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "request_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "operation": {
+            "type": "file",
+            "resource_id": "repo-opaque-1",
+            "environment_class": "development",
+            "reference_set_version": "refs-1",
+            "request_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "digest_key_generation": "kg-1",
+            "verb": "write",
+            "target_ids": [
+              "t-1",
+              "t-2"
+            ],
+            "root_id": "root-1",
+            "resolution": "resolved",
+            "path_class": "ordinary",
+            "outside_root": false,
+            "raw_args": "must not exist"
+          }
+        }
+      },
+      "expect": {
+        "schema_valid": false
+      }
+    },
+    {
+      "name": "unknown_version",
+      "description": "An unsupported payload version is rejected as a terminal unsupported-version item.",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "2.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "sess-0001",
+        "kind": "session",
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1,
+        "data": {
+          "event": "start",
+          "session_id": "sess-0001",
+          "sequence": 1
+        }
+      },
+      "expect": {
+        "schema_valid": false
+      }
+    },
+    {
+      "name": "unknown_event",
+      "description": "An event name that is not in the closed set for the kind is rejected.",
+      "payload": {
+        "type": "scopebond:observation",
+        "version": "1.0",
+        "installation_id": "inst-test-0001",
+        "installation_generation": 1,
+        "observation_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "sess-0001",
+        "kind": "session",
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1,
+        "data": {
+          "event": "explode",
+          "session_id": "sess-0001",
+          "sequence": 1
+        }
+      },
+      "expect": {
+        "schema_valid": false
+      }
+    }
+  ],
+  "source_receipt_hash": {
+    "envelope": {
+      "payload": {
+        "type": "scopebond:receipt",
+        "n": 1
+      },
+      "signature": {
+        "alg": "Ed25519",
+        "kid": "key:0000000000000001",
+        "value": "AAAA"
+      }
+    },
+    "hash": "6ba1d890afb2917f59f43663c17ca24d4d85d289590358c4efdbbca69090c273"
+  }
+}

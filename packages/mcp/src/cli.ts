@@ -7,7 +7,23 @@
 //
 //   scopebond-mcp init --server <id>          scaffold a key + starter policy
 //   scopebond-mcp --server <id> [--policy p.json] [--key k.pem] [--principal sub] \
-//       [--receipts log.jsonl] -- <upstream-command...>
+//       [--receipts log.jsonl] [--typed typed.json] [--dispatch-dir dir] [--delegation id] -- <upstream-command...>
+//
+// --dispatch-dir turns on the dispatch boundary (off by default): the directory holds dispatch.json
+// (require_approval, approver_keys, budgets), an approvals/ inbox and the shared dispatch.db. Each
+// tools/call that policy allows then needs its single-use approval, its delegated scope and its
+// action-budget slot before it is forwarded; without them it is denied and never sent upstream.
+// --delegation (or SCOPEBOND_DELEGATION) runs the proxy under a delegated child scope.
+//
+// --typed turns on the typed adapter (off by default): a JSON file with
+//   { "mode": "monitor" | "enforce", "manifest": { "hash": "sha256:…", "tools": { "<tool>":
+//     { "operation_class": "read_only" | "mutation", "resources": [{ "arg": "repository", "kind": "repository" }] } } },
+//     "requireResourceBinding": true, "approvedResources": { "repository": ["owner/name"] } }
+// Under "enforce" a tool the pinned manifest does not list, a server whose tool list no longer
+// matches its hash, and (with requireResourceBinding) a call whose resources cannot be bound
+// from the dispatched arguments or are not approved, are denied before dispatch. When the
+// hook is installed and enrolled for observations (SCOPEBOND_HOOK_DIR or --observations-dir),
+// tool_intent and tool_outcome observations are queued in its outbox.
 //
 // Env: SCOPEBOND_MCP_POLICY, SCOPEBOND_MCP_KEY, SCOPEBOND_MCP_SERVER,
 //      SCOPEBOND_MCP_PRINCIPAL, SCOPEBOND_MCP_RECEIPTS.
@@ -18,14 +34,20 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { SignedReceipt, CloudExporter } from "@scopebond/gateway";
 import { createMcpProxy } from "./proxy.js";
+import { requestBinderFromHex, type ObservationSink, type RequestBinder, type TypedAdapterConfig } from "./typed.js";
+import { existsSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { resolve } from "node:path";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
 import { scaffold } from "./init.js";
+import { openApprovalBinder, openDispatchGuard } from "@scopebond/gateway/node";
 import { connectCloud, loadMcpConnection, connectionFileFor, openExporter } from "./cloud.js";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
+interface RequestBinderHolder { binding: RequestBinder }
 function die(message: string): never { process.stderr.write(`scopebond-mcp: ${message}\n`); process.exit(1); }
 
 // `init`: scaffold a key + a starter policy for one server, then exit.
@@ -89,8 +111,8 @@ if (connection) {
 const child = spawn(upstreamCmd[0], upstreamCmd.slice(1), { stdio: ["pipe", "pipe", "inherit"] });
 child.on("error", (e) => die(`could not start the upstream server: ${e.message}`));
 const shutdown = (code: number) => {
-  if (!exporter) process.exit(code);
-  void exporter.flush().finally(() => { exporter!.stop(); process.exit(code); });
+  const done = (): never => process.exit(code);
+  void Promise.allSettled([exporter?.flush(), observations?.flush()]).finally(() => { exporter?.stop(); try { observations?.close(); } catch { /* closing is best effort */ } done(); });
 };
 child.on("exit", (code) => shutdown(code ?? 0));
 process.on("SIGINT", () => shutdown(0));
@@ -122,9 +144,52 @@ const upstream: McpUpstream = {
   },
 };
 
+// The typed adapter is off unless a typed config is given. Its binding key and observation
+// outbox come from the hook when it is installed and enrolled; otherwise the key is a local
+// file beside the signing key (never uploaded) and nothing is queued.
+const typedPath = arg("--typed", process.env.SCOPEBOND_MCP_TYPED);
+let typed: TypedAdapterConfig | undefined;
+let observations: { flush(): Promise<unknown>; close(): void } | undefined;
+if (typedPath) {
+  let raw: Record<string, unknown>;
+  try { raw = JSON.parse(readFileSync(typedPath, "utf8")); } catch (e) { die(`could not read the typed config ${typedPath}: ${(e as Error).message}`); }
+  if (raw.mode !== "monitor" && raw.mode !== "enforce") die('the typed config needs "mode": "monitor" or "enforce"');
+  let binder: RequestBinder | undefined;
+  let sink: ObservationSink | undefined;
+  const hookDir = arg("--observations-dir", process.env.SCOPEBOND_HOOK_DIR);
+  if (hookDir) {
+    try {
+      const hook = await import("@scopebond/hook") as unknown as { openObservations(dir: string, o?: object): { status: { state: string; reason?: string }; emitter?: ObservationSink & RequestBinderHolder & { flush(): Promise<unknown>; close(): void } } };
+      const opened = hook.openObservations(resolve(hookDir), { adapterVersion: "scopebond-mcp" });
+      if (opened.emitter) { sink = opened.emitter; binder = opened.emitter.binding; observations = opened.emitter; }
+      else process.stderr.write(`scopebond-mcp: observations are not on (${opened.status.reason ?? opened.status.state}); the typed adapter runs without them\n`);
+    } catch (e) { process.stderr.write(`scopebond-mcp: the hook package is not available for observations (${(e as Error).message})\n`); }
+  }
+  if (!binder) {
+    const file = `${keyPath}.binding`;
+    let hex = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+    if (!/^[0-9a-f]{64}$/.test(hex)) { hex = randomBytes(32).toString("hex"); writeFileSync(file, hex + "\n", { mode: 0o600 }); }
+    binder = requestBinderFromHex(hex);
+  }
+  typed = { ...(raw as object), mode: raw.mode, binder, ...(sink ? { sink } : {}) } as TypedAdapterConfig;
+}
+
+// The dispatch boundary is opt-in. A directory that is named but cannot be read is a setup error: it says what may be spent.
+const dispatchDir = arg("--dispatch-dir", process.env.SCOPEBOND_DISPATCH_DIR);
+const delegationId = arg("--delegation", process.env.SCOPEBOND_DELEGATION);
+let dispatch: { guard: NonNullable<ReturnType<typeof openDispatchGuard>>; delegationId?: string; binder?: ReturnType<typeof openApprovalBinder> & object } | undefined;
+if (delegationId && !dispatchDir) die("--delegation needs --dispatch-dir (a delegation is checked against its shared store)");
+if (dispatchDir) {
+  try {
+    const guard = openDispatchGuard(dispatchDir ?? ".", { delegated: !!delegationId });
+    if (guard) { const binder = openApprovalBinder(dispatchDir ?? "."); dispatch = { guard, ...(delegationId ? { delegationId } : {}), ...(binder ? { binder } : {}) }; }
+  } catch (e) { die(`could not read the dispatch settings in ${dispatchDir ?? "."}: ${(e as Error).message}`); }
+
+}
+
 const proxy = createMcpProxy({
   policy, principal: { subject: `client:${principal}`, issuer: "scopebond:mcp-proxy" }, server: server as string,
-  attesterKeyPem, upstream,
+  attesterKeyPem, upstream, ...(dispatch ? { dispatch } : {}), ...(typed ? { typed, adapterVersion: "scopebond-mcp" } : {}),
   onReceipt: (r: SignedReceipt) => {
     if (receiptsPath) { try { appendFileSync(receiptsPath, JSON.stringify(r) + "\n"); } catch { /* best effort */ } }
     exporter?.enqueue(r); // mirror to the workspace when connected

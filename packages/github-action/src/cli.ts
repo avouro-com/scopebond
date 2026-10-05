@@ -11,6 +11,7 @@
 //
 //   scopebond-verify-pr [--policy scopebond.policy.json] [--event <event.json>] [--paths-file <list>]
 //                       [--policy-source base|workspace]   (workspace: local testing only)
+//                       [--evidence-out <file>]   the exact commit, digests and check result as JSON
 //
 // Env: GITHUB_EVENT_PATH, GITHUB_EVENT_NAME, SCOPEBOND_POLICY, SCOPEBOND_POLICY_SOURCE, GITHUB_OUTPUT.
 
@@ -20,6 +21,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { validatePolicy } from "@scopebond/verify";
 import { evaluatePullRequest } from "./pr.js";
 import { buildPullRequestReceipt } from "./receipt.js";
+import { buildActionEvidence } from "./evidence.js";
 import type { PullRequestContext } from "./pr.js";
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -111,12 +113,14 @@ if (decision.ruleIds.length) console.log(`  rules: ${decision.ruleIds.join(", ")
 
 // Optionally emit a signed boundary receipt (customer's own key). Only for a
 // governed-agent decision; a not_evaluated PR gets none.
+let emittedReceipt: unknown;
 const keyPem = arg("--key") ?? process.env.SCOPEBOND_ATTESTER_KEY;
 const receiptOut = arg("--receipt-out") ?? process.env.SCOPEBOND_RECEIPT_OUT;
 if (keyPem && decision.attribution && decision.decision !== "not_evaluated") {
   let receipt: Awaited<ReturnType<typeof buildPullRequestReceipt>>;
   try {
     receipt = await buildPullRequestReceipt(ctx, policy, decision, keyPem);
+    emittedReceipt = receipt;
     if (receiptOut) writeFileSync(receiptOut, JSON.stringify(receipt) + "\n");
     console.log(`  receipt: boundary/${decision.decision} @ ${ctx.headSha}${receiptOut ? ` → ${receiptOut}` : ""}`);
   } catch (e) {
@@ -141,10 +145,23 @@ if (keyPem && decision.attribution && decision.decision !== "not_evaluated") {
   }
 }
 
+// Optionally write what this run checked, for a workspace collector that has registered this
+// runner. It is a report, not a verification: the document says it is not independent.
+const evidenceOut = arg("--evidence-out") ?? process.env.SCOPEBOND_EVIDENCE_OUT;
+if (evidenceOut) {
+  try {
+    let version = "unknown";
+    try { version = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version ?? "unknown"; } catch { /* the version is informational */ }
+    const evidence = buildActionEvidence({ ctx, policy, decision, receipt: emittedReceipt, prNumber: pr.number, version, env: process.env });
+    writeFileSync(evidenceOut, JSON.stringify(evidence, null, 2) + "\n");
+    console.log(`  evidence: ${evidence.check.result} @ ${evidence.commit}${evidence.commit_exact ? "" : " (not a full commit id)"} -> ${evidenceOut}`);
+  } catch (e) { console.log(`  evidence not written: ${(e as Error).message}`); }
+}
+
 if (process.env.GITHUB_OUTPUT) {
   try {
     const { appendFileSync } = await import("node:fs");
-    appendFileSync(process.env.GITHUB_OUTPUT, `decision=${decision.decision}\nreason=${decision.reason}\naction_type=${decision.actionType}\n`);
+    appendFileSync(process.env.GITHUB_OUTPUT, `decision=${decision.decision}\nreason=${decision.reason}\naction_type=${decision.actionType}\n${evidenceOut ? `evidence_path=${evidenceOut}\n` : ""}`);
   } catch { /* outputs are best-effort */ }
 }
 

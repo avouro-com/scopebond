@@ -1,8 +1,12 @@
 # @scopebond/framework
 
-One import so an agent checks your policy **before every tool call** and records a
-signed receipt — the same policy your other agents use. Cooperative (M0): the
-framework asks Scopebond first and honors the answer.
+**License and hosting:** this package is free, Apache-2.0 open-source software.
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service
+and is not included in this package.
+
+Add a guard so supported tools check your policy before execution and record a
+signed receipt. The framework must call the guard and honor its decision; tools
+outside the guarded loop are not covered.
 
 - **Label:** cooperative · prevents if honored. Enforcement depends on the
   framework honoring the guard; code that calls a tool outside the framework's
