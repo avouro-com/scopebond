@@ -108,9 +108,11 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
     `console.log(cloud.url);`,
     "",
   ].join("\n"));
-  const hook = join(shared, "hook.tgz"), agent = join(shared, "agent.tgz");
+  const hook = join(shared, "hook.tgz");
   copyFileSync(packed.hook, hook);
-  copyFileSync(packed.agent, agent);
+  // The packed agent names the hook tarball in this account's temp folder, which the standard
+  // user cannot read: point it at the shared copy.
+  const agent = withHookFrom(packed.agent, hook, shared);
   const quiet = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] };
   const run = (cmd, args) => spawnSync(cmd, args, quiet);
   try {
@@ -130,7 +132,8 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
       String.raw`set "npm_config_prefix=%APPDATA%\npm"`,
       String.raw`set "npm_config_cache=%LOCALAPPDATA%\npm-cache"`,
       `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${join(shared, "windows-journey.ps1")}" -HookPackage "${hook}" -AgentPackage "${agent}" -SkipEdgeCases > "${log}" 2>&1`,
-      `echo %ERRORLEVEL%> "${exit}"`,
+      // Redirect first: `echo 0> file` would redirect handle 0 and write "ECHO is off.".
+      `> "${exit}" echo %ERRORLEVEL%`,
       "",
     ].join("\r\n"));
     const created = run("schtasks", ["/Create", "/TN", "ScopebondJourney", "/TR", `cmd.exe /d /c "${join(shared, "run.cmd")}"`, "/SC", "ONCE", "/ST", "23:59", "/RU", user, "/RP", password, "/RL", "LIMITED", "/F"]);
