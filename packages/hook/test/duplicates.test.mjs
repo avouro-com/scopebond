@@ -140,3 +140,25 @@ test("one enabled plugin is one place, even when Claude Code keeps its marketpla
     assert.match(entries[0].file, /cache/, "the installed copy is the one counted");
   });
 });
+
+test("dedupe removes only Scopebond's command from a group it shares with a person's own hook", () => {
+  const { home, project } = computer();
+  const userFile = join(home, ".claude", "settings.json");
+  const projectFile = join(project, ".claude", "settings.json");
+  write(userFile, { hooks: { PreToolUse: [ours()] } });
+  const shared = { matcher: "Bash", hooks: [{ type: "command", command: HOOK }, { type: "command", command: "./my-guard.sh" }] };
+  write(projectFile, { hooks: { PreToolUse: [shared] } });
+  withHome(home, () => { dedupeHooks("claude", "user", project, home); });
+  const after = JSON.parse(readFileSync(projectFile, "utf8"));
+  assert.deepEqual(after.hooks.PreToolUse, [{ matcher: "Bash", hooks: [{ type: "command", command: "./my-guard.sh" }] }], "the person's own hook stays");
+});
+
+test("dedupe leaves a file it has nothing to change in exactly as it was", () => {
+  const { home, project } = computer();
+  const userFile = join(home, ".claude", "settings.json");
+  const original = `{"hooks":{"PreToolUse":[${JSON.stringify(ours())}]},"theme":"dark"}`;
+  writeFileSync(userFile, original);
+  write(join(project, ".claude", "settings.json"), { hooks: { PreToolUse: [ours()] } });
+  withHome(home, () => { dedupeHooks("claude", "user", project, home); });
+  assert.equal(readFileSync(userFile, "utf8"), original, "the kept file is not reformatted");
+});

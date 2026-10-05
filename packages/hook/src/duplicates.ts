@@ -21,7 +21,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 export function decisionEntries(file: string, harness: Harness): string[] {
   if (!existsSync(file)) return [];
   try {
-    const config = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    const config = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as unknown;
     const list = isRecord(config) && isRecord(config.hooks) ? config.hooks[decisionEvent(harness)] : undefined;
     if (!Array.isArray(list)) return [];
     return list.filter(harnessEntryMatches).map((e) => {
@@ -38,7 +38,7 @@ export function enabledPluginHookFiles(home = homedir()): string[] {
   const root = join(home, ".claude", "plugins");
   let enabled: string[] = [];
   try {
-    const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")) as { enabledPlugins?: Record<string, unknown> };
+    const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8").replace(/^\uFEFF/, "")) as { enabledPlugins?: Record<string, unknown> };
     enabled = Object.entries(settings.enabledPlugins ?? {}).filter(([, on]) => on === true).map(([id]) => id.split("@")[0]);
   } catch { return []; }
   if (!enabled.length || !existsSync(root)) return [];
@@ -95,6 +95,17 @@ export function describeEntry(e: HookEntry): string {
   return e.scope === "plugin" ? `an enabled Claude Code plugin (${e.file})` : `${e.scope} settings (${e.file})`;
 }
 
+/** An entry without its Scopebond commands: a flat entry that is Scopebond's goes (null); in a group
+ *  ({ matcher, hooks: [...] }) only the Scopebond commands go, and the group goes only when nothing
+ *  else is left in it, so a person's own hook that shares a group with ours is kept. */
+function withoutScopebond(entry: unknown): unknown | null {
+  if (!harnessEntryMatches(entry)) return entry;
+  const record = entry as Record<string, unknown>;
+  if (!Array.isArray(record.hooks)) return null;
+  const rest = record.hooks.filter((h) => !harnessEntryMatches(h));
+  return rest.length ? { ...record, hooks: rest } : null;
+}
+
 /** Keep one Scopebond decision entry: the first of the chosen scope (user by default). Entries in
  *  other settings files are removed with their observation hooks; a second entry in the kept
  *  file is dropped. Plugins cannot be edited from here: keep "plugin" to remove every settings
@@ -109,26 +120,30 @@ export function dedupeHooks(harness: Harness, keep: HookScope = "user", cwd: str
   // every teammate who has no user-level install. It is left alone and named.
   const shared: HookEntry[] = [];
   for (const file of files) {
-    if ((!kept || file !== kept.file) && gitShareState(file) === "tracked") { shared.push(...entries.filter((e) => e.file === file)); continue; }
+    // The kept file is edited only when it is not the team's, or when the person chose to keep the project's.
+    if (gitShareState(file) === "tracked" && (!kept || file !== kept.file || keep !== "project")) { shared.push(...entries.filter((e) => e.file === file)); continue; }
     const config = readHarnessConfig(file);
+    const before = JSON.stringify(config);
     const hooks = isRecord(config.hooks) ? config.hooks : {};
     if (kept && file === kept.file && keep !== "plugin") {
       // The kept file: only a second decision entry goes.
       const list = hooks[decisionEvent(harness)];
       if (Array.isArray(list)) {
         let seen = false;
-        hooks[decisionEvent(harness)] = list.filter((e) => {
-          if (!harnessEntryMatches(e)) return true;
-          if (!seen) { seen = true; return true; }
-          return false;
+        hooks[decisionEvent(harness)] = list.flatMap((e) => {
+          if (!harnessEntryMatches(e)) return [e];
+          if (!seen) { seen = true; return [e]; }
+          const rest = withoutScopebond(e);
+          return rest === null ? [] : [rest];
         });
       }
       removed.push(...entries.filter((e) => e.file === file).slice(1));
     } else {
-      for (const [event, value] of Object.entries(hooks)) if (Array.isArray(value)) hooks[event] = value.filter((e) => !harnessEntryMatches(e));
+      for (const [event, value] of Object.entries(hooks)) if (Array.isArray(value)) hooks[event] = value.flatMap((e) => { const rest = withoutScopebond(e); return rest === null ? [] : [rest]; });
       removed.push(...entries.filter((e) => e.file === file));
     }
-    writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+    // A file with nothing to change is left exactly as it is.
+    if (JSON.stringify(config) !== before) writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   }
   return { kept, removed, plugins: keep === "plugin" ? [] : plugins, shared };
 }
