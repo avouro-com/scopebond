@@ -6,7 +6,7 @@ export { startControl, callAgent, readEndpoint, AGENT_FILE, TOKEN_HEADER } from 
 export type { AgentEndpoint } from "./ipc.js";
 export {
   launcherPath, windowsLauncher, posixLauncher, windowsRunCommand, macLaunchAgent, linuxUserUnit,
-  enableAutostart, disableAutostart, autostartHealth, autostartPaths, LABEL,
+  enableAutostart, disableAutostart, autostartHealth, autostartPaths, startCommands, startNow, LABEL,
 } from "./autostart.js";
 export {
   agentVersion, fetchClientVersion, compareVersions, commandHookVersion, maintainedHookCommand, maintainHookEntries, installAgent,

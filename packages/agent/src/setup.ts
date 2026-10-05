@@ -138,11 +138,18 @@ export async function runSetup(o: SetupOptions): Promise<number> {
     say(enableAutostart(o.dir, cli));
   } else say("✓ The agent already starts with your sign-in.");
   if (cli && !await callAgent(o.dir, "GET", "/status", undefined, 2_000)) {
-    if (!startNow(o.dir) && process.platform === "linux") {
+    const up = async (tries: number) => {
+      for (let i = 0; i < tries; i++) { if (await callAgent(o.dir, "GET", "/status", undefined, 1_000)) return true; await new Promise((r) => setTimeout(r, 500)); }
+      return false;
+    };
+    if (process.platform === "win32") {
+      // The headless console first; where it does not start, the launcher through a hidden cmd.exe.
+      if (!(startNow(o.dir, "win32", 0) && await up(12))) { startNow(o.dir, "win32", 1); await up(18); }
+    } else {
       // No systemd user session (a container, WSL without systemd): run it detached until the next sign-in.
-      spawn(process.execPath, [cli, "run"], { detached: true, stdio: "ignore", env: { ...process.env, SCOPEBOND_HOME: o.dir } }).unref();
+      if (!await up(10) && process.platform === "linux") spawn(process.execPath, [cli, "run"], { detached: true, stdio: "ignore", env: { ...process.env, SCOPEBOND_HOME: o.dir } }).unref();
+      await up(20);
     }
-    for (let i = 0; i < 30 && !await callAgent(o.dir, "GET", "/status", undefined, 1_000); i++) await new Promise((r) => setTimeout(r, 500));
   }
 
   // 4. Status, from the installed agent.
