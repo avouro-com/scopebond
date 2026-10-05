@@ -25,6 +25,9 @@ scopebond install                   # detects Cursor and Codex
 scopebond install --codex           # set up Codex only
 ```
 
+In Windows PowerShell type `npm.cmd` and `scopebond.cmd` (PowerShell's default script policy blocks
+the plain names; the `.cmd` forms work without changing it).
+
 `install` sets Scopebond up **once per developer machine**, not per repository: it
 scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
@@ -215,8 +218,14 @@ In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy
 last problem. Records are never dropped from the queue while they wait: a long outage only makes
 the queue longer. If the workspace refuses this computer's connection (it was revoked, replaced or
 removed), `status` says **NOT DELIVERING** with the time it stopped and the one command that fixes
-it, which is signing in again. `status --json` prints the same in one machine-readable shape (`scopebond.status.v1`) for tools and support. `doctor` also checks that the workspace still accepts the connection,
-not only that it is reachable, and fails when it does not.
+it, which is signing in again. `status` also says **NOT DELIVERING** when records have waited more
+than five minutes and the workspace has accepted nothing since they were queued, whatever the
+last error says, and names `flush`, which sends the queue with no time limit and prints the
+workspace's answer. Each tool call gives delivery a short time (800 ms, `SCOPEBOND_HOOK_FLUSH_MS`)
+before the hook exits; an attempt cut off by that limit is recorded as a `timeout` error rather
+than as nothing. `status --json` prints the same in one machine-readable shape (`scopebond.status.v1`) for tools and support: `delivery.last_error_code` is `timeout` for a cut-off attempt, `state` is `recording_locally` for a stalled queue, and `config.user_connection_shadowed` is true when a project setup takes precedence over your user-level sign-in in the current folder. `doctor` also checks that the workspace still accepts the connection,
+not only that it is reachable, and fails when it does not, when the queue is stalled, or when this
+folder's own setup takes precedence over your sign-in without being connected.
 
 `status` and `doctor` also say when an agent would ask Scopebond more than once for each action:
 the hook in your user settings and a project's, twice in one file, or an enabled Claude Code plugin
@@ -226,7 +235,9 @@ leaving other tools' hooks alone; the Scopebond Agent's daily self-check reports
 
 The connection renews itself: in the last 30 days of its 90-day credential the hook renews it during its rules check, proving it still holds the key it enrolled with. With each rules check it also tells the workspace how many records wait to send (counts and one error line, never a record), so the portal can show a computer that checks in but is not delivering.
 
-Signing in puts the hook in your user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json` or `~/.codex/hooks.json`), so every project on this computer is checked; `--project` connects one project instead. Signing in again never rewrites a settings file that already holds the right hook entry.
+Signing in sets Scopebond up for you across projects, from whatever folder you run it: it connects `~/.scopebond` and puts the hook in your user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json` or `~/.codex/hooks.json`), so every project on this computer is checked. `--project` connects the current folder's own setup (`.scopebond/`) instead. Signing in again never rewrites a settings file that already holds the right hook entry.
+
+A folder can still have its own project setup, from `init` or an earlier `login --project`. When that setup is trusted, it takes precedence over your sign-in for agent sessions opened in that folder: their rules come from it, and their records go to its own connection, or stay on this computer when it has none. `login` says so when you run it from such a folder, with how to remove it (delete the folder's `.scopebond/` and the Scopebond entry in its project agent settings), and `status` and `doctor` show it too.
 
 Enrollment registers both the gateway attester and the hook's separate agent signing key with proof of possession, so Cloud can verify authenticated receipts.
 
@@ -242,11 +253,12 @@ From then on every receipt is mirrored to the workspace through a **durable outb
 delivery is best-effort and never blocks a tool call, and receipts are retained
 locally and retried if the workspace is unreachable. `npx -y @scopebond/hook@latest flush`
 delivers anything still queued — run it on a session-end hook (and set
-`SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency.
+`SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency. Records then wait until the
+session ends, so during a long session `status` and `doctor` report them as not delivered.
 
-**Reconnecting.** Run `login` again from any folder: unless that folder has its own project
-setup, it repairs the connection the hook actually uses (usually the user-level one) instead
-of creating a second one; pass `--project` to set up the folder you are in. If the workspace
+**Reconnecting.** Run `login` again from any folder: it repairs your user-level connection
+instead of creating a second one; pass `--project` to reconnect the setup of the folder you
+are in. If the workspace
 no longer accepts this computer's countersigning key (the computer was replaced or
 disconnected there), `login` replaces the key and keeps the old one in
 `.scopebond/retired-keys/`.

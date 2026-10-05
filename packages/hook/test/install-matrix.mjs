@@ -5,10 +5,11 @@
 // Windows/macOS/Linux × Node 22/24. Exits non-zero on the first failure.
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { startFakeCloud } from "./fake-cloud.mjs";
 
 const isWin = process.platform === "win32";
 // Prefer SCOPEBOND_CLI (an absolute path to the *installed* dist/cli.js) so we spawn
@@ -16,6 +17,21 @@ const isWin = process.platform === "win32";
 // global install placed the code. Fall back to the bin shim on PATH.
 const CLI = process.env.SCOPEBOND_CLI;
 const BIN = process.env.SCOPEBOND_BIN || (isWin ? "scopebond.cmd" : "scopebond");
+
+/** Like sb(), but the event loop keeps running, so an in-process fake Cloud can answer. */
+function sbAsync(args, { env = {}, input, cwd, onOutput } = {}) {
+  return new Promise((resolve) => {
+    const opts = { cwd, env: { ...process.env, ...env } };
+    const child = CLI ? spawn(process.execPath, [CLI, ...args], opts) : spawn(BIN, args, { ...opts, shell: isWin });
+    let out = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
+    const take = (chunk) => { out += chunk; onOutput?.(out); };
+    child.stdout.on("data", take);
+    child.stderr.on("data", take);
+    child.on("close", (status, signal) => { clearTimeout(timer); resolve({ status: signal ? -1 : status, out }); });
+    child.stdin.end(input ?? "");
+  });
+}
 
 function sb(args, { env = {}, input, cwd } = {}) {
   const opts = { input, cwd, encoding: "utf8", env: { ...process.env, ...env }, timeout: 30_000, killSignal: "SIGKILL" };
@@ -100,12 +116,55 @@ check("connect exists and rejects an unreadable enrollment fast (exit 1, no hang
   assert.ok(!existsSync(join(connectDir, "cloud.json")), "no cloud.json on a failed connect");
 });
 
-// 6. login is honest that device flow is not available yet.
+// 6. login without a workspace URL says what it needs.
 check("login without a workspace URL explains what it needs", () => {
   const r = sb(["login"], { env: baseEnv });
   assert.equal(r.status, 1, r.out);
   assert.ok(/login <workspace-url>/.test(r.out), r.out);
 });
+
+// 7. The real device-code login, end to end: the computer asks for a code, a person approves it
+// in the workspace (here through the fake Cloud's control route), and the computer is connected
+// in the user's home, not the folder it was run from. Then one action reaches the workspace.
+async function checkAsync(name, fn) {
+  try { await fn(); console.log(`  ✓ ${name}`); } catch (e) { failures++; console.error(`  ✗ ${name}
+    ${e.message}`); }
+}
+const cloud = await startFakeCloud();
+const loginHome = mkdtempSync(join(tmpdir(), "sb-login-home-"));
+const loginSbHome = join(loginHome, ".scopebond");
+const loginEnv = { HOME: loginHome, USERPROFILE: loginHome, SCOPEBOND_HOME: loginSbHome };
+const projectFolder = mkdtempSync(join(tmpdir(), "sb-login-project-"));
+await checkAsync("login: request a code, approve it in the workspace, cloud.json lands in the home", async () => {
+  let approved = false;
+  const r = await sbAsync(["login", cloud.url, "--claude"], {
+    env: loginEnv, cwd: projectFolder,
+    onOutput: (out) => {
+      const code = /code\s+([B-Z]{4}-[B-Z]{4})/.exec(out)?.[1];
+      if (code && !approved) approved = cloud.approve(code);
+    },
+  });
+  assert.equal(r.status, 0, `${r.out}
+workspace saw: ${JSON.stringify(cloud.state())}`);
+  assert.ok(approved, `the CLI never showed a code to approve: ${r.out}`);
+  assert.match(r.out, /Approved/, r.out);
+  assert.ok(existsSync(join(loginSbHome, "cloud.json")), `cloud.json in the home (in the project folder instead: ${existsSync(join(projectFolder, ".scopebond", "cloud.json"))})`);
+  assert.ok(!existsSync(join(projectFolder, ".scopebond")), "nothing written to the folder it was run from");
+  const settings = join(loginHome, ".claude", "settings.json");
+  assert.ok(existsSync(settings), "the hook is in the user-level Claude Code settings");
+  assert.equal(cloud.state().code_requests[0]?.harness, "claude");
+});
+await checkAsync("one record is delivered to the workspace after login", async () => {
+  const before = cloud.state().ingested;
+  const r = await sbAsync(["claude"], { env: loginEnv, cwd: projectFolder, input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin main" }, cwd: projectFolder }) });
+  assert.equal(r.status, 2, `expected deny (exit 2): ${r.out}`);
+  const f = await sbAsync(["flush"], { env: loginEnv, cwd: projectFolder });
+  assert.equal(f.status, 0, f.out);
+  const state = cloud.state();
+  assert.equal(state.ingested - before, 1, `expected exactly one delivered record, got ${state.ingested - before}: ${f.out}`);
+  assert.equal(state.ingested_results.at(-1), "deny");
+});
+await cloud.close();
 
 console.log(failures ? `\n${failures} check(s) failed` : `\nall checks passed`);
 process.exit(failures ? 1 : 0);

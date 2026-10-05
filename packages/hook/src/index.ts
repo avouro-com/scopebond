@@ -80,3 +80,4 @@ export { refreshIfDue, refreshProof, REFRESH_WINDOW_MS } from "./credential-refr
 export { hookVersion, hookCommand, cliCommand } from "./version.js";
 export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
 export type { HookEntry, HookScope } from "./duplicates.js";
+export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";
