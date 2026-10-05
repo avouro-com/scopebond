@@ -15,6 +15,9 @@
     4. npm.cmd install -g the agent; scopebond-agent.cmd autostart on: the Run key and launcher,
        the agent running, its self-check passing, status saying so.
     5. scopebond-agent.cmd autostart off and npm.cmd uninstall -g: nothing left behind.
+    6. Edge cases: status from the project folder and the home agree; a profile path with a space
+       and non-ASCII letters; HOME pointing into OneDrive; Node 22.12 first on PATH is refused
+       before anything changes, with the one fix.
 
   Every command the script runs must end in .cmd, and every command Scopebond prints for the
   person to run (hints, fixes, next steps) is checked for the same: plain `npx`, `npm` or
@@ -26,6 +29,8 @@
   The agent as an npm package spec: a packed tarball path, or @scopebond/agent@<version>.
 .PARAMETER SkipAgent
   Run steps 1-3 only (for a computer whose own agent autostart must not be touched).
+.PARAMETER SkipEdgeCases
+  Leave out step 6 (Windows edge cases: an unusual profile path, HOME in OneDrive, an old Node).
 .PARAMETER IsolatedHome
   Use a throwaway user profile folder (USERPROFILE, HOME, APPDATA) instead of the real one.
 #>
@@ -34,6 +39,7 @@ param(
   [Parameter(Mandatory = $true)] [string] $HookPackage,
   [string] $AgentPackage = '',
   [switch] $SkipAgent,
+  [switch] $SkipEdgeCases,
   [switch] $IsolatedHome
 )
 
@@ -89,6 +95,75 @@ function Find-PlainCommands([string] $Text) {
 function Get-RunValue {
   $value = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'ScopebondAgent' -ErrorAction SilentlyContinue
   if ($value) { return $value.ScopebondAgent }
+  return $null
+}
+
+# Run a configured hook command the way Claude Code does: start it and write the event to stdin.
+function Invoke-HookEvent([string] $Command, [string] $Payload) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'cmd.exe'
+  $psi.Arguments = '/d /s /c "' + $Command + '"'
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardInput = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  $proc.StandardInput.Write($Payload)
+  $proc.StandardInput.Close()
+  $out = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
+  $proc.WaitForExit()
+  return [pscustomobject]@{ Code = $proc.ExitCode; Out = $out }
+}
+
+function Save-Env { return @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; PATH = $env:PATH; Location = (Get-Location).Path } }
+function Restore-Env($Saved) {
+  $env:USERPROFILE = $Saved.USERPROFILE; $env:HOME = $Saved.HOME; $env:APPDATA = $Saved.APPDATA; $env:PATH = $Saved.PATH
+  Set-Location $Saved.Location
+}
+function Set-Profile([string] $ProfileDir, [string] $HomeOverride = '') {
+  New-Item -ItemType Directory -Force -Path (Join-Path $ProfileDir 'AppData\Roaming') | Out-Null
+  $env:USERPROFILE = $ProfileDir
+  if ($HomeOverride) { New-Item -ItemType Directory -Force -Path $HomeOverride | Out-Null; $env:HOME = $HomeOverride } else { $env:HOME = $ProfileDir }
+  $env:APPDATA = Join-Path $ProfileDir 'AppData\Roaming'
+}
+
+# Sign in, act once and deliver, as a fresh person whose Windows profile is $ProfileDir.
+function Invoke-IsolatedJourney([string] $ProfileDir, [string] $Name, [string] $HomeOverride = '') {
+  $saved = Save-Env
+  try {
+    Set-Profile $ProfileDir $HomeOverride
+    $folder = Join-Path $ProfileDir 'source\repo'
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    Set-Location $folder
+    $before = (Get-CloudState).ingested
+    $login = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'login', $cloud, '--claude')
+    Assert ($login.Code -eq 0) "$Name`: login exited $($login.Code):`n$($login.Out)"
+    Assert (Test-Path (Join-Path $ProfileDir '.scopebond\cloud.json')) "$Name`: no cloud.json in $ProfileDir\.scopebond"
+    $settings = Join-Path $ProfileDir '.claude\settings.json'
+    Assert (Test-Path $settings) "$Name`: no $settings"
+    $command = ((Get-Content $settings -Raw -Encoding UTF8 | ConvertFrom-Json).hooks.PreToolUse | Select-Object -First 1).hooks[0].command
+    $payload = '{"tool_name":"Bash","tool_input":{"command":"git push origin main"},"cwd":"' + ($folder -replace '\\', '\\') + '"}'
+    $hook = Invoke-HookEvent $command $payload
+    Assert ($hook.Code -eq 2) "$Name`: expected a block (exit 2), got $($hook.Code): $($hook.Out)"
+    $flush = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'flush')
+    for ($i = 0; $i -lt 40; $i++) { if ((Get-CloudState).ingested -gt $before) { break }; Start-Sleep -Milliseconds 250 }
+    $delivered = (Get-CloudState).ingested - $before
+    Assert ($delivered -eq 1) "$Name`: $delivered record(s) delivered, expected 1. flush: $($flush.Out)"
+  } finally { Restore-Env $saved }
+}
+
+# An older Node, unpacked once (no Expand-Archive: it is a script module the policy blocks).
+function Get-OldNode([string] $Version) {
+  $dir = Join-Path $work "node-v$Version-win-x64"
+  if (Test-Path (Join-Path $dir 'node.exe')) { return $dir }
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $zip = Join-Path $work "node-v$Version.zip"
+    Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/v$Version/node-v$Version-win-x64.zip" -OutFile $zip
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $work)
+    if (Test-Path (Join-Path $dir 'node.exe')) { return $dir }
+  } catch { Write-Host "       (download failed: $($_.Exception.Message))" }
   return $null
 }
 
@@ -267,6 +342,50 @@ try {
       $alive = $agentPid -and (Get-Process -Id $agentPid -ErrorAction SilentlyContinue)
       if ($alive) { Stop-Process -Id $agentPid -Force -ErrorAction SilentlyContinue }
       Assert (-not $alive) "the agent (pid $agentPid) is still running after autostart off and uninstall"
+    }
+  }
+
+  # 6. Windows edge cases: where the home is, which Node runs, which folder it is run from.
+  if (-not $SkipEdgeCases) {
+    Check 'status from the project folder and from the home name the same configuration' {
+      $fromProject = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'status')
+      Push-Location $env:USERPROFILE
+      try { $fromHome = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'status') } finally { Pop-Location }
+      $active = { param($t) ([regex]::Match($t, '(?m)^\s*active config\s+(.+)$')).Groups[1].Value.Trim() }
+      $a = & $active $fromProject.Out; $b = & $active $fromHome.Out
+      Assert ($a -and $a -eq $b) "the project folder uses '$a', the home uses '$b'"
+      Assert ($a -eq $sbHome) "the active configuration is '$a', not the user home $sbHome"
+    }
+
+    # A profile folder with a space and non-ASCII letters (written as code points: Windows
+    # PowerShell reads a script without a byte-order mark in the ANSI code page).
+    $person = 'J' + [char]0x00F6 + 'rg M' + [char]0x00FC + 'ller'
+    Check "a home folder with a space and non-ASCII letters ($person) connects and delivers" {
+      Invoke-IsolatedJourney -ProfileDir (Join-Path $work "Users\$person") -Name 'unicode home'
+    }
+    Check 'HOME pointing into OneDrive: everything stays in the Windows profile (USERPROFILE)' {
+      $profileDir = Join-Path $work 'Users\onedrive-person'
+      $oneDrive = Join-Path $profileDir 'OneDrive - Contoso'
+      Invoke-IsolatedJourney -ProfileDir $profileDir -Name 'OneDrive HOME' -HomeOverride $oneDrive
+      Assert (-not (Test-Path (Join-Path $oneDrive '.scopebond'))) "a .scopebond folder appeared under HOME ($oneDrive)"
+      Assert (-not (Test-Path (Join-Path $oneDrive '.claude'))) "agent settings appeared under HOME ($oneDrive)"
+    }
+    Check 'Node 22.12 first on PATH (a second, newer Node after it): refused before any change, with one fix' {
+      $old = Get-OldNode '22.12.0'
+      if (-not $old) { Write-Host '       (could not download Node 22.12.0; skipped)'; return }
+      $profileDir = Join-Path $work 'Users\old-node'
+      $saved = Save-Env
+      try {
+        Set-Profile $profileDir
+        $env:PATH = "$old;$env:PATH"
+        $r = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'login', $cloud, '--claude')
+      } finally { Restore-Env $saved }
+      Assert ($r.Code -ne 0) "login on Node 22.12 succeeded:`n$($r.Out)"
+      Assert ($r.Out -match 'Node\.js 22\.13 or later; this is Node 22\.12\.0') "no clear refusal:`n$($r.Out)"
+      Assert ($r.Out -match 'winget install --id OpenJS\.NodeJS\.LTS') "no install command for Windows:`n$($r.Out)"
+      Assert ($r.Out -match 'where\.exe node') "nothing about a second Node on PATH:`n$($r.Out)"
+      Assert (-not (Test-Path (Join-Path $profileDir '.scopebond\cloud.json'))) 'it connected anyway'
+      Assert (-not (Test-Path (Join-Path $profileDir '.claude\settings.json'))) 'it changed the agent settings anyway'
     }
   }
 
