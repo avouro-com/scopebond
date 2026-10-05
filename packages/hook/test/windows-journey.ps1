@@ -246,7 +246,9 @@ try {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.StandardInput.Write($payload)
+    # UTF-8 without a byte-order mark, as Claude Code writes it (Windows PowerShell's StreamWriter would add one).
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($payload)
+    $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
     $proc.StandardInput.Close()
     $out = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
     $proc.WaitForExit()
