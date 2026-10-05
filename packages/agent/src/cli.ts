@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // scopebond-agent: run, look at and control the Scopebond Agent for this user.
 //
+//   scopebond-agent setup <workspace-url> [--claude|--cursor|--codex] [--relogin]
+//                                       one command to start: sign in, install, autostart, status
 //   scopebond-agent run                 run in the foreground (what autostart starts)
 //   scopebond-agent status [--json]     what the running agent reports, or why it is not running
 //   scopebond-agent flush               deliver now
@@ -15,6 +17,8 @@ import { isEphemeralPath, userHome } from "@scopebond/hook";
 import { computerStatus } from "./agent.js";
 import { autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
+import { runSetup } from "./setup.js";
+import { agentVersion } from "./update.js";
 import { AFTER_PID_ENV, AGENT_VERSION, startService } from "./service.js";
 
 const [cmd = "help", ...rest] = process.argv.slice(2);
@@ -27,6 +31,7 @@ function help(): void {
   const c = (sub: string) => `${me} ${sub}`.padEnd(me.length + 36);
   console.log(`Scopebond Agent — keeps this computer delivering to its Scopebond workspace.
 
+  ${c("setup <workspace-url>")}sign in, install for this user, start with sign-in, show status
   ${c("run")}run in the foreground (what autostart starts)
   ${c("status [--json]")}what the agent reports about this computer
   ${c("flush")}deliver waiting records now
@@ -74,6 +79,24 @@ async function main(): Promise<void> {
       const answer = await callAgent(dir, "POST", `/${cmd === "check" ? "maintain" : cmd}`, {}, 6 * 60_000);
       if (!answer) { console.error(`The Scopebond Agent is not running. Start it with: ${me} autostart on`); process.exitCode = 1; return; }
       console.log(JSON.stringify(answer, null, 2));
+      return;
+    }
+    case "setup": {
+      const target = rest.find((a) => !a.startsWith("--"));
+      let origin: string | null = null;
+      try {
+        const url = new URL(target ?? "");
+        const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+        if (url.protocol === "https:" || (local && url.protocol === "http:")) origin = url.origin;
+      } catch { origin = null; }
+      if (!origin) {
+        console.error(`usage: ${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/agent@${agentVersion()} setup <workspace-url> [--claude|--cursor|--codex]`);
+        console.error("The workspace URL is the address of your Scopebond workspace, for example https://cloud.scopebond.com.");
+        process.exitCode = 1;
+        return;
+      }
+      const harness = rest.includes("--cursor") ? "cursor" : rest.includes("--codex") ? "codex" : "claude";
+      process.exitCode = await runSetup({ dir, origin, harness, relogin: rest.includes("--relogin"), version: agentVersion(), me });
       return;
     }
     case "stop": {

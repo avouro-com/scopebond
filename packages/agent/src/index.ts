@@ -17,3 +17,5 @@ export { parseQuestion, questionText, windowsScript, systemPrompter, serialized 
 export type { OverrideQuestion, OverrideAnswer, Prompter } from "./prompt.js";
 export { queueReason, flushReasons, pendingReasons, REASONS_FILE } from "./override-reasons.js";
 export type { SelfCheckItem } from "./selfcheck.js";
+export { setupPlan, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
+export type { SetupState, SetupStep, SetupOptions } from "./setup.js";

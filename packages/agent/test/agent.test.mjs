@@ -364,3 +364,40 @@ test("an autostart problem names the fix as the person types it", async () => {
   assert.match(autostartHealth(dir, "win32").detail, /run: scopebond-agent.cmd autostart on/);
   if (process.platform !== "win32") assert.match(autostartHealth(dir, "linux").detail, /run: scopebond-agent autostart on/);
 });
+
+test("setup plans only what is missing, so a second run signs nobody in again and installs nothing twice", async () => {
+  const { setupPlan } = await import("../dist/index.js");
+  const fresh = { connectedTo: null, credentialRefused: false, installedVersion: null, autostartOk: false };
+  assert.deepEqual(setupPlan(fresh, "https://cloud.scopebond.com", "0.4.0"), ["login", "install_agent", "autostart"]);
+  const done = { connectedTo: "https://cloud.scopebond.com", credentialRefused: false, installedVersion: "0.4.0", autostartOk: true };
+  assert.deepEqual(setupPlan(done, "https://cloud.scopebond.com", "0.4.0"), [], "a second run changes nothing");
+  assert.deepEqual(setupPlan(done, "https://cloud.scopebond.com", "0.4.0", true), ["login"], "--relogin signs in again");
+  assert.deepEqual(setupPlan({ ...done, credentialRefused: true }, "https://cloud.scopebond.com", "0.4.0"), ["login"], "a refused credential needs a new sign-in");
+  assert.deepEqual(setupPlan(done, "https://eu.example.test", "0.4.0"), ["login"], "another workspace needs a sign-in there");
+  assert.deepEqual(setupPlan({ ...done, autostartOk: false }, "https://cloud.scopebond.com", "0.4.0"), ["autostart"], "autostart is repaired on its own");
+  assert.deepEqual(setupPlan({ ...done, installedVersion: "0.3.1" }, "https://cloud.scopebond.com", "0.4.0"), ["install_agent", "autostart"]);
+  assert.deepEqual(setupPlan({ ...done, installedVersion: "0.5.0" }, "https://cloud.scopebond.com", "0.4.0"), [], "a newer installed agent is kept");
+});
+
+test("setup finds npm's global folder on PATH the way each system spells it, and says how to add it", async () => {
+  const { globalBinDir, onPath, addToPathCommand, nodeSupported } = await import("../dist/index.js");
+  assert.equal(globalBinDir(String.raw`C:\npm\prefix`, "win32"), String.raw`C:\npm\prefix`);
+  assert.equal(globalBinDir("/usr/local", "linux"), join("/usr/local", "bin"));
+  assert.equal(onPath(String.raw`D:\Tools\npm`, String.raw`C:\Windows;d:\tools\NPM\ `.trim(), "win32"), true);
+  assert.equal(onPath(String.raw`D:\Tools\npm`, String.raw`C:\Windows;C:\Program Files\nodejs`, "win32"), false);
+  assert.equal(onPath("/usr/local/bin", "/usr/bin:/usr/local/bin", "linux"), true);
+  assert.ok(addToPathCommand(String.raw`C:\npm\prefix`).endsWith(String.raw`+ ";C:\npm\prefix", "User")`));
+  assert.equal(nodeSupported("22.12.0"), false);
+  assert.equal(nodeSupported("22.13.0"), true);
+  assert.equal(nodeSupported("24.1.0"), true);
+});
+
+test("setup without a workspace URL says what it needs, in the form this system runs", async () => {
+  const { execFile } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+  const out = await new Promise((resolve) => execFile(process.execPath, [cli, "setup", "http://example.com"], { encoding: "utf8" }, (error, stdout, stderr) => resolve({ code: error?.code ?? 0, text: stdout + stderr })));
+  assert.equal(out.code, 1);
+  const runner = process.platform === "win32" ? "npx.cmd" : "npx";
+  assert.ok(out.text.includes(`usage: ${runner} -y @scopebond/agent@`) && out.text.includes("setup <workspace-url>"), out.text);
+});
