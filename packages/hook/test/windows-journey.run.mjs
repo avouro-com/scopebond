@@ -79,3 +79,51 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
     assert.equal(r.status, 0, `${shell} journey failed:\n${r.stdout}${r.stderr}`);
   });
 }
+
+// The same journey as a standard (non-administrator) user, the way most people run Windows:
+// a throwaway local account on the CI machine runs it through a scheduled task, with Node on
+// PATH and npm's global folder in that user's own profile (%APPDATA%\npm), as the Node installer
+// sets it up. The account and the task are removed afterwards; the password is random and never printed.
+test("the Windows journey passes for a standard (non-administrator) user", { skip: !enabled || process.env.CI !== "true" ? "Windows CI only: it creates a local user account" : false, timeout: 20 * 60_000 }, async () => {
+  const { randomBytes } = await import("node:crypto");
+  const { copyFileSync, existsSync, mkdirSync } = await import("node:fs");
+  const { dirname } = await import("node:path");
+  packed ??= pack();
+  const user = "sbjourney";
+  const password = `Sb!${randomBytes(12).toString("base64url")}9a`;
+  const shared = join(process.env.SystemDrive ?? "C:", "\\", `sb-journey-${randomBytes(4).toString("hex")}`);
+  mkdirSync(shared, { recursive: true });
+  for (const file of ["windows-journey.ps1", "fake-cloud.mjs"]) copyFileSync(join(here, file), join(shared, file));
+  const hook = join(shared, "hook.tgz"), agent = join(shared, "agent.tgz");
+  copyFileSync(packed.hook, hook);
+  copyFileSync(packed.agent, agent);
+  const quiet = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] };
+  const run = (cmd, args) => spawnSync(cmd, args, quiet);
+  try {
+    assert.equal(run("net", ["user", user, password, "/add"]).status, 0, "could not create the standard user");
+    run("icacls", [shared, "/grant", `${user}:(OI)(CI)M`, "/T"]);
+    const nodeDir = dirname(process.execPath);
+    const log = join(shared, "journey.log"), exit = join(shared, "journey.exit");
+    writeFileSync(join(shared, "run.cmd"), [
+      "@echo off",
+      `set "PATH=${nodeDir};%PATH%"`,
+      String.raw`set "npm_config_prefix=%APPDATA%\npm"`,
+      String.raw`set "npm_config_cache=%LOCALAPPDATA%\npm-cache"`,
+      `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${join(shared, "windows-journey.ps1")}" -HookPackage "${hook}" -AgentPackage "${agent}" -SkipEdgeCases > "${log}" 2>&1`,
+      `echo %ERRORLEVEL%> "${exit}"`,
+      "",
+    ].join("\r\n"));
+    const created = run("schtasks", ["/Create", "/TN", "ScopebondJourney", "/TR", `cmd.exe /d /c "${join(shared, "run.cmd")}"`, "/SC", "ONCE", "/ST", "23:59", "/RU", user, "/RP", password, "/RL", "LIMITED", "/F"]);
+    assert.equal(created.status, 0, `could not schedule the journey: ${created.stdout}${created.stderr}`);
+    assert.equal(run("schtasks", ["/Run", "/TN", "ScopebondJourney"]).status, 0, "could not start the journey task");
+    const until = Date.now() + 18 * 60_000;
+    while (!existsSync(exit) && Date.now() < until) await new Promise((r) => setTimeout(r, 2_000));
+    const output = existsSync(log) ? readFileSync(log, "utf8") : "(no log)";
+    process.stdout.write(output);
+    assert.ok(existsSync(exit), `the standard user's journey did not finish:\n${output}`);
+    assert.equal(readFileSync(exit, "utf8").trim(), "0", `the standard user's journey failed:\n${output}`);
+  } finally {
+    run("schtasks", ["/Delete", "/TN", "ScopebondJourney", "/F"]);
+    run("net", ["user", user, "/delete"]);
+  }
+});
