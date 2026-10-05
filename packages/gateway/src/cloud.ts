@@ -196,8 +196,8 @@ export function settleRefusal(status: number, text: string, batch: Array<Pick<Cl
     const rejected = body.rejected as Array<{ index?: unknown; code?: unknown }>;
     // Only records refused for good. A timestamp ahead of the workspace clock is accepted once the time
     // passes, and a key the connection did not enroll is delivered after signing in again: both are retried.
-    // A record refused for a clock ahead is settled too once it has been kept CLOCK_AHEAD_KEEP_MS.
-    if (rejected.some((r) => r?.code !== "invalid_receipt" && !(r?.code === "future_timestamp" && typeof r.index === "number" && batch[r.index] && !keepForClock(batch[r.index], r.code, at)))) return null;
+    // A record refused for a reason that can pass is settled too once it has been kept CLOCK_AHEAD_KEEP_MS.
+    if (rejected.some((r) => r?.code !== "invalid_receipt" && !(RETRYABLE.has(String(r?.code)) && typeof r.index === "number" && batch[r.index] && !keepForClock(batch[r.index], r.code, at)))) return null;
     const indexes = new Set(rejected.flatMap((r) => (typeof r?.index === "number" ? [r.index] : [])));
     return batch.length > 0 && batch.every((_, i) => indexes.has(i)) ? batch.map((entry) => ({ id: entry.id, reason: "rejected" as const })) : null;
   }
@@ -227,12 +227,14 @@ async function refusedIn(res: Response, batch: CloudOutboxEntry[]): Promise<Arra
   } catch { return []; }
 }
 
-/** How long a record refused only because this computer's clock is ahead of the workspace's is kept
- *  and sent again (it is accepted once the time passes). After that it is settled as a gap, so a clock
- *  that is badly wrong cannot hold the queue for ever. */
+/** Refusals that can pass: a timestamp ahead of the workspace's clock (accepted once the time passes)
+ *  and a key the connection did not enroll (delivered after signing in again). */
+const RETRYABLE = new Set(["future_timestamp", "attester_mismatch"]);
+/** How long a record refused for one of those reasons is kept and sent again. After that it is settled
+ *  as a gap, so a clock that is badly wrong, or a key that never comes back, cannot hold the queue for ever. */
 export const CLOCK_AHEAD_KEEP_MS = 24 * 60 * 60 * 1000;
 const keepForClock = (entry: Pick<CloudOutboxEntry, "enqueuedAt">, code: unknown, at: number) =>
-  code === "future_timestamp" && at - entry.enqueuedAt < CLOCK_AHEAD_KEEP_MS;
+  RETRYABLE.has(String(code)) && at - entry.enqueuedAt < CLOCK_AHEAD_KEEP_MS;
 
 export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   if (!opts.url.trim()) throw new TypeError("Cloud export URL is required");
@@ -290,11 +292,11 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           // accepted as it is: it leaves the queue as a "rejected" gap, so it never holds up the records
           // behind it. It stays in the local log.
           const listed = await refusedIn(res, batch);
-          // A record refused only because this computer's clock is ahead stays queued and is sent again.
+          // A record refused for a reason that can pass (a clock ahead, a key not enrolled) stays queued and is sent again.
           kept = new Set(listed.filter((r) => keepForClock(r.entry, r.code, now())).map((r) => r.entry.id));
           refused = listed.filter((r) => !kept.has(r.entry.id)).map((r) => ({ id: r.entry.id, reason: "rejected" as const }));
           // Nothing in the batch moved: wait and retry rather than send the same records at once again.
-          if (kept.size >= batch.length) throw new Error("ingest refused every record for a timestamp ahead of the workspace clock; retrying");
+          if (kept.size >= batch.length) throw new Error("ingest refused every record for a reason that can pass (a clock ahead, a key not enrolled); retrying");
         } else {
           const text = (typeof res.text === "function" ? await res.text().catch(() => "") : "").slice(0, 262_144);
           const settled = settleRefusal(res.status, text, batch, now());

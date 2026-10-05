@@ -162,7 +162,7 @@ test("a non-conforming 200 that refuses every record for a clock ahead does not 
   ex.stop();
   assert.equal(requests.length, 1);
   assert.equal(ex.status().pending, 1);
-  assert.match(ex.status().lastError, /timestamp ahead/);
+  assert.match(ex.status().lastError, /clock ahead/);
 });
 
 test("a record kept for a clock ahead longer than a day is settled as a gap", async () => {
@@ -184,4 +184,15 @@ test("a record kept for a clock ahead longer than a day is settled as a gap", as
   ex.stop();
   assert.equal(ex.status().pending, 0);
   assert.deepEqual(gaps.map((g) => [g.id, g.reason]), [["action:old-ahead-0001", "rejected"]]);
+});
+
+test("in a batch with valid records, one refused for a key the connection did not enroll is kept, not settled", async () => {
+  const { ex, gaps, delivered } = setup((ids) => json(200, { ok: true, rejected: ids.flatMap((id, index) => (id === "action:key-mix-0001" ? [{ index, action_id: id, code: "attester_mismatch" }] : [])) }));
+  ex.enqueue(receipt("action:key-mix-0001"));
+  ex.enqueue(receipt("action:key-mix-0002"));
+  await ex.flush();
+  ex.stop();
+  assert.equal(gaps.length, 0);
+  assert.equal(ex.status().pending, 1);
+  assert.ok(delivered.includes("action:key-mix-0002"));
 });
