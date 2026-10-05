@@ -218,6 +218,10 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
     // Unchanged: the ETag goes out, 304 comes back, no second confirmation.
     w = fakeWorkspace([{ status: 304 }]);
     assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "unchanged", revision: 1 });
+    // D140: every rules check says what this computer runs for each rule and who set it.
+    const reported = JSON.parse(w.calls[0].headers["x-scopebond-rules"]);
+    assert.deepEqual(reported["protect-branches"], ["monitor", "workspace"]);
+    assert.deepEqual(reported["safe-shell"], ["enforce", "workspace"]);
     assert.equal(w.calls[0].headers["if-none-match"], `"1:${d1.rules_digest}"`);
     assert.equal(w.calls.length, 1);
     // An older version is refused and the refusal is confirmed; the rules in force stay.
@@ -333,4 +337,22 @@ test("the rules check names the delivery queue and the highest number it has giv
     assert.equal(w.calls[0].headers["x-scopebond-seq-assigned"], "2");
     assert.equal(w.calls[0].headers["x-scopebond-pending"], "2");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("D140: a person's choice on a managed computer applies only where the workspace allows changes on computers", () => {
+  const { agentKid } = home();
+  const local = { ...defaultRules(), enforce: [], local_overrides: { "safe-shell": "monitor", "protect-read": "enforce" } };
+  const mode = (policy, id) => policy.clauses.find((c) => c.id === id)?.mode;
+  // Not allowed (absent or false): the workspace decides; the person's choices are kept but not applied.
+  const workspaceOnly = compileManaged(local, doc(3, { "secret-read": { mode: "monitor" } }), agentKid);
+  assert.equal(mode(workspaceOnly, "safe-shell"), "enforce", "the workspace's Block holds");
+  assert.equal(mode(workspaceOnly, "protect-read"), "monitor", "the workspace's Monitor holds");
+  // Allowed: the person's choice wins for the rules they set; the others follow the workspace.
+  const allowed = compileManaged(local, doc(3, { "secret-read": { mode: "monitor" } }, { local_changes: true }), agentKid);
+  assert.equal(mode(allowed, "safe-shell"), "monitor");
+  assert.equal(mode(allowed, "protect-read"), "enforce");
+  assert.equal(mode(allowed, "protect-branches"), "enforce");
+  // Scopebond's own protection holds whatever anyone chose.
+  assert.equal(mode(allowed, "protect-scopebond-write"), "enforce");
+  assert.equal(mode(allowed, "protect-scopebond-read"), "enforce");
 });

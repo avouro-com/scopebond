@@ -56,7 +56,7 @@ import { uploadPending } from "./obs-upload.js";
 import { connectCloud, ingestUrl, loadConnection, connectionPath, reportUninstall } from "./cloud.js";
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
-import { isManaged, readMeta, MANAGED_DOC_FILE } from "./managed.js";
+import { compileManaged, isManaged, readMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
 import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
@@ -530,7 +530,16 @@ async function runLog(args: string[]): Promise<void> {
  *  Without this, "edit the limits" meant hand-writing a ~700-character case-folded
  *  negative lookahead, which nobody does — so the starter policy was effectively the only
  *  policy. The lists live in `.scopebond/rules.json`; `policy.json` is compiled from them. */
-function runRules(args: string[]): void {
+/** D140: tell the workspace now what this computer runs (a rules check carries the report). Bounded; silent when not connected. */
+async function reportRules(dir: string): Promise<void> {
+  if (!loadConnection(dir)) return;
+  try {
+    const outcome = await syncPolicy(dir, syncOptionsFor(dir));
+    if (outcome.state !== "refused") console.log("  workspace      told");
+  } catch { /* the next rules check reports it */ }
+}
+
+async function runRules(args: string[]): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
   if (!existsSync(join(dir, "policy.json"))) {
     console.error(`no policy here yet — run \`${cliCommand("init")}\` first.`);
@@ -629,6 +638,24 @@ function runRules(args: string[]): void {
         console.error(`rules ${verb} <rule>: one of ${ENFORCEABLE_RULES.join(", ")}`);
         process.exit(1);
       }
+      if (isManaged(dir)) {
+        // D140: the workspace sets this computer's rules. A person's own choice applies only where the workspace allows
+        // changes on computers; either way the workspace hears what this computer runs.
+        const doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument;
+        if (doc.local_changes !== true) {
+          console.error(`Your Scopebond workspace sets the rules on this computer, and it does not allow changing them here.`);
+          console.error(`An owner or admin can change ${id} in the workspace (Rules), or allow changes on computers there.`);
+          process.exit(1);
+        }
+        requireInteractive("rules", args);
+        rules.local_overrides = { ...(rules.local_overrides ?? {}), [id]: verb };
+        const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
+        saveRules(dir, rules);
+        writeFileSync(join(dir, "policy.json"), `${JSON.stringify(compileManaged(rules, doc, agentKid), null, 2)}\n`);
+        console.log(`✓ ${verb === "enforce" ? `${id} now blocks on this computer` : `${id} now records on this computer, without blocking`} (your workspace allows changes on computers)`);
+        await reportRules(dir);
+        process.exit(0);
+      }
       const set = new Set(rules.enforce ?? []);
       if (verb === "enforce") set.add(id); else set.delete(id);
       rules.enforce = ENFORCEABLE_RULES.filter((r) => set.has(r));
@@ -658,6 +685,7 @@ function runRules(args: string[]): void {
   console.log(`✓ ${changed}`);
   console.log(`  rules          ${rulesPath(dir)}`);
   console.log(`  policy         ${policyPath} (recompiled)`);
+  await reportRules(dir);
   // A project policy governs only once trusted, and the hash just changed.
   if (!process.env.SCOPEBOND_HOOK_DIR && existsSync(join(userHome(), "policy.json"))) {
     trustProjectPolicy(dir);
@@ -1865,7 +1893,7 @@ else if (cmd === "uninstall") { await runUninstall(rest); }
 else if (cmd === "login") { await runLogin(rest); }
 else if (cmd === "trust") { runTrust(rest); }
 else if (cmd === "prune") { await runPrune(rest); }
-else if (cmd === "rules") { runRules(rest); }
+else if (cmd === "rules") { await runRules(rest); }
 else if (cmd === "help" || cmd === "--help" || cmd === "-h" || cmd === undefined) { printHelp(rest[0]); }
 else {
   console.error(`unknown command: ${cmd}`);

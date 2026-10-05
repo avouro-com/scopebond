@@ -36,8 +36,20 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
     `set "CLI=${noQuotes(cli)}"`,
     `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
     `if not defined NODE exit /b 1`,
+    // Restart on failure, as launchd (KeepAlive) and systemd (Restart=on-failure) do: a crash restarts the agent after
+    // 30 seconds, up to 50 times; a clean exit (stop, autostart off, an update handing over) ends the launcher.
+    "set /a TRIES=0",
+    ":run",
     // The log sits beside this launcher; %~dp0 keeps it right whatever the folder is called.
     `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "%~dp0${win32.basename(noQuotes(logFile))}" 2>&1`,
+    `set "CODE=%ERRORLEVEL%"`,
+    "if %CODE% EQU 0 exit /b 0",
+    "set /a TRIES+=1",
+    `echo %DATE% %TIME% the agent stopped with exit code %CODE%; restarting in 30 seconds (attempt %TRIES% of 50) >> "%~dp0${win32.basename(noQuotes(logFile))}"`,
+    "if %TRIES% GEQ 50 exit /b 1",
+    // ping waits without a console to read from (timeout.exe refuses to run under a headless console).
+    "ping -n 31 127.0.0.1 >nul",
+    "goto run",
     "",
   ].join("\r\n");
 }

@@ -134,6 +134,10 @@ test("autostart starts a launcher that finds Node and the agent each time, with 
   assert.match(cmd, /where node/, "falls back to the Node on PATH");
   assert.match(cmd, /npm\.cmd root -g/, "falls back to the globally installed agent");
   assert.match(cmd, /\r\n/, "Windows line endings");
+  // A crash restarts the agent (as launchd and systemd do); a clean exit ends the launcher.
+  assert.match(cmd, /set "CODE=%ERRORLEVEL%"\r\nif %CODE% EQU 0 exit \/b 0/);
+  assert.match(cmd, /:run[\s\S]*goto run/);
+  assert.match(cmd, /if %TRIES% GEQ 50 exit \/b 1/);
   const sh = posixLauncher("/opt/node's/bin/node", "/opt/scopebond/cli.js");
   assert.match(sh, /^#!\/bin\/sh/);
   assert.ok(sh.includes(`NODE='/opt/node'\\''s/bin/node'`), "single quotes escaped");

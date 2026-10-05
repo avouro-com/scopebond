@@ -35,11 +35,17 @@ function deliveryHeaders(dir: string): Record<string, string> {
       // removed, the workspace knows how many of its numbers never arrived.
       ...(queueId ? { "x-scopebond-queue-id": queueId, "x-scopebond-seq-assigned": String(seqAssigned ?? 0) } : {}),
       ...(state.last_error ? { "x-scopebond-last-error": state.last_error.replace(/[^\x20-\x7e]/g, " ").slice(0, 200) } : {}),
+      // D140: the rule settings this computer runs and who set each, so the workspace shows what is true here.
+      ...rulesHeader(dir),
     };
   } catch { return {}; }
 }
+function rulesHeader(dir: string): Record<string, string> {
+  const report = ruleReport(dir);
+  return report ? { "x-scopebond-rules": JSON.stringify(report) } : {};
+}
 import {
-  inspectManaged, installManaged, isManaged, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
+  ruleReport, inspectManaged, installManaged, isManaged, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
