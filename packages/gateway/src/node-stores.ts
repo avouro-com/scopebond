@@ -444,8 +444,15 @@ export class SqliteCloudOutbox implements CloudOutbox {
     // here; records already in them stay unnumbered.
     const has = (table: string, column: string) =>
       (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
-    if (!has("cloud_outbox", "seq")) this.db.exec("ALTER TABLE cloud_outbox ADD COLUMN seq INTEGER");
-    if (!has("cloud_outbox_metadata", "next_seq")) this.db.exec("ALTER TABLE cloud_outbox_metadata ADD COLUMN next_seq INTEGER NOT NULL DEFAULT 1");
+    // Two processes (parallel hook calls, or the hook and the agent) can open an old queue at once: the
+    // one that loses the race finds the column already added, which is the state it wanted.
+    const addColumn = (table: string, column: string, definition: string) => {
+      if (has(table, column)) return;
+      try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); }
+      catch (error) { if (!/duplicate column/i.test((error as Error).message)) throw error; }
+    };
+    addColumn("cloud_outbox", "seq", "INTEGER");
+    addColumn("cloud_outbox_metadata", "next_seq", "INTEGER NOT NULL DEFAULT 1");
   }
 
   enqueue(receipt: SignedReceipt): { queued: boolean; duplicate: boolean; gap?: CloudDeliveryGap } {

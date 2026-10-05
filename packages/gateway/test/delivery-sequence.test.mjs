@@ -72,3 +72,27 @@ test("the exporter sends each record's number beside it, and nothing extra for u
   ex2.stop();
   assert.equal("seq" in bodies2[0], false);
 });
+
+test("several processes opening the same old queue at once all succeed (the column is added once)", async () => {
+  const { spawn } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const path = join(mkdtempSync(join(tmpdir(), "sb-seq-race-")), "outbox.db");
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE cloud_outbox (event_id TEXT PRIMARY KEY, payload_hash TEXT NOT NULL, receipt_json TEXT NOT NULL, enqueued_at INTEGER NOT NULL, bytes INTEGER NOT NULL CHECK (bytes > 0));
+    CREATE TABLE cloud_delivery_gaps (seq INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT, reason TEXT NOT NULL, created_at INTEGER NOT NULL);
+    CREATE TABLE cloud_outbox_metadata (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), total_gaps INTEGER NOT NULL CHECK (total_gaps >= 0));
+    INSERT INTO cloud_outbox_metadata VALUES (1, 0);
+  `);
+  db.close();
+  const nodeModule = new URL("../dist/node.js", import.meta.url).href;
+  void fileURLToPath;
+  const code = `import { SqliteCloudOutbox } from ${JSON.stringify(nodeModule)}; new SqliteCloudOutbox(${JSON.stringify(path)}).close();`;
+  const results = await Promise.all(Array.from({ length: 6 }, () => new Promise((resolve) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code], { stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("close", (status) => resolve({ status, err }));
+  })));
+  for (const r of results) assert.equal(r.status, 0, r.err);
+});
