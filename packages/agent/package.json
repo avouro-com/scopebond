@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "The Scopebond Agent — one resident process per user that delivers this computer's signed records to its Scopebond workspace, keeps its rules and connection current, and reports its health, so nobody has to run a command to keep it working.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
