@@ -64,7 +64,7 @@ export function buildStatusJson(input: {
   const governing = input.hasPolicy && (input.agents.claude || input.agents.cursor || input.agents.codex);
   const stuck = pending > 0 && oldest !== null && now - oldest > STUCK_AFTER_MS && state.last_error !== null;
   const overall: StatusJson["state"] = !governing ? "not_governing"
-    : !connection || state.invalid_since !== null || stuck ? "recording_locally" : "delivering";
+    : !connection || state.invalid_since !== null || stuck || queueError ? "recording_locally" : "delivering";
   return {
     schema: STATUS_SCHEMA,
     version: input.version,

@@ -294,6 +294,10 @@ test("health says green, amber or red in plain words, with the one fix", async (
   assert.deepEqual([waiting.level, waiting.headline, waiting.fix.route], ["amber", "3 records waiting to be sent", "/flush"]);
   const check = healthOf(base, { ok: false, failed: ["autostart"] });
   assert.deepEqual([check.level, check.fix.route], ["amber", "/maintain"]);
+  const blocked = healthOf({ ...base, state: "recording_locally", delivery: { ...base.delivery, queue_error: "/srv/sb/receipts.db.cloud-outbox.db: attempt to write a readonly database" } }, null);
+  assert.equal(blocked.level, "red");
+  assert.match(blocked.headline, /Every action is blocked/);
+  assert.match(blocked.hint, /-wal and -shm/);
   assert.match(check.headline, /autostart/);
 });
 
