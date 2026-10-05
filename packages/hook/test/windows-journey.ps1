@@ -110,7 +110,7 @@ function Invoke-HookEvent([string] $Command, [string] $Payload) {
   $proc = [System.Diagnostics.Process]::Start($psi)
   $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Payload)
   $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
-  $proc.StandardInput.Close()
+  $proc.StandardInput.BaseStream.Close()
   $out = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
   $proc.WaitForExit()
   return [pscustomobject]@{ Code = $proc.ExitCode; Out = $out }
