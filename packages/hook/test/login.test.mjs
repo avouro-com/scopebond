@@ -152,6 +152,31 @@ test("login: from a folder with no project setup, it repairs the user-level conn
   }
 });
 
+test("login: on a computer with nothing set up yet, it connects the user's home, not the folder it was run from", async () => {
+  // A first login usually runs from whatever folder the terminal opened in (an editor's
+  // terminal opens in the project). It used to scaffold and connect that folder, so the
+  // hook, resolving to the user home everywhere else, found no connection.
+  const home = join(mkdtempSync(join(tmpdir(), "sb-hook-login-fresh-")), ".scopebond");
+  const folder = mkdtempSync(join(tmpdir(), "sb-hook-login-editor-"));
+  // The workspace binds the credential to the enrolling keys; creating them is not a setup
+  // (no policy.json), so the home still counts as fresh.
+  const kids = {
+    attester: loadOrCreateAttester({ file: join(home, "attester.key") }).attester.kid,
+    agent: loadOrCreateAttester({ file: join(home, "agent.key") }).attester.kid,
+  };
+  const workspace = await startFakeWorkspace({ pendingPolls: 0, kids });
+  const env = { ...process.env, SCOPEBOND_HOME: home };
+  delete env.SCOPEBOND_HOOK_DIR;
+  try {
+    const r = await runCli(["login", workspace.url, "--no-install"], env, folder);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(join(home, "cloud.json")), "the connection is in the user's home");
+    assert.ok(!existsSync(join(folder, ".scopebond")), "nothing is written to the folder it was run from");
+  } finally {
+    workspace.close();
+  }
+});
+
 test("login: a denied request connects nothing and says so", async () => {
   const workspace = await startFakeWorkspace({ pendingPolls: 0, outcome: "deny" });
   const project = mkdtempSync(join(tmpdir(), "sb-hook-login-deny-"));
