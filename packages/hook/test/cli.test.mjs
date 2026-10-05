@@ -60,6 +60,13 @@ test("claude: an event that starts with a UTF-8 byte-order mark is read as the e
   assert.doesNotMatch(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /invalid JSON/);
 });
 
+test("claude: a policy.json saved with a byte-order mark (Windows PowerShell 5.1) is read as the policy", () => {
+  const dir = enrolledDir();
+  writeFileSync(join(dir, "policy.json"), "\uFEFF" + readFileSync(join(dir, "policy.json"), "utf8"));
+  const allowed = run(dir, ["claude"], JSON.stringify({ tool_name: "Write", tool_input: { file_path: "src/app.ts" } }));
+  assert.equal(allowed.status, 0, `an allowed action is not refused because the policy could not be read: ${allowed.stdout}`);
+});
+
 test("claude: invalid stdin fails closed (deny, exit 2)", () => {
   const r = run(enrolledDir(), ["claude"], "not json");
   assert.equal(r.status, 2);

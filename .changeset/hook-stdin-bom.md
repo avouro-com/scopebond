@@ -2,4 +2,4 @@
 "@scopebond/hook": patch
 ---
 
-The hook reads an event, and an agent settings file, that starts with a UTF-8 byte-order mark. Windows PowerShell 5.1 and other .NET Framework programs write one before text they pipe in; the hook used to refuse the whole event as invalid JSON (failing closed, so every action was blocked).
+The hook reads an event, and an agent settings file, that starts with a UTF-8 byte-order mark. Windows PowerShell 5.1 and other .NET Framework programs write one before text they pipe in; the hook used to refuse the whole event as invalid JSON (failing closed, so every action was blocked). The same holds for files a person edits or saves on Windows: `rules.json` (a BOM made the hook fall back to the default rules without a word), `policy.json`, a policy export, a budget file and `cloud.json`.
