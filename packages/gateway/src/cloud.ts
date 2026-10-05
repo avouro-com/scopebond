@@ -30,6 +30,11 @@ export interface CloudOutboxStatus {
   gaps: number;
   retainedGapRecords: number;
   latestGap: CloudDeliveryGap | null;
+  /** SB289: this queue's own id, made once when the queue is created. A queue that was removed and
+   *  made again gets a new id, so the workspace can tell numbering that restarted from a resend. */
+  queueId?: string;
+  /** SB289: the highest number this queue has given a record so far (0 before the first). */
+  seqAssigned?: number;
 }
 
 export interface CloudOutbox {
@@ -87,6 +92,7 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
   const now = options.now ?? Date.now;
   const entries = new Map<string, CloudOutboxEntry>();
   let nextSeq = 1;
+  const queueId = randomQueueId();
   let gapCount = 0;
   let latestGap: CloudDeliveryGap | null = null;
 
@@ -112,6 +118,8 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
       gaps: gapCount,
       retainedGapRecords: latestGap ? 1 : 0,
       latestGap,
+      queueId,
+      seqAssigned: nextSeq - 1,
     };
   };
 
@@ -148,6 +156,13 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
     status,
     recordGap,
   };
+}
+
+/** A random queue id: 32 hex characters, no dependency on node:crypto (the gateway also runs in Workers). */
+export function randomQueueId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** "ingest failed: HTTP 401" plus, when the workspace named one, its refusal code and the one
@@ -209,13 +224,16 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       for (;;) {
         const batch = opts.outbox.peek(batchSize, now());
         if (!batch.length) break;
+        const numbered = batch.some((entry) => entry.seq !== undefined);
+        const queue = numbered ? opts.outbox.status().queueId : undefined;
         const res = await doFetch(endpoint, {
           method: "POST",
           headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json" },
           // SB289: each record's number travels beside it (the signed receipt is unchanged); a workspace
           // that does not read it ignores it.
-          body: JSON.stringify(batch.some((entry) => entry.seq !== undefined)
-            ? { receipts: batch.map((entry) => entry.receipt), seq: batch.map((entry) => entry.seq ?? null) }
+          // The queue's id says which numbering the numbers belong to.
+          body: JSON.stringify(numbered
+            ? { receipts: batch.map((entry) => entry.receipt), seq: batch.map((entry) => entry.seq ?? null), ...(queue ? { queue } : {}) }
             : { receipts: batch.map((entry) => entry.receipt) }),
         });
         if (!res.ok) throw new Error(await refusalMessage(res));

@@ -87,12 +87,42 @@ test("several processes opening the same old queue at once all succeed (the colu
   db.close();
   const nodeModule = new URL("../dist/node.js", import.meta.url).href;
   void fileURLToPath;
-  const code = `import { SqliteCloudOutbox } from ${JSON.stringify(nodeModule)}; new SqliteCloudOutbox(${JSON.stringify(path)}).close();`;
+  const code = `import { SqliteCloudOutbox } from ${JSON.stringify(nodeModule)}; const o = new SqliteCloudOutbox(${JSON.stringify(path)}); process.stdout.write(o.status().queueId); o.close();`;
   const results = await Promise.all(Array.from({ length: 6 }, () => new Promise((resolve) => {
-    const child = spawn(process.execPath, ["--input-type=module", "-e", code], { stdio: ["ignore", "ignore", "pipe"] });
-    let err = "";
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code], { stdio: ["ignore", "pipe", "pipe"] });
+    let err = "", out = "";
+    child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
-    child.on("close", (status) => resolve({ status, err }));
+    child.on("close", (status) => resolve({ status, err, out }));
   })));
   for (const r of results) assert.equal(r.status, 0, r.err);
+  assert.equal(new Set(results.map((r) => r.out)).size, 1, "every process reads the same queue id");
+});
+
+test("each queue has its own id, kept across restarts; the exporter names it beside the numbers", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-seq-queue-"));
+  let outbox = new SqliteCloudOutbox(join(dir, "outbox.db"));
+  const id = outbox.status().queueId;
+  assert.match(id, /^[0-9a-f]{32}$/);
+  assert.equal(outbox.status().seqAssigned, 0);
+  outbox.enqueue(receipt("action:seq-q-0001"));
+  outbox.enqueue(receipt("action:seq-q-0002"));
+  assert.equal(outbox.status().seqAssigned, 2);
+  outbox.close();
+  outbox = new SqliteCloudOutbox(join(dir, "outbox.db"));
+  assert.equal(outbox.status().queueId, id, "the same queue keeps its id");
+  outbox.close();
+  // A queue made again (the file was removed) is a different queue: numbering restarts under a new id.
+  const again = new SqliteCloudOutbox(join(dir, "outbox-again.db"));
+  assert.notEqual(again.status().queueId, id);
+  again.close();
+
+  const bodies = [];
+  const memory = createMemoryCloudOutbox();
+  const ex = createCloudExporter({ url: "https://cloud.example", credential: "sbm_x", outbox: memory, flushMs: 1e9, fetch: async (_u, init) => { bodies.push(JSON.parse(init.body)); return new Response("{}", { status: 200 }); } });
+  ex.enqueue(receipt("action:seq-q-0003"));
+  await ex.flush();
+  ex.stop();
+  assert.equal(bodies[0].queue, memory.status().queueId);
+  assert.deepEqual(bodies[0].seq, [1]);
 });

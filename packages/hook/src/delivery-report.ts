@@ -14,14 +14,14 @@ export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
 export const LOSSLESS_OUTBOX = { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER } as const;
 
 /** How many records wait to send and since when, read without changing the queue. */
-export function queueStatus(dir: string): { pending: number; oldest: number | null } {
+export function queueStatus(dir: string): { pending: number; oldest: number | null; queueId?: string; seqAssigned?: number } {
   const outboxPath = join(dir, OUTBOX_FILE);
   if (!existsSync(outboxPath)) return { pending: 0, oldest: null };
   try {
     const outbox = new SqliteCloudOutbox(outboxPath, LOSSLESS_OUTBOX);
     try {
       const status = outbox.status();
-      return { pending: status.pending, oldest: status.oldestEnqueuedAt };
+      return { pending: status.pending, oldest: status.oldestEnqueuedAt, ...(status.queueId ? { queueId: status.queueId, seqAssigned: status.seqAssigned ?? 0 } : {}) };
     } finally { outbox.close(); }
   } catch { return { pending: 0, oldest: null }; }
 }

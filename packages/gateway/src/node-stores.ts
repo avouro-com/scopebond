@@ -6,7 +6,7 @@ import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } fro
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
 import { canonical, sha256 } from "./crypto.js";
-import type { CloudDeliveryGap, CloudOutbox, CloudOutboxEntry, CloudOutboxStatus } from "./cloud.js";
+import { randomQueueId, type CloudDeliveryGap, type CloudOutbox, type CloudOutboxEntry, type CloudOutboxStatus } from "./cloud.js";
 import type {
   ReceiptStore, SignedReceipt, Anchor, AuthorityReservation,
   AuthorityReservationResult, AuthorityFinalState, StopState, ActionLifecycleRecord, RealtimeResult,
@@ -453,6 +453,10 @@ export class SqliteCloudOutbox implements CloudOutbox {
     };
     addColumn("cloud_outbox", "seq", "INTEGER");
     addColumn("cloud_outbox_metadata", "next_seq", "INTEGER NOT NULL DEFAULT 1");
+    // SB289: the queue's id, made once. Two processes opening a new queue at once both try; the
+    // first write wins and both read the same id back.
+    addColumn("cloud_outbox_metadata", "queue_id", "TEXT");
+    this.db.prepare("UPDATE cloud_outbox_metadata SET queue_id = ? WHERE singleton = 1 AND queue_id IS NULL").run(randomQueueId());
   }
 
   enqueue(receipt: SignedReceipt): { queued: boolean; duplicate: boolean; gap?: CloudDeliveryGap } {
@@ -566,8 +570,8 @@ export class SqliteCloudOutbox implements CloudOutbox {
               MIN(enqueued_at) AS oldest FROM cloud_outbox`,
     ).all() as Array<{ count: number; bytes: number; oldest: number | null }>;
     const gapCount = this.db.prepare(
-      "SELECT total_gaps AS count FROM cloud_outbox_metadata WHERE singleton = 1",
-    ).all() as Array<{ count: number }>;
+      "SELECT total_gaps AS count, queue_id, next_seq FROM cloud_outbox_metadata WHERE singleton = 1",
+    ).all() as Array<{ count: number; queue_id: string | null; next_seq: number }>;
     const retainedGapCount = this.db.prepare(
       "SELECT COUNT(*) AS count FROM cloud_delivery_gaps",
     ).all() as Array<{ count: number }>;
@@ -581,6 +585,8 @@ export class SqliteCloudOutbox implements CloudOutbox {
       gaps: gapCount[0]?.count ?? 0,
       retainedGapRecords: retainedGapCount[0]?.count ?? 0,
       latestGap: latest[0] ? { id: latest[0].event_id, reason: latest[0].reason, at: latest[0].created_at } : null,
+      ...(gapCount[0]?.queue_id ? { queueId: gapCount[0].queue_id } : {}),
+      seqAssigned: Math.max(0, Number(gapCount[0]?.next_seq ?? 1) - 1),
     };
   }
 
