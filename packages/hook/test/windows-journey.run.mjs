@@ -103,10 +103,16 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
   try {
     assert.equal(run("net", ["user", user, password, "/add"]).status, 0, "could not create the standard user");
     run("icacls", [shared, "/grant", `${user}:(OI)(CI)M`, "/T"]);
+    // A scheduled task that runs as a user with a stored password needs "Log on as a batch job".
+    // Windows Server (the CI image) grants it only to administrators and operators, so the task
+    // never starts; a person's Windows 10/11 computer is not involved. Grant it to the throwaway user.
+    const granted = run("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", batchLogonScript(user, shared)]);
+    assert.equal(granted.status, 0, `could not let the standard user run a scheduled task: ${granted.stdout}${granted.stderr}`);
     const nodeDir = dirname(process.execPath);
     const log = join(shared, "journey.log"), exit = join(shared, "journey.exit");
     writeFileSync(join(shared, "run.cmd"), [
       "@echo off",
+      `echo started> "${join(shared, "journey.started")}"`,
       `set "PATH=${nodeDir};%PATH%"`,
       String.raw`set "npm_config_prefix=%APPDATA%\npm"`,
       String.raw`set "npm_config_cache=%LOCALAPPDATA%\npm-cache"`,
@@ -117,8 +123,17 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
     const created = run("schtasks", ["/Create", "/TN", "ScopebondJourney", "/TR", `cmd.exe /d /c "${join(shared, "run.cmd")}"`, "/SC", "ONCE", "/ST", "23:59", "/RU", user, "/RP", password, "/RL", "LIMITED", "/F"]);
     assert.equal(created.status, 0, `could not schedule the journey: ${created.stdout}${created.stderr}`);
     assert.equal(run("schtasks", ["/Run", "/TN", "ScopebondJourney"]).status, 0, "could not start the journey task");
-    const until = Date.now() + 18 * 60_000;
-    while (!existsSync(exit) && Date.now() < until) await new Promise((r) => setTimeout(r, 2_000));
+    const started = join(shared, "journey.started");
+    const until = Date.now() + 18 * 60_000, startBy = Date.now() + 2 * 60_000;
+    while (!existsSync(exit) && Date.now() < until) {
+      // A task Windows refused to start never writes its first line: say why instead of waiting 18 minutes.
+      if (!existsSync(started) && Date.now() > startBy) break;
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+    if (!existsSync(started)) {
+      const task = run("schtasks", ["/Query", "/TN", "ScopebondJourney", "/V", "/FO", "LIST"]);
+      assert.fail(`the standard user's task never started:\n${task.stdout}${task.stderr}`);
+    }
     const output = existsSync(log) ? readFileSync(log, "utf8") : "(no log)";
     process.stdout.write(output);
     assert.ok(existsSync(exit), `the standard user's journey did not finish:\n${output}`);
@@ -128,3 +143,17 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
     run("net", ["user", user, "/delete"]);
   }
 });
+
+/** PowerShell that adds a user to "Log on as a batch job" with secedit (no extra tools). */
+function batchLogonScript(user, dir) {
+  const cfg = join(dir, "rights.inf"), db = join(dir, "rights.sdb");
+  return [
+    `$sid = (New-Object System.Security.Principal.NTAccount('${user}')).Translate([System.Security.Principal.SecurityIdentifier]).Value`,
+    `secedit /export /cfg '${cfg}' /areas USER_RIGHTS | Out-Null`,
+    `$lines = Get-Content -LiteralPath '${cfg}'`,
+    "if ($lines -match '^SeBatchLogonRight') { $lines = $lines -replace '^(SeBatchLogonRight\\s*=.*)$', ('$1,*' + $sid) } else { $lines = $lines -replace '^\\[Privilege Rights\\]$', ('[Privilege Rights]' + [Environment]::NewLine + 'SeBatchLogonRight = *' + $sid) }",
+    `Set-Content -LiteralPath '${cfg}' -Value $lines -Encoding Unicode`,
+    `secedit /configure /db '${db}' /cfg '${cfg}' /areas USER_RIGHTS | Out-Null`,
+    "exit $LASTEXITCODE",
+  ].join("; ");
+}
