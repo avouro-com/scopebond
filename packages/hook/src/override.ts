@@ -19,6 +19,7 @@ import { userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
 import { compileManaged, floorDocument, MANAGED_DOC_FILE, RULE_OF_CLAUSE, writeAtomic, type ManagedDocument, type ManagedRuleId } from "./managed.js";
 import { defaultRules, loadRules } from "./rules.js";
+import { agentCommand } from "./windows-hints.js";
 
 export const OVERRIDE_STATE_FILE = "overrides.json";
 const AGENT_FILE = "agent.json";
@@ -178,7 +179,7 @@ function osUserDigest(): string | null {
 export function overrideHint(note: OverrideNote | null): string | null {
   if (!note) return null;
   switch (note.outcome) {
-    case "unavailable": return `Your workspace lets you allow this once with a reason in the Scopebond window, but the Scopebond Agent is not running. Start it (scopebond-agent run) and try again.`;
+    case "unavailable": return `Your workspace lets you allow this once with a reason in the Scopebond window, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
     case "limit": return `You have used today's overrides for "${note.title}". It blocks until tomorrow.`;
     case "declined": return `The override was not given.`;
     case "not_overridable": return null;

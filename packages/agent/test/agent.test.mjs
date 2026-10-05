@@ -357,3 +357,10 @@ test("stop ends the running agent, so turning autostart off and uninstalling lea
     if (agent.exitCode === null) agent.kill();
   }
 });
+
+test("an autostart problem names the fix as the person types it", async () => {
+  const { autostartHealth } = await import("../dist/autostart.js");
+  const dir = mkdtempSync(join(tmpdir(), "sb-agent-health-"));
+  assert.match(autostartHealth(dir, "win32").detail, /run: scopebond-agent.cmd autostart on/);
+  if (process.platform !== "win32") assert.match(autostartHealth(dir, "linux").detail, /run: scopebond-agent autostart on/);
+});
