@@ -495,7 +495,11 @@ try {
   # Everything Scopebond printed for the person to run is in the form PowerShell accepts.
   Check 'every command Scopebond printed uses the .cmd form' {
     $plain = @()
-    foreach ($text in $script:Printed) { $plain += Find-PlainCommands $text }
+    # npm's own notices ("To update run: npm install -g npm@...") are npm's text, not Scopebond's.
+    foreach ($text in $script:Printed) {
+      $own = (($text -split "`n") | Where-Object { $_ -notmatch '^\s*npm (notice|warn)\b' }) -join "`n"
+      $plain += Find-PlainCommands $own
+    }
     $plain = $plain | Sort-Object -Unique
     Assert (@($plain).Count -eq 0) ("printed without .cmd (PowerShell blocks these):`n" + ($plain -join "`n"))
   }
