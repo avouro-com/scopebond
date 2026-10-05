@@ -440,6 +440,12 @@ export class SqliteCloudOutbox implements CloudOutbox {
       INSERT OR IGNORE INTO cloud_outbox_metadata (singleton, total_gaps)
         SELECT 1, COUNT(*) FROM cloud_delivery_gaps;
     `);
+    // SB289: a number per queued record, kept across restarts. Queues made before it get the columns
+    // here; records already in them stay unnumbered.
+    const has = (table: string, column: string) =>
+      (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
+    if (!has("cloud_outbox", "seq")) this.db.exec("ALTER TABLE cloud_outbox ADD COLUMN seq INTEGER");
+    if (!has("cloud_outbox_metadata", "next_seq")) this.db.exec("ALTER TABLE cloud_outbox_metadata ADD COLUMN next_seq INTEGER NOT NULL DEFAULT 1");
   }
 
   enqueue(receipt: SignedReceipt): { queued: boolean; duplicate: boolean; gap?: CloudDeliveryGap } {
@@ -472,9 +478,12 @@ export class SqliteCloudOutbox implements CloudOutbox {
         this.db.exec("COMMIT");
         return { queued: false, duplicate: false, gap };
       }
+      const seq = (this.db.prepare(
+        "UPDATE cloud_outbox_metadata SET next_seq = next_seq + 1 WHERE singleton = 1 RETURNING next_seq - 1 AS seq",
+      ).all() as Array<{ seq: number }>)[0]?.seq ?? null;
       this.db.prepare(
-        "INSERT INTO cloud_outbox (event_id, payload_hash, receipt_json, enqueued_at, bytes) VALUES (?, ?, ?, ?, ?)",
-      ).run(id, payloadHash, receiptJson, at, bytes);
+        "INSERT INTO cloud_outbox (event_id, payload_hash, receipt_json, enqueued_at, bytes, seq) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(id, payloadHash, receiptJson, at, bytes, seq);
       this.db.exec("COMMIT");
       return { queued: true, duplicate: false };
     } catch (error) {
@@ -494,10 +503,10 @@ export class SqliteCloudOutbox implements CloudOutbox {
     }
     const bounded = Math.max(1, Math.min(100, Math.trunc(limit)));
     const rows = this.db.prepare(
-      `SELECT event_id, payload_hash, receipt_json, enqueued_at, bytes
+      `SELECT event_id, payload_hash, receipt_json, enqueued_at, bytes, seq
          FROM cloud_outbox ORDER BY enqueued_at, event_id LIMIT ?`,
     ).all(bounded) as Array<{
-      event_id: string; payload_hash: string; receipt_json: string; enqueued_at: number; bytes: number;
+      event_id: string; payload_hash: string; receipt_json: string; enqueued_at: number; bytes: number; seq: number | null;
     }>;
     return rows.map((row) => ({
       id: row.event_id,
@@ -505,6 +514,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
       receipt: JSON.parse(row.receipt_json) as SignedReceipt,
       enqueuedAt: row.enqueued_at,
       bytes: row.bytes,
+      ...(row.seq === null ? {} : { seq: row.seq }),
     }));
   }
 

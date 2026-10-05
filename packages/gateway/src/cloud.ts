@@ -10,6 +10,11 @@ export interface CloudOutboxEntry {
   receipt: SignedReceipt;
   enqueuedAt: number;
   bytes: number;
+  /** SB289: this computer's number for the record, 1, 2, 3… in the order it was queued, never reused.
+   *  The workspace compares the numbers it has seen with how many it received, so a record lost on
+   *  the computer (aged out, or a queue that was deleted) shows as missing instead of silently absent.
+   *  Absent for a record queued before numbering existed. */
+  seq?: number;
 }
 
 export interface CloudDeliveryGap {
@@ -81,6 +86,7 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
   const maxAgeMs = options.maxAgeMs ?? 7 * 24 * 60 * 60 * 1000;
   const now = options.now ?? Date.now;
   const entries = new Map<string, CloudOutboxEntry>();
+  let nextSeq = 1;
   let gapCount = 0;
   let latestGap: CloudDeliveryGap | null = null;
 
@@ -126,7 +132,7 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
       if (current.pending >= maxPending || current.pendingBytes + bytes > maxBytes) {
         return { queued: false, duplicate: false, gap: recordGap(id, "capacity") };
       }
-      entries.set(id, { id, payloadHash, receipt: structuredClone(receipt), enqueuedAt: now(), bytes });
+      entries.set(id, { id, payloadHash, receipt: structuredClone(receipt), enqueuedAt: now(), bytes, seq: nextSeq++ });
       return { queued: true, duplicate: false };
     },
     peek(limit, at) {
@@ -206,7 +212,11 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
         const res = await doFetch(endpoint, {
           method: "POST",
           headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json" },
-          body: JSON.stringify({ receipts: batch.map((entry) => entry.receipt) }),
+          // SB289: each record's number travels beside it (the signed receipt is unchanged); a workspace
+          // that does not read it ignores it.
+          body: JSON.stringify(batch.some((entry) => entry.seq !== undefined)
+            ? { receipts: batch.map((entry) => entry.receipt), seq: batch.map((entry) => entry.seq ?? null) }
+            : { receipts: batch.map((entry) => entry.receipt) }),
         });
         if (!res.ok) throw new Error(await refusalMessage(res));
         // A record the workspace refused on its own (the rest of the batch was stored) can never be
