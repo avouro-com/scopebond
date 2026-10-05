@@ -9,7 +9,7 @@ import { canonical, sha256 } from "./crypto.js";
 import { randomQueueId, type CloudDeliveryGap, type CloudOutbox, type CloudOutboxEntry, type CloudOutboxStatus } from "./cloud.js";
 import type {
   ReceiptStore, SignedReceipt, Anchor, AuthorityReservation,
-  AuthorityReservationResult, AuthorityFinalState, StopState, ActionLifecycleRecord, RealtimeResult,
+  AuthorityReservationResult, AuthorityFinalState, StopState, ActionLifecycleRecord, RealtimeResult, PriorScope,
 } from "./receipts.js";
 import type { Receipt } from "@scopebond/verify";
 
@@ -92,7 +92,10 @@ export class FileReceiptStore implements ReceiptStore {
   list(): SignedReceipt[] { return structuredClone(this.cache); }
   recent(limit: number): SignedReceipt[] { return structuredClone(this.cache.slice(-Math.max(1, Math.floor(limit))).reverse()); }
   count(): number { return this.cache.length; }
-  executed(): Receipt[] { return structuredClone(this.cache.map((r) => r.payload as unknown as Receipt)); }
+  executed(scope?: PriorScope): Receipt[] {
+    if (scope?.kind === "none") return [];
+    return structuredClone(this.cache.map((r) => r.payload as unknown as Receipt));
+  }
   putAnchor(a: Anchor): void { this.append(this.anchorFile, JSON.stringify(a)); this.anchorLog.push(a); }
   anchors(): Anchor[] { return this.anchorLog.slice(); }
   getStopState(): StopState { return { global: this.stops.has("global"), agents: [...this.stops].filter((key) => key !== "global") }; }
@@ -146,7 +149,8 @@ export class SqliteReceiptStore implements ReceiptStore {
        CREATE TABLE IF NOT EXISTS gateway_stops (
          target TEXT PRIMARY KEY,
          stopped INTEGER NOT NULL
-       );`,
+       );
+       CREATE INDEX IF NOT EXISTS receipts_timestamp ON receipts (timestamp);`,
     );
   }
   put(r: SignedReceipt): void {
@@ -159,8 +163,16 @@ export class SqliteReceiptStore implements ReceiptStore {
     const rows = this.db.prepare(`SELECT receipt_json FROM receipts ORDER BY id`).all() as { receipt_json: string }[];
     return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
   }
-  executed(): Receipt[] {
-    const receipts = this.list().map((r) => r.payload as unknown as Receipt);
+  /** Prior receipts for an evaluation. A policy that reads no history costs no query; a
+   *  windowed one reads only the indexed tail since `scope.since`. This is the per-tool-call
+   *  path of the hook, so it must not grow with the log. */
+  executed(scope?: PriorScope): Receipt[] {
+    if (scope?.kind === "none") return [];
+    const stored = scope?.kind === "since"
+      ? this.db.prepare(`SELECT receipt_json FROM receipts INDEXED BY receipts_timestamp WHERE timestamp >= ? ORDER BY id`)
+        .all(scope.since) as { receipt_json: string }[]
+      : this.db.prepare(`SELECT receipt_json FROM receipts ORDER BY id`).all() as { receipt_json: string }[];
+    const receipts = stored.map((row) => (JSON.parse(row.receipt_json) as SignedReceipt).payload as unknown as Receipt);
     const rows = this.db.prepare(
       `SELECT candidate_json FROM authority_actions WHERE state IN ('reserved', 'dispatching', 'outcome_unknown') ORDER BY rowid`,
     ).all() as { candidate_json: string }[];
@@ -169,6 +181,7 @@ export class SqliteReceiptStore implements ReceiptStore {
   reserveAction<T extends { allow: boolean }>(
     reservation: AuthorityReservation,
     decide: (prior: Receipt[]) => T,
+    scope?: PriorScope,
   ): AuthorityReservationResult<T> {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -187,7 +200,7 @@ export class SqliteReceiptStore implements ReceiptStore {
           return { duplicate: true };
         }
       }
-      const decision = decide(this.executed());
+      const decision = decide(this.executed(scope));
       this.db.prepare(
         `INSERT INTO authority_actions (action_id,state,candidate_json,policy_ref_json,policy_snapshot) VALUES (?,?,?,?,?)`,
       ).run(

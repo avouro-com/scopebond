@@ -11,7 +11,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { violates } from "../dist/violates.js";
+// Each vector is also checked against the bounded prior set a live gateway uses.
+import { violatesBoth as violates } from "./bounded.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cases = JSON.parse(readFileSync(join(here, "../vectors/taxonomy-verdicts.json"), "utf8"));

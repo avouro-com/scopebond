@@ -147,6 +147,11 @@ check (`attester.kid` is derived from the key) with WebCrypto only, so the same 
 in Node, browsers, Cloudflare Workers and offline. It accepts the attester key as SPKI PEM
 or as an Ed25519 JWK.
 
+A gateway evaluates a live action against only the prior receipts its policy can read
+(`historyNeed` / `boundPrior` in `@scopebond/verify`; see that package's README,
+"Bounded prior history"). The decision is the one the full history gives; the live
+verdict's `inputs_hash` commits to the bounded set. Receipts do not carry `inputs_hash`.
+
 ## Anchors
 
 An anchor commits to a prefix of a gateway's receipt log with a single Merkle root,
