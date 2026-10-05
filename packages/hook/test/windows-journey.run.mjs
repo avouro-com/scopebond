@@ -90,7 +90,8 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
   const { dirname } = await import("node:path");
   packed ??= pack();
   const user = "sbjourney";
-  const password = `Sb!${randomBytes(12).toString("base64url")}9a`;
+  // 13 characters: `net user` stops to ask a yes/no question for a password over 14.
+  const password = `Sb!${randomBytes(6).toString("base64url")}9a`;
   const shared = join(process.env.SystemDrive ?? "C:", "\\", `sb-journey-${randomBytes(4).toString("hex")}`);
   mkdirSync(shared, { recursive: true });
   copyFileSync(join(here, "windows-journey.ps1"), join(shared, "windows-journey.ps1"));
