@@ -185,7 +185,7 @@ test("login: from a folder with a leftover project setup, it signs in the user, 
     assert.ok(existsSync(join(pc.home, "policy.json")), "and installed");
     assert.ok(!existsSync(join(pc.project, "cloud.json")), "the leftover project setup is not connected");
     // The configured command runs this checkout's cli.js (any folder name) or the published hook.
-    assert.match(readFileSync(pc.userSettings, "utf8"), /cli\.js\\?" claude|@scopebond\/hook\S* claude/, "the hook goes into the user-level agent settings");
+    assert.match(readFileSync(pc.userSettings, "utf8"), /cli\.js(\\")? claude|@scopebond\/hook\S* claude/, "the hook goes into the user-level agent settings");
     assert.ok(r.stdout.includes(`Claude Code configured in ${pc.userSettings}`), "the project's hook entry does not count as the user's");
     // The project is not trusted, so the user's setup governs there; the sign-in says so and how to tidy up.
     assert.match(r.stdout, /earlier project setup/);
