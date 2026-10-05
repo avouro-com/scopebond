@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import type { HookConnection } from "./cloud.js";
-import { ago, readDeliveryState } from "./delivery-state.js";
+import { ago, readDeliveryState, type DeliveryState } from "./delivery-state.js";
 import { cliCommand } from "./version.js";
 
 export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
@@ -27,6 +27,19 @@ export function queueStatus(dir: string): { pending: number; oldest: number | nu
     // Not "nothing waiting": the queue cannot be opened, so the hook fails closed on every action.
     return { pending: 0, oldest: null, error: `${outboxPath}: ${(error as Error).message}` };
   }
+}
+
+/** How long the oldest waiting record may wait, with nothing accepted since it was queued,
+ *  before this computer counts as not delivering. Each tool call tries to send, so a working
+ *  connection empties the queue within seconds. */
+export const STALLED_AFTER_MS = 5 * 60 * 1000;
+
+/** Records are waiting and nothing has been accepted since the oldest was queued, for longer
+ *  than `STALLED_AFTER_MS`. True whatever the last error says, including none at all: an
+ *  attempt can end without one, and "last tried a moment ago" is no evidence of delivery. */
+export function deliveryStalled(state: Pick<DeliveryState, "last_success_at">, pending: number, oldest: number | null, now: number): boolean {
+  return pending > 0 && oldest !== null && now - oldest > STALLED_AFTER_MS
+    && (state.last_success_at === null || state.last_success_at < oldest);
 }
 
 export interface DeliveryReport {
@@ -57,11 +70,14 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   lines.push(`last delivered   ${ago(state.last_success_at, now)}${tried}`);
   const age = oldest !== null ? `, oldest from ${ago(oldest, now)}` : "";
   if (!queueError) lines.push(`waiting to send  ${pending} record(s)${age}`);
-  if (state.last_error && state.invalid_since === null) {
-    lines.push(`last problem     ${state.last_error}`);
-    if (pending > 0 && oldest !== null && now - oldest > 60 * 60 * 1000) {
-      problems.push(`${pending} record(s) have waited more than an hour to send (${state.last_error}); they stay queued and send once the workspace accepts them`);
-    }
+  if (state.last_error && state.invalid_since === null) lines.push(`last problem     ${state.last_error}`);
+  if (state.invalid_since === null && deliveryStalled(state, pending, oldest, now)) {
+    const since = state.last_success_at === null ? "nothing from this computer has ever reached the workspace" : `nothing has reached the workspace since ${ago(state.last_success_at, now)}`;
+    const why = state.last_error ?? "no attempt recorded an error, so the cause is unknown";
+    const flush = cliCommand("flush");
+    lines.unshift(`NOT DELIVERING: ${since}, and ${pending} record(s) wait, the oldest from ${ago(oldest, now)}.`);
+    lines.push(`next step        run ${flush}: it sends the queue with no time limit and prints what the workspace answers`);
+    problems.push(`${pending} record(s) are not reaching the workspace: ${since} (${why}); they stay queued — run ${flush} to send them now and see the answer`);
   }
   return { lines, problems, fix };
 }

@@ -3,11 +3,11 @@
 // desktop agent and the workspace read. Additive only: fields are added, never renamed.
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import { loadConnection } from "./cloud.js";
 import { readDeliveryState } from "./delivery-state.js";
-import { LOSSLESS_OUTBOX, OUTBOX_FILE, queueStatus } from "./delivery-report.js";
+import { LOSSLESS_OUTBOX, OUTBOX_FILE, deliveryStalled, queueStatus } from "./delivery-report.js";
 
 export const STATUS_SCHEMA = "scopebond.status.v1";
 
@@ -37,7 +37,9 @@ export interface StatusJson {
     key_kid: string | null;
     credential_expires_at: string | null;
   };
-  config: { active: string; others: string[] };
+  /** user_connection_shadowed: the user-level sign-in is connected, but a project setup takes
+   *  precedence from here. */
+  config: { active: string; others: string[]; user_connection_shadowed: boolean };
   agents: { claude: boolean; cursor: boolean; codex: boolean };
 }
 
@@ -46,6 +48,8 @@ const STUCK_AFTER_MS = 60 * 60 * 1000;
 
 export function buildStatusJson(input: {
   version: string; activeDir: string; candidateDirs: string[]; hasPolicy: boolean;
+  /** The user-level config dir, to report a project setup that takes precedence over its connection. */
+  userDir?: string;
   agents: { claude: boolean; cursor: boolean; codex: boolean }; now?: number;
 }): StatusJson {
   const now = input.now ?? Date.now();
@@ -62,7 +66,10 @@ export function buildStatusJson(input: {
   }
   const code = /\(([a-z_]+)\)/.exec(state.last_error ?? "")?.[1] ?? (state.last_status ? `http_${state.last_status}` : null);
   const governing = input.hasPolicy && (input.agents.claude || input.agents.cursor || input.agents.codex);
-  const stuck = pending > 0 && oldest !== null && now - oldest > STUCK_AFTER_MS && state.last_error !== null;
+  // Stuck with a known error for an hour, or stalled: nothing accepted since the oldest waiting
+  // record was queued, error or not (an attempt cut off by its time limit used to record none).
+  const stuck = (pending > 0 && oldest !== null && now - oldest > STUCK_AFTER_MS && state.last_error !== null)
+    || deliveryStalled(state, pending, oldest, now);
   const overall: StatusJson["state"] = !governing ? "not_governing"
     : !connection || state.invalid_since !== null || stuck || queueError ? "recording_locally" : "delivering";
   return {
@@ -88,7 +95,11 @@ export function buildStatusJson(input: {
       key_kid: connection?.attester_kid ?? null,
       credential_expires_at: connection?.expires_at ?? null,
     },
-    config: { active: dir, others: input.candidateDirs.filter((d) => d !== dir && existsSync(join(d, "policy.json"))) },
+    config: {
+      active: dir,
+      others: input.candidateDirs.filter((d) => d !== dir && existsSync(join(d, "policy.json"))),
+      user_connection_shadowed: !!input.userDir && resolve(input.userDir) !== resolve(dir) && !!loadConnection(input.userDir),
+    },
     agents: input.agents,
   };
 }

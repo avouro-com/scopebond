@@ -4,8 +4,11 @@
 // the agent settings are moved to the hook version the agent carries.
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import {
+  absoluteHookCommand, ensureDurableRuntime,
   configuredHookCommands, hookCommandResolves, hookVersion, isScopebondHookCommand, userHarnessFile, writeHarnessConfig,
   type Harness, type HookConnection,
 } from "@scopebond/hook";
@@ -49,8 +52,24 @@ export function commandHookVersion(command: string): string | null {
 
 /** The command an agent-maintained settings entry runs: the hook version this agent carries,
  *  through npx, so it resolves Node at run time and an agent update never swaps files under it. */
+/** The hook command upkeep writes. The hook this agent carries is pinned by its absolute path (fast,
+ *  and it needs neither the registry nor npx on the coding tool's PATH); another version, or a pin that
+ *  cannot be made, falls back to the portable npx form. */
 export function maintainedHookCommand(harness: Harness, version = hookVersion()): string {
+  if (version === hookVersion()) {
+    try {
+      const cli = join(dirname(createRequire(import.meta.url).resolve("@scopebond/hook")), "cli.js");
+      const pin = ensureDurableRuntime(cli, version);
+      if (pin.cli) return absoluteHookCommand(pin.cli, harness);
+    } catch { /* fall back below */ }
+  }
   return `npx -y @scopebond/hook@${version} ${harness}`;
+}
+
+/** This Node's own npm, run directly (no shell, and never another Node's npm first on PATH), or null. */
+export function ownNpm(): [string, string[]] | null {
+  const cli = join(dirname(process.execPath), process.platform === "win32" ? "" : "../lib", "node_modules", "npm", "bin", "npm-cli.js");
+  return existsSync(cli) ? [process.execPath, [cli]] : null;
 }
 
 /** Bring the user-level Scopebond hook entries to `version`, and repair any that cannot start.
@@ -75,8 +94,11 @@ export function installAgent(version: string, timeoutMs = 5 * 60_000): Promise<{
   if (!VERSION.test(version)) return Promise.resolve({ ok: false, output: "not a version" });
   return new Promise((resolve) => {
     const win = process.platform === "win32";
-    // npm on Windows is a .cmd file, which Node only starts through a shell; the arguments are fixed and the version is validated.
-    const child = spawn(win ? "npm.cmd" : "npm", ["install", "-g", `@scopebond/agent@${version}`, "--no-fund", "--no-audit"], { shell: win, windowsHide: true });
+    const args = ["install", "-g", `@scopebond/agent@${version}`, "--no-fund", "--no-audit"];
+    // This Node's own npm when it can be found; otherwise npm on PATH (a .cmd on Windows, which Node only
+    // starts through a shell; the arguments are fixed and the version is validated).
+    const own = ownNpm();
+    const child = own ? spawn(own[0], [...own[1], ...args], { windowsHide: true }) : spawn(win ? "npm.cmd" : "npm", args, { shell: win, windowsHide: true });
     let output = "";
     child.stdout?.on("data", (d) => { output += d; });
     child.stderr?.on("data", (d) => { output += d; });

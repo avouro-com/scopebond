@@ -9,7 +9,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 
 export const LABEL = "com.scopebond.agent";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -25,6 +25,9 @@ export function launcherPath(home: string, platform: NodeJS.Platform = process.p
 export function windowsLauncher(node: string, cli: string, logFile: string): string {
   return [
     "@echo off",
+    // cmd.exe reads a batch file in the console code page: switch to UTF-8 first, so a profile folder
+    // with non-ASCII letters in the paths below reads as written.
+    "chcp 65001 >nul",
     "rem Scopebond Agent launcher: finds Node and the agent each time, so a Node upgrade never stops it.",
     "setlocal",
     `set "NODE=${noQuotes(node)}"`,
@@ -33,7 +36,8 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
     `set "CLI=${noQuotes(cli)}"`,
     `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
     `if not defined NODE exit /b 1`,
-    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "${noQuotes(logFile)}" 2>&1`,
+    // The log sits beside this launcher; %~dp0 keeps it right whatever the folder is called.
+    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "%~dp0${win32.basename(noQuotes(logFile))}" 2>&1`,
     "",
   ].join("\r\n");
 }
@@ -59,8 +63,12 @@ exec "$NODE" --disable-warning=ExperimentalWarning "$CLI" run
 }
 
 /** The Run value: the launcher under a headless console host, so nothing appears on screen. */
+/** `cmd /s /c ""<launcher>""`: cmd drops only the outer quotes and runs the quoted path as it is, so a
+ *  profile folder with a space and a `(`, `)` or `&` ("John (Work)") still starts the launcher. */
+const cmdRun = (launcher: string) => `/d /s /c ""${noQuotes(launcher)}""`;
+
 export function windowsRunCommand(launcher: string): string {
-  return `conhost.exe --headless cmd.exe /d /c "${noQuotes(launcher)}"`;
+  return `conhost.exe --headless cmd.exe ${cmdRun(launcher)}`;
 }
 
 export function macLaunchAgent(launcher: string, logFile: string): string {
@@ -112,15 +120,24 @@ function writeLauncher(scopebondHome: string, node: string, cli: string, platfor
   return launcher;
 }
 
-/** Start the agent now, the way sign-in will (Windows: the launcher under a headless console, detached from this terminal).
- *  macOS and Linux start it themselves when autostart is turned on (RunAtLoad, enable --now). Returns whether it started one. */
-export function startNow(scopebondHome: string, platform = process.platform): boolean {
-  if (platform !== "win32") return false;
+/** The ways to start the agent now on Windows, in order: the launcher under a headless console (no window,
+ *  as sign-in does), then the launcher through cmd.exe with its window hidden, for a session where the
+ *  headless console host does not start (seen on Windows Server). macOS and Linux start it themselves
+ *  when autostart is turned on (RunAtLoad, enable --now). */
+export function startCommands(launcher: string, platform: NodeJS.Platform = process.platform): Array<[string, string[]]> {
+  if (platform !== "win32") return [];
+  // Passed verbatim (startNow sets windowsVerbatimArguments): Node's own quoting follows other rules than cmd's.
+  return [["conhost.exe", ["--headless", "cmd.exe", cmdRun(launcher)]], ["cmd.exe", [cmdRun(launcher)]]];
+}
+
+/** Start the agent now with the `attempt`-th way (0 first), detached from this terminal. Returns whether it tried one. */
+export function startNow(scopebondHome: string, platform = process.platform, attempt = 0): boolean {
   const launcher = launcherPath(scopebondHome, platform);
-  if (!existsSync(launcher)) return false;
+  const command = startCommands(launcher, platform)[attempt];
+  if (!command || !existsSync(launcher)) return false;
   try {
-    const child = spawn("conhost.exe", ["--headless", "cmd.exe", "/d", "/c", launcher], { detached: true, stdio: "ignore", windowsHide: true });
-    child.on("error", () => { /* it starts at the next sign-in instead */ });
+    const child = spawn(command[0], command[1], { detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true });
+    child.on("error", () => { /* the next way, or the next sign-in */ });
     child.unref();
     return true;
   } catch { return false; }
@@ -173,7 +190,9 @@ export function autostartHealth(scopebondHome: string, platform = process.platfo
   if (platform === "win32") {
     try { execFileSync("reg", ["query", RUN_KEY, "/v", RUN_VALUE], { stdio: "ignore" }); on = true; } catch { on = false; }
   } else on = existsSync(platform === "darwin" ? paths.macPlist : paths.linuxUnit);
-  if (!on) return { on, ok: false, detail: "the agent does not start with sign-in (run: scopebond-agent autostart on)" };
-  if (!existsSync(launcherPath(scopebondHome, platform))) return { on, ok: false, detail: "the autostart launcher is missing (run: scopebond-agent autostart on)" };
+  // The fix as the person types it: PowerShell blocks the plain scopebond-agent script shim.
+  const fix = `${platform === "win32" ? "scopebond-agent.cmd" : "scopebond-agent"} autostart on`;
+  if (!on) return { on, ok: false, detail: `the agent does not start with sign-in (run: ${fix})` };
+  if (!existsSync(launcherPath(scopebondHome, platform))) return { on, ok: false, detail: `the autostart launcher is missing (run: ${fix})` };
   return { on, ok: true, detail: "starts with sign-in" };
 }

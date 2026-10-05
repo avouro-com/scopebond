@@ -9,7 +9,7 @@ import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA } from "@s
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
-  parseQuestion, windowsScript, serialized, queueReason, pendingReasons,
+  parseQuestion, windowsScript, serialized, queueReason, pendingReasons, acquireAgentLock, releaseAgentLock, AGENT_LOCK,
   compareVersions, commandHookVersion, maintainHookEntries, fetchClientVersion, localChecks, runSelfCheck, selfCheckProof,
 } from "../dist/index.js";
 
@@ -114,7 +114,8 @@ test("repair puts the hook back into agent settings that lost it, and touches no
     assert.equal(repaired.length, 1);
     const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
     assert.equal(settings.model, "opus");
-    assert.match(settings.hooks.PreToolUse[0].hooks[0].command, /@scopebond\/hook@\S+ claude$/);
+    // The hook the agent carries, pinned by its path: fast, and neither npx nor the registry is needed.
+    assert.match(settings.hooks.PreToolUse[0].hooks[0].command, /cli\.js"? claude$/);
     assert.deepEqual(missingHookEntries(["claude"]), []);
     assert.deepEqual(repairHookEntries(["claude"]), [], "nothing to repair the second time");
   } finally {
@@ -125,7 +126,9 @@ test("repair puts the hook back into agent settings that lost it, and touches no
 test("autostart starts a launcher that finds Node and the agent each time, with no window on Windows", () => {
   assert.match(launcherPath(join("x", "sb"), "win32"), /agent-launch\.cmd$/);
   assert.match(launcherPath(join("x", "sb"), "linux"), /agent-launch\.sh$/);
-  assert.equal(windowsRunCommand("C:\\Users\\a b\\.scopebond\\agent-launch.cmd"), `conhost.exe --headless cmd.exe /d /c "C:\\Users\\a b\\.scopebond\\agent-launch.cmd"`);
+  assert.equal(windowsRunCommand("C:\\Users\\a b\\.scopebond\\agent-launch.cmd"), `conhost.exe --headless cmd.exe /d /s /c ""C:\\Users\\a b\\.scopebond\\agent-launch.cmd""`);
+  // A space with ( ) or & in the profile folder: cmd /s keeps the inner quotes, so the path stays whole.
+  assert.equal(windowsRunCommand("C:\\Users\\John (Work)\\.scopebond\\agent-launch.cmd"), `conhost.exe --headless cmd.exe /d /s /c ""C:\\Users\\John (Work)\\.scopebond\\agent-launch.cmd""`);
   const cmd = windowsLauncher("C:\\Program Files\\nodejs\\node.exe", "C:\\npm\\cli.js", "C:\\sb\\agent.log");
   assert.ok(cmd.includes(`set "NODE=C:\\Program Files\\nodejs\\node.exe"`));
   assert.match(cmd, /where node/, "falls back to the Node on PATH");
@@ -219,6 +222,15 @@ test("the self-check names what is broken locally and sends a signed proof to th
     assert.equal(byId.hook_entry.ok, false, "no agent setting holds the hook in this empty home");
     assert.equal(byId.queue.ok, true);
     assert.equal(byId.credential.ok, false, "expiring in two days without renewal");
+    assert.equal(byId.hook_duplicates.ok, true, "no hook at all is not a duplicate");
+    // SB302: the hook twice in the user settings is reported, with the command that keeps one.
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const entry = { matcher: "*", hooks: [{ type: "command", command: "npx -y @scopebond/hook@0.16.0 claude" }] };
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { PreToolUse: [entry, entry] } }));
+    const doubled = Object.fromEntries(localChecks(dir, connection, ["claude"]).map((c) => [c.id, c]));
+    assert.equal(doubled.hook_duplicates.ok, false);
+    assert.match(doubled.hook_duplicates.detail, /more than once per action for claude .*dedupe/);
+    writeFileSync(join(home, ".claude", "settings.json"), "{}");
     let posted = null;
     const fake = async (url, init) => {
       posted = { url, body: JSON.parse(init.body) };
@@ -335,4 +347,137 @@ test("against a workspace without the self-check, only this computer's own check
     assert.ok(!result.failed.some((f) => f.startsWith("workspace_")), "a missing route is not a failure");
     assert.deepEqual(result.failed, result.checks.filter((c) => !c.ok).map((c) => c.id));
   } finally { process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE; }
+});
+
+test("stop ends the running agent, so turning autostart off and uninstalling leaves nothing running", async () => {
+  const { spawn, execFile } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+  const home = mkdtempSync(join(tmpdir(), "sb-agent-stop-"));
+  const dir = join(home, ".scopebond");
+  mkdirSync(dir, { recursive: true });
+  const env = { ...process.env, HOME: home, USERPROFILE: home, SCOPEBOND_HOME: dir, SCOPEBOND_AGENT_TRAY: "off" };
+  const agent = spawn(process.execPath, [cli, "run"], { env, stdio: "ignore" });
+  const exited = new Promise((resolve) => agent.on("exit", (code) => resolve(code)));
+  try {
+    let up = false;
+    for (let i = 0; i < 60 && !up; i++) { await new Promise((r) => setTimeout(r, 250)); up = !!(await callAgent(dir, "GET", "/status", undefined, 1_000)); }
+    assert.ok(up, "the agent started");
+    const out = await new Promise((resolve) => execFile(process.execPath, [cli, "stop"], { env, encoding: "utf8", timeout: 30_000 }, (error, stdout, stderr) => resolve({ code: error?.code ?? 0, text: stdout + stderr })));
+    assert.equal(out.code, 0, out.text);
+    assert.match(out.text, /Stopped the Scopebond Agent/);
+    const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running"), 10_000))]);
+    assert.equal(code, 0, "the agent process exited");
+    assert.equal(await callAgent(dir, "GET", "/status", undefined, 1_000), null, "nothing answers on its channel");
+  } finally {
+    if (agent.exitCode === null) agent.kill();
+  }
+});
+
+test("an autostart problem names the fix as the person types it", async () => {
+  const { autostartHealth } = await import("../dist/autostart.js");
+  const dir = mkdtempSync(join(tmpdir(), "sb-agent-health-"));
+  assert.match(autostartHealth(dir, "win32").detail, /run: scopebond-agent.cmd autostart on/);
+  if (process.platform !== "win32") assert.match(autostartHealth(dir, "linux").detail, /run: scopebond-agent autostart on/);
+});
+
+test("setup plans only what is missing, so a second run signs nobody in again and installs nothing twice", async () => {
+  const { setupPlan } = await import("../dist/index.js");
+  const fresh = { connectedTo: null, credentialRefused: false, installedVersion: null, autostartOk: false };
+  assert.deepEqual(setupPlan(fresh, "https://cloud.scopebond.com", "0.4.0"), ["login", "install_agent", "autostart"]);
+  const done = { connectedTo: "https://cloud.scopebond.com", credentialRefused: false, installedVersion: "0.4.0", autostartOk: true };
+  assert.deepEqual(setupPlan(done, "https://cloud.scopebond.com", "0.4.0"), [], "a second run changes nothing");
+  assert.deepEqual(setupPlan(done, "https://cloud.scopebond.com", "0.4.0", true), ["login"], "--relogin signs in again");
+  assert.deepEqual(setupPlan({ ...done, credentialRefused: true }, "https://cloud.scopebond.com", "0.4.0"), ["login"], "a refused credential needs a new sign-in");
+  assert.deepEqual(setupPlan(done, "https://eu.example.test", "0.4.0"), ["login"], "another workspace needs a sign-in there");
+  assert.deepEqual(setupPlan({ ...done, autostartOk: false }, "https://cloud.scopebond.com", "0.4.0"), ["autostart"], "autostart is repaired on its own");
+  assert.deepEqual(setupPlan({ ...done, installedVersion: "0.3.1" }, "https://cloud.scopebond.com", "0.4.0"), ["install_agent", "autostart"]);
+  assert.deepEqual(setupPlan({ ...done, installedVersion: "0.5.0" }, "https://cloud.scopebond.com", "0.4.0"), [], "a newer installed agent is kept");
+});
+
+test("setup finds npm's global folder on PATH the way each system spells it, and says how to add it", async () => {
+  const { globalBinDir, onPath, addToPathCommand, nodeSupported } = await import("../dist/index.js");
+  assert.equal(globalBinDir(String.raw`C:\npm\prefix`, "win32"), String.raw`C:\npm\prefix`);
+  assert.equal(globalBinDir("/usr/local", "linux"), join("/usr/local", "bin"));
+  assert.equal(onPath(String.raw`D:\Tools\npm`, String.raw`C:\Windows;d:\tools\NPM\ `.trim(), "win32"), true);
+  assert.equal(onPath(String.raw`D:\Tools\npm`, String.raw`C:\Windows;C:\Program Files\nodejs`, "win32"), false);
+  assert.equal(onPath("/usr/local/bin", "/usr/bin:/usr/local/bin", "linux"), true);
+  assert.ok(addToPathCommand(String.raw`C:\npm\prefix`).endsWith(String.raw`+ ";C:\npm\prefix", "User")`));
+  assert.equal(nodeSupported("22.12.0"), false);
+  assert.equal(nodeSupported("22.13.0"), true);
+  assert.equal(nodeSupported("24.1.0"), true);
+});
+
+test("setup without a workspace URL says what it needs, in the form this system runs", async () => {
+  const { execFile } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+  const out = await new Promise((resolve) => execFile(process.execPath, [cli, "setup", "http://example.com"], { encoding: "utf8" }, (error, stdout, stderr) => resolve({ code: error?.code ?? 0, text: stdout + stderr })));
+  assert.equal(out.code, 1);
+  const runner = process.platform === "win32" ? "npx.cmd" : "npx";
+  assert.ok(out.text.includes(`usage: ${runner} -y @scopebond/agent@`) && out.text.includes("setup <workspace-url>"), out.text);
+});
+
+test("autostart on starts the agent now with a hidden cmd.exe when the headless console does not start", async () => {
+  const { startCommands } = await import("../dist/index.js");
+  const launcher = String.raw`D:\home\agent-launch.cmd`;
+  assert.deepEqual(startCommands(launcher, "win32"), [
+    ["conhost.exe", ["--headless", "cmd.exe", `/d /s /c ""${launcher}""`]],
+    ["cmd.exe", [`/d /s /c ""${launcher}""`]],
+  ]);
+  assert.deepEqual(startCommands("/opt/sb/agent-launch.sh", "linux"), [], "launchd and systemd start it themselves");
+});
+
+test("against the shared stand-in workspace, a self-check the workspace cannot take names the HTTP status, then passes", async () => {
+  const { startFakeCloud } = await import("@scopebond/fake-cloud");
+  const cloud = await startFakeCloud();
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "sb-agent-fake-"));
+    scaffold(dir);
+    const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
+    const enrolled = await (await fetch(cloud.url + "/v1/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_token: "sbe_fake_agent", public_key_pem: attester.publicKeyPem }) })).json();
+    const connection = { url: cloud.url, credential: enrolled.credential, credential_id: enrolled.credential_id, gateway_id: enrolled.gateway_id, expires_at: enrolled.expires_at };
+    cloud.fault("self-check", { status: 500, times: 1 });
+    const failed = await runSelfCheck(dir, connection, ["claude"], "0.3.0");
+    assert.equal(failed.ok, false);
+    assert.deepEqual(failed.failed, ["workspace_http_500"]);
+    const passed = await runSelfCheck(dir, connection, ["claude"], "0.3.0");
+    assert.equal(passed.signature_verified, true);
+    assert.equal(cloud.state().self_checks.length, 1, "the workspace recorded the one it took");
+    assert.equal(cloud.state().self_checks[0].agent_version, "0.3.0");
+  } finally { await cloud.close(); }
+});
+
+test("the Windows launcher reads as written in a profile folder with non-ASCII letters", () => {
+  const text = windowsLauncher("D:\\Data\\J\u00f6rg\\node.exe", "D:\\Data\\J\u00f6rg\\cli.js", "D:\\Data\\J\u00f6rg\\.sb\\agent.log");
+  const lines = text.split("\r\n");
+  assert.equal(lines[1], "chcp 65001 >nul", "UTF-8 before any path is read");
+  assert.match(text, /run >> "%~dp0agent\.log" 2>&1/, "the log path does not depend on the folder's name");
+});
+
+test("only one agent runs per home: a live holder keeps the lock, a dead one gives it up", async () => {
+  const { spawn } = await import("node:child_process");
+  const dir = mkdtempSync(join(tmpdir(), "sb-agent-lock-"));
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+  try {
+    writeFileSync(join(dir, AGENT_LOCK), String(holder.pid));
+    assert.equal(acquireAgentLock(dir), null, "another live agent holds it");
+  } finally { holder.kill(); }
+  await new Promise((r) => holder.on("exit", r));
+  const file = acquireAgentLock(dir);
+  assert.ok(file, "a lock left by an agent that is gone is taken over");
+  releaseAgentLock(file);
+  assert.equal(existsSync(join(dir, AGENT_LOCK)), false);
+});
+
+test("a lock left from before a restart is taken over even when its process id is in use again", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-agent-lock-old-"));
+  // This test's own parent process stands in for an unrelated process that reused the id.
+  writeFileSync(join(dir, AGENT_LOCK), `${process.ppid} ${Date.now() - 5 * 60_000}`);
+  const file = acquireAgentLock(dir);
+  assert.ok(file, "no agent answered and the lock is minutes old: it is left over");
+  releaseAgentLock(file);
+  // A lock created a moment ago with no id yet is an agent starting now: this start gives way.
+  writeFileSync(join(dir, AGENT_LOCK), "");
+  assert.equal(acquireAgentLock(dir), null);
 });
