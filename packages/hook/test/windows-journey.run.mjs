@@ -1,7 +1,7 @@
-// Runs windows-journey.ps1 (its own entry in the test script: the journey outlasts the per-file limit)
 // Runs windows-journey.ps1 in Windows PowerShell 5.1 and in PowerShell 7 against freshly packed
 // hook and agent tarballs. Only on Windows in CI: the journey turns the agent's autostart on and
 // off for the signed-in user, which must never touch a developer's own computer.
+// It has its own entry in the hook test script: the journey outlasts the per-file time limit.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
