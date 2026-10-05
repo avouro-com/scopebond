@@ -95,9 +95,11 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
   const shared = join(process.env.SystemDrive ?? "C:", "\\", `sb-journey-${randomBytes(4).toString("hex")}`);
   mkdirSync(shared, { recursive: true });
   for (const file of ["windows-journey.ps1", "fake-cloud.mjs"]) copyFileSync(join(here, file), join(shared, file));
-  const hook = join(shared, "hook.tgz"), agent = join(shared, "agent.tgz");
+  const hook = join(shared, "hook.tgz");
   copyFileSync(packed.hook, hook);
-  copyFileSync(packed.agent, agent);
+  // The packed agent names the hook tarball in this account's temp folder, which the standard
+  // user cannot read: point it at the shared copy.
+  const agent = withHookFrom(packed.agent, hook, shared);
   const quiet = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] };
   const run = (cmd, args) => spawnSync(cmd, args, quiet);
   try {
