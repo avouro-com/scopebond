@@ -115,8 +115,8 @@ export function retireAttesterKey(dir: string, kid: string): string {
 /** Wrap a receipt store so every stored receipt is enqueued to a durable outbox and
  *  exported to Cloud. Returns the wrapped store and the exporter (flush + stop). */
 /** The delivery queue could not be opened or written: a full disk, a read-only or locked file. The
- *  hook still fails closed (it cannot keep the record it would deliver); the message names the file
- *  and what fixes it, since `init` does not. The queue is never deleted: it holds waiting records. */
+ *  decision still happens and the record stays in the local log; the runtime reports this error (file and fix,
+ *  since `init` does not) as `deliveryUnavailable`. The queue is never deleted: it holds waiting records. */
 export class DeliveryQueueError extends Error {
   readonly repair: string;
   constructor(file: string, cause: unknown) {
@@ -148,3 +148,26 @@ export async function flushBounded(exporter: CloudExporter, timeoutMs = 3000): P
     new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, timeoutMs)).unref?.()),
   ]);
 }
+
+export interface UninstallReport { workspace: string; told: boolean; authorized: boolean | null }
+
+/** Tell the workspace this computer is removing Scopebond, before anything is removed. Unless an owner or admin disconnected
+ *  the computer or allowed its removal first, the workspace raises a critical alert. Bounded: an unreachable workspace never
+ *  stops the person's uninstall; the line printed says the workspace was not told. */
+export async function reportUninstall(connection: HookConnection, details: { purge: boolean; hookVersion: string }, fetchImpl: typeof fetch = fetch, timeoutMs = 4000): Promise<UninstallReport> {
+  const workspace = connection.url;
+  try {
+    const res = await fetchImpl(`${ingestUrl(connection)}/v1/uninstall`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
+      body: JSON.stringify({ purge: details.purge, hook_version: details.hookVersion }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return { workspace, told: false, authorized: null };
+    const body = await res.json().catch(() => ({})) as { authorized?: unknown };
+    return { workspace, told: true, authorized: typeof body.authorized === "boolean" ? body.authorized : null };
+  } catch {
+    return { workspace, told: false, authorized: null };
+  }
+}
+

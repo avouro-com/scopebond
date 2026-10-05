@@ -12,6 +12,7 @@ import {
   callRequestOf, operationsForCall, parseDestination, redactCommand, useDigestKey, VECTORS, TYPED_ACTION_TYPES, mapCursorEvent, mapCodexToolUse,
 } from "../dist/index.js";
 import { operationProblem } from "./operation-schema.mjs";
+import { ENFORCE } from "./enforce-all.mjs";
 
 const KEY = bindingKeyFromHex("11".repeat(32));
 useDigestKey("22".repeat(32));
@@ -414,7 +415,7 @@ test("every new vector derives its operation and the default policy allows it", 
 // ---- opt-in enforcement -------------------------------------------------------------------------------------------
 
 test("protect_remote_database: off by default; when on, the compiled policy has the clause and remote destructive SQL is classified risky", () => {
-  const off = compile(defaultRules(), "kid");
+  const off = compile({ ...defaultRules(), ...ENFORCE }, "kid");
   assert.equal(off.clauses.some((c) => c.id === "protect-remote-database"), false, "the starter policy is unchanged");
   const on = compile({ ...defaultRules(), protect_remote_database: true }, "kid");
   const clause = on.clauses.find((c) => c.id === "protect-remote-database");
@@ -444,7 +445,7 @@ test("end to end: with the rule on, the hook denies a remote DROP before it runs
   const { scaffold } = await import("../dist/index.js");
   const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), "sb-guard-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: dir, USERPROFILE: dir };
   const run = (args, input) => spawnSync(process.execPath, [cli, ...args], { input, encoding: "utf8", env, cwd: dir, timeout: 60000 });
   const bash = (command) => JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: dir });

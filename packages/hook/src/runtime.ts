@@ -9,7 +9,7 @@ import { createGateway, StaticPrincipalKeyRegistry, type CloudExporter } from "@
 import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
-import { attachExporter, flushBounded, type HookConnection } from "./cloud.js";
+import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
 import { explainDeny, type ExplainIntent } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
 import { applyRootScope } from "./paths.js";
@@ -100,6 +100,25 @@ export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join
  *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
 export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + ".+";
 
+/** Scopebond's own protection, always enforced and never relaxed by a rule set or a workspace: the hook's folder (its keys,
+ *  connection and policy) and the coding agents' hook settings can be neither changed nor read by the coding agent, and an
+ *  agent switching Scopebond off (uninstalling the hook or the agent, `autostart off`, `stop`, killing it) is mapped to a
+ *  write to the hook's folder and so is stopped here. */
+export function selfProtectionClauses(): Array<Record<string, unknown>> {
+  return [
+    {
+      id: "protect-scopebond-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
+      param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
+      description: "Never change Scopebond's own settings, keys and policy, or the coding agents' hook settings, and never switch Scopebond off (always on; it cannot be relaxed).",
+    },
+    {
+      id: "protect-scopebond-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
+      param_bounds: { path: { pattern: GUARDRAIL_READ_PATTERN } },
+      description: "Never read Scopebond's own folder, which holds this computer's key and connection (always on; it cannot be relaxed).",
+    },
+  ];
+}
+
 const PROTECTED_READ = "^" + [
   under("\\.scopebond"),
   `(?!.*${ci("\\.(?:key|pem|p12|pfx|jks|keystore)")}$)`,
@@ -158,31 +177,32 @@ export function upgradeStarterPolicy<T>(policy: T): T {
   return policy;
 }
 
-/** The default starter policy for a coding agent: protect release branches, deny
- *  destructive programs, allow workspace file access except the hook's own config
- *  and keys, and trust only the enrolled machine key. Every threshold is the
- *  operator's to edit. */
-export function starterPolicy(agentKid: string): Record<string, unknown> {
+/** The default starter policy for a coding agent. Monitor is the default: each rule records the actions it would have stopped
+ *  (pushes to release branches, destructive programs, protected writes and reads) and lets them run; a rule blocks only once a
+ *  person or the workspace turns it on. Scopebond's own protection is always enforced. Every threshold is the operator's to edit. */
+export function starterPolicy(agentKid: string, opts: { enforce?: readonly string[] } = {}): Record<string, unknown> {
+  const mode = (id: string): "enforce" | "monitor" => (opts.enforce?.includes(id) ? "enforce" : "monitor");
   return {
     vocabulary_version: "1.0", policy_id: "coding-agent", version: 1,
     clauses: [
+      ...selfProtectionClauses(),
       {
-        id: "protect-branches", type: "action_allowlist", mode: "enforce", action_types: ["git.push"],
+        id: "protect-branches", type: "action_allowlist", mode: mode("protect-branches"), action_types: ["git.push"],
         param_bounds: { ref: { pattern: SAFE_REF } },
         description: "Deny pushes to main, master and release/* (any case, any refspec spelling), pushes of every branch at once (--all, --mirror) and pushes whose destination cannot be read from the command (a git alias, a configured push refspec, send-pack). A tags-only push (--tags) is allowed.",
       },
       {
-        id: "safe-shell", type: "action_allowlist", mode: "enforce", action_types: ["shell.exec"],
+        id: "safe-shell", type: "action_allowlist", mode: mode("safe-shell"), action_types: ["shell.exec"],
         param_bounds: { program: { pattern: SAFE_SHELL } },
         description: "Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.",
       },
       {
-        id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
+        id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],
         param_bounds: { path: { pattern: PROTECTED_WRITE } },
         description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor or Codex hook settings, .mcp.json and .cursor/mcp.json, git hooks (.git/hooks, .githooks) and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines, bitbucket-pipelines.yml, .travis.yml, .drone.yml, cloudbuild, .buildkite, Jenkinsfile). Case-insensitive.",
       },
       {
-        id: "protect-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
+        id: "protect-read", type: "action_allowlist", mode: mode("protect-read"), action_types: ["file.read"],
         param_bounds: { path: { pattern: PROTECTED_READ } },
         description: "Allow workspace reads, but never signing keys and key containers (*.key, *.pem, *.p12, *.pfx, *.jks), environment secret files (.env, .env.*, .envrc — except names ending in .example/.sample/.template/.dist), SSH private keys and the .ssh directory, cloud/registry/git credentials (.aws except .aws/config, .npmrc, .pypirc, .netrc, .git-credentials, .kube/config, .docker/config.json, gcloud, Azure, GnuPG, the GitHub CLI's hosts.yml, Claude Code's .credentials.json) or the hook's own .scopebond directory. Case-insensitive.",
       },
@@ -216,11 +236,19 @@ export function createHookRuntime(config: RuntimeConfig) {
   let store = baseStore;
   let exporter: CloudExporter | undefined;
   let outbox: { close(): void } | undefined;
+  let deliveryUnavailable: string | null = null;
   if (config.cloud) {
-    const attached = attachExporter(config.dbPath + ".cloud-outbox.db", config.cloud.connection, baseStore, config.cloud.fetch);
-    store = attached.store;
-    exporter = attached.exporter;
-    outbox = attached.outbox;
+    try {
+      const attached = attachExporter(config.dbPath + ".cloud-outbox.db", config.cloud.connection, baseStore, config.cloud.fetch);
+      store = attached.store;
+      exporter = attached.exporter;
+      outbox = attached.outbox;
+    } catch (error) {
+      // A full disk or a read-only or locked queue file does not stop the decision: the record stays in the local log, and
+      // the runtime reports the file and the fix as `deliveryUnavailable` until the queue can be written again.
+      if (!(error instanceof DeliveryQueueError)) throw error;
+      deliveryUnavailable = `${error.message}. ${error.repair}`;
+    }
   }
   const scopeRoots = loadRules(dirname(config.policyPath))?.allowed_roots ?? [];
   // The dispatch boundary is checked once per tool call, after every intent has been allowed, so the
@@ -235,6 +263,8 @@ export function createHookRuntime(config: RuntimeConfig) {
     gateway,
     agentKid: agent.kid,
     exporter,
+    /** Why records are kept only in the local log this call (the delivery queue could not be opened), or null. */
+    deliveryUnavailable,
     /** Deliver queued receipts to Cloud with a bounded timeout, then it is safe to
      *  exit. Undelivered receipts persist in the durable outbox for the next run. */
     async flush(): Promise<void> {

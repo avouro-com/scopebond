@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mapClaudeToolUse, createHookRuntime, scaffold, fillPushBranch } from "../dist/index.js";
 import { createOracle, findBash, parseLog } from "./oracle/harness.mjs";
+import { ENFORCE } from "./enforce-all.mjs";
 
 // Denials of commands bash runs harmlessly. Lower it when the mapper improves; never
 // raise it without reviewing the new false positives printed by this test.
@@ -31,7 +32,7 @@ const skip = process.platform === "win32" && process.env.SCOPEBOND_ORACLE !== "1
 
 function starterRuntime() {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-oracle-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   return createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"),
     attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"),

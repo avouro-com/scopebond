@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { budgetDigest, defaultBudgetTemplate, scopeDigest } from "@scopebond/gateway";
 import { DispatchStore } from "@scopebond/gateway/node";
 import { createHookRuntime, mapClaudeToolUse, scaffold } from "../dist/index.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 function home() {
   const dir = join(mkdtempSync(join(tmpdir(), "sb-hook-dispatch-")), ".scopebond");
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   return dir;
 }
 const open = (dir) => createHookRuntime({ policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db") });

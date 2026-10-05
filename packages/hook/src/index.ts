@@ -49,7 +49,7 @@ export {
   ensureDurableRuntime, isEphemeralPath, nodeModulesRootOf, runtimeRoot, runtimeDirFor, pinnedCliPath,
 } from "./runtime-install.js";
 export type { PinResult } from "./runtime-install.js";
-export { connectCloud, ingestUrl, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
+export { connectCloud, ingestUrl, loadConnection, attachExporter, flushBounded, connectionPath, reportUninstall } from "./cloud.js";
 export type { HookConnection } from "./cloud.js";
 export { scrubSecrets, scrubParam, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 export {

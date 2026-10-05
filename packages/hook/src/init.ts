@@ -2,7 +2,7 @@
 // gateway countersigning key and a starter policy. Keys and receipts stay on the
 // machine; no credentials are handled.
 
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
@@ -14,7 +14,7 @@ import {
 import { hookCommand } from "./version.js";
 import { loadOrCreateDigestKey } from "./minimize.js";
 
-export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKid: string; policyPath: string; rulesPath: string } {
+export function scaffold(dir: string, opts: { force?: boolean; enforce?: readonly string[] } = {}): { agentKid: string; policyPath: string; rulesPath: string } {
   mkdirSync(dir, { recursive: true });
   const keyPath = join(dir, "agent.key");
   const attesterPath = join(dir, "attester.key");
@@ -33,12 +33,36 @@ export function scaffold(dir: string, opts: { force?: boolean } = {}): { agentKi
   // the starter policy's exact patterns — `rules.test.mjs` pins that — so writing either
   // form enforces the same thing.
   const rulesFile = rulesPath(dir);
-  if (!existsSync(rulesFile) || opts.force) saveRules(dir, defaultRules());
+  if (!existsSync(rulesFile) || opts.force) saveRules(dir, { ...defaultRules(), enforce: [...(opts.enforce ?? [])] });
   if (!existsSync(policyPath) || opts.force) {
     const rules = loadRules(dir) ?? defaultRules();
     writeFileSync(policyPath, JSON.stringify(compile(rules, agent.kid), null, 2) + "\n");
   }
   return { agentKid: agent.kid, policyPath, rulesPath: rulesFile };
+}
+
+/** The clause ids a policy compiled from the rule set carries (with the optional ones). */
+const GENERATED_IDS = new Set(["protect-scopebond-write", "protect-scopebond-read", "protect-branches", "safe-shell", "protect-write", "protect-read",
+  "observe-net-mcp", "protect-root", "protect-remote-database", "keys"]);
+
+/** One-time move to the monitor default (rules record what they would have stopped; only Scopebond's own protection blocks).
+ *  A rule set written before it has no `enforce` list; it gets an empty one and the policy is recompiled, the previous policy
+ *  kept beside it. A computer whose rules a workspace manages is left alone (the workspace's document decides), and so is a
+ *  policy a person edited by hand (clauses this hook does not generate). Returns whether anything changed. */
+export function migrateToMonitorDefault(dir: string): boolean {
+  const policyPath = join(dir, "policy.json");
+  if (existsSync(join(dir, "managed-rules.json")) || !existsSync(rulesPath(dir)) || !existsSync(policyPath)) return false;
+  const rules = loadRules(dir);
+  if (!rules || Array.isArray(rules.enforce)) return false;
+  try {
+    const policy = JSON.parse(readFileSync(policyPath, "utf8").replace(/^\uFEFF/, "")) as { clauses?: Array<{ id?: unknown }> };
+    if (!Array.isArray(policy.clauses) || policy.clauses.some((c) => !GENERATED_IDS.has(String(c?.id)))) return false;
+  } catch { return false; }
+  const agent = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") });
+  copyFileSync(policyPath, join(dir, "policy.previous.json"));
+  saveRules(dir, { ...rules, enforce: [] });
+  writeFileSync(policyPath, JSON.stringify(compile({ ...rules, enforce: [] }, agent.kid), null, 2) + "\n");
+  return true;
 }
 
 /** Where `init` put the hook, and why — for the lines it prints. */

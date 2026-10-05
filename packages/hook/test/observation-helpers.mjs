@@ -6,12 +6,13 @@ import { createPublicKey, verify } from "node:crypto";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { observationSigningInput } from "@scopebond/policy-schema";
 import { scaffold } from "../dist/index.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 /** A throwaway hook home with keys, a starter policy and a Cloud connection that carries
  *  (or lacks) what observations need. Nothing under the real home or agent settings. */
 export function makeHome(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sb-obs-"));
-  scaffold(dir, {});
+  scaffold(dir, ENFORCE);
   const { attester: agent } = loadOrCreateAttester({ file: join(dir, "agent.key") });
   const connection = {
     url: options.url ?? "http://127.0.0.1:9",

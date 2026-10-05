@@ -8,6 +8,7 @@ import { loadOrCreateAttester, SqliteReceiptStore, SqliteCloudOutbox } from "@sc
 import { scaffold, connectCloud, createHookRuntime } from "../dist/index.js";
 import { mapClaudeToolUse } from "../dist/index.js";
 import { recoverEarlierReceipts } from "../dist/recover.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 const policy = {
   vocabulary_version: "1.0", policy_id: "recover-test", version: 1,
@@ -78,7 +79,7 @@ const io = (lines = []) => ({ log: (l) => lines.push(l), fetch, sleep: async () 
 
 test("a refused key is replaced on reconnect, its queued receipts leave the queue, and recover delivers them", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-recover-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
   const old = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
   await record(dir, ["/repo/a.ts", "/repo/b.ts", "/repo/c.ts"]);
@@ -121,7 +122,7 @@ test("a refused key is replaced on reconnect, its queued receipts leave the queu
 
 test("recover without waiting reports what awaits approval; a key still valid elsewhere is skipped", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-recover-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
   const old = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
   await record(dir, ["/repo/a.ts", "/repo/b.ts"]);
@@ -147,7 +148,7 @@ test("recover without waiting reports what awaits approval; a key still valid el
 
 test("a connection whose key is accepted is not rotated", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-recover-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const before = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
   const cloud = await fakeCloud(dir, "-");
   try {
@@ -162,7 +163,7 @@ test("a connection whose key is accepted is not rotated", async () => {
 
 test("recover resends a batch through temporary failures instead of stopping", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-recover-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
   const old = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
   await record(dir, ["/repo/a.ts", "/repo/b.ts"]);

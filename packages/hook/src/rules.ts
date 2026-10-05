@@ -18,7 +18,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ci, under, named, dir, DESTRUCTIVE } from "./runtime.js";
+import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
 
 /** One protected location. `under`/`named`/`dir` are the readable, editable shapes;
  *  `raw` carries the few patterns with bespoke exceptions (`.env` templates are allowed,
@@ -39,6 +39,10 @@ export interface RuleSet {
   protected_read: PathRule[];
   /** Action types recorded but not blocked. */
   observe: string[];
+  /** The rules that block. Every other rule records what it would have stopped and lets the action run (monitor).
+   *  Ids: `protect-branches`, `safe-shell`, `protect-write`, `protect-read`. Absent or empty: nothing blocks except
+   *  Scopebond's own protection (its settings, keys and hook entries, and an agent switching it off), which always does. */
+  enforce?: string[];
   /** Optional workspace scope. When set, a write whose physical target (symlinks and
    *  junctions followed, rename and link destinations included) is outside these roots,
    *  or cannot be resolved, is denied. `.` means the project directory. Absent = not
@@ -119,28 +123,36 @@ function sentence(items: string[], limit = 12): string {
   return shown.join(", ") + (rest > 0 ? `, and ${rest} more` : "");
 }
 
-/** Compile a rule set into the policy the gateway evaluates. */
+/** The rules a person or a workspace can switch between recording (monitor) and blocking (enforce). */
+export const ENFORCEABLE_RULES = ["protect-branches", "safe-shell", "protect-write", "protect-read"] as const;
+export type EnforceableRule = typeof ENFORCEABLE_RULES[number];
+
+/** Compile a rule set into the policy the gateway evaluates. Monitor is the default: a rule blocks only when it is listed in
+ *  `rules.enforce`. Scopebond's own protection is always enforced, whatever the rule set says. */
 export function compile(rules: RuleSet, agentKid: string): Record<string, unknown> {
+  const enforced = new Set(rules.enforce ?? []);
+  const mode = (id: EnforceableRule): "enforce" | "monitor" => (enforced.has(id) ? "enforce" : "monitor");
   return {
     vocabulary_version: "1.0", policy_id: "coding-agent", version: 1,
     clauses: [
+      ...selfProtectionClauses(),
       {
-        id: "protect-branches", type: "action_allowlist", mode: "enforce", action_types: ["git.push"],
+        id: "protect-branches", type: "action_allowlist", mode: mode("protect-branches"), action_types: ["git.push"],
         param_bounds: { ref: { pattern: branchPattern(rules.protected_branches) } },
         description: `Deny pushes to ${sentence(rules.protected_branches)} (any case, any refspec spelling), pushes of every branch at once (--all, --mirror) and pushes whose destination cannot be read from the command (a git alias, a configured push refspec, send-pack). A tags-only push (--tags) is allowed. Change these in .scopebond/${RULES_FILE}.`,
       },
       {
-        id: "safe-shell", type: "action_allowlist", mode: "enforce", action_types: ["shell.exec"],
+        id: "safe-shell", type: "action_allowlist", mode: mode("safe-shell"), action_types: ["shell.exec"],
         param_bounds: { program: { pattern: programPattern(rules.destructive_programs) } },
         description: `Deny destructive programs (${sentence(rules.destructive_programs, 10)}) in any case and with or without .exe. An empty program — a command that could not be parsed, or whose program is only known at run time ($VAR, $(…), eval of a variable) — is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here. Change this list in .scopebond/${RULES_FILE}.`,
       },
       {
-        id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
+        id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],
         param_bounds: { path: { pattern: pathsPattern(rules.protected_write) } },
         description: `Allow workspace writes, but never to ${sentence(rules.protected_write.map((r) => r.label))}. Case-insensitive. Change this list in .scopebond/${RULES_FILE}.`,
       },
       {
-        id: "protect-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
+        id: "protect-read", type: "action_allowlist", mode: mode("protect-read"), action_types: ["file.read"],
         param_bounds: { path: { pattern: pathsPattern(rules.protected_read) } },
         description: `Allow workspace reads, but never ${sentence(rules.protected_read.map((r) => r.label))}. Case-insensitive. Change this list in .scopebond/${RULES_FILE}.`,
       },
@@ -280,28 +292,32 @@ export function isProtectedBranch(rules: RuleSet, ref: string): boolean {
 
 /** Plain English, for `scopebond-hook rules`. */
 export function describeRules(rules: RuleSet): string {
+  const enforced = new Set(rules.enforce ?? []);
+  const how = (id: EnforceableRule) => (enforced.has(id) ? "blocks" : "records");
   const lines: string[] = [];
-  lines.push("Blocked before it runs:");
+  lines.push("Always blocked (Scopebond's own protection; cannot be relaxed):");
+  lines.push("  changing or reading Scopebond's folder, its keys and connection, or the coding agents' hook settings,");
+  lines.push("  and the coding agent uninstalling, stopping or switching off Scopebond");
   lines.push("");
-  lines.push(`  pushes to          ${rules.protected_branches.join(", ")}`);
-  lines.push(`                     and any push whose destination cannot be read`);
-  lines.push(`  programs           ${rules.destructive_programs.join(", ")}`);
+  lines.push("Rules (records: the action runs and is recorded as one the rule would have stopped; blocks: stopped before it runs):");
   lines.push("");
-  lines.push(`  writes to          ${rules.protected_write.length} protected location(s):`);
+  lines.push(`  [${how("protect-branches")}] protect-branches   pushes to ${rules.protected_branches.join(", ")}, and any push whose destination cannot be read`);
+  lines.push(`  [${how("safe-shell")}] safe-shell         programs ${rules.destructive_programs.join(", ")}`);
+  lines.push(`  [${how("protect-write")}] protect-write      writes to ${rules.protected_write.length} protected location(s):`);
   for (const rule of rules.protected_write) lines.push(`                       ${rule.label}`);
-  lines.push("");
-  lines.push(`  reads of           ${rules.protected_read.length} protected location(s):`);
+  lines.push(`  [${how("protect-read")}] protect-read       reads of ${rules.protected_read.length} protected location(s):`);
   for (const rule of rules.protected_read) lines.push(`                       ${rule.label}`);
   lines.push("");
   if (rules.protect_remote_database) {
-    lines.push(`  remote SQL         that drops a table, deletes or updates every row, or cannot be read`);
+    lines.push(`  [blocks] remote SQL that drops a table, deletes or updates every row, or cannot be read`);
     lines.push("");
   }
   if (rules.allowed_roots?.length) {
-    lines.push(`  writes outside     ${rules.allowed_roots.join(", ")} (physical target; unresolved targets too)`);
+    lines.push(`  [blocks] writes outside ${rules.allowed_roots.join(", ")} (physical target; unresolved targets too)`);
     lines.push("");
   }
-  lines.push("Recorded, not blocked:");
-  lines.push(`  ${rules.observe.join(", ")}`);
+  lines.push(`  [records] ${rules.observe.join(", ")}`);
+  lines.push("");
+  lines.push("Make a rule block: rules enforce <rule>   Back to recording: rules monitor <rule>");
   return lines.join("\n");
 }

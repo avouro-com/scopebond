@@ -12,6 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { scaffold, createHookRuntime, mapClaudeToolUse } from "../dist/index.js";
 import { buildStatusJson, STATUS_SCHEMA } from "../dist/status-json.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 const DAY = 86_400_000;
 
@@ -46,7 +47,7 @@ function workspace() {
 
 function computer(url, { flushTimeoutMs = 5_000 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sb-dic1-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
   const connection = {
     url, credential: "sbm_us_test", credential_id: "cred-1", organization_id: "org-1", environment_id: "env-1",
@@ -71,7 +72,7 @@ function computer(url, { flushTimeoutMs = 5_000 } = {}) {
     try { await rt.flush(); } finally { rt.exporter?.stop(); rt.close(); }
   };
   const status = (now) => buildStatusJson({ version: "test", activeDir: dir, candidateDirs: [dir], hasPolicy: true, agents: { claude: true, cursor: false, codex: false }, now });
-  return { dir, act, deliverOnly, status };
+  return { dir, act, deliverOnly, status, runtime };
 }
 
 test("DIC-1: a refused connection keeps every record and says so; they deliver once it works again", async () => {
@@ -271,7 +272,7 @@ test("SB290: a key revoked mid-queue keeps every record; signing in again delive
   const ws = await strictWorkspace();
   try {
     const dir = mkdtempSync(join(tmpdir(), "sb-sb290-revoke-"));
-    scaffold(dir);
+    scaffold(dir, ENFORCE);
     await actAs(dir, ws.url, "sbm_us_first", 2);
     assert.equal(ws.received.length, 2);
     ws.issue("sbm_us_second"); // revoked in the workspace; the computer does not know yet
@@ -289,7 +290,7 @@ test("SB290: signing in again three times while records wait loses nothing and s
   const ws = await strictWorkspace();
   try {
     const dir = mkdtempSync(join(tmpdir(), "sb-sb290-relogin-"));
-    scaffold(dir);
+    scaffold(dir, ENFORCE);
     ws.issue("sbm_us_none"); // offline from the computer's point of view
     for (const credential of ["sbm_us_a", "sbm_us_b", "sbm_us_c"]) await actAs(dir, ws.url, credential, 2);
     assert.equal(ws.received.length, 0);
@@ -306,7 +307,7 @@ test("SB290: two configurations on one computer each deliver their own records, 
   try {
     const home = mkdtempSync(join(tmpdir(), "sb-sb290-home-"));
     const project = mkdtempSync(join(tmpdir(), "sb-sb290-project-"));
-    scaffold(home); scaffold(project);
+    scaffold(home, ENFORCE); scaffold(project, ENFORCE);
     ws.issue("sbm_us_home");
     await actAs(home, ws.url, "sbm_us_home", 2);
     await actAs(project, ws.url, "sbm_us_project", 2);
@@ -337,7 +338,7 @@ test("SB290: a clock ahead of the workspace keeps the record; it is delivered on
   } finally { ws.close(); }
 });
 
-test("SB290: a queue that cannot be written (a full disk) fails closed naming the file and the fix; delivery resumes when it can write", async () => {
+test("SB290: a queue that cannot be written (a full disk) does not stop the decision; the runtime names the file and the fix; delivery resumes when it can write", async () => {
   const { chmodSync, existsSync } = await import("node:fs");
   const ws = await workspace();
   try {
@@ -347,9 +348,18 @@ test("SB290: a queue that cannot be written (a full disk) fails closed naming th
     assert.ok(existsSync(outbox));
     chmodSync(outbox, 0o444);
     try {
-      // The hook fails closed (the CLI denies): it cannot keep the record it would deliver. The error
-      // names the queue and what fixes it, never "run init", which would not.
-      await assert.rejects(pc.act(1), (error) => error.name === "DeliveryQueueError" && error.message.includes(outbox) && /Free some disk space/.test(error.repair) && /-wal and -shm/.test(error.repair) && /do not delete it/.test(error.repair));
+      // The decision still happens (the record stays in the local log); the runtime says why delivery is off and what
+      // fixes it, never "run init", which would not.
+      const rt = pc.runtime();
+      try {
+        assert.ok(rt.deliveryUnavailable, "the unusable queue is reported");
+        assert.ok(rt.deliveryUnavailable.includes(outbox));
+        assert.match(rt.deliveryUnavailable, /Free some disk space/);
+        assert.match(rt.deliveryUnavailable, /-wal and -shm/);
+        assert.match(rt.deliveryUnavailable, /do not delete it/);
+        const decision = await rt.evaluate(mapClaudeToolUse({ tool_name: "Read", tool_input: { file_path: "/repo/during.ts" }, cwd: "/repo" }));
+        assert.ok(decision, "the call is still decided");
+      } finally { rt.exporter?.stop(); rt.close(); }
     } finally {
       // The repair: the queue and the -wal/-shm files SQLite created beside it with its permissions.
       for (const file of [outbox, outbox + "-wal", outbox + "-shm"]) if (existsSync(file)) chmodSync(file, 0o644);

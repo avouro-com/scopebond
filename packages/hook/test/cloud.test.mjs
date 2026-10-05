@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { scaffold, connectCloud, loadConnection, connectionPath, createHookRuntime, installHarness } from "../dist/index.js";
 import { mapClaudeToolUse } from "../dist/index.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 test("installHarness merges the hook into the agent config, idempotently and preserving existing settings", () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-install-"));
@@ -103,7 +104,7 @@ const policy = {
 
 test("connect persists a scoped credential and auto-exports receipts to Cloud", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-cloud-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
   const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
   const { attester: agent } = loadOrCreateAttester({ file: join(dir, "agent.key") });
@@ -175,7 +176,7 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
 
 test("receipts survive when Cloud is unreachable and export is best-effort", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-cloud-off-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
   // A connection pointing at a closed port: enqueue must not throw and the decision stands.
   const connection = {
@@ -197,7 +198,7 @@ test("connecting this computer puts the hook in the user-level agent settings, n
   const home = mkdtempSync(join(tmpdir(), "sb-hook-home-"));
   const scratch = mkdtempSync(join(tmpdir(), "sb-hook-scratch-"));
   const sbHome = join(home, ".scopebond");
-  scaffold(sbHome);
+  scaffold(sbHome, ENFORCE);
   const { attester } = loadOrCreateAttester({ file: join(sbHome, "attester.key") });
   const { attester: agent } = loadOrCreateAttester({ file: join(sbHome, "agent.key") });
   const cloud = await startFakeCloud(attester, agent);

@@ -2,6 +2,7 @@
 // choices into the policy, a rule set to Monitor is recorded and allowed (never blocks its whole action type), the protection of
 // the hook's own settings cannot be relaxed, and sync installs, confirms, refuses and falls back without ever leaving a computer
 // without rules.
+import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
@@ -29,7 +30,7 @@ function doc(revision, overrides = {}, extra = {}) {
 }
 function home() {
   const dir = mkdtempSync(join(tmpdir(), "scopebond-managed-"));
-  const { agentKid } = scaffold(dir);
+  const { agentKid } = scaffold(dir, ENFORCE);
   return { dir, agentKid };
 }
 async function decide(dir, policy, toolUses) {
@@ -72,7 +73,7 @@ test("a document is checked before anything changes, and every refusal says why"
 test("the workspace defaults enforce exactly what the computer's own rules enforce", async () => {
   const { dir, agentKid } = home();
   try {
-    const local = compile(defaultRules(), agentKid);
+    const local = compile({ ...defaultRules(), ...ENFORCE }, agentKid);
     const managed = compileManaged(defaultRules(), doc(1), agentKid);
     const cases = [bash("git push origin main"), bash("git push --force origin main"), bash("git push origin feature/x"), bash("rm -rf build"),
       read("/repo/.env"), write("/repo/.github/workflows/ci.yml"), write("/repo/.scopebond/policy.json"), write("/repo/src/app.ts"), fetchUrl("https://evil.example.com/x")];
@@ -242,7 +243,7 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
     w = fakeWorkspace([{ status: 401 }]);
     assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "disconnected" });
     assert.equal(isManaged(dir), false);
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8")), compile(defaultRules(), agentKid));
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8")), compile({ ...defaultRules(), ...ENFORCE }, agentKid));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
