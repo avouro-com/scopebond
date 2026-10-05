@@ -204,6 +204,15 @@ export function settleRefusal(status: number, text: string, batch: Array<Pick<Cl
   return null;
 }
 
+/** Retry-After in milliseconds (seconds or an HTTP date), or 0. */
+function retryAfter(res: Response): number {
+  const value = res.headers?.get?.("retry-after")?.trim();
+  if (!value) return 0;
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0;
+}
+
 /** The action ids of records a successful response lists as refused (`rejected[].index`). */
 async function refusedIn(res: Response, batch: CloudOutboxEntry[]): Promise<string[]> {
   try {
@@ -232,10 +241,11 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   let lastSuccessAt: number | null = null;
   let lastError: string | null = null;
 
-  const fail = (error: unknown) => {
+  const fail = (error: unknown, retryAfterMs = 0) => {
     consecutiveFailures += 1;
     const delay = Math.min(maxRetryMs, flushMs * (2 ** Math.min(consecutiveFailures - 1, 10)));
-    nextAttemptAt = now() + delay;
+    // A workspace that asks to wait (429 or 503 with Retry-After) is not asked again sooner; at most an hour.
+    nextAttemptAt = now() + Math.max(delay, Math.min(retryAfterMs, 3_600_000));
     lastError = error instanceof Error ? error.message : String(error);
     opts.onError?.(error);
   };
@@ -271,7 +281,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           const text = (await res.text().catch(() => "")).slice(0, 262_144);
           const settled = settleRefusal(res.status, text, batch);
           if (settled === "isolate") { isolate = true; continue; }
-          if (!settled) throw new Error(refusalMessage(res.status, text.slice(0, 4096)));
+          if (!settled) throw Object.assign(new Error(refusalMessage(res.status, text.slice(0, 4096))), { retryAfterMs: retryAfter(res) });
           refused = settled;
         }
         opts.outbox.acknowledge(batch.map(({ id, payloadHash }) => ({ id, payloadHash })));
@@ -285,7 +295,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
         lastSuccessAt = now();
       }
     } catch (error) {
-      fail(error);
+      fail(error, (error as { retryAfterMs?: number } | null)?.retryAfterMs ?? 0);
     } finally {
       sending = false;
     }

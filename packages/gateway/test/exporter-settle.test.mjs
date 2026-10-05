@@ -87,3 +87,16 @@ test("a 400 that refuses only some records (the rest were not stored) is retried
   assert.equal(gaps.length, 0);
   assert.equal(ex.status().pending, 2);
 });
+
+test("a workspace asking to wait (429 with Retry-After) is not asked again sooner", async () => {
+  let t = 1_000_000;
+  const outbox = createMemoryCloudOutbox({ now: () => t });
+  const ex = createCloudExporter({
+    url: "https://cloud.example", credential: "sbm_x", outbox, flushMs: 1_000, now: () => t, maxRetryMs: 60_000,
+    fetch: async () => new Response(JSON.stringify({ code: "rate_limited" }), { status: 429, headers: { "retry-after": "120" } }),
+  });
+  ex.enqueue(receipt("action:wait-0001"));
+  await ex.flush();
+  ex.stop();
+  assert.equal(ex.status().nextAttemptAt, t + 120_000);
+});
