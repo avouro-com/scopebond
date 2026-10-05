@@ -22,7 +22,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
-import { GUARDRAIL_LOOKAHEADS, GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
+import { GUARDRAIL_LOOKAHEADS, GUARDRAIL_READ_PATTERN, GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet } from "./rules.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
@@ -161,7 +161,10 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
           description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch; ordinary pushes are allowed. Set by your workspace." });
       }
     } else if (clause.id === "safe-shell" && r["destructive-shell"].mode === "monitor") clauses.push(allowAll(clause));
-    else if (clause.id === "protect-read" && r["secret-read"].mode === "monitor") clauses.push(allowAll(clause));
+    else if (clause.id === "protect-read" && r["secret-read"].mode === "monitor") {
+      clauses.push({ ...clause, param_bounds: { path: { pattern: GUARDRAIL_READ_PATTERN } },
+        description: "Allow workspace reads, but never Scopebond's own folder, which holds this computer's key (always on). Other protected files are recorded, not blocked: set by your workspace." });
+    }
     else if (clause.id === "protect-write" && r["ci-config-write"].mode === "monitor") {
       clauses.push({ ...clause, param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
         description: "Allow workspace writes, but never to Scopebond's own settings or the agents' hook settings (always on). Other protected files are recorded, not blocked: set by your workspace." });

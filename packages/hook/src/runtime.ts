@@ -92,6 +92,9 @@ const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
 export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + ".+";
 /** The always-on floor as bare lookaheads, for a pattern that must also refuse these paths (the hook's own folder included). */
 export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("");
+/** The read protection that is always on, whoever manages the rules: the hook's own folder, which holds this computer's
+ *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
+export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + ".+";
 
 const PROTECTED_READ = "^" + [
   under("\\.scopebond"),
