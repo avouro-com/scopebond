@@ -59,6 +59,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "@scopebond/sdk": "workspace:*"
+    "@scopebond/sdk": "workspace:*",
+    "@scopebond/fake-cloud": "workspace:*"
   }
 }

@@ -87,3 +87,36 @@ test("connect enrolls the proxy key and openExporter mirrors PEP receipts to Clo
     cloud.close();
   }
 });
+
+test("against the shared stand-in workspace, a failed delivery keeps the proxy's receipts, across a restart", async () => {
+  const { startFakeCloud } = await import("@scopebond/fake-cloud");
+  const dir = mkdtempSync(join(tmpdir(), "sb-mcp-fake-"));
+  const keyPath = join(dir, "scopebond-agent.key");
+  loadOrCreateAttester({ file: keyPath });
+  const cloud = await startFakeCloud();
+  try {
+    const connection = await connectCloud(keyPath, cloud.url, { ...bundle, enrollment_token: "sbe_fake_mcp" });
+    const exporter = openExporter(keyPath, connection);
+    const proxy = createMcpProxy({
+      policy: starterMcpPolicy("filesystem"),
+      principal: { subject: "client:test", issuer: "scopebond:mcp-proxy" },
+      server: "filesystem",
+      attesterKeyPem: readFileSync(keyPath, "utf8"),
+      upstream: { call: async () => ({ jsonrpc: "2.0", id: 1, result: { ok: true } }) },
+      onReceipt: (r) => exporter.enqueue(r),
+    });
+    cloud.fault("ingest", { status: 500, times: 1 });
+    await proxy.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_file", arguments: { path: "x" } } });
+    await exporter.flush();
+    assert.equal(cloud.state().ingested, 0, "the 500 delivered nothing");
+    assert.deepEqual(cloud.state().faults_applied.map((f) => f.what), ["500"]);
+    // The outbox is durable: a proxy started again delivers what waited.
+    exporter.stop();
+    const again = openExporter(keyPath, connection);
+    await again.flush();
+    assert.ok(cloud.state().ingested >= 1, "delivered once the workspace answers");
+    again.stop();
+  } finally {
+    await cloud.close();
+  }
+});

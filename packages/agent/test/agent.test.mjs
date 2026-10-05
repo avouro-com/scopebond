@@ -374,3 +374,23 @@ test("autostart on starts the agent now with a hidden cmd.exe when the headless 
   ]);
   assert.deepEqual(startCommands("/opt/sb/agent-launch.sh", "linux"), [], "launchd and systemd start it themselves");
 });
+
+test("against the shared stand-in workspace, a self-check the workspace cannot take names the HTTP status, then passes", async () => {
+  const { startFakeCloud } = await import("@scopebond/fake-cloud");
+  const cloud = await startFakeCloud();
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "sb-agent-fake-"));
+    scaffold(dir);
+    const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
+    const enrolled = await (await fetch(cloud.url + "/v1/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_token: "sbe_fake_agent", public_key_pem: attester.publicKeyPem }) })).json();
+    const connection = { url: cloud.url, credential: enrolled.credential, credential_id: enrolled.credential_id, gateway_id: enrolled.gateway_id, expires_at: enrolled.expires_at };
+    cloud.fault("self-check", { status: 500, times: 1 });
+    const failed = await runSelfCheck(dir, connection, ["claude"], "0.3.0");
+    assert.equal(failed.ok, false);
+    assert.deepEqual(failed.failed, ["workspace_http_500"]);
+    const passed = await runSelfCheck(dir, connection, ["claude"], "0.3.0");
+    assert.equal(passed.signature_verified, true);
+    assert.equal(cloud.state().self_checks.length, 1, "the workspace recorded the one it took");
+    assert.equal(cloud.state().self_checks[0].agent_version, "0.3.0");
+  } finally { await cloud.close(); }
+});
