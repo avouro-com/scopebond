@@ -15,7 +15,7 @@ import {
 } from "./receipts.js";
 import type {
   Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
-  AuthorityFinalState, ActionLifecycleRecord, ReceiptContext,
+  AuthorityFinalState, ActionLifecycleRecord, ReceiptContext, OverrideRecord,
 } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleProof } from "./anchor.js";
@@ -109,13 +109,18 @@ export class ExecutorInputError extends Error {
   constructor(message: string) { super(message); this.name = "ExecutorInputError"; }
 }
 
+/** Asked once when policy denies an action (never for the kill switch or the dispatch boundary): return the override record when
+ *  a person allows it, or null to keep the denial. The caller is responsible for who may answer; the gateway only records it. */
+export type OverrideHandler = (ctx: { verdict: Verdict; action_id: string; intent: Intent; intent_hash: string }) => Promise<OverrideRecord | null>;
+export interface ActionOptions { override?: OverrideHandler }
+
 export interface Gateway {
   app: Hono;
   store: ReceiptStore;
   attester: Attester;
   state: { killed: boolean };
   policyHash: string;
-  handleAction(req: ActionRequest): Promise<ActionResult>;
+  handleAction(req: ActionRequest, options?: ActionOptions): Promise<ActionResult>;
   /** M0 cooperative check: evaluate and countersign a decision without ever
    * dispatching. An allowed action is recorded as `cooperative_allow`
    * (executed: false); the caller performs the action itself. Equivalent to a
@@ -199,7 +204,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     );
   }
 
-  async function handleAction(req: ActionRequest, opts?: { checkOnly?: boolean }): Promise<ActionResult> {
+  async function handleAction(req: ActionRequest, opts?: { checkOnly?: boolean } & ActionOptions): Promise<ActionResult> {
     // Check-only (M0): never dispatch; an allowed action is a cooperative allow.
     // The flag defaults to the gateway's configured mode and can be forced per
     // call by `check()`, but is never implicitly turned on.
@@ -308,6 +313,14 @@ export function createGateway(config: GatewayConfig): Gateway {
       d = decide(await store.executed());
     }
 
+    // A person may override a policy denial (warn mode). Asked only for a policy verdict, never while the kill switch is on;
+    // the overridden action still goes through the dispatch boundary below, and a later denial drops the override.
+    let override: OverrideRecord | null = null;
+    if (!d.allow && d.realtime_result === "deny" && opts?.override && !(await isStopped(req.intent.signer))) {
+      override = await opts.override({ verdict: d.verdict, action_id: actionId, intent: req.intent, intent_hash: ih });
+      if (override) d = { ...d, allow: true, realtime_result: "approved", clause_mode: "enforce" };
+    }
+
     // The dispatch boundary. It runs only for an action policy has already allowed, after the kill
     // switch and before any executor, and it answers with everything it spent or nothing at all.
     let guardDenied: string | null = null;
@@ -370,15 +383,17 @@ export function createGateway(config: GatewayConfig): Gateway {
       }
     }
 
+    const finalResult = stoppedBeforeDispatch ? "deny" : d.realtime_result;
     const receipt = await buildReceipt({
-      ...receiptFields(stoppedBeforeDispatch ? "deny" : d.realtime_result, executionState, assertion, ref),
+      ...receiptFields(finalResult, executionState, assertion, ref),
+      ...(override && finalResult === "approved" ? { override } : {}),
     }, attester);
     const finalState = executionState as AuthorityFinalState;
     if (store.finalizeAction && store.reserveAction) await store.finalizeAction(actionId, receipt, finalState);
     else await store.put(receipt);
 
     const reason = guardDenied ? guardDenied : d.allow
-      ? (d.clause_mode === "monitor" ? "allowed (monitored, out of policy — covered at claim time)" : "allowed")
+      ? override ? `allowed by override (${override.method === "agent_dialog" ? "a person allowed it" : "offered at the agent's prompt"})` : (d.clause_mode === "monitor" ? "allowed (monitored, out of policy — covered at claim time)" : "allowed")
       : (d.verdict.explanation || "denied");
     return {
       allowed: d.allow && !stoppedBeforeDispatch,
@@ -721,7 +736,7 @@ export function createGateway(config: GatewayConfig): Gateway {
 
   return {
     app, store, attester, state, get policyHash() { return policyHash; },
-    handleAction, check: (req: ActionRequest) => handleAction(req, { checkOnly: true }),
+    handleAction: (req: ActionRequest, options?: ActionOptions) => handleAction(req, options), check: (req: ActionRequest) => handleAction(req, { checkOnly: true }),
     observeAction, setPolicy, anchor, unresolvedActions, reconcileAction,
   };
 }

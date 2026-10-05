@@ -17,6 +17,11 @@ agent never takes part in a decision. It only keeps everything around the decisi
 - **Self-check.** Once a day it checks this computer's side (hook entry present and able to start, autostart on,
   nothing stuck in the queue, connection not about to lapse) and sends the result, signed with the key the computer
   enrolled with, so the workspace can show that the whole path works end to end, or what broke.
+- **Overrides.** When the workspace sets a rule to *Block, user may override*, the hook asks the agent, and the agent
+  shows its own window (Windows PowerShell with Windows Forms, macOS `osascript`, Linux `zenity`): the rule, the action and a
+  reason field. Only the window answers; whatever calls the local channel can open a window but never decide it. One window
+  at a time; it closes itself before the hook stops waiting. The reason goes to the workspace once, and waits in the
+  Scopebond home while the computer is offline.
 - **Health.** It reports the same machine-readable status as `scopebond status --json` (`scopebond.status.v1`).
 
 ## Use
@@ -41,7 +46,7 @@ On Windows, type `npx.cmd` instead of `npx` in PowerShell if you run it without 
 ## Local control channel
 
 The agent listens on `127.0.0.1` only, on a random port, and every request must carry a random token. Port, token and
-process id are in `~/.scopebond/agent.json`, readable by you only. Routes: `GET /status`, `POST /flush`, `POST /repair`, `POST /maintain`.
+process id are in `~/.scopebond/agent.json`, readable by you only. Routes: `GET /status`, `POST /flush`, `POST /repair`, `POST /maintain`, `POST /override`.
 Exactly one agent serves a computer's Scopebond home; a second one exits.
 
 ## Autostart
@@ -51,6 +56,14 @@ runs (the paths recorded at setup first, then the ones on the system), so a Node
 leaves autostart pointing at nothing. On Windows the Run entry starts it under `conhost --headless`, so no window
 opens at sign-in. `status` says whether autostart is on and working.
 
+## Where you see it
+
+On Windows the agent shows a tray icon (from Windows' own PowerShell, nothing extra to install): a green, amber or red
+dot, what it means as its tooltip, and a menu with the one fix (Repair, Send now or Check again). It warns with a balloon
+when it turns amber or red, and closes when the agent stops. Set `SCOPEBOND_AGENT_TRAY=off` for none. On macOS and Linux
+the agent sends a system notification when things get worse, and once more when they recover. `GET /status` carries the
+same `health` (level, headline, fix).
+
 ## Status
 
-Experimental. A tray icon with a one-click fix for every amber or red state is next.
+Experimental.

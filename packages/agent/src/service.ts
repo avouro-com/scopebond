@@ -11,6 +11,10 @@ import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type C
 import { launcherPath } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
+import { flushReasons, queueReason } from "./override-reasons.js";
+import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
+import { healthOf, type HealthLevel } from "./health.js";
+import { notifyChange, startTray } from "./tray.js";
 import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries } from "./update.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
@@ -26,6 +30,10 @@ export interface ServiceOptions {
   maintenance?: boolean;
   /** Called after a successful update instead of restarting (tests). */
   onUpdated?: (version: string) => void;
+  /** Shows the Scopebond window for an override (tests replace it). */
+  prompter?: Prompter;
+  /** The Windows tray icon (default on Windows; SCOPEBOND_AGENT_TRAY=off turns it off). */
+  tray?: boolean;
 }
 
 export interface Service {
@@ -81,9 +89,21 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let stopped = false;
   let lastSelfCheckAt = 0;
 
+  const prompt = serialized(options.prompter ?? systemPrompter);
+  let shownLevel: HealthLevel | null = null;
+  const health = () => healthOf(computerStatus(options.dir), lastMaintenance?.selfCheck ?? null);
+  const noticeHealth = () => { const h = health(); notifyChange(shownLevel, h); shownLevel = h.level; };
+  const sendReasons = async () => {
+    const connection = loadConnection(options.dir);
+    if (!connection) return;
+    try { const sent = await flushReasons(options.dir, connection, options.fetchImpl); if (sent) log(`sent ${sent} override reason(s) to the workspace`); }
+    catch { /* they wait for the next cycle */ }
+  };
   const cycle = async (): Promise<CycleResult> => {
     if (running) return running;
-    running = runCycle({ dir: options.dir, fetchImpl: options.fetchImpl }).then((result) => {
+    running = runCycle({ dir: options.dir, fetchImpl: options.fetchImpl }).then(async (result) => {
+      await sendReasons();
+      try { noticeHealth(); } catch { /* status is best effort */ }
       last = result;
       failures = result.deliveryError ? failures + 1 : 0;
       if (result.delivered) log(`delivered ${result.delivered} record(s); ${result.pending} waiting`);
@@ -136,7 +156,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   };
 
   const control = await startControl(options.dir, `${AGENT_VERSION} hook/${hookVersion()}`, {
-    "GET /status": () => ({ ...computerStatus(options.dir), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, last_maintenance: lastMaintenance } }),
+    "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, last_maintenance: lastMaintenance } }),
     "POST /flush": async () => ({ cycle: await cycle() }),
     "POST /repair": () => {
       const repaired = repairHookEntries();
@@ -144,9 +164,21 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return { repaired };
     },
     "POST /maintain": async () => ({ maintenance: await maintain(true) }),
+    // Warn mode: the hook asks; only the window answers. The caller learns the answer, never decides it.
+    "POST /override": async (body) => {
+      const question = parseQuestion(body);
+      if (!question) return { decision: "unavailable" };
+      log(`asking whether to allow "${question.title}"`);
+      const answer = await prompt(question);
+      log(`override ${answer.decision === "allow" ? "given" : answer.decision === "deny" ? "not given" : "not available"} for "${question.title}"`);
+      if (answer.decision === "allow" && answer.reason) { queueReason(options.dir, question.action_id, answer.reason); void sendReasons(); }
+      return answer;
+    },
   });
+  const tray = (options.tray ?? true) && process.env.SCOPEBOND_AGENT_TRAY !== "off" ? startTray(options.dir) : null;
   const stop = async () => {
     stopped = true;
+    try { tray?.kill(); } catch { /* already gone */ }
     if (timer) clearTimeout(timer);
     if (maintenanceTimer) clearInterval(maintenanceTimer);
     await running?.catch(() => undefined);

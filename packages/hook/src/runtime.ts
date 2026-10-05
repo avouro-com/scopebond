@@ -17,7 +17,7 @@ import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
 import { recordDeliveryAttempt } from "./delivery-state.js";
 import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
-import { dispatchIntentOf, type DispatchDecision, type DispatchGuard } from "@scopebond/gateway";
+import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -34,10 +34,14 @@ export interface RuntimeConfig {
   /** When connected to a Cloud workspace, receipts are auto-exported to the portal.
    *  Export is best-effort and never changes the local decision. */
   cloud?: { connection: HookConnection; fetch?: typeof fetch; flushTimeoutMs?: number };
+  /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
+   *  (see override.ts). `hint` explains, in a denial, how an override would have been possible. */
+  override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null } | null;
 }
 
 export interface Decision {
-  decision: "allow" | "deny" | "not_evaluated";
+  /** ask: a rule blocked it and the coding agent's own prompt asks the person (warn mode, Claude Code only). */
+  decision: "allow" | "deny" | "not_evaluated" | "ask";
   reason: string;
   /** The clause that decided a deny, when the verdict named one. */
   clauseId?: string | null;
@@ -225,6 +229,7 @@ export function createHookRuntime(config: RuntimeConfig) {
   let boundaryVerdict: DispatchDecision | null = null;
   const gatewayGuard: DispatchGuard = { authorize: async () => boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] } };
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only", dispatchGuard: gatewayGuard });
+  const override = config.override?.(agent.kid) ?? null;
 
   return {
     gateway,
@@ -260,7 +265,11 @@ export function createHookRuntime(config: RuntimeConfig) {
       }
       // Evaluated actions, and (in strict mode) unmapped tool.<name>/opaque commands,
       // go through policy — a closed allowlist denies an unlisted action.
-      const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
+      const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, override ? { override: override.handler } : undefined);
+      const granted = (result.receipt as { payload?: { override?: { state?: string } } } | undefined)?.payload?.override;
+      if (result.allowed && granted?.state === "offered") {
+        return { decision: "ask", reason: "Scopebond: a workspace rule blocks this, and your workspace lets you allow it once. Allow only if you meant it; your answer is recorded.", receipt: result.receipt };
+      }
       if (result.allowed) return { decision: "allow", reason: result.reason, receipt: result.receipt };
       // A deny is the one message the user and their agent actually read, so it is
       // composed from the deciding clause's own words rather than the engine's
@@ -276,7 +285,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           // from `rules.json`, so telling someone to hand-edit it invites a change the
           // next `rules` run would overwrite.
           remedy: rulesRemedy,
-        }),
+        }) + (override?.hint() ? ` ${override.hint()}` : ""),
         clauseId,
         receipt: result.receipt,
       };
@@ -295,6 +304,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       const receipts: unknown[] = [];
       const dispatched: NonNullable<Decision["dispatched"]> = [];
       let allow: Decision | null = null;
+      let ask: Decision | null = null;
       let notEvaluated: Decision | null = null;
       for (const m of list) {
         const d = await this.evaluateOne(m);
@@ -302,10 +312,12 @@ export function createHookRuntime(config: RuntimeConfig) {
         dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params as Record<string, unknown> }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
         if (d.decision === "deny") return { ...d, receipts, dispatched };            // any deny denies the call
         if (d.decision === "allow" && !allow) allow = d;
+        if (d.decision === "ask" && !ask) ask = d;
         if (d.decision === "not_evaluated" && !notEvaluated) notEvaluated = d;
       }
       // No deny: allow if any command was evaluated-and-allowed, else not_evaluated.
-      const chosen = allow ?? notEvaluated!;
+      // A command the person must be asked about makes the whole call an ask (warn mode); otherwise as before.
+      const chosen = ask ?? allow ?? notEvaluated!;
       if (boundary) {
         // Immediately before permitted dispatch: approvals are consumed and the budget slot is reserved
         // atomically, once for the whole parent action, or nothing is spent and the call is denied.

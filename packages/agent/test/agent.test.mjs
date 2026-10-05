@@ -9,11 +9,13 @@ import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA } from "@s
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
+  parseQuestion, windowsScript, serialized, queueReason, pendingReasons,
   compareVersions, commandHookVersion, maintainHookEntries, fetchClientVersion, localChecks, runSelfCheck, selfCheckProof,
 } from "../dist/index.js";
 
 function workspace() {
   const received = [];
+  const reasons = [];
   let ingestStatus = 200;
   const server = http.createServer((req, res) => {
     let raw = "";
@@ -25,13 +27,14 @@ function workspace() {
         res.end(JSON.stringify(ingestStatus === 200 ? { ok: true } : { error: "down", code: "unavailable" }));
         return;
       }
+      if (req.url === "/v1/overrides") { reasons.push(JSON.parse(raw)); res.writeHead(200, { "content-type": "application/json" }); res.end("{\"ok\":true}"); return; }
       if (req.url === "/v1/policy") { res.writeHead(204); res.end(); return; }
       if (req.url === "/v1/policy/ack") { res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); return; }
       res.writeHead(404); res.end("{}");
     });
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({
-    url: `http://127.0.0.1:${server.address().port}`, received, setIngest: (s) => { ingestStatus = s; }, close: () => server.close(),
+    url: `http://127.0.0.1:${server.address().port}`, received, reasons, setIngest: (s) => { ingestStatus = s; }, close: () => server.close(),
   })));
 }
 
@@ -75,7 +78,7 @@ test("the running agent answers on its token-protected local channel, and only o
   const ws = await workspace();
   const dir = await computerWithQueue(ws.url, 1);
   const logs = [];
-  const service = await startService({ dir, intervalMs: 60 * 60_000, log: (l) => logs.push(l), maintenance: false });
+  const service = await startService({ dir, intervalMs: 60 * 60_000, log: (l) => logs.push(l), maintenance: false, tray: false });
   try {
     const endpoint = readEndpoint(dir);
     assert.ok(endpoint && endpoint.port > 0 && endpoint.token.length > 20);
@@ -87,7 +90,7 @@ test("the running agent answers on its token-protected local channel, and only o
     const anonymous = await fetch(`http://127.0.0.1:${endpoint.port}/status`);
     assert.equal(anonymous.status, 401);
     // A second agent for the same computer refuses to start.
-    await assert.rejects(startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false }), /already running/);
+    await assert.rejects(startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false }), /already running/);
     // Flush on request.
     ws.setIngest(200);
     const flushed = await callAgent(dir, "POST", "/flush", {});
@@ -234,4 +237,83 @@ test("the self-check names what is broken locally and sends a signed proof to th
   } finally {
     process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE;
   }
+});
+
+const question = (extra = {}) => ({ action_id: "action-0000000000001", rule: "destructive-shell", title: "Destructive command", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 20_000, ...extra });
+
+test("an override request is checked before any window opens, and its text reaches PowerShell only as data", () => {
+  assert.equal(parseQuestion(question()).rule, "destructive-shell");
+  for (const bad of [null, {}, question({ action_id: "short" }), question({ rule: "Not A Rule" }), question({ reason_min: 3 })]) assert.equal(parseQuestion(bad), null);
+  assert.equal(parseQuestion(question({ timeout_ms: 999_999 })).timeout_ms, 55_000, "never longer than the hook waits");
+  const script = windowsScript(parseQuestion(question({ summary: "x'; Remove-Item -Recurse C:\ ; '$(evil)" })));
+  assert.doesNotMatch(script, /Remove-Item|\$\(evil\)/, "the summary is base64, never code");
+});
+
+test("one window at a time", async () => {
+  const order = [];
+  const prompt = serialized(async (q) => { order.push(`start ${q.action_id}`); await new Promise((r) => setTimeout(r, 30)); order.push(`end ${q.action_id}`); return { decision: "deny" }; });
+  await Promise.all([prompt(question({ action_id: "action-a-000000000001" })), prompt(question({ action_id: "action-b-000000000001" }))]);
+  assert.deepEqual(order, ["start action-a-000000000001", "end action-a-000000000001", "start action-b-000000000001", "end action-b-000000000001"]);
+});
+
+test("the agent answers an override only from its window, and sends the reason to the workspace", async () => {
+  const ws = await workspace();
+  const dir = await computerWithQueue(ws.url, 0);
+  const shown = [];
+  const service = await startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false,
+    prompter: async (q) => { shown.push(q); return q.summary === "rm -rf build" ? { decision: "allow", reason: "Cleaning the build folder", os_user: "dev" } : { decision: "deny" }; } });
+  try {
+    const allowed = await callAgent(dir, "POST", "/override", question(), 10_000);
+    assert.deepEqual(allowed, { decision: "allow", reason: "Cleaning the build folder", os_user: "dev" });
+    const refused = await callAgent(dir, "POST", "/override", question({ summary: "rm -rf /" }), 10_000);
+    assert.deepEqual(refused, { decision: "deny" });
+    assert.deepEqual(await callAgent(dir, "POST", "/override", { rule: "x" }, 10_000), { decision: "unavailable" });
+    assert.equal(shown.length, 2, "a malformed request opens no window");
+    await service.cycleNow();
+    assert.deepEqual(ws.reasons, [{ action_id: "action-0000000000001", reason: "Cleaning the build folder" }]);
+    assert.equal(pendingReasons(dir), 0);
+  } finally { await service.stop(); ws.close(); }
+});
+
+test("a reason given offline waits until the workspace has it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-agent-reasons-"));
+  queueReason(dir, "action-0000000000009", "Rotating the deploy key");
+  assert.equal(pendingReasons(dir), 1);
+});
+
+test("health says green, amber or red in plain words, with the one fix", async () => {
+  const { healthOf } = await import("../dist/health.js");
+  const base = { state: "delivering", delivery: { connected: true, connection_refused_since: null, pending: 0 } };
+  assert.deepEqual(healthOf(base, { ok: true, failed: [] }).level, "green");
+  assert.deepEqual(healthOf({ ...base, state: "not_governing" }, null).fix, { label: "Repair", route: "/repair" });
+  const offline = healthOf({ ...base, state: "recording_locally", delivery: { ...base.delivery, connected: false } }, null);
+  assert.equal(offline.level, "red");
+  assert.match(offline.hint, /login/);
+  const waiting = healthOf({ ...base, state: "recording_locally", delivery: { ...base.delivery, pending: 3 } }, null);
+  assert.deepEqual([waiting.level, waiting.headline, waiting.fix.route], ["amber", "3 records waiting to be sent", "/flush"]);
+  const check = healthOf(base, { ok: false, failed: ["autostart"] });
+  assert.deepEqual([check.level, check.fix.route], ["amber", "/maintain"]);
+  assert.match(check.headline, /autostart/);
+});
+
+test("the tray script carries the home folder only as data, and notifications fire when things get worse or recover", async () => {
+  const { trayScript, notifyChange } = await import("../dist/tray.js");
+  assert.doesNotMatch(trayScript("D:/work/x';Remove-Item C:/ -Recurse;'", 42), /Remove-Item C:/);
+  assert.match(trayScript("C:/sb", 42), /\$agentPid = 42/);
+  const calls = [];
+  const run = (cmd, args) => { calls.push([cmd, args.at(-1)]); return { on() {} }; };
+  const red = { level: "red", headline: "Not connected", fix: null, hint: "Connect it" };
+  const amber = { level: "amber", headline: "3 records waiting", fix: null, hint: null };
+  const green = { level: "green", headline: "Delivering", fix: null, hint: null };
+  if (process.platform === "win32") {
+    assert.equal(notifyChange("green", red, run), false, "Windows uses the tray balloon");
+    return;
+  }
+  assert.equal(notifyChange(null, red, run), false, "nothing on start");
+  assert.equal(notifyChange("green", amber, run), true);
+  assert.equal(notifyChange("amber", red, run), true);
+  assert.equal(notifyChange("red", amber, run), false, "better but not fixed: quiet");
+  assert.equal(notifyChange("amber", green, run), true, "recovered");
+  assert.equal(notifyChange("green", green, run), false);
+  assert.equal(calls.length, 3);
 });

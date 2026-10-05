@@ -13,4 +13,7 @@ export {
 } from "./update.js";
 export type { ClientVersion } from "./update.js";
 export { selfCheckProof, localChecks, runSelfCheck } from "./selfcheck.js";
+export { parseQuestion, questionText, windowsScript, systemPrompter, serialized } from "./prompt.js";
+export type { OverrideQuestion, OverrideAnswer, Prompter } from "./prompt.js";
+export { queueReason, flushReasons, pendingReasons, REASONS_FILE } from "./override-reasons.js";
 export type { SelfCheckItem } from "./selfcheck.js";
