@@ -181,8 +181,15 @@ try {
     Check 'npm.cmd install -g the agent puts scopebond-agent.cmd on PATH' {
       $install = Invoke-Published 'npm.cmd' @('install', '-g', $AgentPackage)
       Assert ($install.Code -eq 0) "npm.cmd install -g exited $($install.Code):`n$($install.Out)"
-      $bin = Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue
-      Assert ($null -ne $bin) "scopebond-agent.cmd is not on PATH after install (npm global folder: $((& npm.cmd prefix -g) 2>$null))"
+      $prefix = ((& npm.cmd prefix -g) 2>$null | Select-Object -First 1).Trim()
+      Assert (Test-Path (Join-Path $prefix 'scopebond-agent.cmd')) "npm installed no scopebond-agent.cmd in its global folder $prefix"
+      if (-not (Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue)) {
+        # Found on real computers too (nvm-windows, a custom prefix): npm's global folder is not on
+        # PATH, so the next published command is "not recognized". Continue as a person who added it.
+        Write-Host "       note: npm's global folder $prefix is not on PATH; scopebond-agent.cmd would be 'not recognized' (W16)"
+        $env:PATH = "$prefix;$env:PATH"
+      }
+      Assert ($null -ne (Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue)) 'scopebond-agent.cmd is not runnable'
     }
     Check 'scopebond-agent.cmd autostart on: Run key, launcher, and the agent running' {
       $on = Invoke-Published 'scopebond-agent.cmd' @('autostart', 'on')

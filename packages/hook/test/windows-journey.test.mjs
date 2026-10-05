@@ -31,13 +31,21 @@ function hasShell(exe) {
   return spawnSync(exe, ["-NoProfile", "-Command", "exit 0"], { encoding: "utf8" }).status === 0;
 }
 
+// Each PowerShell finds its own modules; one started with the other's PSModulePath cannot load
+// Microsoft.PowerShell.Security (Set-ExecutionPolicy).
+function journeyEnv() {
+  const env = { ...process.env, CLAUDECODE: "" };
+  for (const key of Object.keys(env)) if (key.toLowerCase() === "psmodulepath") delete env[key];
+  return env;
+}
+
 let packed = null;
 for (const shell of ["powershell.exe", "pwsh.exe"]) {
   test(`the Windows journey passes in ${shell}`, { skip: !enabled ? "Windows CI only (set SCOPEBOND_WINDOWS_JOURNEY=1 to run it here)" : !hasShell(shell) && `${shell} is not installed`, timeout: 15 * 60_000 }, () => {
     packed ??= pack();
     // -ExecutionPolicy Bypass only lets this file start; the journey then sets Restricted for itself.
     const r = spawnSync(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-HookPackage", packed.hook, "-AgentPackage", packed.agent], {
-      encoding: "utf8", timeout: 14 * 60_000, env: { ...process.env, CLAUDECODE: "" },
+      encoding: "utf8", timeout: 14 * 60_000, env: journeyEnv(),
     });
     process.stdout.write(r.stdout ?? "");
     assert.equal(r.status, 0, `${shell} journey failed:\n${r.stdout}${r.stderr}`);
