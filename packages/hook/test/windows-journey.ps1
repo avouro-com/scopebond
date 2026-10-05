@@ -26,6 +26,8 @@
   The agent as an npm package spec: a packed tarball path, or @scopebond/agent@<version>.
 .PARAMETER SkipAgent
   Run steps 1-3 only (for a computer whose own agent autostart must not be touched).
+.PARAMETER SkipEdgeCases
+  Leave out step 6 (Windows edge cases: an unusual profile path, HOME in OneDrive, an old Node).
 .PARAMETER IsolatedHome
   Use a throwaway user profile folder (USERPROFILE, HOME, APPDATA) instead of the real one.
 #>
@@ -34,6 +36,7 @@ param(
   [Parameter(Mandatory = $true)] [string] $HookPackage,
   [string] $AgentPackage = '',
   [switch] $SkipAgent,
+  [switch] $SkipEdgeCases,
   [switch] $IsolatedHome
 )
 
