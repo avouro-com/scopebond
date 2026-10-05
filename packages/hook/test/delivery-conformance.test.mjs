@@ -141,6 +141,44 @@ test("DIC-1: a record refused on its own never blocks the records behind it", as
   } finally { ws.close(); }
 });
 
+test("DIC-1: a batch the workspace refuses entirely, for good, never blocks the records after it", async () => {
+  const ws = await workspace();
+  try {
+    const pc = computer(ws.url);
+    let first = true;
+    ws.answer((receipts) => {
+      if (!first) return { status: 200, body: { ok: true } };
+      first = false;
+      return { status: 400, body: { error: "invalid", code: "invalid_receipt", rejected: receipts.map((r, index) => ({ index, code: "invalid_receipt", action_id: r.payload.action_ref.action_id })) } };
+    });
+    await pc.act(2);
+    await pc.act(1);
+    const s = pc.status();
+    assert.equal(s.delivery.pending, 0, "nothing is left queued behind the refused batch");
+    assert.equal(s.delivery.gaps_by_reason.rejected, 2);
+    assert.equal(ws.received.length, 1);
+  } finally { ws.close(); }
+});
+
+test("DIC-1: a reused action id is found and refused alone; the records around it deliver", async () => {
+  const ws = await workspace();
+  try {
+    const pc = computer(ws.url);
+    let reused = null;
+    ws.answer((receipts) => {
+      reused ??= receipts[0].payload.action_ref.action_id;
+      return receipts.some((r) => r.payload.action_ref.action_id === reused)
+        ? { status: 409, body: { error: "conflict", code: "id_conflict" } }
+        : { status: 200, body: { ok: true } };
+    });
+    await pc.act(3);
+    const s = pc.status();
+    assert.equal(s.delivery.pending, 0);
+    assert.equal(s.delivery.gaps_by_reason.id_conflict, 1);
+    assert.equal(ws.received.length, 2);
+  } finally { ws.close(); }
+});
+
 test("DIC-1: no agent wired to the hook is reported as not governing", async () => {
   const ws = await workspace();
   try {
