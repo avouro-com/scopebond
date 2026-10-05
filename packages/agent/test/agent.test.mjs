@@ -78,7 +78,7 @@ test("the running agent answers on its token-protected local channel, and only o
   const ws = await workspace();
   const dir = await computerWithQueue(ws.url, 1);
   const logs = [];
-  const service = await startService({ dir, intervalMs: 60 * 60_000, log: (l) => logs.push(l), maintenance: false });
+  const service = await startService({ dir, intervalMs: 60 * 60_000, log: (l) => logs.push(l), maintenance: false, tray: false });
   try {
     const endpoint = readEndpoint(dir);
     assert.ok(endpoint && endpoint.port > 0 && endpoint.token.length > 20);
@@ -90,7 +90,7 @@ test("the running agent answers on its token-protected local channel, and only o
     const anonymous = await fetch(`http://127.0.0.1:${endpoint.port}/status`);
     assert.equal(anonymous.status, 401);
     // A second agent for the same computer refuses to start.
-    await assert.rejects(startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false }), /already running/);
+    await assert.rejects(startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false }), /already running/);
     // Flush on request.
     ws.setIngest(200);
     const flushed = await callAgent(dir, "POST", "/flush", {});
@@ -260,7 +260,7 @@ test("the agent answers an override only from its window, and sends the reason t
   const ws = await workspace();
   const dir = await computerWithQueue(ws.url, 0);
   const shown = [];
-  const service = await startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false,
+  const service = await startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false,
     prompter: async (q) => { shown.push(q); return q.summary === "rm -rf build" ? { decision: "allow", reason: "Cleaning the build folder", os_user: "dev" } : { decision: "deny" }; } });
   try {
     const allowed = await callAgent(dir, "POST", "/override", question(), 10_000);
@@ -279,4 +279,41 @@ test("a reason given offline waits until the workspace has it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-agent-reasons-"));
   queueReason(dir, "action-0000000000009", "Rotating the deploy key");
   assert.equal(pendingReasons(dir), 1);
+});
+
+test("health says green, amber or red in plain words, with the one fix", async () => {
+  const { healthOf } = await import("../dist/health.js");
+  const base = { state: "delivering", delivery: { connected: true, connection_refused_since: null, pending: 0 } };
+  assert.deepEqual(healthOf(base, { ok: true, failed: [] }).level, "green");
+  assert.deepEqual(healthOf({ ...base, state: "not_governing" }, null).fix, { label: "Repair", route: "/repair" });
+  const offline = healthOf({ ...base, state: "recording_locally", delivery: { ...base.delivery, connected: false } }, null);
+  assert.equal(offline.level, "red");
+  assert.match(offline.hint, /login/);
+  const waiting = healthOf({ ...base, state: "recording_locally", delivery: { ...base.delivery, pending: 3 } }, null);
+  assert.deepEqual([waiting.level, waiting.headline, waiting.fix.route], ["amber", "3 records waiting to be sent", "/flush"]);
+  const check = healthOf(base, { ok: false, failed: ["autostart"] });
+  assert.deepEqual([check.level, check.fix.route], ["amber", "/maintain"]);
+  assert.match(check.headline, /autostart/);
+});
+
+test("the tray script carries the home folder only as data, and notifications fire when things get worse or recover", async () => {
+  const { trayScript, notifyChange } = await import("../dist/tray.js");
+  assert.doesNotMatch(trayScript("D:/work/x';Remove-Item C:/ -Recurse;'", 42), /Remove-Item C:/);
+  assert.match(trayScript("C:/sb", 42), /\$agentPid = 42/);
+  const calls = [];
+  const run = (cmd, args) => { calls.push([cmd, args.at(-1)]); return { on() {} }; };
+  const red = { level: "red", headline: "Not connected", fix: null, hint: "Connect it" };
+  const amber = { level: "amber", headline: "3 records waiting", fix: null, hint: null };
+  const green = { level: "green", headline: "Delivering", fix: null, hint: null };
+  if (process.platform === "win32") {
+    assert.equal(notifyChange("green", red, run), false, "Windows uses the tray balloon");
+    return;
+  }
+  assert.equal(notifyChange(null, red, run), false, "nothing on start");
+  assert.equal(notifyChange("green", amber, run), true);
+  assert.equal(notifyChange("amber", red, run), true);
+  assert.equal(notifyChange("red", amber, run), false, "better but not fixed: quiet");
+  assert.equal(notifyChange("amber", green, run), true, "recovered");
+  assert.equal(notifyChange("green", green, run), false);
+  assert.equal(calls.length, 3);
 });

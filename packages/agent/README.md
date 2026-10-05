@@ -56,6 +56,14 @@ runs (the paths recorded at setup first, then the ones on the system), so a Node
 leaves autostart pointing at nothing. On Windows the Run entry starts it under `conhost --headless`, so no window
 opens at sign-in. `status` says whether autostart is on and working.
 
+## Where you see it
+
+On Windows the agent shows a tray icon (from Windows' own PowerShell, nothing extra to install): a green, amber or red
+dot, what it means as its tooltip, and a menu with the one fix (Repair, Send now or Check again). It warns with a balloon
+when it turns amber or red, and closes when the agent stops. Set `SCOPEBOND_AGENT_TRAY=off` for none. On macOS and Linux
+the agent sends a system notification when things get worse, and once more when they recover. `GET /status` carries the
+same `health` (level, headline, fix).
+
 ## Status
 
-Experimental. A tray icon with a one-click fix for every amber or red state is next.
+Experimental.
