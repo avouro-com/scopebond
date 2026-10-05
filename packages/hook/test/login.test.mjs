@@ -88,6 +88,8 @@ test("login: a code, then approval, then the enrollment completes as connect wou
     assert.match(r.stdout, /\/app\/device\?code=BCDF-GHJK/, "shows the page to open");
     assert.match(r.stdout, /Approved/);
     assert.match(r.stdout, /Connected to/);
+    assert.match(r.stdout, /https:\/\/scopebond\.com\/get-started#desktop-agent/, "a connected computer is offered the background delivery agent");
+    assert.doesNotMatch(r.stdout, /Start free with one agent/, "an approved workspace connection does not ask the user to sign up again");
     assert.equal(workspace.seen.enrolled, true);
     assert.equal(workspace.seen.codeRequest.harness, "claude");
     assert.ok(typeof workspace.seen.codeRequest.client_name === "string" && workspace.seen.codeRequest.client_name.length > 0);
