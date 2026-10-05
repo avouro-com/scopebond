@@ -199,7 +199,7 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
  *  key, unavailable store) — the CLI turns that into a fail-closed deny. */
 export function createHookRuntime(config: RuntimeConfig) {
-  const policy = upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8")));
+  const policy = upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8").replace(/^\uFEFF/, "")));
   const agent = createSigner({ privateKeyPem: readFileSync(config.keyPath, "utf8") });
   const keys = new StaticPrincipalKeyRegistry([
     { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },
@@ -240,9 +240,13 @@ export function createHookRuntime(config: RuntimeConfig) {
     async flush(): Promise<void> {
       if (!exporter) return;
       const before = exporter.status().lastSuccessAt;
-      await flushBounded(exporter, config.cloud?.flushTimeoutMs);
+      const timeoutMs = config.cloud?.flushTimeoutMs ?? 3000;
+      await flushBounded(exporter, timeoutMs);
       // The process exits after this call; keep what the attempt saw for `status` and `doctor`.
-      try { recordDeliveryAttempt(dirname(config.dbPath), exporter.status(), Date.now(), before); } catch { /* diagnostic only */ }
+      // An attempt the time limit cut off has an outcome too: the exit abandons the request,
+      // and a workspace slower than the limit used to leave only "last tried" moving, with no
+      // error. A limit of 0 defers delivery on purpose (to a session-end `flush`).
+      try { recordDeliveryAttempt(dirname(config.dbPath), exporter.status(), Date.now(), before, timeoutMs > 0 ? timeoutMs : null); } catch { /* diagnostic only */ }
     },
     /** Release the SQLite handles. The hook is a per-tool-call process, and a writer that
      *  exits without closing leaves its write-ahead log on disk for the next process to

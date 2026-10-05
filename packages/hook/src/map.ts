@@ -573,18 +573,49 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
 }
 
 // The hook's own CLI run by the agent to switch itself off or re-scope itself
-// (`npx @scopebond/hook uninstall`, `scopebond trust`, `scopebond-hook init --force`).
-const SELF_SUBCOMMANDS = new Set(["uninstall", "trust", "init", "install", "connect"]);
+// (`npx @scopebond/hook uninstall`, `scopebond trust`, `scopebond-hook init --force`), or
+// to re-point this computer at another workspace (`login`, `connect`). A person can still
+// run any of these from their own terminal: only the coding agent's commands reach here.
+const SELF_SUBCOMMANDS = new Set(["uninstall", "trust", "init", "install", "connect", "login"]);
 const isHookCli = (w: string): boolean =>
   /^scopebond(?:-hook)?(?:\.js)?$/.test(canonProgram(w)) || /^@scopebond\/hook(?:@[^/\s]*)?$/i.test(w) || /@scopebond[\\/]hook[\\/]dist[\\/]cli\.js$/i.test(w);
+// The Scopebond Agent delivers records, keeps versions current and shows the warn-mode
+// override window; the coding agent must not switch it off. `status`, `flush`, `check`,
+// `repair`, `run` and `autostart on` stay allowed: they only keep it working.
+const isAgentCli = (w: string): boolean =>
+  /^scopebond-agent(?:\.js)?$/.test(canonProgram(w)) || /^@scopebond\/agent(?:@[^/\s]*)?$/i.test(w) || /@scopebond[\\/]agent[\\/]dist[\\/]cli\.js$/i.test(w);
+const isScopebondPackage = (w: string): boolean => /^@scopebond\/(?:hook|agent)(?:@[^/\s]*)?$/i.test(w);
+const mentionsAgent = (w: string): boolean => /scopebond-agent|@scopebond[\\/]agent/i.test(w);
+const KILLERS = new Set(["kill", "pkill", "killall", "taskkill", "tskill", "stop-process", "spps", "wmic"]);
+const UNINSTALL: Record<string, Set<string>> = {
+  npm: new Set(["uninstall", "unlink", "remove", "rm", "r", "un"]),
+  pnpm: new Set(["uninstall", "remove", "rm", "un"]),
+  bun: new Set(["remove", "rm"]),
+};
+const isGlobalFlag = (a: string, next: string | undefined): boolean =>
+  a === "-g" || a === "--global" || /^--location=global$/i.test(a) || (a === "--location" && next === "global");
+/** A global uninstall of the hook or agent package: `npm uninstall -g @scopebond/agent`,
+ *  `pnpm rm -g …`, `bun remove -g …`, `yarn global remove …`. A project-local uninstall
+ *  is left alone: the user-level hook and the agent run from their global installs. */
+function uninstallsScopebond(prog: string, args: string[]): boolean {
+  if (!args.some(isScopebondPackage)) return false;
+  const words = args.filter((a) => !a.startsWith("-"));
+  if (prog === "yarn") return words[0] === "global" && words[1] === "remove";
+  const subs = UNINSTALL[prog];
+  return !!subs && subs.has((words[0] ?? "").toLowerCase()) && args.some((a, i) => isGlobalFlag(a, args[i + 1]));
+}
 function selfDisable(sc: SimpleCommand): boolean {
   const all = [sc.programRaw, ...sc.argv];
   for (let k = 0; k < all.length; k++) {
-    if (!isHookCli(all[k])) continue;
-    const sub = all.slice(k + 1).find((a) => !a.startsWith("-"));
-    if (sub && SELF_SUBCOMMANDS.has(sub.toLowerCase())) return true;
+    const rest = all.slice(k + 1).filter((a) => !a.startsWith("-"));
+    if (isHookCli(all[k]) && rest[0] && SELF_SUBCOMMANDS.has(rest[0].toLowerCase())) return true;
+    if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "autostart" && rest[1]?.toLowerCase() !== "on") return true;
   }
-  return false;
+  const prog = canonProgram(sc.program);
+  // Stopping the running agent by name (`pkill -f scopebond-agent`, a `wmic … terminate`
+  // on its command line). Its pid is in the home's agent.json, which is already unreadable.
+  if (KILLERS.has(prog) && sc.argv.some(mentionsAgent) && (prog !== "wmic" || sc.argv.some((a) => /^(?:delete|terminate)$/i.test(a)))) return true;
+  return uninstallsScopebond(prog, sc.argv);
 }
 
 /** Map one parsed simple command to the intents it implies: the git.push or
