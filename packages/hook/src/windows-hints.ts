@@ -44,7 +44,7 @@ export function executionPolicyAdvice(policy: string, platform: NodeJS.Platform 
   if (!isWin(platform)) return null;
   const p = policy.trim().toLowerCase();
   if (!["restricted", "allsigned", "undefined"].includes(p)) return null;
-  return `PowerShell's script policy is ${policy.trim() || "Restricted"}: it blocks plain npx, npm and scopebond-agent, so type npx.cmd, npm.cmd and scopebond-agent.cmd (no policy change is needed).`;
+  return `Windows PowerShell's script policy is ${policy.trim() || "Restricted"}: there it blocks plain npx, npm and scopebond-agent, so type npx.cmd, npm.cmd and scopebond-agent.cmd (no policy change is needed).`;
 }
 
 /** A PowerShell refusal to run a script shim, explained in one line with the fix. */
@@ -52,4 +52,23 @@ export function explainPowerShellError(text: string): string | null {
   if (!/running scripts is disabled on this system|cannot be loaded because|is not digitally signed|PSSecurityException|UnauthorizedAccess/i.test(text)) return null;
   const shim = /\b(npx|npm|scopebond-agent|scopebond)\.ps1\b/i.exec(text)?.[1]?.toLowerCase() ?? "npx";
   return `PowerShell's script policy blocked ${shim}.ps1. Type ${shim}.cmd instead (same command, no policy change needed).`;
+}
+
+/** Why the workspace could not be reached, in one line, with what to do: a company network that
+ *  inspects secure connections, a proxy Node does not use by default, or the address. */
+export function unreachableHint(error: unknown, env: NodeJS.ProcessEnv = process.env): string {
+  const cause = String((error as { cause?: { code?: unknown } } | null)?.cause?.code ?? "");
+  if (/CERT|SELF_SIGNED|UNABLE_TO_VERIFY|UNABLE_TO_GET_ISSUER/i.test(cause)) {
+    return `(${cause}) A company network may inspect secure connections with its own certificate: set NODE_EXTRA_CA_CERTS to that certificate's file and run the command again.`;
+  }
+  if (env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy) {
+    return `${cause ? `(${cause}) ` : ""}This computer uses a proxy, which Node does not use by default: set NODE_USE_ENV_PROXY=1 (Node 22.21 or later) and run the command again.`;
+  }
+  return `${cause ? `(${cause}) ` : ""}Check the workspace address and this computer's internet connection.`;
+}
+
+/** The command to repeat a sign-in: the one the caller named (setup names itself), or login's own. */
+export function retryCommand(fallback: string, env: NodeJS.ProcessEnv = process.env): string {
+  const named = env.SCOPEBOND_RETRY_COMMAND;
+  return named && /^[ -~]{1,300}$/.test(named) ? named : fallback;
 }

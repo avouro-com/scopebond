@@ -37,7 +37,7 @@ import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
-import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines } from "./windows-hints.js";
+import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand, unreachableHint } from "./windows-hints.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
@@ -1481,7 +1481,7 @@ async function runLogin(args: string[]): Promise<void> {
   }
   let start: { status: number; json: Record<string, unknown> };
   try { start = await post("/v1/device/code", { client_name: hostname(), harness }); }
-  catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}`); process.exit(1); }
+  catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}. ${unreachableHint(error)}`); process.exit(1); }
   const deviceCode = typeof start.json.device_code === "string" ? start.json.device_code : "";
   if (start.status !== 200 || !deviceCode) {
     console.error(`${origin} did not start a login (HTTP ${start.status}). Check the workspace URL, or use ${cliCommand("connect <workspace-url> <enrollment>")}.`);
@@ -1508,12 +1508,12 @@ async function runLogin(args: string[]): Promise<void> {
     const error = polled.json.error;
     if (error === "authorization_pending") continue;
     if (error === "slow_down") { intervalMs += 5_000; continue; }
-    if (error === "access_denied") { console.error(`The request was denied in the workspace. Nothing was connected. To ask again: ${loginAgainCommand(origin, loginFlags(args))}`); process.exit(1); }
+    if (error === "access_denied") { console.error(`The request was denied in the workspace. Nothing was connected. To ask again: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`); process.exit(1); }
     if (error === "expired_token") break;
-    console.error(`login failed (${String(error ?? `HTTP ${polled.status}`)}). For a new code, run: ${loginAgainCommand(origin, loginFlags(args))}`);
+    console.error(`login failed (${String(error ?? `HTTP ${polled.status}`)}). For a new code, run: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`);
     process.exit(1);
   }
-  console.error(`The code expired before it was approved. For a new one, run: ${loginAgainCommand(origin, loginFlags(args))}`);
+  console.error(`The code expired before it was approved. For a new one, run: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`);
   process.exit(1);
 }
 

@@ -4,7 +4,7 @@
 // actually start" check all get direct coverage.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -83,6 +83,29 @@ test("a CLI in the npx cache is copied into the Scopebond home, then reused", ()
     if (prev === undefined) delete process.env.SCOPEBOND_HOME; else process.env.SCOPEBOND_HOME = prev;
     rmSync(cache, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a home folder with a space and non-ASCII letters gets its pinned copy, in that folder", () => {
+  // Node 22's fs.cpSync wrote such a destination to a mis-decoded path on Windows ("JÃ¶rg MÃ¼ller")
+  // and reported success, so the copy was never where the hook looked and every install fell back to npx.
+  const cache = mkdtempSync(join(tmpdir(), "sb-cache-"));
+  const ephemeral = join(cache, "_npx", "c0ffee");
+  mkdirSync(ephemeral, { recursive: true });
+  const cli = fakeTree(ephemeral);
+  const people = mkdtempSync(join(tmpdir(), "sb-people-"));
+  const home = join(people, "Jörg Müller", ".scopebond");
+  const prev = process.env.SCOPEBOND_HOME;
+  process.env.SCOPEBOND_HOME = home;
+  try {
+    const pin = ensureDurableRuntime(cli, "9.9.8");
+    assert.equal(pin.how, "pinned");
+    assert.ok(existsSync(pin.cli), "the pinned CLI is in the person's own home");
+    assert.deepEqual(readdirSync(people), ["Jörg Müller"], "no second, mis-decoded home appears beside it");
+  } finally {
+    if (prev === undefined) delete process.env.SCOPEBOND_HOME; else process.env.SCOPEBOND_HOME = prev;
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(people, { recursive: true, force: true });
   }
 });
 

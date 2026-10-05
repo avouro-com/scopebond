@@ -4,9 +4,10 @@
 // versions to run, and once a day it runs the end-to-end self-check.
 
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hookCommand, hookVersion, loadConnection, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { hookVersion, loadConnection, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { launcherPath } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
@@ -15,7 +16,7 @@ import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
-import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries } from "./update.js";
+import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
@@ -59,7 +60,7 @@ export interface MaintenanceResult {
 export function repairHookEntries(harnesses: Harness[] = expectedHarnesses()): Array<{ harness: Harness; file: string }> {
   const repaired: Array<{ harness: Harness; file: string }> = [];
   for (const harness of missingHookEntries(harnesses)) {
-    const file = writeHarnessConfig(userHarnessFile(harness), harness, hookCommand(harness));
+    const file = writeHarnessConfig(userHarnessFile(harness), harness, maintainedHookCommand(harness));
     repaired.push({ harness, file });
   }
   return repaired;
@@ -78,9 +79,49 @@ export function spawnReplacement(dir: string): void {
   child.unref();
 }
 
+export const AGENT_LOCK = "agent.lock";
+
+/** How long a lock whose agent never answered on its local channel still counts as an agent starting up. */
+export const AGENT_LOCK_STARTING_MS = 60_000;
+
+/** Take the one-agent-per-home lock: created exclusively, or taken over when the agent named in it is
+ *  gone. The caller has already found no agent answering on the local channel, so a lock older than
+ *  AGENT_LOCK_STARTING_MS is left over even when its process id is alive: Windows reuses process ids
+ *  soon after a restart, and a sign-in after a reboot must not find "already running". A newer lock
+ *  is an agent still starting (or one whose id is not written yet): this start gives way.
+ *  Returns the lock file, or null while another agent holds it. */
+export function acquireAgentLock(dir: string, now = Date.now()): string | null {
+  const file = join(dir, AGENT_LOCK);
+  mkdirSync(dir, { recursive: true });
+  const mine = `${process.pid} ${now}`;
+  try { writeFileSync(file, mine, { flag: "wx" }); return file; } catch { /* held, or left behind */ }
+  let text = "";
+  let written = now;
+  try { text = readFileSync(file, "utf8").trim(); written = statSync(file).mtimeMs; } catch { /* removed meanwhile */ }
+  const [pidText, atText] = text.split(/\s+/);
+  const holder = Number(pidText);
+  const at = Number(atText);
+  const since = Number.isFinite(at) && at > 0 ? at : written;
+  const fresh = now - since < AGENT_LOCK_STARTING_MS;
+  if (holder !== process.pid && fresh) {
+    if (!(Number.isInteger(holder) && holder > 0)) return null; // being written by an agent starting this moment
+    try { process.kill(holder, 0); return null; } catch { /* that agent is gone: take the lock over */ }
+  }
+  writeFileSync(file, mine);
+  return file;
+}
+
+export function releaseAgentLock(file: string): void {
+  try { if (readFileSync(file, "utf8").trim().split(/\s+/)[0] === String(process.pid)) rmSync(file, { force: true }); } catch { /* already gone */ }
+}
+
 export async function startService(options: ServiceOptions): Promise<Service> {
   const log = options.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
   if (await callAgent(options.dir, "GET", "/status", undefined, 2_000)) throw new Error("a Scopebond Agent is already running for this computer");
+  // Two agents started within moments of each other (a slow first start, then a second start) both see
+  // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
+  const lock = acquireAgentLock(options.dir);
+  if (!lock) throw new Error("a Scopebond Agent is already running for this computer");
   const interval = options.intervalMs ?? INTERVAL_MS;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
@@ -191,6 +232,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     if (maintenanceTimer) clearInterval(maintenanceTimer);
     await running?.catch(() => undefined);
     await control.close();
+    releaseAgentLock(lock);
   };
   log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on 127.0.0.1:${control.endpoint.port})`);
   await cycle();

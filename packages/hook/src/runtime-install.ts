@@ -17,7 +17,7 @@
 // `doctor` re-checks that the path still resolves. If anything here fails, the
 // caller keeps the `npx` form — slow beats broken.
 
-import { existsSync, mkdirSync, cpSync, rmSync, renameSync, readdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, renameSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { userHome } from "./install.js";
 
@@ -69,6 +69,19 @@ function pinnedCopyIsComplete(version: string): boolean {
   } catch { return false; }
 }
 
+/** Copy a directory tree, following links (npx's tree may hold them). Not fs.cpSync: on Windows,
+ *  Node 22's cpSync writes a destination with non-ASCII letters (a profile folder such as
+ *  "Jörg Müller") to a mis-decoded path and still reports success. */
+function copyTree(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const name of readdirSync(from)) {
+    const src = join(from, name);
+    const dest = join(to, name);
+    if (statSync(src).isDirectory()) copyTree(src, dest);
+    else copyFileSync(src, dest);
+  }
+}
+
 export interface PinResult {
   /** The CLI path to pin, or null to keep the `npx` form. */
   cli: string | null;
@@ -94,7 +107,7 @@ export function ensureDurableRuntime(cliFile: string, version: string): PinResul
     const staging = `${target}.incoming-${process.pid}`;
     rmSync(staging, { recursive: true, force: true });
     mkdirSync(staging, { recursive: true });
-    cpSync(source, join(staging, "node_modules"), { recursive: true, dereference: true });
+    copyTree(source, join(staging, "node_modules"));
     rmSync(target, { recursive: true, force: true });
     mkdirSync(dirname(target), { recursive: true });
     renameSync(staging, target);
