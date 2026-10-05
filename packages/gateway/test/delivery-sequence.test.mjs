@@ -127,8 +127,9 @@ test("each queue has its own id, kept across restarts; the exporter names it bes
   assert.deepEqual(bodies[0].seq, [1]);
 });
 
-test("a queue that cannot be opened for writing leaves no handle behind: it opens normally once writable", async () => {
+test("a queue that could not be opened for writing opens normally once writable, in the next process", async () => {
   const { chmodSync } = await import("node:fs");
+  const { spawnSync } = await import("node:child_process");
   const path = join(mkdtempSync(join(tmpdir(), "sb-seq-ro-")), "outbox.db");
   new SqliteCloudOutbox(path).close();
   chmodSync(path, 0o444);
@@ -136,7 +137,10 @@ test("a queue that cannot be opened for writing leaves no handle behind: it open
     // Writable for root on Linux: only assert the failure where the file really is read-only.
     try { new SqliteCloudOutbox(path).close(); } catch (error) { assert.match(error.message, /readonly|read-only/i); }
   } finally { chmodSync(path, 0o644); }
-  const outbox = new SqliteCloudOutbox(path);
-  assert.deepEqual(outbox.enqueue(receipt("action:seq-ro-0001")), { queued: true, duplicate: false });
-  outbox.close();
+  // The hook runs one process per tool call: the next one opens the queue as usual.
+  const nodeModule = new URL("../dist/node.js", import.meta.url).href;
+  const code = `import { SqliteCloudOutbox } from ${JSON.stringify(nodeModule)}; const o = new SqliteCloudOutbox(${JSON.stringify(path)}); const r = o.enqueue({ payload: { action_ref: { action_id: "action:seq-ro-0001" } }, signature: { alg: "Ed25519", sig: "fixture" } }); o.close(); process.stdout.write(JSON.stringify(r));`;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", code], { encoding: "utf8" });
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(JSON.parse(child.stdout), { queued: true, duplicate: false });
 });
