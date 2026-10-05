@@ -400,6 +400,8 @@ test("setup without a workspace URL says what it needs, in the form this system 
   assert.equal(out.code, 1);
   const runner = process.platform === "win32" ? "npx.cmd" : "npx";
   assert.ok(out.text.includes(`usage: ${runner} -y @scopebond/agent@`) && out.text.includes("setup <workspace-url>"), out.text);
+});
+
 test("autostart on starts the agent now with a hidden cmd.exe when the headless console does not start", async () => {
   const { startCommands } = await import("../dist/index.js");
   const launcher = String.raw`D:\home\agent-launch.cmd`;
