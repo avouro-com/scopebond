@@ -46,3 +46,14 @@ test("an override the agent cannot show names the command that starts it", () =>
   const hint = overrideHint({ outcome: "unavailable", title: "x" });
   assert.ok(hint.includes(agentCommand("autostart on")), hint);
 });
+
+test("doctor run from PowerShell 7 prints no Windows PowerShell module error", { skip: process.platform !== "win32" && "Windows only" }, async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+  // PowerShell 7 hands its module path to everything it starts; Windows PowerShell cannot load
+  // Get-ExecutionPolicy from it.
+  const env = { ...process.env, PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules" };
+  const r = spawnSync(process.execPath, [cli, "doctor"], { env, encoding: "utf8", timeout: 60_000 });
+  assert.doesNotMatch(r.stdout + r.stderr, /Get-ExecutionPolicy|CouldNotAutoloadMatchingModule/);
+});

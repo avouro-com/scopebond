@@ -1321,7 +1321,10 @@ async function runDoctor(): Promise<void> {
   if (process.platform === "win32") {
     // The commands this computer's person types: PowerShell's script policy decides whether plain npx runs.
     let policy = "";
-    try { policy = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true }).trim(); } catch { /* no PowerShell: nothing to say */ }
+    // Windows PowerShell finds its own modules only without PowerShell 7's PSModulePath, which a doctor run from
+    // pwsh would pass on; and its errors are not this computer's problem to print.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath"));
+    try { policy = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
     const advice = policy ? executionPolicyAdvice(policy) : null;
     if (advice) console.log(`  powershell       ${advice}`);
   }
