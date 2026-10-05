@@ -876,7 +876,11 @@ const enrollmentHelp = [
  *  beside it. `--project` asks for a new per-project setup explicitly. */
 function connectDir(args: string[]): string {
   const project = configDir();
-  return args.includes("--project") || existsSync(join(project, "policy.json")) ? project : resolveConfigDir(process.cwd());
+  if (args.includes("--project") || existsSync(join(project, "policy.json"))) return project;
+  const resolved = resolveConfigDir(process.cwd());
+  // On a computer with nothing set up yet, resolveConfigDir falls back to this folder. A login
+  // without --project connects the person, so it goes to the user home the hook reads everywhere.
+  return process.env.SCOPEBOND_HOOK_DIR || existsSync(join(resolved, "policy.json")) ? resolved : userHome();
 }
 
 /** `recover [--no-wait]`: deliver receipts that an earlier, since-revoked key of this computer
