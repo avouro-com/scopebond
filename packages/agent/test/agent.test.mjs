@@ -364,3 +364,13 @@ test("an autostart problem names the fix as the person types it", async () => {
   assert.match(autostartHealth(dir, "win32").detail, /run: scopebond-agent.cmd autostart on/);
   if (process.platform !== "win32") assert.match(autostartHealth(dir, "linux").detail, /run: scopebond-agent autostart on/);
 });
+
+test("autostart on starts the agent now with a hidden cmd.exe when the headless console does not start", async () => {
+  const { startCommands } = await import("../dist/index.js");
+  const launcher = String.raw`D:\home\agent-launch.cmd`;
+  assert.deepEqual(startCommands(launcher, "win32"), [
+    ["conhost.exe", ["--headless", "cmd.exe", "/d", "/c", launcher]],
+    ["cmd.exe", ["/d", "/c", launcher]],
+  ]);
+  assert.deepEqual(startCommands("/opt/sb/agent-launch.sh", "linux"), [], "launchd and systemd start it themselves");
+});

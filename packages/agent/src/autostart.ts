@@ -112,15 +112,23 @@ function writeLauncher(scopebondHome: string, node: string, cli: string, platfor
   return launcher;
 }
 
-/** Start the agent now, the way sign-in will (Windows: the launcher under a headless console, detached from this terminal).
- *  macOS and Linux start it themselves when autostart is turned on (RunAtLoad, enable --now). Returns whether it started one. */
-export function startNow(scopebondHome: string, platform = process.platform): boolean {
-  if (platform !== "win32") return false;
+/** The ways to start the agent now on Windows, in order: the launcher under a headless console (no window,
+ *  as sign-in does), then the launcher through cmd.exe with its window hidden, for a session where the
+ *  headless console host does not start (seen on Windows Server). macOS and Linux start it themselves
+ *  when autostart is turned on (RunAtLoad, enable --now). */
+export function startCommands(launcher: string, platform: NodeJS.Platform = process.platform): Array<[string, string[]]> {
+  if (platform !== "win32") return [];
+  return [["conhost.exe", ["--headless", "cmd.exe", "/d", "/c", launcher]], ["cmd.exe", ["/d", "/c", launcher]]];
+}
+
+/** Start the agent now with the `attempt`-th way (0 first), detached from this terminal. Returns whether it tried one. */
+export function startNow(scopebondHome: string, platform = process.platform, attempt = 0): boolean {
   const launcher = launcherPath(scopebondHome, platform);
-  if (!existsSync(launcher)) return false;
+  const command = startCommands(launcher, platform)[attempt];
+  if (!command || !existsSync(launcher)) return false;
   try {
-    const child = spawn("conhost.exe", ["--headless", "cmd.exe", "/d", "/c", launcher], { detached: true, stdio: "ignore", windowsHide: true });
-    child.on("error", () => { /* it starts at the next sign-in instead */ });
+    const child = spawn(command[0], command[1], { detached: true, stdio: "ignore", windowsHide: true });
+    child.on("error", () => { /* the next way, or the next sign-in */ });
     child.unref();
     return true;
   } catch { return false; }
