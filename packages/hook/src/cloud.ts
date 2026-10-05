@@ -122,7 +122,7 @@ export class DeliveryQueueError extends Error {
   constructor(file: string, cause: unknown) {
     super(`Scopebond could not write its delivery queue (${file}): ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = "DeliveryQueueError";
-    this.repair = "Free some disk space, or make that file writable for your user (it holds records waiting to be sent: do not delete it)";
+    this.repair = "Free some disk space, or make that file and its -wal and -shm files beside it writable for your user (it holds records waiting to be sent: do not delete it)";
   }
 }
 
