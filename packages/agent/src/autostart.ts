@@ -173,7 +173,9 @@ export function autostartHealth(scopebondHome: string, platform = process.platfo
   if (platform === "win32") {
     try { execFileSync("reg", ["query", RUN_KEY, "/v", RUN_VALUE], { stdio: "ignore" }); on = true; } catch { on = false; }
   } else on = existsSync(platform === "darwin" ? paths.macPlist : paths.linuxUnit);
-  if (!on) return { on, ok: false, detail: "the agent does not start with sign-in (run: scopebond-agent autostart on)" };
-  if (!existsSync(launcherPath(scopebondHome, platform))) return { on, ok: false, detail: "the autostart launcher is missing (run: scopebond-agent autostart on)" };
+  // The fix as the person types it: PowerShell blocks the plain scopebond-agent script shim.
+  const fix = `${platform === "win32" ? "scopebond-agent.cmd" : "scopebond-agent"} autostart on`;
+  if (!on) return { on, ok: false, detail: `the agent does not start with sign-in (run: ${fix})` };
+  if (!existsSync(launcherPath(scopebondHome, platform))) return { on, ok: false, detail: `the autostart launcher is missing (run: ${fix})` };
   return { on, ok: true, detail: "starts with sign-in" };
 }

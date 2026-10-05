@@ -172,6 +172,9 @@ test("login: an expired code asks for a new one", async () => {
     const r = await runCli(["login", workspace.url, "--no-install"], { ...process.env, SCOPEBOND_HOOK_DIR: join(project, ".scopebond") }, project);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /expired/);
+    // The one next step is the exact command to run, in the form this system runs.
+    const runner = process.platform === "win32" ? "npx.cmd" : "npx";
+    assert.ok(r.stderr.includes(`${runner} -y @scopebond/hook@`) && r.stderr.includes(`login ${workspace.url} --no-install`), r.stderr);
   } finally { workspace.close(); }
 });
 
