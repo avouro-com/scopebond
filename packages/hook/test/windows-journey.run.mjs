@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,7 +28,26 @@ function pack() {
   }
   const files = readdirSync(dest);
   const find = (name) => join(dest, files.find((f) => f.startsWith(`scopebond-${name}-`) && f.endsWith(".tgz")));
-  return { hook: find("hook"), agent: find("agent") };
+  const hook = find("hook");
+  return { hook, agent: withHookFrom(find("agent"), hook, dest) };
+}
+
+// The agent and the hook are released together; the packed agent names the hook by version, which
+// npm would fetch from the registry (the last release, not this one). Point it at this hook instead.
+function withHookFrom(agentTgz, hookTgz, dest) {
+  const work = mkdtempSync(join(tmpdir(), "sb-journey-agent-"));
+  // Windows' own tar: Git's GNU tar, often first on PATH, reads "C:" as a remote host.
+  const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\Windows", "System32", "tar.exe") : "tar";
+  const untar = spawnSync(tar, ["-xzf", agentTgz, "-C", work], { encoding: "utf8" });
+  assert.equal(untar.status, 0, `tar: ${untar.stderr}`);
+  const manifest = join(work, "package", "package.json");
+  const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+  pkg.dependencies["@scopebond/hook"] = "file:" + hookTgz.replace(/\\/g, "/");
+  writeFileSync(manifest, JSON.stringify(pkg, null, 2));
+  const out = mkdtempSync(join(dest, "agent-"));
+  const repack = spawnSync("npm", ["pack", join(work, "package"), "--pack-destination", out], { encoding: "utf8", shell: true });
+  assert.equal(repack.status, 0, `npm pack agent: ${repack.stdout}${repack.stderr}`);
+  return join(out, readdirSync(out).find((f) => f.endsWith(".tgz")));
 }
 
 function hasShell(exe) {
