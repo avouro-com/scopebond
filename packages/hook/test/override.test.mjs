@@ -2,6 +2,7 @@
 // Agent's window (with a reason, signed into the receipt as a digest), or, where the workspace allows it and Claude Code really
 // asks, Claude Code's own prompt is offered. Scopebond's own protection and other Block rules are never overridable, the
 // daily limit holds, and a repeat inside the allowed time is recorded as a repeat.
+import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
@@ -30,7 +31,7 @@ const write = (file_path) => ({ tool_name: "Write", tool_input: { file_path, con
 
 function setup(rules) {
   const dir = mkdtempSync(join(tmpdir(), "scopebond-override-"));
-  const { agentKid } = scaffold(dir);
+  const { agentKid } = scaffold(dir, ENFORCE);
   const d = doc(2, rules);
   writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify(d));
   writeFileSync(join(dir, "policy.json"), JSON.stringify(compileManaged(defaultRules(), d, agentKid)));

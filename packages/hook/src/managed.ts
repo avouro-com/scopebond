@@ -174,36 +174,30 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
     ...local,
     protected_branches: union(local.protected_branches, [...(r["push-protected"].protected_branches ?? []), ...(r["force-push-protected"].protected_branches ?? [])]),
     destructive_programs: union(local.destructive_programs, r["destructive-shell"].destructive_programs),
+    // The workspace decides which rules block (Block or Override); every other rule records (monitor). Scopebond's own
+    // protection is enforced by compile() whatever the workspace sets.
+    enforce: [
+      ...(r["push-protected"].mode !== "monitor" ? ["protect-branches"] : []),
+      ...(r["destructive-shell"].mode !== "monitor" ? ["safe-shell"] : []),
+      ...(r["ci-config-write"].mode !== "monitor" ? ["protect-write"] : []),
+      ...(r["secret-read"].mode !== "monitor" ? ["protect-read"] : []),
+    ],
   };
   const policy = compile(rules, agentKid) as { clauses: Clause[] } & Record<string, unknown>;
-  const allowAll = (clause: Clause): Clause => { const { param_bounds: _dropped, ...rest } = clause; return { ...rest, mode: "enforce", description: `${String(clause.description ?? "").split(".")[0]}. Recorded, not blocked: set by your workspace.` }; };
   const clauses: Clause[] = [];
+  const historyGuard = (): Clause => ({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
+    description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch; ordinary pushes are recorded. Set by your workspace." });
   for (const clause of policy.clauses) {
-    if (clause.id === "protect-branches" && r["push-protected"].mode === "monitor") {
-      clauses.push(allowAll(clause));
-      if (r["force-push-protected"].mode !== "monitor") {
-        clauses.push({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
-          description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch; ordinary pushes are allowed. Set by your workspace." });
-      }
-    } else if (clause.id === "safe-shell" && r["destructive-shell"].mode === "monitor") clauses.push(allowAll(clause));
-    else if (clause.id === "protect-read" && r["secret-read"].mode === "monitor") {
-      clauses.push({ ...clause, param_bounds: { path: { pattern: GUARDRAIL_READ_PATTERN } },
-        description: "Allow workspace reads, but never Scopebond's own folder, which holds this computer's key (always on). Other protected files are recorded, not blocked: set by your workspace." });
-    }
-    else if (clause.id === "protect-write" && r["ci-config-write"].mode === "monitor") {
-      clauses.push({ ...clause, param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
-        description: "Allow workspace writes, but never to Scopebond's own settings or the agents' hook settings (always on). Other protected files are recorded, not blocked: set by your workspace." });
+    if (clause.id === "protect-branches") {
+      const excluded = r["push-protected"].excluded_branches ?? [];
+      clauses.push(excluded.length ? withBound(clause, "ref", withBranchExclusions(boundPattern(clause, "ref"), excluded)) : clause);
+      // History protection is its own setting: it blocks when the workspace turned it on, whether ordinary pushes block or record,
+      // and skipping ordinary pushes to a branch never skips it.
+      if (r["force-push-protected"].mode !== "monitor" && (r["push-protected"].mode === "monitor" || excluded.length)) clauses.push(historyGuard());
     } else if (clause.id === "protect-read" && r["secret-read"].excluded_paths?.length) {
       clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["secret-read"].excluded_paths))));
     } else if (clause.id === "protect-write" && r["ci-config-write"].excluded_paths?.length) {
       clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["ci-config-write"].excluded_paths))));
-    } else if (clause.id === "protect-branches" && r["push-protected"].excluded_branches?.length) {
-      clauses.push(withBound(clause, "ref", withBranchExclusions(boundPattern(clause, "ref"), r["push-protected"].excluded_branches)));
-      // Skipping ordinary pushes to a branch never skips history protection: force-pushes, deletions and mirror pushes stay stopped.
-      if (r["force-push-protected"].mode !== "monitor") {
-        clauses.push({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
-          description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch. Set by your workspace." });
-      }
     } else clauses.push(clause);
   }
   if (r["network-egress"].mode !== "monitor") {

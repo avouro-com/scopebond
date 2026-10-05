@@ -146,6 +146,9 @@ function Invoke-IsolatedJourney([string] $ProfileDir, [string] $Name, [string] $
     $settings = Join-Path $ProfileDir '.claude\settings.json'
     Assert (Test-Path $settings) "$Name`: no $settings"
     $command = ((Get-Content $settings -Raw -Encoding UTF8 | ConvertFrom-Json).hooks.PreToolUse | Select-Object -First 1).hooks[0].command
+    # Monitor is the default: turn the branch rule on so the push is blocked.
+    $on = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'rules', 'enforce', 'protect-branches', '--yes')
+    Assert ($on.Code -eq 0) "$Name`: rules enforce exited $($on.Code): $($on.Out)"
     $payload = '{"tool_name":"Bash","tool_input":{"command":"git push origin main"},"cwd":"' + ($folder -replace '\\', '\\') + '"}'
     $hook = Invoke-HookEvent $command $payload
     Assert ($hook.Code -eq 2) "$Name`: expected a block (exit 2), got $($hook.Code): $($hook.Out)`nconfigured command: $command`nlogin said:`n$($login.Out)"
@@ -237,7 +240,12 @@ try {
     Assert ($script:hookCommand -match 'claude\s*$') "unexpected hook command: $($script:hookCommand)"
   }
 
-  # 3. One action, as Claude Code would send it; one record delivered.
+  # 3. One action, as Claude Code would send it; one record delivered. Monitor is the default, so the
+  # branch rule is turned on first.
+  Check 'rules enforce turns the branch rule on' {
+    $on = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'rules', 'enforce', 'protect-branches', '--yes')
+    Assert ($on.Code -eq 0) "rules enforce exited $($on.Code): $($on.Out)"
+  }
   Check 'a push to main is denied by the configured hook command, and one record reaches the workspace' {
     $payload = '{"tool_name":"Bash","tool_input":{"command":"git push origin main"},"cwd":"' + ($project -replace '\\', '\\') + '"}'
     # Claude Code starts the configured command and writes the event to its stdin; do the same

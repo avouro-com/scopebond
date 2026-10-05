@@ -12,8 +12,11 @@ You can use the hook locally without a Cloud account, or optionally connect it
 for shared activity, rule review, and retained evidence. For hosted setup, start
 with the [workspace getting-started guide](https://scopebond.com/get-started).
 
-- **What it does:** blocks supported actions when a configured rule requires it,
-  and records evaluated decisions and supported observations.
+- **What it does:** records every supported action and what each rule would decide. A rule
+  blocks only once you (or your workspace) turn it on; Scopebond's own protection is always on,
+  so a coding agent can never switch Scopebond off, change its settings or uninstall it.
+- **Default:** monitor. Every rule starts by recording, not blocking. Turn one on with
+  `rules enforce <rule>`.
 - **Where it works:** actions the coding agent routes through its tool system
   (shell, file, MCP, web). A process started outside the harness is not covered.
 
@@ -98,7 +101,9 @@ a short readable list, and `policy.json` is compiled from it — so a limit is a
 list, not a 700-character lookahead:
 
 ```
-npx -y @scopebond/hook@latest rules                      # what is blocked, in plain English
+npx -y @scopebond/hook@latest rules                      # what blocks and what records, in plain English
+npx -y @scopebond/hook@latest rules enforce safe-shell   # make a rule block (protect-branches, safe-shell, protect-write, protect-read)
+npx -y @scopebond/hook@latest rules monitor safe-shell   # back to recording only
 npx -y @scopebond/hook@latest rules allow dd             # stop blocking a program
 npx -y @scopebond/hook@latest rules protect infra/       # never write there
 npx -y @scopebond/hook@latest rules protect-branch production
@@ -107,7 +112,13 @@ npx -y @scopebond/hook@latest rules apply                # recompile after editi
 
 The compiled patterns are identical to the ones this package has always shipped — there
 is a test that pins them against the starter policy — so the readable front end cannot
-change what is enforced. Each clause description is generated from the list too, so it
+change what a rule matches. Whether a matching action is blocked or only recorded is the
+`enforce` list in `rules.json`: empty by default, so every rule records until you turn it on.
+Scopebond's own protection (its settings, keys and the agents' hook settings) is not a rule
+in that list: it always blocks. A project set up by an earlier version, whose rules were never
+edited, moves to recording on the first run after the update and keeps the old policy as
+`policy.previous.json`; a project with its own edits keeps blocking what it blocked.
+Each clause description is generated from the list too, so it
 stays true after an edit, and a block message quotes it.
 
 ### The hook command `init` installs
@@ -540,7 +551,15 @@ autostart off`, stopping it by name (`pkill -f scopebond-agent`, `taskkill`, `wm
 terminate`), or a global uninstall of `@scopebond/agent` or `@scopebond/hook` (`npm
 uninstall -g`, `pnpm rm -g`, `yarn global remove`, `bun remove -g`). `scopebond-agent
 status`, `flush`, `check`, `repair` and `autostart on` stay allowed. A person can still
-run any of these from their own terminal, which the hook never sees.
+run any of these from their own terminal, which the hook never sees. These denials, and the
+denial of any edit to Scopebond's own folder, hold whatever the rules say: they are not rules
+that can be set to record. A command that names Scopebond but cannot be read (an alias, a
+script, a variable) is treated as an attempt to change its settings and denied.
+
+**Removing Scopebond.** `uninstall` tells each workspace this computer is connected to before
+anything is removed. Unless an owner or admin disconnected the computer or allowed its removal
+in the workspace first, the workspace raises a critical alert. A workspace that cannot be
+reached never stops the uninstall; the command says it could not tell it.
 
 **Limits.** The hook sees the command text, not what a program does at run time. It
 does not follow a variable whose value it cannot see (`cat $FILE`), a path assembled

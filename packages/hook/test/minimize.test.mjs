@@ -1,3 +1,4 @@
+import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
@@ -161,7 +162,7 @@ test("command and argument digests are keyed: not a plain hash, stable per key, 
 
 test("scaffold creates a per-machine digest key and reuses it", () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-digest-key-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const key = readFileSync(join(dir, "digest.key"), "utf8").trim();
   assert.match(key, /^[0-9a-f]{64}$/);
   assert.equal(loadOrCreateDigestKey(dir), key, "an existing key is reused, not replaced");
@@ -222,7 +223,7 @@ test("scrubbing stays fast on a long adversarial command", () => {
 // End to end: what is signed, stored on disk and queued for the Cloud export.
 test("no secret reaches the signed receipt, the local store or the Cloud export", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-min-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify({
     vocabulary_version: "1.0", policy_id: "min", version: 1,
     clauses: [{ id: "all", type: "action_allowlist", mode: "enforce", action_types: ["shell.exec", "git.push", "net.fetch"] }],

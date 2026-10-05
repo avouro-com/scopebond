@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scaffold, hookCommandResolves, configuredHookCommands, isMachineSpecificCommand, gitShareState, excludeFromGit } from "../dist/index.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const policy = {
@@ -18,7 +19,7 @@ const policy = {
 
 function enrolledDir() {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-cli-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
   return dir;
 }
@@ -90,7 +91,7 @@ test("codex: a protected branch push is denied and an allowed action stays silen
 
 test("codex: apply_patch cannot rewrite Codex's own hook configuration", () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-codex-protect-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const r = run(dir, ["codex"], JSON.stringify({
     hook_event_name: "PreToolUse", tool_name: "apply_patch",
     tool_input: { command: "*** Begin Patch\n*** Update File: .codex/hooks.json\n@@\n-old\n+new\n*** End Patch" },
@@ -305,12 +306,16 @@ test("init --codex configures .codex/hooks.json and prints the trust step", () =
   assert.match(stdout, /run `\/hooks`/i);
 });
 
-test("first-run smoke: init, a blocked command, then the receipt shows in log and verifies", () => {
+test("first-run smoke: init records by default, a rule turned on blocks, and the receipts show in log and verify", () => {
   const project = mkdtempSync(join(tmpdir(), "sb-hook-e2e-"));
   const dir = join(project, ".scopebond");
   const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
   execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
-  // A destructive command is blocked (exit 2) and recorded.
+  // Monitor is the default: a destructive command runs (exit 0) and is recorded.
+  const recorded = run(dir, ["claude"], JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/x" }, cwd: project }));
+  assert.equal(recorded.status, 0, `recorded, not blocked: ${recorded.stdout}`);
+  // Once the person turns the rule on, the same command is blocked (exit 2) and recorded.
+  execFileSync(process.execPath, [cli, "rules", "enforce", "safe-shell", "--yes"], { encoding: "utf8", cwd: project, env });
   const blocked = run(dir, ["claude"], JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" }, cwd: project }));
   assert.equal(blocked.status, 2, "the destructive command is denied");
   // log shows it; verify passes offline.
@@ -327,6 +332,7 @@ test("test subcommand shows the decision without recording a receipt", () => {
   const dir = join(project, ".scopebond");
   const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
   execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
+  execFileSync(process.execPath, [cli, "rules", "enforce", "safe-shell", "--yes"], { encoding: "utf8", cwd: project, env });
   const denied = run(dir, ["test", "echo hi && rm -rf x"]);
   assert.equal(denied.status, 2, "a command containing rm is denied");
   assert.match(denied.stdout, /overall: deny/);
@@ -340,7 +346,7 @@ test("test subcommand shows the decision without recording a receipt", () => {
 test("starter policy: a fetch and an MCP call are observed (allowed), a bare git push on a feature branch is allowed", async () => {
   const project = mkdtempSync(join(tmpdir(), "sb-hook-starter-"));
   const dir = join(project, ".scopebond");
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const { createHookRuntime } = await import("../dist/index.js");
   const { mapClaudeToolUse, fillPushBranch } = await import("../dist/index.js");
   const rt = createHookRuntime({ policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db") });
@@ -393,3 +399,21 @@ test("verify does not print Node's experimental SQLite warning", () => {
   assert.equal(result.status, 0);
   assert.doesNotMatch(result.stderr, /ExperimentalWarning/);
 });
+
+test("monitor is the default; Scopebond's own protection blocks whatever the rules say", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-monitor-"));
+  const dir = join(project, ".scopebond");
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
+  execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
+  const call = (command) => run(dir, ["claude"], JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: project }));
+  assert.equal(call("git push origin main").status, 0, "a push to main is recorded, not blocked");
+  assert.equal(call("rm -rf build").status, 0, "a destructive program is recorded, not blocked");
+  // Self-protection: the coding agent can never switch Scopebond off or change its settings.
+  for (const command of ["npx -y @scopebond/hook@latest uninstall --yes", "npm uninstall -g @scopebond/agent", "scopebond-agent stop",
+    "scopebond-agent autostart off", "npx -y @scopebond/hook rules monitor safe-shell", "echo x > .scopebond/policy.json"]) {
+    const r = call(command);
+    assert.equal(r.status, 2, `${command} is always blocked: ${r.stdout}`);
+  }
+  assert.equal(call("npx -y @scopebond/hook rules show").status, 0, "showing the rules is allowed");
+});
+

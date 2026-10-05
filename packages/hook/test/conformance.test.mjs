@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mapClaudeToolUse, mapCursorEvent, createHookRuntime, scaffold } from "../dist/index.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 // A representative coding-agent policy exercising each connector path.
 const conformancePolicy = {
@@ -18,7 +19,7 @@ const conformancePolicy = {
 
 function freshRuntime(extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(conformancePolicy));
   return createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"),
@@ -77,7 +78,7 @@ test("conformance: the same policy applies to Cursor events", async () => {
 
 test("fail-closed: a runtime with an unparseable policy cannot be built", () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), "{ not valid json");
   assert.throws(() => createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"),

@@ -576,7 +576,9 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
 // (`npx @scopebond/hook uninstall`, `scopebond trust`, `scopebond-hook init --force`), or
 // to re-point this computer at another workspace (`login`, `connect`). A person can still
 // run any of these from their own terminal: only the coding agent's commands reach here.
-const SELF_SUBCOMMANDS = new Set(["uninstall", "trust", "init", "install", "connect", "login"]);
+const SELF_SUBCOMMANDS = new Set(["uninstall", "trust", "init", "install", "connect", "login", "policy", "prune"]);
+// `rules` shows the limits (allowed); with a change (`rules monitor safe-shell`, `rules allow rm`) it relaxes them.
+const RULES_READ_ONLY = new Set(["show"]);
 const isHookCli = (w: string): boolean =>
   /^scopebond(?:-hook)?(?:\.js)?$/.test(canonProgram(w)) || /^@scopebond\/hook(?:@[^/\s]*)?$/i.test(w) || /@scopebond[\\/]hook[\\/]dist[\\/]cli\.js$/i.test(w);
 // The Scopebond Agent delivers records, keeps versions current and shows the warn-mode
@@ -609,7 +611,9 @@ function selfDisable(sc: SimpleCommand): boolean {
   for (let k = 0; k < all.length; k++) {
     const rest = all.slice(k + 1).filter((a) => !a.startsWith("-"));
     if (isHookCli(all[k]) && rest[0] && SELF_SUBCOMMANDS.has(rest[0].toLowerCase())) return true;
+    if (isHookCli(all[k]) && rest[0]?.toLowerCase() === "rules" && rest[1] && !RULES_READ_ONLY.has(rest[1].toLowerCase())) return true;
     if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "autostart" && rest[1]?.toLowerCase() !== "on") return true;
+    if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "stop") return true;
   }
   const prog = canonProgram(sc.program);
   // Stopping the running agent by name (`pkill -f scopebond-agent`, a `wmic … terminate`
@@ -624,10 +628,14 @@ function selfDisable(sc: SimpleCommand): boolean {
  *  empty program, evaluated, which the starter policy denies. */
 function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string): Mapped[] {
   if (sc.opaque) {
-    return [{
+    const opaque: Mapped[] = [{
       intent: { action_type: "shell.exec", params: { command: redactCommand(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
       evaluated: true, source: "shell",
     }];
+    // A command that cannot be read but names Scopebond (`eval "$X @scopebond/hook uninstall"`) is treated as switching it off:
+    // self-protection never depends on a readable command.
+    if (/scopebond/i.test(sc.raw)) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+    return opaque;
   }
   const push = parseGitPush(sc);
   if (push) {

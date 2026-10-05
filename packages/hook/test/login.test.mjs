@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { scaffold, isTrustedProject, resolveConfigDir, trustProjectPolicy, writeHarnessConfig } from "../dist/index.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
@@ -75,7 +76,7 @@ test("login: a code, then approval, then the enrollment completes as connect wou
   const project = mkdtempSync(join(tmpdir(), "sb-hook-login-"));
   const dir = join(project, ".scopebond");
   // The workspace binds the credential to the enrolling keys, so learn them first.
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const kids = {
     attester: loadOrCreateAttester({ file: join(dir, "attester.key") }).attester.kid,
     agent: loadOrCreateAttester({ file: join(dir, "agent.key") }).attester.kid,
@@ -104,10 +105,10 @@ test("login --project: with a user-level install, the connected project governs,
   // was fixed, `login` and `connect` scaffolded the project without trusting it: the hook
   // then resolved to the user home, which holds no cloud.json, and nothing was reported.
   const home = mkdtempSync(join(tmpdir(), "sb-hook-login-home-"));
-  scaffold(home);
+  scaffold(home, ENFORCE);
   const project = mkdtempSync(join(tmpdir(), "sb-hook-login-trust-"));
   const dir = join(project, ".scopebond");
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const kids = {
     attester: loadOrCreateAttester({ file: join(dir, "attester.key") }).attester.kid,
     agent: loadOrCreateAttester({ file: join(dir, "agent.key") }).attester.kid,
@@ -134,7 +135,7 @@ test("login: from a folder with no project setup, it repairs the user-level conn
   // A computer set up once for the user: reconnecting from whatever folder the terminal
   // happens to be in must fix the connection the hook actually uses.
   const home = mkdtempSync(join(tmpdir(), "sb-hook-login-home-"));
-  scaffold(home);
+  scaffold(home, ENFORCE);
   const folder = mkdtempSync(join(tmpdir(), "sb-hook-login-bare-"));
   const kids = {
     attester: loadOrCreateAttester({ file: join(home, "attester.key") }).attester.kid,
@@ -167,7 +168,7 @@ function leftoverProjectComputer() {
   };
   const folder = mkdtempSync(join(tmpdir(), "sb-hook-login-leftover-"));
   const project = join(folder, ".scopebond");
-  scaffold(project);
+  scaffold(project, ENFORCE);
   const projectSettings = join(folder, ".claude", "settings.json");
   writeHarnessConfig(projectSettings, "claude", "npx -y @scopebond/hook@0.16.0 claude");
   const env = { ...process.env, SCOPEBOND_HOME: home, HOME: profile, USERPROFILE: profile };

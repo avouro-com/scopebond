@@ -35,7 +35,7 @@ import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
-import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
+import { scaffold, harnessSnippet, placeHook, migrateToMonitorDefault, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
 import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand, unreachableHint } from "./windows-hints.js";
@@ -53,14 +53,14 @@ import {
 import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
 import { loadOrCreateBindingKey } from "./observation.js";
 import { uploadPending } from "./obs-upload.js";
-import { connectCloud, ingestUrl, loadConnection, connectionPath } from "./cloud.js";
+import { connectCloud, ingestUrl, loadConnection, connectionPath, reportUninstall } from "./cloud.js";
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { isManaged, readMeta, MANAGED_DOC_FILE } from "./managed.js";
 import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
-import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
+import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, ENFORCEABLE_RULES } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { runDispatchCommand } from "./dispatch-cli.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
@@ -225,6 +225,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
     const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
+    // Rules written before monitor became the default move to it once (never fails the call).
+    try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), override: (agentKid) => {
       const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, waitMs: OVERRIDE_WAIT_MS[harness] });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
@@ -315,6 +317,8 @@ async function runCursor(): Promise<void> {
     const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
     // An edit Cursor reports after saving it cannot be overridden: it already happened.
     const overridable = !mapped.some((m) => m.postHoc);
+    // Rules written before monitor became the default move to it once (never fails the call).
+    try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), override: (agentKid) => {
       const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, waitMs: OVERRIDE_WAIT_MS.cursor }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
@@ -617,6 +621,20 @@ function runRules(args: string[]): void {
       delete rules.protect_remote_database;
       changed = "remote SQL is no longer checked";
       break;
+    case "enforce":
+    case "monitor": {
+      // Monitor is the default: a rule records what it would have stopped. "enforce" makes it block.
+      const id = String(value ?? "");
+      if (!(ENFORCEABLE_RULES as readonly string[]).includes(id)) {
+        console.error(`rules ${verb} <rule>: one of ${ENFORCEABLE_RULES.join(", ")}`);
+        process.exit(1);
+      }
+      const set = new Set(rules.enforce ?? []);
+      if (verb === "enforce") set.add(id); else set.delete(id);
+      rules.enforce = ENFORCEABLE_RULES.filter((r) => set.has(r));
+      changed = verb === "enforce" ? `${id} now blocks` : `${id} now records, without blocking`;
+      break;
+    }
     case "apply":
       changed = `recompiled from ${rulesPath(dir)}`;
       break;
@@ -1522,8 +1540,19 @@ async function runDoctor(): Promise<void> {
   process.exitCode = problems.length ? 1 : 0;
 }
 
-function runUninstall(args: string[]): void {
+async function runUninstall(args: string[]): Promise<void> {
   requireInteractive("uninstall", args);
+  // Every workspace this computer is connected to hears about the removal first (the user home's connection and a project's).
+  const seen = new Set<string>();
+  for (const dir of [userHome(), resolveConfigDir(process.cwd())]) {
+    const connection = loadConnection(dir);
+    if (!connection || seen.has(connection.credential)) continue;
+    seen.add(connection.credential);
+    const report = await reportUninstall(connection, { purge: args.includes("--purge"), hookVersion: hookVersion() });
+    if (!report.told) console.log(`! could not tell ${report.workspace} that Scopebond is being removed (it will see this computer go quiet)`);
+    else if (report.authorized) console.log(`✓ told ${report.workspace}; the removal was allowed there`);
+    else console.log(`! told ${report.workspace}; the removal was not allowed there, so its owners and admins get a critical alert`);
+  }
   let removed = 0;
   // Both scopes. Checking only the user config meant that after a per-project `init` —
   // the install the site actually tells people to run — `uninstall` reported "no
@@ -1653,7 +1682,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "--dry-run prints exactly which files it would touch and changes nothing. Each config",
       "is copied to <file>.scopebond-backup before its first modification.",
     ] },
-  { name: "rules", args: "[show|allow|block|protect|unprotect|protect-branch|unprotect-branch|protect-remote-database|unprotect-remote-database|apply] [value]",
+  { name: "rules", args: "[show|enforce|monitor|allow|block|protect|unprotect|protect-branch|unprotect-branch|protect-remote-database|unprotect-remote-database|apply] [value]",
     summary: "read and change the limits in plain terms",
     detail: [
       "With no arguments, prints what is blocked in plain English — no regular expressions.",
@@ -1778,7 +1807,7 @@ function printHelp(topic: string | undefined, toStderr = false): void {
   out(`  ${cliCommand("init")}            set up this project`);
   out(`  ${cliCommand('test "rm -rf /"')}  see a decision without running it`);
   out(`  ${cliCommand("log --deny")}      what got blocked`);
-  out(`  ${cliCommand("rules")}           what is blocked, in plain English`);
+  out(`  ${cliCommand("rules")}           what blocks and what records, in plain English`);
   out("");
   out("Commands:");
   const width = Math.max(...COMMANDS.map((c) => c.name.length));
@@ -1832,7 +1861,7 @@ else if (cmd === "budget" || cmd === "delegation") {
   const kid = (() => { try { return createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid; } catch { return ""; } })();
   process.exit(runDispatchCommand(cmd, rest, dir, kid));
 }
-else if (cmd === "uninstall") { runUninstall(rest); }
+else if (cmd === "uninstall") { await runUninstall(rest); }
 else if (cmd === "login") { await runLogin(rest); }
 else if (cmd === "trust") { runTrust(rest); }
 else if (cmd === "prune") { await runPrune(rest); }

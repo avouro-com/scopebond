@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scaffold, mapCursorEvent } from "../dist/index.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const policy = {
@@ -30,7 +31,7 @@ const policy = {
 
 function enrolled() {
   const dir = mkdtempSync(join(tmpdir(), "sb-cursor-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const active = JSON.parse(JSON.stringify(policy));
   // Keep the scaffolded key clause so only the enrolled machine key may sign.
   const scaffolded = JSON.parse(execFileSync(process.execPath, ["-e", `process.stdout.write(require('fs').readFileSync(${JSON.stringify(join(dir, "policy.json"))},'utf8'))`], { encoding: "utf8" }));

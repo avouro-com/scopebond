@@ -7,7 +7,7 @@ export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy, upgradeStarterPolicy } from "./runtime.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export {
-  compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE,
+  compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES,
 } from "./rules.js";
 export type { RuleSet, PathRule } from "./rules.js";
 export { pathRuleMatches, isDestructiveProgram, isProtectedBranch } from "./rules.js";
@@ -49,7 +49,7 @@ export {
   ensureDurableRuntime, isEphemeralPath, nodeModulesRootOf, runtimeRoot, runtimeDirFor, pinnedCliPath,
 } from "./runtime-install.js";
 export type { PinResult } from "./runtime-install.js";
-export { connectCloud, ingestUrl, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
+export { connectCloud, ingestUrl, loadConnection, attachExporter, flushBounded, connectionPath, reportUninstall } from "./cloud.js";
 export type { HookConnection } from "./cloud.js";
 export { scrubSecrets, scrubParam, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 export {

@@ -8,6 +8,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { starterPolicy } from "../dist/index.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 const boundsOf = (policy) => Object.fromEntries(
   (policy.clauses ?? [])
@@ -16,16 +17,16 @@ const boundsOf = (policy) => Object.fromEntries(
 );
 
 test("the default rule set compiles to the shipped starter policy's exact patterns", () => {
-  const compiled = compile(defaultRules(), "key:abc");
-  const shipped = starterPolicy("key:abc");
+  const compiled = compile({ ...defaultRules(), ...ENFORCE }, "key:abc");
+  const shipped = starterPolicy("key:abc", ENFORCE);
   // Enforcement is the patterns. If this ever differs, the rules front end has changed
   // what the hook blocks — which is the one thing it must not do.
   assert.deepEqual(boundsOf(compiled), boundsOf(shipped), "compiled patterns must equal the starter policy's");
 });
 
 test("the compiled policy keeps the same clauses, ids, modes and action types", () => {
-  const compiled = compile(defaultRules(), "key:abc");
-  const shipped = starterPolicy("key:abc");
+  const compiled = compile({ ...defaultRules(), ...ENFORCE }, "key:abc");
+  const shipped = starterPolicy("key:abc", ENFORCE);
   const shape = (p) => (p.clauses ?? []).map((c) => ({ id: c.id, type: c.type, mode: c.mode ?? null, action_types: c.action_types ?? null }));
   assert.deepEqual(shape(compiled), shape(shipped));
   assert.equal(compiled.policy_id, shipped.policy_id);
@@ -38,9 +39,11 @@ test("the compiled policy keeps the same clauses, ids, modes and action types", 
 });
 
 test("every clause description says where to change the rule", () => {
-  const compiled = compile(defaultRules(), "key:abc");
+  const compiled = compile({ ...defaultRules(), ...ENFORCE }, "key:abc");
   for (const clause of compiled.clauses) {
     if (clause.type === "key_policy") continue;
+    // Scopebond's own protection cannot be changed, so it says so instead of naming the file.
+    if (String(clause.id).startsWith("protect-scopebond-")) { assert.match(clause.description, /cannot be relaxed/); continue; }
     assert.match(clause.description, /rules\.json/, `${clause.id} points at the editable file`);
   }
 });
@@ -75,7 +78,7 @@ test("adding a protected branch denies it, in any case", () => {
 });
 
 test("a release/* prefix rule matches the prefix, not just the bare name", () => {
-  const pattern = compile(defaultRules(), "k").clauses.find((c) => c.id === "protect-branches").param_bounds.ref.pattern;
+  const pattern = compile({ ...defaultRules(), ...ENFORCE }, "k").clauses.find((c) => c.id === "protect-branches").param_bounds.ref.pattern;
   const re = new RegExp(pattern);
   assert.equal(re.test("release/1.2"), false);
   assert.equal(re.test("releases/1.2"), true, "only the release/ prefix is protected");
@@ -140,11 +143,11 @@ test("pathRuleFor stays linear on adversarial input", () => {
 
 test("describeRules names every protected location in plain words", () => {
   const text = describeRules(defaultRules());
-  assert.match(text, /Blocked before it runs:/);
-  assert.match(text, /pushes to\s+main, master, release\/\*/);
+  assert.match(text, /Always blocked \(Scopebond's own protection; cannot be relaxed\)/);
+  assert.match(text, /\[records\] protect-branches\s+pushes to main, master, release\/\*/, "monitor is the default");
   assert.match(text, /environment secret files/);
-  assert.match(text, /Recorded, not blocked:/);
-  assert.match(text, /net\.fetch, mcp\.tool\.call/);
+  assert.match(text, /\[records\] net\.fetch, mcp\.tool\.call/);
+  assert.match(describeRules({ ...defaultRules(), enforce: ["safe-shell"] }), /\[blocks\] safe-shell/, "a rule turned on says it blocks");
   // The point of the command: no regex in the human output.
   assert.doesNotMatch(text, /\(\?!/, "no lookaheads in the plain-English view");
   assert.doesNotMatch(text, /\[rR\]/, "no case-folded character classes either");
@@ -156,3 +159,15 @@ test("rules.json saved with a byte-order mark keeps the person's rules (not the 
   writeFileSync(rulesPath(dir), "\uFEFF" + JSON.stringify(rules));
   assert.deepEqual(loadRules(dir)?.protected_branches, ["release-only"]);
 });
+
+test("monitor is the default: every rule records unless enforced; Scopebond's own protection always enforces", () => {
+  const compiled = compile(defaultRules(), "key:abc");
+  const modes = Object.fromEntries(compiled.clauses.map((c) => [c.id, c.mode]));
+  for (const id of ["protect-branches", "safe-shell", "protect-write", "protect-read", "observe-net-mcp"]) assert.equal(modes[id], "monitor", id);
+  assert.equal(modes["protect-scopebond-write"], "enforce");
+  assert.equal(modes["protect-scopebond-read"], "enforce");
+  const some = compile({ ...defaultRules(), enforce: ["protect-branches"] }, "key:abc");
+  assert.equal(some.clauses.find((c) => c.id === "protect-branches").mode, "enforce");
+  assert.equal(some.clauses.find((c) => c.id === "safe-shell").mode, "monitor");
+});
+

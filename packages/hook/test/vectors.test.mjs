@@ -4,6 +4,7 @@
 // the mapper is pure, so both run on every host. Vectors that need a real filesystem
 // (workspace root scope) run only on a host with the matching path style.
 
+import { ENFORCE } from "./enforce-all.mjs";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync, readFileSync } from "node:fs";
@@ -20,7 +21,7 @@ const temp = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); temp
 
 function runtimeFor(rules) {
   const dir = temp("sb-vec-");
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const policyPath = join(dir, "policy.json");
   if (rules) {
     const kid = JSON.parse(readFileSync(policyPath, "utf8")).clauses.find((c) => c.type === "key_policy").active_keys[0];
@@ -79,7 +80,7 @@ for (const v of scoped) {
     mkdirSync(join(cwd, "sub"));
     const rules = { ...defaultRules(), allowed_roots: ["."] };
     const dir = temp("sb-vec-roots-");
-    scaffold(dir);
+    scaffold(dir, ENFORCE);
     const policyPath = join(dir, "policy.json");
     const kid = JSON.parse(readFileSync(policyPath, "utf8")).clauses.find((c) => c.type === "key_policy").active_keys[0];
     saveRules(dir, rules);
@@ -126,14 +127,14 @@ test("root scope stamps every write, including rename destinations and link targ
 });
 
 test("without allowed_roots the compiled policy has no root clause (default unchanged)", () => {
-  assert.equal(compile(defaultRules(), "k").clauses.some((c) => c.id === "protect-root"), false);
+  assert.equal(compile({ ...defaultRules(), ...ENFORCE }, "k").clauses.some((c) => c.id === "protect-root"), false);
   const withRoots = compile({ ...defaultRules(), allowed_roots: ["."] }, "k");
   assert.ok(withRoots.clauses.some((c) => c.id === "protect-root"));
 });
 
 test("a write is denied when the hook never stamped its root scope (fail closed)", async () => {
   const dir = temp("sb-vec-closed-");
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const policyPath = join(dir, "policy.json");
   const kid = JSON.parse(readFileSync(policyPath, "utf8")).clauses.find((c) => c.type === "key_policy").active_keys[0];
   // A policy that demands a root scope, but no rules.json listing roots: nothing stamps it.

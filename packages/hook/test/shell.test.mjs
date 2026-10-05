@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mapClaudeToolUse, createHookRuntime, scaffold, fillPushBranch } from "../dist/index.js";
 import { decomposeShell, parseGitPush } from "../dist/shell.js";
+import { ENFORCE } from "./enforce-all.mjs";
 
 // A runtime carrying the real starter policy (protect branches, deny destructive
 // programs, protect the hook's own config and keys).
 function starterRuntime(extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-shell-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   return createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"),
     // In memory: these tests check decisions, not storage, and hundreds of on-disk receipt writes made this file take
@@ -606,7 +607,7 @@ test("PowerShell-tool commands: backslash paths and backtick escapes cannot hide
 
 test("a policy written by an earlier starter version is upgraded in memory", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-legacy-"));
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   const { readFileSync, writeFileSync } = await import("node:fs");
   const policy = JSON.parse(readFileSync(join(dir, "policy.json"), "utf8"));
   const legacy = {

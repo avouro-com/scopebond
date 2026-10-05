@@ -24,6 +24,7 @@ import { createCloudExporter, createMemoryCloudOutbox, verifyReceipt, type Signe
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { fillPushBranch } from "./map.js";
 import { scaffold } from "./init.js";
+import { ENFORCEABLE_RULES } from "./rules.js";
 import { createHookRuntime } from "./runtime.js";
 import { ACTION_GROUP_PARAM } from "./group.js";
 import { computeManifest, specForCell, vectorDigest, vectorsForCell, type Adapter, type CapabilityCell, type ProofRecord } from "./capabilities.js";
@@ -90,7 +91,8 @@ async function proveCell(adapter: Adapter, actionType: string, phase: "pre_actio
         if (existsSync(source)) copyFileSync(source, join(dir, name));
       }
     }
-    scaffold(dir);
+    // The proof shows what the adapter can block, so every rule blocks here (monitor is the default elsewhere).
+    scaffold(dir, { enforce: ENFORCEABLE_RULES });
     const attesterPath = join(dir, "attester.key");
     const { attester } = loadOrCreateAttester({ file: attesterPath });
     runtime = createHookRuntime({ policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath, dbPath: join(dir, "receipts.db") });

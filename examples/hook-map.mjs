@@ -3,7 +3,7 @@
 // mapper (`mapClaudeToolUse`) is the connector's deterministic core; here each
 // mapped intent is checked through a gateway in check-only mode, exactly as the
 // `scopebond-hook` runtime does. Run: `pnpm -r build && node examples/hook-map.mjs`
-import { mapClaudeToolUse, starterPolicy } from "@scopebond/hook";
+import { ENFORCEABLE_RULES, mapClaudeToolUse, starterPolicy } from "@scopebond/hook";
 import { createGateway, StaticPrincipalKeyRegistry } from "@scopebond/gateway";
 import { createSigner } from "@scopebond/sdk";
 
@@ -11,9 +11,9 @@ const agent = createSigner();
 const keys = new StaticPrincipalKeyRegistry([
   { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },
 ]);
-// The default coding-agent policy: protect main/master/release, deny destructive
-// programs (rm, sudo, …), allow workspace file access.
-const gateway = createGateway({ policy: starterPolicy(agent.kid), authentication: { keys }, mode: "check_only" });
+// The coding-agent policy with every rule turned on (the default only records): protect
+// main/master/release, deny destructive programs (rm, sudo, …), allow workspace file access.
+const gateway = createGateway({ policy: starterPolicy(agent.kid, { enforce: ENFORCEABLE_RULES }), authentication: { keys }, mode: "check_only" });
 
 async function hook(label, payload) {
   // A shell tool call can carry several commands (`a && b`, `bash -c '…'`), so the

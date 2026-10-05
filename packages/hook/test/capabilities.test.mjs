@@ -14,6 +14,7 @@ import {
 } from "../dist/index.js";
 import { verifyReceipt } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
+import { ENFORCE } from "./enforce-all.mjs";
 
 const temps = [];
 after(() => { for (const dir of temps) { try { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); } catch { /* handle still open on Windows */ } } });
@@ -189,7 +190,7 @@ test("the capabilities command prints an honest manifest and exits zero", () => 
 // Canonical action groups -------------------------------------------------------------
 
 function runtimeIn(dir) {
-  scaffold(dir);
+  scaffold(dir, ENFORCE);
   return createHookRuntime({ policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db") });
 }
 const params = (receipt) => receipt.payload.intent.params;

@@ -21,6 +21,10 @@ function project(name) {
   execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], {
     cwd: dir, encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: config },
   });
+  // Monitor is the default; these tests need a blocked action, so the shell rule blocks.
+  execFileSync(process.execPath, [cli, "rules", "enforce", "safe-shell", "--yes"], {
+    cwd: dir, encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: config },
+  });
   return { dir, config };
 }
 
