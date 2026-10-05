@@ -136,3 +136,52 @@ test("Retry-After as an HTTP date is measured against the exporter's clock, at m
     assert.equal(ex.status().nextAttemptAt, t + wait);
   }
 });
+
+test("a record refused only because this computer's clock is ahead stays queued and is sent again", async () => {
+  let ahead = true;
+  const { ex, gaps, delivered, requests } = setup((ids) => {
+    const refused = ahead ? ids.filter((id) => id === "action:ahead-0001") : [];
+    if (refused.length === ids.length) return json(400, { code: "invalid_receipt", rejected: ids.map((id, index) => ({ index, action_id: id, code: "future_timestamp" })) });
+    return json(200, { ok: true, rejected: ids.flatMap((id, index) => (refused.includes(id) ? [{ index, action_id: id, code: "future_timestamp" }] : [])) });
+  });
+  ex.enqueue(receipt("action:ahead-0001"));
+  ex.enqueue(receipt("action:ahead-0002"));
+  await ex.flush();
+  assert.equal(gaps.length, 0, "not settled as lost");
+  assert.equal(ex.status().pending, 1, "the newer record went through; the one ahead waits");
+  assert.equal(requests.length, 2, "one batch, then the record ahead alone, refused, and the flush waits");
+  void ahead;
+  ex.stop();
+  assert.ok(delivered.includes("action:ahead-0002"));
+});
+
+test("a non-conforming 200 that refuses every record for a clock ahead does not loop: it waits and retries", async () => {
+  const { ex, requests } = setup((ids) => json(200, { ok: true, rejected: ids.map((id, index) => ({ index, action_id: id, code: "future_timestamp" })) }));
+  ex.enqueue(receipt("action:loop-0001"));
+  await ex.flush();
+  ex.stop();
+  assert.equal(requests.length, 1);
+  assert.equal(ex.status().pending, 1);
+  assert.match(ex.status().lastError, /timestamp ahead/);
+});
+
+test("a record kept for a clock ahead longer than a day is settled as a gap", async () => {
+  let t = 10 * 86_400_000;
+  const outbox = createMemoryCloudOutbox({ now: () => t });
+  const gaps = [];
+  const ex = createCloudExporter({
+    url: "https://cloud.example", credential: "sbm_x", outbox, flushMs: 1_000, now: () => t, onGap: (g) => gaps.push(g),
+    fetch: async (_u, init) => {
+      const ids = JSON.parse(init.body).receipts.map((r) => r.payload.action_ref.action_id);
+      return json(400, { code: "invalid_receipt", rejected: ids.map((id, index) => ({ index, action_id: id, code: "future_timestamp" })) });
+    },
+  });
+  ex.enqueue(receipt("action:old-ahead-0001"));
+  await ex.flush();
+  assert.equal(ex.status().pending, 1, "kept while under a day");
+  t += 86_400_000 + 1;
+  await ex.flush();
+  ex.stop();
+  assert.equal(ex.status().pending, 0);
+  assert.deepEqual(gaps.map((g) => [g.id, g.reason]), [["action:old-ahead-0001", "rejected"]]);
+});
