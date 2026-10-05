@@ -477,3 +477,14 @@ test("a lock left from before a restart is taken over even when its process id i
   writeFileSync(join(dir, AGENT_LOCK), "");
   assert.equal(acquireAgentLock(dir), null);
 });
+
+test("W20: after a read-only queue, the agent restarts itself on Linux and macOS, at most every ten minutes, never on Windows", async () => {
+  const { shouldRestartForQueue, READONLY_RESTART_AFTER_S } = await import("../dist/service.js");
+  const err = "Scopebond could not write its delivery queue (/srv/sb/receipts.db.cloud-outbox.db): attempt to write a readonly database";
+  assert.equal(shouldRestartForQueue(err, "linux", READONLY_RESTART_AFTER_S), true);
+  assert.equal(shouldRestartForQueue("attempt to write a readonly database", "darwin", READONLY_RESTART_AFTER_S + 1), true);
+  assert.equal(shouldRestartForQueue(err, "linux", 30), false, "a fresh agent waits before trying again");
+  assert.equal(shouldRestartForQueue(err, "win32", 3_600), false, "Windows reopens it in the same process");
+  assert.equal(shouldRestartForQueue("ingest failed: HTTP 503", "linux", 3_600), false);
+  assert.equal(shouldRestartForQueue(null, "linux", 3_600), false);
+});

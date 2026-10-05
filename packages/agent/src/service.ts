@@ -35,6 +35,8 @@ export interface ServiceOptions {
   prompter?: Prompter;
   /** The Windows tray icon (default on Windows; SCOPEBOND_AGENT_TRAY=off turns it off). */
   tray?: boolean;
+  /** Called instead of restarting for a read-only queue (tests). */
+  onRestart?: () => void;
   /** Called once the agent has stopped because `stop` (or `autostart off`) asked it to; the CLI exits. */
   onStopped?: () => void;
 }
@@ -80,6 +82,18 @@ export function spawnReplacement(dir: string): void {
 }
 
 export const AGENT_LOCK = "agent.lock";
+
+/** How long an agent runs before it may restart itself for a read-only queue: a fresh agent that
+ *  still finds the queue read-only (the disk is still full) waits this long before trying again. */
+export const READONLY_RESTART_AFTER_S = 600;
+
+/** W20: on Linux and macOS, a process that once failed to open the delivery queue (a full disk, a
+ *  read-only file) keeps seeing it read-only after it is writable again, while a new process opens it
+ *  normally. The agent is one long-running process, so it starts a fresh copy of itself, at most once
+ *  every READONLY_RESTART_AFTER_S. Windows reopens the file normally in the same process. */
+export function shouldRestartForQueue(deliveryError: string | null, platform: NodeJS.Platform, uptimeS: number): boolean {
+  return platform !== "win32" && !!deliveryError && /read-?only database/i.test(deliveryError) && uptimeS >= READONLY_RESTART_AFTER_S;
+}
 
 /** How long a lock whose agent never answered on its local channel still counts as an agent starting up. */
 export const AGENT_LOCK_STARTING_MS = 60_000;
@@ -151,6 +165,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       failures = result.deliveryError ? failures + 1 : 0;
       if (result.delivered) log(`delivered ${result.delivered} record(s); ${result.pending} waiting`);
       if (result.deliveryError) log(`delivery problem: ${result.deliveryError}`);
+      if (!stopped && shouldRestartForQueue(result.deliveryError, process.platform, process.uptime())) {
+        log("the delivery queue still reads as read-only in this process; starting a fresh agent to open it again");
+        if (options.onRestart) options.onRestart();
+        else { spawnReplacement(options.dir); setTimeout(() => { void stop().finally(() => process.exit(0)); }, 500); }
+      }
       return result;
     }).finally(() => { running = null; });
     return running;
