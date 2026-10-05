@@ -36,6 +36,7 @@ import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
+import { onboardingSteps } from "./onboarding.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
@@ -414,7 +415,7 @@ function runInit(args: string[]): void {
   // `scopebond-hook` binary on PATH, so a bare `scopebond-hook log` would fail.
   console.log(`Next: run one command in the agent, then \`${cliCommand("log")}\` to see the receipt`);
   console.log(`and \`${cliCommand("verify")}\` to check it offline. Try \`${cliCommand('test "rm -rf /"')}\`.`);
-  console.log(`To send receipts to a workspace: ${cliCommand("connect <workspace-url> <enrollment>")}`);
+  console.log(onboardingSteps({ harness, command: cliCommand, project: true }).join("\n"));
 }
 
 function decisionOf(payload: Record<string, unknown>): string {
@@ -823,6 +824,7 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     } else if (observing.state === "unsupported") console.log(`Observations: ${observing.reason}`);
     console.log("");
     console.log("Run your agent — the first action appears in your workspace within seconds.");
+    console.log(onboardingSteps({ harness, command: cliCommand, connected: true }).join("\n"));
   } catch (error) {
     const message = (error as Error).message;
     console.error(`connect failed: ${message}`);
@@ -1148,7 +1150,7 @@ function runInstall(args: string[]): void {
   console.log("");
   console.log(`A project's own .scopebond policy applies only after you trust it there (${cliCommand("trust")}).`);
   console.log(`Check it: ${cliCommand("doctor")} · see decisions: ${cliCommand("log")}`);
-  console.log(`To send receipts to a workspace: ${cliCommand("connect <workspace-url> <enrollment>")}`);
+  console.log(onboardingSteps({ harness: harnesses[0], command: cliCommand }).join("\n"));
 }
 
 /** Size and count of the local receipt store, plus its write-ahead log. Signed evidence
