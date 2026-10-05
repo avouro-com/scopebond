@@ -1,6 +1,6 @@
 export { runCycle, computerStatus, expectedHarnesses, missingHookEntries } from "./agent.js";
 export type { CycleOptions, CycleResult } from "./agent.js";
-export { startService, repairHookEntries, spawnReplacement, AGENT_VERSION, AFTER_PID_ENV } from "./service.js";
+export { startService, repairHookEntries, spawnReplacement, acquireAgentLock, releaseAgentLock, AGENT_LOCK, AGENT_VERSION, AFTER_PID_ENV } from "./service.js";
 export type { Service, ServiceOptions, MaintenanceResult } from "./service.js";
 export { startControl, callAgent, readEndpoint, AGENT_FILE, TOKEN_HEADER } from "./ipc.js";
 export type { AgentEndpoint } from "./ipc.js";
@@ -9,7 +9,7 @@ export {
   enableAutostart, disableAutostart, autostartHealth, autostartPaths, startCommands, startNow, LABEL,
 } from "./autostart.js";
 export {
-  agentVersion, fetchClientVersion, compareVersions, commandHookVersion, maintainedHookCommand, maintainHookEntries, installAgent,
+  agentVersion, fetchClientVersion, compareVersions, commandHookVersion, maintainedHookCommand, maintainHookEntries, installAgent, ownNpm,
 } from "./update.js";
 export type { ClientVersion } from "./update.js";
 export { selfCheckProof, localChecks, runSelfCheck } from "./selfcheck.js";

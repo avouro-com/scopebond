@@ -57,3 +57,19 @@ test("doctor run from PowerShell 7 prints no Windows PowerShell module error", {
   const r = spawnSync(process.execPath, [cli, "doctor"], { env, encoding: "utf8", timeout: 60_000 });
   assert.doesNotMatch(r.stdout + r.stderr, /Get-ExecutionPolicy|CouldNotAutoloadMatchingModule/);
 });
+
+test("a workspace that cannot be reached is explained: a company certificate, a proxy, or the address", async () => {
+  const { unreachableHint } = await import("../dist/index.js");
+  const cert = Object.assign(new Error("fetch failed"), { cause: { code: "SELF_SIGNED_CERT_IN_CHAIN" } });
+  assert.match(unreachableHint(cert, {}), /SELF_SIGNED_CERT_IN_CHAIN.*NODE_EXTRA_CA_CERTS/);
+  const refused = Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+  assert.match(unreachableHint(refused, { HTTPS_PROXY: "http://proxy:8080" }), /ECONNREFUSED.*NODE_USE_ENV_PROXY=1/);
+  assert.match(unreachableHint(refused, {}), /ECONNREFUSED.*workspace address/);
+});
+
+test("a sign-in started by setup names setup again when it has to be repeated", async () => {
+  const { retryCommand } = await import("../dist/index.js");
+  assert.equal(retryCommand("npx -y @scopebond/hook@1 login x", {}), "npx -y @scopebond/hook@1 login x");
+  assert.equal(retryCommand("x", { SCOPEBOND_RETRY_COMMAND: "npx.cmd -y @scopebond/agent@0.4.0 setup https://w" }), "npx.cmd -y @scopebond/agent@0.4.0 setup https://w");
+  assert.equal(retryCommand("x", { SCOPEBOND_RETRY_COMMAND: "evil\nline" }), "x", "only one printable line is trusted");
+});

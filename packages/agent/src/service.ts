@@ -4,9 +4,10 @@
 // versions to run, and once a day it runs the end-to-end self-check.
 
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hookCommand, hookVersion, loadConnection, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { hookVersion, loadConnection, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { launcherPath } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
@@ -15,7 +16,7 @@ import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
-import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries } from "./update.js";
+import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
@@ -59,7 +60,7 @@ export interface MaintenanceResult {
 export function repairHookEntries(harnesses: Harness[] = expectedHarnesses()): Array<{ harness: Harness; file: string }> {
   const repaired: Array<{ harness: Harness; file: string }> = [];
   for (const harness of missingHookEntries(harnesses)) {
-    const file = writeHarnessConfig(userHarnessFile(harness), harness, hookCommand(harness));
+    const file = writeHarnessConfig(userHarnessFile(harness), harness, maintainedHookCommand(harness));
     repaired.push({ harness, file });
   }
   return repaired;
@@ -78,9 +79,33 @@ export function spawnReplacement(dir: string): void {
   child.unref();
 }
 
+export const AGENT_LOCK = "agent.lock";
+
+/** Take the one-agent-per-home lock: created exclusively, or taken over when the process named in it
+ *  is gone. Returns the lock file, or null while another live agent holds it. */
+export function acquireAgentLock(dir: string): string | null {
+  const file = join(dir, AGENT_LOCK);
+  mkdirSync(dir, { recursive: true });
+  try { writeFileSync(file, String(process.pid), { flag: "wx" }); return file; } catch { /* held, or left behind */ }
+  const holder = Number(readFileSync(file, "utf8").trim());
+  if (Number.isInteger(holder) && holder > 0 && holder !== process.pid) {
+    try { process.kill(holder, 0); return null; } catch { /* that agent is gone: take the lock over */ }
+  }
+  writeFileSync(file, String(process.pid));
+  return file;
+}
+
+export function releaseAgentLock(file: string): void {
+  try { if (readFileSync(file, "utf8").trim() === String(process.pid)) rmSync(file, { force: true }); } catch { /* already gone */ }
+}
+
 export async function startService(options: ServiceOptions): Promise<Service> {
   const log = options.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
   if (await callAgent(options.dir, "GET", "/status", undefined, 2_000)) throw new Error("a Scopebond Agent is already running for this computer");
+  // Two agents started within moments of each other (a slow first start, then a second start) both see
+  // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
+  const lock = acquireAgentLock(options.dir);
+  if (!lock) throw new Error("a Scopebond Agent is already running for this computer");
   const interval = options.intervalMs ?? INTERVAL_MS;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
@@ -191,6 +216,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     if (maintenanceTimer) clearInterval(maintenanceTimer);
     await running?.catch(() => undefined);
     await control.close();
+    releaseAgentLock(lock);
   };
   log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on 127.0.0.1:${control.endpoint.port})`);
   await cycle();

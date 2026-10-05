@@ -8,11 +8,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadConnection, nodeTooOldLines, readDeliveryState, type Harness } from "@scopebond/hook";
 import { autostartHealth, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
-import { compareVersions } from "./update.js";
+import { compareVersions, ownNpm } from "./update.js";
 import { repairHookEntries } from "./service.js";
 
 export type SetupStep = "login" | "install_agent" | "autostart";
@@ -67,8 +68,11 @@ export function addToPathCommand(dir: string): string {
 
 function npm(args: string[]): { ok: boolean; out: string } {
   const win = process.platform === "win32";
-  // npm on Windows is a .cmd file, which Node starts only through a shell; quote each argument for it.
-  const r = spawnSync(win ? "npm.cmd" : "npm", win ? args.map((a) => `"${a}"`) : args, { encoding: "utf8", shell: win, windowsHide: true, timeout: 5 * 60_000 });
+  // This Node's own npm, without a shell; otherwise npm on PATH (a .cmd on Windows, started through a shell, each argument quoted).
+  const own = ownNpm();
+  const r = own
+    ? spawnSync(own[0], [...own[1], ...args], { encoding: "utf8", windowsHide: true, timeout: 5 * 60_000 })
+    : spawnSync(win ? "npm.cmd" : "npm", win ? args.map((a) => `"${a}"`) : args, { encoding: "utf8", shell: win, windowsHide: true, timeout: 5 * 60_000 });
   return { ok: r.status === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
@@ -110,7 +114,10 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   // 1. Sign in with a code. The hook's own login prints the link and code and waits for approval.
   if (steps.includes("login")) {
     const flag = o.harness === "claude" ? "--claude" : `--${o.harness}`;
-    const r = spawnSync(process.execPath, [hookCli(), "login", o.origin, flag], { stdio: "inherit", env: { ...process.env, SCOPEBOND_HOME: o.dir } });
+    // From the home folder, so a project's own setup in the current folder can never take the sign-in;
+    // and a failed sign-in names this setup command, which also installs and starts the agent.
+    const again = `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/agent@${o.version} setup ${o.origin}${o.harness === "claude" ? "" : ` --${o.harness}`}`;
+    const r = spawnSync(process.execPath, [hookCli(), "login", o.origin, flag], { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: o.dir, SCOPEBOND_RETRY_COMMAND: again } });
     if (r.status !== 0) { console.error("Setup stopped: the sign-in did not finish. Run the same command again for a new code."); return 1; }
   } else {
     say(`✓ Already connected to ${o.origin} (to sign in again anyway, add --relogin).`);
@@ -130,7 +137,10 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   const bin = global.prefix ? globalBinDir(global.prefix) : null;
   if (bin && !onPath(bin)) {
     say(`Note: npm's global folder ${bin} is not on PATH, so new terminals will not find ${o.me}.`);
-    say(process.platform === "win32" ? `  Add it for your user (then open a new window): ${addToPathCommand(bin)}` : `  Add it to PATH in your shell profile: export PATH="${bin}:$PATH"`);
+    say(process.platform === "win32"
+      ? `  Add it for your user in PowerShell, then open a new window: ${addToPathCommand(bin)}
+  (or: Start, "Edit environment variables for your account", Path, New)`
+      : `  Add it to PATH in your shell profile: export PATH="${bin}:$PATH"`);
   }
 
   // 3. Autostart, and the agent running now.

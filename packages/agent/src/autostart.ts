@@ -9,7 +9,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 export const LABEL = "com.scopebond.agent";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -25,6 +25,9 @@ export function launcherPath(home: string, platform: NodeJS.Platform = process.p
 export function windowsLauncher(node: string, cli: string, logFile: string): string {
   return [
     "@echo off",
+    // cmd.exe reads a batch file in the console code page: switch to UTF-8 first, so a profile folder
+    // with non-ASCII letters in the paths below reads as written.
+    "chcp 65001 >nul",
     "rem Scopebond Agent launcher: finds Node and the agent each time, so a Node upgrade never stops it.",
     "setlocal",
     `set "NODE=${noQuotes(node)}"`,
@@ -33,7 +36,8 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
     `set "CLI=${noQuotes(cli)}"`,
     `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
     `if not defined NODE exit /b 1`,
-    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "${noQuotes(logFile)}" 2>&1`,
+    // The log sits beside this launcher; %~dp0 keeps it right whatever the folder is called.
+    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "%~dp0${basename(noQuotes(logFile))}" 2>&1`,
     "",
   ].join("\r\n");
 }

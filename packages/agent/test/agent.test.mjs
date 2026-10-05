@@ -9,7 +9,7 @@ import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA } from "@s
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
-  parseQuestion, windowsScript, serialized, queueReason, pendingReasons,
+  parseQuestion, windowsScript, serialized, queueReason, pendingReasons, acquireAgentLock, releaseAgentLock, AGENT_LOCK,
   compareVersions, commandHookVersion, maintainHookEntries, fetchClientVersion, localChecks, runSelfCheck, selfCheckProof,
 } from "../dist/index.js";
 
@@ -114,7 +114,8 @@ test("repair puts the hook back into agent settings that lost it, and touches no
     assert.equal(repaired.length, 1);
     const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
     assert.equal(settings.model, "opus");
-    assert.match(settings.hooks.PreToolUse[0].hooks[0].command, /@scopebond\/hook@\S+ claude$/);
+    // The hook the agent carries, pinned by its path: fast, and neither npx nor the registry is needed.
+    assert.match(settings.hooks.PreToolUse[0].hooks[0].command, /cli\.js"? claude$/);
     assert.deepEqual(missingHookEntries(["claude"]), []);
     assert.deepEqual(repairHookEntries(["claude"]), [], "nothing to repair the second time");
   } finally {
@@ -410,4 +411,26 @@ test("autostart on starts the agent now with a hidden cmd.exe when the headless 
     ["cmd.exe", ["/d", "/c", launcher]],
   ]);
   assert.deepEqual(startCommands("/opt/sb/agent-launch.sh", "linux"), [], "launchd and systemd start it themselves");
+});
+
+test("the Windows launcher reads as written in a profile folder with non-ASCII letters", () => {
+  const text = windowsLauncher("D:\\Data\\J\u00f6rg\\node.exe", "D:\\Data\\J\u00f6rg\\cli.js", "D:\\Data\\J\u00f6rg\\.sb\\agent.log");
+  const lines = text.split("\r\n");
+  assert.equal(lines[1], "chcp 65001 >nul", "UTF-8 before any path is read");
+  assert.match(text, /run >> "%~dp0agent\.log" 2>&1/, "the log path does not depend on the folder's name");
+});
+
+test("only one agent runs per home: a live holder keeps the lock, a dead one gives it up", async () => {
+  const { spawn } = await import("node:child_process");
+  const dir = mkdtempSync(join(tmpdir(), "sb-agent-lock-"));
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+  try {
+    writeFileSync(join(dir, AGENT_LOCK), String(holder.pid));
+    assert.equal(acquireAgentLock(dir), null, "another live agent holds it");
+  } finally { holder.kill(); }
+  await new Promise((r) => holder.on("exit", r));
+  const file = acquireAgentLock(dir);
+  assert.ok(file, "a lock left by an agent that is gone is taken over");
+  releaseAgentLock(file);
+  assert.equal(existsSync(join(dir, AGENT_LOCK)), false);
 });
