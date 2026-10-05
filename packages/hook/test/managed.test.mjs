@@ -95,6 +95,8 @@ test("Monitor records and allows; Block stops; the guardrail floor never relaxes
     assert.deepEqual(await decide(dir, watch, [bash("git push --force origin main"), bash("rm -rf build"), read("/repo/.env"), write("/repo/.github/workflows/ci.yml")]), ["allow", "allow", "allow", "allow"]);
     // The floor: Scopebond's own settings and the agents' hook settings are always protected.
     assert.deepEqual(await decide(dir, watch, [write("/repo/.scopebond/policy.json"), write("/repo/.claude/settings.json"), write("/repo/.git/hooks/pre-push")]), ["deny", "deny", "deny"]);
+    // Reads of Scopebond's own folder (the computer's key and connection) stay stopped with secret reads on Monitor.
+    assert.deepEqual(await decide(dir, watch, [read("/repo/.scopebond/agent.key"), read("/srv/work/.scopebond/connection.json"), read("/repo/.SCOPEBOND/attester.key"), read("/repo/src/x.ts")]), ["deny", "deny", "deny", "allow"]);
     // List additions extend the computer's own list; they never shorten it.
     const more = compileManaged(defaultRules(), doc(4, { "destructive-shell": { mode: "block", destructive_programs: ["terraform"] }, "push-protected": { mode: "block", protected_branches: ["prod"] } }), agentKid);
     assert.deepEqual(await decide(dir, more, [bash("terraform destroy"), bash("rm -rf build"), bash("git push origin prod"), bash("git push origin main")]), ["deny", "deny", "deny", "deny"]);
