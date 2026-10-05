@@ -37,6 +37,7 @@ import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
+import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
@@ -1245,6 +1246,35 @@ function runStatus(args: string[] = []): void {
   for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
     for (const file of [scopes.project, scopes.local, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
   }
+  for (const line of duplicateLines(process.cwd())) console.log(line);
+}
+
+/** SB302: each agent that would ask Scopebond more than once per action, and the one command that keeps one. */
+function duplicateLines(cwd: string): string[] {
+  const lines: string[] = [];
+  for (const harness of ["claude", "cursor", "codex"] as const) {
+    const dupes = duplicateHooks(harness, cwd);
+    if (!dupes) continue;
+    const flag = harness === "claude" ? "" : ` --${harness}`;
+    lines.push(`  DUPLICATE        ${harnessName(harness)} runs the Scopebond hook ${dupes.length} times for each action:`);
+    for (const e of dupes) lines.push(`                   - ${describeEntry(e)}`);
+    lines.push(`                   Keep one (the user-level entry): ${cliCommand(`dedupe${flag}`)}`);
+  }
+  return lines;
+}
+
+/** `dedupe [--claude|--cursor|--codex] [--keep user|project|plugin]`: keep one Scopebond hook entry per agent. */
+function runDedupe(args: string[]): void {
+  const harness: Harness = args.includes("--cursor") ? "cursor" : args.includes("--codex") ? "codex" : "claude";
+  const at = args.indexOf("--keep");
+  const keep = (at >= 0 ? args[at + 1] : "user") as HookScope;
+  if (!["user", "project", "local", "plugin"].includes(keep)) { console.error(`usage: ${cliCommand("dedupe [--claude|--cursor|--codex] [--keep user|project|plugin]")}`); process.exit(1); }
+  const dupes = duplicateHooks(harness, process.cwd());
+  if (!dupes) { console.log(`${harnessName(harness)} runs the Scopebond hook once per action; nothing to change.`); return; }
+  const result = dedupeHooks(harness, keep, process.cwd());
+  if (result.kept) console.log(`Kept: ${describeEntry(result.kept)}`);
+  for (const e of result.removed) console.log(`Removed: ${describeEntry(e)}`);
+  for (const e of result.plugins) console.log(`Still running from ${describeEntry(e)}: turn that plugin off in Claude Code (/plugin), or keep it instead with ${cliCommand("dedupe --keep plugin")}`);
 }
 
 /** `capabilities`: the manifest of what this hook can honestly claim, cell by cell.
@@ -1391,6 +1421,9 @@ async function runDoctor(): Promise<void> {
     for (const line of delivery.lines) console.log(`                   ${line}`);
     problems.push(...delivery.problems);
   }
+  const duplicates = duplicateLines(process.cwd());
+  for (const line of duplicates) console.log(line);
+  if (duplicates.length) problems.push("the Scopebond hook runs more than once for each action (see DUPLICATE above)");
   console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
   process.exitCode = problems.length ? 1 : 0;
 }
@@ -1533,6 +1566,13 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "  rules apply                   recompile after editing rules.json by hand",
     ] },
   { name: "status", summary: "what is configured, where, and how big the local log is" },
+  { name: "dedupe", args: "[--claude|--cursor|--codex] [--keep user|project|plugin]",
+    summary: "keep one Scopebond hook entry when an agent would run it more than once per action",
+    detail: [
+      "Status and doctor say when the hook sits in the user settings and a project's, twice in one file,",
+      "or in an enabled Claude Code plugin beside a settings entry. dedupe keeps the user-level entry",
+      "(or the scope you name) and removes the others; other tools' hooks are left alone.",
+    ] },
   { name: "capabilities", args: "[--prove [--save]] [--json]",
     summary: "what this hook can honestly claim, per agent host, action and phase",
     detail: [
@@ -1678,6 +1718,7 @@ else if (cmd === "test") { await runTest(rest); }
 else if (cmd === "flush") { await runFlush(); }
 else if (cmd === "recover") { await runRecover(rest); }
 else if (cmd === "status") { runStatus(rest); }
+else if (cmd === "dedupe") { runDedupe(rest); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "capabilities") { await runCapabilities(rest); }
 else if (cmd === "observations") { await runObservations(rest); }

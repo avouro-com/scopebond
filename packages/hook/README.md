@@ -218,6 +218,12 @@ removed), `status` says **NOT DELIVERING** with the time it stopped and the one 
 it, which is signing in again. `status --json` prints the same in one machine-readable shape (`scopebond.status.v1`) for tools and support. `doctor` also checks that the workspace still accepts the connection,
 not only that it is reachable, and fails when it does not.
 
+`status` and `doctor` also say when an agent would ask Scopebond more than once for each action:
+the hook in your user settings and a project's, twice in one file, or an enabled Claude Code plugin
+beside a settings entry. Every action would then be signed and sent twice. `dedupe` keeps the
+user-level entry (`--keep project` or `--keep plugin` to keep another) and removes the rest,
+leaving other tools' hooks alone; the Scopebond Agent's daily self-check reports the same.
+
 The connection renews itself: in the last 30 days of its 90-day credential the hook renews it during its rules check, proving it still holds the key it enrolled with. With each rules check it also tells the workspace how many records wait to send (counts and one error line, never a record), so the portal can show a computer that checks in but is not delivering.
 
 Signing in puts the hook in your user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json` or `~/.codex/hooks.json`), so every project on this computer is checked; `--project` connects one project instead. Signing in again never rewrites a settings file that already holds the right hook entry.

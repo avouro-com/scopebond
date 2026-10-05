@@ -219,6 +219,15 @@ test("the self-check names what is broken locally and sends a signed proof to th
     assert.equal(byId.hook_entry.ok, false, "no agent setting holds the hook in this empty home");
     assert.equal(byId.queue.ok, true);
     assert.equal(byId.credential.ok, false, "expiring in two days without renewal");
+    assert.equal(byId.hook_duplicates.ok, true, "no hook at all is not a duplicate");
+    // SB302: the hook twice in the user settings is reported, with the command that keeps one.
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const entry = { matcher: "*", hooks: [{ type: "command", command: "npx -y @scopebond/hook@0.16.0 claude" }] };
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { PreToolUse: [entry, entry] } }));
+    const doubled = Object.fromEntries(localChecks(dir, connection, ["claude"]).map((c) => [c.id, c]));
+    assert.equal(doubled.hook_duplicates.ok, false);
+    assert.match(doubled.hook_duplicates.detail, /more than once per action for claude .*dedupe/);
+    writeFileSync(join(home, ".claude", "settings.json"), "{}");
     let posted = null;
     const fake = async (url, init) => {
       posted = { url, body: JSON.parse(init.body) };

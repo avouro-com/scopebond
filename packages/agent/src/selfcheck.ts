@@ -4,11 +4,12 @@
 // verifies the signature. A pass means the whole path works, end to end; a failure names what broke.
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import {
-  configuredHookCommands, hookCommandResolves, hookVersion, isScopebondHookCommand, queueStatus, readDeliveryState, userHarnessFile,
+  configuredHookCommands, duplicateHooks, hookCommandResolves, hookVersion, isScopebondHookCommand, queueStatus, readDeliveryState, userHarnessFile,
   type Harness, type HookConnection,
 } from "@scopebond/hook";
 import { autostartHealth } from "./autostart.js";
@@ -25,6 +26,9 @@ export function localChecks(dir: string, connection: HookConnection, harnesses: 
   checks.push({ id: "hook_entry", ok: entries.length > 0, ...(entries.length ? {} : { detail: "no agent setting holds the Scopebond hook" }) });
   const broken = entries.filter((c) => !hookCommandResolves(c));
   checks.push({ id: "hook_starts", ok: entries.length > 0 && broken.length === 0, ...(broken.length ? { detail: `${broken.length} hook command(s) cannot start` } : {}) });
+  // SB302: the hook twice in the user settings, or an enabled plugin beside them, signs and sends every action twice.
+  const dupes = harnesses.flatMap((h) => duplicateHooks(h, homedir()) ? [h] : []);
+  checks.push({ id: "hook_duplicates", ok: dupes.length === 0, ...(dupes.length ? { detail: `the Scopebond hook runs more than once per action for ${dupes.join(", ")} (fix: ${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/hook@${hookVersion()} dedupe)` } : {}) });
   const autostart = autostartHealth(dir);
   checks.push({ id: "autostart", ok: autostart.ok, ...(autostart.ok ? {} : { detail: autostart.detail }) });
   const { pending, oldest } = queueStatus(dir);

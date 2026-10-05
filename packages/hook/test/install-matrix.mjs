@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,8 +17,8 @@ const isWin = process.platform === "win32";
 const CLI = process.env.SCOPEBOND_CLI;
 const BIN = process.env.SCOPEBOND_BIN || (isWin ? "scopebond.cmd" : "scopebond");
 
-function sb(args, { env = {}, input } = {}) {
-  const opts = { input, encoding: "utf8", env: { ...process.env, ...env }, timeout: 30_000, killSignal: "SIGKILL" };
+function sb(args, { env = {}, input, cwd } = {}) {
+  const opts = { input, cwd, encoding: "utf8", env: { ...process.env, ...env }, timeout: 30_000, killSignal: "SIGKILL" };
   const res = CLI
     ? spawnSync(process.execPath, [CLI, ...args], opts)
     : spawnSync(BIN, args, { ...opts, shell: isWin });
@@ -63,6 +63,21 @@ check("doctor reports node ok and finds the policy", () => {
   const r = sb(["doctor"], { env: { ...baseEnv, SCOPEBOND_HOOK_DIR: sbHome } });
   assert.equal(r.status, 0, r.out);
   assert.ok(/All good\./.test(r.out), r.out);
+});
+
+// 3b. SB302: a project's own entry beside the user-level one makes the agent ask twice per action.
+check("a project entry beside the user-level one is reported, and dedupe keeps the user-level one", () => {
+  const proj = mkdtempSync(join(tmpdir(), "sb-dupes-"));
+  mkdirSync(join(proj, ".claude"), { recursive: true });
+  const projectSettings = join(proj, ".claude", "settings.json");
+  writeFileSync(projectSettings, JSON.stringify({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "npx -y @scopebond/hook@0.16.0 claude" }] }] } }));
+  const before = sb(["status"], { env: baseEnv, cwd: proj });
+  assert.match(before.out, /DUPLICATE\s+Claude Code runs the Scopebond hook 2 times/, before.out);
+  const fixed = sb(["dedupe"], { env: baseEnv, cwd: proj });
+  assert.equal(fixed.status, 0, fixed.out);
+  assert.doesNotMatch(sb(["status"], { env: baseEnv, cwd: proj }).out, /DUPLICATE/);
+  const user = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
+  assert.equal(user.hooks.PreToolUse.length, 1, "the user-level entry stays");
 });
 
 // 4. Evaluate: a protected-branch push is denied (exit 2); a plain command is allowed (exit 0).
