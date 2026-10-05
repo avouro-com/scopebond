@@ -1,5 +1,24 @@
 # @scopebond/hook
 
+## 0.18.0
+
+### Minor Changes
+
+- c46cd98: Monitor is the default. Every rule now starts by recording what it would decide; a rule blocks only once it is turned on with `rules enforce <rule>` (or by the workspace for a connected computer), and `rules monitor <rule>` turns it back. Scopebond's own protection is no longer a rule: a coding agent changing Scopebond's settings, switching off the Scopebond Agent or uninstalling Scopebond is always denied, whatever the rules say, and a command that names Scopebond but cannot be read is treated the same way. A project set up by an earlier version whose rules were never edited moves to recording on its first run after the update and keeps the old policy as `policy.previous.json`; a project with its own edits keeps blocking what it blocked.
+
+  `uninstall` now tells each connected workspace before anything is removed, and prints whether the removal was allowed there; a removal the workspace did not allow raises a critical alert there. An unreachable workspace never stops the uninstall.
+
+  A delivery queue that cannot be opened (a full disk, a read-only or locked file) no longer stops the decision: the record stays in the local log and the runtime reports the file and the fix as `deliveryUnavailable`.
+
+### Patch Changes
+
+- 9fd79e2: A tool call no longer gets slower as the receipt log grows. Each decision reads only the history its policy can see: none for allowlists and guards (the coding-agent starter policies), and only the longest window or sequence gap for `rate_limit`, `spend_limit` and `sequence`. At 10,000 stored receipts a starter-policy decision went from more than 60 ms to under 1 ms, and it stays flat as the log grows. Decisions are unchanged; the tests check every conformance vector, every verdict test and randomized histories with and without the bound.
+
+  New in `@scopebond/verify`: `historyNeed(policy)` and `boundPrior(need, receipts, at)`, which define the bounded set exactly; a live verdict's `inputs_hash` commits to that set. New in `@scopebond/gateway`: `ReceiptStore.executed(scope)` and `reserveAction(…, scope)` take an optional `PriorScope`, and `SqliteReceiptStore` adds an index on `receipts.timestamp` when it opens. A store that ignores `scope` stays correct, only slower.
+
+- Updated dependencies [9fd79e2]
+  - @scopebond/gateway@0.15.0
+
 ## 0.17.0
 
 ### Minor Changes

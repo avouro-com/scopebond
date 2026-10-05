@@ -1,5 +1,14 @@
 # @scopebond/agent
 
+## 0.4.1
+
+### Patch Changes
+
+- Updated dependencies [9fd79e2]
+- Updated dependencies [c46cd98]
+  - @scopebond/gateway@0.15.0
+  - @scopebond/hook@0.18.0
+
 ## 0.4.0
 
 ### Minor Changes
