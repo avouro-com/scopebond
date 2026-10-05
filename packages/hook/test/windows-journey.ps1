@@ -108,7 +108,8 @@ function Invoke-HookEvent([string] $Command, [string] $Payload) {
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $proc = [System.Diagnostics.Process]::Start($psi)
-  $proc.StandardInput.Write($Payload)
+  $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Payload)
+  $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
   $proc.StandardInput.Close()
   $out = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
   $proc.WaitForExit()
@@ -144,7 +145,7 @@ function Invoke-IsolatedJourney([string] $ProfileDir, [string] $Name, [string] $
     $command = ((Get-Content $settings -Raw -Encoding UTF8 | ConvertFrom-Json).hooks.PreToolUse | Select-Object -First 1).hooks[0].command
     $payload = '{"tool_name":"Bash","tool_input":{"command":"git push origin main"},"cwd":"' + ($folder -replace '\\', '\\') + '"}'
     $hook = Invoke-HookEvent $command $payload
-    Assert ($hook.Code -eq 2) "$Name`: expected a block (exit 2), got $($hook.Code): $($hook.Out)"
+    Assert ($hook.Code -eq 2) "$Name`: expected a block (exit 2), got $($hook.Code): $($hook.Out)`nconfigured command: $command`nlogin said:`n$($login.Out)"
     $flush = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'flush')
     for ($i = 0; $i -lt 40; $i++) { if ((Get-CloudState).ingested -gt $before) { break }; Start-Sleep -Milliseconds 250 }
     $delivered = (Get-CloudState).ingested - $before
