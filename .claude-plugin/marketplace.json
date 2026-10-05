@@ -8,7 +8,7 @@
     {
       "name": "scopebond",
       "source": "./packages/hook",
-      "description": "A checkpoint for Claude Code: blocks out-of-policy actions before they run and signs every decision into a receipt you can verify offline."
+      "description": "Free, open-source guardrails and signed decision records for supported Claude Code actions. Scopebond Cloud is a separate proprietary hosted workspace."
     }
   ]
 }

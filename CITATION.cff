@@ -7,12 +7,14 @@ authors:
     website: "https://avouro.com"
 repository-code: "https://github.com/avouro-com/scopebond"
 url: "https://scopebond.com"
-abstract: "Scopebond is an open-source checkpoint for AI coding agents (Claude Code, Cursor, MCP, GitHub) that blocks out-of-policy actions before they run and signs every decision into a tamper-evident record anyone can verify offline."
+abstract: "Free, open-source guardrails and verifiable evidence for AI coding agents: Claude Code, Cursor, Codex, MCP, and GitHub. Scopebond Cloud is a separate proprietary hosted workspace."
 keywords:
   - ai-agents
   - agent-security
   - claude-code
   - cursor
+  - openai-codex
+  - ai-oversight
   - mcp
   - guardrails
   - policy-enforcement
