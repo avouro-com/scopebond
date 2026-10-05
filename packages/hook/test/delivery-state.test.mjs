@@ -108,3 +108,23 @@ test("the delivery queue keeps every record: no 7-day expiry and no cap that dro
     assert.equal(outbox.status().gaps, 0);
   } finally { outbox.close(); }
 });
+
+test("status says the delivery queue is unusable instead of 'nothing waiting' when it cannot be opened", async () => {
+  const { chmodSync } = await import("node:fs");
+  const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-queue-ro-"));
+  const outbox = join(dir, "receipts.db.cloud-outbox.db");
+  new SqliteCloudOutbox(outbox).close();
+  chmodSync(outbox, 0o444);
+  try {
+    let unwritable = true;
+    try { new SqliteCloudOutbox(outbox).close(); unwritable = false; } catch { /* read-only, as intended */ }
+    if (!unwritable) return; // root on Linux writes read-only files: nothing to show there
+    const report = describeDelivery(dir, { url: "https://cloud.example" });
+    assert.match(report.lines.join("\n"), /DELIVERY QUEUE UNUSABLE/);
+    assert.doesNotMatch(report.lines.join("\n"), /waiting to send {2}0 record/);
+    assert.match(report.problems.join("\n"), /every action is blocked/);
+  } finally {
+    for (const file of [outbox, outbox + "-wal", outbox + "-shm"]) if (existsSync(file)) chmodSync(file, 0o644);
+  }
+});

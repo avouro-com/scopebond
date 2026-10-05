@@ -14,7 +14,7 @@ export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
 export const LOSSLESS_OUTBOX = { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER } as const;
 
 /** How many records wait to send and since when, read without changing the queue. */
-export function queueStatus(dir: string): { pending: number; oldest: number | null; queueId?: string; seqAssigned?: number } {
+export function queueStatus(dir: string): { pending: number; oldest: number | null; queueId?: string; seqAssigned?: number; error?: string } {
   const outboxPath = join(dir, OUTBOX_FILE);
   if (!existsSync(outboxPath)) return { pending: 0, oldest: null };
   try {
@@ -23,7 +23,10 @@ export function queueStatus(dir: string): { pending: number; oldest: number | nu
       const status = outbox.status();
       return { pending: status.pending, oldest: status.oldestEnqueuedAt, ...(status.queueId ? { queueId: status.queueId, seqAssigned: status.seqAssigned ?? 0 } : {}) };
     } finally { outbox.close(); }
-  } catch { return { pending: 0, oldest: null }; }
+  } catch (error) {
+    // Not "nothing waiting": the queue cannot be opened, so the hook fails closed on every action.
+    return { pending: 0, oldest: null, error: `${outboxPath}: ${(error as Error).message}` };
+  }
 }
 
 export interface DeliveryReport {
@@ -37,8 +40,13 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   const state = readDeliveryState(dir);
   const lines: string[] = [];
   const problems: string[] = [];
-  const { pending, oldest } = queueStatus(dir);
+  const { pending, oldest, error: queueError } = queueStatus(dir);
   let fix: string | null = null;
+  if (queueError) {
+    lines.push(`DELIVERY QUEUE UNUSABLE: ${queueError}`);
+    lines.push("fix: free some disk space, or make that file and its -wal and -shm files writable for your user (do not delete it: it holds records waiting to be sent)");
+    problems.push(`the delivery queue cannot be opened (${queueError}); every action is blocked until it can`);
+  }
   if (state.invalid_since !== null) {
     fix = cliCommand(`login ${connection.url}`);
     lines.push(`NOT DELIVERING since ${new Date(state.invalid_since).toISOString()}: the workspace refused this computer's connection (it was revoked, replaced or removed).`);
@@ -48,7 +56,7 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   const tried = state.last_attempt_at !== null ? `; last tried ${ago(state.last_attempt_at, now)}` : "";
   lines.push(`last delivered   ${ago(state.last_success_at, now)}${tried}`);
   const age = oldest !== null ? `, oldest from ${ago(oldest, now)}` : "";
-  lines.push(`waiting to send  ${pending} record(s)${age}`);
+  if (!queueError) lines.push(`waiting to send  ${pending} record(s)${age}`);
   if (state.last_error && state.invalid_since === null) {
     lines.push(`last problem     ${state.last_error}`);
     if (pending > 0 && oldest !== null && now - oldest > 60 * 60 * 1000) {

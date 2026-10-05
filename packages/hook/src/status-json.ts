@@ -28,6 +28,8 @@ export interface StatusJson {
     pending: number;
     oldest_pending_age_s: number | null;
     gaps_by_reason: Record<string, number>;
+    /** The delivery queue could not be opened (a full disk, a read-only file): every action is blocked. */
+    queue_error: string | null;
   };
   identity: {
     installation_id: string | null;
@@ -50,7 +52,7 @@ export function buildStatusJson(input: {
   const dir = input.activeDir;
   const connection = loadConnection(dir);
   const state = readDeliveryState(dir);
-  const { pending, oldest } = queueStatus(dir);
+  const { pending, oldest, error: queueError } = queueStatus(dir);
   let gaps: Record<string, number> = {};
   if (existsSync(join(dir, OUTBOX_FILE))) {
     try {
@@ -71,8 +73,10 @@ export function buildStatusJson(input: {
       connected: !!connection,
       last_success_at: state.last_success_at,
       last_attempt_at: state.last_attempt_at,
-      last_error: state.last_error,
-      last_error_code: code,
+      // An unusable queue blocks every action: it is the error that matters, whatever delivery said last.
+      last_error: queueError ? `delivery queue unusable: ${queueError}` : state.last_error,
+      last_error_code: queueError ? "queue_unusable" : code,
+      queue_error: queueError ?? null,
       connection_refused_since: state.invalid_since,
       pending,
       oldest_pending_age_s: oldest !== null ? Math.max(0, Math.round((now - oldest) / 1000)) : null,
