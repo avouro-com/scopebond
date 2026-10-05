@@ -142,7 +142,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (connection && (forceSelfCheck || Date.now() - lastSelfCheckAt >= SELF_CHECK_EVERY_MS)) {
         result.selfCheck = await runSelfCheck(options.dir, connection, harnesses, current, { fetchImpl: options.fetchImpl });
         lastSelfCheckAt = Date.now();
-        log(`self-check ${result.selfCheck?.ok ? "passed" : `failed: ${result.selfCheck?.failed.join(", ")}`}`);
+        log(`self-check ${result.selfCheck?.ok ? "passed" : `failed: ${result.selfCheck?.failed.join(", ") ?? "no result"}`}`);
       }
     } catch (error) { result.error = (error as Error).message; }
     lastMaintenance = result;

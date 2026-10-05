@@ -317,3 +317,17 @@ test("the tray script carries the home folder only as data, and notifications fi
   assert.equal(notifyChange("green", green, run), false);
   assert.equal(calls.length, 3);
 });
+
+test("against a workspace without the self-check, only this computer's own checks count", async () => {
+  const home = mkdtempSync(join(tmpdir(), "sb-agent-home-"));
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = home; process.env.USERPROFILE = home;
+  try {
+    const dir = await computerWithQueue("https://workspace.example", 0);
+    const connection = { url: "https://workspace.example", credential: "sbm_test", credential_id: "cred_1", gateway_id: "gw_1", expires_at: new Date(Date.now() + 60 * 86400_000).toISOString() };
+    const result = await runSelfCheck(dir, connection, ["claude"], "0.3.1", { fetchImpl: async () => new Response("{}", { status: 404 }) });
+    assert.equal(result.signature_verified, false);
+    assert.ok(!result.failed.some((f) => f.startsWith("workspace_")), "a missing route is not a failure");
+    assert.deepEqual(result.failed, result.checks.filter((c) => !c.ok).map((c) => c.id));
+  } finally { process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE; }
+});

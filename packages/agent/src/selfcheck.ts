@@ -54,6 +54,9 @@ export async function runSelfCheck(
       headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
       body: JSON.stringify({ signature, day, checks, hook_version: hookVersion(), agent_version: agentVersion }),
     });
+    // A workspace that does not offer the self-check yet answers 404: the computer's own checks still count; the signed
+    // workspace part is simply not available there.
+    if (res.status === 404) { const failed = checks.filter((c) => !c.ok).map((c) => c.id); return { ok: failed.length === 0, signature_verified: false, failed, checks }; }
     if (!res.ok) return { ok: false, signature_verified: false, failed: [`workspace_http_${res.status}`], checks };
     const body = await res.json() as { ok?: boolean; signature_verified?: boolean; failed?: string[] };
     return { ok: !!body.ok, signature_verified: !!body.signature_verified, failed: Array.isArray(body.failed) ? body.failed : [], checks };
