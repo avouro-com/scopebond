@@ -15,7 +15,9 @@
     4. npm.cmd install -g the agent; scopebond-agent.cmd autostart on: the Run key and launcher,
        the agent running, its self-check passing, status saying so.
     5. scopebond-agent.cmd autostart off and npm.cmd uninstall -g: nothing left behind.
-    6. Edge cases: status from the project folder and the home agree; a profile path with a space
+    6. npx.cmd -y @scopebond/agent setup <workspace> as a new person, twice: the second run
+       changes nothing; then autostart off and uninstall leave nothing running.
+    7. Edge cases: status from the project folder and the home agree; a profile path with a space
        and non-ASCII letters; HOME pointing into OneDrive; Node 22.12 first on PATH is refused
        before anything changes, with the one fix.
 
@@ -30,7 +32,7 @@
 .PARAMETER SkipAgent
   Run steps 1-3 only (for a computer whose own agent autostart must not be touched).
 .PARAMETER SkipEdgeCases
-  Leave out step 6 (Windows edge cases: an unusual profile path, HOME in OneDrive, an old Node).
+  Leave out step 7 (Windows edge cases: an unusual profile path, HOME in OneDrive, an old Node).
 .PARAMETER IsolatedHome
   Use a throwaway user profile folder (USERPROFILE, HOME, APPDATA) instead of the real one.
 #>
@@ -345,7 +347,60 @@ try {
     }
   }
 
-  # 6. Windows edge cases: where the home is, which Node runs, which folder it is run from.
+  # 6. One command to start, as a new person: setup signs in, installs, turns autostart on and
+  #    shows status; run again, it changes nothing and duplicates nothing.
+  if (-not $SkipAgent) {
+    $setupProfile = Join-Path $work 'Users\setup-person'
+    $saved = Save-Env
+    try {
+      Set-Profile $setupProfile
+      $setupHome = Join-Path $setupProfile '.scopebond'
+      New-Item -ItemType Directory -Force -Path (Join-Path $setupProfile 'source\repo') | Out-Null
+      Set-Location (Join-Path $setupProfile 'source\repo')
+      # The agent installs the package it was started from (the packed tarball here, npm in real life).
+      $env:SCOPEBOND_AGENT_INSTALL_SPEC = $AgentPackage
+      $approvedBefore = @((Get-CloudState).approved_codes).Count
+      Check 'npx.cmd ... setup <workspace>: signed in, agent installed, autostart on, running, status shown' {
+        $first = Invoke-Published 'npx.cmd' @('-y', $AgentPackage, 'setup', $cloud)
+        Assert ($first.Code -eq 0) "setup exited $($first.Code):`n$($first.Out)"
+        Assert (Test-Path (Join-Path $setupHome 'cloud.json')) "no cloud.json in $setupHome`n$($first.Out)"
+        Assert (Test-Path (Join-Path $setupProfile '.claude\settings.json')) 'no user-level Claude Code settings'
+        $run = Get-RunValue
+        Assert ($run -like "*$setupHome*") "the Run value does not start this person's launcher: $run"
+        Assert ($first.Out -match 'Scopebond Agent: running') "status did not say running:`n$($first.Out)"
+        Assert (@((Get-CloudState).approved_codes).Count -eq $approvedBefore + 1) 'setup did not sign in exactly once'
+      }
+      Check 'setup a second time changes nothing: no new sign-in, no second hook entry' {
+        $second = Invoke-Published 'npx.cmd' @('-y', $AgentPackage, 'setup', $cloud)
+        Assert ($second.Code -eq 0) "second setup exited $($second.Code):`n$($second.Out)"
+        Assert ($second.Out -match 'Already connected') "it did not keep the connection:`n$($second.Out)"
+        Assert (@((Get-CloudState).approved_codes).Count -eq $approvedBefore + 1) 'the second run asked for another sign-in'
+        $entries = @(((Get-Content (Join-Path $setupProfile '.claude\settings.json') -Raw | ConvertFrom-Json).hooks.PreToolUse | ForEach-Object { $_.hooks } | Where-Object { $_.command -match 'scopebond|hook' }))
+        Assert ($entries.Count -eq 1) "$($entries.Count) Scopebond hook entries after two runs"
+      }
+      Check 'after setup: autostart off and uninstall leave nothing running' {
+        $agentJson = Join-Path $setupHome 'agent.json'
+        $setupPid = $null
+        try { $setupPid = (Get-Content $agentJson -Raw | ConvertFrom-Json).pid } catch { }
+        $agentCmd = Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue
+        if (-not $agentCmd) { $env:PATH = (((& npm.cmd prefix -g) 2>$null | Select-Object -First 1).Trim()) + ";$env:PATH" }
+        $off = Invoke-Published 'scopebond-agent.cmd' @('autostart', 'off')
+        Assert ($off.Code -eq 0) "autostart off exited $($off.Code): $($off.Out)"
+        $un = Invoke-Published 'npm.cmd' @('uninstall', '-g', '@scopebond/agent')
+        Assert ($un.Code -eq 0) "uninstall exited $($un.Code)"
+        Start-Sleep -Seconds 2
+        $alive = $setupPid -and (Get-Process -Id $setupPid -ErrorAction SilentlyContinue)
+        if ($alive) { Stop-Process -Id $setupPid -Force -ErrorAction SilentlyContinue }
+        Assert (-not $alive) "the agent (pid $setupPid) is still running"
+        Assert ($null -eq (Get-RunValue)) 'the Run value is still there'
+      }
+    } finally {
+      Remove-Item Env:SCOPEBOND_AGENT_INSTALL_SPEC -ErrorAction SilentlyContinue
+      Restore-Env $saved
+    }
+  }
+
+  # 7. Windows edge cases: where the home is, which Node runs, which folder it is run from.
   if (-not $SkipEdgeCases) {
     Check 'status from the project folder and from the home name the same configuration' {
       $fromProject = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'status')
