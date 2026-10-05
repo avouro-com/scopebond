@@ -63,8 +63,12 @@ exec "$NODE" --disable-warning=ExperimentalWarning "$CLI" run
 }
 
 /** The Run value: the launcher under a headless console host, so nothing appears on screen. */
+/** `cmd /s /c ""<launcher>""`: cmd drops only the outer quotes and runs the quoted path as it is, so a
+ *  profile folder with a space and a `(`, `)` or `&` ("John (Work)") still starts the launcher. */
+const cmdRun = (launcher: string) => `/d /s /c ""${noQuotes(launcher)}""`;
+
 export function windowsRunCommand(launcher: string): string {
-  return `conhost.exe --headless cmd.exe /d /c "${noQuotes(launcher)}"`;
+  return `conhost.exe --headless cmd.exe ${cmdRun(launcher)}`;
 }
 
 export function macLaunchAgent(launcher: string, logFile: string): string {
@@ -122,7 +126,8 @@ function writeLauncher(scopebondHome: string, node: string, cli: string, platfor
  *  when autostart is turned on (RunAtLoad, enable --now). */
 export function startCommands(launcher: string, platform: NodeJS.Platform = process.platform): Array<[string, string[]]> {
   if (platform !== "win32") return [];
-  return [["conhost.exe", ["--headless", "cmd.exe", "/d", "/c", launcher]], ["cmd.exe", ["/d", "/c", launcher]]];
+  // Passed verbatim (startNow sets windowsVerbatimArguments): Node's own quoting follows other rules than cmd's.
+  return [["conhost.exe", ["--headless", "cmd.exe", cmdRun(launcher)]], ["cmd.exe", [cmdRun(launcher)]]];
 }
 
 /** Start the agent now with the `attempt`-th way (0 first), detached from this terminal. Returns whether it tried one. */
@@ -131,7 +136,7 @@ export function startNow(scopebondHome: string, platform = process.platform, att
   const command = startCommands(launcher, platform)[attempt];
   if (!command || !existsSync(launcher)) return false;
   try {
-    const child = spawn(command[0], command[1], { detached: true, stdio: "ignore", windowsHide: true });
+    const child = spawn(command[0], command[1], { detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true });
     child.on("error", () => { /* the next way, or the next sign-in */ });
     child.unref();
     return true;

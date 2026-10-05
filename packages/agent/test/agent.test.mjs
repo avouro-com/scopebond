@@ -126,7 +126,9 @@ test("repair puts the hook back into agent settings that lost it, and touches no
 test("autostart starts a launcher that finds Node and the agent each time, with no window on Windows", () => {
   assert.match(launcherPath(join("x", "sb"), "win32"), /agent-launch\.cmd$/);
   assert.match(launcherPath(join("x", "sb"), "linux"), /agent-launch\.sh$/);
-  assert.equal(windowsRunCommand("C:\\Users\\a b\\.scopebond\\agent-launch.cmd"), `conhost.exe --headless cmd.exe /d /c "C:\\Users\\a b\\.scopebond\\agent-launch.cmd"`);
+  assert.equal(windowsRunCommand("C:\\Users\\a b\\.scopebond\\agent-launch.cmd"), `conhost.exe --headless cmd.exe /d /s /c ""C:\\Users\\a b\\.scopebond\\agent-launch.cmd""`);
+  // A space with ( ) or & in the profile folder: cmd /s keeps the inner quotes, so the path stays whole.
+  assert.equal(windowsRunCommand("C:\\Users\\John (Work)\\.scopebond\\agent-launch.cmd"), `conhost.exe --headless cmd.exe /d /s /c ""C:\\Users\\John (Work)\\.scopebond\\agent-launch.cmd""`);
   const cmd = windowsLauncher("C:\\Program Files\\nodejs\\node.exe", "C:\\npm\\cli.js", "C:\\sb\\agent.log");
   assert.ok(cmd.includes(`set "NODE=C:\\Program Files\\nodejs\\node.exe"`));
   assert.match(cmd, /where node/, "falls back to the Node on PATH");
@@ -407,8 +409,8 @@ test("autostart on starts the agent now with a hidden cmd.exe when the headless 
   const { startCommands } = await import("../dist/index.js");
   const launcher = String.raw`D:\home\agent-launch.cmd`;
   assert.deepEqual(startCommands(launcher, "win32"), [
-    ["conhost.exe", ["--headless", "cmd.exe", "/d", "/c", launcher]],
-    ["cmd.exe", ["/d", "/c", launcher]],
+    ["conhost.exe", ["--headless", "cmd.exe", `/d /s /c ""${launcher}""`]],
+    ["cmd.exe", [`/d /s /c ""${launcher}""`]],
   ]);
   assert.deepEqual(startCommands("/opt/sb/agent-launch.sh", "linux"), [], "launchd and systemd start it themselves");
 });
@@ -433,4 +435,16 @@ test("only one agent runs per home: a live holder keeps the lock, a dead one giv
   assert.ok(file, "a lock left by an agent that is gone is taken over");
   releaseAgentLock(file);
   assert.equal(existsSync(join(dir, AGENT_LOCK)), false);
+});
+
+test("a lock left from before a restart is taken over even when its process id is in use again", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-agent-lock-old-"));
+  // This test's own parent process stands in for an unrelated process that reused the id.
+  writeFileSync(join(dir, AGENT_LOCK), `${process.ppid} ${Date.now() - 5 * 60_000}`);
+  const file = acquireAgentLock(dir);
+  assert.ok(file, "no agent answered and the lock is minutes old: it is left over");
+  releaseAgentLock(file);
+  // A lock created a moment ago with no id yet is an agent starting now: this start gives way.
+  writeFileSync(join(dir, AGENT_LOCK), "");
+  assert.equal(acquireAgentLock(dir), null);
 });

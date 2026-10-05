@@ -4,7 +4,7 @@
 // versions to run, and once a day it runs the end-to-end self-check.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hookVersion, loadConnection, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
@@ -81,22 +81,38 @@ export function spawnReplacement(dir: string): void {
 
 export const AGENT_LOCK = "agent.lock";
 
-/** Take the one-agent-per-home lock: created exclusively, or taken over when the process named in it
- *  is gone. Returns the lock file, or null while another live agent holds it. */
-export function acquireAgentLock(dir: string): string | null {
+/** How long a lock whose agent never answered on its local channel still counts as an agent starting up. */
+export const AGENT_LOCK_STARTING_MS = 60_000;
+
+/** Take the one-agent-per-home lock: created exclusively, or taken over when the agent named in it is
+ *  gone. The caller has already found no agent answering on the local channel, so a lock older than
+ *  AGENT_LOCK_STARTING_MS is left over even when its process id is alive: Windows reuses process ids
+ *  soon after a restart, and a sign-in after a reboot must not find "already running". A newer lock
+ *  is an agent still starting (or one whose id is not written yet): this start gives way.
+ *  Returns the lock file, or null while another agent holds it. */
+export function acquireAgentLock(dir: string, now = Date.now()): string | null {
   const file = join(dir, AGENT_LOCK);
   mkdirSync(dir, { recursive: true });
-  try { writeFileSync(file, String(process.pid), { flag: "wx" }); return file; } catch { /* held, or left behind */ }
-  const holder = Number(readFileSync(file, "utf8").trim());
-  if (Number.isInteger(holder) && holder > 0 && holder !== process.pid) {
+  const mine = `${process.pid} ${now}`;
+  try { writeFileSync(file, mine, { flag: "wx" }); return file; } catch { /* held, or left behind */ }
+  let text = "";
+  let written = now;
+  try { text = readFileSync(file, "utf8").trim(); written = statSync(file).mtimeMs; } catch { /* removed meanwhile */ }
+  const [pidText, atText] = text.split(/\s+/);
+  const holder = Number(pidText);
+  const at = Number(atText);
+  const since = Number.isFinite(at) && at > 0 ? at : written;
+  const fresh = now - since < AGENT_LOCK_STARTING_MS;
+  if (holder !== process.pid && fresh) {
+    if (!(Number.isInteger(holder) && holder > 0)) return null; // being written by an agent starting this moment
     try { process.kill(holder, 0); return null; } catch { /* that agent is gone: take the lock over */ }
   }
-  writeFileSync(file, String(process.pid));
+  writeFileSync(file, mine);
   return file;
 }
 
 export function releaseAgentLock(file: string): void {
-  try { if (readFileSync(file, "utf8").trim() === String(process.pid)) rmSync(file, { force: true }); } catch { /* already gone */ }
+  try { if (readFileSync(file, "utf8").trim().split(/\s+/)[0] === String(process.pid)) rmSync(file, { force: true }); } catch { /* already gone */ }
 }
 
 export async function startService(options: ServiceOptions): Promise<Service> {
