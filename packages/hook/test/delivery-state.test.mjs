@@ -108,3 +108,67 @@ test("the delivery queue keeps every record: no 7-day expiry and no cap that dro
     assert.equal(outbox.status().gaps, 0);
   } finally { outbox.close(); }
 });
+
+test("a bounded attempt cut off with records waiting is recorded as a timeout, not as nothing", () => {
+  const dir = fresh();
+  // What the hook saw on a slow workspace: no error, nothing accepted, records still queued.
+  recordDeliveryAttempt(dir, { lastSuccessAt: null, lastError: null, pending: 46 }, 1_000, null, 800);
+  let state = readDeliveryState(dir);
+  assert.equal(state.last_attempt_at, 1_000);
+  assert.match(state.last_error, /did not finish within 800 ms.*\(timeout\)$/);
+  assert.equal(state.last_status, null);
+  // An attempt with nothing waiting was not cut off, and a delivery clears the timeout.
+  const idle = fresh();
+  recordDeliveryAttempt(idle, { lastSuccessAt: null, lastError: null, pending: 0 }, 1_000, null, 800);
+  assert.equal(readDeliveryState(idle).last_error, null);
+  recordDeliveryAttempt(dir, { lastSuccessAt: 2_000, lastError: null, pending: 0 }, 2_000, null, 800);
+  state = readDeliveryState(dir);
+  assert.equal(state.last_error, null);
+  assert.equal(state.last_success_at, 2_000);
+  // A timeout never clears a refused connection: it says nothing about the credential.
+  recordDeliveryAttempt(dir, { lastSuccessAt: null, lastError: "ingest failed: HTTP 401", pending: 1 }, 3_000);
+  recordDeliveryAttempt(dir, { lastSuccessAt: null, lastError: null, pending: 1 }, 4_000, null, 800);
+  assert.equal(readDeliveryState(dir).invalid_since, 3_000);
+});
+
+/** A computer whose queue holds `count` records queued `ageMs` ago. */
+async function queued(count, ageMs) {
+  const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
+  const { LOSSLESS_OUTBOX, OUTBOX_FILE } = await import("../dist/delivery-report.js");
+  const dir = fresh();
+  const at = Date.now() - ageMs;
+  const outbox = new SqliteCloudOutbox(join(dir, OUTBOX_FILE), { ...LOSSLESS_OUTBOX, now: () => at });
+  try { for (let i = 0; i < count; i++) outbox.enqueue({ payload: { action_ref: { action_id: `q${i}` } }, signature: "s" }); }
+  finally { outbox.close(); }
+  return dir;
+}
+
+test("records that have never been delivered are a problem after a few minutes, even with no error recorded", async () => {
+  // The reported case: "last delivered never; last tried 4 seconds ago", 46 waiting, no error, and doctor said "All good."
+  const dir = await queued(46, 10 * 60_000);
+  writeFileSync(join(dir, "delivery.json"), JSON.stringify({ last_attempt_at: Date.now() - 4_000, last_success_at: null, last_error: null }));
+  const report = describeDelivery(dir, { url });
+  assert.match(report.lines[0], /^NOT DELIVERING: nothing from this computer has ever reached the workspace, and 46 record\(s\) wait/);
+  assert.equal(report.problems.length, 1, "doctor cannot say All good");
+  assert.match(report.problems[0], /no attempt recorded an error/);
+  assert.ok(report.problems[0].includes(cliCommand("flush")), "names the command that sends with no time limit");
+  // The same with the cause known.
+  recordDeliveryAttempt(dir, { lastSuccessAt: null, lastError: null, pending: 46 }, Date.now(), null, 800);
+  assert.match(describeDelivery(dir, { url }).problems[0], /\(timeout\)/);
+  assert.ok(describeDelivery(dir, { url }).lines.some((line) => /^last problem\s+delivery did not finish within 800 ms/.test(line)));
+});
+
+test("records queued a moment ago, or after the last delivery but behind a recent one, are not yet a problem", async () => {
+  const young = await queued(3, 30_000);
+  assert.deepEqual(describeDelivery(young, { url }).problems, []);
+  // Older records, but the workspace accepted something after they were queued: the queue is draining.
+  const draining = await queued(3, 10 * 60_000);
+  recordDeliveryAttempt(draining, { lastSuccessAt: Date.now() - 60_000, lastError: null, pending: 3 }, Date.now(), null);
+  assert.deepEqual(describeDelivery(draining, { url }).problems, []);
+  // Delivered before they were queued, and nothing since: stalled.
+  const stalled = await queued(3, 10 * 60_000);
+  recordDeliveryAttempt(stalled, { lastSuccessAt: Date.now() - 60 * 60_000, lastError: null, pending: 3 }, Date.now(), null);
+  const report = describeDelivery(stalled, { url });
+  assert.equal(report.problems.length, 1);
+  assert.match(report.lines[0], /nothing has reached the workspace since 60 minutes ago/);
+});
