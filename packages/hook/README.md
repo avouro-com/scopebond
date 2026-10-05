@@ -507,9 +507,14 @@ treated as that file. Every destination of a `git push` is checked in the common
 spellings (`refs/heads/main`, `HEAD:main`, a second refspec, `--repo`, `--all`,
 `--mirror`); a push whose destination is not on the command line (a git alias, a
 configured push refspec, `send-pack`) is denied, and a tags-only push is allowed. The
-agent running the hook's own `init`, `install`, `trust`, `uninstall` or `connect` is
-denied, and those commands also refuse a non-interactive terminal unless `--yes` is
-passed.
+agent running the hook's own `init`, `install`, `trust`, `uninstall`, `connect` or
+`login` is denied, and those commands also refuse a non-interactive terminal unless
+`--yes` is passed. So is the agent switching off the Scopebond Agent: `scopebond-agent
+autostart off`, stopping it by name (`pkill -f scopebond-agent`, `taskkill`, `wmic …
+terminate`), or a global uninstall of `@scopebond/agent` or `@scopebond/hook` (`npm
+uninstall -g`, `pnpm rm -g`, `yarn global remove`, `bun remove -g`). `scopebond-agent
+status`, `flush`, `check`, `repair` and `autostart on` stay allowed. A person can still
+run any of these from their own terminal, which the hook never sees.
 
 **Limits.** The hook sees the command text, not what a program does at run time. It
 does not follow a variable whose value it cannot see (`cat $FILE`), a path assembled

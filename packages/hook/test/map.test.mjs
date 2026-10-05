@@ -167,6 +167,27 @@ test("a shell redirection target emits a file.write the write-guard sees", () =>
   assert.ok(writePaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "printf pwned >>.claude/settings.json" } })).includes(".claude/settings.json"));
 });
 
+test("re-pointing the computer or switching off the Scopebond Agent maps to a write of the hook's policy", () => {
+  const selfWrite = (tool_name, command) => writePaths(mapClaudeToolUse({ tool_name, tool_input: { command } })).includes(".scopebond/policy.json");
+  for (const command of [
+    "npx @scopebond/hook login https://other.example",
+    "scopebond-agent autostart off",
+    "scopebond-agent autostart",
+    "pkill -f scopebond-agent",
+    "npm uninstall -g @scopebond/agent",
+    "yarn global remove @scopebond/hook",
+  ]) assert.ok(selfWrite("Bash", command), command);
+  for (const command of ["npm.cmd uninstall -g @scopebond/agent", "scopebond-agent.cmd autostart off", "Stop-Process -Name scopebond-agent"]) {
+    assert.ok(selfWrite("PowerShell", command), `PowerShell: ${command}`);
+  }
+  for (const command of [
+    "scopebond-agent status", "scopebond-agent flush", "scopebond-agent check", "scopebond-agent repair",
+    "scopebond-agent autostart on", "scopebond-agent run", "npm install -g @scopebond/agent", "npm uninstall @scopebond/hook",
+    "npm uninstall -g typescript", "pgrep -f scopebond-agent",
+    "wmic process where \"CommandLine like '%scopebond-agent%'\" get ProcessId",
+  ]) assert.ok(!selfWrite("Bash", command), `${command} must stay allowed`);
+});
+
 test("PowerShell and a generic Shell tool decompose like Bash (not an un-evaluated tool.<name>)", () => {
   const ps = mapClaudeToolUse({ tool_name: "PowerShell", tool_input: { command: "Remove-Item -Recurse -Force ." } });
   assert.equal(ps[0].intent.action_type, "shell.exec");
