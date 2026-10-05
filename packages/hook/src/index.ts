@@ -68,3 +68,11 @@ export { deriveInfraOperation, databaseFacts, databaseGuardActions, parseDestina
 export type { FileProbe, InfraContext, ReadContext, DatabaseFacts, DatabaseGuardAction } from "./typed-infra.js";
 export { classifySql } from "./sql-classify.js";
 export type { SqlClass, SqlVerb } from "./sql-classify.js";
+// Delivery, status and identity pieces the Scopebond Agent reuses (one implementation, one contract).
+export { readDeliveryState, writeDeliveryState, recordDeliveryAttempt, recordRulesCredential, DELIVERY_STATE_FILE } from "./delivery-state.js";
+export type { DeliveryState } from "./delivery-state.js";
+export { describeDelivery, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
+export { buildStatusJson, STATUS_SCHEMA } from "./status-json.js";
+export type { StatusJson } from "./status-json.js";
+export { refreshIfDue, refreshProof, REFRESH_WINDOW_MS } from "./credential-refresh.js";
+export { hookVersion, hookCommand, cliCommand } from "./version.js";
