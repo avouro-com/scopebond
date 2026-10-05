@@ -3,7 +3,10 @@
 // compiled patterns are pinned against the shipped starter policy, byte for byte.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compile, defaultRules, describeRules, pathRuleFor } from "../dist/index.js";
+import { compile, defaultRules, describeRules, pathRuleFor, loadRules, rulesPath } from "../dist/index.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { starterPolicy } from "../dist/index.js";
 
 const boundsOf = (policy) => Object.fromEntries(
@@ -145,4 +148,11 @@ test("describeRules names every protected location in plain words", () => {
   // The point of the command: no regex in the human output.
   assert.doesNotMatch(text, /\(\?!/, "no lookaheads in the plain-English view");
   assert.doesNotMatch(text, /\[rR\]/, "no case-folded character classes either");
+});
+
+test("rules.json saved with a byte-order mark keeps the person's rules (not the defaults)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-rules-bom-"));
+  const rules = { ...defaultRules(), protected_branches: ["release-only"] };
+  writeFileSync(rulesPath(dir), "\uFEFF" + JSON.stringify(rules));
+  assert.deepEqual(loadRules(dir)?.protected_branches, ["release-only"]);
 });

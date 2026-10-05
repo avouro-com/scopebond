@@ -54,7 +54,7 @@ export function loadConnection(dir: string): HookConnection | null {
   const path = connectionPath(dir);
   if (!existsSync(path)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<HookConnection>;
+    const parsed = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as Partial<HookConnection>;
     if (typeof parsed.url === "string" && typeof parsed.credential === "string") return parsed as HookConnection;
   } catch { /* fall through */ }
   return null;

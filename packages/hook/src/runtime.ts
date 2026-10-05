@@ -199,7 +199,7 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
  *  key, unavailable store) — the CLI turns that into a fail-closed deny. */
 export function createHookRuntime(config: RuntimeConfig) {
-  const policy = upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8")));
+  const policy = upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8").replace(/^\uFEFF/, "")));
   const agent = createSigner({ privateKeyPem: readFileSync(config.keyPath, "utf8") });
   const keys = new StaticPrincipalKeyRegistry([
     { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },

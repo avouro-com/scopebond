@@ -139,7 +139,7 @@ export function loadBudgetExport(dir: string, file: string, options: { apply: bo
   let raw: unknown;
   try {
     if (statSync(file).size > MAX_EXPORT_BYTES) return { state: "rejected", error: "schema_invalid", message: "the export file is larger than 1 MiB" };
-    raw = JSON.parse(readFileSync(file, "utf8"));
+    raw = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
   } catch (error) {
     return { state: "rejected", error: "schema_invalid", message: `the export could not be read as JSON (${(error as Error).name})` };
   }
