@@ -1,0 +1,54 @@
+{
+  "name": "@scopebond/agent",
+  "version": "0.0.0",
+  "description": "The Scopebond Agent — one resident process per user that delivers this computer's signed records to its Scopebond workspace, keeps its rules and connection current, and reports its health, so nobody has to run a command to keep it working.",
+  "license": "Apache-2.0",
+  "author": "Avouro LLC",
+  "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avouro-com/scopebond.git",
+    "directory": "packages/agent"
+  },
+  "bugs": {
+    "url": "https://github.com/avouro-com/scopebond/issues"
+  },
+  "keywords": [
+    "scopebond",
+    "ai-agents",
+    "agent",
+    "delivery",
+    "claude-code"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "scopebond-agent": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@scopebond/gateway": "workspace:^",
+    "@scopebond/hook": "workspace:^",
+    "@scopebond/sdk": "workspace:^"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

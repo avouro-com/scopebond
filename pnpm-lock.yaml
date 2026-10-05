@@ -42,6 +42,18 @@ importers:
         specifier: workspace:*
         version: link:../packages/verify
 
+  packages/agent:
+    dependencies:
+      '@scopebond/gateway':
+        specifier: workspace:^
+        version: link:../gateway
+      '@scopebond/hook':
+        specifier: workspace:^
+        version: link:../hook
+      '@scopebond/sdk':
+        specifier: workspace:^
+        version: link:../sdk
+
   packages/framework:
     dependencies:
       '@scopebond/gateway':

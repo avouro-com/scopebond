@@ -13,6 +13,7 @@ The Scopebond monorepo packages. Landing incrementally; entries marked
 | `github-action` | `scopebond-verify-pr` — the GitHub connector's boundary-lane runner (leaf): checks an agent pull request against policy in your own Actions runner before it can merge. | **experimental** (published 0.5.3) |
 | `mcp` | `scopebond-mcp` — the MCP proxy connector (leaf): one policy for every Model Context Protocol tool call, in-path in front of the upstream server, with a signed PEP-authorized receipt. | **experimental** (published 2.0.2) |
 | `framework` | The framework plugins (leaf): a cooperative (M0) in-process tool guard with Vercel AI SDK and LangGraph/LangChain adapters — policy checked before every tool call, with a signed-intent receipt. | **experimental** (published 0.3.7) |
+| `agent` | `scopebond-agent` — the Scopebond Agent: one resident process per user that delivers the hook's queued records, keeps the workspace rules and the connection current, repairs a lost hook entry and reports `scopebond.status.v1` on a token-protected local channel; starts with the user's sign-in. The hook keeps deciding every action without it. | **experimental** (new; tray and signed installers to follow) |
 | `attest` | Countersignature / receipt emission (ACTA envelope, `scopebond:receipt`). | `[PLANNED]` |
 | `contracts` | The on-chain vault, registry, and claim contracts (written fresh on OpenZeppelin primitives), verified on-chain. | `[PLANNED]` |
 | `conformance` | The conformance suite a build must pass to use the "Scopebond Gateway" name. | `[PLANNED]` |

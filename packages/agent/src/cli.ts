@@ -1,0 +1,82 @@
+#!/usr/bin/env node
+// scopebond-agent: run, look at and control the Scopebond Agent for this user.
+//
+//   scopebond-agent run                 run in the foreground (what autostart starts)
+//   scopebond-agent status [--json]     what the running agent reports, or why it is not running
+//   scopebond-agent flush               deliver now
+//   scopebond-agent repair              put the Scopebond hook back where agent settings lost it
+//   scopebond-agent autostart on|off    start with this user's sign-in, or stop doing so
+
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { isEphemeralPath, userHome } from "@scopebond/hook";
+import { computerStatus } from "./agent.js";
+import { disableAutostart, enableAutostart } from "./autostart.js";
+import { callAgent } from "./ipc.js";
+import { startService } from "./service.js";
+
+const [cmd = "help", ...rest] = process.argv.slice(2);
+const dir = process.env.SCOPEBOND_HOME ?? userHome();
+const cliPath = realpathSync(fileURLToPath(import.meta.url));
+
+function help(): void {
+  console.log(`Scopebond Agent — keeps this computer delivering to its Scopebond workspace.
+
+  scopebond-agent run                 run in the foreground (what autostart starts)
+  scopebond-agent status [--json]     what the agent reports about this computer
+  scopebond-agent flush               deliver waiting records now
+  scopebond-agent repair              put the Scopebond hook back where agent settings lost it
+  scopebond-agent autostart on|off    start with your sign-in, or stop doing so
+
+The hook keeps deciding every action on its own; the agent only keeps delivery, rules and the
+connection current. Home: ${dir}`);
+}
+
+async function main(): Promise<void> {
+  switch (cmd) {
+    case "run": {
+      const service = await startService({ dir });
+      const stop = () => { void service.stop().finally(() => process.exit(0)); };
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+      return;
+    }
+    case "status": {
+      const live = await callAgent(dir, "GET", "/status") as (ReturnType<typeof computerStatus> & { agent?: unknown }) | null;
+      const status = live ?? { ...computerStatus(dir), agent: null };
+      if (rest.includes("--json")) { console.log(JSON.stringify(status, null, 2)); return; }
+      const d = status.delivery;
+      console.log(`Scopebond Agent: ${live ? "running" : "not running"}`);
+      console.log(`  state            ${status.state}`);
+      console.log(`  connected        ${d.connected ? "yes" : "no"}`);
+      console.log(`  waiting to send  ${d.pending} record(s)${d.oldest_pending_age_s !== null ? `, oldest ${Math.round(d.oldest_pending_age_s / 60)} min` : ""}`);
+      if (d.last_error) console.log(`  last problem     ${d.last_error}`);
+      if (!live) console.log(`\nStart it with: scopebond-agent run   (or: scopebond-agent autostart on)`);
+      return;
+    }
+    case "flush":
+    case "repair": {
+      const answer = await callAgent(dir, "POST", `/${cmd}`, {}, 60_000);
+      if (!answer) { console.error("The Scopebond Agent is not running. Start it with: scopebond-agent run"); process.exitCode = 1; return; }
+      console.log(JSON.stringify(answer, null, 2));
+      return;
+    }
+    case "autostart": {
+      const on = rest[0] === "on";
+      if (rest[0] !== "on" && rest[0] !== "off") { console.error("usage: scopebond-agent autostart on|off"); process.exitCode = 1; return; }
+      if (on && isEphemeralPath(cliPath)) {
+        // npx runs from a cache npm clears; an autostart entry pointing there would stop working.
+        console.error("Install the agent first so autostart has a stable path: npm install -g @scopebond/agent");
+        process.exitCode = 1;
+        return;
+      }
+      console.log(on ? enableAutostart(cliPath) : disableAutostart());
+      return;
+    }
+    default:
+      help();
+      if (cmd !== "help" && cmd !== "--help") process.exitCode = 1;
+  }
+}
+
+void main().catch((error) => { console.error((error as Error).message); process.exitCode = 1; });
