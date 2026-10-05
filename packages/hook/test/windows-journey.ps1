@@ -112,7 +112,7 @@ function Invoke-HookEvent([string] $Command, [string] $Payload) {
   $proc = [System.Diagnostics.Process]::Start($psi)
   $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Payload)
   $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
-  $proc.StandardInput.Close()
+  $proc.StandardInput.BaseStream.Close()
   $out = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
   $proc.WaitForExit()
   return [pscustomobject]@{ Code = $proc.ExitCode; Out = $out }
@@ -252,7 +252,8 @@ try {
     # UTF-8 without a byte-order mark, as Claude Code writes it (Windows PowerShell's StreamWriter would add one).
     $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($payload)
     $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
-    $proc.StandardInput.Close()
+    # Close the stream itself: closing the .NET Framework writer would add its byte-order mark last.
+    $proc.StandardInput.BaseStream.Close()
     $out = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
     $proc.WaitForExit()
     $code = $proc.ExitCode
@@ -312,7 +313,12 @@ try {
         try { $running = $null -ne ($status.Out | ConvertFrom-Json).agent } catch { $running = $false }
         if (-not $running) { Start-Sleep -Seconds 1 }
       }
-      Assert $running "the agent is not running after autostart on:`n$($on.Out)"
+      if (-not $running) {
+        $log = Join-Path $sbHome 'agent.log'
+        $tail = if (Test-Path $log) { (Get-Content $log -Tail 20) -join "`n" } else { '(no agent.log)' }
+        $launcherText = if (Test-Path $launcher) { Get-Content $launcher -Raw } else { '(no launcher)' }
+        throw "the agent is not running after autostart on:`n$($on.Out)`nagent.log:`n$tail`nlauncher:`n$launcherText"
+      }
     }
     Check 'scopebond-agent.cmd check: the self-check passes and the workspace receives it' {
       $check = Invoke-Published 'scopebond-agent.cmd' @('check')
