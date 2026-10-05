@@ -1,12 +1,5 @@
 # @scopebond/agent
 
-## 0.2.2
-
-### Patch Changes
-
-- Updated dependencies [d2cec83]
-  - @scopebond/hook@0.15.2
-
 ## 0.2.1
 
 ### Patch Changes
