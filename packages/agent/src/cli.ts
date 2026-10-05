@@ -97,12 +97,15 @@ async function main(): Promise<void> {
       }
       // Turning autostart on also starts the agent now, so nobody has to sign out and in again.
       if (await callAgent(dir, "GET", "/status", undefined, 2_000)) { console.log("The Scopebond Agent is running."); return; }
-      startNow(dir);
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        if (await callAgent(dir, "GET", "/status", undefined, 1_000)) {
-          console.log(`The Scopebond Agent is running${process.platform === "win32" ? "; its icon is in the taskbar tray (it may be under the ^ arrow)" : ""}.`);
-          return;
+      // Each way of starting it gets a few seconds; a headless console that never starts falls back to a hidden cmd.exe.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (!startNow(dir, process.platform, attempt) && attempt > 0) break;
+        for (let i = 0; i < (attempt === 0 ? 12 : 18); i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          if (await callAgent(dir, "GET", "/status", undefined, 1_000)) {
+            console.log(`The Scopebond Agent is running${process.platform === "win32" ? "; its icon is in the taskbar tray (it may be under the ^ arrow)" : ""}.`);
+            return;
+          }
         }
       }
       console.log(`It starts at your next sign-in. To start it now: ${me} run`);
