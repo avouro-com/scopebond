@@ -1,5 +1,46 @@
 # @scopebond/github-action
 
+## 0.5.5
+
+### Patch Changes
+
+- Updated dependencies [c4514ca]
+- Updated dependencies [7736223]
+- Updated dependencies [8e42db0]
+- Updated dependencies [2a9b060]
+- Updated dependencies [6c3b253]
+  - @scopebond/gateway@0.14.0
+
+## 0.5.4
+
+### Patch Changes
+
+- Updated dependencies [433c8df]
+  - @scopebond/gateway@0.13.0
+  - @scopebond/policy-schema@0.6.0
+  - @scopebond/verify@0.4.3
+
+## 0.5.3
+
+### Patch Changes
+
+- Updated dependencies [3308250]
+  - @scopebond/gateway@0.12.0
+
+## 0.5.2
+
+### Patch Changes
+
+- Updated dependencies [6e61a3b]
+  - @scopebond/gateway@0.11.0
+
+## 0.5.1
+
+### Patch Changes
+
+- Updated dependencies [1b8be99]
+  - @scopebond/gateway@0.10.0
+
 ## 0.5.0
 
 ### Minor Changes

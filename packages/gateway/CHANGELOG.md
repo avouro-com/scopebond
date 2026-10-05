@@ -1,5 +1,58 @@
 # @scopebond/gateway
 
+## 0.14.0
+
+### Minor Changes
+
+- c4514ca: Each delivery queue has its own id, made once when the queue is created, and the exporter sends it beside the record numbers. The hook's rules check reports the queue id and the highest number the queue has given a record (`x-scopebond-queue-id`, `x-scopebond-seq-assigned`), so a workspace can tell numbering that restarted because the queue was removed from a resend, and count the records that queue never delivered.
+- 7736223: Sequenced delivery: the Cloud outbox gives each queued record this computer's number for it (1, 2, 3… in queue order, kept across restarts and never reused), and the exporter sends the numbers beside the receipts (`{ receipts, seq }`; the signed receipts are unchanged). A workspace that reads them can show records lost on the computer, for example aged out of the queue, as missing instead of silently absent. Queues made before this are upgraded in place; their waiting records stay unnumbered.
+
+### Patch Changes
+
+- 8e42db0: A record the workspace refuses only because this computer's clock is ahead of its own (`future_timestamp`) stays in the queue and is sent again, since it is accepted once the time passes; the records around it still deliver. Before, it was settled as a lost record when it shared a batch with others. After a day it is settled as a gap, so a clock that is badly wrong cannot hold the queue for ever. A record refused for a key the connection did not enroll (`attester_mismatch`) is kept the same way, since signing in again delivers it.
+- 2a9b060: A refused batch that no retry can deliver no longer holds up the records behind it. When the workspace refuses every record of a batch on its own as `invalid_receipt` (HTTP 400 with `rejected`), each becomes a "rejected" delivery gap, as inside an accepted batch. Any other code is retried: a timestamp ahead of the workspace's clock is accepted once the time passes, and a key the connection did not enroll is delivered after signing in again. A 409 `id_conflict` sends records one at a time until it finds the record that conflicts, which becomes an "id_conflict" gap; the rest go in batches again. Before, the exporter sent the same batch forever and every newer record waited. Every other refusal is retried with backoff, as before. A workspace that answers 429 or 503 with `Retry-After` is not asked again sooner (at most an hour).
+- 6c3b253: A Cloud delivery queue that cannot be set up (a full disk, a read-only file) closes its database handle before it reports the error, instead of leaving it open.
+
+## 0.13.0
+
+### Minor Changes
+
+- 433c8df: Warn mode. A workspace can set a rule to "Block, user may override": the hook then blocks a matching action until the person at the computer allows it once, with a reason, in the Scopebond Agent's window, or, where the workspace allows it and Claude Code's permission mode really asks the person, offers Claude Code's own prompt. Scopebond's own protection, rules on Block and the kill switch are never overridable; the workspace's daily limit and repeat window hold. The gateway takes an optional override handler on `handleAction` and signs an `override` record (rule, method, state, reason digest) into an approved receipt; `validateOverrideRecord` and the receipt schema define its exact shape.
+
+### Patch Changes
+
+- Updated dependencies [433c8df]
+  - @scopebond/policy-schema@0.6.0
+  - @scopebond/verify@0.4.3
+
+## 0.12.0
+
+### Minor Changes
+
+- 3308250: `status --json` prints the delivery and identity status in one machine-readable shape (`scopebond.status.v1`): `state` (`delivering`, `recording_locally` or `not_governing`), the last delivery and its error code, records waiting and the age of the oldest, delivery gaps by reason, this computer's installation, generation, key and credential expiry, and which configurations exist. The desktop agent and support read this, not the human text.
+
+  A record the workspace refuses on its own (the rest of the batch stored) now leaves the delivery queue as a `rejected` gap instead of being retried with every batch, so one bad record can never hold up the ones behind it; it stays in the local log. The SQLite outbox gains `recordGap` and `gapsByReason`.
+
+  A delivery conformance suite runs the real runtime and queue against a workspace that refuses the connection, fails with 5xx, stays unreachable for eight days, and refuses single records: in every case each record is delivered or accounted for.
+
+## 0.11.0
+
+### Minor Changes
+
+- 6e61a3b: When the workspace refuses an upload and says why, the exporter keeps its refusal code and remediation after the unchanged `ingest failed: HTTP <status>` prefix, for example `ingest failed: HTTP 401 (credential_refused): Sign it in again ...`. A refusal without a JSON body reads as before.
+
+## 0.10.0
+
+### Minor Changes
+
+- 1b8be99: Reconnecting a computer always works now. When the workspace refuses this computer's countersigning key because the computer was replaced or disconnected there, `login` and `connect` replace the key and enroll again with the same, unspent token. The old key is kept in `retired-keys/`. Queued receipts signed by the earlier key leave the delivery queue as `rekeyed` gaps, so they no longer hold up newer receipts, and they stay in the local log.
+
+  New `recover` command: it finds the local records an earlier key signed, asks the workspace to accept them, waits while an owner or admin approves it there, then sends them in bounded batches and reports how many were recovered, already present or refused. Nothing is re-signed.
+
+  `login` and `connect` run from a folder without its own project setup now repair the connection the hook actually uses, usually the user-level one, instead of creating a second, project-level setup beside it. `--project` sets up the current folder explicitly.
+
+  Gateway changes: enrollment refusals are a `CloudEnrollmentError` that carries the HTTP status and the workspace's code. `SqliteReceiptStore.page()` walks a large log without loading it into memory. `SqliteCloudOutbox.discardNotSignedBy()` sets aside queued receipts signed by another key.
+
 ## 0.9.0
 
 ### Minor Changes

@@ -1,9 +1,13 @@
 # @scopebond/verify
 
+**License and hosting:** this package is free, Apache-2.0 open-source software.
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service
+and is not included in this package.
+
 `scopebond-verify` — the deterministic, reproducible verdict library. The same
-code runs in the gateway (real-time, single receipt) and at claim time (over the
-full receipt set). **This is the moat-bearing artifact** (D27): whoever owns the
-reference `violates()` and the vectors owns the definition of a scope violation.
+code runs in the gateway (real-time, single receipt) and during later review (over the
+full receipt set). The reference `violates()` implementation and conformance
+vectors make policy evaluation reproducible across integrations.
 
 ```js
 import { violates, validateIntent, validatePolicy } from "@scopebond/verify";

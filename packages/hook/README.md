@@ -1,22 +1,32 @@
 # @scopebond/hook
 
-The Scopebond connector for **Claude Code**, **Cursor**, and **OpenAI Codex**. It checks every tool
-call a coding agent makes against your policy *before it runs*, blocks the ones
-outside policy, and records a signed receipt — locally, on the machine, and
-optionally mirrored to your Scopebond Cloud workspace for monitoring.
+The free, open-source Scopebond connector for **Claude Code**, **Cursor**, and
+**OpenAI Codex**. It checks supported actions delivered through the configured
+hook against your policy and signs decision records locally. Some actions are
+observed after they happen: Cursor file edits are recorded, not prevented. See
+the coverage table below before choosing what to protect.
 
-- **What it does:** checks supported agent actions before they run and blocks an
-  action when it breaks your policy.
+**License and hosting:** this package is Apache-2.0 open-source software.
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service.
+You can use the hook locally without a Cloud account, or optionally connect it
+for shared activity, rule review, and retained evidence. For hosted setup, start
+with the [workspace getting-started guide](https://scopebond.com/get-started).
+
+- **What it does:** blocks supported actions when a configured rule requires it,
+  and records evaluated decisions and supported observations.
 - **Where it works:** actions the coding agent routes through its tool system
   (shell, file, MCP, web). A process started outside the harness is not covered.
 
 ## Install once for your machine
 
 ```
-npm i -g @scopebond/hook
+npm i -g @scopebond/hook@latest
 scopebond install                   # detects Cursor and Codex
 scopebond install --codex           # set up Codex only
 ```
+
+In Windows PowerShell type `npm.cmd` and `scopebond.cmd` (PowerShell's default script policy blocks
+the plain names; the `.cmd` forms work without changing it).
 
 `install` sets Scopebond up **once per developer machine**, not per repository: it
 scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
@@ -48,9 +58,9 @@ Scopebond is also a Claude Code plugin (this repo is a plugin marketplace):
 ### Per-repository enroll (alternative)
 
 ```
-npx @scopebond/hook init            # Claude Code
-npx @scopebond/hook init --cursor   # Cursor
-npx @scopebond/hook init --codex    # Codex, then approve it once with /hooks
+npx -y @scopebond/hook@latest init            # Claude Code
+npx -y @scopebond/hook@latest init --cursor   # Cursor
+npx -y @scopebond/hook@latest init --codex    # Codex, then approve it once with /hooks
 ```
 
 `init` scaffolds `.scopebond/` in the current project (a machine signing key, a
@@ -58,7 +68,7 @@ countersigning key, a starter policy — "protect main and production paths" —
 `.gitignore` so none of it is committed) and wires your agent to the hook. Then run one
 safe command in the agent and see the receipt in `.scopebond/receipts.db`. `init`, `trust`
 and `uninstall` are meant for a person at a terminal: in a script or CI, pass `--yes`.
-`npx @scopebond/hook init --dry-run` shows what it would write, and changes nothing.
+`npx -y @scopebond/hook@latest init --dry-run` shows what it would write, and changes nothing.
 
 **Where the hook goes, and why.** `init` pins a copy of the hook on this machine so it
 starts fast on every tool call. That command names paths that exist only here, so it
@@ -77,8 +87,8 @@ portable command (`npx -y @scopebond/hook@<version> claude`) to `.claude/setting
 until a teammate runs `init` themselves it blocks their agent's actions with a message
 saying how to set it up.
 
-Check what it did with `npx @scopebond/hook status` (which agents are configured, in
-which scope) and `npx @scopebond/hook doctor` (whether each configured command can
+Check what it did with `npx -y @scopebond/hook@latest status` (which agents are configured, in
+which scope) and `npx -y @scopebond/hook@latest doctor` (whether each configured command can
 actually start).
 
 ### Changing the rules
@@ -88,11 +98,11 @@ a short readable list, and `policy.json` is compiled from it — so a limit is a
 list, not a 700-character lookahead:
 
 ```
-npx @scopebond/hook rules                      # what is blocked, in plain English
-npx @scopebond/hook rules allow dd             # stop blocking a program
-npx @scopebond/hook rules protect infra/       # never write there
-npx @scopebond/hook rules protect-branch production
-npx @scopebond/hook rules apply                # recompile after editing rules.json by hand
+npx -y @scopebond/hook@latest rules                      # what is blocked, in plain English
+npx -y @scopebond/hook@latest rules allow dd             # stop blocking a program
+npx -y @scopebond/hook@latest rules protect infra/       # never write there
+npx -y @scopebond/hook@latest rules protect-branch production
+npx -y @scopebond/hook@latest rules apply                # recompile after editing rules.json by hand
 ```
 
 The compiled patterns are identical to the ones this package has always shipped — there
@@ -138,10 +148,10 @@ is not seen. Run `capabilities` (below) for the exact per-cell picture.
 ### What this hook can honestly claim: `capabilities`
 
 ```
-npx @scopebond/hook capabilities            # the manifest, per agent host / action / phase
-npx @scopebond/hook capabilities --prove    # run the safe fixtures in temp directories
-npx @scopebond/hook capabilities --prove --save   # and record the result beside the policy
-npx @scopebond/hook capabilities --json
+npx -y @scopebond/hook@latest capabilities            # the manifest, per agent host / action / phase
+npx -y @scopebond/hook@latest capabilities --prove    # run the safe fixtures in temp directories
+npx -y @scopebond/hook@latest capabilities --prove --save   # and record the result beside the policy
+npx -y @scopebond/hook@latest capabilities --json
 ```
 
 Each cell is one connector version, agent host (Claude terminal / desktop, Codex CLI /
@@ -183,7 +193,7 @@ it nothing changes. Run `rules apply` after adding it.
 To see the receipts in your hosted Scopebond workspace, sign this computer in:
 
 ```
-npx @scopebond/hook login https://<your-workspace>
+npx -y @scopebond/hook@latest login https://<your-workspace>
 ```
 
 It prints a short code and a link. Someone who manages the workspace opens the link,
@@ -197,10 +207,39 @@ portal's **Connect** step (it gives you a one-use enrollment bundle), save it as
 `scopebond-enrollment.json`, then:
 
 ```
-npx @scopebond/hook connect https://<your-workspace> scopebond-enrollment.json
+npx -y @scopebond/hook@latest connect https://<your-workspace> scopebond-enrollment.json
 ```
 
-In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Enrollment registers both the gateway attester and the hook's separate agent signing key with proof of possession, so Cloud can verify authenticated receipts.
+In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Every command the hook prints for you to run uses `npx.cmd` on Windows.
+
+### Is it delivering?
+
+`status` shows when this computer last delivered records, how many are waiting to send and the
+last problem. Records are never dropped from the queue while they wait: a long outage only makes
+the queue longer. If the workspace refuses this computer's connection (it was revoked, replaced or
+removed), `status` says **NOT DELIVERING** with the time it stopped and the one command that fixes
+it, which is signing in again. `status` also says **NOT DELIVERING** when records have waited more
+than five minutes and the workspace has accepted nothing since they were queued, whatever the
+last error says, and names `flush`, which sends the queue with no time limit and prints the
+workspace's answer. Each tool call gives delivery a short time (800 ms, `SCOPEBOND_HOOK_FLUSH_MS`)
+before the hook exits; an attempt cut off by that limit is recorded as a `timeout` error rather
+than as nothing. `status --json` prints the same in one machine-readable shape (`scopebond.status.v1`) for tools and support: `delivery.last_error_code` is `timeout` for a cut-off attempt, `state` is `recording_locally` for a stalled queue, and `config.user_connection_shadowed` is true when a project setup takes precedence over your user-level sign-in in the current folder. `doctor` also checks that the workspace still accepts the connection,
+not only that it is reachable, and fails when it does not, when the queue is stalled, or when this
+folder's own setup takes precedence over your sign-in without being connected.
+
+`status` and `doctor` also say when an agent would ask Scopebond more than once for each action:
+the hook in your user settings and a project's, twice in one file, or an enabled Claude Code plugin
+beside a settings entry. Every action would then be signed and sent twice. `dedupe` keeps the
+user-level entry (`--keep project` or `--keep plugin` to keep another) and removes the rest,
+leaving other tools' hooks alone; the Scopebond Agent's daily self-check reports the same.
+
+The connection renews itself: in the last 30 days of its 90-day credential the hook renews it during its rules check, proving it still holds the key it enrolled with. With each rules check it also tells the workspace how many records wait to send (counts and one error line, never a record), so the portal can show a computer that checks in but is not delivering.
+
+Signing in sets Scopebond up for you across projects, from whatever folder you run it: it connects `~/.scopebond` and puts the hook in your user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json` or `~/.codex/hooks.json`), so every project on this computer is checked. `--project` connects the current folder's own setup (`.scopebond/`) instead. Signing in again never rewrites a settings file that already holds the right hook entry.
+
+A folder can still have its own project setup, from `init` or an earlier `login --project`. When that setup is trusted, it takes precedence over your sign-in for agent sessions opened in that folder: their rules come from it, and their records go to its own connection, or stay on this computer when it has none. `login` says so when you run it from such a folder, with how to remove it (delete the folder's `.scopebond/` and the Scopebond entry in its project agent settings), and `status` and `doctor` show it too.
+
+Enrollment registers both the gateway attester and the hook's separate agent signing key with proof of possession, so Cloud can verify authenticated receipts.
 
 `connect` does the whole setup in one command: it scaffolds `.scopebond/` if needed,
 enrolls this machine's countersigning key, stores a scoped machine credential in
@@ -212,9 +251,23 @@ can hand you a single copy-paste command with nothing to save.
 
 From then on every receipt is mirrored to the workspace through a **durable outbox**:
 delivery is best-effort and never blocks a tool call, and receipts are retained
-locally and retried if the workspace is unreachable. `npx @scopebond/hook flush`
+locally and retried if the workspace is unreachable. `npx -y @scopebond/hook@latest flush`
 delivers anything still queued — run it on a session-end hook (and set
-`SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency.
+`SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency. Records then wait until the
+session ends, so during a long session `status` and `doctor` report them as not delivered.
+
+**Reconnecting.** Run `login` again from any folder: it repairs your user-level connection
+instead of creating a second one; pass `--project` to reconnect the setup of the folder you
+are in. If the workspace
+no longer accepts this computer's countersigning key (the computer was replaced or
+disconnected there), `login` replaces the key and keeps the old one in
+`.scopebond/retired-keys/`.
+
+**Records signed by an earlier key.** The new connection cannot deliver records the earlier
+key signed, so they leave the delivery queue but stay in the local log.
+`npx -y @scopebond/hook@latest recover` asks the workspace to accept them, waits while an owner or
+admin approves it there, then sends them; the workspace checks each signature against the
+key it kept and labels the records as recovered.
 
 ### Rules set by your workspace
 
@@ -229,7 +282,7 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   (`SCOPEBOND_POLICY_SYNC_MS`); every other call only reads two small files. A change therefore
   applies within a few minutes of the agent's next action, and a workspace that is slow or
   unreachable never holds up the agent for longer than the cap. The new rules govern from the
-  next action. `npx @scopebond/hook policy sync` checks right now.
+  next action. `npx -y @scopebond/hook@latest policy sync` checks right now.
 - **What is checked.** A rules document must be complete, issued for this computer, match its
   digest and be newer than the one in force; the resulting policy must load. Anything else is
   refused, the rules already in force stay, and the refusal is reported to the workspace.
@@ -238,6 +291,15 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
 - **What the workspace cannot change.** Protection of Scopebond's own settings and of the
   agents' hook settings, the machine key policy, fail-closed handling of anything unreadable,
   and this computer's own opt-ins (`allowed_roots`, `protect_remote_database`).
+- **Overrides.** The workspace can set a rule to *Block, user may override* and say who may
+  override. A matching action is then blocked until the person at the computer allows it once,
+  with a reason, in the Scopebond Agent's window (`@scopebond/agent`): the hook asks the running
+  agent and waits up to 45 seconds (20 seconds for Codex and Cursor), then blocks. The receipt
+  records the override, the reason's digest and the rule; the workspace adds who and why. Where the
+  workspace allows it and the window is not available, Claude Code's own prompt is offered instead,
+  but only in a permission mode where Claude Code really asks; that prompt takes no reason and is
+  recorded as *offered*. Scopebond's own protection, rules set to Block and the kill switch are
+  never overridable, and the workspace's daily limit holds.
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left
@@ -440,8 +502,8 @@ slow the agent down. Nothing is ever deleted automatically — these are your ev
 `status` reports the count and size, and `prune` bounds it when you choose to:
 
 ```
-npx @scopebond/hook prune                      # report the footprint
-npx @scopebond/hook prune --before 90d --yes   # archive, then remove, anything older
+npx -y @scopebond/hook@latest prune                      # report the footprint
+npx -y @scopebond/hook@latest prune --before 90d --yes   # archive, then remove, anything older
 ```
 
 `prune` writes the receipts it will remove to a JSONL file beside the database first, so
@@ -471,9 +533,14 @@ treated as that file. Every destination of a `git push` is checked in the common
 spellings (`refs/heads/main`, `HEAD:main`, a second refspec, `--repo`, `--all`,
 `--mirror`); a push whose destination is not on the command line (a git alias, a
 configured push refspec, `send-pack`) is denied, and a tags-only push is allowed. The
-agent running the hook's own `init`, `install`, `trust`, `uninstall` or `connect` is
-denied, and those commands also refuse a non-interactive terminal unless `--yes` is
-passed.
+agent running the hook's own `init`, `install`, `trust`, `uninstall`, `connect` or
+`login` is denied, and those commands also refuse a non-interactive terminal unless
+`--yes` is passed. So is the agent switching off the Scopebond Agent: `scopebond-agent
+autostart off`, stopping it by name (`pkill -f scopebond-agent`, `taskkill`, `wmic …
+terminate`), or a global uninstall of `@scopebond/agent` or `@scopebond/hook` (`npm
+uninstall -g`, `pnpm rm -g`, `yarn global remove`, `bun remove -g`). `scopebond-agent
+status`, `flush`, `check`, `repair` and `autostart on` stay allowed. A person can still
+run any of these from their own terminal, which the hook never sees.
 
 **Limits.** The hook sees the command text, not what a program does at run time. It
 does not follow a variable whose value it cannot see (`cat $FILE`), a path assembled

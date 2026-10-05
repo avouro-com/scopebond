@@ -1,5 +1,9 @@
 # @scopebond/sdk
 
+**License and hosting:** this package is free, Apache-2.0 open-source software.
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service
+and is not included in this package.
+
 Operator-side SDK: sign an agent's action intents (Ed25519) and submit them to a
 Scopebond gateway. Zero dependencies (`node:crypto` + `fetch`).
 

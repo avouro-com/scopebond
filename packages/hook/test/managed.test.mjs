@@ -95,6 +95,8 @@ test("Monitor records and allows; Block stops; the guardrail floor never relaxes
     assert.deepEqual(await decide(dir, watch, [bash("git push --force origin main"), bash("rm -rf build"), read("/repo/.env"), write("/repo/.github/workflows/ci.yml")]), ["allow", "allow", "allow", "allow"]);
     // The floor: Scopebond's own settings and the agents' hook settings are always protected.
     assert.deepEqual(await decide(dir, watch, [write("/repo/.scopebond/policy.json"), write("/repo/.claude/settings.json"), write("/repo/.git/hooks/pre-push")]), ["deny", "deny", "deny"]);
+    // Reads of Scopebond's own folder (the computer's key and connection) stay stopped with secret reads on Monitor.
+    assert.deepEqual(await decide(dir, watch, [read("/repo/.scopebond/agent.key"), read("/srv/work/.scopebond/connection.json"), read("/repo/.SCOPEBOND/attester.key"), read("/repo/src/x.ts")]), ["deny", "deny", "deny", "allow"]);
     // List additions extend the computer's own list; they never shorten it.
     const more = compileManaged(defaultRules(), doc(4, { "destructive-shell": { mode: "block", destructive_programs: ["terraform"] }, "push-protected": { mode: "block", protected_branches: ["prod"] } }), agentKid);
     assert.deepEqual(await decide(dir, more, [bash("terraform destroy"), bash("rm -rf build"), bash("git push origin prod"), bash("git push origin main")]), ["deny", "deny", "deny", "deny"]);
@@ -105,6 +107,74 @@ test("Monitor records and allows; Block stops; the guardrail floor never relaxes
     assert.equal(sites.version, 5);
     assert.ok(sites.clauses.some((c) => c.id === "keys" && c.type === "key_policy"), "the machine key policy always stays");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an exclusion skips exactly the named path or branch, and never the guardrail floor", async () => {
+  const { dir, agentKid } = home();
+  try {
+    const skip = compileManaged(defaultRules(), doc(6, {
+      "secret-read": { mode: "block", excluded_paths: ["test/fixtures/.env", "fixtures/keys/**"] },
+      "ci-config-write": { mode: "block", excluded_paths: [".github/workflows/docs.yml", ".scopebond/policy.json", ".claude/settings.json"] },
+      "push-protected": { mode: "block", excluded_branches: ["release/approved-repair"] },
+    }), agentKid);
+    assert.ok(policyBuilds(skip));
+    // Exactly the named file or folder; a sibling, a different case or a longer name stays protected.
+    assert.deepEqual(await decide(dir, skip, [read("/repo/test/fixtures/.env"), read("/repo/test/other/.env"), read("/repo/fixtures/keys/a.pem"), read("/repo/.env")]), ["allow", "deny", "allow", "deny"]);
+    assert.deepEqual(await decide(dir, skip, [write("/repo/.github/workflows/docs.yml"), write("/repo/.github/workflows/DOCS.yml"), write("/repo/.github/workflows/ci.yml")]), ["allow", "deny", "deny"]);
+    // The floor never relaxes, whatever the workspace names.
+    assert.deepEqual(await decide(dir, skip, [write("/repo/.scopebond/policy.json"), write("/repo/.claude/settings.json")]), ["deny", "deny"]);
+    // Pushes: only the named branch; main and other release branches stay protected.
+    assert.deepEqual(await decide(dir, skip, [bash("git push origin release/approved-repair"), bash("git push origin main"), bash("git push origin release/approved-repair-2")]), ["allow", "deny", "deny"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an exclusion list is checked like any other setting", () => {
+  const at = (rules) => inspectManaged(doc(7, rules), { installationId: INSTALLATION, currentRevision: null });
+  assert.equal(at({ "secret-read": { mode: "block", excluded_paths: ["/etc/passwd"] } }).ok, false);
+  assert.equal(at({ "secret-read": { mode: "block", excluded_paths: ["a/../b"] } }).ok, false);
+  assert.equal(at({ "destructive-shell": { mode: "block", excluded_paths: ["x"] } }).ok, false, "only the rules that take paths accept them");
+  assert.equal(at({ "push-protected": { mode: "block", excluded_branches: ["release/*"] } }).ok, false, "an exclusion names one branch, not a pattern");
+  assert.equal(at({ "secret-read": { mode: "block", excluded_paths: ["config/dev.key"] } }).ok, true);
+});
+
+test("no exclusion, however written, reaches the always-on floor or climbs out of its folder", async () => {
+  const { dir, agentKid } = home();
+  try {
+    const wide = compileManaged(defaultRules(), doc(8, {
+      "ci-config-write": { mode: "block", excluded_paths: [".claude/**", ".git/**", ".codex/**", "src/**", "ci/**"] },
+      "secret-read": { mode: "block", excluded_paths: ["docs/**"] },
+    }), agentKid);
+    assert.ok(policyBuilds(wide));
+    assert.deepEqual(await decide(dir, wide, [
+      write("/repo/.claude/settings.json"), write("/repo/.git/hooks/pre-commit"), write("/repo/.git/config"), write("/repo/.codex/hooks.json"),
+      write("/repo/src/../.claude/settings.json"), write("/repo/src/../.scopebond/policy.json"), write("/repo/./.claude/settings.json"),
+    ]), ["deny", "deny", "deny", "deny", "deny", "deny", "deny"]);
+    assert.deepEqual(await decide(dir, wide, [read("/repo/docs/../.env"), read("/repo/docs/../.scopebond/agent.key")]), ["deny", "deny"]);
+    // The folder itself still works for ordinary files in it.
+    assert.deepEqual(await decide(dir, wide, [read("/repo/docs/sample/.env")]), ["allow"]);
+    // A "." segment or a bare "**" is refused when the document is checked.
+    const at = (rules) => inspectManaged(doc(9, rules), { installationId: INSTALLATION, currentRevision: null });
+    assert.equal(at({ "ci-config-write": { mode: "block", excluded_paths: ["./**"] } }).ok, false);
+    assert.equal(at({ "ci-config-write": { mode: "block", excluded_paths: ["a/./b"] } }).ok, false);
+    assert.equal(at({ "push-protected": { mode: "block", excluded_branches: ["--all"] } }).ok, false, "a branch exclusion can never be a push flag");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("skipping ordinary pushes to a branch never skips its history protection", async () => {
+  const { dir, agentKid } = home();
+  try {
+    const p = compileManaged(defaultRules(), doc(10, { "push-protected": { mode: "block", excluded_branches: ["main"] } }), agentKid);
+    assert.deepEqual(await decide(dir, p, [bash("git push origin main"), bash("git push --force origin main"), bash("git push origin --delete main")]), ["allow", "deny", "deny"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the same version with different rules is accepted; the same rules again are not a new document", () => {
+  const d = doc(3, { "secret-read": { mode: "block", excluded_paths: ["config/dev.key"] } });
+  assert.equal(inspectManaged(d, { installationId: INSTALLATION, currentRevision: 3, currentDigest: digestRules(defaults()) }).ok, true);
+  const same = inspectManaged(d, { installationId: INSTALLATION, currentRevision: 3, currentDigest: d.rules_digest });
+  assert.equal(same.ok, false);
+  assert.equal(same.reason, "stale_revision");
+  assert.equal(inspectManaged(doc(2), { installationId: INSTALLATION, currentRevision: 3, currentDigest: "x" }).ok, false, "an older version is never accepted");
 });
 
 function fakeWorkspace(responses) {
@@ -138,6 +208,8 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
     const d1 = doc(1, { "push-protected": { mode: "monitor" } });
     w = fakeWorkspace([{ status: 200, body: d1, etag: `"1:${d1.rules_digest}"` }]);
     assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "applied", revision: 1 });
+    assert.equal(w.calls[0].headers["x-scopebond-hook-version"], "0.10.0", "the fetch says which hook version asks, so the workspace sends only settings it understands");
+    assert.equal(w.calls[0].headers["x-scopebond-pending"], "0", "the rules check reports how many records wait to send, so the portal can tell checking in from delivering");
     assert.ok(isManaged(dir));
     assert.notEqual(readFileSync(join(dir, "policy.json"), "utf8"), localPolicy);
     assert.ok(existsSync(join(dir, "policy.previous.json")));
@@ -148,6 +220,9 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
     assert.equal(w.calls[0].headers["if-none-match"], `"1:${d1.rules_digest}"`);
     assert.equal(w.calls.length, 1);
     // An older version is refused and the refusal is confirmed; the rules in force stay.
+    const d2 = doc(2, { "push-protected": { mode: "monitor" } });
+    w = fakeWorkspace([{ status: 200, body: d2, etag: `"2:${d2.rules_digest}"` }]);
+    assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "applied", revision: 2 });
     const inForce = readFileSync(join(dir, "policy.json"), "utf8");
     const old = doc(1, { "secret-read": { mode: "monitor" } });
     w = fakeWorkspace([{ status: 200, body: old }]);
@@ -241,4 +316,20 @@ test("a tool call finishes promptly when the workspace never answers: no helper 
     rmSync(dir, { recursive: true, force: true });
     rmSync(userHomeDir, { recursive: true, force: true });
   }
+});
+
+test("the rules check names the delivery queue and the highest number it has given a record (SB289)", async () => {
+  const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
+  const { dir, agentKid } = connected();
+  try {
+    const outbox = new SqliteCloudOutbox(join(dir, "receipts.db.cloud-outbox.db"));
+    for (const id of ["action:q-0001", "action:q-0002"]) outbox.enqueue({ payload: { action_ref: { action_id: id } }, signature: { alg: "Ed25519", sig: "fixture" } });
+    const queueId = outbox.status().queueId;
+    outbox.close();
+    const w = fakeWorkspace([{ status: 204 }]);
+    await syncPolicy(dir, { agentKid, hookVersion: "0.10.0", policyBuilds, fetchImpl: w.fetchImpl });
+    assert.equal(w.calls[0].headers["x-scopebond-queue-id"], queueId);
+    assert.equal(w.calls[0].headers["x-scopebond-seq-assigned"], "2");
+    assert.equal(w.calls[0].headers["x-scopebond-pending"], "2");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

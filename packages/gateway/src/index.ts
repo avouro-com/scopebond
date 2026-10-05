@@ -4,7 +4,7 @@ export {
 } from "./app.js";
 export type {
   Gateway, GatewayConfig, Executor, ExecutionResult, ExecutionQueryResult,
-  ActionRequest, ActionResult, ObservationResult,
+  ActionRequest, ActionResult, ObservationResult, OverrideHandler, ActionOptions,
 } from "./app.js";
 export { createHttpExecutor, createSupportRefundExecutor } from "./executors.js";
 export type { HttpExecutorOptions, SupportRefundExecutorOptions } from "./executors.js";
@@ -14,7 +14,7 @@ export {
   MemoryReceiptStore, createAttester, attesterFromPrivateKeyPem, verifyReceipt,
   buildReceipt, canonical, sha256, intentHash, ed25519JwkToSpkiPem, deriveKid,
   minimizeIntentForEvidence, EVIDENCE_VERSION, REDACTION_PROFILE, EXECUTION_STATES,
-  CANONICALIZATION, validateEvidencePayload,
+  CANONICALIZATION, validateEvidencePayload, validateOverrideRecord,
   classifyEvidenceClass, EVIDENCE_CLASSES, BOUNDARY_GATES, buildBoundaryReceipt, buildPepReceipt,
 } from "./receipts.js";
 export type {
@@ -23,6 +23,7 @@ export type {
   AuthorityReservation, AuthorityFinalState, AuthorityReservationResult, ReceiptContext,
   AuthorityLifecycleState, ActionLifecycleRecord, StopState, PriorScope,
   EvidenceClass, BoundaryGate, AttributionKind, PepPrincipal, BoundaryEvidence, BoundaryReceiptInput, PepReceiptInput,
+  OverrideRecord,
 } from "./receipts.js";
 export {
   AUTHORIZATION_VERSION, AuthorizationError, StaticPrincipalKeyRegistry,
@@ -53,7 +54,7 @@ export type { Ed25519Jwk } from "./webcrypto.js";
 export { KvReceiptStore, loadOrCreateKvAttester, createWorkerGateway } from "./workers.js";
 export type { KvLike } from "./workers.js";
 export { createCloudExporter, createMemoryCloudOutbox, withCloudExporter } from "./cloud.js";
-export { completeCloudEnrollment } from "./enrollment.js";
+export { completeCloudEnrollment, CloudEnrollmentError } from "./enrollment.js";
 export type { CloudEnrollmentBundle, CloudEnrollmentResult } from "./enrollment.js";
 export type {
   CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus,

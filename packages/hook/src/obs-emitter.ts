@@ -26,7 +26,7 @@ import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConnection, type HookConnection } from "./cloud.js";
+import { ingestUrl, loadConnection, type HookConnection } from "./cloud.js";
 import {
   operationsForCall, capabilityProofData, digestPolicy, heartbeatData, intentData, loadOrCreateBindingKey, observationSigner,
   outcomeData, policyAckData, queueData, sessionStartData, sessionStopData, sourceReceiptHash,
@@ -146,7 +146,7 @@ export class ObservationEmitter {
   async flush(timeoutMs = this.options.flushTimeoutMs ?? 800): Promise<UploadOutcome | null> {
     try {
       return await uploadPending(this.store, {
-        url: this.connection.url, credential: this.connection.credential,
+        url: ingestUrl(this.connection), credential: this.connection.credential,
         fetch: this.options.fetch, now: this.options.now, timeoutMs,
       });
     } catch { return null; }

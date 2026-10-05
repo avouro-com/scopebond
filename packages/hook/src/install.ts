@@ -270,9 +270,15 @@ const entryMatches = harnessEntryMatches;
 /** Read an agent's JSON config for merging. A missing file is an empty config; a file
  *  that exists but does not parse as a JSON object is an error — rewriting it would
  *  silently delete the user's other settings, so the installer stops instead. */
+/** A config file's text without a UTF-8 byte-order mark: Windows PowerShell 5.1 writes one
+ *  (Set-Content -Encoding UTF8), and JSON.parse refuses the whole file because of it. */
+export function readConfigText(file: string): string {
+  return readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+}
+
 export function readHarnessConfig(file: string): Record<string, unknown> {
   if (!existsSync(file)) return {};
-  const text = readFileSync(file, "utf8");
+  const text = readConfigText(file);
   if (!text.trim()) return {};
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch (error) {
@@ -301,8 +307,7 @@ export function backupHarnessConfig(file: string): string | null {
  *  Shared by the project installer (npx command) and the user installer (absolute path). */
 export function writeHarnessConfig(file: string, harness: Harness, command: string): string {
   const config = readHarnessConfig(file);
-  backupHarnessConfig(file);
-  mkdirSync(dirname(file), { recursive: true });
+  const before = existsSync(file) ? JSON.stringify(config) : null;
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   if (harness === "cursor") {
     config.version = config.version ?? 1;
@@ -322,6 +327,12 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
       : { matcher: "*", hooks: [{ type: "command", command }] };
     if (at >= 0) list[at] = entry; else list.push(entry);
   }
+  // SB276: a settings file that already holds exactly this entry is left byte-for-byte
+  // untouched — no rewrite, no backup. A running agent session watches this file, and
+  // rewriting it (even with the same content) is what disturbed a live session on re-login.
+  if (before !== null && JSON.stringify(config) === before) return file;
+  backupHarnessConfig(file);
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return file;
 }
@@ -367,7 +378,7 @@ export function absoluteHookCommand(cliPath: string, harness: Harness): string {
 export function isHarnessConfigured(file: string): boolean {
   if (!existsSync(file)) return false;
   try {
-    const p = JSON.parse(readFileSync(file, "utf8"));
+    const p = JSON.parse(readConfigText(file));
     if (!isRecord(p) || !isRecord(p.hooks)) return false;
     return Object.values(p.hooks).some((v) => Array.isArray(v) && v.some(entryMatches));
   } catch { return false; }
@@ -385,7 +396,7 @@ export function configuredHookCommands(file: string): string[] {
     if (Array.isArray(entry.hooks)) for (const h of entry.hooks) collect(h);
   };
   try {
-    const p = JSON.parse(readFileSync(file, "utf8"));
+    const p = JSON.parse(readConfigText(file));
     if (!isRecord(p) || !isRecord(p.hooks)) return [];
     for (const list of Object.values(p.hooks)) if (Array.isArray(list)) for (const e of list) collect(e);
   } catch { return []; }

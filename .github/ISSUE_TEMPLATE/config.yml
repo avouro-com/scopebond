@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Hosted workspace support
+    url: https://scopebond.com/get-started
+    about: Scopebond Cloud is a separate proprietary service. For account help, contact support@scopebond.com; use this repository for open-source package issues.
   - name: Security vulnerability
     url: https://github.com/avouro-com/scopebond/security/advisories/new
     about: Please report vulnerabilities privately — see SECURITY.md. Do not open a public issue.

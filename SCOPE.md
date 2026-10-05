@@ -1,16 +1,20 @@
 # Scope policy
 
-Scopebond is an open-source checkpoint for AI coding agents (Claude Code, Cursor, MCP,
-GitHub) that blocks out-of-policy actions before they run and signs every decision into
-a tamper-evident record anyone can verify offline.
+This repository contains Scopebond's free, Apache-2.0 open-source guardrails and
+verification components for AI coding agents: Claude Code, Cursor, Codex, MCP,
+framework tools, and GitHub pull requests. They check supported actions routed
+through configured connections and produce verifiable records. Scopebond Cloud,
+the hosted shared workspace, is a separate proprietary service and is not included.
 
 This is the contract that decides what belongs in Scopebond. It is written for
 two readers: contributors, and the **automated scope-review agent** that reads
 every pull request and issue and judges it against this document. Keep it precise —
 the agent's verdict is only as good as this document.
 
-The product's one rule: **prevent what you can, collateralize what you can't
-prevent, refuse what you can't observe.**
+The current product connects visibility, control, and evidence for supported coding
+tools. Additional business-platform connections, collateral deposits, and registry
+features are future concepts, not current product capabilities or a request to
+implement them. Substantive scope changes still require maintainer sign-off.
 
 ## In scope
 
@@ -22,8 +26,8 @@ prevent, refuse what you can't observe.**
 - **The verdict layer** — `scopebond-verify` (`violates(policy, receipts, claimed)`),
   the policy schema, the test vectors, and the conformance suite. Deterministic,
   reproducible, no network, no clock.
-- **The registry** — indexer and read API over verified receipt histories; the
-  on-chain contracts (written fresh), verified on-chain.
+- **Future registry work** — indexer, read API, and on-chain contracts are parked;
+  route proposals to a maintainer rather than treating them as current work.
 - **Portability** — anything that lets a track record be read by any counterparty
   without a platform's permission.
 - **Framework/wallet integrations** — as separate leaf packages that emit

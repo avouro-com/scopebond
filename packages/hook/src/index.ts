@@ -23,9 +23,11 @@ export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYP
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
   inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules,
-  MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE,
+  MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument,
 } from "./managed.js";
-export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason } from "./managed.js";
+export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms } from "./managed.js";
+export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE } from "./override.js";
+export type { OverrideContext, OverrideNote, AgentAnswer } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS } from "./policy-sync.js";
 export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";
@@ -47,7 +49,7 @@ export {
   ensureDurableRuntime, isEphemeralPath, nodeModulesRootOf, runtimeRoot, runtimeDirFor, pinnedCliPath,
 } from "./runtime-install.js";
 export type { PinResult } from "./runtime-install.js";
-export { connectCloud, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
+export { connectCloud, ingestUrl, loadConnection, attachExporter, flushBounded, connectionPath } from "./cloud.js";
 export type { HookConnection } from "./cloud.js";
 export { scrubSecrets, scrubParam, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 export {
@@ -68,3 +70,14 @@ export { deriveInfraOperation, databaseFacts, databaseGuardActions, parseDestina
 export type { FileProbe, InfraContext, ReadContext, DatabaseFacts, DatabaseGuardAction } from "./typed-infra.js";
 export { classifySql } from "./sql-classify.js";
 export type { SqlClass, SqlVerb } from "./sql-classify.js";
+// Delivery, status and identity pieces the Scopebond Agent reuses (one implementation, one contract).
+export { readDeliveryState, writeDeliveryState, recordDeliveryAttempt, recordRulesCredential, DELIVERY_STATE_FILE } from "./delivery-state.js";
+export type { DeliveryState } from "./delivery-state.js";
+export { describeDelivery, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
+export { buildStatusJson, STATUS_SCHEMA } from "./status-json.js";
+export type { StatusJson } from "./status-json.js";
+export { refreshIfDue, refreshProof, REFRESH_WINDOW_MS } from "./credential-refresh.js";
+export { hookVersion, hookCommand, cliCommand } from "./version.js";
+export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
+export type { HookEntry, HookScope } from "./duplicates.js";
+export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";

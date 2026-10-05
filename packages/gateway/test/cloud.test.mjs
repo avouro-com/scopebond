@@ -93,7 +93,10 @@ test("bounded outbox reports conflicts, capacity drops, and expiry as delivery g
   assert.equal(outbox.enqueue(receipt("action:bounded-outbox-0002")).gap.reason, "capacity");
   now += 101;
   assert.equal(outbox.peek(10, now).length, 0);
-  assert.deepEqual(outbox.status(), {
+  const { queueId, seqAssigned, ...status } = outbox.status();
+  assert.match(queueId, /^[0-9a-f]{32}$/);
+  assert.equal(seqAssigned, 1);
+  assert.deepEqual(status, {
     pending: 0,
     pendingBytes: 0,
     oldestEnqueuedAt: null,
@@ -165,4 +168,41 @@ test("SQLite gap detail is bounded while its cumulative count survives restart",
   assert.equal(reopened.status().latestGap.id, "action:gap-limit-0004");
   reopened.close();
   rmSync(directory, { recursive: true, force: true });
+});
+
+test("a refusal keeps the workspace's code and remediation after the unchanged HTTP prefix", async () => {
+  const ex = createCloudExporter({
+    url: "https://c", credential: "sbm_k", outbox: createMemoryCloudOutbox(), batchSize: 10, flushMs: 1e9,
+    fetch: async () => new Response(JSON.stringify({ error: "unauthorized", code: "credential_refused", remediation: "Sign it in again." }), { status: 401 }),
+  });
+  ex.enqueue(receipt("action:cloud-refused-0001"));
+  await ex.flush();
+  assert.equal(ex.status().lastError, "ingest failed: HTTP 401 (credential_refused): Sign it in again.");
+  ex.stop();
+  const plain = createCloudExporter({
+    url: "https://c", credential: "sbm_k", outbox: createMemoryCloudOutbox(), batchSize: 10, flushMs: 1e9,
+    fetch: async () => new Response("<html>bad gateway</html>", { status: 502 }),
+  });
+  plain.enqueue(receipt("action:cloud-refused-0002"));
+  await plain.flush();
+  assert.equal(plain.status().lastError, "ingest failed: HTTP 502");
+  plain.stop();
+});
+
+test("a record the workspace refuses on its own leaves the queue as a rejected gap and blocks nothing", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-outbox-rejected-"));
+  const outbox = new SqliteCloudOutbox(join(dir, "q.db"));
+  const gaps = [];
+  const ex = createCloudExporter({
+    url: "https://c", credential: "sbm_k", outbox, batchSize: 10, flushMs: 1e9, onGap: (g) => gaps.push(g),
+    fetch: async () => new Response(JSON.stringify({ ok: true, ingested: 1, rejected: [{ index: 0, code: "invalid_receipt" }] }), { status: 200 }),
+  });
+  ex.enqueue(receipt("action:refused-0001"));
+  ex.enqueue(receipt("action:refused-0002"));
+  await ex.flush();
+  assert.equal(ex.pending(), 0);
+  assert.deepEqual(gaps.map((g) => [g.id, g.reason]), [["action:refused-0001", "rejected"]]);
+  assert.deepEqual(outbox.gapsByReason(), { rejected: 1 });
+  ex.stop();
+  rmSync(dir, { recursive: true, force: true });
 });

@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/sdk",
-  "version": "0.1.3",
-  "description": "Scopebond SDK — operator-side Ed25519 signing of agent action intents and a thin client for submitting them to a Scopebond gateway.",
+  "version": "0.1.4",
+  "description": "Open-source Scopebond SDK for signing action intents and approvals and submitting them to a policy gateway.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/sdk#readme",

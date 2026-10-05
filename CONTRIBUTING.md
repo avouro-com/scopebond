@@ -1,8 +1,8 @@
 # Contributing to Scopebond
 
-Thanks for your interest. Scopebond is open source (Apache-2.0) and built mostly
-with AI assistance. This guide covers how to contribute and the boundaries that
-keep the project healthy and safe.
+Thanks for your interest. The software in this repository is free and open source
+(Apache-2.0). Scopebond Cloud, the hosted shared workspace, is a separate
+proprietary service. This guide covers contributions to the open-source software.
 
 ## Before you start — is it in scope?
 
@@ -16,7 +16,9 @@ silently closed.
 
 ## Getting started
 
-1. Install [Node ≥ 20](.nvmrc) and `pnpm`.
+1. Use the [Node version pinned for this repository](.nvmrc) and pnpm 9.12.0
+   (the `packageManager` in `package.json`). Individual packages have their own
+   runtime requirements; the hook and Scopebond Agent require Node >=22.13.
 2. `pnpm install` — this also activates the local git hooks
    (`git config core.hooksPath .githooks`).
 3. Make your change on a branch, add tests, and run `pnpm run gate` and

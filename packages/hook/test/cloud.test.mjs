@@ -150,7 +150,8 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
     const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
     for (const command of ["doctor", "flush"]) {
       const result = await promisify(execFile)(process.execPath, [cli, command], {
-        cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, timeout: 15_000,
+        // Its own home folder: a Scopebond hook in the real user settings would be a duplicate of this project's.
+        cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: join(dir, "home"), USERPROFILE: join(dir, "home") }, timeout: 15_000,
       });
       assert.doesNotMatch(result.stderr, /Assertion failed/);
       assert.match(result.stdout, command === "doctor" ? /All good/ : /0 receipt\(s\) still pending/);
@@ -190,4 +191,30 @@ test("receipts survive when Cloud is unreachable and export is best-effort", asy
   assert.equal(decision.decision, "allow");
   await runtime.flush(); // bounded; must resolve despite the unreachable Cloud
   assert.ok(runtime.exporter.pending() >= 1, "the undelivered receipt is retained in the durable outbox");
+});
+
+test("connecting this computer puts the hook in the user-level agent settings, not the current folder", async () => {
+  const home = mkdtempSync(join(tmpdir(), "sb-hook-home-"));
+  const scratch = mkdtempSync(join(tmpdir(), "sb-hook-scratch-"));
+  const sbHome = join(home, ".scopebond");
+  scaffold(sbHome);
+  const { attester } = loadOrCreateAttester({ file: join(sbHome, "attester.key") });
+  const { attester: agent } = loadOrCreateAttester({ file: join(sbHome, "agent.key") });
+  const cloud = await startFakeCloud(attester, agent);
+  try {
+    const bundleFile = join(scratch, "scopebond-enrollment.json");
+    writeFileSync(bundleFile, JSON.stringify(bundle));
+    const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+    const env = { ...process.env, HOME: home, USERPROFILE: home };
+    delete env.SCOPEBOND_HOME; delete env.SCOPEBOND_HOOK_DIR; delete env.CLAUDE_PROJECT_DIR;
+    const result = await promisify(execFile)(process.execPath, [cli, "connect", cloud.url, bundleFile, "--claude"], { cwd: scratch, env, timeout: 30_000 });
+    assert.match(result.stdout, /Connected to/);
+    const userSettings = join(home, ".claude", "settings.json");
+    assert.ok(existsSync(userSettings), result.stdout + result.stderr);
+    assert.match(readFileSync(userSettings, "utf8"), /claude/);
+    assert.equal(existsSync(join(scratch, ".claude")), false, "nothing written into the folder the command ran from");
+    assert.ok(existsSync(join(sbHome, "cloud.json")), "the connection belongs to this computer");
+  } finally {
+    cloud.close();
+  }
 });

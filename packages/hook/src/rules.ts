@@ -241,7 +241,7 @@ export function loadRules(configDir: string): RuleSet | null {
   const file = rulesPath(configDir);
   if (!existsSync(file)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as RuleSet;
+    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as RuleSet;
     if (parsed?.version !== 1 || !Array.isArray(parsed.protected_branches)) return null;
     return parsed;
   } catch { return null; }

@@ -17,6 +17,27 @@
 import { closeSync, existsSync, openSync, rmSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { connectionPath, loadConnection } from "./cloud.js";
+import { readDeliveryState, recordRulesCredential } from "./delivery-state.js";
+import { queueStatus } from "./delivery-report.js";
+import { refreshIfDue } from "./credential-refresh.js";
+
+/** What this computer sends the workspace about its own delivery queue with each rules check, so
+ *  the portal can say "checking in but not delivering" instead of "reporting". Counts and one
+ *  error line only; never a record. */
+function deliveryHeaders(dir: string): Record<string, string> {
+  try {
+    const { pending, oldest, queueId, seqAssigned } = queueStatus(dir);
+    const state = readDeliveryState(dir);
+    return {
+      "x-scopebond-pending": String(pending),
+      ...(oldest !== null ? { "x-scopebond-oldest-pending-at": String(oldest) } : {}),
+      // SB289: which queue, and the highest number it has given a record. If this queue is later
+      // removed, the workspace knows how many of its numbers never arrived.
+      ...(queueId ? { "x-scopebond-queue-id": queueId, "x-scopebond-seq-assigned": String(seqAssigned ?? 0) } : {}),
+      ...(state.last_error ? { "x-scopebond-last-error": state.last_error.replace(/[^\x20-\x7e]/g, " ").slice(0, 200) } : {}),
+    };
+  } catch { return {}; }
+}
 import {
   inspectManaged, installManaged, isManaged, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
@@ -80,7 +101,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let res: Response;
   try {
     res = await fetchImpl(`${base}/v1/policy`, {
-      headers: { ...auth, ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}) },
+      // The hook's version tells the workspace which settings this computer understands (for example exact-target
+      // exclusions), so it is never sent a document an older hook would refuse.
+      headers: { ...auth, ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -88,6 +111,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     return { state: "unavailable", message: "could not reach the workspace" };
   }
 
+  recordRulesCredential(dir, res.status !== 401, now.getTime());
+  // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
+  if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
   if (res.status === 401) {
     backToOwnRules();
     save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules" });
@@ -123,7 +149,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     save({ etag, last_ack: confirmed, last_error: null });
     return { state: "unchanged", revision: meta.revision };
   }
-  const inspected = inspectManaged(raw, { installationId, currentRevision: isManaged(dir) ? meta.revision : null });
+  const inspected = inspectManaged(raw, { installationId, currentRevision: isManaged(dir) ? meta.revision : null, currentDigest: isManaged(dir) ? meta.rules_digest : null });
   const echo = typeof r.export_id === "string" && Number.isInteger(r.revision) && typeof r.rules_digest === "string" && /^[0-9a-f]{64}$/.test(r.rules_digest)
     ? { export_id: r.export_id, revision: r.revision as number, rules_digest: r.rules_digest } : null;
   if (!inspected.ok) {

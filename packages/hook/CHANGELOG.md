@@ -1,5 +1,136 @@
 # @scopebond/hook
 
+## 0.17.0
+
+### Minor Changes
+
+- c4514ca: Each delivery queue has its own id, made once when the queue is created, and the exporter sends it beside the record numbers. The hook's rules check reports the queue id and the highest number the queue has given a record (`x-scopebond-queue-id`, `x-scopebond-seq-assigned`), so a workspace can tell numbering that restarted because the queue was removed from a resend, and count the records that queue never delivered.
+- 78c0a29: Duplicate hooks: `status` and `doctor` say when an agent would run the Scopebond hook more than once for each action (user settings plus a project's, two entries in one file, or an enabled Claude Code plugin beside a settings entry), and the new `dedupe` command keeps one (the user-level entry unless `--keep project|plugin`), leaving other tools' hooks alone. The Scopebond Agent's self-check reports it as `hook_duplicates` with the fix. `dedupe` removes only the Scopebond command from a hook group it shares with a person's own hook (the group goes only when nothing else is left), never rewrites a file it has nothing to change in, and edits a git-tracked project file only when `--keep project` was chosen. Settings files with a byte-order mark are read too.
+- a9eaba1: `login` now sets Scopebond up for you across projects whatever folder it runs from: it connects the user home (`~/.scopebond`) and the user-level agent settings. It used to connect a project setup it found in the current folder, so signing in from a folder with a leftover `.scopebond` connected only that folder and left the user not installed, and a project's own hook entry counted as the user's agent being configured. `--project` connects the folder's own setup, as before. When the folder has a project setup, `login` says whether it takes precedence for sessions opened there and how to remove it; `status`, `doctor` and `status --json` (`config.user_connection_shadowed`) show a project setup that takes precedence over a connected user-level sign-in, and `doctor` fails when that project setup is not connected.
+
+  Delivery attempts that the per-call time limit cuts off are now recorded as an error (`delivery did not finish within 800 ms, so it was cut off (timeout)`, code `timeout` in `status --json`) instead of leaving only "last tried" behind. `status` and `doctor` report NOT DELIVERING, and `status --json` reports `recording_locally`, when records have waited more than five minutes and nothing has been accepted since they were queued, error or not, so `doctor` no longer says "All good." while nothing has ever been delivered. `flush` records its outcome too.
+
+### Patch Changes
+
+- 20c2266: When the delivery queue cannot be opened or written (a full disk, a read-only or locked file), the hook still fails closed, but its message names the queue file and the fix: free disk space or make the file and its `-wal` and `-shm` files writable (SQLite creates them with the database's permissions, so a read-only episode can leave them read-only too), and do not delete it, because it holds records waiting to be sent. It used to say to run `init`, which does not help. `status` and `doctor` say the queue is unusable (and that every action is blocked) instead of "0 waiting", and `status --json` reports it as `delivery.queue_error` with the error code `queue_unusable`.
+- 7736223: Sequenced delivery: the Cloud outbox gives each queued record this computer's number for it (1, 2, 3… in queue order, kept across restarts and never reused), and the exporter sends the numbers beside the receipts (`{ receipts, seq }`; the signed receipts are unchanged). A workspace that reads them can show records lost on the computer, for example aged out of the queue, as missing instead of silently absent. Queues made before this are upgraded in place; their waiting records stay unnumbered.
+- 8e42db0: A record the workspace refuses only because this computer's clock is ahead of its own (`future_timestamp`) stays in the queue and is sent again, since it is accepted once the time passes; the records around it still deliver. Before, it was settled as a lost record when it shared a batch with others. After a day it is settled as a gap, so a clock that is badly wrong cannot hold the queue for ever. A record refused for a key the connection did not enroll (`attester_mismatch`) is kept the same way, since signing in again delivers it.
+- 2a9b060: A refused batch that no retry can deliver no longer holds up the records behind it. When the workspace refuses every record of a batch on its own as `invalid_receipt` (HTTP 400 with `rejected`), each becomes a "rejected" delivery gap, as inside an accepted batch. Any other code is retried: a timestamp ahead of the workspace's clock is accepted once the time passes, and a key the connection did not enroll is delivered after signing in again. A 409 `id_conflict` sends records one at a time until it finds the record that conflicts, which becomes an "id_conflict" gap; the rest go in batches again. Before, the exporter sent the same batch forever and every newer record waited. Every other refusal is retried with backoff, as before. A workspace that answers 429 or 503 with `Retry-After` is not asked again sooner (at most an hour).
+- 2430526: Self-protection now covers the Scopebond Agent and re-pointing the computer. A coding agent running `scopebond-agent autostart off`, stopping the agent by name (`pkill -f scopebond-agent`, `taskkill`, `wmic … terminate`), a global uninstall of `@scopebond/agent` or `@scopebond/hook` (`npm`/`npm.cmd uninstall -g`, `pnpm rm -g`, `yarn global remove`, `bun remove -g`), or the hook's own `login` is denied like `uninstall` and `connect`. `scopebond-agent status`, `flush`, `check`, `repair` and `autostart on` stay allowed, and a person can still run any of these from their own terminal.
+- 3d01147: On Windows, a user folder with non-ASCII letters (a profile named after a person with an accented name) now gets the fast, pinned hook command. Node 22's `fs.cpSync` wrote the pinned copy to a mis-decoded folder beside the real one and reported success, so the hook fell back to the slower `npx` command on every install; the copy is now made file by file.
+- 0ef0a87: The hook reads an event, and an agent settings file, that starts with a UTF-8 byte-order mark. Windows PowerShell 5.1 and other .NET Framework programs write one before text they pipe in; the hook used to refuse the whole event as invalid JSON (failing closed, so every action was blocked). The same holds for files a person edits or saves on Windows: `rules.json` (a BOM made the hook fall back to the default rules without a word), `policy.json`, a policy export, a budget file and `cloud.json`.
+- 67812b1: `login` on a computer with nothing set up yet connects the user's home, not the folder the terminal happened to open in. A first login from an editor's terminal used to connect the project folder, so the hook, which reads the user home everywhere else, found no connection and delivered nothing. `--project` still connects the folder.
+- eb5eaf9: Every next step the CLI prints is in the form the person's system runs. On Windows: an expired, denied or failed sign-in prints the exact `npx.cmd … login <workspace>` command to run again; "Node too old" gives the `winget` command and how to find an older Node that still comes first on PATH; `doctor` says when PowerShell's script policy blocks plain `npx`/`npm`/`scopebond-agent` and that the `.cmd` forms work without a policy change; the agent's autostart fixes, usage line, install hint and help use `scopebond-agent.cmd` / `npm.cmd`; and the warn-mode hint names `scopebond-agent.cmd autostart on`. New helpers: `agentCommand`, `npmGlobalInstall`, `nodeTooOldLines`, `loginAgainCommand`, `executionPolicyAdvice`, `explainPowerShellError`.
+- 458294f: First-run fixes on Windows and beyond. The agent's autostart launcher switches cmd.exe to UTF-8 and writes its log beside itself, so it starts in a profile folder with non-ASCII letters. Only one agent runs per home even when two start moments apart (a lock file decides). Upkeep and repair keep the hook pinned by its path (the hook the agent carries) instead of switching to the slower `npx` form, which also needed npx on the coding tool's PATH. `setup` runs the sign-in from the home folder and, when a sign-in has to be repeated, names the setup command; npm is run as this Node's own npm, without a shell. A workspace that cannot be reached is explained (a company certificate: `NODE_EXTRA_CA_CERTS`; a proxy: `NODE_USE_ENV_PROXY=1`), and `doctor`'s note says the policy it read is Windows PowerShell's. Autostart starts the launcher with `cmd /s /c ""…""`, so a profile folder whose name has a space and `(`, `)` or `&` ("John (Work)") still starts the agent. The one-agent lock is taken over when it is older than a minute and no agent answers, so a sign-in after a restart is not refused because Windows reused the old process id.
+- Updated dependencies [c4514ca]
+- Updated dependencies [7736223]
+- Updated dependencies [8e42db0]
+- Updated dependencies [2a9b060]
+- Updated dependencies [6c3b253]
+  - @scopebond/gateway@0.14.0
+
+## 0.16.0
+
+### Minor Changes
+
+- 433c8df: Warn mode. A workspace can set a rule to "Block, user may override": the hook then blocks a matching action until the person at the computer allows it once, with a reason, in the Scopebond Agent's window, or, where the workspace allows it and Claude Code's permission mode really asks the person, offers Claude Code's own prompt. Scopebond's own protection, rules on Block and the kill switch are never overridable; the workspace's daily limit and repeat window hold. The gateway takes an optional override handler on `handleAction` and signs an `override` record (rule, method, state, reason digest) into an approved receipt; `validateOverrideRecord` and the receipt schema define its exact shape.
+
+### Patch Changes
+
+- Updated dependencies [433c8df]
+  - @scopebond/gateway@0.13.0
+  - @scopebond/policy-schema@0.6.0
+  - @scopebond/sdk@0.1.4
+
+## 0.15.2
+
+### Patch Changes
+
+- d2cec83: After local setup, show the free workspace sign-up link and the sign-in command for the chosen coding tool. After setup or a successful connection, show the optional Scopebond Agent setup link and Windows-safe commands. These are human next steps only; no extra package or background process is installed automatically and per-action hook output is unchanged.
+
+## 0.15.1
+
+### Patch Changes
+
+- 793e126: Security: with the workspace's secret-read rule on Monitor, reads of Scopebond's own folder (this computer's signing key and connection) were no longer stopped. That floor is now always on, as the write floor already was.
+
+## 0.15.0
+
+### Minor Changes
+
+- 464b80a: New package `@scopebond/agent`, the Scopebond Agent: one resident process per user that delivers the records the hook queued, runs the rules check (workspace rules, the queue report and credential renewal), notices agent settings that lost the Scopebond hook entry and repairs them on request, and reports `scopebond.status.v1` on a token-protected local channel (`127.0.0.1`, token in `~/.scopebond/agent.json`). `scopebond-agent autostart on` starts it with the user's sign-in on Windows, macOS and Linux, without administrator rights. The hook keeps deciding every action without it.
+
+  The hook exports the delivery-state, status and credential-renewal functions the agent reuses.
+
+## 0.14.0
+
+### Minor Changes
+
+- 3308250: `status --json` prints the delivery and identity status in one machine-readable shape (`scopebond.status.v1`): `state` (`delivering`, `recording_locally` or `not_governing`), the last delivery and its error code, records waiting and the age of the oldest, delivery gaps by reason, this computer's installation, generation, key and credential expiry, and which configurations exist. The desktop agent and support read this, not the human text.
+
+  A record the workspace refuses on its own (the rest of the batch stored) now leaves the delivery queue as a `rejected` gap instead of being retried with every batch, so one bad record can never hold up the ones behind it; it stays in the local log. The SQLite outbox gains `recordGap` and `gapsByReason`.
+
+  A delivery conformance suite runs the real runtime and queue against a workspace that refuses the connection, fails with 5xx, stays unreachable for eight days, and refuses single records: in every case each record is delivered or accounted for.
+
+### Patch Changes
+
+- Updated dependencies [3308250]
+  - @scopebond/gateway@0.12.0
+
+## 0.13.0
+
+### Minor Changes
+
+- 6e61a3b: A connected computer now renews its machine credential by itself. Credentials last 90 days; in the last 30 the hook renews it during its rules check, proving it still holds the signing key it enrolled with, and saves the new credential in `cloud.json`. A computer no longer stops delivering on day 90 because nobody signed it in again. An outage or refusal leaves the saved connection unchanged, and the next check tries again.
+
+  The rules check also tells the workspace how many records wait to send, since when, and the last delivery problem (`x-scopebond-pending`, `x-scopebond-oldest-pending-at`, `x-scopebond-last-error`), so the portal can show a computer that checks in but is not delivering. It sends counts and one error line, never a record.
+
+### Patch Changes
+
+- Updated dependencies [6e61a3b]
+  - @scopebond/gateway@0.11.0
+
+## 0.12.0
+
+### Minor Changes
+
+- c299d50: `status` and `doctor` now tell the truth about delivery. Each delivery attempt is remembered after the hook exits: when this computer last delivered records, when it last tried, how many records wait and since when, and the last problem. A refused connection (HTTP 401 from record delivery or the rules check) is shown as **NOT DELIVERING** since the time it started, with the one command that fixes it; it clears on the next accepted delivery. `doctor` checks that the workspace still accepts the connection, not only that it is reachable, and fails when records have waited more than an hour or the connection is refused.
+
+  The delivery queue no longer drops records: no 10,000-record or 64 MiB cap and no 7-day expiry. A record leaves the queue only when the workspace accepts it, or when a key change sets it aside for `recover`.
+
+  Signing in again leaves an agent settings file that already holds the right hook entry byte-for-byte untouched (no rewrite, no backup), and `login` notes when it is run inside a coding agent's own terminal. Commands the hook prints use `npx.cmd` on Windows, where PowerShell's default script policy refuses `npx`.
+
+  `login` and `connect` for this computer (the default) now put the hook in the user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.codex/hooks.json`), so every project is checked. Before, with no existing setup they wrote the current folder's project settings, so a sign-in run from a scratch folder governed only that folder. `--project` keeps a per-project connection and placement.
+
+## 0.11.0
+
+### Minor Changes
+
+- 0a30e9c: Workspace rules can name exact targets a rule skips: paths for the secret-read and CI-configuration rules (an exact path, or a folder ending in `/**`) and branches for the push rule. An exclusion matches exactly, same case, so it is never broader than what was typed, and an exclusion that would touch the always-on protection of Scopebond's own settings or the agents' hook settings is dropped when the policy is compiled. The rules fetch now sends the hook's version (`x-scopebond-hook-version`), so a workspace can send these lists only to computers that understand them; earlier hook versions refuse a document that carries them.
+
+  A document with the same version as the one in force but different rules is now accepted (the workspace can change what reaches a computer without a new version, for example when an agent moves to another team); an older version, or the same rules again, is still refused. An exclusion can never reach Scopebond's own settings or the agents' hook settings or climb out of its folder (no "." or ".." segments), a branch exclusion is one exact name starting with a letter or digit, and skipping ordinary pushes to a branch keeps its force-push, deletion and mirror protection.
+
+- 1b8be99: Reconnecting a computer always works now. When the workspace refuses this computer's countersigning key because the computer was replaced or disconnected there, `login` and `connect` replace the key and enroll again with the same, unspent token. The old key is kept in `retired-keys/`. Queued receipts signed by the earlier key leave the delivery queue as `rekeyed` gaps, so they no longer hold up newer receipts, and they stay in the local log.
+
+  New `recover` command: it finds the local records an earlier key signed, asks the workspace to accept them, waits while an owner or admin approves it there, then sends them in bounded batches and reports how many were recovered, already present or refused. Nothing is re-signed.
+
+  `login` and `connect` run from a folder without its own project setup now repair the connection the hook actually uses, usually the user-level one, instead of creating a second, project-level setup beside it. `--project` sets up the current folder explicitly.
+
+  Gateway changes: enrollment refusals are a `CloudEnrollmentError` that carries the HTTP status and the workspace's code. `SqliteReceiptStore.page()` walks a large log without loading it into memory. `SqliteCloudOutbox.discardNotSignedBy()` sets aside queued receipts signed by another key.
+
+- 4242eda: A connected computer sends its records to the address its workspace names at enrollment. When the enrollment answer carries `ingest_url` (a workspace's regional ingest address), the hook keeps it in `cloud.json` and uses it for record delivery, observations, proof receipts, `flush` and `recover`; sign-in, rules and the portal still use the workspace URL. Only an HTTPS origin without credentials is accepted (or `http://localhost` for development); anything else is ignored and the workspace URL is used, as are connections made before this version.
+
+### Patch Changes
+
+- Updated dependencies [1b8be99]
+  - @scopebond/gateway@0.10.0
+
+## 0.10.0
+
+### Minor Changes
+
+- c37c604: Rules set by your workspace. A connected computer keeps its own rules until someone who manages the workspace changes one; it then checks for changes at most every five minutes, alongside a tool call's record delivery and capped at about one and a half seconds, installs a newer version only after checking that it is complete, issued for this computer, matches its digest and loads, and confirms exactly which version it loaded. Each rule is blocked or only recorded as the workspace chooses, and the workspace can add entries to the computer's lists; it cannot relax the protection of Scopebond's own settings and the agents' hook settings. `rules` edits and `policy load` are refused while the workspace sets the rules; a revoked connection, or a workspace that stops setting them, restores the computer's own rules. New: `policy sync`, a `rules` line in `status`, and `SCOPEBOND_POLICY_SYNC=off`.
+
 ## 0.9.0
 
 ### Minor Changes

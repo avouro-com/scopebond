@@ -5,6 +5,10 @@
 // to the computer's own lists (protected branches, programs, allowed sites). It never sends a pattern: this module compiles the
 // workspace's choices with the same compiler `rules apply` uses, so what decides a block lives in one place.
 //
+// A workspace may also name exact targets one rule skips: paths for the secret-read and CI-configuration rules, branches for the
+// push rule. An exclusion matches exactly (same case; a trailing `/**` covers a folder), so it is never broader than what was typed,
+// and an exclusion that would touch the always-on protection of the hook's own settings is dropped when the policy is compiled.
+//
 // What a workspace cannot change: the protection of the hook's own settings (and the settings of the agents it guards), the
 // machine key policy, fail-closed handling of anything unparseable, and the computer's own opt-in extras (`allowed_roots`,
 // `protect_remote_database`). A rule set to Monitor is still covered by an allow clause, so the action is recorded and passes;
@@ -18,7 +22,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
-import { GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
+import { GUARDRAIL_LOOKAHEADS, GUARDRAIL_READ_PATTERN, GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet } from "./rules.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
@@ -28,6 +32,7 @@ export const PREVIOUS_POLICY_FILE = "policy.previous.json";
 export const MANAGED_RULE_IDS = ["force-push-protected", "push-protected", "destructive-shell", "secret-read", "ci-config-write", "network-egress"] as const;
 export type ManagedRuleId = (typeof MANAGED_RULE_IDS)[number];
 type ListKey = "protected_branches" | "destructive_programs" | "allowed_hosts";
+type ExclusionKey = "excluded_paths" | "excluded_branches";
 const LIST_OF: Partial<Record<ManagedRuleId, ListKey>> = {
   "force-push-protected": "protected_branches", "push-protected": "protected_branches",
   "destructive-shell": "destructive_programs", "network-egress": "allowed_hosts",
@@ -37,10 +42,44 @@ const LIST_PATTERN: Record<ListKey, RegExp> = {
   destructive_programs: /^[a-z0-9][a-z0-9._-]{0,63}$/,
   allowed_hosts: /^(?=.{1,253}$)(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
 };
+/** The exact targets a rule may skip, and the one list each rule accepts. */
+const EXCLUSIONS_OF: Partial<Record<ManagedRuleId, ExclusionKey>> = {
+  "secret-read": "excluded_paths", "ci-config-write": "excluded_paths", "push-protected": "excluded_branches",
+};
+const EXCLUSION_PATTERN: Record<ExclusionKey, RegExp> = {
+  // A relative path with forward slashes: no empty, "." or ".." segment, optionally ending in /** for a folder.
+  excluded_paths: /^(?!\/)(?!.*\/\/)(?!(?:.*\/)?\.{1,2}(?:\/|$))[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]{0,199}?(?:\/\*\*)?$/,
+  // One exact branch name; it starts with a letter or digit, so it can never be a push flag such as --all.
+  excluded_branches: /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/,
+};
 const HEX64 = /^[0-9a-f]{64}$/;
 const OPAQUE = /^[A-Za-z0-9._:-]{1,128}$/;
 
-export type ManagedRule = { mode: "monitor" | "block" } & Partial<Record<ListKey, string[]>>;
+/** What the computer enforces for a rule set to "Block, user may override": the shortest reason accepted, how long one override
+ *  lasts (0 = this action only), how many a person may make per rule per day, and whether the coding agent's own prompt may be
+ *  used when the Scopebond window is not available. Who may override is the workspace's decision: it sends "override" only then. */
+export interface OverrideTerms { reason_min: number; minutes: number; daily_limit: number; harness_prompt: boolean }
+export type ManagedRule = { mode: "monitor" | "block" | "override"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
+const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+function validTerms(t: unknown): t is OverrideTerms {
+  return isObject(t) && Object.keys(t).length === 4 && intIn(t.reason_min, 10, 200) && intIn(t.minutes, 0, 60) && intIn(t.daily_limit, 1, 50)
+    && typeof t.harness_prompt === "boolean";
+}
+/** The clause that carries each workspace rule on the computer, for naming the rule a denial came from. */
+export const RULE_OF_CLAUSE: Readonly<Record<string, ManagedRuleId>> = {
+  "protect-branches": "push-protected", "protect-branch-history": "force-push-protected", "safe-shell": "destructive-shell",
+  "protect-read": "secret-read", "protect-write": "ci-config-write", "allowed-sites": "network-egress",
+};
+/** The same document with every overridable rule recorded instead of blocked: what still denies under it is never overridable
+ *  (another rule on Block, or Scopebond's own floor). */
+export function floorDocument(doc: ManagedDocument): ManagedDocument {
+  const rules = Object.fromEntries(Object.entries(doc.rules).map(([id, rule]) => {
+    if (rule.mode !== "override") return [id, rule];
+    const { override: _terms, excluded_paths: _p, excluded_branches: _b, ...rest } = rule;
+    return [id, { ...rest, mode: "monitor" }];
+  })) as ManagedDocument["rules"];
+  return { ...doc, rules };
+}
 export interface ManagedDocument {
   type: "scopebond:managed-rules";
   version: 1;
@@ -61,7 +100,7 @@ export const digestRules = (rules: unknown): string => createHash("sha256").upda
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Check a document from the workspace without touching disk. Pure. */
-export function inspectManaged(raw: unknown, context: { installationId: string; currentRevision: number | null }): Inspection {
+export function inspectManaged(raw: unknown, context: { installationId: string; currentRevision: number | null; currentDigest?: string | null }): Inspection {
   const bad = (message: string): Inspection => ({ ok: false, reason: "invalid_document", message });
   if (!isObject(raw) || raw.type !== "scopebond:managed-rules") return bad("this is not a Scopebond workspace rules document");
   if (raw.version !== 1) return { ok: false, reason: "unsupported", message: `unsupported rules document version ${String(raw.version)}` };
@@ -81,21 +120,27 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   }
   for (const id of MANAGED_RULE_IDS) {
     const rule = rules[id];
-    if (!isObject(rule) || (rule.mode !== "monitor" && rule.mode !== "block")) return bad(`rule ${id} has no valid mode`);
+    if (!isObject(rule) || (rule.mode !== "monitor" && rule.mode !== "block" && rule.mode !== "override")) return bad(`rule ${id} has no valid mode`);
+    if ((rule.mode === "override") !== ("override" in rule) || (rule.mode === "override" && !validTerms(rule.override))) return bad(`rule ${id} has invalid override terms`);
     for (const key of Object.keys(rule)) {
-      if (key === "mode") continue;
+      if (key === "mode" || key === "override") continue;
       const listKey = LIST_OF[id];
-      if (key !== listKey) return bad(`rule ${id} has an unknown setting`);
+      const exclusionKey = EXCLUSIONS_OF[id];
+      const pattern = key === listKey ? LIST_PATTERN[listKey] : key === exclusionKey ? EXCLUSION_PATTERN[exclusionKey] : null;
+      if (!pattern) return bad(`rule ${id} has an unknown setting`);
       const list = rule[key];
-      if (!Array.isArray(list) || list.length > 50 || !list.every((v) => typeof v === "string" && LIST_PATTERN[listKey].test(v) && !v.includes(".."))) {
+      if (!Array.isArray(list) || list.length > 50 || !list.every((v) => typeof v === "string" && pattern.test(v) && !v.includes(".."))) {
         return bad(`rule ${id} has an invalid list`);
       }
     }
   }
   const network = rules["network-egress"] as ManagedRule;
-  if (network.mode === "block" && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
+  if (network.mode !== "monitor" && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
   if (digestRules(rules) !== rulesDigest) return bad("the rules do not match their digest; the document was changed or damaged");
-  if (context.currentRevision !== null && (revision as number) <= context.currentRevision) {
+  // The same version with different rules is a newer document too: the workspace can change what reaches this computer without a new
+  // version (an agent moved to another team, or this hook started reading a setting it did not read before). The export id binds it here.
+  const sameVersionChanged = context.currentRevision !== null && revision === context.currentRevision && !!context.currentDigest && rulesDigest !== context.currentDigest;
+  if (context.currentRevision !== null && (revision as number) <= context.currentRevision && !sameVersionChanged) {
     return { ok: false, reason: "stale_revision", message: `version ${String(revision)} is not newer than the version in force (${context.currentRevision})` };
   }
   return { ok: true, doc: raw as unknown as ManagedDocument };
@@ -107,6 +152,20 @@ const hostPattern = (hosts: readonly string[]): string =>
   `^(?:${hosts.map((h) => (h.startsWith("*.") ? `(?:[^.]+\\.)+${ci(h.slice(2).replace(/\./g, "\\."))}` : ci(h.replace(/\./g, "\\.")))).join("|")})$`;
 
 type Clause = Record<string, unknown> & { id: string };
+
+const escapeRegex = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
+/** Exclusions that passed validation (the document check refuses the rest; this is a second line of defence). */
+const safeExclusions = (paths: readonly string[] | undefined): string[] => (paths ?? []).filter((path) => EXCLUSION_PATTERN.excluded_paths.test(path) && !path.includes(".."));
+/** An allow pattern that also allows exactly these paths (a trailing /** allows everything under the folder). The added alternative
+ *  carries the always-on floor and refuses any path with a "." or ".." segment, so no exclusion — however it is written — can reach
+ *  Scopebond's own settings or the agents' hook settings, or climb out of the folder it names. */
+const withPathExclusions = (pattern: string, paths: readonly string[]): string => paths.length === 0 ? pattern
+  : `^(?!(?:.*/)?\\.{1,2}(?:/|$))${GUARDRAIL_LOOKAHEADS}(?:${paths.map((p) => p.endsWith("/**") ? `${escapeRegex(p.slice(0, -3))}/.+` : escapeRegex(p)).join("|")})$|${pattern}`;
+/** An allow pattern for pushes that also allows exactly these branches. */
+const withBranchExclusions = (pattern: string, branches: readonly string[]): string => branches.length === 0 ? pattern
+  : `^(?:refs/heads/)?(?:${branches.map(escapeRegex).join("|")})$|${pattern}`;
+const boundPattern = (clause: Clause, key: string): string => String(((clause.param_bounds as Record<string, { pattern: string }> | undefined)?.[key])?.pattern ?? "");
+const withBound = (clause: Clause, key: string, pattern: string): Clause => ({ ...clause, param_bounds: { ...(clause.param_bounds as Record<string, unknown>), [key]: { pattern } } });
 
 /** The policy this computer enforces under workspace rules: its own compiled rules, adjusted rule by rule. Pure. */
 export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: string): Record<string, unknown> {
@@ -122,18 +181,32 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
   for (const clause of policy.clauses) {
     if (clause.id === "protect-branches" && r["push-protected"].mode === "monitor") {
       clauses.push(allowAll(clause));
-      if (r["force-push-protected"].mode === "block") {
+      if (r["force-push-protected"].mode !== "monitor") {
         clauses.push({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
           description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch; ordinary pushes are allowed. Set by your workspace." });
       }
     } else if (clause.id === "safe-shell" && r["destructive-shell"].mode === "monitor") clauses.push(allowAll(clause));
-    else if (clause.id === "protect-read" && r["secret-read"].mode === "monitor") clauses.push(allowAll(clause));
+    else if (clause.id === "protect-read" && r["secret-read"].mode === "monitor") {
+      clauses.push({ ...clause, param_bounds: { path: { pattern: GUARDRAIL_READ_PATTERN } },
+        description: "Allow workspace reads, but never Scopebond's own folder, which holds this computer's key (always on). Other protected files are recorded, not blocked: set by your workspace." });
+    }
     else if (clause.id === "protect-write" && r["ci-config-write"].mode === "monitor") {
       clauses.push({ ...clause, param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
         description: "Allow workspace writes, but never to Scopebond's own settings or the agents' hook settings (always on). Other protected files are recorded, not blocked: set by your workspace." });
+    } else if (clause.id === "protect-read" && r["secret-read"].excluded_paths?.length) {
+      clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["secret-read"].excluded_paths))));
+    } else if (clause.id === "protect-write" && r["ci-config-write"].excluded_paths?.length) {
+      clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["ci-config-write"].excluded_paths))));
+    } else if (clause.id === "protect-branches" && r["push-protected"].excluded_branches?.length) {
+      clauses.push(withBound(clause, "ref", withBranchExclusions(boundPattern(clause, "ref"), r["push-protected"].excluded_branches)));
+      // Skipping ordinary pushes to a branch never skips history protection: force-pushes, deletions and mirror pushes stay stopped.
+      if (r["force-push-protected"].mode !== "monitor") {
+        clauses.push({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
+          description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch. Set by your workspace." });
+      }
     } else clauses.push(clause);
   }
-  if (r["network-egress"].mode === "block") {
+  if (r["network-egress"].mode !== "monitor") {
     const keysAt = clauses.findIndex((c) => c.id === "keys");
     clauses.splice(keysAt < 0 ? clauses.length : keysAt, 0, {
       id: "allowed-sites", type: "action_allowlist", mode: "enforce", action_types: ["net.fetch"],

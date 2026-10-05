@@ -19,6 +19,16 @@ function withEnv(overrides, fn) {
   try { return fn(); } finally { for (const k of Object.keys(overrides)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } }
 }
 
+test("an agent settings file saved with a UTF-8 byte-order mark is read and kept, not refused as invalid JSON", () => {
+  // Windows PowerShell 5.1 writes one with Set-Content -Encoding UTF8.
+  const file = join(tmp(), "settings.json");
+  writeFileSync(file, "﻿" + JSON.stringify({ theme: "dark" }));
+  writeHarnessConfig(file, "claude", "npx -y @scopebond/hook@0.16.0 claude");
+  const saved = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+  assert.equal(saved.theme, "dark", "the person's settings are kept");
+  assert.equal(isHarnessConfigured(file), true);
+});
+
 test("resolveConfigDir: explicit override wins", () => {
   withEnv({ SCOPEBOND_HOOK_DIR: "/explicit/dir" }, () => {
     assert.equal(resolveConfigDir("/some/project"), "/explicit/dir");

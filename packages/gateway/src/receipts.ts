@@ -82,6 +82,46 @@ export interface RedactionEvidence {
   paths: string[];
 }
 
+/** A person at the computer allowed an action a rule blocked ("Block, user may override"), or the coding agent's own permission
+ *  prompt was offered for it. Carried only with realtime_result "approved". The person is not named here: the workspace resolves
+ *  who connected the computer; the reason travels separately and is checked against reason_digest. */
+export interface OverrideRecord {
+  version: 1;
+  /** The workspace rule that blocked the action. */
+  rule: string;
+  /** agent_dialog: the Scopebond Agent's own window, with a reason. harness_prompt: the coding agent's permission prompt,
+   *  which takes no reason and does not prove a person answered. */
+  method: "agent_dialog" | "harness_prompt";
+  /** allowed (agent_dialog) or offered (harness_prompt: whether the person said yes is known only from after-action events). */
+  state: "allowed" | "offered";
+  /** The action an earlier override allowed, when this one is the same action inside the time that override allowed. */
+  repeat_of: string | null;
+  /** SHA-256 of the trimmed reason text; null for harness_prompt. */
+  reason_digest: string | null;
+  reason_length: number | null;
+  /** SHA-256 of the operating-system account name, when known. */
+  os_user_digest: string | null;
+  decided_at: string;
+}
+
+const OVERRIDE_KEYS = ["version", "rule", "method", "state", "repeat_of", "reason_digest", "reason_length", "os_user_digest", "decided_at"];
+const OVERRIDE_RULE = /^[a-z0-9-]{1,64}$/;
+/** The shape a receipt's override must have; Scopebond Cloud applies the same check. */
+export function validateOverrideRecord(o: unknown): o is OverrideRecord {
+  if (!isRecord(o) || !hasOnlyKeys(o, OVERRIDE_KEYS) || Object.keys(o).length !== OVERRIDE_KEYS.length) return false;
+  if (o.version !== 1 || typeof o.rule !== "string" || !OVERRIDE_RULE.test(o.rule)) return false;
+  if (o.method !== "agent_dialog" && o.method !== "harness_prompt") return false;
+  if (o.state !== "allowed" && o.state !== "offered") return false;
+  if (o.repeat_of !== null && (typeof o.repeat_of !== "string" || o.repeat_of.length < 16 || o.repeat_of.length > 200)) return false;
+  if (o.os_user_digest !== null && (typeof o.os_user_digest !== "string" || !HEX_64.test(o.os_user_digest))) return false;
+  if (typeof o.decided_at !== "string" || !Number.isFinite(Date.parse(o.decided_at))) return false;
+  if (o.method === "agent_dialog") {
+    return o.state === "allowed" && typeof o.reason_digest === "string" && HEX_64.test(o.reason_digest)
+      && Number.isInteger(o.reason_length) && (o.reason_length as number) >= 1 && (o.reason_length as number) <= 500;
+  }
+  return o.state === "offered" && o.reason_digest === null && o.reason_length === null && o.repeat_of === null;
+}
+
 export interface ReceiptPayload {
   type: "scopebond:receipt";
   evidence_version: typeof EVIDENCE_VERSION;
@@ -109,6 +149,8 @@ export interface ReceiptPayload {
   principal?: PepPrincipal;
   /** Required when evidence_class === "boundary"; absent otherwise. */
   boundary?: BoundaryEvidence;
+  /** Present only when a person overrode a block (realtime_result "approved"). */
+  override?: OverrideRecord;
 }
 
 export interface SignedReceipt {
@@ -330,8 +372,9 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
     "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result",
     "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp",
-    "evidence_class", "principal", "boundary",
+    "evidence_class", "principal", "boundary", "override",
   ]) && evidenceClassValid(payload as unknown as ReceiptPayload) &&
+    (payload.override === undefined || (validateOverrideRecord(payload.override) && payload.realtime_result === "approved")) &&
     hasOnlyKeys(payload.action_ref, ["action_id", "authorized_intent_hash", "evidence_intent_hash"]) &&
     hasOnlyKeys(payload.policy_ref, ["id", "version", "digest"]) &&
     hasOnlyKeys(payload.execution, ["state", "assertion", "reference", "external_effect"]) &&
