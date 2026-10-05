@@ -1,7 +1,0 @@
----
-"@scopebond/hook": minor
----
-
-`login` now sets Scopebond up for you across projects whatever folder it runs from: it connects the user home (`~/.scopebond`) and the user-level agent settings. It used to connect a project setup it found in the current folder, so signing in from a folder with a leftover `.scopebond` connected only that folder and left the user not installed, and a project's own hook entry counted as the user's agent being configured. `--project` connects the folder's own setup, as before. When the folder has a project setup, `login` says whether it takes precedence for sessions opened there and how to remove it; `status`, `doctor` and `status --json` (`config.user_connection_shadowed`) show a project setup that takes precedence over a connected user-level sign-in, and `doctor` fails when that project setup is not connected.
-
-Delivery attempts that the per-call time limit cuts off are now recorded as an error (`delivery did not finish within 800 ms, so it was cut off (timeout)`, code `timeout` in `status --json`) instead of leaving only "last tried" behind. `status` and `doctor` report NOT DELIVERING, and `status --json` reports `recording_locally`, when records have waited more than five minutes and nothing has been accepted since they were queued, error or not, so `doctor` no longer says "All good." while nothing has ever been delivered. `flush` records its outcome too.
