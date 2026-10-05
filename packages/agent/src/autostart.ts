@@ -9,7 +9,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 
 export const LABEL = "com.scopebond.agent";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -37,7 +37,7 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
     `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
     `if not defined NODE exit /b 1`,
     // The log sits beside this launcher; %~dp0 keeps it right whatever the folder is called.
-    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "%~dp0${basename(noQuotes(logFile))}" 2>&1`,
+    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "%~dp0${win32.basename(noQuotes(logFile))}" 2>&1`,
     "",
   ].join("\r\n");
 }
