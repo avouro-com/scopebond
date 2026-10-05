@@ -25,10 +25,12 @@ function workspace() {
     req.on("end", () => {
       if (req.url === "/v1/ingest") {
         const receipts = JSON.parse(raw).receipts ?? [];
-        const { status, body } = answer(receipts);
-        if (status === 200) received.push(...receipts.filter((_, i) => !(body.rejected ?? []).some((r) => r.index === i)));
-        res.writeHead(status, { "content-type": "application/json" });
-        res.end(JSON.stringify(body));
+        const { status, body, delayMs = 0 } = answer(receipts);
+        setTimeout(() => {
+          if (status === 200) received.push(...receipts.filter((_, i) => !(body.rejected ?? []).some((r) => r.index === i)));
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+        }, delayMs);
         return;
       }
       res.writeHead(404); res.end("{}");
@@ -42,7 +44,7 @@ function workspace() {
   })));
 }
 
-function computer(url) {
+function computer(url, { flushTimeoutMs = 5_000 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sb-dic1-"));
   scaffold(dir);
   const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
@@ -52,9 +54,9 @@ function computer(url) {
     scopes: ["receipt:ingest"], expires_at: new Date(Date.now() + 80 * DAY).toISOString(),
   };
   writeFileSync(join(dir, "cloud.json"), JSON.stringify(connection));
-  const runtime = () => createHookRuntime({
+  const runtime = (limitMs = flushTimeoutMs) => createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"),
-    dbPath: join(dir, "receipts.db"), cloud: { connection, flushTimeoutMs: 5_000 },
+    dbPath: join(dir, "receipts.db"), cloud: { connection, flushTimeoutMs: limitMs },
   });
   // One tool call per run, as the hook works: decide, deliver what is queued, exit.
   const act = async (n) => {
@@ -64,11 +66,11 @@ function computer(url) {
       await rt.flush();
     } finally { rt.exporter?.stop(); rt.close(); }
   };
-  const deliverOnly = async () => {
-    const rt = runtime();
+  const deliverOnly = async (limitMs) => {
+    const rt = runtime(limitMs);
     try { await rt.flush(); } finally { rt.exporter?.stop(); rt.close(); }
   };
-  const status = () => buildStatusJson({ version: "test", activeDir: dir, candidateDirs: [dir], hasPolicy: true, agents: { claude: true, cursor: false, codex: false } });
+  const status = (now) => buildStatusJson({ version: "test", activeDir: dir, candidateDirs: [dir], hasPolicy: true, agents: { claude: true, cursor: false, codex: false }, now });
   return { dir, act, deliverOnly, status };
 }
 
@@ -91,6 +93,35 @@ test("DIC-1: a refused connection keeps every record and says so; they deliver o
     assert.equal(s.delivery.pending, 0);
     assert.equal(s.delivery.connection_refused_since, null);
     assert.ok(ws.received.length >= 3);
+  } finally { ws.close(); }
+});
+
+test("DIC-1: a workspace slower than the hook's time limit is reported, not shown as healthy", async () => {
+  // Each tool call gives delivery a bounded time and then exits, abandoning the request. An
+  // attempt cut off that way used to record only its time: status said "last tried 4 seconds
+  // ago" with no error, and doctor said "All good." while nothing was ever delivered.
+  const ws = await workspace();
+  try {
+    const pc = computer(ws.url, { flushTimeoutMs: 100 });
+    ws.answer(() => ({ status: 200, body: { ok: true }, delayMs: 1_500 }));
+    await pc.act(2);
+    let s = pc.status();
+    assert.equal(s.delivery.last_success_at, null);
+    assert.ok(s.delivery.last_attempt_at !== null);
+    assert.equal(s.delivery.last_error_code, "timeout");
+    assert.match(s.delivery.last_error, /did not finish within 100 ms/);
+    assert.equal(s.state, "delivering", "a few seconds of waiting is not yet a stall");
+    // Ten minutes on, with nothing accepted since the records were queued, it is not delivering.
+    s = pc.status(Date.now() + 10 * 60_000);
+    assert.equal(s.state, "recording_locally");
+    // Given the time, the same records deliver, and the state recovers.
+    await new Promise((done) => setTimeout(done, 1_600)); // let the abandoned requests finish
+    ws.answer(() => ({ status: 200, body: { ok: true } }));
+    await pc.deliverOnly(5_000);
+    s = pc.status(Date.now() + 10 * 60_000);
+    assert.equal(s.delivery.pending, 0);
+    assert.equal(s.delivery.last_error, null);
+    assert.equal(s.state, "delivering");
   } finally { ws.close(); }
 });
 
