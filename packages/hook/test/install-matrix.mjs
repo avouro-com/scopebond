@@ -96,8 +96,13 @@ check("a project entry beside the user-level one is reported, and dedupe keeps t
   assert.equal(user.hooks.PreToolUse.length, 1, "the user-level entry stays");
 });
 
-// 4. Evaluate: a protected-branch push is denied (exit 2); a plain command is allowed (exit 0).
-check("a push to main is denied through the installed bin", () => {
+// 4. Evaluate: monitor is the default, so a protected-branch push is recorded (exit 0) until the rule is
+// turned on; then it is denied (exit 2). A plain command is allowed (exit 0).
+check("a push to main is recorded by default and denied once the rule is on, through the installed bin", () => {
+  const recorded = sb(["claude"], { env: { ...baseEnv, SCOPEBOND_HOOK_DIR: sbHome }, input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin main" } }) });
+  assert.equal(recorded.status, 0, `expected recorded (exit 0), got ${recorded.status}: ${recorded.out}`);
+  const on = sb(["rules", "enforce", "protect-branches", "--yes"], { env: { ...baseEnv, SCOPEBOND_HOOK_DIR: sbHome } });
+  assert.equal(on.status, 0, on.out);
   const r = sb(["claude"], { env: { ...baseEnv, SCOPEBOND_HOOK_DIR: sbHome }, input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin main" } }) });
   assert.equal(r.status, 2, `expected deny (exit 2), got ${r.status}: ${r.out}`);
 });
@@ -155,6 +160,8 @@ workspace saw: ${JSON.stringify(cloud.state())}`);
   assert.equal(cloud.state().code_requests[0]?.harness, "claude");
 });
 await checkAsync("one record is delivered to the workspace after login", async () => {
+  const on = await sbAsync(["rules", "enforce", "protect-branches", "--yes"], { env: loginEnv, cwd: projectFolder });
+  assert.equal(on.status, 0, on.out);
   const before = cloud.state().ingested;
   const r = await sbAsync(["claude"], { env: loginEnv, cwd: projectFolder, input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin main" }, cwd: projectFolder }) });
   assert.equal(r.status, 2, `expected deny (exit 2): ${r.out}`);

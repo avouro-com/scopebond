@@ -1807,7 +1807,7 @@ function printHelp(topic: string | undefined, toStderr = false): void {
   out(`  ${cliCommand("init")}            set up this project`);
   out(`  ${cliCommand('test "rm -rf /"')}  see a decision without running it`);
   out(`  ${cliCommand("log --deny")}      what got blocked`);
-  out(`  ${cliCommand("rules")}           what is blocked, in plain English`);
+  out(`  ${cliCommand("rules")}           what blocks and what records, in plain English`);
   out("");
   out("Commands:");
   const width = Math.max(...COMMANDS.map((c) => c.name.length));
