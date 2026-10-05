@@ -270,6 +270,25 @@ const MUST_DENY_REVIEW = [
   "scopebond trust",
   "scopebond-hook init --force",
   "pnpm dlx @scopebond/hook install --force",
+  // the agent re-pointing this computer at another workspace
+  "npx @scopebond/hook login https://other.example",
+  "npx.cmd -y @scopebond/hook@0.16.0 login https://other.example --claude",
+  "scopebond login https://other.example",
+  // the agent switching off the Scopebond Agent
+  "scopebond-agent autostart off",
+  "scopebond-agent.cmd autostart OFF",
+  "npx -y @scopebond/agent autostart off",
+  "pkill -f scopebond-agent",
+  "taskkill /F /FI \"COMMANDLINE eq scopebond-agent\"",
+  "wmic process where \"CommandLine like '%scopebond-agent%'\" call terminate",
+  "kill $(jq .pid ~/.scopebond/agent.json)",
+  "npm uninstall -g @scopebond/agent",
+  "npm.cmd uninstall -g @scopebond/agent",
+  "npm rm --global @scopebond/agent@0.3.0",
+  "npm uninstall --location=global @scopebond/hook",
+  "pnpm remove -g @scopebond/agent",
+  "yarn global remove @scopebond/agent",
+  "bun remove -g @scopebond/agent",
 ];
 
 test(`review corpus: all ${MUST_DENY_REVIEW.length} attempts are denied`, async () => {
@@ -330,6 +349,17 @@ const MUST_ALLOW_REVIEW = [
   "echo \"$(date)\"",
   "scopebond test \"rm -rf /\"",
   "npx @scopebond/hook log",
+  // keeping the Scopebond Agent working, and looking at it
+  "scopebond-agent status",
+  "scopebond-agent status --json",
+  "scopebond-agent flush",
+  "scopebond-agent check",
+  "scopebond-agent repair",
+  "scopebond-agent autostart on",
+  "npm install -g @scopebond/agent",
+  "ps aux | grep scopebond-agent",
+  "npm uninstall -g typescript",
+  "npm uninstall @scopebond/hook",
 ];
 
 test(`review allow-list: none of the ${MUST_ALLOW_REVIEW.length} ordinary commands is denied`, async () => {
