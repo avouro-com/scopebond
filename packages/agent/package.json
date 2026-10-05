@@ -39,9 +39,9 @@
     "dist"
   ],
   "dependencies": {
-    "@scopebond/gateway": "workspace:^",
-    "@scopebond/hook": "workspace:^",
-    "@scopebond/sdk": "workspace:^"
+    "@scopebond/gateway": "workspace:*",
+    "@scopebond/hook": "workspace:*",
+    "@scopebond/sdk": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

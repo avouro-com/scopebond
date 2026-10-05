@@ -10,6 +10,13 @@ agent never takes part in a decision. It only keeps everything around the decisi
   queue, and renews the machine credential before it expires.
 - **Repair.** It notices when an agent's settings lost the Scopebond hook entry (an update or a reset can remove it)
   and, on request, puts it back without touching anything else in the file.
+- **Updates, under the workspace's control.** Every six hours it asks the workspace which versions to run. When
+  the workspace recommends a newer agent, it installs it from npm and restarts itself; when the workspace holds
+  updates, it changes nothing. It also moves the Scopebond hook entries in agent settings to the recommended hook
+  and repairs any entry that can no longer start. Other tools' hook entries are never touched.
+- **Self-check.** Once a day it checks this computer's side (hook entry present and able to start, autostart on,
+  nothing stuck in the queue, connection not about to lapse) and sends the result, signed with the key the computer
+  enrolled with, so the workspace can show that the whole path works end to end, or what broke.
 - **Health.** It reports the same machine-readable status as `scopebond status --json` (`scopebond.status.v1`).
 
 ## Use
@@ -28,15 +35,22 @@ On Windows, type `npx.cmd` instead of `npx` in PowerShell if you run it without 
 | `scopebond-agent status [--json]` | Delivery state, records waiting and the last problem |
 | `scopebond-agent flush` | Deliver waiting records now |
 | `scopebond-agent repair` | Put the Scopebond hook back into agent settings that lost it |
+| `scopebond-agent check` | Check for updates and run the self-check now |
 | `scopebond-agent autostart on\|off` | Start with your sign-in, or stop doing so |
 
 ## Local control channel
 
 The agent listens on `127.0.0.1` only, on a random port, and every request must carry a random token. Port, token and
-process id are in `~/.scopebond/agent.json`, readable by you only. Routes: `GET /status`, `POST /flush`, `POST /repair`.
+process id are in `~/.scopebond/agent.json`, readable by you only. Routes: `GET /status`, `POST /flush`, `POST /repair`, `POST /maintain`.
 Exactly one agent serves a computer's Scopebond home; a second one exits.
+
+## Autostart
+
+`autostart on` writes a small launcher script into the Scopebond home that finds Node and the agent each time it
+runs (the paths recorded at setup first, then the ones on the system), so a Node upgrade or a version manager never
+leaves autostart pointing at nothing. On Windows the Run entry starts it under `conhost --headless`, so no window
+opens at sign-in. `status` says whether autostart is on and working.
 
 ## Status
 
-Experimental. A tray window with a one-click fix for every amber or red state, signed installers and signed updates
-are next.
+Experimental. A tray icon with a one-click fix for every amber or red state is next.
