@@ -413,50 +413,57 @@ export class SqliteCloudOutbox implements CloudOutbox {
 
   constructor(path: string, options: SqliteCloudOutboxOptions = {}) {
     this.db = openSqlite(path);
-    this.maxPending = positiveInteger(options.maxPending, 10_000);
-    this.maxBytes = positiveInteger(options.maxBytes, 64 * 1024 * 1024);
-    this.maxAgeMs = positiveInteger(options.maxAgeMs, 7 * 24 * 60 * 60 * 1000);
-    this.maxGapRecords = positiveInteger(options.maxGapRecords, 10_000);
-    this.now = options.now ?? Date.now;
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS cloud_outbox (
-        event_id TEXT PRIMARY KEY,
-        payload_hash TEXT NOT NULL,
-        receipt_json TEXT NOT NULL,
-        enqueued_at INTEGER NOT NULL,
-        bytes INTEGER NOT NULL CHECK (bytes > 0)
-      );
-      CREATE INDEX IF NOT EXISTS cloud_outbox_order ON cloud_outbox (enqueued_at, event_id);
-      CREATE TABLE IF NOT EXISTS cloud_delivery_gaps (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT,
-        reason TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS cloud_outbox_metadata (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        total_gaps INTEGER NOT NULL CHECK (total_gaps >= 0)
-      );
-      INSERT OR IGNORE INTO cloud_outbox_metadata (singleton, total_gaps)
-        SELECT 1, COUNT(*) FROM cloud_delivery_gaps;
-    `);
-    // SB289: a number per queued record, kept across restarts. Queues made before it get the columns
-    // here; records already in them stay unnumbered.
-    const has = (table: string, column: string) =>
-      (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
-    // Two processes (parallel hook calls, or the hook and the agent) can open an old queue at once: the
-    // one that loses the race finds the column already added, which is the state it wanted.
-    const addColumn = (table: string, column: string, definition: string) => {
-      if (has(table, column)) return;
-      try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); }
-      catch (error) { if (!/duplicate column/i.test((error as Error).message)) throw error; }
-    };
-    addColumn("cloud_outbox", "seq", "INTEGER");
-    addColumn("cloud_outbox_metadata", "next_seq", "INTEGER NOT NULL DEFAULT 1");
-    // SB289: the queue's id, made once. Two processes opening a new queue at once both try; the
-    // first write wins and both read the same id back.
-    addColumn("cloud_outbox_metadata", "queue_id", "TEXT");
-    this.db.prepare("UPDATE cloud_outbox_metadata SET queue_id = ? WHERE singleton = 1 AND queue_id IS NULL").run(randomQueueId());
+    // A queue that cannot be set up (a full disk, a read-only file) must not leave its handle open:
+    // the next open of the same file in this process would reuse it and stay read-only.
+    try {
+      this.maxPending = positiveInteger(options.maxPending, 10_000);
+      this.maxBytes = positiveInteger(options.maxBytes, 64 * 1024 * 1024);
+      this.maxAgeMs = positiveInteger(options.maxAgeMs, 7 * 24 * 60 * 60 * 1000);
+      this.maxGapRecords = positiveInteger(options.maxGapRecords, 10_000);
+      this.now = options.now ?? Date.now;
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS cloud_outbox (
+          event_id TEXT PRIMARY KEY,
+          payload_hash TEXT NOT NULL,
+          receipt_json TEXT NOT NULL,
+          enqueued_at INTEGER NOT NULL,
+          bytes INTEGER NOT NULL CHECK (bytes > 0)
+        );
+        CREATE INDEX IF NOT EXISTS cloud_outbox_order ON cloud_outbox (enqueued_at, event_id);
+        CREATE TABLE IF NOT EXISTS cloud_delivery_gaps (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT,
+          reason TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS cloud_outbox_metadata (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          total_gaps INTEGER NOT NULL CHECK (total_gaps >= 0)
+        );
+        INSERT OR IGNORE INTO cloud_outbox_metadata (singleton, total_gaps)
+          SELECT 1, COUNT(*) FROM cloud_delivery_gaps;
+      `);
+      // SB289: a number per queued record, kept across restarts. Queues made before it get the columns
+      // here; records already in them stay unnumbered.
+      const has = (table: string, column: string) =>
+        (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
+      // Two processes (parallel hook calls, or the hook and the agent) can open an old queue at once: the
+      // one that loses the race finds the column already added, which is the state it wanted.
+      const addColumn = (table: string, column: string, definition: string) => {
+        if (has(table, column)) return;
+        try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); }
+        catch (error) { if (!/duplicate column/i.test((error as Error).message)) throw error; }
+      };
+      addColumn("cloud_outbox", "seq", "INTEGER");
+      addColumn("cloud_outbox_metadata", "next_seq", "INTEGER NOT NULL DEFAULT 1");
+      // SB289: the queue's id, made once. Two processes opening a new queue at once both try; the
+      // first write wins and both read the same id back.
+      addColumn("cloud_outbox_metadata", "queue_id", "TEXT");
+      this.db.prepare("UPDATE cloud_outbox_metadata SET queue_id = ? WHERE singleton = 1 AND queue_id IS NULL").run(randomQueueId());
+    } catch (error) {
+      try { this.db.close(); } catch { /* already failing */ }
+      throw error;
+    }
   }
 
   enqueue(receipt: SignedReceipt): { queued: boolean; duplicate: boolean; gap?: CloudDeliveryGap } {

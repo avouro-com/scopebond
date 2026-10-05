@@ -126,3 +126,17 @@ test("each queue has its own id, kept across restarts; the exporter names it bes
   assert.equal(bodies[0].queue, memory.status().queueId);
   assert.deepEqual(bodies[0].seq, [1]);
 });
+
+test("a queue that cannot be opened for writing leaves no handle behind: it opens normally once writable", async () => {
+  const { chmodSync } = await import("node:fs");
+  const path = join(mkdtempSync(join(tmpdir(), "sb-seq-ro-")), "outbox.db");
+  new SqliteCloudOutbox(path).close();
+  chmodSync(path, 0o444);
+  try {
+    // Writable for root on Linux: only assert the failure where the file really is read-only.
+    try { new SqliteCloudOutbox(path).close(); } catch (error) { assert.match(error.message, /readonly|read-only/i); }
+  } finally { chmodSync(path, 0o644); }
+  const outbox = new SqliteCloudOutbox(path);
+  assert.deepEqual(outbox.enqueue(receipt("action:seq-ro-0001")), { queued: true, duplicate: false });
+  outbox.close();
+});
