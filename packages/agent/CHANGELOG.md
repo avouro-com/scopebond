@@ -1,5 +1,11 @@
 # @scopebond/agent
 
+## 0.3.1
+
+### Patch Changes
+
+- 8de1477: The daily self-check against a workspace that does not offer it yet (it answers 404) now reports this computer's own checks instead of a failure, so the tray stays green when everything on the computer works.
+
 ## 0.3.0
 
 ### Minor Changes
