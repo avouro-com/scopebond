@@ -189,3 +189,98 @@ test("DIC-1: no agent wired to the hook is reported as not governing", async () 
     assert.ok(s.identity.key_kid);
   } finally { ws.close(); }
 });
+
+// SB290: identity changes while records wait. A workspace that accepts only the credential it issued last.
+function strictWorkspace() {
+  const received = [];
+  let accepted = "sbm_us_first";
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", () => {
+      if (req.url !== "/v1/ingest") { res.writeHead(404); res.end("{}"); return; }
+      if (req.headers.authorization !== `Bearer ${accepted}`) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized", code: "credential_refused" }));
+        return;
+      }
+      received.push(...(JSON.parse(raw).receipts ?? []).map((r) => r.payload.action_ref.action_id));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({
+    url: `http://127.0.0.1:${server.address().port}`, received,
+    issue: (credential) => { accepted = credential; },
+    close: () => server.close(),
+  })));
+}
+
+/** One tool call per run on `dir`, delivering with `credential` (what a sign-in writes to cloud.json). */
+async function actAs(dir, url, credential, n) {
+  const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
+  const connection = {
+    url, credential, credential_id: credential, organization_id: "org-1", environment_id: "env-1",
+    gateway_id: "gw-1", installation_id: "gw-1", installation_generation: 1, attester_kid: attester.kid,
+    scopes: ["receipt:ingest"], expires_at: new Date(Date.now() + 80 * DAY).toISOString(),
+  };
+  writeFileSync(join(dir, "cloud.json"), JSON.stringify(connection));
+  const rt = createHookRuntime({
+    policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"),
+    dbPath: join(dir, "receipts.db"), cloud: { connection, flushTimeoutMs: 5_000 },
+  });
+  try {
+    for (let i = 0; i < n; i++) await rt.evaluate(mapClaudeToolUse({ tool_name: "Read", tool_input: { file_path: `/repo/${credential}-${Date.now()}-${i}.ts` }, cwd: "/repo" }));
+    await rt.flush();
+  } finally { rt.exporter?.stop(); rt.close(); }
+}
+const pendingIn = (dir) => buildStatusJson({ version: "test", activeDir: dir, candidateDirs: [dir], hasPolicy: true, agents: { claude: true, cursor: false, codex: false } }).delivery.pending;
+
+test("SB290: a key revoked mid-queue keeps every record; signing in again delivers them all, once", async () => {
+  const ws = await strictWorkspace();
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "sb-sb290-revoke-"));
+    scaffold(dir);
+    await actAs(dir, ws.url, "sbm_us_first", 2);
+    assert.equal(ws.received.length, 2);
+    ws.issue("sbm_us_second"); // revoked in the workspace; the computer does not know yet
+    await actAs(dir, ws.url, "sbm_us_first", 3);
+    assert.equal(ws.received.length, 2, "nothing is accepted on the revoked credential");
+    assert.ok(pendingIn(dir) >= 3, "the records wait on the computer");
+    await actAs(dir, ws.url, "sbm_us_second", 0); // signed in again: nothing new, just deliver
+    assert.equal(pendingIn(dir), 0);
+    assert.equal(ws.received.length, 5);
+    assert.equal(new Set(ws.received).size, 5, "each record delivered once");
+  } finally { ws.close(); }
+});
+
+test("SB290: signing in again three times while records wait loses nothing and sends nothing twice", async () => {
+  const ws = await strictWorkspace();
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "sb-sb290-relogin-"));
+    scaffold(dir);
+    ws.issue("sbm_us_none"); // offline from the computer's point of view
+    for (const credential of ["sbm_us_a", "sbm_us_b", "sbm_us_c"]) await actAs(dir, ws.url, credential, 2);
+    assert.equal(ws.received.length, 0);
+    ws.issue("sbm_us_c");
+    await actAs(dir, ws.url, "sbm_us_c", 0);
+    assert.equal(pendingIn(dir), 0);
+    assert.equal(ws.received.length, 6);
+    assert.equal(new Set(ws.received).size, 6);
+  } finally { ws.close(); }
+});
+
+test("SB290: two configurations on one computer each deliver their own records, with their own credential", async () => {
+  const ws = await strictWorkspace();
+  try {
+    const home = mkdtempSync(join(tmpdir(), "sb-sb290-home-"));
+    const project = mkdtempSync(join(tmpdir(), "sb-sb290-project-"));
+    scaffold(home); scaffold(project);
+    ws.issue("sbm_us_home");
+    await actAs(home, ws.url, "sbm_us_home", 2);
+    await actAs(project, ws.url, "sbm_us_project", 2);
+    assert.equal(ws.received.length, 2, "only the home's records reached the workspace that accepts the home's credential");
+    assert.equal(pendingIn(home), 0);
+    assert.ok(pendingIn(project) >= 2, "the project's records wait in the project's own queue, not the home's");
+  } finally { ws.close(); }
+});
