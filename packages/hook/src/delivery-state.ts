@@ -55,10 +55,16 @@ export function httpStatusOf(message: string | null | undefined): number | null 
   return match ? Number(match[1]) : null;
 }
 
+/** The error recorded for an attempt the time limit cut off. The trailing `(timeout)` is the
+ *  code `status --json` reports. */
+export const timeoutError = (ms: number): string => `delivery did not finish within ${ms} ms, so it was cut off (timeout)`;
+
 /** Record the outcome of one delivery attempt from the exporter's in-process status.
  *  `before` is the exporter's last success time before this attempt, so an attempt with
- *  nothing to send does not count as a delivery. */
-export function recordDeliveryAttempt(dir: string, status: Pick<CloudExporterStatus, "lastSuccessAt" | "lastError" | "pending">, at: number, before: number | null = null): DeliveryState {
+ *  nothing to send does not count as a delivery. `limitMs` is the time limit of a bounded
+ *  attempt: one that ends with records still waiting, no error and nothing accepted was cut
+ *  off before the workspace answered, and is recorded as a timeout rather than as nothing. */
+export function recordDeliveryAttempt(dir: string, status: Pick<CloudExporterStatus, "lastSuccessAt" | "lastError" | "pending">, at: number, before: number | null = null, limitMs: number | null = null): DeliveryState {
   const patch: Partial<DeliveryState> = { last_attempt_at: at };
   if (status.lastError) {
     const code = httpStatusOf(status.lastError);
@@ -72,6 +78,10 @@ export function recordDeliveryAttempt(dir: string, status: Pick<CloudExporterSta
   } else if (status.lastSuccessAt !== null && status.lastSuccessAt !== before) {
     // Accepted: the connection works, whatever an earlier run saw.
     Object.assign(patch, { last_success_at: status.lastSuccessAt, last_error: null, last_status: null, invalid_since: null, invalid_source: null });
+  } else if (limitMs !== null && status.pending > 0) {
+    // A refusal seen earlier is kept: a timeout says nothing about whether the workspace
+    // accepts this computer.
+    Object.assign(patch, { last_error: timeoutError(limitMs), last_status: null });
   }
   return writeDeliveryState(dir, patch);
 }
