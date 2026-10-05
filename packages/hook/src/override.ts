@@ -63,7 +63,7 @@ export function actionSummary(intent: { action_type?: string; params?: Record<st
     : intent.action_type === "net.fetch" ? pick("url") || pick("host")
     : pick("path") || intent.action_type || "an action";
   // Arguments the hook keeps only as a keyed digest stay out of the window.
-  const shown = text.replace(/\s*\(hmac-sha256:[0-9a-f]{64}\)/g, "");
+  const shown = text.slice(0, 2000).replace(/ ?\(hmac-sha256:[0-9a-f]{64}\)/g, "").trim();
   return shown.length > 200 ? `${shown.slice(0, 197)}...` : shown;
 }
 
