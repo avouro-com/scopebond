@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Scopebond is an open-source checkpoint for AI coding agents (Claude Code, Cursor, Codex, MCP, GitHub) that blocks out-of-policy actions before they run and signs every decision into a tamper-evident record anyone can verify offline.",
+  "description": "Free, open-source guardrails and verifiable evidence for AI coding agents: Claude Code, Cursor, Codex, MCP, and GitHub. Scopebond Cloud is a separate proprietary hosted workspace.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://scopebond.com",

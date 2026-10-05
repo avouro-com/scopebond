@@ -1,19 +1,26 @@
 # @scopebond/hook
 
-The Scopebond connector for **Claude Code**, **Cursor**, and **OpenAI Codex**. It checks every tool
-call a coding agent makes against your policy *before it runs*, blocks the ones
-outside policy, and records a signed receipt — locally, on the machine, and
-optionally mirrored to your Scopebond Cloud workspace for monitoring.
+The free, open-source Scopebond connector for **Claude Code**, **Cursor**, and
+**OpenAI Codex**. It checks supported actions delivered through the configured
+hook against your policy and signs decision records locally. Some actions are
+observed after they happen: Cursor file edits are recorded, not prevented. See
+the coverage table below before choosing what to protect.
 
-- **What it does:** checks supported agent actions before they run and blocks an
-  action when it breaks your policy.
+**License and hosting:** this package is Apache-2.0 open-source software.
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service.
+You can use the hook locally without a Cloud account, or optionally connect it
+for shared activity, rule review, and retained evidence. For hosted setup, start
+with the [workspace getting-started guide](https://scopebond.com/get-started).
+
+- **What it does:** blocks supported actions when a configured rule requires it,
+  and records evaluated decisions and supported observations.
 - **Where it works:** actions the coding agent routes through its tool system
   (shell, file, MCP, web). A process started outside the harness is not covered.
 
 ## Install once for your machine
 
 ```
-npm i -g @scopebond/hook
+npm i -g @scopebond/hook@latest
 scopebond install                   # detects Cursor and Codex
 scopebond install --codex           # set up Codex only
 ```
@@ -48,9 +55,9 @@ Scopebond is also a Claude Code plugin (this repo is a plugin marketplace):
 ### Per-repository enroll (alternative)
 
 ```
-npx @scopebond/hook init            # Claude Code
-npx @scopebond/hook init --cursor   # Cursor
-npx @scopebond/hook init --codex    # Codex, then approve it once with /hooks
+npx -y @scopebond/hook@latest init            # Claude Code
+npx -y @scopebond/hook@latest init --cursor   # Cursor
+npx -y @scopebond/hook@latest init --codex    # Codex, then approve it once with /hooks
 ```
 
 `init` scaffolds `.scopebond/` in the current project (a machine signing key, a
@@ -58,7 +65,7 @@ countersigning key, a starter policy — "protect main and production paths" —
 `.gitignore` so none of it is committed) and wires your agent to the hook. Then run one
 safe command in the agent and see the receipt in `.scopebond/receipts.db`. `init`, `trust`
 and `uninstall` are meant for a person at a terminal: in a script or CI, pass `--yes`.
-`npx @scopebond/hook init --dry-run` shows what it would write, and changes nothing.
+`npx -y @scopebond/hook@latest init --dry-run` shows what it would write, and changes nothing.
 
 **Where the hook goes, and why.** `init` pins a copy of the hook on this machine so it
 starts fast on every tool call. That command names paths that exist only here, so it
@@ -77,8 +84,8 @@ portable command (`npx -y @scopebond/hook@<version> claude`) to `.claude/setting
 until a teammate runs `init` themselves it blocks their agent's actions with a message
 saying how to set it up.
 
-Check what it did with `npx @scopebond/hook status` (which agents are configured, in
-which scope) and `npx @scopebond/hook doctor` (whether each configured command can
+Check what it did with `npx -y @scopebond/hook@latest status` (which agents are configured, in
+which scope) and `npx -y @scopebond/hook@latest doctor` (whether each configured command can
 actually start).
 
 ### Changing the rules
@@ -88,11 +95,11 @@ a short readable list, and `policy.json` is compiled from it — so a limit is a
 list, not a 700-character lookahead:
 
 ```
-npx @scopebond/hook rules                      # what is blocked, in plain English
-npx @scopebond/hook rules allow dd             # stop blocking a program
-npx @scopebond/hook rules protect infra/       # never write there
-npx @scopebond/hook rules protect-branch production
-npx @scopebond/hook rules apply                # recompile after editing rules.json by hand
+npx -y @scopebond/hook@latest rules                      # what is blocked, in plain English
+npx -y @scopebond/hook@latest rules allow dd             # stop blocking a program
+npx -y @scopebond/hook@latest rules protect infra/       # never write there
+npx -y @scopebond/hook@latest rules protect-branch production
+npx -y @scopebond/hook@latest rules apply                # recompile after editing rules.json by hand
 ```
 
 The compiled patterns are identical to the ones this package has always shipped — there
@@ -138,10 +145,10 @@ is not seen. Run `capabilities` (below) for the exact per-cell picture.
 ### What this hook can honestly claim: `capabilities`
 
 ```
-npx @scopebond/hook capabilities            # the manifest, per agent host / action / phase
-npx @scopebond/hook capabilities --prove    # run the safe fixtures in temp directories
-npx @scopebond/hook capabilities --prove --save   # and record the result beside the policy
-npx @scopebond/hook capabilities --json
+npx -y @scopebond/hook@latest capabilities            # the manifest, per agent host / action / phase
+npx -y @scopebond/hook@latest capabilities --prove    # run the safe fixtures in temp directories
+npx -y @scopebond/hook@latest capabilities --prove --save   # and record the result beside the policy
+npx -y @scopebond/hook@latest capabilities --json
 ```
 
 Each cell is one connector version, agent host (Claude terminal / desktop, Codex CLI /
@@ -183,7 +190,7 @@ it nothing changes. Run `rules apply` after adding it.
 To see the receipts in your hosted Scopebond workspace, sign this computer in:
 
 ```
-npx @scopebond/hook login https://<your-workspace>
+npx -y @scopebond/hook@latest login https://<your-workspace>
 ```
 
 It prints a short code and a link. Someone who manages the workspace opens the link,
@@ -197,7 +204,7 @@ portal's **Connect** step (it gives you a one-use enrollment bundle), save it as
 `scopebond-enrollment.json`, then:
 
 ```
-npx @scopebond/hook connect https://<your-workspace> scopebond-enrollment.json
+npx -y @scopebond/hook@latest connect https://<your-workspace> scopebond-enrollment.json
 ```
 
 In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Every command the hook prints for you to run uses `npx.cmd` on Windows.
@@ -227,7 +234,7 @@ can hand you a single copy-paste command with nothing to save.
 
 From then on every receipt is mirrored to the workspace through a **durable outbox**:
 delivery is best-effort and never blocks a tool call, and receipts are retained
-locally and retried if the workspace is unreachable. `npx @scopebond/hook flush`
+locally and retried if the workspace is unreachable. `npx -y @scopebond/hook@latest flush`
 delivers anything still queued — run it on a session-end hook (and set
 `SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency.
 
@@ -240,7 +247,7 @@ disconnected there), `login` replaces the key and keeps the old one in
 
 **Records signed by an earlier key.** The new connection cannot deliver records the earlier
 key signed, so they leave the delivery queue but stay in the local log.
-`npx @scopebond/hook recover` asks the workspace to accept them, waits while an owner or
+`npx -y @scopebond/hook@latest recover` asks the workspace to accept them, waits while an owner or
 admin approves it there, then sends them; the workspace checks each signature against the
 key it kept and labels the records as recovered.
 
@@ -257,7 +264,7 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   (`SCOPEBOND_POLICY_SYNC_MS`); every other call only reads two small files. A change therefore
   applies within a few minutes of the agent's next action, and a workspace that is slow or
   unreachable never holds up the agent for longer than the cap. The new rules govern from the
-  next action. `npx @scopebond/hook policy sync` checks right now.
+  next action. `npx -y @scopebond/hook@latest policy sync` checks right now.
 - **What is checked.** A rules document must be complete, issued for this computer, match its
   digest and be newer than the one in force; the resulting policy must load. Anything else is
   refused, the rules already in force stay, and the refusal is reported to the workspace.
@@ -476,8 +483,8 @@ your evidence — so `status` reports the count and size, and `prune` bounds it 
 choose to:
 
 ```
-npx @scopebond/hook prune                      # report the footprint
-npx @scopebond/hook prune --before 90d --yes   # archive, then remove, anything older
+npx -y @scopebond/hook@latest prune                      # report the footprint
+npx -y @scopebond/hook@latest prune --before 90d --yes   # archive, then remove, anything older
 ```
 
 `prune` writes the receipts it will remove to a JSONL file beside the database first, so

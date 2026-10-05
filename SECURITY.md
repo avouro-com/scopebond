@@ -1,7 +1,8 @@
 # Security Policy
 
-Scopebond is fail-closed infrastructure on the money path, so we take security
-reports seriously.
+Scopebond's open-source components check supported agent actions and produce
+signed evidence. Enforcement integrity, record integrity, credentials, and local
+workspace connections are security-sensitive, so we take reports seriously.
 
 ## Reporting a vulnerability
 
@@ -23,10 +24,14 @@ disclosure. We credit reporters who wish to be credited.
 In scope: the code in this repository — the core packages `@scopebond/gateway`,
 `@scopebond/verify`, `@scopebond/policy-schema` and `@scopebond/sdk`, and the
 connectors `@scopebond/hook`, `@scopebond/mcp`, `@scopebond/framework` and
-`@scopebond/github-action`. The on-chain contracts, the registry read API and the
-conformance suite are `[PLANNED]` and not yet in the tree. The hosted control plane
-("Scopebond Cloud") is a separate product; report issues affecting it to the same
-address.
+`@scopebond/github-action`, plus the `@scopebond/agent` companion (including its
+credential handling, local control channel, and update path). Policy and evidence
+conformance vectors are already in the tree. On-chain contracts and a registry
+read API are future work, not current product features.
+
+The hosted shared workspace (Scopebond Cloud) is a separate proprietary service,
+not open source and not included in this repository. Report issues affecting it
+to the same address.
 
 Enforcement boundary: the connectors are cooperative (they govern an agent that
 routes through them); an agent that bypasses the hook or gateway is out of scope for

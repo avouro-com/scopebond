@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/verify",
   "version": "0.4.3",
-  "description": "scopebond-verify — the deterministic verdict library: violates(policy, receipts, claimed). The moat-bearing reference implementation.",
+  "description": "Open-source deterministic policy evaluation and evidence verification for Scopebond action records, with portable conformance vectors.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/verify#readme",

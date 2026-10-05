@@ -6,10 +6,14 @@
 > requests run the built-in simulation and are recorded as `simulated`, never
 > `executed`.
 
-The **Scopebond Gateway** — a policy-enforcement proxy that sits between an AI
-agent and everything it can touch. One policy, three uses: **prevent · prove · pay**
-(the gateway does prevent + prove). Built on [Hono](https://hono.dev) so the same
-codebase runs on Node and Workers (ADR-004).
+The **Scopebond Gateway** is a free, Apache-2.0 open-source policy-enforcement
+proxy for actions routed through its HTTP and MCP interfaces. It connects rules,
+control, and signed decision evidence. Built on [Hono](https://hono.dev), it runs
+on Node and Workers.
+
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service;
+it is not included in this package. You can self-host the gateway without a Cloud
+account and optionally export configured records to a workspace.
 
 ## What it does
 
@@ -54,13 +58,13 @@ they remain suitable for simulation and passive observation.
 Scaffold a working key, key registry and starter policy, then follow the printed steps:
 
 ```bash
-npx @scopebond/gateway init
+npx -y @scopebond/gateway@latest init
 ```
 
 Or wire it up yourself with an existing policy and key registry:
 
 ```bash
-SCOPEBOND_PRINCIPAL_KEYS_FILE=./principal-keys.json SCOPEBOND_CONTROL_TOKEN=<random-24+-character-token> npx @scopebond/gateway ./policy.json
+SCOPEBOND_PRINCIPAL_KEYS_FILE=./principal-keys.json SCOPEBOND_CONTROL_TOKEN=<random-24+-character-token> npx -y @scopebond/gateway@latest ./policy.json
 ```
 
 ```bash
@@ -141,7 +145,7 @@ gateway machine and complete possession proof with the same attester key the gat
 will use:
 
 ```bash
-corepack pnpm dlx @scopebond/gateway@0.13.0 enroll https://cloud.scopebond.com scopebond-enrollment.json
+npx -y @scopebond/gateway@latest enroll https://cloud.scopebond.com scopebond-enrollment.json
 ```
 
 The command refuses non-HTTPS remote origins, signs the canonical challenge locally,
