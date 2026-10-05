@@ -135,7 +135,8 @@ test("autostart starts a launcher that finds Node and the agent each time, with 
   assert.match(sh, /^#!\/bin\/sh/);
   assert.ok(sh.includes(`NODE='/opt/node'\\''s/bin/node'`), "single quotes escaped");
   assert.match(sh, /nvm\.sh/);
-  assert.ok(sh.includes(`exec "$NODE" "$CLI" run`));
+  assert.ok(sh.includes(`exec "$NODE" --disable-warning=ExperimentalWarning "$CLI" run`));
+  assert.match(cmd, /--disable-warning=ExperimentalWarning "%CLI%" run/);
   const plist = macLaunchAgent("/opt/a&b/agent-launch.sh", "/var/tmp/scopebond-agent.log");
   assert.match(plist, /<string>com\.scopebond\.agent<\/string>/);
   assert.ok(plist.includes("<string>/bin/sh</string><string>/opt/a&amp;b/agent-launch.sh</string>"));

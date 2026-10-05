@@ -27,7 +27,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "scopebond-agent": "dist/cli.js"
+    "scopebond-agent": "dist/bin.js"
   },
   "exports": {
     ".": {
