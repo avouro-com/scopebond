@@ -1,5 +1,9 @@
 # @scopebond/mcp
 
+**License and hosting:** this package is free, Apache-2.0 open-source software.
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service
+and is not included in this package.
+
 The Scopebond **MCP proxy** — one policy for every Model Context Protocol tool
 call, in front of the servers an agent uses. It sits in-path between an MCP client
 and an upstream server, checks each `tools/call` against your policy before it is
@@ -12,6 +16,12 @@ forwarded.
   call, never that an agent signed it.
 
 ## Use it
+
+Install the free open-source proxy with a current Node.js LTS release:
+
+```bash
+npm install -g @scopebond/mcp@latest
+```
 
 Point your MCP client at `scopebond-mcp` and give it the real server after `--`:
 

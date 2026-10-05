@@ -64,7 +64,7 @@ import { runDispatchCommand } from "./dispatch-cli.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
-import { recordRulesCredential } from "./delivery-state.js";
+import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
 import { describeDelivery } from "./delivery-report.js";
 import { buildStatusJson } from "./status-json.js";
 import { computeManifest, renderManifest } from "./capabilities.js";
@@ -819,8 +819,12 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     // caller opts out. This removes the "paste this snippet" step. A hook that is already
     // configured — pinned by `init`, or user-level by `install` — is left as it is:
     // connecting changes where receipts go, not how the hook starts.
+    // A user-level connection looks only at the user-level settings: a project's own hook
+    // entry in the folder this ran from used to count as "already configured", so a sign-in
+    // from such a folder never set up the user at all.
+    const forUser = resolve(dir) === resolve(userHome());
     const scopes = harnessScopes(harness, process.cwd());
-    const existing = scopes.local ?? scopes.project ?? scopes.user;
+    const existing = forUser ? scopes.user : scopes.local ?? scopes.project ?? scopes.user;
     if (existing && !args.includes("--no-install")) {
       console.log(`✓ ${harnessName(harness)} already configured in ${existing}`);
     } else if (!args.includes("--no-install")) {
@@ -829,7 +833,7 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
       // folder's project settings — what this did before — left every other project
       // unchecked, and a sign-in run from a scratch folder governed only that folder.
       // `--project` (a per-project connection) keeps the project placement.
-      const file = dir === userHome()
+      const file = forUser
         ? writeHarnessConfig(userHarnessFile(harness), harness, durableHookCommand(harness))
         : placeHook(harness, process.cwd(), undefined).file;
       console.log(`✓ ${harnessName(harness)} configured in ${file}`);
@@ -844,10 +848,11 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     const observing = observationStatus(loadConnection(dir));
     if (observing.state === "on" && harness === "claude" && !args.includes("--no-install")) {
       const placed = harnessScopes("claude", process.cwd());
-      const target = placed.local ?? placed.project ?? placed.user;
+      const target = forUser ? placed.user : placed.local ?? placed.project ?? placed.user;
       const command = target ? configuredHookCommands(target)[0] : undefined;
       if (target && command) { wireLifecycleHooks(target, command); console.log(`✓ Session and after-action observations enabled in ${target}`); }
     } else if (observing.state === "unsupported") console.log(`Observations: ${observing.reason}`);
+    if (forUser) for (const line of projectSetupNotice(process.cwd())) console.log(line);
     console.log("");
     console.log("Run your agent — the first action appears in your workspace within seconds.");
     console.log(onboardingSteps({ harness, command: cliCommand, connected: true }).join("\n"));
@@ -877,6 +882,53 @@ const enrollmentHelp = [
 function connectDir(args: string[]): string {
   const project = configDir();
   return args.includes("--project") || existsSync(join(project, "policy.json")) ? project : resolveConfigDir(process.cwd());
+}
+
+/** Where `login` writes: the user home, whatever folder it runs from, because signing in sets
+ *  Scopebond up for this person across projects. It used to follow `connect` and connect a
+ *  project setup it found in the current folder, so a sign-in from a folder with a leftover
+ *  `.scopebond` connected only that folder and left the user "not installed". `--project`
+ *  connects the folder's own setup instead; SCOPEBOND_HOOK_DIR still overrides both. */
+function loginDir(args: string[]): string {
+  if (args.includes("--project")) return configDir();
+  return process.env.SCOPEBOND_HOOK_DIR ?? userHome();
+}
+
+/** After a sign-in for the user: what a project setup in the folder it ran from means for it.
+ *  The hook prefers a trusted project setup for sessions opened in that folder (see
+ *  `resolveConfigDir`), so the sign-in says so instead of leaving it to be found later. */
+function projectSetupNotice(cwd: string): string[] {
+  if (process.env.SCOPEBOND_HOOK_DIR) return [];
+  const project = join(cwd, ".scopebond");
+  if (resolve(project) === resolve(userHome()) || !existsSync(join(project, "policy.json"))) return [];
+  const hookFiles = (["claude", "cursor", "codex"] as const).flatMap((h) => {
+    const scopes = harnessScopes(h, cwd);
+    return [scopes.project, scopes.local].filter((file): file is string => !!file);
+  });
+  const remove = [`delete the folder ${project}`, ...hookFiles.map((file) => `remove the Scopebond hook entry from ${file}`)].join(", and ");
+  if (resolve(resolveConfigDir(cwd)) === resolve(project)) {
+    const own = loadConnection(project);
+    const records = own ? `go to the workspace its own connection names (${own.url})` : "stay on this computer: it is not connected";
+    return [
+      "",
+      `Note: ${cwd} has its own Scopebond setup (${project}), and it takes precedence over this sign-in`,
+      `for agent sessions opened in ${cwd}: their rules come from it and their records ${records}.`,
+      `To use this sign-in there too, ${remove}.`,
+    ];
+  }
+  return [
+    "",
+    `Note: ${cwd} also has an earlier project setup (${project}). It is not trusted, so the hook ignores it`,
+    `and this sign-in governs sessions opened there. To remove it, ${remove}.`,
+  ];
+}
+
+/** The user-level sign-in's workspace, when a project setup takes precedence over it from here
+ *  (for `status` and `doctor`): the hook would otherwise route this folder's records past it
+ *  without a word. */
+function shadowedUserConnection(active: string): string | null {
+  if (process.env.SCOPEBOND_HOOK_DIR || resolve(active) === resolve(userHome())) return null;
+  return loadConnection(userHome())?.url ?? null;
 }
 
 /** `recover [--no-wait]`: deliver receipts that an earlier, since-revoked key of this computer
@@ -912,8 +964,11 @@ async function runFlush(): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
   if (!loadConnection(dir)) { console.error(`not connected to a workspace; run \`${cliCommand("connect <workspace-url> <enrollment>")}\` first`); process.exit(1); }
   const runtime = createHookRuntime(runtimePaths(dir));
+  const before = runtime.exporter?.status().lastSuccessAt ?? null;
   await runtime.exporter?.flush();
   const status = runtime.exporter?.status();
+  // Unbounded, so its outcome is a real one: `status` and `doctor` show it like any other.
+  if (status) recordDeliveryAttempt(dir, status, Date.now(), before);
   runtime.exporter?.stop();
   console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
   // Let pending HTTP handles close normally (forced exit can abort on Windows).
@@ -1201,6 +1256,7 @@ function runStatus(args: string[] = []): void {
     const configured = (h: Harness) => !!harnessScopeLabel(harnessScopes(h, cwd));
     console.log(JSON.stringify(buildStatusJson({
       version: hookVersion(), activeDir: active, candidateDirs: [userHome(), join(cwd, ".scopebond")],
+      userDir: process.env.SCOPEBOND_HOOK_DIR ? undefined : userHome(),
       hasPolicy: existsSync(join(active, "policy.json")),
       agents: { claude: configured("claude"), cursor: configured("cursor"), codex: configured("codex") },
     }), null, 2));
@@ -1218,6 +1274,11 @@ function runStatus(args: string[] = []): void {
   console.log(`Scopebond hook ${hookVersion()}`);
   console.log(`  user home        ${home} ${installed ? "(installed)" : `(not installed — run \`${cliCommand("install")}\`)`}`);
   console.log(`  active config    ${resolveConfigDir(process.cwd())}`);
+  {
+    const active = resolveConfigDir(process.cwd());
+    const shadowed = shadowedUserConnection(active);
+    if (shadowed) console.log(`  user sign-in     ${home} is connected to ${shadowed}, but ${active} takes precedence here${connected ? "" : " and is not connected, so records from here stay on this computer"}`);
+  }
   const ignored = untrustedProjectPolicy(process.cwd());
   if (ignored) console.log(`  project policy   ${ignored} ignored — not trusted (run \`${cliCommand("trust")}\` to use it)`);
   console.log(`  Claude Code      ${harnessScopeLabel(claude) || "not configured"}`);
@@ -1320,6 +1381,12 @@ async function runDoctor(): Promise<void> {
   console.log(`  active config    ${active} ${hasPolicy ? "ok" : `no policy (run \`${cliCommand("init")}\` here, or \`${cliCommand("install")}\` once for your user)`}`);
   if (!hasPolicy) problems.push("no policy found in the active config dir");
   const ignored = untrustedProjectPolicy(process.cwd());
+  const shadowed = shadowedUserConnection(active);
+  if (shadowed) {
+    const activeConnected = !!loadConnection(active);
+    console.log(`  user sign-in     ${userHome()} is connected to ${shadowed}, but ${active} takes precedence here${activeConnected ? "" : " — NOT CONNECTED"}`);
+    if (!activeConnected) problems.push(`this folder's own setup (${active}) takes precedence over your user-level sign-in and is not connected, so records from agent sessions here stay on this computer; delete ${active} to use your sign-in here, or run ${cliCommand(`login ${shadowed} --project`)} here to connect it`);
+  }
   if (ignored) console.log(`  project policy   ${ignored} IGNORED — not trusted (never trusted, or edited since). Review it, then \`${cliCommand("trust")}\``);
   // Every harness, in both scopes, plus a check that each configured command can
   // actually start. A pinned path that has gone missing is the one failure mode of
@@ -1473,7 +1540,7 @@ async function runLogin(args: string[]): Promise<void> {
   const deadline = Date.now() + Math.max(60, Number(start.json.expires_in ?? 600)) * 1000;
   console.log(`To connect this computer, open:\n\n  ${verify}\n\nand check that it shows the code  ${userCode}\n`);
   console.log("Waiting for approval (the code expires in 10 minutes; Ctrl+C to stop)…");
-  const dir = connectDir(args);
+  const dir = loginDir(args);
   scaffold(dir, {});
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -1596,15 +1663,18 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "to a JSONL file beside the database, then removes them. Refuses once the log has been",
       "anchored, because a receipt's position is its anchor leaf index.",
     ] },
-  { name: "login", args: "<workspace-url> [--claude|--cursor|--codex] [--no-install]",
+  { name: "login", args: "<workspace-url> [--claude|--cursor|--codex] [--no-install] [--project]",
     summary: "connect this computer to a Scopebond Cloud workspace by approving a short code there",
     detail: [
       "Prints a code and a link; someone who manages the workspace opens it, checks the code",
       "and approves it for an environment and agent. Nothing is copied or pasted.",
+      "It sets Scopebond up for you across projects (~/.scopebond and your user-level agent",
+      "settings), whatever folder you run it from. --project connects the current folder's",
+      "own setup instead. If the folder has a project setup that takes precedence, it says so.",
     ] },
   { name: "connect", args: "<workspace-url> <enrollment> [--claude|--cursor|--codex]",
     summary: "send receipts to a Scopebond Cloud workspace as well as keeping them locally" },
-  { name: "flush", summary: "deliver any receipts still queued for the workspace now" },
+  { name: "flush", summary: "deliver any receipts still queued for the workspace now, with no time limit" },
   { name: "recover", args: "[--no-wait]", summary: "deliver records an earlier, revoked key signed, once the workspace approves",
     detail: [
       "When this computer was replaced or disconnected while records were still queued, the",

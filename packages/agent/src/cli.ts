@@ -12,11 +12,13 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isEphemeralPath, userHome } from "@scopebond/hook";
 import { computerStatus } from "./agent.js";
-import { autostartHealth, disableAutostart, enableAutostart } from "./autostart.js";
+import { autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
 import { AFTER_PID_ENV, AGENT_VERSION, startService } from "./service.js";
 
 const [cmd = "help", ...rest] = process.argv.slice(2);
+// What a person types here: on Windows, PowerShell blocks the plain name's script shim.
+const me = process.platform === "win32" ? "scopebond-agent.cmd" : "scopebond-agent";
 const dir = process.env.SCOPEBOND_HOME ?? userHome();
 const cliPath = realpathSync(fileURLToPath(import.meta.url));
 
@@ -52,7 +54,7 @@ async function main(): Promise<void> {
       if (rest.includes("--json")) { console.log(JSON.stringify(status, null, 2)); return; }
       const d = status.delivery;
       console.log(`Scopebond Agent: ${live ? "running" : "not running"}`);
-      console.log(`  state            ${status.state}`);
+      console.log(`  state            ${live ? status.state : "not running: records wait on this computer until it runs"}`);
       console.log(`  connected        ${d.connected ? "yes" : "no"}`);
       console.log(`  waiting to send  ${d.pending} record(s)${d.oldest_pending_age_s !== null ? `, oldest ${Math.round(d.oldest_pending_age_s / 60)} min` : ""}`);
       if (d.last_error) console.log(`  last problem     ${d.last_error}`);
@@ -60,14 +62,14 @@ async function main(): Promise<void> {
       console.log(`  autostart        ${status.autostart.detail}`);
       const check = status.agent?.last_maintenance?.selfCheck;
       if (check) console.log(`  self-check       ${check.ok ? "passed" : `failed: ${check.failed.join(", ")}`}`);
-      if (!live) console.log(`\nStart it with: scopebond-agent run   (or: scopebond-agent autostart on)`);
+      if (!live) console.log(`\nStart it with: ${me} autostart on`);
       return;
     }
     case "flush":
     case "repair":
     case "check": {
       const answer = await callAgent(dir, "POST", `/${cmd === "check" ? "maintain" : cmd}`, {}, 6 * 60_000);
-      if (!answer) { console.error("The Scopebond Agent is not running. Start it with: scopebond-agent run"); process.exitCode = 1; return; }
+      if (!answer) { console.error(`The Scopebond Agent is not running. Start it with: ${me} autostart on`); process.exitCode = 1; return; }
       console.log(JSON.stringify(answer, null, 2));
       return;
     }
@@ -81,6 +83,18 @@ async function main(): Promise<void> {
         return;
       }
       console.log(on ? enableAutostart(dir, cliPath) : disableAutostart(dir));
+      if (!on) return;
+      // Turning autostart on also starts the agent now, so nobody has to sign out and in again.
+      if (await callAgent(dir, "GET", "/status", undefined, 2_000)) { console.log("The Scopebond Agent is running."); return; }
+      startNow(dir);
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (await callAgent(dir, "GET", "/status", undefined, 1_000)) {
+          console.log(`The Scopebond Agent is running${process.platform === "win32" ? "; its icon is in the taskbar tray (it may be under the ^ arrow)" : ""}.`);
+          return;
+        }
+      }
+      console.log(`It starts at your next sign-in. To start it now: ${me} run`);
       return;
     }
     default:

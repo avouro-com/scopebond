@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/agent",
-  "version": "0.3.1",
-  "description": "The Scopebond Agent — one resident process per user that delivers this computer's signed records to its Scopebond workspace, keeps its rules and connection current, and reports its health, so nobody has to run a command to keep it working.",
+  "version": "0.3.2",
+  "description": "Free, open-source Scopebond Agent companion: deliver queued records, maintain rules and connections, and report computer health to the separate proprietary Scopebond Cloud workspace.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/agent#readme",
@@ -27,7 +27,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "scopebond-agent": "dist/cli.js"
+    "scopebond-agent": "dist/bin.js"
   },
   "exports": {
     ".": {

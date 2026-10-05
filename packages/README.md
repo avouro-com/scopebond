@@ -1,38 +1,43 @@
 # packages/
 
-The Scopebond monorepo packages. Landing incrementally; entries marked
-`[PLANNED]` do not exist yet.
+All nine packages below are free, Apache-2.0 open-source software. The hosted
+shared workspace, Scopebond Cloud, is a separate proprietary service and is not
+included here. Its Free and paid plans are distinct from these packages.
+
+The hook and gateway can run locally without a Cloud account. The Scopebond Agent
+is a companion for connected computers, not the AI coding agent doing the work.
+See the [root README](../README.md) for product scope and hosted versus local setup.
 
 | Package | Purpose | Status |
 |---|---|---|
-| `policy-schema` | The policy vocabulary as JSON Schema, canonical types and shared evidence vectors. | **experimental** (published 0.6.0) |
-| `verify` | `scopebond-verify` — the deterministic `violates(policy, receipts, claimed)` library used by the gateway and offline verification. | **experimental** (published 0.4.3) |
-| `gateway` | Policy gateway with authenticated HTTP/MCP ingress, durable authority/lifecycle state, signed evidence, constrained execution and optional bounded Cloud export. Default execution is a simulation. `npx @scopebond/gateway`. | **experimental alpha** (published 0.13.0; not production-qualified) |
-| `sdk` | Signing SDK for authenticated action intents and approvals plus a thin gateway client. | **experimental** (published 0.1.4) |
-| `hook` | `scopebond-hook` — the Claude Code + Cursor connector (leaf): maps each tool call to a taxonomy action and checks it against policy in-path (cooperative M0) with a signed local receipt. | **experimental** (published 0.16.0) |
-| `github-action` | `scopebond-verify-pr` — the GitHub connector's boundary-lane runner (leaf): checks an agent pull request against policy in your own Actions runner before it can merge. | **experimental** (published 0.5.4) |
-| `mcp` | `scopebond-mcp` — the MCP proxy connector (leaf): one policy for every Model Context Protocol tool call, in-path in front of the upstream server, with a signed PEP-authorized receipt. | **experimental** (published 2.0.3) |
-| `framework` | The framework plugins (leaf): a cooperative (M0) in-process tool guard with Vercel AI SDK and LangGraph/LangChain adapters — policy checked before every tool call, with a signed-intent receipt. | **experimental** (published 0.3.8) |
-| `agent` | `scopebond-agent` — the Scopebond Agent: one resident process per user that delivers the hook's queued records, keeps the workspace rules and the connection current, repairs a lost hook entry and reports `scopebond.status.v1` on a token-protected local channel; starts with the user's sign-in. The hook keeps deciding every action without it. | **experimental** (new; tray and signed installers to follow) |
-| `attest` | Countersignature / receipt emission (ACTA envelope, `scopebond:receipt`). | `[PLANNED]` |
-| `contracts` | The on-chain vault, registry, and claim contracts (written fresh on OpenZeppelin primitives), verified on-chain. | `[PLANNED]` |
-| `conformance` | The conformance suite a build must pass to use the "Scopebond Gateway" name. | `[PLANNED]` |
+| `policy-schema` | Policy, action, receipt, and observation schemas and shared evidence vectors. | **experimental** (published 0.6.0) |
+| `verify` | Deterministic policy evaluation and independent evidence verification. | **experimental** (published 0.4.3) |
+| `gateway` | HTTP/MCP policy engine, constrained execution, signed evidence, and a kill switch. Default execution is a simulation. | **experimental alpha; not production-qualified** (published 0.13.0) |
+| `sdk` | Signing action intents and approvals and submitting them to a gateway. | **experimental** (published 0.1.4) |
+| `hook` | Claude Code, Cursor, and Codex checks and signed local records. Coverage depends on the tool; Cursor file edits are recorded after writing. | **experimental** (published 0.16.0) |
+| `github-action` | Agent pull-request checks in your own runner. Make the check required to gate merge; signing is configurable. | **experimental** (published 0.5.4) |
+| `mcp` | Checks routed MCP tools/call requests before forwarding; other MCP operations are outside the tool-call policy. | **experimental** (published 2.0.3) |
+| `framework` | Guards supported tools in Vercel AI SDK, LangGraph/LangChain, and custom loops; the application must honor the decision. | **experimental** (published 0.3.8) |
+| `agent` | Open-source companion for delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.3.2) |
 
-**Core-package rule:** `policy-schema`, `verify`, `gateway`, `sdk`, and
-`contracts` carry no vendor or agent-framework SDK dependencies. External
-services sit behind an interface with a local implementation exercised in tests.
-Framework integrations are separate leaf packages.
+**Core-package rule:** `policy-schema`, `verify`, `gateway`, and `sdk` carry no
+vendor or agent-framework SDK dependencies. External services sit behind an
+interface with a local implementation exercised in tests. Framework integrations
+are separate leaf packages.
 
 ## Runnable examples
 
-Each connector has a worked, end-to-end example under [`../examples/`](../examples/)
-(run with `node examples/<file>.mjs` after `pnpm -r build`); the same files are a
-CI smoke that asserts their decisions (`pnpm run test:examples`):
+Worked examples live in [`../examples/`](../examples/). After `pnpm -r build`, run
+`node examples/<file>.mjs`, or `pnpm run test:examples` for the smoke checks.
 
 | Connector | Example | Shows |
 |---|---|---|
-| `framework` | `framework-guard.mjs` | allow, spend-cap deny, fail-closed deny; signed-intent receipt |
-| `github-action` | `github-pr-gate.mjs` | human PR never blocked; agent PR denied on a production path (D67) |
-| `mcp` | `mcp-proxy.mjs` | allowed call forwarded (PEP receipt); denied call never forwarded |
-| `hook` | `hook-map.mjs` | protected-branch push deny, destructive-program deny, unmapped → not_evaluated |
-| `gateway` | `quickstart.mjs` | an agent signs an action; in-policy allowed, over-limit denied |
+| `framework` | `framework-guard.mjs` | Allowed call, spend-cap deny, fail-closed deny, signed intent. |
+| `github-action` | `github-pr-gate.mjs` | Human PR not evaluated; agent PR denied on a protected path. |
+| `mcp` | `mcp-proxy.mjs` | Allowed call forwarded; denied call never forwarded. |
+| `hook` | `hook-map.mjs` | Protected-branch and destructive-program denials; unmapped actions not evaluated. |
+| `gateway` | `quickstart.mjs` | Signed request allowed within policy and denied over its limit. |
+
+Conformance vectors are already included in the schema and verifier packages.
+Separate certification packages, collateral contracts, and registry features are
+future concepts, not available packages.

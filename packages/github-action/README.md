@@ -1,5 +1,9 @@
 # @scopebond/github-action
 
+**License and hosting:** this package is free, Apache-2.0 open-source software.
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service
+and is not included in this package.
+
 The Scopebond connector for **GitHub** — check every pull request an AI agent
 opens against your policy *before it can merge*, in your own Actions runner, with
 no Scopebond-held credential and no GitHub SDK.

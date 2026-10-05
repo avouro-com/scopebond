@@ -10,6 +10,11 @@ const packages = {
   verify: json("packages/verify/package.json").version,
   gateway: json("packages/gateway/package.json").version,
   sdk: json("packages/sdk/package.json").version,
+  hook: json("packages/hook/package.json").version,
+  agent: json("packages/agent/package.json").version,
+  "github-action": json("packages/github-action/package.json").version,
+  mcp: json("packages/mcp/package.json").version,
+  framework: json("packages/framework/package.json").version,
 };
 
 const rootReadme = read("README.md");
@@ -25,7 +30,7 @@ for (const [name, version] of Object.entries(packages)) {
   }
 }
 
-const enrollment = `@scopebond/gateway@${packages.gateway} enroll`;
+const enrollment = "@scopebond/gateway@latest enroll";
 if (!gatewayReadme.includes(enrollment)) {
   failures.push(`packages/gateway/README.md must use ${enrollment}`);
 }
@@ -55,5 +60,5 @@ if (failures.length) {
 
 console.log(
   `release-state: schema ${packages["policy-schema"]}, verify ${packages.verify}, `
-  + `gateway ${packages.gateway}, sdk ${packages.sdk}`,
+  + `gateway ${packages.gateway}, sdk ${packages.sdk}; all nine package references checked`,
 );

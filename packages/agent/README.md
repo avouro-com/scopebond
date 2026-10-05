@@ -1,7 +1,11 @@
 # @scopebond/agent
 
+**Free, open-source companion (Apache-2.0).** Scopebond Cloud, the hosted shared
+workspace it connects to, is a separate proprietary service. This package is the
+Scopebond Agent companion, not the AI coding agent doing the work.
+
 The Scopebond Agent keeps a computer connected to its Scopebond workspace without anyone running a command.
-It is one resident process per user. The hook (`@scopebond/hook`) keeps deciding every action on its own; the
+It is one resident process per user. The hook (`@scopebond/hook`) keeps evaluating supported actions on its own; the
 agent never takes part in a decision. It only keeps everything around the decisions working:
 
 - **Delivery.** It sends the records the hook queued, all of them, with backoff while the workspace is unreachable.
@@ -27,12 +31,14 @@ agent never takes part in a decision. It only keeps everything around the decisi
 ## Use
 
 ```bash
-npm install -g @scopebond/agent
+npm install -g @scopebond/agent@latest
 scopebond-agent autostart on      # start with your sign-in (Windows Run entry, macOS LaunchAgent, Linux systemd user unit)
 scopebond-agent status            # what it reports about this computer
 ```
 
-On Windows, type `npx.cmd` instead of `npx` in PowerShell if you run it without installing.
+In Windows PowerShell, use `npm.cmd` instead of `npm` and `scopebond-agent.cmd`
+instead of `scopebond-agent` if script execution policy blocks the `.ps1` command.
+For `npx` commands, use `npx.cmd`; no execution-policy change is needed.
 
 | Command | What it does |
 |---|---|

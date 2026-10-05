@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/mcp",
   "version": "2.0.3",
-  "description": "Scopebond MCP proxy — one policy for every Model Context Protocol tool call, in front of the servers an agent uses. In-path enforcement with a signed PEP-authorized receipt.",
+  "description": "Free, open-source MCP proxy: check routed tools/call requests against policy before forwarding, with signed authorization records.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/mcp#readme",

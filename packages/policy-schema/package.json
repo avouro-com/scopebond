@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/policy-schema",
   "version": "0.6.0",
-  "description": "Scopebond policy vocabulary — JSON Schema for the policy document and the scopebond:receipt envelope, plus test vectors.",
+  "description": "Open-source Scopebond policy, action, receipt, and observation schemas with shared conformance vectors.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/policy-schema#readme",

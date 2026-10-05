@@ -1,9 +1,13 @@
 # @scopebond/policy-schema
 
+**License and hosting:** this package is free, Apache-2.0 open-source software.
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service
+and is not included in this package.
+
 The Scopebond **policy vocabulary** as machine-readable artifacts: the JSON Schema
 for a policy document, the JSON Schema for the `scopebond:receipt` envelope, the
 vocabulary constants, and test vectors. This is the contract that prevention,
-evidence, and coverage all share — published before the proxy (D27).
+evidence, and coverage all share.
 
 ## Contents
 
