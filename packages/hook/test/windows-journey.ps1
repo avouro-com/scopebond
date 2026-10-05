@@ -440,6 +440,32 @@ try {
     Check "a home folder with a space and non-ASCII letters ($person) connects and delivers" {
       Invoke-IsolatedJourney -ProfileDir (Join-Path $work "Users\$person") -Name 'unicode home'
     }
+    if (-not $SkipAgent) {
+      Check "the agent starts with autostart in a profile folder with non-ASCII letters ($person)" {
+        $saved = Save-Env
+        try {
+          $profileDir = Join-Path $work "Users\$person"
+          Set-Profile $profileDir
+          $home2 = Join-Path $profileDir '.scopebond'
+          $install = Invoke-Published 'npm.cmd' @('install', '-g', $AgentPackage)
+          Assert ($install.Code -eq 0) "npm.cmd install -g exited $($install.Code)"
+          if (-not (Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue)) { $env:PATH = (((& npm.cmd prefix -g) 2>$null | Select-Object -First 1).Trim()) + ";$env:PATH" }
+          $on = Invoke-Published 'scopebond-agent.cmd' @('autostart', 'on')
+          $running = $false
+          for ($i = 0; $i -lt 30 -and -not $running; $i++) {
+            $status = Invoke-Published 'scopebond-agent.cmd' @('status', '--json')
+            try { $running = $null -ne ($status.Out | ConvertFrom-Json).agent } catch { $running = $false }
+            if (-not $running) { Start-Sleep -Seconds 1 }
+          }
+          $log = Join-Path $home2 'agent.log'
+          Assert $running "the agent did not start in $profileDir`n$($on.Out)`nlog exists: $(Test-Path $log)"
+          Assert (Test-Path $log) "the launcher wrote no log beside itself in $home2"
+          $off = Invoke-Published 'scopebond-agent.cmd' @('autostart', 'off')
+          Assert ($off.Code -eq 0) "autostart off exited $($off.Code)"
+          Invoke-Published 'npm.cmd' @('uninstall', '-g', '@scopebond/agent') | Out-Null
+        } finally { Restore-Env $saved }
+      }
+    }
     Check 'HOME pointing into OneDrive: everything stays in the Windows profile (USERPROFILE)' {
       $profileDir = Join-Path $work 'Users\onedrive-person'
       $oneDrive = Join-Path $profileDir 'OneDrive - Contoso'
