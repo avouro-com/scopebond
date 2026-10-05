@@ -49,6 +49,9 @@ For `npx` commands, use `npx.cmd`; no execution-policy change is needed.
 | `scopebond-agent check` | Check for updates and run the self-check now |
 | `scopebond-agent autostart on\|off` | Start with your sign-in, or stop doing so |
 
+The Scopebond hook stops a coding agent from switching the agent off: `autostart off`, stopping it by name and a
+global uninstall of `@scopebond/agent` are denied when the coding agent runs them. Run them from your own terminal.
+
 ## Local control channel
 
 The agent listens on `127.0.0.1` only, on a random port, and every request must carry a random token. Port, token and
