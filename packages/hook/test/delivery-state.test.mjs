@@ -109,6 +109,31 @@ test("the delivery queue keeps every record: no 7-day expiry and no cap that dro
   } finally { outbox.close(); }
 });
 
+test("status says the delivery queue is unusable instead of 'nothing waiting' when it cannot be opened", async () => {
+  const { chmodSync } = await import("node:fs");
+  const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-queue-ro-"));
+  const outbox = join(dir, "receipts.db.cloud-outbox.db");
+  new SqliteCloudOutbox(outbox).close();
+  chmodSync(outbox, 0o444);
+  try {
+    let unwritable = true;
+    try { new SqliteCloudOutbox(outbox).close(); unwritable = false; } catch { /* read-only, as intended */ }
+    if (!unwritable) return; // root on Linux writes read-only files: nothing to show there
+    const report = describeDelivery(dir, { url: "https://cloud.example" });
+    assert.match(report.lines.join("\n"), /DELIVERY QUEUE UNUSABLE/);
+    assert.doesNotMatch(report.lines.join("\n"), /waiting to send {2}0 record/);
+    assert.match(report.problems.join("\n"), /every action is blocked/);
+    const { buildStatusJson } = await import("../dist/status-json.js");
+    const json = buildStatusJson({ version: "test", activeDir: dir, candidateDirs: [dir], hasPolicy: true, agents: { claude: true, cursor: false, codex: false } });
+    assert.notEqual(json.state, "delivering", "an unusable queue is never reported as delivering");
+    assert.equal(json.delivery.last_error_code, "queue_unusable");
+    assert.match(json.delivery.queue_error, /receipts\.db\.cloud-outbox\.db/);
+  } finally {
+    for (const file of [outbox, outbox + "-wal", outbox + "-shm"]) if (existsSync(file)) chmodSync(file, 0o644);
+  }
+});
+
 test("a bounded attempt cut off with records waiting is recorded as a timeout, not as nothing", () => {
   const dir = fresh();
   // What the hook saw on a slow workspace: no error, nothing accepted, records still queued.

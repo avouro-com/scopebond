@@ -26,11 +26,14 @@ import { refreshIfDue } from "./credential-refresh.js";
  *  error line only; never a record. */
 function deliveryHeaders(dir: string): Record<string, string> {
   try {
-    const { pending, oldest } = queueStatus(dir);
+    const { pending, oldest, queueId, seqAssigned } = queueStatus(dir);
     const state = readDeliveryState(dir);
     return {
       "x-scopebond-pending": String(pending),
       ...(oldest !== null ? { "x-scopebond-oldest-pending-at": String(oldest) } : {}),
+      // SB289: which queue, and the highest number it has given a record. If this queue is later
+      // removed, the workspace knows how many of its numbers never arrived.
+      ...(queueId ? { "x-scopebond-queue-id": queueId, "x-scopebond-seq-assigned": String(seqAssigned ?? 0) } : {}),
       ...(state.last_error ? { "x-scopebond-last-error": state.last_error.replace(/[^\x20-\x7e]/g, " ").slice(0, 200) } : {}),
     };
   } catch { return {}; }

@@ -93,7 +93,10 @@ test("bounded outbox reports conflicts, capacity drops, and expiry as delivery g
   assert.equal(outbox.enqueue(receipt("action:bounded-outbox-0002")).gap.reason, "capacity");
   now += 101;
   assert.equal(outbox.peek(10, now).length, 0);
-  assert.deepEqual(outbox.status(), {
+  const { queueId, seqAssigned, ...status } = outbox.status();
+  assert.match(queueId, /^[0-9a-f]{32}$/);
+  assert.equal(seqAssigned, 1);
+  assert.deepEqual(status, {
     pending: 0,
     pendingBytes: 0,
     oldestEnqueuedAt: null,

@@ -1,6 +1,6 @@
 # packages/
 
-All nine packages below are free, Apache-2.0 open-source software. The hosted
+All ten packages below are free, Apache-2.0 open-source software. The hosted
 shared workspace, Scopebond Cloud, is a separate proprietary service and is not
 included here. Its Free and paid plans are distinct from these packages.
 
@@ -18,6 +18,7 @@ See the [root README](../README.md) for product scope and hosted versus local se
 | `github-action` | Agent pull-request checks in your own runner. Make the check required to gate merge; signing is configurable. | **experimental** (published 0.5.4) |
 | `mcp` | Checks routed MCP tools/call requests before forwarding; other MCP operations are outside the tool-call policy. | **experimental** (published 2.0.3) |
 | `framework` | Guards supported tools in Vercel AI SDK, LangGraph/LangChain, and custom loops; the application must honor the decision. | **experimental** (published 0.3.8) |
+| `fake-cloud` | A stand-in Scopebond workspace for tests: device sign-in, enrollment, delivery, rules, self-check and client version, with fault injection (401, 409, 429, 500, slow, dropped). | **experimental** (test tool; release with the next version) |
 | `agent` | Open-source companion for delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.3.2) |
 
 **Core-package rule:** `policy-schema`, `verify`, `gateway`, and `sdk` carry no

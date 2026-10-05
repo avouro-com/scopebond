@@ -150,7 +150,8 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
     const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
     for (const command of ["doctor", "flush"]) {
       const result = await promisify(execFile)(process.execPath, [cli, command], {
-        cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, timeout: 15_000,
+        // Its own home folder: a Scopebond hook in the real user settings would be a duplicate of this project's.
+        cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: join(dir, "home"), USERPROFILE: join(dir, "home") }, timeout: 15_000,
       });
       assert.doesNotMatch(result.stderr, /Assertion failed/);
       assert.match(result.stdout, command === "doctor" ? /All good/ : /0 receipt\(s\) still pending/);

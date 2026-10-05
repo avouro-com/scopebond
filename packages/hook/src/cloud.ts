@@ -114,6 +114,18 @@ export function retireAttesterKey(dir: string, kid: string): string {
 
 /** Wrap a receipt store so every stored receipt is enqueued to a durable outbox and
  *  exported to Cloud. Returns the wrapped store and the exporter (flush + stop). */
+/** The delivery queue could not be opened or written: a full disk, a read-only or locked file. The
+ *  hook still fails closed (it cannot keep the record it would deliver); the message names the file
+ *  and what fixes it, since `init` does not. The queue is never deleted: it holds waiting records. */
+export class DeliveryQueueError extends Error {
+  readonly repair: string;
+  constructor(file: string, cause: unknown) {
+    super(`Scopebond could not write its delivery queue (${file}): ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "DeliveryQueueError";
+    this.repair = "Free some disk space, or make that file and its -wal and -shm files beside it writable for your user (it holds records waiting to be sent: do not delete it)";
+  }
+}
+
 export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
 ): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
@@ -121,7 +133,9 @@ export function attachExporter(
   // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
   // gateway's defaults (10,000 records, 64 MiB, 7 days) dropped the newest records once a long
   // outage filled the queue.
-  const outbox = new SqliteCloudOutbox(outboxDbPath, LOSSLESS_OUTBOX);
+  let outbox: SqliteCloudOutbox;
+  try { outbox = new SqliteCloudOutbox(outboxDbPath, LOSSLESS_OUTBOX); }
+  catch (error) { throw new DeliveryQueueError(outboxDbPath, error); }
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }

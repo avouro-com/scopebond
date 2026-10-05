@@ -30,7 +30,22 @@ agent never takes part in a decision. It only keeps everything around the decisi
 
 ## Use
 
+One command from nothing to a connected computer:
+
 ```bash
+npx -y @scopebond/agent@latest setup https://cloud.scopebond.com      # Windows: npx.cmd
+```
+
+`setup` checks Node.js (22.13 or later), signs you in with a code you approve in the workspace (which adds the
+Scopebond hook to your user-level agent settings), installs the agent for your user, turns autostart on and ends with
+`status`. Add `--cursor` or `--codex` for those tools. Run it again at any time: it keeps an existing connection to the
+same workspace (`--relogin` signs in again), does not reinstall the same version, and only puts back what is missing.
+If npm's global folder is not on PATH, it says which folder and how to add it.
+
+Or step by step (from your home folder; on Windows type `npx.cmd`, `npm.cmd` and `scopebond-agent.cmd`):
+
+```bash
+npx -y @scopebond/hook@latest login https://cloud.scopebond.com   # sign in first: the agent delivers what the hook records
 npm install -g @scopebond/agent@latest
 scopebond-agent autostart on      # start with your sign-in (Windows Run entry, macOS LaunchAgent, Linux systemd user unit)
 scopebond-agent status            # what it reports about this computer
@@ -42,12 +57,14 @@ For `npx` commands, use `npx.cmd`; no execution-policy change is needed.
 
 | Command | What it does |
 |---|---|
+| `scopebond-agent setup <workspace-url>` | Sign in, install for this user, start with sign-in, show status; safe to run again |
 | `scopebond-agent run` | Run in the foreground (what autostart starts) |
 | `scopebond-agent status [--json]` | Delivery state, records waiting and the last problem |
 | `scopebond-agent flush` | Deliver waiting records now |
 | `scopebond-agent repair` | Put the Scopebond hook back into agent settings that lost it |
 | `scopebond-agent check` | Check for updates and run the self-check now |
-| `scopebond-agent autostart on\|off` | Start with your sign-in, or stop doing so |
+| `scopebond-agent autostart on\|off` | Start with your sign-in, or stop doing so (off also stops it now) |
+| `scopebond-agent stop` | Stop the running agent until the next sign-in |
 
 The Scopebond hook stops a coding agent from switching the agent off: `autostart off`, stopping it by name and a
 global uninstall of `@scopebond/agent` are denied when the coding agent runs them. Run them from your own terminal.
@@ -55,7 +72,7 @@ global uninstall of `@scopebond/agent` are denied when the coding agent runs the
 ## Local control channel
 
 The agent listens on `127.0.0.1` only, on a random port, and every request must carry a random token. Port, token and
-process id are in `~/.scopebond/agent.json`, readable by you only. Routes: `GET /status`, `POST /flush`, `POST /repair`, `POST /maintain`, `POST /override`.
+process id are in `~/.scopebond/agent.json`, readable by you only. Routes: `GET /status`, `POST /flush`, `POST /repair`, `POST /maintain`, `POST /override`, `POST /stop`.
 Exactly one agent serves a computer's Scopebond home; a second one exits.
 
 ## Autostart

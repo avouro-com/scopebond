@@ -37,6 +37,8 @@ import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
+import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
+import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand, unreachableHint } from "./windows-hints.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
@@ -209,6 +211,12 @@ function databaseGuard(dir: string, cwd: string, input: Record<string, unknown>)
   }
 }
 
+/** The one fix for a failure while deciding: the error's own when it names one, else `init`. */
+function repairFor(error: unknown): string {
+  const repair = (error as { repair?: unknown } | null)?.repair;
+  return typeof repair === "string" && repair ? repair : `run \`${cliCommand("init")}\``;
+}
+
 async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude, raw?: string, harness: Harness = "claude"): Promise<void> {
   let input: Record<string, unknown>;
   try { input = JSON.parse(raw ?? readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
@@ -239,7 +247,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     process.exit(0);
   } catch (error) {
     try { runtime?.close(); } catch { /* already failing; the deny below is what matters */ }
-    deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`);
+    deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`);
   }
 }
 
@@ -333,7 +341,7 @@ async function runCursor(): Promise<void> {
     message = decision.reason;
   } catch (error) {
     permission = "deny";
-    message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`;
+    message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`;
   } finally {
     // Release the SQLite handles on every path: an unclosed writer leaves its
     // write-ahead log behind for the next tool call to extend.
@@ -883,7 +891,11 @@ const enrollmentHelp = [
  *  beside it. `--project` asks for a new per-project setup explicitly. */
 function connectDir(args: string[]): string {
   const project = configDir();
-  return args.includes("--project") || existsSync(join(project, "policy.json")) ? project : resolveConfigDir(process.cwd());
+  if (args.includes("--project") || existsSync(join(project, "policy.json"))) return project;
+  const resolved = resolveConfigDir(process.cwd());
+  // On a computer with nothing set up yet, resolveConfigDir falls back to this folder. A login
+  // without --project connects the person, so it goes to the user home the hook reads everywhere.
+  return process.env.SCOPEBOND_HOOK_DIR || existsSync(join(resolved, "policy.json")) ? resolved : userHome();
 }
 
 /** Where `login` writes: the user home, whatever folder it runs from, because signing in sets
@@ -1308,6 +1320,36 @@ function runStatus(args: string[] = []): void {
   for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
     for (const file of [scopes.project, scopes.local, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
   }
+  for (const line of duplicateLines(process.cwd())) console.log(line);
+}
+
+/** SB302: each agent that would ask Scopebond more than once per action, and the one command that keeps one. */
+function duplicateLines(cwd: string): string[] {
+  const lines: string[] = [];
+  for (const harness of ["claude", "cursor", "codex"] as const) {
+    const dupes = duplicateHooks(harness, cwd);
+    if (!dupes) continue;
+    const flag = harness === "claude" ? "" : ` --${harness}`;
+    lines.push(`  DUPLICATE        ${harnessName(harness)} runs the Scopebond hook ${dupes.length} times for each action:`);
+    for (const e of dupes) lines.push(`                   - ${describeEntry(e)}`);
+    lines.push(`                   Keep one (the user-level entry): ${cliCommand(`dedupe${flag}`)}`);
+  }
+  return lines;
+}
+
+/** `dedupe [--claude|--cursor|--codex] [--keep user|project|plugin]`: keep one Scopebond hook entry per agent. */
+function runDedupe(args: string[]): void {
+  const harness: Harness = args.includes("--cursor") ? "cursor" : args.includes("--codex") ? "codex" : "claude";
+  const at = args.indexOf("--keep");
+  const keep = (at >= 0 ? args[at + 1] : "user") as HookScope;
+  if (!["user", "project", "local", "plugin"].includes(keep)) { console.error(`usage: ${cliCommand("dedupe [--claude|--cursor|--codex] [--keep user|project|plugin]")}`); process.exit(1); }
+  const dupes = duplicateHooks(harness, process.cwd());
+  if (!dupes) { console.log(`${harnessName(harness)} runs the Scopebond hook once per action; nothing to change.`); return; }
+  const result = dedupeHooks(harness, keep, process.cwd());
+  if (result.kept) console.log(`Kept: ${describeEntry(result.kept)}`);
+  for (const e of result.removed) console.log(`Removed: ${describeEntry(e)}`);
+  for (const e of result.plugins) console.log(`Still running from ${describeEntry(e)}: turn that plugin off in Claude Code (/plugin), or keep it instead with ${cliCommand("dedupe --keep plugin")}`);
+  for (const e of result.shared) console.log(`Left alone: ${describeEntry(e)} is shared with the team through git; actions in this project are recorded twice until the team removes that entry.`);
 }
 
 /** `capabilities`: the manifest of what this hook can honestly claim, cell by cell.
@@ -1376,6 +1418,16 @@ async function runDoctor(): Promise<void> {
   console.log(`Scopebond doctor`);
   console.log(`  node             ${process.versions.node} ${nodeOk ? "ok" : "TOO OLD (need >=22.13)"}`);
   if (!nodeOk) problems.push("node >=22.13 is required (the Cloud outbox uses node:sqlite)");
+  if (process.platform === "win32") {
+    // The commands this computer's person types: PowerShell's script policy decides whether plain npx runs.
+    let policy = "";
+    // Windows PowerShell finds its own modules only without PowerShell 7's PSModulePath, which a doctor run from
+    // pwsh would pass on; and its errors are not this computer's problem to print.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath"));
+    try { policy = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
+    const advice = policy ? executionPolicyAdvice(policy) : null;
+    if (advice) console.log(`  powershell       ${advice}`);
+  }
   const cli = cliPath();
   console.log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}`);
   const active = resolveConfigDir(process.cwd());
@@ -1460,6 +1512,12 @@ async function runDoctor(): Promise<void> {
     for (const line of delivery.lines) console.log(`                   ${line}`);
     problems.push(...delivery.problems);
   }
+  const duplicates = duplicateLines(process.cwd());
+  for (const line of duplicates) console.log(line);
+  // A duplicate only the team can remove (its project file is shared through git) is shown, not failed on.
+  const fixableHere = (["claude", "cursor", "codex"] as const).some((h) => (duplicateHooks(h, process.cwd()) ?? []).some((e) => e.scope !== "user" && e.scope !== "plugin" && gitShareState(e.file) !== "tracked")
+    || (duplicateHooks(h, process.cwd()) ?? []).filter((e) => e.scope === "user" || e.scope === "plugin").length > 1);
+  if (duplicates.length && fixableHere) problems.push("the Scopebond hook runs more than once for each action (see DUPLICATE above)");
   console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
   process.exitCode = problems.length ? 1 : 0;
 }
@@ -1501,6 +1559,11 @@ function runTrust(args: string[]): void {
  *  person who can manage the workspace approves it there for an environment and agent.
  *  The approval hands back a single-use enrollment, which completes exactly as
  *  `connect` does. Nothing secret is printed: the device code stays in memory. */
+/** The flags a login was run with, to repeat it exactly. */
+function loginFlags(args: string[]): string[] {
+  return args.filter((a) => ["--claude", "--cursor", "--codex", "--no-install", "--project"].includes(a));
+}
+
 async function runLogin(args: string[]): Promise<void> {
   const positional = args.filter((a) => !a.startsWith("--"));
   const harness = selectedHarness(args);
@@ -1530,7 +1593,7 @@ async function runLogin(args: string[]): Promise<void> {
   }
   let start: { status: number; json: Record<string, unknown> };
   try { start = await post("/v1/device/code", { client_name: hostname(), harness }); }
-  catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}`); process.exit(1); }
+  catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}. ${unreachableHint(error)}`); process.exit(1); }
   const deviceCode = typeof start.json.device_code === "string" ? start.json.device_code : "";
   if (start.status !== 200 || !deviceCode) {
     console.error(`${origin} did not start a login (HTTP ${start.status}). Check the workspace URL, or use ${cliCommand("connect <workspace-url> <enrollment>")}.`);
@@ -1557,12 +1620,12 @@ async function runLogin(args: string[]): Promise<void> {
     const error = polled.json.error;
     if (error === "authorization_pending") continue;
     if (error === "slow_down") { intervalMs += 5_000; continue; }
-    if (error === "access_denied") { console.error("The request was denied in the workspace. Nothing was connected."); process.exit(1); }
+    if (error === "access_denied") { console.error(`The request was denied in the workspace. Nothing was connected. To ask again: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`); process.exit(1); }
     if (error === "expired_token") break;
-    console.error(`login failed (${String(error ?? `HTTP ${polled.status}`)}). Run the command again for a new code.`);
+    console.error(`login failed (${String(error ?? `HTTP ${polled.status}`)}). For a new code, run: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`);
     process.exit(1);
   }
-  console.error("The code expired before it was approved. Run the command again for a new one.");
+  console.error(`The code expired before it was approved. For a new one, run: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`);
   process.exit(1);
 }
 
@@ -1602,6 +1665,13 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "  rules apply                   recompile after editing rules.json by hand",
     ] },
   { name: "status", summary: "what is configured, where, and how big the local log is" },
+  { name: "dedupe", args: "[--claude|--cursor|--codex] [--keep user|project|plugin]",
+    summary: "keep one Scopebond hook entry when an agent would run it more than once per action",
+    detail: [
+      "Status and doctor say when the hook sits in the user settings and a project's, twice in one file,",
+      "or in an enabled Claude Code plugin beside a settings entry. dedupe keeps the user-level entry",
+      "(or the scope you name) and removes the others; other tools' hooks are left alone.",
+    ] },
   { name: "capabilities", args: "[--prove [--save]] [--json]",
     summary: "what this hook can honestly claim, per agent host, action and phase",
     detail: [
@@ -1734,8 +1804,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 // first action with an error about a missing module. Stop before changing anything, and
 // say what to do. The hook subcommands are left alone: they already fail closed.
 if (["init", "install", "connect", "login"].includes(cmd ?? "") && !nodeSupported()) {
-  console.error(`Scopebond needs Node.js 22.13 or later; this is Node ${process.versions.node}.`);
-  console.error("Install the current Node.js LTS from https://nodejs.org, open a new terminal, and run the command again.");
+  for (const line of nodeTooOldLines(process.versions.node)) console.error(line);
   process.exit(1);
 }
 if (cmd === "claude") { await runClaude(); }
@@ -1750,6 +1819,7 @@ else if (cmd === "test") { await runTest(rest); }
 else if (cmd === "flush") { await runFlush(); }
 else if (cmd === "recover") { await runRecover(rest); }
 else if (cmd === "status") { runStatus(rest); }
+else if (cmd === "dedupe") { runDedupe(rest); }
 else if (cmd === "doctor") { await runDoctor(); }
 else if (cmd === "capabilities") { await runCapabilities(rest); }
 else if (cmd === "observations") { await runObservations(rest); }

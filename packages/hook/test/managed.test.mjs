@@ -317,3 +317,19 @@ test("a tool call finishes promptly when the workspace never answers: no helper 
     rmSync(userHomeDir, { recursive: true, force: true });
   }
 });
+
+test("the rules check names the delivery queue and the highest number it has given a record (SB289)", async () => {
+  const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
+  const { dir, agentKid } = connected();
+  try {
+    const outbox = new SqliteCloudOutbox(join(dir, "receipts.db.cloud-outbox.db"));
+    for (const id of ["action:q-0001", "action:q-0002"]) outbox.enqueue({ payload: { action_ref: { action_id: id } }, signature: { alg: "Ed25519", sig: "fixture" } });
+    const queueId = outbox.status().queueId;
+    outbox.close();
+    const w = fakeWorkspace([{ status: 204 }]);
+    await syncPolicy(dir, { agentKid, hookVersion: "0.10.0", policyBuilds, fetchImpl: w.fetchImpl });
+    assert.equal(w.calls[0].headers["x-scopebond-queue-id"], queueId);
+    assert.equal(w.calls[0].headers["x-scopebond-seq-assigned"], "2");
+    assert.equal(w.calls[0].headers["x-scopebond-pending"], "2");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

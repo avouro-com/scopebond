@@ -25,6 +25,9 @@ scopebond install                   # detects Cursor and Codex
 scopebond install --codex           # set up Codex only
 ```
 
+In Windows PowerShell type `npm.cmd` and `scopebond.cmd` (PowerShell's default script policy blocks
+the plain names; the `.cmd` forms work without changing it).
+
 `install` sets Scopebond up **once per developer machine**, not per repository: it
 scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
@@ -223,6 +226,12 @@ before the hook exits; an attempt cut off by that limit is recorded as a `timeou
 than as nothing. `status --json` prints the same in one machine-readable shape (`scopebond.status.v1`) for tools and support: `delivery.last_error_code` is `timeout` for a cut-off attempt, `state` is `recording_locally` for a stalled queue, and `config.user_connection_shadowed` is true when a project setup takes precedence over your user-level sign-in in the current folder. `doctor` also checks that the workspace still accepts the connection,
 not only that it is reachable, and fails when it does not, when the queue is stalled, or when this
 folder's own setup takes precedence over your sign-in without being connected.
+
+`status` and `doctor` also say when an agent would ask Scopebond more than once for each action:
+the hook in your user settings and a project's, twice in one file, or an enabled Claude Code plugin
+beside a settings entry. Every action would then be signed and sent twice. `dedupe` keeps the
+user-level entry (`--keep project` or `--keep plugin` to keep another) and removes the rest,
+leaving other tools' hooks alone; the Scopebond Agent's daily self-check reports the same.
 
 The connection renews itself: in the last 30 days of its 90-day credential the hook renews it during its rules check, proving it still holds the key it enrolled with. With each rules check it also tells the workspace how many records wait to send (counts and one error line, never a record), so the portal can show a computer that checks in but is not delivering.
 
