@@ -168,10 +168,9 @@ export function randomQueueId(): string {
 /** "ingest failed: HTTP 401" plus, when the workspace named one, its refusal code and the one
  *  thing to do ("ingest failed: HTTP 401 (credential_refused): Sign it in again ..."). The prefix
  *  never changes, so anything that reads the status from it keeps working. Bounded and never throws. */
-async function refusalMessage(res: Response): Promise<string> {
-  const base = "ingest failed: HTTP " + res.status;
+function refusalMessage(status: number, text: string): string {
+  const base = "ingest failed: HTTP " + status;
   try {
-    const text = (await res.text()).slice(0, 4096);
     const body = JSON.parse(text) as { code?: unknown; remediation?: unknown };
     const code = typeof body.code === "string" && /^[a-z_]{1,40}$/.test(body.code) ? body.code : null;
     const remediation = typeof body.remediation === "string" ? body.remediation.replace(/[^\x20-\x7e]/g, " ").slice(0, 240) : null;
@@ -179,6 +178,30 @@ async function refusalMessage(res: Response): Promise<string> {
   } catch {
     return base;
   }
+}
+
+/** A refused batch that no retry can deliver, settled so it never holds up the records behind it
+ *  (DIC-1). Without this the exporter sent the same batch forever and every newer record waited.
+ *  - 400 where the workspace refused every record on its own: each becomes a "rejected" gap, as it
+ *    would inside an accepted batch. Not when one was refused for a timestamp ahead of the
+ *    workspace's clock: that record is accepted once the time passes, so the batch is retried.
+ *  - 409 id_conflict (an action id already used with different evidence): in a batch of several,
+ *    "isolate" sends the rest one at a time to find the record; alone, it becomes an "id_conflict"
+ *    gap. Any other 409 (an attester briefly unavailable) is retried.
+ *  Anything else: null, and the batch is retried with backoff, as before. */
+export function settleRefusal(status: number, text: string, batch: Array<Pick<CloudOutboxEntry, "id">>): Array<{ id: string; reason: CloudDeliveryGap["reason"] }> | "isolate" | null {
+  let body: { code?: unknown; rejected?: unknown } | null;
+  try { body = JSON.parse(text) as { code?: unknown; rejected?: unknown }; } catch { return null; }
+  if (status === 400 && Array.isArray(body?.rejected)) {
+    const rejected = body.rejected as Array<{ index?: unknown; code?: unknown }>;
+    if (rejected.some((r) => r?.code === "future_timestamp")) return null;
+    const indexes = new Set(rejected.flatMap((r) => (typeof r?.index === "number" ? [r.index] : [])));
+    return batch.length > 0 && batch.every((_, i) => indexes.has(i)) ? batch.map((entry) => ({ id: entry.id, reason: "rejected" as const })) : null;
+  }
+  if (status === 409 && (body?.code === "id_conflict" || body?.code === "idempotency_conflict") && batch.length > 0) {
+    return batch.length > 1 ? "isolate" : [{ id: batch[0].id, reason: "id_conflict" }];
+  }
+  return null;
 }
 
 /** The action ids of records a successful response lists as refused (`rejected[].index`). */
@@ -220,9 +243,11 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   async function flush(): Promise<void> {
     if (sending || stopped || (nextAttemptAt !== null && now() < nextAttemptAt)) return;
     sending = true;
+    // After a 409 id_conflict on a batch, the rest of this flush goes one record at a time.
+    let isolate = false;
     try {
       for (;;) {
-        const batch = opts.outbox.peek(batchSize, now());
+        const batch = opts.outbox.peek(isolate ? 1 : batchSize, now());
         if (!batch.length) break;
         const numbered = batch.some((entry) => entry.seq !== undefined);
         const queue = numbered ? opts.outbox.status().queueId : undefined;
@@ -236,14 +261,22 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
             ? { receipts: batch.map((entry) => entry.receipt), seq: batch.map((entry) => entry.seq ?? null), ...(queue ? { queue } : {}) }
             : { receipts: batch.map((entry) => entry.receipt) }),
         });
-        if (!res.ok) throw new Error(await refusalMessage(res));
-        // A record the workspace refused on its own (the rest of the batch was stored) can never be
-        // accepted as it is: it leaves the queue as a "rejected" gap, so it never holds up the records
-        // behind it. It stays in the local log.
-        const refused = await refusedIn(res, batch);
+        let refused: Array<{ id: string; reason: CloudDeliveryGap["reason"] }>;
+        if (res.ok) {
+          // A record the workspace refused on its own (the rest of the batch was stored) can never be
+          // accepted as it is: it leaves the queue as a "rejected" gap, so it never holds up the records
+          // behind it. It stays in the local log.
+          refused = (await refusedIn(res, batch)).map((id) => ({ id, reason: "rejected" as const }));
+        } else {
+          const text = (await res.text().catch(() => "")).slice(0, 262_144);
+          const settled = settleRefusal(res.status, text, batch);
+          if (settled === "isolate") { isolate = true; continue; }
+          if (!settled) throw new Error(refusalMessage(res.status, text.slice(0, 4096)));
+          refused = settled;
+        }
         opts.outbox.acknowledge(batch.map(({ id, payloadHash }) => ({ id, payloadHash })));
-        for (const id of refused) {
-          const gap = opts.outbox.recordGap?.(id, "rejected") ?? { id, reason: "rejected" as const, at: now() };
+        for (const { id, reason } of refused) {
+          const gap = opts.outbox.recordGap?.(id, reason) ?? { id, reason, at: now() };
           opts.onGap?.(gap);
         }
         consecutiveFailures = 0;

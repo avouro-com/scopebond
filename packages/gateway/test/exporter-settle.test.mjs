@@ -1,0 +1,89 @@
+// DIC-1: a batch the workspace refuses in a way no retry can fix never holds up the records
+// behind it. Before, the exporter sent the same batch forever and every newer record waited.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createCloudExporter, createMemoryCloudOutbox } from "../dist/index.js";
+
+const receipt = (id) => ({ payload: { action_ref: { action_id: id } }, signature: { alg: "Ed25519", sig: "fixture" } });
+const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+/** An exporter over a memory queue whose workspace answers each request with `answer(receipts)`. */
+function setup(answer) {
+  const outbox = createMemoryCloudOutbox();
+  const gaps = [];
+  const delivered = [];
+  const requests = [];
+  const ex = createCloudExporter({
+    url: "https://cloud.example", credential: "sbm_x", outbox, flushMs: 1e9, onGap: (gap) => gaps.push(gap),
+    fetch: async (_url, init) => {
+      const ids = JSON.parse(init.body).receipts.map((r) => r.payload.action_ref.action_id);
+      requests.push(ids);
+      const res = answer(ids);
+      if (res.status === 200) delivered.push(...ids);
+      return res;
+    },
+  });
+  return { ex, outbox, gaps, delivered, requests };
+}
+
+test("a 400 that refuses every record on its own settles them as gaps, and the records behind them deliver", async () => {
+  let first = true;
+  const { ex, gaps, delivered } = setup((ids) => {
+    if (first) { first = false; return json(400, { error: "invalid", code: "invalid_receipt", rejected: ids.map((id, index) => ({ index, action_id: id, code: "invalid_receipt", reason: "bad signature" })) }); }
+    return json(200, { ok: true });
+  });
+  ex.enqueue(receipt("action:bad-0001"));
+  ex.enqueue(receipt("action:bad-0002"));
+  await ex.flush();
+  ex.enqueue(receipt("action:good-0003"));
+  await ex.flush();
+  ex.stop();
+  assert.deepEqual(gaps.map((g) => [g.id, g.reason]), [["action:bad-0001", "rejected"], ["action:bad-0002", "rejected"]]);
+  assert.deepEqual(delivered, ["action:good-0003"]);
+  assert.equal(ex.status().pending, 0);
+  assert.equal(ex.status().lastError, null);
+});
+
+test("a timestamp ahead of the workspace's clock is retried, not dropped: it is accepted once the time passes", async () => {
+  const { ex, gaps } = setup((ids) => json(400, { error: "future", code: "invalid_receipt", rejected: ids.map((id, index) => ({ index, action_id: id, code: "future_timestamp", reason: "ahead" })) }));
+  ex.enqueue(receipt("action:ahead-0001"));
+  await ex.flush();
+  ex.stop();
+  assert.equal(gaps.length, 0);
+  assert.equal(ex.status().pending, 1);
+  assert.match(ex.status().lastError, /HTTP 400/);
+});
+
+test("a 409 id_conflict finds the one record by sending one at a time; the others deliver", async () => {
+  const { ex, gaps, delivered, requests } = setup((ids) => (ids.includes("action:dup-0002")
+    ? json(409, { error: "conflict", code: "id_conflict", remediation: "Two different records used the same action id." })
+    : json(200, { ok: true })));
+  for (const id of ["action:dup-0001", "action:dup-0002", "action:dup-0003"]) ex.enqueue(receipt(id));
+  await ex.flush();
+  ex.stop();
+  assert.deepEqual(delivered, ["action:dup-0001", "action:dup-0003"]);
+  assert.deepEqual(gaps.map((g) => [g.id, g.reason]), [["action:dup-0002", "id_conflict"]]);
+  assert.deepEqual(requests[0], ["action:dup-0001", "action:dup-0002", "action:dup-0003"], "the batch goes first as it is");
+  assert.equal(ex.status().pending, 0);
+});
+
+test("any other refusal keeps the batch for a retry, as before", async () => {
+  for (const [status, body] of [[409, { code: "attester_unavailable" }], [401, { code: "credential_refused" }], [500, {}], [400, { code: "bad_request" }]]) {
+    const { ex, gaps } = setup(() => json(status, body));
+    ex.enqueue(receipt(`action:keep-${status}`));
+    await ex.flush();
+    ex.stop();
+    assert.equal(gaps.length, 0, `HTTP ${status} ${body.code ?? ""}`);
+    assert.equal(ex.status().pending, 1);
+  }
+});
+
+test("a 400 that refuses only some records (the rest were not stored) is retried, not settled", async () => {
+  const { ex, gaps } = setup((ids) => json(400, { code: "invalid_receipt", rejected: [{ index: 0, action_id: ids[0], code: "invalid_receipt" }] }));
+  ex.enqueue(receipt("action:part-0001"));
+  ex.enqueue(receipt("action:part-0002"));
+  await ex.flush();
+  ex.stop();
+  assert.equal(gaps.length, 0);
+  assert.equal(ex.status().pending, 2);
+});
