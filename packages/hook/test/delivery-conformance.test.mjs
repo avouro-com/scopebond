@@ -284,3 +284,45 @@ test("SB290: two configurations on one computer each deliver their own records, 
     assert.ok(pendingIn(project) >= 2, "the project's records wait in the project's own queue, not the home's");
   } finally { ws.close(); }
 });
+
+test("SB290: a clock ahead of the workspace keeps the record; it is delivered once the time passes, the others at once", async () => {
+  const ws = await workspace();
+  try {
+    const pc = computer(ws.url);
+    let ahead = true;
+    let first = null;
+    ws.answer((receipts) => {
+      first ??= receipts[0].payload.action_ref.action_id;
+      const refused = ahead ? receipts.flatMap((r, index) => (r.payload.action_ref.action_id === first ? [{ index, code: "future_timestamp", action_id: first }] : [])) : [];
+      if (refused.length === receipts.length) return { status: 400, body: { error: "future", code: "invalid_receipt", rejected: refused } };
+      return { status: 200, body: { ok: true, ...(refused.length ? { rejected: refused } : {}) } };
+    });
+    await pc.act(3);
+    assert.equal(pc.status().delivery.pending, 1, "the record ahead waits; the other two went");
+    assert.deepEqual(pc.status().delivery.gaps_by_reason, {}, "nothing is settled as lost");
+    ahead = false; // the workspace's clock caught up
+    await pc.deliverOnly();
+    assert.equal(pc.status().delivery.pending, 0);
+  } finally { ws.close(); }
+});
+
+test("SB290: a queue that cannot be written (a full disk) fails closed naming the file and the fix; delivery resumes when it can write", async () => {
+  const { chmodSync, existsSync } = await import("node:fs");
+  const ws = await workspace();
+  try {
+    const pc = computer(ws.url);
+    await pc.act(1);
+    const outbox = join(pc.dir, "receipts.db.cloud-outbox.db");
+    assert.ok(existsSync(outbox));
+    chmodSync(outbox, 0o444);
+    try {
+      // The hook fails closed (the CLI denies): it cannot keep the record it would deliver. The error
+      // names the queue and what fixes it, never "run init", which would not.
+      await assert.rejects(pc.act(1), (error) => error.name === "DeliveryQueueError" && error.message.includes(outbox) && /Free some disk space/.test(error.repair) && /do not delete it/.test(error.repair));
+    } finally { chmodSync(outbox, 0o644); }
+    const before = ws.received.length;
+    await pc.act(2);
+    assert.equal(pc.status().delivery.pending, 0);
+    assert.ok(ws.received.length >= before + 2, "records after the disk freed up are delivered");
+  } finally { ws.close(); }
+});

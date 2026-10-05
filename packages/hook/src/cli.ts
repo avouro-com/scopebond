@@ -207,6 +207,12 @@ function databaseGuard(dir: string, cwd: string, input: Record<string, unknown>)
   }
 }
 
+/** The one fix for a failure while deciding: the error's own when it names one, else `init`. */
+function repairFor(error: unknown): string {
+  const repair = (error as { repair?: unknown } | null)?.repair;
+  return typeof repair === "string" && repair ? repair : `run \`${cliCommand("init")}\``;
+}
+
 async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude, raw?: string, harness: Harness = "claude"): Promise<void> {
   let input: Record<string, unknown>;
   try { input = JSON.parse(raw ?? readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
@@ -237,7 +243,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     process.exit(0);
   } catch (error) {
     try { runtime?.close(); } catch { /* already failing; the deny below is what matters */ }
-    deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`);
+    deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`);
   }
 }
 
@@ -331,7 +337,7 @@ async function runCursor(): Promise<void> {
     message = decision.reason;
   } catch (error) {
     permission = "deny";
-    message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: run \`${cliCommand("init")}\`.`;
+    message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`;
   } finally {
     // Release the SQLite handles on every path: an unclosed writer leaves its
     // write-ahead log behind for the next tool call to extend.
