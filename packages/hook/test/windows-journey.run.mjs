@@ -93,7 +93,20 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
   const password = `Sb!${randomBytes(12).toString("base64url")}9a`;
   const shared = join(process.env.SystemDrive ?? "C:", "\\", `sb-journey-${randomBytes(4).toString("hex")}`);
   mkdirSync(shared, { recursive: true });
-  for (const file of ["windows-journey.ps1", "fake-cloud.mjs"]) copyFileSync(join(here, file), join(shared, file));
+  copyFileSync(join(here, "windows-journey.ps1"), join(shared, "windows-journey.ps1"));
+  // The copied folder cannot resolve the workspace package by name, so the stand-in workspace is
+  // started from the built package by its absolute path.
+  const { pathToFileURL } = await import("node:url");
+  const fakeCloudIndex = pathToFileURL(join(root, "packages", "fake-cloud", "dist", "index.js")).href;
+  writeFileSync(join(shared, "fake-cloud.mjs"), [
+    `import { writeFileSync } from "node:fs";`,
+    `import { startFakeCloud } from ${JSON.stringify(fakeCloudIndex)};`,
+    `const i = process.argv.indexOf("--url-file");`,
+    `const cloud = await startFakeCloud({ autoApprove: process.argv.includes("--auto-approve") });`,
+    `if (i > 0 && process.argv[i + 1]) writeFileSync(process.argv[i + 1], cloud.url);`,
+    `console.log(cloud.url);`,
+    "",
+  ].join("\n"));
   const hook = join(shared, "hook.tgz"), agent = join(shared, "agent.tgz");
   copyFileSync(packed.hook, hook);
   copyFileSync(packed.agent, agent);
