@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import { harnessEntryMatches, localHarnessFile, projectHarnessFile, readHarnessConfig, userHarnessFile, type Harness } from "./install.js";
+import { gitShareState, harnessEntryMatches, localHarnessFile, projectHarnessFile, readHarnessConfig, userHarnessFile, type Harness } from "./install.js";
 
 export type HookScope = "user" | "project" | "local" | "plugin";
 export interface HookEntry { scope: HookScope; file: string; command: string }
@@ -56,7 +56,16 @@ export function enabledPluginHookFiles(home = homedir()): string[] {
     }
   };
   walk(root, 0);
-  return found;
+  // Claude Code keeps a plugin both in its marketplace copy and in its installed cache (and may keep
+  // older versions): one enabled plugin is one place, so keep one file per plugin, the installed copy first.
+  const byPlugin = new Map<string, string>();
+  for (const file of found) {
+    const plugin = enabled.find((name) => file.split(sep).includes(name));
+    if (!plugin) continue;
+    const current = byPlugin.get(plugin);
+    if (!current || (!current.split(sep).includes("cache") && file.split(sep).includes("cache"))) byPlugin.set(plugin, file);
+  }
+  return [...byPlugin.values()];
 }
 
 /** Every place this agent would run the Scopebond hook from, seen from `cwd`. */
@@ -90,13 +99,17 @@ export function describeEntry(e: HookEntry): string {
  *  other settings files are removed with their observation hooks; a second entry in the kept
  *  file is dropped. Plugins cannot be edited from here: keep "plugin" to remove every settings
  *  entry instead, or turn the plugin off in Claude Code (/plugin). Other tools' hooks are kept. */
-export function dedupeHooks(harness: Harness, keep: HookScope = "user", cwd: string = process.cwd(), home = homedir()): { kept: HookEntry | null; removed: HookEntry[]; plugins: HookEntry[] } {
+export function dedupeHooks(harness: Harness, keep: HookScope = "user", cwd: string = process.cwd(), home = homedir()): { kept: HookEntry | null; removed: HookEntry[]; plugins: HookEntry[]; shared: HookEntry[] } {
   const entries = hookEntries(harness, cwd, home);
   const kept = entries.find((e) => e.scope === keep) ?? (keep === "plugin" ? null : entries.find((e) => e.scope !== "plugin") ?? null);
   const removed: HookEntry[] = [];
   const plugins = entries.filter((e) => e.scope === "plugin" && e !== kept);
   const files = [...new Set(entries.filter((e) => e.scope !== "plugin").map((e) => e.file))];
+  // A project file git tracks is the team's setting: removing the hook there would take it away from
+  // every teammate who has no user-level install. It is left alone and named.
+  const shared: HookEntry[] = [];
   for (const file of files) {
+    if ((!kept || file !== kept.file) && gitShareState(file) === "tracked") { shared.push(...entries.filter((e) => e.file === file)); continue; }
     const config = readHarnessConfig(file);
     const hooks = isRecord(config.hooks) ? config.hooks : {};
     if (kept && file === kept.file && keep !== "plugin") {
@@ -117,5 +130,5 @@ export function dedupeHooks(harness: Harness, keep: HookScope = "user", cwd: str
     }
     writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   }
-  return { kept, removed, plugins: keep === "plugin" ? [] : plugins };
+  return { kept, removed, plugins: keep === "plugin" ? [] : plugins, shared };
 }

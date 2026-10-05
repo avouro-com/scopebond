@@ -1275,6 +1275,7 @@ function runDedupe(args: string[]): void {
   if (result.kept) console.log(`Kept: ${describeEntry(result.kept)}`);
   for (const e of result.removed) console.log(`Removed: ${describeEntry(e)}`);
   for (const e of result.plugins) console.log(`Still running from ${describeEntry(e)}: turn that plugin off in Claude Code (/plugin), or keep it instead with ${cliCommand("dedupe --keep plugin")}`);
+  for (const e of result.shared) console.log(`Left alone: ${describeEntry(e)} is shared with the team through git; actions in this project are recorded twice until the team removes that entry.`);
 }
 
 /** `capabilities`: the manifest of what this hook can honestly claim, cell by cell.
@@ -1423,7 +1424,10 @@ async function runDoctor(): Promise<void> {
   }
   const duplicates = duplicateLines(process.cwd());
   for (const line of duplicates) console.log(line);
-  if (duplicates.length) problems.push("the Scopebond hook runs more than once for each action (see DUPLICATE above)");
+  // A duplicate only the team can remove (its project file is shared through git) is shown, not failed on.
+  const fixableHere = (["claude", "cursor", "codex"] as const).some((h) => (duplicateHooks(h, process.cwd()) ?? []).some((e) => e.scope !== "user" && e.scope !== "plugin" && gitShareState(e.file) !== "tracked")
+    || (duplicateHooks(h, process.cwd()) ?? []).filter((e) => e.scope === "user" || e.scope === "plugin").length > 1);
+  if (duplicates.length && fixableHere) problems.push("the Scopebond hook runs more than once for each action (see DUPLICATE above)");
   console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
   process.exitCode = problems.length ? 1 : 0;
 }

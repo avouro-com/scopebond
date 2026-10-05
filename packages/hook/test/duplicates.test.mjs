@@ -105,3 +105,38 @@ test("status and doctor say so with the one command; dedupe fixes it", () => {
   assert.match(fixed.stdout, /Removed: project settings/);
   assert.doesNotMatch(run(["status"]).stdout, /DUPLICATE/);
 });
+
+test("a project settings file the team shares through git is never edited by dedupe", () => {
+  const { home, project, env } = computer();
+  write(join(home, ".claude", "settings.json"), { hooks: { PreToolUse: [ours()] } });
+  const shared = join(project, ".claude", "settings.json");
+  write(shared, { hooks: { PreToolUse: [ours()] } });
+  const git = (args) => spawnSync("git", args, { cwd: project, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" } });
+  if (git(["init", "-q"]).status !== 0) return; // no git on this machine
+  git(["add", ".claude/settings.json"]);
+  git(["commit", "-qm", "team hook"]);
+  const before = readFileSync(shared, "utf8");
+  const run = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: project, env, encoding: "utf8" });
+  const result = run(["dedupe"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Left alone: project settings .* shared with the team through git/);
+  assert.equal(readFileSync(shared, "utf8"), before, "the team's file is unchanged");
+  assert.equal(decisionEntries(join(home, ".claude", "settings.json"), "claude").length, 1, "the user-level entry is kept too");
+  const doctor = run(["doctor"]);
+  assert.doesNotMatch(doctor.stdout, /runs more than once for each action \(see DUPLICATE/, "not a problem this person can fix");
+});
+
+test("one enabled plugin is one place, even when Claude Code keeps its marketplace copy and its installed copy", () => {
+  const { home, project } = computer();
+  for (const dir of [["marketplaces", "acme", "plugins", "scopebond-guard", "hooks"], ["cache", "acme", "scopebond-guard", "1.0.0", "hooks"], ["cache", "acme", "scopebond-guard", "0.9.0", "hooks"]]) {
+    const hooks = join(home, ".claude", "plugins", ...dir);
+    mkdirSync(hooks, { recursive: true });
+    write(join(hooks, "hooks.json"), { hooks: { PreToolUse: [ours()] } });
+  }
+  write(join(home, ".claude", "settings.json"), { enabledPlugins: { "scopebond-guard@acme": true } });
+  withHome(home, () => {
+    const entries = hookEntries("claude", project, home);
+    assert.deepEqual(entries.map((e) => e.scope), ["plugin"], "the plugin alone is not a duplicate of itself");
+    assert.match(entries[0].file, /cache/, "the installed copy is the one counted");
+  });
+});
