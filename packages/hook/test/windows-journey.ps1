@@ -170,7 +170,10 @@ try {
     for ($i = 0; $i -lt 40; $i++) { $state = Get-CloudState; if ($state.ingested -ge 1) { break }; Start-Sleep -Milliseconds 250 }
     Start-Sleep -Milliseconds 500
     $state = Get-CloudState
-    Assert ($state.ingested -eq 1) "expected one delivered record, the workspace has $($state.ingested)"
+    if ($state.ingested -ne 1) {
+      $why = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'status')
+      throw "expected one delivered record, the workspace has $($state.ingested). hook output: $out`nflush: $($flush.Out)`nstatus:`n$($why.Out)"
+    }
     Assert ($state.ingested_results[0] -eq 'deny') "the delivered record says $($state.ingested_results[0])"
   }
   Check 'npx.cmd ... doctor is green' {
@@ -188,7 +191,10 @@ try {
       $shim = Join-Path $prefix 'scopebond-agent.cmd'
       if (-not (Test-Path $shim)) {
         $where = Get-ChildItem -Path $prefix, (Join-Path $prefix 'bin') -Filter 'scopebond-agent*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-        $npmEnv = Get-ChildItem Env: | Where-Object { $_.Name -like 'npm_config_*prefix*' -or $_.Name -like 'npm_config_global*' } | ForEach-Object { "$($_.Name)=$($_.Value)" }
+        $npmEnv = Get-ChildItem Env: | Where-Object { $_.Name -like 'npm_*' } | ForEach-Object { "$($_.Name)=$($_.Value)" }
+        $listing = (Get-ChildItem -Path $prefix -ErrorAction SilentlyContinue | Select-Object -First 30 | ForEach-Object { $_.Name }) -join ' '
+        $root = ((& npm.cmd root -g) 2>$null | Select-Object -First 1)
+        $where = @($where) + "prefix lists: $listing" + "npm root -g: $root"
         throw "npm installed no scopebond-agent.cmd in its global folder $prefix (found: $($where -join ', '); env: $($npmEnv -join ', '))`n$($install.Out)"
       }
       if (-not (Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue)) {
