@@ -1,3 +1,4 @@
+// Runs windows-journey.ps1 (its own entry in the test script: the journey outlasts the per-file limit)
 // Runs windows-journey.ps1 in Windows PowerShell 5.1 and in PowerShell 7 against freshly packed
 // hook and agent tarballs. Only on Windows in CI: the journey turns the agent's autostart on and
 // off for the signed-in user, which must never touch a developer's own computer.
@@ -31,11 +32,16 @@ function hasShell(exe) {
   return spawnSync(exe, ["-NoProfile", "-Command", "exit 0"], { encoding: "utf8" }).status === 0;
 }
 
-// Each PowerShell finds its own modules; one started with the other's PSModulePath cannot load
-// Microsoft.PowerShell.Security (Set-ExecutionPolicy).
+// A person's terminal, not a package script: each PowerShell finds its own modules (one started
+// with the other's PSModulePath cannot load Set-ExecutionPolicy), and none of the variables pnpm
+// sets for a running script (npm_config_recursive, npm_lifecycle_*, …) reach npm.cmd.
+const KEEP_NPM = new Set(["npm_config_prefix", "npm_config_cache", "npm_config_registry"]);
 function journeyEnv() {
   const env = { ...process.env, CLAUDECODE: "" };
-  for (const key of Object.keys(env)) if (key.toLowerCase() === "psmodulepath") delete env[key];
+  for (const key of Object.keys(env)) {
+    const k = key.toLowerCase();
+    if (k === "psmodulepath" || k === "init_cwd" || k.startsWith("pnpm_") || (k.startsWith("npm_") && !KEEP_NPM.has(k))) delete env[key];
+  }
   return env;
 }
 

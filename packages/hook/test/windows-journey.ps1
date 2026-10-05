@@ -161,8 +161,21 @@ try {
   # 3. One action, as Claude Code would send it; one record delivered.
   Check 'a push to main is denied by the configured hook command, and one record reaches the workspace' {
     $payload = '{"tool_name":"Bash","tool_input":{"command":"git push origin main"},"cwd":"' + ($project -replace '\\', '\\') + '"}'
-    $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { $out = $payload | & cmd.exe /d /s /c $script:hookCommand 2>&1; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $previous }
+    # Claude Code starts the configured command and writes the event to its stdin; do the same
+    # (a PowerShell pipe would re-encode the text on the way).
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'cmd.exe'
+    $psi.Arguments = '/d /s /c "' + $script:hookCommand + '"'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $proc.StandardInput.Write($payload)
+    $proc.StandardInput.Close()
+    $out = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+    $code = $proc.ExitCode
     Assert ($code -eq 2) "expected a block (exit 2), got $code`: $out"
     $flush = Invoke-Published 'npx.cmd' @('-y', $HookPackage, 'flush')
     Assert ($flush.Code -eq 0) "flush exited $($flush.Code): $($flush.Out)"
