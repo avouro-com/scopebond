@@ -4,7 +4,9 @@
 // browser. Dependency-free (node: built-ins only), so it runs from a plain checkout.
 //
 // In process:   const cloud = await startFakeCloud(); … cloud.state(); cloud.close();
-// As a process: node fake-cloud.mjs --url-file <path>   (writes its URL there, runs until killed)
+// As a process: node fake-cloud.mjs --url-file <path> [--auto-approve]
+//               (writes its URL there, runs until killed; --auto-approve approves each code on its
+//               second poll, as a person who opened the page would, and lists it in approved_codes)
 //
 // Test control (never part of the real API):
 //   POST /__test/approve {"user_code": "…"}   approve a pending code (the newest if omitted)
@@ -26,11 +28,11 @@ export function kidForPem(pem) {
 const LETTERS = "BCDFGHJKLMNPQRSTVWXZ";
 const userCode = () => Array.from(randomBytes(8), (b, i) => (i === 4 ? "-" : "") + LETTERS[b % LETTERS.length]).join("");
 
-export function startFakeCloud({ host = "127.0.0.1", port = 0 } = {}) {
+export function startFakeCloud({ host = "127.0.0.1", port = 0, autoApprove = false } = {}) {
   const codes = new Map(); // device_code -> { user_code, client_name, harness, approved, consumed }
   const seen = {
     codeRequests: [], enrolled: [], ingested: [], observations: 0, selfChecks: [], policyPolls: 0,
-    versionPolls: 0, credentials: new Set(),
+    versionPolls: 0, credentials: new Set(), approved: [],
   };
   const server = http.createServer((req, res) => {
     let raw = "";
@@ -65,6 +67,8 @@ export function startFakeCloud({ host = "127.0.0.1", port = 0 } = {}) {
       if (url.pathname === "/v1/device/token" && req.method === "POST") {
         const entry = codes.get(String(body.device_code ?? ""));
         if (!entry || entry.consumed) return json(400, { error: "expired_token" });
+        if (!entry.approved && autoApprove && entry.polled) { entry.approved = true; seen.approved.push(entry.user_code); }
+        entry.polled = true;
         if (!entry.approved) return json(400, { error: "authorization_pending" });
         entry.consumed = true;
         const enrollment_token = "sbe_" + randomBytes(12).toString("hex");
@@ -128,6 +132,7 @@ export function startFakeCloud({ host = "127.0.0.1", port = 0 } = {}) {
         const entry = body.user_code ? pending.find((c) => c.user_code === body.user_code) : pending.at(-1);
         if (!entry) return json(404, { error: "no_pending_code" });
         entry.approved = true;
+        seen.approved.push(entry.user_code);
         return json(200, { approved: entry.user_code });
       }
       if (url.pathname === "/__test/state" && req.method === "GET") return json(200, state());
@@ -139,6 +144,7 @@ export function startFakeCloud({ host = "127.0.0.1", port = 0 } = {}) {
     code_requests: seen.codeRequests, enrolled: seen.enrolled.length, ingested: seen.ingested.length,
     ingested_results: seen.ingested.map((r) => r?.payload?.realtime_result ?? null),
     observations: seen.observations, self_checks: seen.selfChecks, policy_polls: seen.policyPolls,
+    approved_codes: seen.approved,
     pending_codes: [...codes.values()].filter((c) => !c.approved && !c.consumed).map((c) => c.user_code),
   });
   return new Promise((resolve, reject) => {
@@ -151,6 +157,7 @@ export function startFakeCloud({ host = "127.0.0.1", port = 0 } = {}) {
           const entry = [...codes.values()].find((c) => !c.approved && !c.consumed && (!code || c.user_code === code));
           if (!entry) return false;
           entry.approved = true;
+          seen.approved.push(entry.user_code);
           return true;
         },
         close: () => new Promise((done) => server.close(() => done())),
@@ -161,7 +168,7 @@ export function startFakeCloud({ host = "127.0.0.1", port = 0 } = {}) {
 
 if (process.argv[1] && resolve(fileURLToPath(import.meta.url)).toLowerCase() === resolve(process.argv[1]).toLowerCase()) {
   const i = process.argv.indexOf("--url-file");
-  const cloud = await startFakeCloud();
+  const cloud = await startFakeCloud({ autoApprove: process.argv.includes("--auto-approve") });
   if (i > 0 && process.argv[i + 1]) writeFileSync(process.argv[i + 1], cloud.url);
   console.log(cloud.url);
 }
