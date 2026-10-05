@@ -158,9 +158,34 @@
               }
             }
           }
+        },
+        "override": {
+          "type": "object",
+          "description": "A person at the computer allowed an action a rule blocked (agent_dialog, with a reason whose SHA-256 is reason_digest), or the coding agent's own permission prompt was offered for it (harness_prompt). Present only with realtime_result \"approved\".",
+          "required": ["version", "rule", "method", "state", "repeat_of", "reason_digest", "reason_length", "os_user_digest", "decided_at"],
+          "additionalProperties": false,
+          "properties": {
+            "version": { "const": 1 },
+            "rule": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+            "method": { "enum": ["agent_dialog", "harness_prompt"] },
+            "state": { "enum": ["allowed", "offered"] },
+            "repeat_of": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 16, "maxLength": 200 }] },
+            "reason_digest": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-f]{64}$" }] },
+            "reason_length": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 1, "maximum": 500 }] },
+            "os_user_digest": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-f]{64}$" }] },
+            "decided_at": { "type": "string", "format": "date-time" }
+          },
+          "oneOf": [
+            { "properties": { "method": { "const": "agent_dialog" }, "state": { "const": "allowed" }, "reason_digest": { "type": "string" }, "reason_length": { "type": "integer" } } },
+            { "properties": { "method": { "const": "harness_prompt" }, "state": { "const": "offered" }, "reason_digest": { "type": "null" }, "reason_length": { "type": "null" }, "repeat_of": { "type": "null" } } }
+          ]
         }
       },
       "allOf": [
+        {
+          "if": { "required": ["override"] },
+          "then": { "properties": { "realtime_result": { "const": "approved" } } }
+        },
         {
           "if": { "required": ["evidence_class"], "properties": { "evidence_class": { "const": "boundary" } } },
           "then": { "required": ["boundary"], "not": { "required": ["principal"] } },

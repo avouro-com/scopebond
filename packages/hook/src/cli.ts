@@ -55,6 +55,7 @@ import { connectCloud, ingestUrl, loadConnection, connectionPath } from "./cloud
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { isManaged, readMeta, MANAGED_DOC_FILE } from "./managed.js";
+import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor } from "./rules.js";
@@ -122,6 +123,19 @@ function callId(input: Record<string, unknown>): string | undefined {
 }
 function readStdin(): string {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
+}
+
+/** How long a hook waits for a person in the Scopebond window: well inside each agent's hook timeout (Claude Code 60 s by
+ *  default; the Codex entry Scopebond writes says 30 s), so the wait ends as a block, never as a timed-out hook. */
+const OVERRIDE_WAIT_MS: Record<Harness, number> = { claude: 45_000, codex: 20_000, cursor: 20_000 };
+
+/** Warn mode: Claude Code shows the person its own prompt for this action (only where the workspace allows it and Claude Code
+ *  really asks; see override.ts). */
+function askClaude(reason: string): never {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason },
+  }) + "\n");
+  process.exit(0);
 }
 
 function denyClaude(reason: string): never {
@@ -200,7 +214,11 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
-    runtime = createHookRuntime(runtimePaths(dir, cwd));
+    const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), override: (agentKid) => {
+      const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, waitMs: OVERRIDE_WAIT_MS[harness] });
+      return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
+    } });
     useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), currentBranch(cwd)), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
     const observer = recordObservations(dir, cwd, input!, decision, harness);
@@ -212,6 +230,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     runtime.close();
     runtime = undefined;
     if (decision.decision === "deny") deny(decision.reason);
+    // Only Claude Code is ever offered "ask" (override.ts); any other harness treats it as a denial.
+    if (decision.decision === "ask") { if (harness === "claude") askClaude(decision.reason); deny(decision.reason); }
     // Stay silent on allow/not_evaluated so the coding agent's normal permission
     // flow remains in charge. Scopebond blocks; it never silently approves.
     process.exit(0);
@@ -281,9 +301,15 @@ async function runCursor(): Promise<void> {
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
-    runtime = createHookRuntime(runtimePaths(dir, cwd));
-    useDigestKey(loadOrCreateDigestKey(dir));
+    const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
     const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
+    // An edit Cursor reports after saving it cannot be overridden: it already happened.
+    const overridable = !mapped.some((m) => m.postHoc);
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), override: (agentKid) => {
+      const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, waitMs: OVERRIDE_WAIT_MS.cursor }) : null;
+      return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
+    } });
+    useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);

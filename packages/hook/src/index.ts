@@ -23,9 +23,11 @@ export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYP
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
   inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules,
-  MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE,
+  MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument,
 } from "./managed.js";
-export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason } from "./managed.js";
+export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms } from "./managed.js";
+export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE } from "./override.js";
+export type { OverrideContext, OverrideNote, AgentAnswer } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS } from "./policy-sync.js";
 export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";

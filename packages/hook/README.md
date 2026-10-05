@@ -266,6 +266,15 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
 - **What the workspace cannot change.** Protection of Scopebond's own settings and of the
   agents' hook settings, the machine key policy, fail-closed handling of anything unreadable,
   and this computer's own opt-ins (`allowed_roots`, `protect_remote_database`).
+- **Overrides.** The workspace can set a rule to *Block, user may override* and say who may
+  override. A matching action is then blocked until the person at the computer allows it once,
+  with a reason, in the Scopebond Agent's window (`@scopebond/agent`): the hook asks the running
+  agent and waits up to 45 seconds (20 seconds for Codex and Cursor), then blocks. The receipt
+  records the override, the reason's digest and the rule; the workspace adds who and why. Where the
+  workspace allows it and the window is not available, Claude Code's own prompt is offered instead,
+  but only in a permission mode where Claude Code really asks; that prompt takes no reason and is
+  recorded as *offered*. Scopebond's own protection, rules set to Block and the kill switch are
+  never overridable, and the workspace's daily limit holds.
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left

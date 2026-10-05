@@ -55,7 +55,31 @@ const EXCLUSION_PATTERN: Record<ExclusionKey, RegExp> = {
 const HEX64 = /^[0-9a-f]{64}$/;
 const OPAQUE = /^[A-Za-z0-9._:-]{1,128}$/;
 
-export type ManagedRule = { mode: "monitor" | "block" } & Partial<Record<ListKey | ExclusionKey, string[]>>;
+/** What the computer enforces for a rule set to "Block, user may override": the shortest reason accepted, how long one override
+ *  lasts (0 = this action only), how many a person may make per rule per day, and whether the coding agent's own prompt may be
+ *  used when the Scopebond window is not available. Who may override is the workspace's decision: it sends "override" only then. */
+export interface OverrideTerms { reason_min: number; minutes: number; daily_limit: number; harness_prompt: boolean }
+export type ManagedRule = { mode: "monitor" | "block" | "override"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
+const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+function validTerms(t: unknown): t is OverrideTerms {
+  return isObject(t) && Object.keys(t).length === 4 && intIn(t.reason_min, 10, 200) && intIn(t.minutes, 0, 60) && intIn(t.daily_limit, 1, 50)
+    && typeof t.harness_prompt === "boolean";
+}
+/** The clause that carries each workspace rule on the computer, for naming the rule a denial came from. */
+export const RULE_OF_CLAUSE: Readonly<Record<string, ManagedRuleId>> = {
+  "protect-branches": "push-protected", "protect-branch-history": "force-push-protected", "safe-shell": "destructive-shell",
+  "protect-read": "secret-read", "protect-write": "ci-config-write", "allowed-sites": "network-egress",
+};
+/** The same document with every overridable rule recorded instead of blocked: what still denies under it is never overridable
+ *  (another rule on Block, or Scopebond's own floor). */
+export function floorDocument(doc: ManagedDocument): ManagedDocument {
+  const rules = Object.fromEntries(Object.entries(doc.rules).map(([id, rule]) => {
+    if (rule.mode !== "override") return [id, rule];
+    const { override: _terms, excluded_paths: _p, excluded_branches: _b, ...rest } = rule;
+    return [id, { ...rest, mode: "monitor" }];
+  })) as ManagedDocument["rules"];
+  return { ...doc, rules };
+}
 export interface ManagedDocument {
   type: "scopebond:managed-rules";
   version: 1;
@@ -96,9 +120,10 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   }
   for (const id of MANAGED_RULE_IDS) {
     const rule = rules[id];
-    if (!isObject(rule) || (rule.mode !== "monitor" && rule.mode !== "block")) return bad(`rule ${id} has no valid mode`);
+    if (!isObject(rule) || (rule.mode !== "monitor" && rule.mode !== "block" && rule.mode !== "override")) return bad(`rule ${id} has no valid mode`);
+    if ((rule.mode === "override") !== ("override" in rule) || (rule.mode === "override" && !validTerms(rule.override))) return bad(`rule ${id} has invalid override terms`);
     for (const key of Object.keys(rule)) {
-      if (key === "mode") continue;
+      if (key === "mode" || key === "override") continue;
       const listKey = LIST_OF[id];
       const exclusionKey = EXCLUSIONS_OF[id];
       const pattern = key === listKey ? LIST_PATTERN[listKey] : key === exclusionKey ? EXCLUSION_PATTERN[exclusionKey] : null;
@@ -110,7 +135,7 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
     }
   }
   const network = rules["network-egress"] as ManagedRule;
-  if (network.mode === "block" && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
+  if (network.mode !== "monitor" && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
   if (digestRules(rules) !== rulesDigest) return bad("the rules do not match their digest; the document was changed or damaged");
   // The same version with different rules is a newer document too: the workspace can change what reaches this computer without a new
   // version (an agent moved to another team, or this hook started reading a setting it did not read before). The export id binds it here.
@@ -156,7 +181,7 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
   for (const clause of policy.clauses) {
     if (clause.id === "protect-branches" && r["push-protected"].mode === "monitor") {
       clauses.push(allowAll(clause));
-      if (r["force-push-protected"].mode === "block") {
+      if (r["force-push-protected"].mode !== "monitor") {
         clauses.push({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
           description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch; ordinary pushes are allowed. Set by your workspace." });
       }
@@ -175,13 +200,13 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
     } else if (clause.id === "protect-branches" && r["push-protected"].excluded_branches?.length) {
       clauses.push(withBound(clause, "ref", withBranchExclusions(boundPattern(clause, "ref"), r["push-protected"].excluded_branches)));
       // Skipping ordinary pushes to a branch never skips history protection: force-pushes, deletions and mirror pushes stay stopped.
-      if (r["force-push-protected"].mode === "block") {
+      if (r["force-push-protected"].mode !== "monitor") {
         clauses.push({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
           description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch. Set by your workspace." });
       }
     } else clauses.push(clause);
   }
-  if (r["network-egress"].mode === "block") {
+  if (r["network-egress"].mode !== "monitor") {
     const keysAt = clauses.findIndex((c) => c.id === "keys");
     clauses.splice(keysAt < 0 ? clauses.length : keysAt, 0, {
       id: "allowed-sites", type: "action_allowlist", mode: "enforce", action_types: ["net.fetch"],
