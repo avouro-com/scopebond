@@ -246,6 +246,9 @@ try {
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    # Windows PowerShell's .NET Framework writes the console input encoding's byte-order mark as soon
+    # as it opens a child's stdin; Claude Code writes none, so use UTF-8 without one here.
+    try { [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
     $proc = [System.Diagnostics.Process]::Start($psi)
     # UTF-8 without a byte-order mark, as Claude Code writes it (Windows PowerShell's StreamWriter would add one).
     $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($payload)
@@ -312,6 +315,15 @@ try {
         if (-not $running) { Start-Sleep -Seconds 1 }
       }
       if (-not $running) {
+        # Diagnose: does the launcher itself start the agent when run directly (no headless console)?
+        Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d', '/c', "`"$launcher`"") -WindowStyle Hidden | Out-Null
+        $direct = $false
+        for ($i = 0; $i -lt 20 -and -not $direct; $i++) {
+          Start-Sleep -Seconds 1
+          $status = Invoke-Published 'scopebond-agent.cmd' @('status', '--json')
+          try { $direct = $null -ne ($status.Out | ConvertFrom-Json).agent } catch { $direct = $false }
+        }
+        Write-Host "       note: autostart on did not start the agent here; started directly, the launcher $(if ($direct) { 'did' } else { 'did not' }) start it"
         $log = Join-Path $sbHome 'agent.log'
         $tail = if (Test-Path $log) { (Get-Content $log -Tail 20) -join "`n" } else { '(no agent.log)' }
         $launcherText = if (Test-Path $launcher) { Get-Content $launcher -Raw } else { '(no launcher)' }
