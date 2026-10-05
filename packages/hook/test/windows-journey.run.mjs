@@ -19,6 +19,9 @@ const enabled = process.platform === "win32" && (process.env.CI === "true" || pr
 function pack() {
   const dest = mkdtempSync(join(tmpdir(), "sb-journey-pack-"));
   for (const pkg of ["hook", "agent"]) {
+    // The hook's tests run before the agent's own build in `pnpm -r test`: build it, or the tarball has no dist/.
+    const built = spawnSync("pnpm", ["--dir", join(root, "packages", pkg), "run", "build"], { encoding: "utf8", shell: true });
+    assert.equal(built.status, 0, `pnpm build ${pkg}: ${built.stdout}${built.stderr}`);
     // pnpm rewrites the workspace dependencies to the versions a published package names.
     const r = spawnSync("pnpm", ["--dir", join(root, "packages", pkg), "pack", "--pack-destination", dest], { encoding: "utf8", shell: true });
     assert.equal(r.status, 0, `pnpm pack ${pkg}: ${r.stdout}${r.stderr}`);
