@@ -51,7 +51,8 @@ function openSqlite(path: string): SqliteDb {
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+  try { db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"); }
+  catch (error) { try { db.close(); } catch { /* already failing */ } throw error; }
   return db;
 }
 
@@ -503,7 +504,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
     }
   }
 
-  peek(limit: number, at: number): CloudOutboxEntry[] {
+  peek(limit: number, at: number, exclude?: ReadonlySet<string>): CloudOutboxEntry[] {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.expire(at);
@@ -515,8 +516,8 @@ export class SqliteCloudOutbox implements CloudOutbox {
     const bounded = Math.max(1, Math.min(100, Math.trunc(limit)));
     const rows = this.db.prepare(
       `SELECT event_id, payload_hash, receipt_json, enqueued_at, bytes, seq
-         FROM cloud_outbox ORDER BY enqueued_at, event_id LIMIT ?`,
-    ).all(bounded) as Array<{
+         FROM cloud_outbox WHERE event_id NOT IN (SELECT value FROM json_each(?)) ORDER BY enqueued_at, event_id LIMIT ?`,
+    ).all(JSON.stringify(exclude ? [...exclude] : []), bounded) as Array<{
       event_id: string; payload_hash: string; receipt_json: string; enqueued_at: number; bytes: number; seq: number | null;
     }>;
     return rows.map((row) => ({
