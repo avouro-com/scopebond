@@ -100,3 +100,39 @@ test("a workspace asking to wait (429 with Retry-After) is not asked again soone
   ex.stop();
   assert.equal(ex.status().nextAttemptAt, t + 120_000);
 });
+
+test("after the conflicting record is found, the rest of the queue goes in batches again", async () => {
+  const { ex, requests, delivered } = setup((ids) => (ids.includes("action:iso-0001")
+    ? json(409, { code: "id_conflict" })
+    : json(200, { ok: true })));
+  for (let i = 1; i <= 6; i += 1) ex.enqueue(receipt(`action:iso-000${i}`));
+  await ex.flush();
+  ex.stop();
+  assert.deepEqual(delivered, ["action:iso-0002", "action:iso-0003", "action:iso-0004", "action:iso-0005", "action:iso-0006"]);
+  // The batch, the conflicting record alone, then one batch for the rest.
+  assert.deepEqual(requests.map((r) => r.length), [6, 1, 5]);
+});
+
+test("records signed with a key the connection did not enroll are retried, never settled", async () => {
+  const { ex, gaps } = setup((ids) => json(400, { code: "invalid_receipt", rejected: ids.map((id, index) => ({ index, action_id: id, code: "attester_mismatch" })) }));
+  ex.enqueue(receipt("action:key-0001"));
+  await ex.flush();
+  ex.stop();
+  assert.equal(gaps.length, 0);
+  assert.equal(ex.status().pending, 1);
+});
+
+test("Retry-After as an HTTP date is measured against the exporter's clock, at most an hour", async () => {
+  let t = Date.parse("2026-10-05T10:00:00Z");
+  for (const [header, wait] of [[new Date(t + 90_000).toUTCString(), 90_000], ["99999", 3_600_000]]) {
+    const outbox = createMemoryCloudOutbox({ now: () => t });
+    const ex = createCloudExporter({
+      url: "https://cloud.example", credential: "sbm_x", outbox, flushMs: 1_000, now: () => t, maxRetryMs: 60_000,
+      fetch: async () => new Response("{}", { status: 503, headers: { "retry-after": header } }),
+    });
+    ex.enqueue(receipt(`action:date-${wait}`));
+    await ex.flush();
+    ex.stop();
+    assert.equal(ex.status().nextAttemptAt, t + wait);
+  }
+});
