@@ -14,7 +14,8 @@ import { fileURLToPath } from "node:url";
 const here = fileURLToPath(new URL(".", import.meta.url));
 const root = join(here, "..", "..", "..");
 const script = join(here, "windows-journey.ps1");
-const enabled = process.platform === "win32" && (process.env.CI === "true" || process.env.SCOPEBOND_WINDOWS_JOURNEY === "1");
+// SCOPEBOND_WINDOWS_JOURNEY=0 leaves the journeys out of the unit run (a CI job that runs them on its own, in parallel).
+const enabled = process.platform === "win32" && process.env.SCOPEBOND_WINDOWS_JOURNEY !== "0" && (process.env.CI === "true" || process.env.SCOPEBOND_WINDOWS_JOURNEY === "1");
 
 function pack() {
   const dest = mkdtempSync(join(tmpdir(), "sb-journey-pack-"));
@@ -75,6 +76,8 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
     // Outside CI (SCOPEBOND_WINDOWS_JOURNEY=1 on a developer's computer) the journey uses a throwaway profile
     // folder and leaves the agent alone: it never touches that person's own Run key, agent or settings.
     const local = process.env.CI !== "true" ? ["-IsolatedHome", "-SkipAgent"] : [];
+    // The edge cases (unusual profile paths, OneDrive, an old Node) are the same in either shell: run them once.
+    if (shell === "pwsh.exe") local.push("-SkipEdgeCases");
     const r = spawnSync(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-HookPackage", packed.hook, "-AgentPackage", packed.agent, ...local], {
       encoding: "utf8", timeout: 14 * 60_000, env: journeyEnv(),
     });
