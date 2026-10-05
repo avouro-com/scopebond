@@ -16,6 +16,14 @@ inputs:
     description: "Optional Scopebond workspace URL to mirror the signed boundary receipt to. Also set the SCOPEBOND_ATTESTER_KEY and SCOPEBOND_CLOUD_CREDENTIAL job env from repository secrets. Export is best-effort and never fails the check."
     required: false
     default: ""
+  evidence-out:
+    description: "Optional path to write the exact commit, digests and check result as JSON, for a workspace collector that has registered this runner. It is a report, not an independent verification."
+    required: false
+    default: ""
+outputs:
+  evidence-path:
+    description: "The evidence file, when evidence-out was set."
+    value: ${{ steps.check.outputs.evidence_path }}
 runs:
   using: "composite"
   steps:
@@ -53,8 +61,10 @@ runs:
         fi
         echo "Scopebond: $(wc -l < "$out" | tr -d ' ') changed path(s) resolved"
     - name: Scopebond policy check
+      id: check
       shell: bash
       env:
+        SCOPEBOND_EVIDENCE_OUT: ${{ inputs.evidence-out }}
         SCOPEBOND_PR_PATHS: ${{ runner.temp }}/scopebond-pr-paths.txt
         SCOPEBOND_CLOUD_URL: ${{ inputs.workspace-url }}
         SCOPEBOND_POLICY_SOURCE: base

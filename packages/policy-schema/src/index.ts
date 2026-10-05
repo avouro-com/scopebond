@@ -6,6 +6,8 @@ import policySchemaDocument from "../schema/policy.schema.json" with { type: "js
 import actionSchemaDocument from "../schema/action.schema.json" with { type: "json" };
 import receiptSchemaDocument from "../schema/receipt.schema.json" with { type: "json" };
 import legacyReceiptSchemaDocument from "../schema/receipt-legacy.schema.json" with { type: "json" };
+import observationSchemaDocument from "../schema/observation.schema.json" with { type: "json" };
+import { canonical } from "./canonical.js";
 export { canonical } from "./canonical.js";
 export {
   actionRegistry, TAXONOMY_VERSION, getActionType, validateActionParams,
@@ -18,6 +20,30 @@ export const policySchema = policySchemaDocument as Record<string, unknown>;
 export const actionSchema = actionSchemaDocument as Record<string, unknown>;
 export const receiptSchema = receiptSchemaDocument as Record<string, unknown>;
 export const legacyReceiptSchema = legacyReceiptSchemaDocument as Record<string, unknown>;
+export const observationSchema = observationSchemaDocument as Record<string, unknown>;
+
+// Observation envelope (scopebond:observation v1): a separate, closed envelope for
+// lifecycle, health, policy-acknowledgement and independently sourced outcome
+// observations. Receipts are unchanged. The signature covers the domain below followed
+// by the RFC 8785 canonical payload; observation_hash is the SHA-256 of the same bytes.
+export const OBSERVATION_TYPE = "scopebond:observation";
+export const OBSERVATION_VERSION = "1.0";
+export const OBSERVATION_DOMAIN = "scopebond:observation/v1\n";
+export const SOURCE_RECEIPT_DOMAIN = "scopebond:source-receipt/v1\n";
+export const OBSERVATION_KINDS = [
+  "session", "capability", "health", "policy_ack", "tool_intent",
+  "tool_outcome", "platform_outcome", "verification", "integrity", "export",
+] as const;
+export const OBSERVATION_LIMITS = {
+  maxBatchItems: 100,
+  maxObservationBytes: 16 * 1024,
+  maxBatchBodyBytes: 1024 * 1024,
+} as const;
+export type ObservationKind = (typeof OBSERVATION_KINDS)[number];
+
+/** The exact string whose UTF-8 bytes an observation signature (and observation_hash) covers. */
+export const observationSigningInput = (payload: Record<string, unknown>): string =>
+  OBSERVATION_DOMAIN + canonical(payload as never);
 
 export const VOCABULARY_VERSION = "1.0";
 export const EVIDENCE_VERSION = "1.0";

@@ -6,7 +6,7 @@ import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } fro
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
 import { canonical, sha256 } from "./crypto.js";
-import type { CloudDeliveryGap, CloudOutbox, CloudOutboxEntry, CloudOutboxStatus } from "./cloud.js";
+import { randomQueueId, type CloudDeliveryGap, type CloudOutbox, type CloudOutboxEntry, type CloudOutboxStatus } from "./cloud.js";
 import type {
   ReceiptStore, SignedReceipt, Anchor, AuthorityReservation,
   AuthorityReservationResult, AuthorityFinalState, StopState, ActionLifecycleRecord, RealtimeResult,
@@ -51,7 +51,8 @@ function openSqlite(path: string): SqliteDb {
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+  try { db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"); }
+  catch (error) { try { db.close(); } catch { /* already failing */ } throw error; }
   return db;
 }
 
@@ -290,6 +291,14 @@ export class SqliteReceiptStore implements ReceiptStore {
       .all(Math.max(1, Math.floor(limit))) as { receipt_json: string }[];
     return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
   }
+  /** Receipts in log order after the row `afterId`, at most `limit` of them, with their row
+   *  ids — for walking a large log without holding it in memory. */
+  page(afterId: number, limit: number): Array<{ id: number; receipt: SignedReceipt }> {
+    const rows = this.db
+      .prepare(`SELECT id, receipt_json FROM receipts WHERE id > ? ORDER BY id LIMIT ?`)
+      .all(Math.max(0, Math.floor(afterId)), Math.max(1, Math.floor(limit))) as { id: number; receipt_json: string }[];
+    return rows.map((row) => ({ id: Number(row.id), receipt: JSON.parse(row.receipt_json) as SignedReceipt }));
+  }
   /** How many receipts are stored, without reading any of them. */
   count(): number {
     const rows = this.db.prepare(`SELECT COUNT(*) AS n FROM receipts`).all() as { n: number }[];
@@ -405,33 +414,57 @@ export class SqliteCloudOutbox implements CloudOutbox {
 
   constructor(path: string, options: SqliteCloudOutboxOptions = {}) {
     this.db = openSqlite(path);
-    this.maxPending = positiveInteger(options.maxPending, 10_000);
-    this.maxBytes = positiveInteger(options.maxBytes, 64 * 1024 * 1024);
-    this.maxAgeMs = positiveInteger(options.maxAgeMs, 7 * 24 * 60 * 60 * 1000);
-    this.maxGapRecords = positiveInteger(options.maxGapRecords, 10_000);
-    this.now = options.now ?? Date.now;
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS cloud_outbox (
-        event_id TEXT PRIMARY KEY,
-        payload_hash TEXT NOT NULL,
-        receipt_json TEXT NOT NULL,
-        enqueued_at INTEGER NOT NULL,
-        bytes INTEGER NOT NULL CHECK (bytes > 0)
-      );
-      CREATE INDEX IF NOT EXISTS cloud_outbox_order ON cloud_outbox (enqueued_at, event_id);
-      CREATE TABLE IF NOT EXISTS cloud_delivery_gaps (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT,
-        reason TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS cloud_outbox_metadata (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        total_gaps INTEGER NOT NULL CHECK (total_gaps >= 0)
-      );
-      INSERT OR IGNORE INTO cloud_outbox_metadata (singleton, total_gaps)
-        SELECT 1, COUNT(*) FROM cloud_delivery_gaps;
-    `);
+    // A queue that cannot be set up (a full disk, a read-only file) must not leave its handle open:
+    // the next open of the same file in this process would reuse it and stay read-only.
+    try {
+      this.maxPending = positiveInteger(options.maxPending, 10_000);
+      this.maxBytes = positiveInteger(options.maxBytes, 64 * 1024 * 1024);
+      this.maxAgeMs = positiveInteger(options.maxAgeMs, 7 * 24 * 60 * 60 * 1000);
+      this.maxGapRecords = positiveInteger(options.maxGapRecords, 10_000);
+      this.now = options.now ?? Date.now;
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS cloud_outbox (
+          event_id TEXT PRIMARY KEY,
+          payload_hash TEXT NOT NULL,
+          receipt_json TEXT NOT NULL,
+          enqueued_at INTEGER NOT NULL,
+          bytes INTEGER NOT NULL CHECK (bytes > 0)
+        );
+        CREATE INDEX IF NOT EXISTS cloud_outbox_order ON cloud_outbox (enqueued_at, event_id);
+        CREATE TABLE IF NOT EXISTS cloud_delivery_gaps (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT,
+          reason TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS cloud_outbox_metadata (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          total_gaps INTEGER NOT NULL CHECK (total_gaps >= 0)
+        );
+        INSERT OR IGNORE INTO cloud_outbox_metadata (singleton, total_gaps)
+          SELECT 1, COUNT(*) FROM cloud_delivery_gaps;
+      `);
+      // SB289: a number per queued record, kept across restarts. Queues made before it get the columns
+      // here; records already in them stay unnumbered.
+      const has = (table: string, column: string) =>
+        (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
+      // Two processes (parallel hook calls, or the hook and the agent) can open an old queue at once: the
+      // one that loses the race finds the column already added, which is the state it wanted.
+      const addColumn = (table: string, column: string, definition: string) => {
+        if (has(table, column)) return;
+        try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); }
+        catch (error) { if (!/duplicate column/i.test((error as Error).message)) throw error; }
+      };
+      addColumn("cloud_outbox", "seq", "INTEGER");
+      addColumn("cloud_outbox_metadata", "next_seq", "INTEGER NOT NULL DEFAULT 1");
+      // SB289: the queue's id, made once. Two processes opening a new queue at once both try; the
+      // first write wins and both read the same id back.
+      addColumn("cloud_outbox_metadata", "queue_id", "TEXT");
+      this.db.prepare("UPDATE cloud_outbox_metadata SET queue_id = ? WHERE singleton = 1 AND queue_id IS NULL").run(randomQueueId());
+    } catch (error) {
+      try { this.db.close(); } catch { /* already failing */ }
+      throw error;
+    }
   }
 
   enqueue(receipt: SignedReceipt): { queued: boolean; duplicate: boolean; gap?: CloudDeliveryGap } {
@@ -464,9 +497,12 @@ export class SqliteCloudOutbox implements CloudOutbox {
         this.db.exec("COMMIT");
         return { queued: false, duplicate: false, gap };
       }
+      const seq = (this.db.prepare(
+        "UPDATE cloud_outbox_metadata SET next_seq = next_seq + 1 WHERE singleton = 1 RETURNING next_seq - 1 AS seq",
+      ).all() as Array<{ seq: number }>)[0]?.seq ?? null;
       this.db.prepare(
-        "INSERT INTO cloud_outbox (event_id, payload_hash, receipt_json, enqueued_at, bytes) VALUES (?, ?, ?, ?, ?)",
-      ).run(id, payloadHash, receiptJson, at, bytes);
+        "INSERT INTO cloud_outbox (event_id, payload_hash, receipt_json, enqueued_at, bytes, seq) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(id, payloadHash, receiptJson, at, bytes, seq);
       this.db.exec("COMMIT");
       return { queued: true, duplicate: false };
     } catch (error) {
@@ -475,7 +511,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
     }
   }
 
-  peek(limit: number, at: number): CloudOutboxEntry[] {
+  peek(limit: number, at: number, exclude?: ReadonlySet<string>): CloudOutboxEntry[] {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.expire(at);
@@ -486,10 +522,10 @@ export class SqliteCloudOutbox implements CloudOutbox {
     }
     const bounded = Math.max(1, Math.min(100, Math.trunc(limit)));
     const rows = this.db.prepare(
-      `SELECT event_id, payload_hash, receipt_json, enqueued_at, bytes
-         FROM cloud_outbox ORDER BY enqueued_at, event_id LIMIT ?`,
-    ).all(bounded) as Array<{
-      event_id: string; payload_hash: string; receipt_json: string; enqueued_at: number; bytes: number;
+      `SELECT event_id, payload_hash, receipt_json, enqueued_at, bytes, seq
+         FROM cloud_outbox WHERE event_id NOT IN (SELECT value FROM json_each(?)) ORDER BY enqueued_at, event_id LIMIT ?`,
+    ).all(JSON.stringify(exclude ? [...exclude] : []), bounded) as Array<{
+      event_id: string; payload_hash: string; receipt_json: string; enqueued_at: number; bytes: number; seq: number | null;
     }>;
     return rows.map((row) => ({
       id: row.event_id,
@@ -497,6 +533,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
       receipt: JSON.parse(row.receipt_json) as SignedReceipt,
       enqueuedAt: row.enqueued_at,
       bytes: row.bytes,
+      ...(row.seq === null ? {} : { seq: row.seq }),
     }));
   }
 
@@ -512,14 +549,37 @@ export class SqliteCloudOutbox implements CloudOutbox {
     }
   }
 
+  /** After the machine's countersigning key is replaced, queued receipts signed by an earlier
+   *  key can never be delivered by the new connection: the workspace refuses them, and a
+   *  refused batch would hold up every newer receipt behind it. They are taken out of the
+   *  queue as `rekeyed` gaps; the receipts themselves stay in the local log, from which
+   *  `recover` delivers them once the workspace approves. Returns how many were set aside. */
+  discardNotSignedBy(kid: string): number {
+    const at = this.now();
+    const rows = this.db.prepare(
+      "SELECT event_id FROM cloud_outbox WHERE json_extract(receipt_json, '$.payload.attester.kid') IS NOT ?",
+    ).all(kid) as Array<{ event_id: string }>;
+    if (!rows.length) return 0;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const remove = this.db.prepare("DELETE FROM cloud_outbox WHERE event_id = ?");
+      for (const row of rows) { remove.run(row.event_id); this.gap(row.event_id, "rekeyed", at); }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return rows.length;
+  }
+
   status(): CloudOutboxStatus {
     const total = this.db.prepare(
       `SELECT COUNT(*) AS count, COALESCE(SUM(bytes), 0) AS bytes,
               MIN(enqueued_at) AS oldest FROM cloud_outbox`,
     ).all() as Array<{ count: number; bytes: number; oldest: number | null }>;
     const gapCount = this.db.prepare(
-      "SELECT total_gaps AS count FROM cloud_outbox_metadata WHERE singleton = 1",
-    ).all() as Array<{ count: number }>;
+      "SELECT total_gaps AS count, queue_id, next_seq FROM cloud_outbox_metadata WHERE singleton = 1",
+    ).all() as Array<{ count: number; queue_id: string | null; next_seq: number }>;
     const retainedGapCount = this.db.prepare(
       "SELECT COUNT(*) AS count FROM cloud_delivery_gaps",
     ).all() as Array<{ count: number }>;
@@ -533,6 +593,8 @@ export class SqliteCloudOutbox implements CloudOutbox {
       gaps: gapCount[0]?.count ?? 0,
       retainedGapRecords: retainedGapCount[0]?.count ?? 0,
       latestGap: latest[0] ? { id: latest[0].event_id, reason: latest[0].reason, at: latest[0].created_at } : null,
+      ...(gapCount[0]?.queue_id ? { queueId: gapCount[0].queue_id } : {}),
+      seqAssigned: Math.max(0, Number(gapCount[0]?.next_seq ?? 1) - 1),
     };
   }
 
@@ -549,6 +611,17 @@ export class SqliteCloudOutbox implements CloudOutbox {
     ).all(at - this.maxAgeMs) as Array<{ event_id: string }>;
     for (const row of expired) this.gap(row.event_id, "expired", at);
     this.db.prepare("DELETE FROM cloud_outbox WHERE enqueued_at < ?").run(at - this.maxAgeMs);
+  }
+
+  /** Delivery gaps by reason, over the retained gap records (for a machine-readable status). */
+  gapsByReason(): Record<string, number> {
+    const rows = this.db.prepare("SELECT reason, COUNT(*) AS n FROM cloud_delivery_gaps GROUP BY reason").all() as Array<{ reason: string; n: number }>;
+    return Object.fromEntries(rows.map((r) => [r.reason, Number(r.n)]));
+  }
+
+  /** A gap learned from the workspace (a record refused on its own). */
+  recordGap(id: string | null, reason: CloudDeliveryGap["reason"]): CloudDeliveryGap {
+    return this.gap(id, reason, this.now());
   }
 
   private gap(id: string | null, reason: CloudDeliveryGap["reason"], at: number): CloudDeliveryGap {

@@ -9,3 +9,5 @@ export {
 } from "./pr.js";
 export type { PullRequestContext, EvaluateOptions, PrDecision } from "./pr.js";
 export { buildPullRequestReceipt } from "./receipt.js";
+export { buildActionEvidence, checkResult, EVIDENCE_SCHEMA, CHECK_NAME } from "./evidence.js";
+export type { ActionEvidence, CheckResult, EvidenceInput } from "./evidence.js";

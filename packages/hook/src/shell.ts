@@ -556,8 +556,13 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
     const canon = canonProgram(program);
     const nested = (script: string | null | undefined) => { if (script) out.push(...decomposeShell(script, depth + 1)); };
     if (SHELLS.has(canon)) {
-      nested(shellScriptArg(argv));
-    } else if (canon === "eval") {
+      const script = shellScriptArg(argv);
+      nested(script);
+      // A shell given neither a -c script nor a script file reads its program from
+      // standard input (`curl … | sh`, `sh -s`): the text that will run is not in the
+      // command, so it is opaque rather than safe.
+      if (script === null && !argv.some((a) => !a.startsWith("-")) && !argv.some((a) => /^--(?:version|help)$/.test(a))) out.push(...opaque(seg));
+    } else if (canon === "eval" || canon === "iex" || canon === "invoke-expression") {
       nested(argv.join(" "));
     } else if (canon === "trap") {
       if (argv.length >= 2 && !argv[0].startsWith("-")) nested(argv[0]);
@@ -701,7 +706,10 @@ export function parseGitPush(cmd: SimpleCommand): { force: boolean; remote?: str
     // `src:dst` pushes to dst; `:dst` deletes dst; `src:` has no destination, so src.
     const isDelete = del || (colon >= 0 && s.slice(0, colon) === "");
     const dst = colon >= 0 ? (s.slice(colon + 1) || s.slice(0, colon)) : s;
-    targets.push({ ref: canonRef(dst.replace(/^\+/, "")), force: f || dst.startsWith("+"), ...(isDelete ? { del: true } : {}) });
+    // A destination made of a variable, substitution or glob is only known at run time:
+    // it is an unresolved destination, never a safe one.
+    const unresolved = /[$`*?[\]{}]/.test(dst);
+    targets.push({ ref: unresolved ? UNKNOWN_REF : canonRef(dst.replace(/^\+/, "")), force: f || dst.startsWith("+"), ...(isDelete ? { del: true } : {}) });
   }
   if (repo !== undefined && positional.length <= 1 && !everything && !tags) targets.push({ ref: undefined, force, ...(del ? { del: true } : {}) });
   if (targets.length === 0) targets.push(tags ? { ref: "--tags", force } : { ref: undefined, force, ...(del ? { del: true } : {}) });

@@ -60,7 +60,7 @@ test("an MCP tool name maps to mcp.tool.call with a digested arg set", () => {
   assert.equal(m.intent.action_type, "mcp.tool.call");
   assert.equal(m.intent.params.server, "github");
   assert.equal(m.intent.params.tool, "create_issue");
-  assert.match(String(m.intent.params.args_digest), /^sha256:[0-9a-f]{64}$/);
+  assert.match(String(m.intent.params.args_digest), /^hmac-sha256:[0-9a-f]{64}$/);
 });
 
 test("WebFetch maps to net.fetch; an unknown tool falls back to tool.<name>, not evaluated", () => {
@@ -165,6 +165,27 @@ test("a Windows backslash path is normalized so the .scopebond / settings guards
 test("a shell redirection target emits a file.write the write-guard sees", () => {
   assert.ok(writePaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "echo x > .scopebond/policy.json" } })).includes(".scopebond/policy.json"));
   assert.ok(writePaths(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "printf pwned >>.claude/settings.json" } })).includes(".claude/settings.json"));
+});
+
+test("re-pointing the computer or switching off the Scopebond Agent maps to a write of the hook's policy", () => {
+  const selfWrite = (tool_name, command) => writePaths(mapClaudeToolUse({ tool_name, tool_input: { command } })).includes(".scopebond/policy.json");
+  for (const command of [
+    "npx @scopebond/hook login https://other.example",
+    "scopebond-agent autostart off",
+    "scopebond-agent autostart",
+    "pkill -f scopebond-agent",
+    "npm uninstall -g @scopebond/agent",
+    "yarn global remove @scopebond/hook",
+  ]) assert.ok(selfWrite("Bash", command), command);
+  for (const command of ["npm.cmd uninstall -g @scopebond/agent", "scopebond-agent.cmd autostart off", "Stop-Process -Name scopebond-agent"]) {
+    assert.ok(selfWrite("PowerShell", command), `PowerShell: ${command}`);
+  }
+  for (const command of [
+    "scopebond-agent status", "scopebond-agent flush", "scopebond-agent check", "scopebond-agent repair",
+    "scopebond-agent autostart on", "scopebond-agent run", "npm install -g @scopebond/agent", "npm uninstall @scopebond/hook",
+    "npm uninstall -g typescript", "pgrep -f scopebond-agent",
+    "wmic process where \"CommandLine like '%scopebond-agent%'\" get ProcessId",
+  ]) assert.ok(!selfWrite("Bash", command), `${command} must stay allowed`);
 });
 
 test("PowerShell and a generic Shell tool decompose like Bash (not an un-evaluated tool.<name>)", () => {

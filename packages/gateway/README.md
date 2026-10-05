@@ -6,10 +6,14 @@
 > requests run the built-in simulation and are recorded as `simulated`, never
 > `executed`.
 
-The **Scopebond Gateway** — a policy-enforcement proxy that sits between an AI
-agent and everything it can touch. One policy, three uses: **prevent · prove · pay**
-(the gateway does prevent + prove). Built on [Hono](https://hono.dev) so the same
-codebase runs on Node and Workers (ADR-004).
+The **Scopebond Gateway** is a free, Apache-2.0 open-source policy-enforcement
+proxy for actions routed through its HTTP and MCP interfaces. It connects rules,
+control, and signed decision evidence. Built on [Hono](https://hono.dev), it runs
+on Node and Workers.
+
+Scopebond Cloud, the hosted shared workspace, is a separate proprietary service;
+it is not included in this package. You can self-host the gateway without a Cloud
+account and optionally export configured records to a workspace.
 
 ## What it does
 
@@ -54,13 +58,13 @@ they remain suitable for simulation and passive observation.
 Scaffold a working key, key registry and starter policy, then follow the printed steps:
 
 ```bash
-npx @scopebond/gateway init
+npx -y @scopebond/gateway@latest init
 ```
 
 Or wire it up yourself with an existing policy and key registry:
 
 ```bash
-SCOPEBOND_PRINCIPAL_KEYS_FILE=./principal-keys.json SCOPEBOND_CONTROL_TOKEN=<random-24+-character-token> npx @scopebond/gateway ./policy.json
+SCOPEBOND_PRINCIPAL_KEYS_FILE=./principal-keys.json SCOPEBOND_CONTROL_TOKEN=<random-24+-character-token> npx -y @scopebond/gateway@latest ./policy.json
 ```
 
 ```bash
@@ -113,6 +117,14 @@ each `kid`; do not put private keys in this file:
 ]
 ```
 
+## Dispatch boundary: approvals, delegation and action budgets
+
+`createGateway({ dispatchGuard })` (and the hook and MCP proxy, through the same guard) checks three things once per parent action, after policy has allowed it and immediately before it is dispatched. They are decided in one SQLite transaction (`dispatch.db`), so two processes cannot both take the last slot or the same approval, and a refusal spends nothing.
+
+- **Single-use approval.** A `DispatchApproval` is signed by an approver key and binds the actor, action type, target, policy digest, `requestHash()` of the actual request (SHA-256 over `scopebond:dispatch-request/v1\n` plus the canonical request) and an expiry of at most five minutes. It is verified and consumed at the boundary; replay, a changed request, another actor, expiry or an unknown approver is rejected and nothing is dispatched. `signDispatchApproval` is the reference signer.
+- **Delegation.** A child scope must be a subset of its parent (action types and targets; a target ending in `*` is a prefix) and end no later than it. Every action is checked against the whole chain for scope, expiry and revocation, so revoking a parent refuses its children on the next action. `DispatchStore.revoke` and `importRevocations` (add-only) feed the local list; syncing that list from a workspace is not automatic yet.
+- **Action budgets.** An `ActionBudgetPolicy` (actor, operations, `installation` or `shared_gateway`, positive `max`, `window_seconds`, `monitor` or `enforce`, version, expiry, acknowledgement of its exact digest) counts dispatched parent actions, not paths or receipts, in a sliding window kept across processes. A retry of the same call (same `action_group`) does not use a second slot. Enforcement denies on an unacknowledged, expired or withdrawn policy, an unreadable counter, or a clock set behind the last time the store saw; monitor mode never denies and reports the state. A `shared_gateway` limit is refused unless a shared in-path gateway is configured (`sharedGatewayConfigured`): counters on independent installations are independent.
+
 ## Optional: mirror receipts to Scopebond Cloud
 
 Create an organization/environment gateway enrollment in Cloud, prove possession of
@@ -133,7 +145,7 @@ gateway machine and complete possession proof with the same attester key the gat
 will use:
 
 ```bash
-corepack pnpm dlx @scopebond/gateway@0.7.0 enroll https://cloud.scopebond.com scopebond-enrollment.json
+npx -y @scopebond/gateway@latest enroll https://cloud.scopebond.com scopebond-enrollment.json
 ```
 
 The command refuses non-HTTPS remote origins, signs the canonical challenge locally,

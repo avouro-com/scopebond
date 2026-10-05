@@ -1,41 +1,50 @@
 # Releasing
 
-Packages are versioned and published to npm with
-[Changesets](https://github.com/changesets/changesets). Publishing is one command
-away and gated on a merged "Version packages" PR.
-
-Publishing is a **deliberate** step — CI never auto-publishes (so nothing, least of
-all a `0.0.0`, goes out by accident).
+Packages are versioned and published with
+[Changesets](https://github.com/changesets/changesets). **The Release workflow
+publishes on merge** once version changes are committed and no pending changesets
+remain. A public merge or npm publication needs maintainer approval; approving and
+merging a version PR is a publication decision, not just a documentation update.
 
 ## Flow
 
-1. **Add a changeset** with your change:
-   ```bash
-   pnpm changeset
-   ```
-   Select the packages that changed (e.g. `@scopebond/verify`,
-   `@scopebond/policy-schema`) and the bump (**minor** for the first release), and
-   write a one-line summary. Commit the generated `.changeset/*.md` with your PR.
-2. **Merge to `main`.** The Release workflow opens/updates a **"Version packages"**
-   PR that bumps versions and updates each package's changelog from the changesets.
-   (It only versions — it does not publish.)
-3. **Merge the "Version packages" PR.** Versions are now real (e.g. `0.1.0`).
-4. **Publish, deliberately:**
-   ```bash
-   pnpm release        # builds all, then `changeset publish`
-   ```
-   Run it locally (with `npm whoami` authenticated), or enable publish-on-merge by
-   adding `publish: pnpm release` (and `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`)
-   to the workflow step — see the comment in `.github/workflows/release.yml`.
+1. Add a changeset for a releasable package change with `pnpm changeset`.
+   Select affected packages and an appropriate bump, and describe the behavior
+   change. A repository documentation-only change does not need a package bump.
+2. An approved PR merged to `main` triggers `.github/workflows/release.yml`.
+   When changesets remain, it opens or updates **Version packages**, which bumps
+   versions and writes package changelogs. `pnpm version:packages` also synchronizes
+   plugin versions and README release references.
+3. Review the version PR, checks, and package scope. Obtain maintainer approval
+   before merging. With the version changes committed and changesets consumed,
+   the workflow runs `pnpm release`: build all packages, then `changeset publish`.
+4. Verify the workflow result, npm versions and provenance, and generated release
+   notes. A merged version is not proof of a successful npm publication. If a
+   publish fails, inspect the existing registry versions and rerun the approved
+   workflow rather than inventing another version or publishing from a different
+   source tree.
 
-## Setup / notes
+## Configuration and checks
 
-- Requires the **`NPM_TOKEN`** repo secret — a granular npm token with read+write on
-  the `@scopebond` scope and **2FA-bypass** (CI can't prompt). All packages set
-  `publishConfig.access: public`.
-- **First publish:** the changeset bumps `0.0.0 → 0.1.0`, so packages publish at
-  `0.1.0` (npm rejects `0.0.0`). Publishing `@scopebond/verify` + `@scopebond/policy-schema`
-  first establishes the open standard (the spec + conformance vectors) ahead of the proxy.
-- **`@scopebond/gateway` is in `ignore`** (`.changeset/config.json`) while it's alpha —
-  remove it from `ignore` when you're ready to publish the gateway.
-- Manual publish (if ever needed): `pnpm release` (builds all, then `changeset publish`).
+- Use the Node version in `.nvmrc` and pnpm 9.12.0 from `package.json`.
+- The workflow supplies `NPM_TOKEN_SCOPEBOND` as both `NPM_TOKEN` and
+  `NODE_AUTH_TOKEN`, and enables npm provenance. Keep credentials in repository
+  secrets; never put their values in source or release instructions.
+- Public packages set `publishConfig.access: public`. The Changesets ignore list
+  is empty; the gateway is already published, not awaiting its first release.
+- Run `pnpm run gate` and the relevant build, test, and package smoke checks before
+  requesting a merge. `check:release-state` verifies README release references,
+  public gateway installation instructions, and plugin version pins.
+- Current public npm/npx setup examples use `@latest`. Runtime hook commands,
+  managed workspace client updates, and reproducible CI configurations may pin
+  exact versions separately; do not replace those pins with `@latest`.
+- README and npm description changes appear on npm when the relevant package is
+  next published through an approved release. A GitHub documentation merge alone
+  does not update the README of an already published npm version.
+
+## Exceptional manual publication
+
+After explicit maintainer approval and verification of the exact source/version
+set, `pnpm release` builds all packages and publishes versions missing from npm.
+Prefer the existing workflow for provenance and traceability; do not change the
+workflow or bypass checks merely to publish from a workstation.

@@ -11,8 +11,13 @@ import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, type HookConnection } from "./cloud.js";
 import { explainDeny, type ExplainIntent } from "./explain.js";
-import { RULES_FILE } from "./rules.js";
+import { RULES_FILE, loadRules } from "./rules.js";
+import { applyRootScope } from "./paths.js";
+import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
+import { recordDeliveryAttempt } from "./delivery-state.js";
+import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
+import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -23,13 +28,20 @@ export interface RuntimeConfig {
    *  allowlist) instead of observed. Fail-closed for tools with no taxonomy
    *  mapping; default false (observe, matching the connector conformance vector). */
   strict?: boolean;
+  /** The working directory the harness reported, used to resolve workspace roots when
+   *  the rule set lists `allowed_roots`. Defaults to the process directory. */
+  cwd?: string;
   /** When connected to a Cloud workspace, receipts are auto-exported to the portal.
    *  Export is best-effort and never changes the local decision. */
   cloud?: { connection: HookConnection; fetch?: typeof fetch; flushTimeoutMs?: number };
+  /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
+   *  (see override.ts). `hint` explains, in a denial, how an override would have been possible. */
+  override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null } | null;
 }
 
 export interface Decision {
-  decision: "allow" | "deny" | "not_evaluated";
+  /** ask: a rule blocked it and the coding agent's own prompt asks the person (warn mode, Claude Code only). */
+  decision: "allow" | "deny" | "not_evaluated" | "ask";
   reason: string;
   /** The clause that decided a deny, when the verdict named one. */
   clauseId?: string | null;
@@ -37,6 +49,11 @@ export interface Decision {
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
   receipts?: unknown[];
+  /** Each action as actually evaluated (after root scoping and grouping), with its
+   *  receipt: what the observation emitters bind a request digest to. */
+  /** What the dispatch boundary spent or refused for this call, when one is configured. */
+  dispatch?: DispatchDecision;
+  dispatched?: Array<{ action: { action_type: string; params: Record<string, unknown> }; receipt?: unknown }>;
 }
 
 // The hook's own config and keys must be off-limits to the agent it governs:
@@ -53,13 +70,35 @@ export const under = (dir: string): string => `(?!(?:.*/)?${ci(dir)}(?:/|$))`;  
 export const named = (file: string): string => `(?!(?:.*/)?${ci(file)}$)`;         // exactly this file name
 export const dir = (d: string): string => `(?!(?:.*/)?${ci(d)}/?$)`;               // the directory itself (a recursive read or copy)
 
-const PROTECTED_WRITE = "^" + [
+// The protected-write set, in two typed groups the catalog classifies separately:
+// guardrail/hook configuration (C02) and CI configuration (H03).
+const GUARDRAIL_WRITE_PREV = [
   under("\\.scopebond"), `(?!(?:.*/)?${ci("\\.claude/settings")})`, under("\\.claude/hooks"), under("\\.claude/agents"),
   `(?!(?:.*/)?${ci("\\.cursor/hooks")})`, named("\\.codex/hooks\\.json"), named("\\.codex/config\\.toml"), named("\\.mcp\\.json"),
   under("\\.git/hooks"), named("\\.git/config"), under("\\.husky"),
+];
+const CI_WRITE_PREV = [
   under("\\.github/workflows"), under("\\.github/actions"), named("\\.gitlab-ci\\.yml"), named("\\.gitlab-ci\\.yaml"), under("\\.circleci"),
   named("azure-pipelines\\.yml"), named("Jenkinsfile"),
-].join("") + ".+";
+];
+const GUARDRAIL_WRITE = [...GUARDRAIL_WRITE_PREV, named("\\.cursor/mcp\\.json"), under("\\.githooks")];
+const CI_WRITE = [
+  ...CI_WRITE_PREV,
+  named("azure-pipelines\\.yaml"), named("bitbucket-pipelines\\.yml"), named("\\.travis\\.yml"), named("\\.drone\\.yml"),
+  named("cloudbuild\\.yaml"), named("cloudbuild\\.yml"), under("\\.buildkite"),
+];
+// What 0.8 compiled, kept so an installed policy that still carries it verbatim is
+// upgraded in memory (see LEGACY_STARTER_PATTERNS).
+const PROTECTED_WRITE_PREV = "^" + [...GUARDRAIL_WRITE_PREV, ...CI_WRITE_PREV].join("") + ".+";
+const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
+/** The write protection that is always on, whoever manages the rules: the hook's own settings and those of the agents it
+ *  guards. A workspace can relax CI-configuration writes; it can never relax these. */
+export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + ".+";
+/** The always-on floor as bare lookaheads, for a pattern that must also refuse these paths (the hook's own folder included). */
+export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("");
+/** The read protection that is always on, whoever manages the rules: the hook's own folder, which holds this computer's
+ *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
+export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + ".+";
 
 const PROTECTED_READ = "^" + [
   under("\\.scopebond"),
@@ -95,6 +134,7 @@ const SAFE_REF = `^(?!(?:${ci("main")}|${ci("master")})$)(?!${ci("release")}/)(?
 // policy on disk still carries them verbatim. An operator's own edits never match
 // these strings and are left untouched.
 const LEGACY_STARTER_PATTERNS: Record<string, string> = {
+  [PROTECTED_WRITE_PREV]: PROTECTED_WRITE,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+": SAFE_SHELL,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+": SAFE_SHELL,
@@ -139,7 +179,7 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
       {
         id: "protect-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
         param_bounds: { path: { pattern: PROTECTED_WRITE } },
-        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor or Codex hook settings, .mcp.json, git hooks and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines.yml, Jenkinsfile). Case-insensitive.",
+        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor or Codex hook settings, .mcp.json and .cursor/mcp.json, git hooks (.git/hooks, .githooks) and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines, bitbucket-pipelines.yml, .travis.yml, .drone.yml, cloudbuild, .buildkite, Jenkinsfile). Case-insensitive.",
       },
       {
         id: "protect-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
@@ -159,7 +199,7 @@ export function starterPolicy(agentKid: string): Record<string, unknown> {
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
  *  key, unavailable store) — the CLI turns that into a fail-closed deny. */
 export function createHookRuntime(config: RuntimeConfig) {
-  const policy = upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8")));
+  const policy = upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8").replace(/^\uFEFF/, "")));
   const agent = createSigner({ privateKeyPem: readFileSync(config.keyPath, "utf8") });
   const keys = new StaticPrincipalKeyRegistry([
     { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },
@@ -182,7 +222,14 @@ export function createHookRuntime(config: RuntimeConfig) {
     exporter = attached.exporter;
     outbox = attached.outbox;
   }
-  const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only" });
+  const scopeRoots = loadRules(dirname(config.policyPath))?.allowed_roots ?? [];
+  // The dispatch boundary is checked once per tool call, after every intent has been allowed, so the
+  // gateway's own per-intent hook only reports what the runtime already decided for this call.
+  const boundary = openDispatchGuard(dirname(config.policyPath));
+  let boundaryVerdict: DispatchDecision | null = null;
+  const gatewayGuard: DispatchGuard = { authorize: async () => boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] } };
+  const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only", dispatchGuard: gatewayGuard });
+  const override = config.override?.(agent.kid) ?? null;
 
   return {
     gateway,
@@ -191,7 +238,15 @@ export function createHookRuntime(config: RuntimeConfig) {
     /** Deliver queued receipts to Cloud with a bounded timeout, then it is safe to
      *  exit. Undelivered receipts persist in the durable outbox for the next run. */
     async flush(): Promise<void> {
-      if (exporter) await flushBounded(exporter, config.cloud?.flushTimeoutMs);
+      if (!exporter) return;
+      const before = exporter.status().lastSuccessAt;
+      const timeoutMs = config.cloud?.flushTimeoutMs ?? 3000;
+      await flushBounded(exporter, timeoutMs);
+      // The process exits after this call; keep what the attempt saw for `status` and `doctor`.
+      // An attempt the time limit cut off has an outcome too: the exit abandons the request,
+      // and a workspace slower than the limit used to leave only "last tried" moving, with no
+      // error. A limit of 0 defers delivery on purpose (to a session-end `flush`).
+      try { recordDeliveryAttempt(dirname(config.dbPath), exporter.status(), Date.now(), before, timeoutMs > 0 ? timeoutMs : null); } catch { /* diagnostic only */ }
     },
     /** Release the SQLite handles. The hook is a per-tool-call process, and a writer that
      *  exits without closing leaves its write-ahead log on disk for the next process to
@@ -201,6 +256,7 @@ export function createHookRuntime(config: RuntimeConfig) {
     close(): void {
       try { baseStore.close?.(); } catch { /* the decision is already recorded */ }
       try { outbox?.close(); } catch { /* best effort */ }
+      try { boundary?.close(); } catch { /* best effort */ }
     },
     /** Decide one mapped action, recording a receipt either way. */
     async evaluateOne(mapped: Mapped): Promise<Decision> {
@@ -213,7 +269,11 @@ export function createHookRuntime(config: RuntimeConfig) {
       }
       // Evaluated actions, and (in strict mode) unmapped tool.<name>/opaque commands,
       // go through policy — a closed allowlist denies an unlisted action.
-      const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
+      const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, override ? { override: override.handler } : undefined);
+      const granted = (result.receipt as { payload?: { override?: { state?: string } } } | undefined)?.payload?.override;
+      if (result.allowed && granted?.state === "offered") {
+        return { decision: "ask", reason: "Scopebond: a workspace rule blocks this, and your workspace lets you allow it once. Allow only if you meant it; your answer is recorded.", receipt: result.receipt };
+      }
       if (result.allowed) return { decision: "allow", reason: result.reason, receipt: result.receipt };
       // A deny is the one message the user and their agent actually read, so it is
       // composed from the deciding clause's own words rather than the engine's
@@ -229,29 +289,63 @@ export function createHookRuntime(config: RuntimeConfig) {
           // from `rules.json`, so telling someone to hand-edit it invites a change the
           // next `rules` run would overwrite.
           remedy: rulesRemedy,
-        }),
+        }) + (override?.hint() ? ` ${override.hint()}` : ""),
         clauseId,
         receipt: result.receipt,
       };
     },
     /** Decide a whole tool call. A shell call decomposes into several simple
      *  commands; every one is recorded, and a single deny denies the call. */
-    async evaluate(mapped: Mapped | Mapped[]): Promise<Decision> {
-      const list = Array.isArray(mapped) ? mapped : [mapped];
-      if (list.length === 0) return { decision: "not_evaluated", reason: "no action", receipts: [] };
+    async evaluate(mapped: Mapped | Mapped[], options: { groupKey?: string } = {}): Promise<Decision> {
+      const raw = Array.isArray(mapped) ? mapped : [mapped];
+      if (raw.length === 0) return { decision: "not_evaluated", reason: "no action", receipts: [] };
+      // Every intent of one tool call carries one parent group id, so the receipts of a
+      // decomposed call (a command, its file reads and writes, a rename destination)
+      // link to each other and count once as an action. It is part of the signed
+      // intent, so it is authenticated by the same signature as the rest.
+      const scoped = scopeRoots.length ? applyRootScope(raw, { cwd: config.cwd ?? process.cwd(), roots: scopeRoots }) : raw;
+      const list = withActionGroup(scoped, actionGroupId(options.groupKey));
       const receipts: unknown[] = [];
+      const dispatched: NonNullable<Decision["dispatched"]> = [];
       let allow: Decision | null = null;
+      let ask: Decision | null = null;
       let notEvaluated: Decision | null = null;
       for (const m of list) {
         const d = await this.evaluateOne(m);
         if (d.receipt !== undefined) receipts.push(d.receipt);
-        if (d.decision === "deny") return { ...d, receipts };            // any deny denies the call
+        dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params as Record<string, unknown> }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
+        if (d.decision === "deny") return { ...d, receipts, dispatched };            // any deny denies the call
         if (d.decision === "allow" && !allow) allow = d;
+        if (d.decision === "ask" && !ask) ask = d;
         if (d.decision === "not_evaluated" && !notEvaluated) notEvaluated = d;
       }
       // No deny: allow if any command was evaluated-and-allowed, else not_evaluated.
-      const chosen = allow ?? notEvaluated!;
-      return { ...chosen, receipts };
+      // A command the person must be asked about makes the whole call an ask (warn mode); otherwise as before.
+      const chosen = ask ?? allow ?? notEvaluated!;
+      if (boundary) {
+        // Immediately before permitted dispatch: approvals are consumed and the budget slot is reserved
+        // atomically, once for the whole parent action, or nothing is spent and the call is denied.
+        const group = String(list[0]!.intent.params[ACTION_GROUP_PARAM]);
+        const delegation = process.env[DELEGATION_ENV] ?? "";
+        const verdict = await boundary.authorize({
+          actor: agent.kid, action_group: group, policy_digest: gateway.policyHash,
+          intents: list.map((m) => dispatchIntentOf(m.intent as never)),
+          ...(delegation !== "" ? { delegation_id: delegation } : {}),
+        });
+        if (!verdict.allow) {
+          // Record the refusal as its own denied receipt, then deny the call.
+          boundaryVerdict = verdict;
+          try {
+            const last = list[list.length - 1]!;
+            const signed = agent.sign(last.intent);
+            const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
+            if (result.receipt !== undefined) receipts.push(result.receipt);
+          } finally { boundaryVerdict = null; }
+          return { decision: "deny", reason: `Scopebond blocked this before it ran: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`, receipts, dispatched, dispatch: verdict };
+        }
+        return { ...chosen, receipts, dispatched, dispatch: verdict };
+      }
+      return { ...chosen, receipts, dispatched };
     },
   };
 }
