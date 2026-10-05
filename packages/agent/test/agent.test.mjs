@@ -332,3 +332,35 @@ test("against a workspace without the self-check, only this computer's own check
     assert.deepEqual(result.failed, result.checks.filter((c) => !c.ok).map((c) => c.id));
   } finally { process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE; }
 });
+
+test("stop ends the running agent, so turning autostart off and uninstalling leaves nothing running", async () => {
+  const { spawn, execFile } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+  const home = mkdtempSync(join(tmpdir(), "sb-agent-stop-"));
+  const dir = join(home, ".scopebond");
+  mkdirSync(dir, { recursive: true });
+  const env = { ...process.env, HOME: home, USERPROFILE: home, SCOPEBOND_HOME: dir, SCOPEBOND_AGENT_TRAY: "off" };
+  const agent = spawn(process.execPath, [cli, "run"], { env, stdio: "ignore" });
+  const exited = new Promise((resolve) => agent.on("exit", (code) => resolve(code)));
+  try {
+    let up = false;
+    for (let i = 0; i < 60 && !up; i++) { await new Promise((r) => setTimeout(r, 250)); up = !!(await callAgent(dir, "GET", "/status", undefined, 1_000)); }
+    assert.ok(up, "the agent started");
+    const out = await new Promise((resolve) => execFile(process.execPath, [cli, "stop"], { env, encoding: "utf8", timeout: 30_000 }, (error, stdout, stderr) => resolve({ code: error?.code ?? 0, text: stdout + stderr })));
+    assert.equal(out.code, 0, out.text);
+    assert.match(out.text, /Stopped the Scopebond Agent/);
+    const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running"), 10_000))]);
+    assert.equal(code, 0, "the agent process exited");
+    assert.equal(await callAgent(dir, "GET", "/status", undefined, 1_000), null, "nothing answers on its channel");
+  } finally {
+    if (agent.exitCode === null) agent.kill();
+  }
+});
+
+test("an autostart problem names the fix as the person types it", async () => {
+  const { autostartHealth } = await import("../dist/autostart.js");
+  const dir = mkdtempSync(join(tmpdir(), "sb-agent-health-"));
+  assert.match(autostartHealth(dir, "win32").detail, /run: scopebond-agent.cmd autostart on/);
+  if (process.platform !== "win32") assert.match(autostartHealth(dir, "linux").detail, /run: scopebond-agent autostart on/);
+});

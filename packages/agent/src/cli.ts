@@ -6,7 +6,8 @@
 //   scopebond-agent flush               deliver now
 //   scopebond-agent repair              put the Scopebond hook back where agent settings lost it
 //   scopebond-agent check               update check, hook upkeep and the end-to-end self-check, now
-//   scopebond-agent autostart on|off    start with this user's sign-in, or stop doing so
+//   scopebond-agent autostart on|off    start with this user's sign-in, or stop doing so (off also stops it now)
+//   scopebond-agent stop                stop the running agent (autostart still starts it at the next sign-in)
 
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -23,14 +24,16 @@ const dir = process.env.SCOPEBOND_HOME ?? userHome();
 const cliPath = realpathSync(fileURLToPath(import.meta.url));
 
 function help(): void {
+  const c = (sub: string) => `${me} ${sub}`.padEnd(me.length + 36);
   console.log(`Scopebond Agent — keeps this computer delivering to its Scopebond workspace.
 
-  scopebond-agent run                 run in the foreground (what autostart starts)
-  scopebond-agent status [--json]     what the agent reports about this computer
-  scopebond-agent flush               deliver waiting records now
-  scopebond-agent repair              put the Scopebond hook back where agent settings lost it
-  scopebond-agent check               check for updates and run the end-to-end self-check now
-  scopebond-agent autostart on|off    start with your sign-in, or stop doing so
+  ${c("run")}run in the foreground (what autostart starts)
+  ${c("status [--json]")}what the agent reports about this computer
+  ${c("flush")}deliver waiting records now
+  ${c("repair")}put the Scopebond hook back where agent settings lost it
+  ${c("check")}check for updates and run the end-to-end self-check now
+  ${c("autostart on|off")}start with your sign-in, or stop doing so (off also stops it now)
+  ${c("stop")}stop the running agent until the next sign-in
 
 The hook keeps deciding every action on its own; the agent only keeps delivery, rules and the
 connection current. Home: ${dir}`);
@@ -42,7 +45,7 @@ async function main(): Promise<void> {
       // Started by an agent that just updated itself: let it exit first.
       const previous = Number(process.env[AFTER_PID_ENV]);
       if (Number.isInteger(previous) && previous > 0) await waitForExit(previous, 30_000);
-      const service = await startService({ dir });
+      const service = await startService({ dir, onStopped: () => process.exit(0) });
       const stop = () => { void service.stop().finally(() => process.exit(0)); };
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
@@ -73,17 +76,25 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(answer, null, 2));
       return;
     }
+    case "stop": {
+      console.log(await stopRunning() ? "Stopped the Scopebond Agent." : "The Scopebond Agent was not running.");
+      return;
+    }
     case "autostart": {
       const on = rest[0] === "on";
-      if (rest[0] !== "on" && rest[0] !== "off") { console.error("usage: scopebond-agent autostart on|off"); process.exitCode = 1; return; }
+      if (rest[0] !== "on" && rest[0] !== "off") { console.error(`usage: ${me} autostart on|off`); process.exitCode = 1; return; }
       if (on && isEphemeralPath(cliPath)) {
         // npx runs from a cache npm clears; an autostart entry pointing there would stop working.
-        console.error("Install the agent first so autostart has a stable path: npm install -g @scopebond/agent");
+        console.error(`Install the agent first so autostart has a stable path: ${process.platform === "win32" ? "npm.cmd" : "npm"} install -g @scopebond/agent`);
         process.exitCode = 1;
         return;
       }
       console.log(on ? enableAutostart(dir, cliPath) : disableAutostart(dir));
-      if (!on) return;
+      if (!on) {
+        // Off means off: an agent left running would keep going until sign-out, even after an uninstall.
+        if (await stopRunning()) console.log("Stopped the running Scopebond Agent.");
+        return;
+      }
       // Turning autostart on also starts the agent now, so nobody has to sign out and in again.
       if (await callAgent(dir, "GET", "/status", undefined, 2_000)) { console.log("The Scopebond Agent is running."); return; }
       startNow(dir);
@@ -101,6 +112,16 @@ async function main(): Promise<void> {
       help();
       if (cmd !== "help" && cmd !== "--help") process.exitCode = 1;
   }
+}
+
+/** Ask the running agent to stop and wait until its control channel is gone. Whether one was running. */
+async function stopRunning(): Promise<boolean> {
+  if (!await callAgent(dir, "POST", "/stop", {}, 3_000)) return false;
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    if (!await callAgent(dir, "GET", "/status", undefined, 1_000)) return true;
+  }
+  return true;
 }
 
 interface AgentReport { version?: string; last_maintenance?: { selfCheck?: { ok: boolean; failed: string[] } | null } | null }

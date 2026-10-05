@@ -37,6 +37,7 @@ import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { scaffold, harnessSnippet, placeHook, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
+import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines } from "./windows-hints.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
@@ -1317,6 +1318,13 @@ async function runDoctor(): Promise<void> {
   console.log(`Scopebond doctor`);
   console.log(`  node             ${process.versions.node} ${nodeOk ? "ok" : "TOO OLD (need >=22.13)"}`);
   if (!nodeOk) problems.push("node >=22.13 is required (the Cloud outbox uses node:sqlite)");
+  if (process.platform === "win32") {
+    // The commands this computer's person types: PowerShell's script policy decides whether plain npx runs.
+    let policy = "";
+    try { policy = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true }).trim(); } catch { /* no PowerShell: nothing to say */ }
+    const advice = policy ? executionPolicyAdvice(policy) : null;
+    if (advice) console.log(`  powershell       ${advice}`);
+  }
   const cli = cliPath();
   console.log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}`);
   const active = resolveConfigDir(process.cwd());
@@ -1436,6 +1444,11 @@ function runTrust(args: string[]): void {
  *  person who can manage the workspace approves it there for an environment and agent.
  *  The approval hands back a single-use enrollment, which completes exactly as
  *  `connect` does. Nothing secret is printed: the device code stays in memory. */
+/** The flags a login was run with, to repeat it exactly. */
+function loginFlags(args: string[]): string[] {
+  return args.filter((a) => ["--claude", "--cursor", "--codex", "--no-install", "--project"].includes(a));
+}
+
 async function runLogin(args: string[]): Promise<void> {
   const positional = args.filter((a) => !a.startsWith("--"));
   const harness = selectedHarness(args);
@@ -1492,12 +1505,12 @@ async function runLogin(args: string[]): Promise<void> {
     const error = polled.json.error;
     if (error === "authorization_pending") continue;
     if (error === "slow_down") { intervalMs += 5_000; continue; }
-    if (error === "access_denied") { console.error("The request was denied in the workspace. Nothing was connected."); process.exit(1); }
+    if (error === "access_denied") { console.error(`The request was denied in the workspace. Nothing was connected. To ask again: ${loginAgainCommand(origin, loginFlags(args))}`); process.exit(1); }
     if (error === "expired_token") break;
-    console.error(`login failed (${String(error ?? `HTTP ${polled.status}`)}). Run the command again for a new code.`);
+    console.error(`login failed (${String(error ?? `HTTP ${polled.status}`)}). For a new code, run: ${loginAgainCommand(origin, loginFlags(args))}`);
     process.exit(1);
   }
-  console.error("The code expired before it was approved. Run the command again for a new one.");
+  console.error(`The code expired before it was approved. For a new one, run: ${loginAgainCommand(origin, loginFlags(args))}`);
   process.exit(1);
 }
 
@@ -1666,8 +1679,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 // first action with an error about a missing module. Stop before changing anything, and
 // say what to do. The hook subcommands are left alone: they already fail closed.
 if (["init", "install", "connect", "login"].includes(cmd ?? "") && !nodeSupported()) {
-  console.error(`Scopebond needs Node.js 22.13 or later; this is Node ${process.versions.node}.`);
-  console.error("Install the current Node.js LTS from https://nodejs.org, open a new terminal, and run the command again.");
+  for (const line of nodeTooOldLines(process.versions.node)) console.error(line);
   process.exit(1);
 }
 if (cmd === "claude") { await runClaude(); }
