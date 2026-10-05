@@ -191,7 +191,7 @@ try {
       $shim = Join-Path $prefix 'scopebond-agent.cmd'
       if (-not (Test-Path $shim)) {
         $where = Get-ChildItem -Path $prefix, (Join-Path $prefix 'bin') -Filter 'scopebond-agent*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-        $npmEnv = Get-ChildItem Env: | Where-Object { $_.Name -like 'npm_*' } | ForEach-Object { "$($_.Name)=$($_.Value)" }
+        $npmEnv = Get-ChildItem Env: | Where-Object { $_.Name -like 'npm_config_*' -and $_.Name -notmatch 'auth|token|pass|cert|key' } | ForEach-Object { "$($_.Name)=$($_.Value)" }
         $listing = (Get-ChildItem -Path $prefix -ErrorAction SilentlyContinue | Select-Object -First 30 | ForEach-Object { $_.Name }) -join ' '
         $root = ((& npm.cmd root -g) 2>$null | Select-Object -First 1)
         $where = @($where) + "prefix lists: $listing" + "npm root -g: $root"
