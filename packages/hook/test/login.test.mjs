@@ -2,12 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, isTrustedProject, resolveConfigDir } from "../dist/index.js";
+import { scaffold, isTrustedProject, resolveConfigDir, trustProjectPolicy, writeHarnessConfig } from "../dist/index.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
@@ -99,7 +99,7 @@ test("login: a code, then approval, then the enrollment completes as connect wou
   } finally { workspace.close(); }
 });
 
-test("login: with a user-level install, the connected project governs, so its receipts reach the workspace", async () => {
+test("login --project: with a user-level install, the connected project governs, so its receipts reach the workspace", async () => {
   // A user-level install makes the hook ignore an untrusted project policy. Before this
   // was fixed, `login` and `connect` scaffolded the project without trusting it: the hook
   // then resolved to the user home, which holds no cloud.json, and nothing was reported.
@@ -117,9 +117,10 @@ test("login: with a user-level install, the connected project governs, so its re
   delete env.SCOPEBOND_HOOK_DIR;
   const previousHome = process.env.SCOPEBOND_HOME;
   try {
-    const r = await runCli(["login", workspace.url, "--no-install"], env, project);
+    const r = await runCli(["login", workspace.url, "--no-install", "--project"], env, project);
     assert.equal(r.status, 0, r.stderr);
     assert.ok(existsSync(join(dir, "cloud.json")), "the connection is saved in the project");
+    assert.ok(!existsSync(join(home, "cloud.json")), "and not in the user home");
     process.env.SCOPEBOND_HOME = home;
     assert.equal(isTrustedProject(dir), true, "the project policy is trusted");
     assert.equal(resolveConfigDir(project), dir, "the hook resolves to the connected project");
@@ -152,6 +153,77 @@ test("login: from a folder with no project setup, it repairs the user-level conn
   }
 });
 
+/** A computer whose user home has keys but no Scopebond install yet (no policy), and a folder
+ *  with a leftover project setup and project agent settings: what a person following the
+ *  get-started page from such a folder has. HOME and USERPROFILE point at a temp dir so the
+ *  user-level agent settings land there. */
+function leftoverProjectComputer() {
+  const profile = mkdtempSync(join(tmpdir(), "sb-hook-login-profile-"));
+  const home = join(profile, ".scopebond");
+  mkdirSync(home, { recursive: true });
+  const kids = {
+    attester: loadOrCreateAttester({ file: join(home, "attester.key") }).attester.kid,
+    agent: loadOrCreateAttester({ file: join(home, "agent.key") }).attester.kid,
+  };
+  const folder = mkdtempSync(join(tmpdir(), "sb-hook-login-leftover-"));
+  const project = join(folder, ".scopebond");
+  scaffold(project);
+  const projectSettings = join(folder, ".claude", "settings.json");
+  writeHarnessConfig(projectSettings, "claude", "npx -y @scopebond/hook@0.16.0 claude");
+  const env = { ...process.env, SCOPEBOND_HOME: home, HOME: profile, USERPROFILE: profile };
+  delete env.SCOPEBOND_HOOK_DIR;
+  return { profile, home, kids, folder, project, projectSettings, env, userSettings: join(profile, ".claude", "settings.json") };
+}
+
+test("login: from a folder with a leftover project setup, it signs in the user, not the project", async () => {
+  const pc = leftoverProjectComputer();
+  const workspace = await startFakeWorkspace({ pendingPolls: 0, kids: pc.kids });
+  try {
+    const r = await runCli(["login", workspace.url], pc.env, pc.folder);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(join(pc.home, "cloud.json")), "the user home is connected");
+    assert.ok(existsSync(join(pc.home, "policy.json")), "and installed");
+    assert.ok(!existsSync(join(pc.project, "cloud.json")), "the leftover project setup is not connected");
+    assert.match(readFileSync(pc.userSettings, "utf8"), /scopebond/, "the hook goes into the user-level agent settings");
+    assert.ok(r.stdout.includes(`Claude Code configured in ${pc.userSettings}`), "the project's hook entry does not count as the user's");
+    // The project is not trusted, so the user's setup governs there; the sign-in says so and how to tidy up.
+    assert.match(r.stdout, /earlier project setup/);
+    assert.match(r.stdout, /ignores it/);
+    assert.ok(r.stdout.includes(pc.projectSettings), "names the project settings file holding a hook entry");
+    process.env.SCOPEBOND_HOME = pc.home;
+    assert.equal(resolveConfigDir(pc.folder), pc.home, "sessions in that folder use the user-level connection");
+  } finally {
+    delete process.env.SCOPEBOND_HOME;
+    workspace.close();
+  }
+});
+
+test("login: a trusted project setup that takes precedence is named, with how to remove it, and status and doctor show it", async () => {
+  const pc = leftoverProjectComputer();
+  // Trust is recorded in the user home: pin the project there first, as `init` would have.
+  process.env.SCOPEBOND_HOME = pc.home;
+  try { trustProjectPolicy(pc.project); } finally { delete process.env.SCOPEBOND_HOME; }
+  const workspace = await startFakeWorkspace({ pendingPolls: 0, kids: pc.kids });
+  try {
+    const r = await runCli(["login", workspace.url], pc.env, pc.folder);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(join(pc.home, "cloud.json")), "the user home is connected");
+    assert.match(r.stdout, /takes precedence over this sign-in/);
+    assert.match(r.stdout, /stay on this computer: it is not connected/);
+    assert.ok(r.stdout.includes(`delete the folder ${pc.project}`), "says how to remove it");
+    const status = await runCli(["status"], pc.env, pc.folder);
+    assert.match(status.stdout, /user sign-in .* takes precedence here and is not connected/);
+    const json = JSON.parse((await runCli(["status", "--json"], pc.env, pc.folder)).stdout);
+    assert.equal(json.config.user_connection_shadowed, true);
+    assert.equal(json.config.active, pc.project);
+    const doctor = await runCli(["doctor"], pc.env, pc.folder);
+    assert.notEqual(doctor.status, 0);
+    assert.match(doctor.stdout, /NOT CONNECTED/);
+    assert.match(doctor.stdout, /takes precedence over your user-level sign-in/);
+    assert.doesNotMatch(doctor.stdout, /All good/);
+  } finally { workspace.close(); }
+});
+
 test("login: on a computer with nothing set up yet, it connects the user's home, not the folder it was run from", async () => {
   // A first login usually runs from whatever folder the terminal opened in (an editor's
   // terminal opens in the project). It used to scaffold and connect that folder, so the
@@ -176,6 +248,7 @@ test("login: on a computer with nothing set up yet, it connects the user's home,
     workspace.close();
   }
 });
+
 
 test("login: a denied request connects nothing and says so", async () => {
   const workspace = await startFakeWorkspace({ pendingPolls: 0, outcome: "deny" });
