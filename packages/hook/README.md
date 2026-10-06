@@ -299,6 +299,13 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   refused, the rules already in force stay, and the refusal is reported to the workspace.
 - **What is confirmed.** After loading, the hook tells the workspace exactly which version it
   loaded, so the workspace shows *Applied* only for computers that confirmed it.
+- **What is reported back.** Every rules check also says what this computer runs for each rule
+  (blocks or records) and whether the workspace or the person at the computer set it, so the
+  workspace shows what is true on the computer, not only what it asked for.
+- **Changing a rule on the computer.** On a computer the workspace manages, `rules enforce <rule>`
+  and `rules monitor <rule>` apply only where the workspace allows changes on computers;
+  otherwise the command says the workspace sets it and changes nothing. Either way the workspace
+  sees the result at once.
 - **What the workspace cannot change.** Protection of Scopebond's own settings and of the
   agents' hook settings, the machine key policy, fail-closed handling of anything unreadable,
   and this computer's own opt-ins (`allowed_roots`, `protect_remote_database`).

@@ -14,7 +14,7 @@
 //   200  a rules document: checked, installed if newer, confirmed
 //   401  the connection is no longer valid (revoked, expired, removed): go back to this computer's own rules
 
-import { closeSync, existsSync, openSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { connectionPath, loadConnection } from "./cloud.js";
 import { readDeliveryState, recordRulesCredential } from "./delivery-state.js";
@@ -35,11 +35,21 @@ function deliveryHeaders(dir: string): Record<string, string> {
       // removed, the workspace knows how many of its numbers never arrived.
       ...(queueId ? { "x-scopebond-queue-id": queueId, "x-scopebond-seq-assigned": String(seqAssigned ?? 0) } : {}),
       ...(state.last_error ? { "x-scopebond-last-error": state.last_error.replace(/[^\x20-\x7e]/g, " ").slice(0, 200) } : {}),
+      // D140: the rule settings this computer runs and who set each, so the workspace shows what is true here.
+      ...rulesHeader(dir),
     };
   } catch { return {}; }
 }
+/** Whether the workspace document in force lets people change rules on this computer. */
+function installedLocalChanges(dir: string): boolean {
+  try { return (JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as { local_changes?: unknown }).local_changes === true; } catch { return false; }
+}
+function rulesHeader(dir: string): Record<string, string> {
+  const report = ruleReport(dir);
+  return report ? { "x-scopebond-rules": JSON.stringify(report) } : {};
+}
 import {
-  inspectManaged, installManaged, isManaged, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
+  ruleReport, inspectManaged, installManaged, isManaged, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -142,14 +152,19 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   try { raw = await res.json(); } catch { raw = null; }
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const etag = res.headers.get("etag");
+  // D140: whether people may change rules on this computer is outside the rules digest, so the same version can arrive
+  // with only that switch changed; it is a change to install, not "unchanged".
+  const sameVersion = isManaged(dir) && r.revision === meta.revision && r.rules_digest === meta.rules_digest && meta.revision !== null;
+  const switchChanged = sameVersion && (r.local_changes === true) !== installedLocalChanges(dir);
   // The same version already in force: confirm it again if the last confirmation did not land.
-  if (isManaged(dir) && r.revision === meta.revision && r.rules_digest === meta.rules_digest && meta.revision !== null) {
+  if (sameVersion && !switchChanged) {
     const confirmed = meta.last_ack?.revision === meta.revision ? meta.last_ack
-      : await ack({ export_id: meta.export_id!, revision: meta.revision, rules_digest: meta.rules_digest!, result: "loaded" });
+      : await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "loaded" });
     save({ etag, last_ack: confirmed, last_error: null });
-    return { state: "unchanged", revision: meta.revision };
+    return { state: "unchanged", revision: meta.revision! };
   }
-  const inspected = inspectManaged(raw, { installationId, currentRevision: isManaged(dir) ? meta.revision : null, currentDigest: isManaged(dir) ? meta.rules_digest : null });
+  const inspected = inspectManaged(raw, switchChanged ? { installationId, currentRevision: null }
+    : { installationId, currentRevision: isManaged(dir) ? meta.revision : null, currentDigest: isManaged(dir) ? meta.rules_digest : null });
   const echo = typeof r.export_id === "string" && Number.isInteger(r.revision) && typeof r.rules_digest === "string" && /^[0-9a-f]{64}$/.test(r.rules_digest)
     ? { export_id: r.export_id, revision: r.revision as number, rules_digest: r.rules_digest } : null;
   if (!inspected.ok) {

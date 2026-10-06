@@ -43,6 +43,9 @@ export interface RuleSet {
    *  Ids: `protect-branches`, `safe-shell`, `protect-write`, `protect-read`. Absent or empty: nothing blocks except
    *  Scopebond's own protection (its settings, keys and hook entries, and an agent switching it off), which always does. */
   enforce?: string[];
+  /** On a computer its workspace manages: a person's own choice per rule (`rules enforce|monitor`), applied only while the
+   *  workspace allows changes on computers (D140), and reported to the workspace either way. */
+  local_overrides?: Partial<Record<string, "enforce" | "monitor">>;
   /** Optional workspace scope. When set, a write whose physical target (symlinks and
    *  junctions followed, rename and link destinations included) is outside these roots,
    *  or cannot be resolved, is denied. `.` means the project directory. Absent = not
