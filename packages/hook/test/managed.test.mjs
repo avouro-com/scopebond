@@ -356,3 +356,18 @@ test("D140: a person's choice on a managed computer applies only where the works
   assert.equal(mode(allowed, "protect-scopebond-write"), "enforce");
   assert.equal(mode(allowed, "protect-scopebond-read"), "enforce");
 });
+
+test("D140: the same version with only the local-changes switch flipped is installed, not treated as unchanged", async () => {
+  const { dir, agentKid } = connected();
+  const opts = (fetchImpl) => ({ agentKid, hookVersion: "0.19.0", policyBuilds, fetchImpl });
+  const d1 = doc(1, { "push-protected": { mode: "monitor" } });
+  let w = fakeWorkspace([{ status: 200, body: d1, etag: `"1:${d1.rules_digest}"` }]);
+  assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "applied", revision: 1 });
+  const allowed = { ...d1, local_changes: true };
+  w = fakeWorkspace([{ status: 200, body: allowed, etag: `"1:${d1.rules_digest}:local"` }]);
+  assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "applied", revision: 1 });
+  assert.equal(JSON.parse(readFileSync(join(dir, "managed-rules.json"), "utf8")).local_changes, true);
+  // And the same again is unchanged.
+  w = fakeWorkspace([{ status: 200, body: allowed, etag: `"1:${d1.rules_digest}:local"` }]);
+  assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "unchanged", revision: 1 });
+});
