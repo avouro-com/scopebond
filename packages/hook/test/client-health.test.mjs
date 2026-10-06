@@ -29,6 +29,8 @@ test("compares versions by number", () => {
 test("tells a running agent from a stopped or missing one", () => {
   const home = mkdtempSync(join(tmpdir(), "sb-health-"));
   assert.deepEqual(agentPresence(home), { state: "not_installed" });
+  writeFileSync(join(home, "agent.key"), ""); // the hook's own signing key, written on init
+  assert.deepEqual(agentPresence(home), { state: "not_installed" });
   writeFileSync(join(home, "agent-launch.cmd"), "");
   assert.deepEqual(agentPresence(home), { state: "stopped" });
   writeFileSync(join(home, "agent.json"), JSON.stringify({ port: 1, token: "secret", pid: 4242, started_at: 1, version: "0.4.4" }));

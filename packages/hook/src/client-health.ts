@@ -31,7 +31,8 @@ export function olderVersion(have: string | null | undefined, want: string | nul
 export type AgentPresence = { state: "running"; version: string | null } | { state: "stopped" } | { state: "not_installed" };
 
 /** Whether the Scopebond Agent runs for this user. It writes its process id to `agent.json` in the
- *  Scopebond home while it runs; its key and launcher stay when it is stopped. */
+ *  Scopebond home while it runs; its launcher stays when it is stopped. `agent.key` is no sign of it:
+ *  the hook writes that signing key itself on `init`. */
 export function agentPresence(home: string, alive: (pid: number) => boolean = processAlive): AgentPresence {
   try {
     const endpoint = JSON.parse(readFileSync(join(home, "agent.json"), "utf8")) as { pid?: unknown; version?: unknown };
@@ -39,7 +40,7 @@ export function agentPresence(home: string, alive: (pid: number) => boolean = pr
       return { state: "running", version: typeof endpoint.version === "string" ? endpoint.version : null };
     }
   } catch { /* not running */ }
-  const installed = ["agent.key", "agent-launch.cmd", "agent-launch.sh"].some((f) => existsSync(join(home, f)));
+  const installed = ["agent-launch.cmd", "agent-launch.sh"].some((f) => existsSync(join(home, f)));
   return installed ? { state: "stopped" } : { state: "not_installed" };
 }
 

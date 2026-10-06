@@ -51,9 +51,22 @@ function openSqlite(path: string): SqliteDb {
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
-  try { db.exec("PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"); }
+  try { db.exec("PRAGMA busy_timeout = 15000;"); whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")); }
   catch (error) { try { db.close(); } catch { /* already failing */ } throw error; }
   return db;
+}
+
+/** Run one step again while the database is locked, for up to 15 seconds. Switching a log to WAL takes a
+ *  lock that busy_timeout does not always wait for: on Windows, a dozen hook processes opening the same
+ *  log at once failed closed with "database is locked" before this. */
+export function whileBusy<T>(step: () => T, limitMs = 15_000): T {
+  const deadline = Date.now() + limitMs;
+  for (let wait = 5; ; wait = Math.min(wait * 2, 200)) {
+    try { return step(); } catch (error) {
+      if (!/database is locked|SQLITE_BUSY/i.test((error as Error).message ?? "") || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait + Math.floor(Math.random() * wait));
+    }
+  }
 }
 
 /** Whether this Node has the built-in `node:sqlite` module. */

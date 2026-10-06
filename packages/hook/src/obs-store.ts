@@ -20,6 +20,7 @@
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { whileBusy } from "@scopebond/gateway/node";
 import { MAX_BATCH_BODY_BYTES, MAX_BATCH_ITEMS, observationHash, type ObservationDraft, type ObservationPayload, type SignedObservation, type EnvelopeContext, buildPayload, signObservation, type ObservationSigner } from "./observation.js";
 
 interface SqliteStatement { run(...args: unknown[]): unknown; all(...args: unknown[]): unknown[]; get(...args: unknown[]): unknown }
@@ -105,7 +106,8 @@ function open(path: string): SqliteDb {
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+  db.exec("PRAGMA busy_timeout = 15000;");
+  whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));
   return db;
 }
 
