@@ -1,5 +1,12 @@
 # @scopebond/hook
 
+## 0.19.1
+
+### Patch Changes
+
+- Updated dependencies [40c1fb7]
+  - @scopebond/gateway@0.16.0
+
 ## 0.19.0
 
 ### Minor Changes

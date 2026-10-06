@@ -1,5 +1,12 @@
 # @scopebond/framework
 
+## 0.3.11
+
+### Patch Changes
+
+- Updated dependencies [40c1fb7]
+  - @scopebond/gateway@0.16.0
+
 ## 0.3.10
 
 ### Patch Changes

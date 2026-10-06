@@ -1,5 +1,12 @@
 # @scopebond/github-action
 
+## 0.5.7
+
+### Patch Changes
+
+- Updated dependencies [40c1fb7]
+  - @scopebond/gateway@0.16.0
+
 ## 0.5.6
 
 ### Patch Changes
