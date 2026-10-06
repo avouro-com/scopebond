@@ -77,6 +77,15 @@ export interface CloudExporterOptions {
   now?: () => number;
   onError?: (e: unknown) => void;
   onGap?: (gap: CloudDeliveryGap) => void;
+  /** Compress a batch with gzip once the workspace has said it reads gzip (`Accept-Encoding: gzip` on an
+   *  ingest answer), when the batch is at least this many bytes. Default 1024; 0 turns compression off. */
+  gzipMinBytes?: number;
+}
+
+/** A batch body as gzip bytes. */
+async function gzipBody(text: string): Promise<ArrayBuffer> {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Response(stream).arrayBuffer();
 }
 
 export interface MemoryCloudOutboxOptions {
@@ -265,6 +274,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   let nextAttemptAt: number | null = null;
   let lastSuccessAt: number | null = null;
   let lastError: string | null = null;
+  // Learned from the workspace's answers: only a workspace that says it reads gzip is sent gzip.
+  let workspaceReadsGzip = false;
+  const gzipMinBytes = Math.max(0, Math.trunc(opts.gzipMinBytes ?? 1024));
 
   const fail = (error: unknown, retryAfterMs = 0) => {
     consecutiveFailures += 1;
@@ -291,16 +303,19 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
         if (!batch.length) break;
         const numbered = batch.some((entry) => entry.seq !== undefined);
         if (numbered && queue === null) queue = opts.outbox.status().queueId;
+        // SB289: each record's number travels beside it (the signed receipt is unchanged); a workspace
+        // that does not read it ignores it.
+        // The queue's id says which numbering the numbers belong to.
+        const json = JSON.stringify(numbered
+          ? { receipts: batch.map((entry) => entry.receipt), seq: batch.map((entry) => entry.seq ?? null), ...(numbered && queue ? { queue } : {}) }
+          : { receipts: batch.map((entry) => entry.receipt) });
+        const compress = workspaceReadsGzip && gzipMinBytes > 0 && json.length >= gzipMinBytes && typeof CompressionStream === "function";
         const res = await doFetch(endpoint, {
           method: "POST",
-          headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json" },
-          // SB289: each record's number travels beside it (the signed receipt is unchanged); a workspace
-          // that does not read it ignores it.
-          // The queue's id says which numbering the numbers belong to.
-          body: JSON.stringify(numbered
-            ? { receipts: batch.map((entry) => entry.receipt), seq: batch.map((entry) => entry.seq ?? null), ...(numbered && queue ? { queue } : {}) }
-            : { receipts: batch.map((entry) => entry.receipt) }),
+          headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json", ...(compress ? { "content-encoding": "gzip" } : {}) },
+          body: compress ? await gzipBody(json) : json,
         });
+        if (/\bgzip\b/i.test(res.headers?.get?.("accept-encoding") ?? "")) workspaceReadsGzip = true;
         let refused: Array<{ id: string; reason: CloudDeliveryGap["reason"] }>;
         let kept = new Set<string>();
         if (res.ok) {

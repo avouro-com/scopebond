@@ -206,3 +206,32 @@ test("a record the workspace refuses on its own leaves the queue as a rejected g
   ex.stop();
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("batches are gzip-compressed only after the workspace says it reads gzip", async () => {
+  const seen = [];
+  const make = (readsGzip) => async (_url, opts) => {
+    const encoding = opts.headers["content-encoding"] ?? null;
+    const text = encoding === "gzip"
+      ? await new Response(new Blob([opts.body]).stream().pipeThrough(new DecompressionStream("gzip"))).text()
+      : opts.body;
+    seen.push({ encoding, count: JSON.parse(text).receipts.length });
+    return new Response(JSON.stringify({ ok: true, ingested: JSON.parse(text).receipts.length }), { status: 200, headers: readsGzip ? { "accept-encoding": "gzip" } : {} });
+  };
+  const big = (id) => ({ ...receipt(id), filler: "x".repeat(800) });
+  const send = async (fetch, gzipMinBytes) => {
+    const ex = createCloudExporter({ url: "https://cloud.example", credential: "sbm_x", outbox: createMemoryCloudOutbox(), batchSize: 2, flushMs: 1e9, fetch, ...(gzipMinBytes === undefined ? {} : { gzipMinBytes }) });
+    const settle = async () => { await new Promise((r) => setTimeout(r, 50)); await ex.flush(); };
+    ex.enqueue(big("action:gzip-test-0001")); ex.enqueue(big("action:gzip-test-0002")); await settle();
+    ex.enqueue(big("action:gzip-test-0003")); ex.enqueue(big("action:gzip-test-0004")); await settle();
+    ex.enqueue(receipt("action:gzip-test-0005")); await settle();
+    ex.stop();
+  };
+  // The first batch goes plain; once the answer says gzip, large batches are compressed and small ones are not.
+  await send(make(true));
+  assert.deepEqual(seen.splice(0), [{ encoding: null, count: 2 }, { encoding: "gzip", count: 2 }, { encoding: null, count: 1 }]);
+  // A workspace that never says so is never sent gzip; 0 turns it off.
+  await send(make(false));
+  assert.deepEqual(seen.splice(0).map((s) => s.encoding), [null, null, null]);
+  await send(make(true), 0);
+  assert.deepEqual(seen.splice(0).map((s) => s.encoding), [null, null, null]);
+});
