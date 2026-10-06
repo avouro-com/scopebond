@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/gateway",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Free, open-source policy gateway for AI agent actions routed through HTTP and MCP: configured controls, signed decision evidence, and a kill switch.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
