@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { GUARDRAIL_LOOKAHEADS, GUARDRAIL_READ_PATTERN, GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
-import { compile, defaultRules, loadRules, type RuleSet } from "./rules.js";
+import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES } from "./rules.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
 export const MANAGED_META_FILE = "managed-meta.json";
@@ -90,6 +90,8 @@ export interface ManagedDocument {
   installation_id: string;
   rules: Record<ManagedRuleId, ManagedRule>;
   rules_digest: string;
+  /** Whether a person may change a rule on this computer (`rules enforce|monitor`); absent means no. */
+  local_changes?: boolean;
 }
 
 export type RefusalReason = "invalid_document" | "stale_revision" | "wrong_computer" | "unsupported" | "write_failed";
@@ -183,6 +185,15 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
       ...(r["secret-read"].mode !== "monitor" ? ["protect-read"] : []),
     ],
   };
+  // D140: where the workspace allows changes on computers, a person's own choice for a rule wins on this computer.
+  if (doc.local_changes === true && local.local_overrides) {
+    const enforce = new Set(rules.enforce);
+    for (const [id, mode] of Object.entries(local.local_overrides)) {
+      if (!(ENFORCEABLE_RULES as readonly string[]).includes(id)) continue;
+      if (mode === "enforce") enforce.add(id); else if (mode === "monitor") enforce.delete(id);
+    }
+    rules.enforce = ENFORCEABLE_RULES.filter((id) => enforce.has(id));
+  }
   const policy = compile(rules, agentKid) as { clauses: Clause[] } & Record<string, unknown>;
   const clauses: Clause[] = [];
   const historyGuard = (): Clause => ({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
@@ -264,3 +275,24 @@ export function restoreLocal(dir: string, agentKid: string): void {
   writeAtomic(policyPath, `${JSON.stringify(compile(local, agentKid), null, 2)}\n`);
   rmSync(join(dir, MANAGED_DOC_FILE), { force: true });
 }
+
+export type RuleSource = "workspace" | "computer";
+/** D140: what this computer runs for each rule and who set it, as it reports to its workspace. Reads the files only. */
+export function ruleReport(dir: string): Record<string, [ "enforce" | "monitor", RuleSource ]> | null {
+  try {
+    const policy = JSON.parse(readFileSync(join(dir, "policy.json"), "utf8")) as { clauses?: Array<{ id?: unknown; mode?: unknown }> };
+    const managed = isManaged(dir);
+    const doc = managed ? JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument : null;
+    const overrides = (loadRules(dir)?.local_overrides ?? {}) as Record<string, string>;
+    const report: Record<string, [ "enforce" | "monitor", RuleSource ]> = {};
+    for (const id of ENFORCEABLE_RULES) {
+      const clause = policy.clauses?.find((c) => c.id === id);
+      if (!clause) continue;
+      const mode = clause.mode === "monitor" ? "monitor" : "enforce";
+      const source: RuleSource = !managed ? "computer" : doc?.local_changes === true && overrides[id] ? "computer" : "workspace";
+      report[id] = [mode, source];
+    }
+    return report;
+  } catch { return null; }
+}
+

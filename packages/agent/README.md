@@ -80,7 +80,9 @@ Exactly one agent serves a computer's Scopebond home; a second one exits.
 `autostart on` writes a small launcher script into the Scopebond home that finds Node and the agent each time it
 runs (the paths recorded at setup first, then the ones on the system), so a Node upgrade or a version manager never
 leaves autostart pointing at nothing. On Windows the Run entry starts it under `conhost --headless`, so no window
-opens at sign-in. `status` says whether autostart is on and working.
+opens at sign-in. If the agent stops with an error, the launcher starts it again after 30 seconds (up to 50 times,
+each noted in `agent.log`), as launchd and systemd do on macOS and Linux; a clean stop (`stop`, `autostart off`, an
+update handing over) ends it. `status` says whether autostart is on and working.
 
 ## Where you see it
 

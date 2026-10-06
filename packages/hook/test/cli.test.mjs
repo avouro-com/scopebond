@@ -417,3 +417,29 @@ test("monitor is the default; Scopebond's own protection blocks whatever the rul
   assert.equal(call("npx -y @scopebond/hook rules show").status, 0, "showing the rules is allowed");
 });
 
+
+test("D140: on a computer its workspace manages, rules enforce|monitor applies only where the workspace allows changes on computers", async () => {
+  const { digestRules } = await import("../dist/index.js");
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-local-"));
+  const dir = join(project, ".scopebond");
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
+  execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
+  const rules = { "force-push-protected": { mode: "monitor" }, "push-protected": { mode: "monitor" }, "destructive-shell": { mode: "block" },
+    "secret-read": { mode: "monitor" }, "ci-config-write": { mode: "monitor" }, "network-egress": { mode: "monitor" } };
+  const managed = (extra) => writeFileSync(join(dir, "managed-rules.json"), JSON.stringify({ type: "scopebond:managed-rules", version: 1, revision: 1,
+    export_id: "rev-1-gw-1", environment_id: "env-1", agent_id: "agent-1", installation_id: "gw-1", rules, rules_digest: digestRules(rules), ...extra }));
+  const rulesCli = (...args) => spawnSync(process.execPath, [cli, "rules", ...args, "--yes"], { encoding: "utf8", cwd: project, env });
+  managed({});
+  const refused = rulesCli("monitor", "safe-shell");
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /does not allow changing them here/);
+  managed({ local_changes: true });
+  const ok = rulesCli("monitor", "safe-shell");
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /safe-shell now records on this computer/);
+  const saved = JSON.parse(readFileSync(join(dir, "rules.json"), "utf8"));
+  assert.deepEqual(saved.local_overrides, { "safe-shell": "monitor" });
+  const policy = JSON.parse(readFileSync(join(dir, "policy.json"), "utf8"));
+  assert.equal(policy.clauses.find((c) => c.id === "safe-shell").mode, "monitor", "the person's choice applies");
+  assert.equal(policy.clauses.find((c) => c.id === "protect-scopebond-write").mode, "enforce");
+});
