@@ -105,7 +105,7 @@ function open(path: string): SqliteDb {
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+  db.exec("PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
   return db;
 }
 

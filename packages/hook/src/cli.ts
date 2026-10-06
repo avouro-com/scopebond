@@ -214,7 +214,13 @@ function databaseGuard(dir: string, cwd: string, input: Record<string, unknown>)
 /** The one fix for a failure while deciding: the error's own when it names one, else `init`. */
 function repairFor(error: unknown): string {
   const repair = (error as { repair?: unknown } | null)?.repair;
-  return typeof repair === "string" && repair ? repair : `run \`${cliCommand("init")}\``;
+  if (typeof repair === "string" && repair) return repair;
+  // A busy local log is another Scopebond check on this computer writing at the same moment (two agents at once), not a
+  // broken setup: init would not help.
+  if (/database is locked|SQLITE_BUSY/i.test((error as Error | null)?.message ?? "")) {
+    return `another Scopebond check on this computer was writing at the same moment; run the action again (if it keeps happening, \`${cliCommand("status")}\` says what holds it)`;
+  }
+  return `run \`${cliCommand("init")}\``;
 }
 
 async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude, raw?: string, harness: Harness = "claude"): Promise<void> {

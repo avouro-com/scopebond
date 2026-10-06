@@ -51,7 +51,7 @@ function openSqlite(path: string): SqliteDb {
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
-  try { db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"); }
+  try { db.exec("PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"); }
   catch (error) { try { db.close(); } catch { /* already failing */ } throw error; }
   return db;
 }
@@ -354,7 +354,7 @@ export class SqliteReceiptStore implements ReceiptStore {
     // WAL rather than starting clean: measured at ~11 KiB of WAL per receipt against
     // ~1.7 KiB once the handle is closed. It also releases the file lock, which on
     // Windows is what stops `.scopebond` being removable after a run.
-    try { this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* best effort */ }
+    try { this.db.exec("PRAGMA wal_checkpoint(PASSIVE);"); } catch { /* best effort */ }
     this.db.close();
   }
 }
@@ -614,7 +614,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
   close(): void {
     // Same reason as the receipt store: a per-tool-call process that exits without
     // closing leaves its write-ahead log behind for the next one to extend.
-    try { this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* best effort */ }
+    try { this.db.exec("PRAGMA wal_checkpoint(PASSIVE);"); } catch { /* best effort */ }
     this.db.close();
   }
 
