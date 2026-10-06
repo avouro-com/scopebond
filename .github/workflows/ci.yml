@@ -116,7 +116,7 @@ jobs:
       - name: Install the packed tarball globally and drive the real install
         shell: bash
         run: |
-          TARBALL=$(ls "$RUNNER_TEMP/pack"/*.tgz | head -1)
+          TARBALL=$(find "$RUNNER_TEMP/pack" -maxdepth 1 -name '*.tgz' | head -1)
           npm i -g "$TARBALL"
           ROOT=$(npm root -g)
           SCOPEBOND_CLI="$ROOT/@scopebond/hook/dist/cli.js" node packages/hook/test/install-matrix.mjs
