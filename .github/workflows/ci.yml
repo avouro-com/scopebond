@@ -1,12 +1,14 @@
 name: CI
 
 on:
-  # main requires an up-to-date branch (strict required checks) and squash-only
-  # merges, so the pull-request run already tested the exact tree that lands. A
-  # second run on push to main only re-bills the same minutes; workflow_dispatch
-  # is the manual way to re-verify main.
+  # main requires an up-to-date branch (strict required checks), so the pull-request
+  # (or merge-queue) run already tested the exact tree that lands; a stack lands by
+  # merging its top PR with a merge commit. A second run on push to main only
+  # re-bills the same minutes; workflow_dispatch is the manual way to re-verify main.
   pull_request:
     branches: [main]
+  # Merge queue: queued PRs are tested together once, on the exact tree that lands.
+  merge_group: {}
   workflow_dispatch: {}
 
 # A newer push to the same pull request supersedes the run in flight (the
@@ -54,6 +56,38 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build + test (tsc build, then node --test)
         run: pnpm -r test
+        # The Windows journeys run in their own jobs below, in parallel.
+        env:
+          SCOPEBOND_WINDOWS_JOURNEY: "0"
+
+  # The clean-machine Windows journey (powershell.exe, pwsh.exe, a standard user), one job each,
+  # in parallel with everything else. It packs the hook and agent itself.
+  windows-journey:
+    name: "windows journey (${{ matrix.run }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - run: powershell
+            pattern: "passes in powershell\\.exe"
+          - run: pwsh
+            pattern: "passes in pwsh\\.exe"
+          - run: standard-user
+            pattern: "standard \\(non-administrator\\) user"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.20.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Journey (${{ matrix.run }})
+        run: node --test --test-name-pattern "${{ matrix.pattern }}" packages/hook/test/windows-journey.run.mjs
+        env:
+          SCOPEBOND_WINDOWS_JOURNEY: "1"
 
   install-matrix:
     name: "install (${{ matrix.os }}, node ${{ matrix.node }})"
@@ -82,7 +116,7 @@ jobs:
       - name: Install the packed tarball globally and drive the real install
         shell: bash
         run: |
-          TARBALL=$(ls "$RUNNER_TEMP/pack"/*.tgz | head -1)
+          TARBALL=$(find "$RUNNER_TEMP/pack" -maxdepth 1 -name '*.tgz' | head -1)
           npm i -g "$TARBALL"
           ROOT=$(npm root -g)
           SCOPEBOND_CLI="$ROOT/@scopebond/hook/dist/cli.js" node packages/hook/test/install-matrix.mjs

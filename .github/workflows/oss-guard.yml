@@ -7,6 +7,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Required check: it must also run for the merge queue, or queued PRs never merge.
+  merge_group: {}
 
 # A newer push to the same pull request supersedes the run in flight; runs on
 # main (the defense-in-depth tree scan) are never cancelled.
