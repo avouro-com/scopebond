@@ -443,3 +443,24 @@ test("D140: on a computer its workspace manages, rules enforce|monitor applies o
   assert.equal(policy.clauses.find((c) => c.id === "safe-shell").mode, "monitor", "the person's choice applies");
   assert.equal(policy.clauses.find((c) => c.id === "protect-scopebond-write").mode, "enforce");
 });
+
+test("two agents at once: a dozen simultaneous checks on one computer never fail closed on a busy local log", async () => {
+  const { spawn } = await import("node:child_process");
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-busy-"));
+  const dir = join(project, ".scopebond");
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
+  execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
+  const one = (i) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, "claude"], { cwd: project, env });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { out += d; });
+    child.on("close", (code) => resolve({ code, out }));
+    child.stdin.end(JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(project, `f${i}.ts`) }, cwd: project }));
+  });
+  const results = await Promise.all(Array.from({ length: 12 }, (_, i) => one(i)));
+  for (const r of results) {
+    assert.doesNotMatch(r.out, /database is locked|failed closed/, r.out);
+    assert.equal(r.code, 0, r.out);
+  }
+});

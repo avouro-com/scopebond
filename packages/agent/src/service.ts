@@ -164,6 +164,12 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const target = connection ? await fetchClientVersion(connection, options.fetchImpl) : null;
       if (target) result.policy = target.policy;
       const current = agentVersion();
+      // Hook entries first: under "recommended" they move to the newest hook named or carried; under "hold" only broken ones
+      // are repaired, at the version they already name or the one the agent carries. Done before a self-update, so an update
+      // whose handover fails never leaves the hook behind.
+      const hookTarget = target?.policy === "recommended" && target.hook && compareVersions(target.hook, hookVersion()) > 0 ? target.hook : hookVersion();
+      result.hookEntries = maintainHookEntries(harnesses, hookTarget, target?.policy !== "hold");
+      for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
       if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0) {
         log(`updating the Scopebond Agent ${current} -> ${target.agent}`);
         const installed = await installAgent(target.agent);
@@ -171,17 +177,17 @@ export async function startService(options: ServiceOptions): Promise<Service> {
           result.updatedTo = target.agent;
           lastMaintenance = result;
           if (options.onUpdated) options.onUpdated(target.agent);
-          else { spawnReplacement(options.dir); setTimeout(() => { void stop().finally(() => process.exit(0)); }, 500); }
+          else {
+            spawnReplacement(options.dir);
+            // Hand over: stop, then exit. A stop that never finishes (a tray or window child that will not close) must not
+            // keep the old agent alive with the replacement waiting on it, so the exit has a hard deadline.
+            setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
+          }
           return result;
         }
         result.error = `update to ${target.agent} failed: ${installed.output.slice(-300)}`;
         log(result.error);
       }
-      // Hook entries: under "recommended" they move to the newest hook named or carried; under "hold"
-      // only broken ones are repaired, at the version they already name or the one the agent carries.
-      const hookTarget = target?.policy === "recommended" && target.hook && compareVersions(target.hook, hookVersion()) > 0 ? target.hook : hookVersion();
-      result.hookEntries = maintainHookEntries(harnesses, hookTarget, target?.policy !== "hold");
-      for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
       if (connection && (forceSelfCheck || Date.now() - lastSelfCheckAt >= SELF_CHECK_EVERY_MS)) {
         result.selfCheck = await runSelfCheck(options.dir, connection, harnesses, current, { fetchImpl: options.fetchImpl });
         lastSelfCheckAt = Date.now();
