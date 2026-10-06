@@ -24,6 +24,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { GUARDRAIL_LOOKAHEADS, GUARDRAIL_READ_PATTERN, GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES } from "./rules.js";
+import type { Recommended } from "./client-health.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
 export const MANAGED_META_FILE = "managed-meta.json";
@@ -232,8 +233,10 @@ export interface ManagedMeta {
   checked_at: string | null;
   last_ack: { revision: number; result: "loaded" | "rejected"; at: string } | null;
   last_error: string | null;
+  /** The Scopebond versions the workspace recommends for its computers, as its last rules check said. */
+  recommended?: Recommended | null;
 }
-const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null };
+const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 
 export function readMeta(dir: string): ManagedMeta {
   try { return { ...EMPTY_META, ...(JSON.parse(readFileSync(join(dir, MANAGED_META_FILE), "utf8")) as Partial<ManagedMeta>) }; } catch { return { ...EMPTY_META }; }

@@ -57,6 +57,7 @@ import { connectCloud, ingestUrl, loadConnection, connectionPath, reportUninstal
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { compileManaged, isManaged, readMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
+import { agentPresence, healthLines, recommendedFrom } from "./client-health.js";
 import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
@@ -1365,6 +1366,13 @@ function runStatus(args: string[] = []): void {
     console.log(`                   always on: protection of Scopebond's own settings and the agents' hook settings`);
     if (meta.last_error) console.log(`                   last problem: ${meta.last_error}`);
   }
+  {
+    const activeDir = resolveConfigDir(process.cwd());
+    const connection = loadConnection(activeDir);
+    for (const line of healthLines({ hookVersion: hookVersion(), recommended: readMeta(activeDir).recommended ?? null, agent: agentPresence(home), connected: !!connection, workspaceUrl: connection?.url ?? null })) {
+      console.log(`  ${line.label.padEnd(16)} ${line.text}`);
+    }
+  }
   const observationLines = describeObservations(resolveConfigDir(process.cwd()));
   console.log(`  observations     ${observationLines[0]}`);
   for (const line of observationLines.slice(1)) console.log(`                   ${line}`);
@@ -1546,11 +1554,13 @@ async function runDoctor(): Promise<void> {
     // SB273: an authenticated check. Reaching the workspace says nothing about whether it
     // still accepts this computer; the rules endpoint answers 401 when it does not.
     let accepted = "unknown";
+    let recommended = readMeta(active).recommended ?? null;
     try {
       const res = await fetch(new URL("/v1/policy", connection.url).toString(), {
         headers: { authorization: `Bearer ${connection.credential}`, "x-scopebond-hook-version": hookVersion() },
         redirect: "error", signal: AbortSignal.timeout(10_000),
       });
+      recommended = recommendedFrom(res.headers) ?? recommended;
       if (res.status === 401) {
         accepted = "REFUSED (401)";
         recordRulesCredential(active, false, Date.now());
@@ -1563,6 +1573,12 @@ async function runDoctor(): Promise<void> {
     const delivery = describeDelivery(active, connection);
     for (const line of delivery.lines) console.log(`                   ${line}`);
     problems.push(...delivery.problems);
+    for (const line of healthLines({ hookVersion: hookVersion(), recommended, agent: agentPresence(userHome()), connected: true, workspaceUrl: connection.url })) {
+      console.log(`  ${line.label.padEnd(16)} ${line.text}`);
+      // Only a broken setup fails doctor: an agent installed but not running. An older version or a computer
+      // without the (optional) agent is said above, with its command, and does not fail scripts that run doctor.
+      if (line.problem && /installed but not running/.test(line.text)) problems.push("the Scopebond Agent is installed but not running (see background agent above)");
+    }
   }
   const duplicates = duplicateLines(process.cwd());
   for (const line of duplicates) console.log(line);
