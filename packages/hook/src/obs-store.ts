@@ -20,7 +20,6 @@
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { whileBusy } from "@scopebond/gateway/node";
 import { MAX_BATCH_BODY_BYTES, MAX_BATCH_ITEMS, observationHash, type ObservationDraft, type ObservationPayload, type SignedObservation, type EnvelopeContext, buildPayload, signObservation, type ObservationSigner } from "./observation.js";
 
 interface SqliteStatement { run(...args: unknown[]): unknown; all(...args: unknown[]): unknown[]; get(...args: unknown[]): unknown }
@@ -109,6 +108,18 @@ function open(path: string): SqliteDb {
   db.exec("PRAGMA busy_timeout = 15000;");
   whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));
   return db;
+}
+
+/** Run one step again while the database is locked, for up to 15 seconds: switching a log to WAL takes a lock
+ *  that busy_timeout does not always wait for when several checks open it at once (the gateway's stores do the same). */
+function whileBusy<T>(step: () => T, limitMs = 15_000): T {
+  const deadline = Date.now() + limitMs;
+  for (let wait = 5; ; wait = Math.min(wait * 2, 200)) {
+    try { return step(); } catch (error) {
+      if (!/database is locked|SQLITE_BUSY/i.test((error as Error).message ?? "") || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait + Math.floor(Math.random() * wait));
+    }
+  }
 }
 
 export class ObservationStore {
