@@ -1,5 +1,11 @@
 # @scopebond/gateway
 
+## 0.16.2
+
+### Patch Changes
+
+- 2dac3d7: Several checks opening the local log at the same moment no longer fail closed with "database is locked" on Windows. Switching a log to WAL takes a lock that SQLite's busy timeout does not always wait for, so that one step now retries for up to 15 seconds. The hook also no longer counts its own signing key (`agent.key`) as a sign that the Scopebond Agent is installed, so `doctor` passes on a computer without the agent.
+
 ## 0.16.1
 
 ### Patch Changes

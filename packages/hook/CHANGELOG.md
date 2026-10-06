@@ -1,5 +1,17 @@
 # @scopebond/hook
 
+## 0.20.0
+
+### Minor Changes
+
+- 377e2e0: `status` and `doctor` say when this computer needs attention to keep delivering and stay up to date, each with the one command that fixes it. When the workspace recommends a newer Scopebond than the one running (it says so on every rules check), they print the update command. They also say whether the Scopebond Agent runs: running, installed but not running (start it with `scopebond-agent autostart on`), or not installed (with its setup command). Only an agent that is installed but not running fails `doctor`; an older version or a computer without the optional agent is shown, not failed on.
+
+### Patch Changes
+
+- 2dac3d7: Several checks opening the local log at the same moment no longer fail closed with "database is locked" on Windows. Switching a log to WAL takes a lock that SQLite's busy timeout does not always wait for, so that one step now retries for up to 15 seconds. The hook also no longer counts its own signing key (`agent.key`) as a sign that the Scopebond Agent is installed, so `doctor` passes on a computer without the agent.
+- Updated dependencies [2dac3d7]
+  - @scopebond/gateway@0.16.2
+
 ## 0.19.2
 
 ### Patch Changes
