@@ -105,8 +105,21 @@ function open(path: string): SqliteDb {
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+  db.exec("PRAGMA busy_timeout = 15000;");
+  whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));
   return db;
+}
+
+/** Run one step again while the database is locked, for up to 15 seconds: switching a log to WAL takes a lock
+ *  that busy_timeout does not always wait for when several checks open it at once (the gateway's stores do the same). */
+function whileBusy<T>(step: () => T, limitMs = 15_000): T {
+  const deadline = Date.now() + limitMs;
+  for (let wait = 5; ; wait = Math.min(wait * 2, 200)) {
+    try { return step(); } catch (error) {
+      if (!/database is locked|SQLITE_BUSY/i.test((error as Error).message ?? "") || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait + Math.floor(Math.random() * wait));
+    }
+  }
 }
 
 export class ObservationStore {

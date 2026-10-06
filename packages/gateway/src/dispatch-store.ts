@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { PrincipalKeyRegistry } from "./auth.js";
+import { whileBusy } from "./node-stores.js";
 import type { CloudDelegation, CloudDispatchSource, ConsumeAnswer } from "./dispatch-cloud.js";
 import {
   actionInScope, actionScopeEntries, budgetAcknowledged, budgetDigest, checkApproval, isSubScope, requestHash, scopeDigest, validateDelegation,
@@ -33,7 +34,8 @@ function open(path: string): Db {
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => Db };
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+  db.exec("PRAGMA busy_timeout = 15000;");
+  whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));
   return db;
 }
 
