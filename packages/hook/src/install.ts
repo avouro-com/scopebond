@@ -378,6 +378,12 @@ export function absoluteHookCommand(cliPath: string, harness: Harness): string {
   return `${quote(process.execPath)} ${quote(cliPath)} ${harness}`;
 }
 
+/** The command a coding agent's settings run when Scopebond is installed as the single executable: the executable itself,
+ *  quoted, with `hook` and the harness. It needs neither Node nor npm, and the installer keeps its path stable. */
+export function nativeHookCommand(harness: Harness, exe: string = process.execPath): string {
+  return `"${exe}" hook ${harness}`;
+}
+
 export function isHarnessConfigured(file: string): boolean {
   if (!existsSync(file)) return false;
   try {

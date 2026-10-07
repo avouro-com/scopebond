@@ -10,6 +10,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, win32 } from "node:path";
+import { isSingleExecutable } from "@scopebond/hook";
 
 export const LABEL = "com.scopebond.agent";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -34,8 +35,10 @@ export function launcherPath(home: string, platform: NodeJS.Platform = process.p
   return join(home, platform === "win32" ? "agent-launch.cmd" : "agent-launch.sh");
 }
 
+/** The Windows launcher. With `cli` empty, `node` is the single executable: it is started as it is, with no Node to find. */
 export function windowsLauncher(node: string, cli: string, logFile: string): string {
   const log = `"%~dp0${win32.basename(noQuotes(logFile))}"`;
+  const single = cli === "";
   return [
     "@echo off",
     // cmd.exe reads a batch file in the console code page: switch to UTF-8 first, so a profile folder
@@ -48,18 +51,20 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
     // whole command line when a redirect fails. The log sits beside this launcher; %~dp0 keeps it right whatever the folder is called.
     `set "${AGENT_LOG_ENV}=%~dp0${win32.basename(noQuotes(logFile))}"`,
     `set "NODE=${noQuotes(node)}"`,
-    `if not exist "%NODE%" set "NODE="`,
-    `if not defined NODE for /f "delims=" %%i in ('where node 2^>nul') do if not defined NODE set "NODE=%%i"`,
-    `set "CLI=${noQuotes(cli)}"`,
-    `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
-    `if not defined NODE exit /b 1`,
+    ...(single ? [`if not exist "%NODE%" exit /b 1`] : [
+      `if not exist "%NODE%" set "NODE="`,
+      `if not defined NODE for /f "delims=" %%i in ('where node 2^>nul') do if not defined NODE set "NODE=%%i"`,
+      `set "CLI=${noQuotes(cli)}"`,
+      `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
+      `if not defined NODE exit /b 1`,
+    ]),
     // Restart on failure, as launchd (KeepAlive) and systemd (Restart=on-failure) do: a crash restarts the agent after
     // 30 seconds, up to 50 times; a clean exit (stop, autostart off, an update handing over) ends the launcher.
     "set /a TRIES=0",
     ":run",
     // (call) sets the error level to 1 first, so a command that never ran counts as a failure, not a clean stop.
     "(call)",
-    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >nul 2>&1`,
+    single ? `"%NODE%" run >nul 2>&1` : `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >nul 2>&1`,
     `set "CODE=%ERRORLEVEL%"`,
     // An update's handover names the agent to wait for; a restart after a crash has nothing to wait for.
     `set "SCOPEBOND_AGENT_AFTER_PID="`,
@@ -74,8 +79,13 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
   ].join("\r\n");
 }
 
+/** The macOS/Linux launcher. With `cli` empty, `node` is the single executable, started as it is. */
 export function posixLauncher(node: string, cli: string): string {
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  if (cli === "") return `#!/bin/sh
+# Scopebond Agent launcher: the single executable.
+exec ${q(node)} run
+`;
   return `#!/bin/sh
 # Scopebond Agent launcher: finds Node and the agent each time, so a Node upgrade never stops it.
 NODE=${q(node)}
@@ -156,6 +166,8 @@ export function refreshLauncher(scopebondHome: string, cli: string, node = proce
 }
 
 function writeLauncher(scopebondHome: string, node: string, cli: string, platform: NodeJS.Platform): string {
+  // The single executable is both Node and the agent: the launcher starts it with `run`.
+  if (isSingleExecutable()) { node = process.execPath; cli = ""; }
   mkdirSync(scopebondHome, { recursive: true });
   const launcher = launcherPath(scopebondHome, platform);
   const log = join(scopebondHome, "agent.log");

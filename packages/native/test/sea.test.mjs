@@ -57,6 +57,13 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
   assert.equal(decide(true, event(...cases[0])).decision, "deny", "Scopebond's own folder stays protected");
   const log = spawnSync(exe, ["hook", "log"], { cwd: project, env, encoding: "utf8" });
   assert.match(log.stdout, /receipt\(s\)/, "receipts are written to the store");
+  // Installed for the user, the coding agent's settings name the executable itself: no Node, npm or npx.
+  const install = spawnSync(exe, ["hook", "install", "--claude", "--yes"], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
+  assert.equal(install.status, 0, install.stdout + install.stderr);
+  const settings = readFileSync(join(home, ".claude", "settings.json"), "utf8");
+  assert.ok(settings.includes(JSON.stringify(`"${exe}" hook claude`).slice(1, -1)), settings);
+  const doctor = spawnSync(exe, ["hook", "doctor"], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
+  assert.doesNotMatch(doctor.stdout, /cannot start|could not start/i, doctor.stdout);
   // Warm starts: the first runs pay for the operating system's first look at a new file.
   const times = [];
   for (let i = 0; i < 22; i++) times.push(decide(true, event("Read", { file_path: "README.md" })).ms);

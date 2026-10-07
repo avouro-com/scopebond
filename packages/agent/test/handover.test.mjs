@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  handoverPlan, launcherPath, windowsLauncher, launcherIsCurrent, refreshLauncher, startCommands, startControl,
+  handoverPlan, launcherPath, windowsLauncher, posixLauncher, launcherIsCurrent, refreshLauncher, startCommands, startControl,
   AFTER_PID_ENV, REFRESH_LAUNCHER_ENV, AGENT_LOG_ENV, FALLBACK_LOG,
 } from "../dist/index.js";
 
@@ -156,4 +156,15 @@ test("the single executable starts its update as itself with `run`, with no cli.
   const plan = handoverPlan({ dir: "/opt/sb", cli: "/opt/sb/scopebond-agent", pid: 7, execPath: "/opt/sb/scopebond-agent", platform: "linux", env: {}, launcherText: null, singleExecutable: true });
   assert.equal(plan.command, "/opt/sb/scopebond-agent");
   assert.deepEqual(plan.args, ["run"]);
+});
+
+test("the single executable's launcher starts it as it is, with no Node to find and no cli.js", () => {
+  const cmd = windowsLauncher(String.raw`C:\Programs\Scopebond\scopebond-agent.exe`, "", String.raw`C:\h\agent.log`);
+  assert.ok(cmd.includes(String.raw`set "NODE=C:\Programs\Scopebond\scopebond-agent.exe"`));
+  assert.match(cmd, /\(call\)\r\n"%NODE%" run >nul 2>&1\r\n/);
+  assert.doesNotMatch(cmd, /where node|npm\.cmd root|%CLI%/);
+  assert.equal(launcherIsCurrent(cmd, "win32"), true, "a current launcher: an update hands over through it");
+  const sh = posixLauncher("/opt/sb/scopebond-agent", "");
+  assert.match(sh, /^#!\/bin\/sh\n/);
+  assert.ok(sh.includes("exec '/opt/sb/scopebond-agent' run"));
 });

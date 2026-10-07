@@ -7,7 +7,8 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isScopebondHookCommand, userHarnessFile, writeHarnessConfig, type Harness, type HookConnection,
+  absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isScopebondHookCommand, isSingleExecutable,
+  nativeHookCommand, userHarnessFile, writeHarnessConfig, type Harness, type HookConnection,
 } from "@scopebond/hook";
 
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
@@ -57,6 +58,8 @@ export function commandHookVersion(command: string): string | null {
  *  and it needs neither the registry nor npx on the coding tool's PATH); another version, or a pin that
  *  cannot be made, falls back to the portable npx form. */
 export function maintainedHookCommand(harness: Harness, version = hookVersion()): string {
+  // The single executable carries its own hook, at the path the installer keeps.
+  if (isSingleExecutable()) return nativeHookCommand(harness);
   if (version === hookVersion()) {
     try {
       const pin = ensureDurableRuntime(hookCliPath(), version);

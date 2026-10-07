@@ -36,7 +36,7 @@ export { scaffold, harnessSnippet, installHarness, placeHook } from "./init.js";
 export type { HookPlacement } from "./init.js";
 export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
-  cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome,
+  cursorDetected, codexDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
   readHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
   isScopebondHookCommand, harnessEntryMatches,

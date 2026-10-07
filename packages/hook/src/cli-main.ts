@@ -9,7 +9,7 @@
 // Fail-closed: any error denies the action with a repair message.
 
 import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { hookCliPath } from "./self.js";
+import { hookCliPath, isSingleExecutable } from "./self.js";
 import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -27,7 +27,7 @@ import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./du
 import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand, unreachableHint } from "./windows-hints.js";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
-  cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome, type Harness,
+  cursorDetected, codexDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
   localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy, isTrustedProject,
   wireLifecycleHooks, unwireLifecycleHooks,
@@ -421,8 +421,9 @@ function runInit(args: string[]): void {
   // (slow, but it always starts) when no durable copy can be made. `--npx` forces the
   // portable form for anyone who wants it.
   const shared = args.includes("--shared");
-  const pin = args.includes("--npx") || shared ? { cli: null, how: "unavailable" as const } : ensureDurableRuntime(cliPath(), hookVersion());
-  const command = pin.cli ? absoluteHookCommand(pin.cli, harness) : undefined;
+  const native = isSingleExecutable() && !args.includes("--npx") && !shared;
+  const pin = native ? { cli: process.execPath, how: "native" as const } : args.includes("--npx") || shared ? { cli: null, how: "unavailable" as const } : ensureDurableRuntime(cliPath(), hookVersion());
+  const command = native ? nativeHookCommand(harness) : pin.cli ? absoluteHookCommand(pin.cli, harness) : undefined;
   // Configure the agent automatically by default (idempotent), so there is no
   // hand-editing step; --no-install prints the snippet instead.
   if (!args.includes("--no-install")) {
@@ -1284,6 +1285,8 @@ function cliPath(): string {
  *  npm clears it — and a hook that cannot start lets every action through. Pin the durable
  *  copy, as `init` does, and fall back to the portable `npx` command when none can be made. */
 function durableHookCommand(h: Harness): string {
+  // The single executable is its own durable copy: the installer keeps its path.
+  if (isSingleExecutable()) return nativeHookCommand(h);
   const pin = ensureDurableRuntime(cliPath(), hookVersion());
   return pin.cli ? absoluteHookCommand(pin.cli, h) : hookCommand(h);
 }
@@ -1307,7 +1310,7 @@ function runInstall(args: string[]): void {
       console.log(`Would ${exists ? "modify" : "create"} ${file}`);
       if (exists) console.log(`  backing it up to  ${file}.scopebond-backup`);
       // Previewed without copying anything: the path the real run would pin.
-      console.log(`  adding hook       ${absoluteHookCommand(isEphemeralPath(cliPath()) ? pinnedCliPath(hookVersion()) : cliPath(), h)}`);
+      console.log(`  adding hook       ${isSingleExecutable() ? nativeHookCommand(h) : absoluteHookCommand(isEphemeralPath(cliPath()) ? pinnedCliPath(hookVersion()) : cliPath(), h)}`);
       if (exists && isHarnessConfigured(file)) console.log(`  (a Scopebond hook is already there; it would be replaced, not duplicated)`);
     }
     console.log(`\nNothing else in those files is changed. Run without --dry-run to apply.`);
