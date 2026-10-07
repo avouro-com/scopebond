@@ -11,7 +11,7 @@ import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import {
   LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, hookVersion, ingestUrl,
-  isHarnessConfigured, loadConnection, policyBuilds, recordDeliveryAttempt, syncPolicy, userHarnessFile,
+  isHarnessConfigured, loadConnection, policyBuilds, recordDeliveryAttempt, summaryOptions, syncPolicy, userHarnessFile,
   type Harness, type StatusJson, type SyncOutcome,
 } from "@scopebond/hook";
 
@@ -61,7 +61,7 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
     const before = outbox.status().pending;
     const exporter = createCloudExporter({
       url: ingestUrl(connection), credential: connection.credential, outbox,
-      flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now,
+      flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries: summaryOptions(dir),
     });
     try {
       const lastSuccess = exporter.status().lastSuccessAt;

@@ -18,6 +18,9 @@ agent never takes part in a decision. It only keeps everything around the decisi
   the workspace recommends a newer agent, it installs it from npm and restarts itself; when the workspace holds
   updates, it changes nothing. It also moves the Scopebond hook entries in agent settings to the recommended hook
   and repairs any entry that can no longer start. Other tools' hook entries are never touched.
+- **A small local store.** With each update check it keeps the local receipt store small: receipts the workspace
+  acknowledged are removed after the workspace's retention window (30 days unless it sets 7–365), never one it has not
+  acknowledged; a store written by an older hook is rewritten once so it keeps each policy and receipt only once.
 - **Self-check.** Once a day it checks this computer's side (hook entry present and able to start, autostart on,
   nothing stuck in the queue, connection not about to lapse) and sends the result, signed with the key the computer
   enrolled with, so the workspace can show that the whole path works end to end, or what broke.

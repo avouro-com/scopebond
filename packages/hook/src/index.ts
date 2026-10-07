@@ -87,3 +87,7 @@ export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requ
 export type { AdminRequest } from "./requests.js";
 export { localActivity } from "./local-activity.js";
 export type { LocalActivity } from "./local-activity.js";
+export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEFAULT_RETENTION_DAYS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./store-upkeep.js";
+export type { UpkeepOptions } from "./store-upkeep.js";
+export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-detail.js";
+export type { EvidenceDetail } from "./evidence-detail.js";

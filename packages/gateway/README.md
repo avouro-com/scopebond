@@ -252,6 +252,29 @@ trims it with `boundPrior`, so a custom store that ignores `scope` stays correct
 slower. `SqliteReceiptStore` answers `since` from an index on `receipts.timestamp`
 (created on open), so the cost of a decision no longer grows with the log.
 
+The replay check works the same way: a store that implements the optional
+`authorizationUsed(kind, id, since)` answers whether a request or approval id was already
+used with one lookup, within the time a still-valid authorization could have been used
+(its lifetime plus the accepted clock skew). A store without it is read in full, as before.
+
+`SqliteReceiptStore` keeps each policy once (actions reference it by digest), each receipt
+once (a finished action points at its row), and no lifecycle row or candidate copy for an
+action that finished without being dispatched. A new file uses 8 KiB pages and incremental
+vacuum. `maintain(options)` does bounded upkeep: it rewrites a file from an earlier version
+to this layout, removes finished authority records after a week, removes receipts a
+delivery queue acknowledged before `retainAcknowledgedMs` (never one it did not, never in an
+anchored log), and returns free pages; with `allowFullVacuum` it rewrites the whole file
+once so an older file can shrink. `SqliteCloudOutbox` records each record the workspace holds
+(`acknowledge(entries, held)`; a refused record is never in `held`) for that purpose, and keeps
+its pending totals instead of counting the queue per record.
+
+Two limits follow from removing old rows. Finished authority records are what the replay check
+consults, so keep `stateRetentionMs` longer than your authorizations' `maxLifetimeMs` plus clock
+skew (the defaults are seven days against five minutes). And a policy can only count history the
+store still holds: retention keeps at least the window of the current policy, so if you later widen
+a windowed limit beyond the retention, the first decisions under it see less history than the
+window names.
+
 ### Constrained support refund adapter
 
 `createSupportRefundExecutor` is the first narrow dispatch integration. It accepts

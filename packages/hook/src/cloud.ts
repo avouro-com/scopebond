@@ -5,13 +5,15 @@
 // receipt log stay local-first; export is best-effort and never blocks a tool call.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,
   type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter, type ReceiptStore,
 } from "@scopebond/gateway";
 import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX } from "./delivery-report.js";
+import { forgetCached, readTextCached } from "./config-cache.js";
+import { summaryOptions } from "./evidence-detail.js";
 
 /** The persisted connection between this machine and a Cloud workspace. Holds the
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
@@ -52,9 +54,10 @@ export const connectionPath = (dir: string): string => join(dir, "cloud.json");
 /** Read the persisted connection, or null when the hook is not connected to Cloud. */
 export function loadConnection(dir: string): HookConnection | null {
   const path = connectionPath(dir);
-  if (!existsSync(path)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as Partial<HookConnection>;
+    const text = readTextCached(path);
+    if (text === null) return null;
+    const parsed = JSON.parse(text.replace(/^\uFEFF/, "")) as Partial<HookConnection>;
     if (typeof parsed.url === "string" && typeof parsed.credential === "string") return parsed as HookConnection;
   } catch { /* fall through */ }
   return null;
@@ -89,6 +92,7 @@ export async function connectCloud(
   const { ingest_url: offered, ...enrolled } = result as typeof result & { ingest_url?: unknown };
   const ingest = safeIngestOrigin(offered);
   const connection: HookConnection = { url, ...enrolled, ...(ingest ? { ingest_url: ingest } : {}) };
+  forgetCached(connectionPath(dir));
   writeFileSync(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n", { mode: 0o600 });
   let setAside = 0;
   const outboxPath = join(dir, "receipts.db.cloud-outbox.db");
@@ -136,15 +140,17 @@ export function attachExporter(
   let outbox: SqliteCloudOutbox;
   try { outbox = new SqliteCloudOutbox(outboxDbPath, LOSSLESS_OUTBOX); }
   catch (error) { throw new DeliveryQueueError(outboxDbPath, error); }
-  const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl });
+  const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl,
+    summaries: summaryOptions(dirname(outboxDbPath)) });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }
 
 /** Attempt delivery with a bounded timeout so a per-invocation hook never hangs the
- *  agent; undelivered receipts stay in the durable outbox and flush next time. */
-export async function flushBounded(exporter: CloudExporter, timeoutMs = 3000): Promise<void> {
+ *  agent; undelivered receipts stay in the durable outbox and flush next time. A hook call passes `routine: false`: with
+ *  summaries on, it sends only when it queued a notable record (the agent and `flush` send the summaries). */
+export async function flushBounded(exporter: CloudExporter, timeoutMs = 3000, options: { routine?: boolean } = {}): Promise<void> {
   await Promise.race([
-    exporter.flush().catch(() => {}),
+    exporter.flush(options).catch(() => {}),
     new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, timeoutMs)).unref?.()),
   ]);
 }

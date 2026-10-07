@@ -8,7 +8,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SignedReceipt } from "@scopebond/gateway";
-import { SqliteReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { SqliteCloudOutbox, SqliteReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
 import { ingestUrl, type HookConnection } from "./cloud.js";
 
 /** The workspace accepts at most 1 MiB and 100 receipts per request. */
@@ -109,7 +110,7 @@ export async function recoverEarlierReceipts(
       if (status === "declined") { io.log("  Declined in the workspace. Nothing was sent."); result.skipped += group.count; continue; }
       if (status !== "approved") { io.log(status === "pending" ? "  Not approved yet. Run recover again after it is approved." : `  This recovery is ${status}. Run recover again to ask anew.`); result.pending += group.count; continue; }
       io.log("  ✓ Approved. Sending…");
-      const sent = await uploadGroup(store, group, id, connection, io);
+      const sent = await uploadGroup(store, group, id, connection, io, (ids) => markAcknowledged(dir, ids));
       result.accepted += sent.accepted; result.duplicates += sent.duplicates; result.rejected += sent.rejected;
       if (sent.stopped) { result.failed = true; return result; }
       await call(io, connection, `/v1/recover/${encodeURIComponent(id)}/complete`, {}).catch(() => null);
@@ -123,9 +124,11 @@ export async function recoverEarlierReceipts(
 
 async function uploadGroup(
   store: SqliteReceiptStore, group: KeyGroup, id: string, connection: HookConnection, io: RecoverIo,
+  acknowledged: (ids: string[]) => void = () => {},
 ): Promise<{ accepted: number; duplicates: number; rejected: number; stopped: boolean }> {
   const totals = { accepted: 0, duplicates: 0, rejected: 0, stopped: false };
   let batch: string[] = [];
+  let batchIds: string[] = [];
   let bytes = 0;
   let sent = 0;
   const send = async (): Promise<boolean> => {
@@ -138,6 +141,9 @@ async function uploadGroup(
         totals.accepted += Number(answer.json.accepted ?? 0);
         totals.duplicates += Number(answer.json.duplicates ?? 0);
         totals.rejected += Number(answer.json.rejected_count ?? 0);
+        // A batch the workspace took whole is held there, so retention may later remove the local copies (D144). The answer
+        // does not say which record of a partly refused batch was refused, so such a batch keeps all of them.
+        if (Number(answer.json.rejected_count ?? 0) === 0) { try { acknowledged(batchIds); } catch { /* they stay local */ } }
         break;
       }
       // Durable but not yet readable, or a network error: the same batch is safe to resend.
@@ -155,7 +161,7 @@ async function uploadGroup(
     }
     sent += batch.length;
     if (sent % 1000 < batch.length || sent === group.count) io.log(`  … ${sent.toLocaleString()} of ${group.count.toLocaleString()}`);
-    batch = []; bytes = 0;
+    batch = []; batchIds = []; bytes = 0;
     return true;
   };
   for (let after = 0; ;) {
@@ -169,8 +175,17 @@ async function uploadGroup(
       if (size > MAX_RECEIPT_BYTES) { totals.rejected += 1; continue; }
       if (batch.length >= MAX_BATCH_COUNT || bytes + size + 1 > MAX_BATCH_BYTES) { if (!(await send())) return totals; }
       batch.push(json); bytes += size + 1;
+      const actionId = receipt.payload.action_ref?.action_id;
+      if (actionId) batchIds.push(actionId);
     }
   }
   if (!(await send())) return totals;
   return totals;
+}
+
+/** Record that the workspace holds these receipts, in the delivery queue's acknowledgements (D144 retention). */
+function markAcknowledged(dir: string, ids: string[]): void {
+  if (!ids.length) return;
+  const outbox = new SqliteCloudOutbox(join(dir, OUTBOX_FILE), LOSSLESS_OUTBOX);
+  try { outbox.markAcknowledged(ids); } finally { outbox.close(); }
 }

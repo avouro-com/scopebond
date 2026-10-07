@@ -19,6 +19,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
+import { forgetCached, readTextCached } from "./config-cache.js";
 
 /** One protected location. `under`/`named`/`dir` are the readable, editable shapes;
  *  `raw` carries the few patterns with bespoke exceptions (`.env` templates are allowed,
@@ -254,9 +255,10 @@ export const rulesPath = (dir: string): string => join(dir, RULES_FILE);
 
 export function loadRules(configDir: string): RuleSet | null {
   const file = rulesPath(configDir);
-  if (!existsSync(file)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as RuleSet;
+    const text = readTextCached(file);
+    if (text === null) return null;
+    const parsed = JSON.parse(text.replace(/^\uFEFF/, "")) as RuleSet;
     if (parsed?.version !== 1 || !Array.isArray(parsed.protected_branches)) return null;
     return parsed;
   } catch { return null; }
@@ -264,6 +266,7 @@ export function loadRules(configDir: string): RuleSet | null {
 
 export function saveRules(configDir: string, rules: RuleSet): string {
   const file = rulesPath(configDir);
+  forgetCached(file);
   writeFileSync(file, `${JSON.stringify(rules, null, 2)}\n`);
   return file;
 }

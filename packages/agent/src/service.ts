@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, wr
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { actOnBlocked, blockedQuestion, hookVersion, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { actOnBlocked, blockedQuestion, hookVersion, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { launcherPath } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
@@ -77,6 +77,8 @@ export interface MaintenanceResult {
   updatedTo: string | null;
   hookEntries: Array<{ harness: Harness; file: string; reason: string }>;
   selfCheck: Awaited<ReturnType<typeof runSelfCheck>>;
+  /** The local store's upkeep this pass (D144): rows rewritten, receipts past retention removed, space returned. */
+  store?: ReturnType<typeof runStoreUpkeep>;
   error: string | null;
 }
 
@@ -244,6 +246,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         result.error = `update to ${target.agent} failed: ${installed.output.slice(-300)}`;
         log(result.error);
       }
+      // The local store: older rows rewritten, acknowledged receipts past the retention window removed, space returned.
+      // The agent may rewrite the whole file once (the hook never does that during a tool call).
+      try {
+        result.store = runStoreUpkeep(options.dir, { budgetMs: 30_000, allowFullVacuum: true });
+        const kept = result.store;
+        if (kept && (kept.migrated || kept.receiptsRemoved || kept.stateRemoved || kept.pagesFreed)) {
+          log(`local store: ${kept.migrated} row(s) rewritten, ${kept.receiptsRemoved} receipt(s) past retention removed, ${kept.stateRemoved} finished check record(s) removed, ${kept.pagesFreed} page(s) returned`);
+        }
+      } catch (error) { log(`local store upkeep failed: ${(error as Error).message}`); }
       if (connection && (forceSelfCheck || Date.now() - lastSelfCheckAt >= SELF_CHECK_EVERY_MS)) {
         result.selfCheck = await runSelfCheck(options.dir, connection, harnesses, current, { fetchImpl: options.fetchImpl });
         lastSelfCheckAt = Date.now();

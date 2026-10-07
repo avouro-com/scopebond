@@ -28,7 +28,7 @@ import { validateIntent, validatePolicy, historyNeed, boundPrior, VERIFIER_VERSI
 import type { Policy, Intent, Approval, Verdict, HistoryNeed } from "@scopebond/verify";
 import { authenticateRequest, AuthorizationError } from "./auth.js";
 import type {
-  AuthorizationEvidence, GatewayAuthentication, SignedApproval, SignedIntentAuthorization,
+  AuthenticationConfig, AuthorizationEvidence, GatewayAuthentication, SignedApproval, SignedIntentAuthorization,
 } from "./auth.js";
 
 /** How an allowed action is actually carried out. Default: a no-op (record only).
@@ -191,18 +191,39 @@ export function createGateway(config: GatewayConfig): Gateway {
         approvalForPolicy: req.approval as Approval | undefined,
       };
     }
-    const receipts = await store.list();
-    const usedRequestIds = new Set<string>();
-    const usedApprovalIds = new Set<string>();
-    for (const receipt of receipts) {
-      const evidence = receipt.payload.authorization;
-      if (evidence?.agent?.request_id) usedRequestIds.add(evidence.agent.request_id);
-      if (evidence?.approval?.approval_id) usedApprovalIds.add(evidence.approval.approval_id);
-    }
+    const { requestIds: usedRequestIds, approvalIds: usedApprovalIds } = await usedAuthorizations(req, ts, authentication);
     return authenticateRequest(
       req.intent, req.authorization, req.approval, authentication, ts, policyRef,
       usedRequestIds, usedApprovalIds,
     );
+  }
+
+  /** Which of this request's ids were already used. A store that can look one id up answers for just this request, within
+   *  the time any still-valid authorization could have been used: an authorization lives at most `maxLifetimeMs` and is
+   *  accepted at most `maxClockSkewMs` early, so a use older than both cannot collide with one that is still fresh. Reading
+   *  the whole log instead parsed every receipt on every action (hundreds of megabytes on a long-used computer). */
+  async function usedAuthorizations(req: ActionRequest, ts: string, authentication: AuthenticationConfig): Promise<{ requestIds: Set<string>; approvalIds: Set<string> }> {
+    const requestId = idField(req.authorization, "request_id");
+    const approvalId = idField(req.approval, "approval_id");
+    const windowMs = (authentication.maxLifetimeMs ?? 5 * 60_000) + (authentication.maxClockSkewMs ?? 30_000) + REPLAY_MARGIN_MS;
+    const since = new Date(Date.parse(ts) - windowMs);
+    const lookup = (store as ReceiptStore).authorizationUsed?.bind(store);
+    if (lookup && Number.isFinite(since.getTime())) {
+      const sinceIso = since.toISOString();
+      const used = async (kind: "request_id" | "approval_id", id: string | null) => !!id && await lookup(kind, id, sinceIso);
+      return {
+        requestIds: new Set(requestId && await used("request_id", requestId) ? [requestId] : []),
+        approvalIds: new Set(approvalId && await used("approval_id", approvalId) ? [approvalId] : []),
+      };
+    }
+    const requestIds = new Set<string>();
+    const approvalIds = new Set<string>();
+    for (const receipt of await store.list()) {
+      const evidence = receipt.payload.authorization;
+      if (evidence?.agent?.request_id) requestIds.add(evidence.agent.request_id);
+      if (evidence?.approval?.approval_id) approvalIds.add(evidence.approval.approval_id);
+    }
+    return { requestIds, approvalIds };
   }
 
   async function handleAction(req: ActionRequest, opts?: { checkOnly?: boolean } & ActionOptions): Promise<ActionResult> {
@@ -770,6 +791,14 @@ function constantTimeTextEqual(left: string, right: string): boolean {
 // `Z`, a different precision), so the text cutoff is a day earlier than the exact one:
 // a superset, trimmed exactly by `boundPrior`.
 const SINCE_MARGIN_MS = 24 * 60 * 60 * 1000;
+
+// Slack on the replay window for timestamps written in another format or by a clock that moved a little.
+const REPLAY_MARGIN_MS = 60 * 60 * 1000;
+
+function idField(value: unknown, key: string): string | null {
+  const id = value && typeof value === "object" ? (value as Record<string, unknown>)[key] : null;
+  return typeof id === "string" && id !== "" ? id : null;
+}
 
 /** The store query for a policy's history need at evaluation time `at`. */
 function priorScope(need: HistoryNeed, at: string): PriorScope {
