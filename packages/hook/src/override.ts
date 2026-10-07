@@ -22,6 +22,7 @@ import { makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, r
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
+import { requestOverSocket } from "./local-socket.js";
 
 export const OVERRIDE_STATE_FILE = "overrides.json";
 const AGENT_FILE = "agent.json";
@@ -85,17 +86,28 @@ export interface AgentAnswer { decision: "allow" | "deny" | "unavailable" | "ask
 
 /** Ask the resident Scopebond Agent to show its window. Returns "unavailable" when no agent answers. */
 export async function askAgent(home: string, request: Record<string, unknown>, timeoutMs: number, fetchImpl: typeof fetch = fetch): Promise<AgentAnswer> {
-  let endpoint: { port?: unknown; token?: unknown };
-  try { endpoint = JSON.parse(readFileSync(join(home, AGENT_FILE), "utf8")) as { port?: unknown; token?: unknown }; }
+  let endpoint: { port?: unknown; socket?: unknown; token?: unknown };
+  try { endpoint = JSON.parse(readFileSync(join(home, AGENT_FILE), "utf8")) as { port?: unknown; socket?: unknown; token?: unknown }; }
   catch { return { decision: "unavailable" }; }
-  if (!Number.isInteger(endpoint.port) || typeof endpoint.token !== "string") return { decision: "unavailable" };
+  if (typeof endpoint.token !== "string") return { decision: "unavailable" };
+  const hasPort = Number.isInteger(endpoint.port) && (endpoint.port as number) > 0;
+  if (!hasPort && !(typeof endpoint.socket === "string" && endpoint.socket)) return { decision: "unavailable" };
   try {
-    const res = await fetchImpl(`http://127.0.0.1:${endpoint.port as number}/override`, {
-      method: "POST", headers: { "content-type": "application/json", [TOKEN_HEADER]: endpoint.token }, body: JSON.stringify(request),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) return { decision: "unavailable" };
-    const body = await res.json() as AgentAnswer;
+    let body: AgentAnswer;
+    // The agent's pipe or socket when it has one (and no test stands in for the network); else its loopback port.
+    if (typeof endpoint.socket === "string" && endpoint.socket && fetchImpl === fetch) {
+      const answer = await requestOverSocket(endpoint.socket, "POST", "/override", { [TOKEN_HEADER]: endpoint.token }, request, timeoutMs);
+      if (!answer || answer.status !== 200 || !answer.body || typeof answer.body !== "object") return { decision: "unavailable" };
+      body = answer.body as AgentAnswer;
+    } else {
+      if (!hasPort) return { decision: "unavailable" };
+      const res = await fetchImpl(`http://127.0.0.1:${endpoint.port as number}/override`, {
+        method: "POST", headers: { "content-type": "application/json", [TOKEN_HEADER]: endpoint.token }, body: JSON.stringify(request),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) return { decision: "unavailable" };
+      body = await res.json() as AgentAnswer;
+    }
     const user = typeof body.os_user === "string" ? { os_user: body.os_user } : {};
     const lasts = body.lasts === "15m" || body.lasts === "always" ? body.lasts : "once";
     if (body.decision === "allow" && typeof body.reason === "string") return { decision: "allow", reason: body.reason, lasts, ...user };

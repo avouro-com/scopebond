@@ -92,3 +92,4 @@ export type { UpkeepOptions } from "./store-upkeep.js";
 export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-detail.js";
 export type { EvidenceDetail } from "./evidence-detail.js";
 export { isSingleExecutable, hookCliPath, hookSelfCommand, nodeSqlite } from "./self.js";
+export { requestOverSocket } from "./local-socket.js";
