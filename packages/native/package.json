@@ -1,0 +1,23 @@
+{
+  "name": "@scopebond/native",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The single-file Scopebond Agent and hook for Windows (and later macOS): a Node single executable application built from the agent and hook packages. Not published to npm; released as signed files.",
+  "license": "Apache-2.0",
+  "author": "Avouro LLC",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "node -e \"\"",
+    "build:sea": "node build-sea.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@scopebond/agent": "workspace:*",
+    "@scopebond/hook": "workspace:*",
+    "esbuild": "0.28.2",
+    "postject": "1.0.0-alpha.6"
+  }
+}
