@@ -143,6 +143,33 @@ Also: `verifyConsistencyProof`, `verifyAnchorChain`, `verifyAnchorRoot`,
 `merkleTreeHash`, `inclusionProof`, `consistencyProof`, `merkleRootV1`. Exact
 definitions: SPEC.md "Anchors"; vectors: `vectors/merkle-rfc9162.json`.
 
+## Summary records (`@scopebond/verify/summary`)
+
+A summary record (`type: "scopebond:summary"`, `evidence_class: "summary"`) stands in
+for many routine receipts when a computer sends its evidence. Every action still has
+its own signed receipt; the summary carries their number, an RFC 9162 Merkle Tree Hash
+over their payloads' leaf hashes (taken in order of timestamp, then action id, so anybody
+holding the receipts can recompute it), counts by action
+type, result, program and working folder (a digest), and the actions repeated in the
+window. It never covers a denied, overridden, approved or timed-out action: those are
+always sent in full. The signature uses the receipts' key over
+`"scopebond:summary/v1\n"` followed by the RFC 8785 canonical payload, so a summary can
+never pass as a receipt. Schema: `@scopebond/policy-schema/summary.schema.json`.
+
+```js
+import { validateSummary, verifySummarySignature, verifySummaryCoverage } from "@scopebond/verify/summary";
+
+validateSummary(summary);                                // closed shape and cross-field rules
+await verifySummarySignature(summary, attesterPublicKey); // signature and key binding
+await verifySummaryCoverage(summary, receipts);           // count, root, window, routine only, totals
+```
+
+Cross-field rules beyond the schema: the window does not end before it starts; the
+counts add up to `receipt_count`; each repeat lies in the window and repeats at most
+`receipt_count` times. Coverage also checks that every covered receipt lies in the
+window, that none is a deny, override, approval or timeout, and that the totals per
+action type and result match. Also: `summaryRoot`, `summaryOrder`, `summarySigningInput`.
+
 ## Examples
 
 Runnable end to end against a real gateway (asserted in CI by `pnpm run test:examples`):
