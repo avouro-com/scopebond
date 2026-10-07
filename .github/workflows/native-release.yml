@@ -149,9 +149,13 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
-      - name: Put the installer with the other files
+      - name: Put the installer with the other files, and name the executable by its version
         shell: pwsh
-        run: Move-Item msi/*.msi out/
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          Move-Item msi/*.msi out/
+          Move-Item out/scopebond-agent.exe "out/scopebond-agent-$env:VERSION-x64.exe"
       - name: Verify every signature, its timestamp and the publisher
         shell: pwsh
         run: |
@@ -176,10 +180,18 @@ jobs:
           } | Set-Content -Encoding ascii SHA256SUMS
           Get-Content SHA256SUMS
           Pop-Location
+      # The manifest signed installs trust before updating themselves (the updater key, separate from Authenticode).
+      # Without the secret there is no manifest, and signed installs leave this release to a person to install.
+      - name: Signed release manifest
+        env:
+          UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: node packages/native/manifest.mjs "$env:VERSION" out
+        shell: pwsh
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            out/scopebond-agent.exe
+            out/scopebond-agent-*-x64.exe
             out/scopebond-agent-*-x64.msi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -274,8 +286,6 @@ jobs:
         run: |
           set -euo pipefail
           tag="agent-native-v${VERSION}"
-          mv out/scopebond-agent.exe "out/scopebond-agent-${VERSION}-x64.exe"
-          sed -i "s/  scopebond-agent.exe\$/  scopebond-agent-${VERSION}-x64.exe/" out/SHA256SUMS
           gh release create "$tag" --repo "$REPO" --target "$SHA" --draft --prerelease \
             --title "Scopebond Agent ${VERSION} for Windows (signed)" \
             --notes "The Scopebond Agent and hook as one signed file, and its signed installer (per user by default; ALLUSERS=1 for every user). Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})." \

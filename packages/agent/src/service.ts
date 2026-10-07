@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
+import { fetchVerifiedInstaller, installAfterExit, installKind } from "./native-update.js";
 import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
@@ -288,7 +289,27 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const hookTarget = target?.policy === "recommended" && target.hook && compareVersions(target.hook, hookVersion()) > 0 ? target.hook : hookVersion();
       result.hookEntries = maintainHookEntries(harnesses, hookTarget, target?.policy !== "hold");
       for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
-      if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0) {
+      const kind = installKind();
+      if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 && kind === "per-machine") {
+        // Installed for every user: the organisation that deployed it updates it.
+        log(`the workspace recommends the Scopebond Agent ${target.agent}; this install is updated by your organization`);
+      } else if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 && kind === "per-user") {
+        log(`updating the Scopebond Agent ${current} -> ${target.agent} (signed installer)`);
+        const verified = await fetchVerifiedInstaller(target.agent, { dir: options.dir, fetchImpl: options.fetchImpl });
+        if (verified.ok) {
+          result.updatedTo = target.agent;
+          lastMaintenance = result;
+          if (options.onUpdated) options.onUpdated(target.agent);
+          else {
+            // The installer replaces this file, so it runs after this agent has exited, and starts the agent again.
+            installAfterExit(verified.path, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null);
+            setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
+          }
+          return result;
+        }
+        result.error = `update to ${target.agent} could not be verified: ${verified.reason}; nothing was installed`;
+        log(result.error);
+      } else if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0) {
         log(`updating the Scopebond Agent ${current} -> ${target.agent}`);
         const installed = await installAgent(target.agent);
         if (installed.ok) {

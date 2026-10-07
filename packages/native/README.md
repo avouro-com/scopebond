@@ -58,3 +58,18 @@ stays on 5). The installer:
 
 Signing in, the hook entries and autostart come from `scopebond-agent.exe setup <workspace-url>` after installing, as with
 npm. CI installs and removes it, per user and for every user (`test/msi.test.mjs`, only with `SCOPEBOND_MSI=1`).
+
+## Updates
+
+A per-user install updates itself when its workspace recommends a newer agent, with the release's installer, after three
+checks: the release manifest (`scopebond-agent-<version>.manifest.json`, each file's SHA-256 and size) is signed with the
+updater key, an Ed25519 key separate from the Authenticode certificate whose public half (`updater-public-key.txt`) is
+built into the program; the downloaded installer's digest and size are the manifest's; and its Authenticode signature is
+valid and names Avouro LLC. Then a detached helper waits for the agent to exit, installs it with `msiexec /qn` and starts
+the agent again through autostart's launcher. If any check fails, nothing is installed and the agent reports that the
+update could not be verified. An install for every user (Program Files) never updates itself.
+
+The updater key is made once by the owner: `node packages/native/updater-key.mjs` writes the public half here and the
+private half to a file, which goes into the `signing` environment as `UPDATER_SIGNING_KEY` and is then kept offline. The
+release workflow signs the manifest with it (`manifest.mjs`); without it there is no manifest, and signed installs do not
+update themselves to that release.

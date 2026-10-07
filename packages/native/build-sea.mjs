@@ -32,6 +32,8 @@ export async function bundle() {
       "import.meta.url": "__sbUrl",
       __SCOPEBOND_HOOK_VERSION__: JSON.stringify(version("hook")),
       __SCOPEBOND_AGENT_VERSION__: JSON.stringify(version("agent")),
+      // The updater key's public half (updater-public-key.txt), when there is one; without it the build never updates itself.
+      __SCOPEBOND_UPDATER_KEY__: existsSync(join(here, "updater-public-key.txt")) ? JSON.stringify(readFileSync(join(here, "updater-public-key.txt"), "utf8").trim()) : "undefined",
     },
     banner: { js: 'var __sbUrl = require("node:url").pathToFileURL(process.execPath).href;' },
     minify: false, keepNames: true, sourcemap: "external", metafile: true, logLevel: "silent",
