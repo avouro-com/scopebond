@@ -188,6 +188,23 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: node packages/native/manifest.mjs "$env:VERSION" out
         shell: pwsh
+      # The winget manifests (Avouro.Scopebond) for this release's installer; the owner submits them to winget-pkgs.
+      - name: winget manifests
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          $msi = Get-ChildItem out -Filter "scopebond-agent-$env:VERSION-x64.msi" | Select-Object -First 1
+          $wi = New-Object -ComObject WindowsInstaller.Installer
+          $db = $wi.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $wi, @($msi.FullName, 0))
+          $view = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"))
+          $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+          $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+          $code = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+          $sha = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash
+          $url = "https://github.com/$env:REPO/releases/download/agent-native-v$env:VERSION/$($msi.Name)"
+          node packages/native/winget.mjs $env:VERSION $url $sha $code out
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
