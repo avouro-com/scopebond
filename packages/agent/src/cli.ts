@@ -15,11 +15,12 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isEphemeralPath, userHome } from "@scopebond/hook";
 import { computerStatus } from "./agent.js";
-import { autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
+import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
 import { runSetup } from "./setup.js";
 import { agentVersion } from "./update.js";
-import { AFTER_PID_ENV, AGENT_VERSION, startService } from "./service.js";
+import { writeOutputTo } from "./log-file.js";
+import { AGENT_VERSION, startService, takeOver } from "./service.js";
 
 const [cmd = "help", ...rest] = process.argv.slice(2);
 // What a person types here: on Windows, PowerShell blocks the plain name's script shim.
@@ -47,9 +48,11 @@ connection current. Home: ${dir}`);
 async function main(): Promise<void> {
   switch (cmd) {
     case "run": {
+      // A launcher or a handover names the log; the agent writes it itself (see log-file.ts).
+      const log = process.env[AGENT_LOG_ENV];
+      if (log) writeOutputTo(log);
       // Started by an agent that just updated itself: let it exit first.
-      const previous = Number(process.env[AFTER_PID_ENV]);
-      if (Number.isInteger(previous) && previous > 0) await waitForExit(previous, 30_000);
+      await takeOver(dir, cliPath);
       const service = await startService({ dir, onStopped: () => process.exit(0) });
       const stop = () => { void service.stop().finally(() => process.exit(0)); };
       process.on("SIGINT", stop);
@@ -79,6 +82,8 @@ async function main(): Promise<void> {
       const answer = await callAgent(dir, "POST", `/${cmd === "check" ? "maintain" : cmd}`, {}, 6 * 60_000);
       if (!answer) { console.error(`The Scopebond Agent is not running. Start it with: ${me} autostart on`); process.exitCode = 1; return; }
       console.log(JSON.stringify(answer, null, 2));
+      const updatedTo = (answer as { updatedTo?: unknown }).updatedTo;
+      if (cmd === "check" && typeof updatedTo === "string") console.log(await afterUpdate(updatedTo));
       return;
     }
     case "setup": {
@@ -120,16 +125,9 @@ async function main(): Promise<void> {
       }
       // Turning autostart on also starts the agent now, so nobody has to sign out and in again.
       if (await callAgent(dir, "GET", "/status", undefined, 2_000)) { console.log("The Scopebond Agent is running."); return; }
-      // Each way of starting it gets a few seconds; a headless console that never starts falls back to a hidden cmd.exe.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (!startNow(dir, process.platform, attempt) && attempt > 0) break;
-        for (let i = 0; i < (attempt === 0 ? 12 : 18); i++) {
-          await new Promise((r) => setTimeout(r, 500));
-          if (await callAgent(dir, "GET", "/status", undefined, 1_000)) {
-            console.log(`The Scopebond Agent is running${process.platform === "win32" ? "; its icon is in the taskbar tray (it may be under the ^ arrow)" : ""}.`);
-            return;
-          }
-        }
+      if (await startAndWait()) {
+        console.log(`The Scopebond Agent is running${process.platform === "win32" ? "; its icon is in the taskbar tray (it may be under the ^ arrow)" : ""}.`);
+        return;
       }
       console.log(`It starts at your next sign-in. To start it now: ${me} run`);
       return;
@@ -138,6 +136,33 @@ async function main(): Promise<void> {
       help();
       if (cmd !== "help" && cmd !== "--help") process.exitCode = 1;
   }
+}
+
+/** Start the agent through its autostart launcher and wait until it answers. Each way of starting it gets a few seconds;
+ *  a headless console that never starts falls back to a hidden cmd.exe. Whether it answers. */
+async function startAndWait(): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!startNow(dir, process.platform, attempt) && attempt > 0) break;
+    for (let i = 0; i < (attempt === 0 ? 12 : 18); i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (await callAgent(dir, "GET", "/status", undefined, 1_000)) return true;
+    }
+  }
+  return false;
+}
+
+/** After `check` updated the agent: wait for the updated one to answer, start it if nothing does, and say which version runs. */
+async function afterUpdate(version: string): Promise<string> {
+  const running = async () => ((await callAgent(dir, "GET", "/status", undefined, 1_000)) as { agent?: AgentReport | null } | null)?.agent?.version ?? null;
+  let seen: string | null = null;
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 1_000));
+    seen = await running();
+    if (seen === `agent/${version}`) return `The Scopebond Agent ${version} is running.`;
+  }
+  if (seen) return `The Scopebond Agent running now is ${seen.replace(/^agent\//, "")}, not ${version}. Restart it with: ${me} stop, then ${me} autostart on`;
+  if (autostartHealth(dir).on && await startAndWait()) return "The updated agent had not started; it is running now.";
+  return `The updated agent is not running. Start it with: ${me} autostart on`;
 }
 
 /** Ask the running agent to stop and wait until its control channel is gone. Whether one was running. */
@@ -151,13 +176,5 @@ async function stopRunning(): Promise<boolean> {
 }
 
 interface AgentReport { version?: string; last_maintenance?: { selfCheck?: { ok: boolean; failed: string[] } | null } | null }
-
-async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
-  const until = Date.now() + timeoutMs;
-  while (Date.now() < until) {
-    try { process.kill(pid, 0); } catch { return; }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-}
 
 void main().catch((error) => { console.error((error as Error).message); process.exitCode = 1; });

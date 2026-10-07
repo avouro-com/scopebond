@@ -135,7 +135,7 @@ test("autostart starts a launcher that finds Node and the agent each time, with 
   assert.match(cmd, /npm\.cmd root -g/, "falls back to the globally installed agent");
   assert.match(cmd, /\r\n/, "Windows line endings");
   // A crash restarts the agent (as launchd and systemd do); a clean exit ends the launcher.
-  assert.match(cmd, /set "CODE=%ERRORLEVEL%"\r\nif %CODE% EQU 0 exit \/b 0/);
+  assert.match(cmd, /\(call\)\r\n"%NODE%" [^\r]* run >nul 2>&1\r\nset "CODE=%ERRORLEVEL%"\r\nset "SCOPEBOND_AGENT_AFTER_PID="\r\nif %CODE% EQU 0 exit \/b 0/, "a command that never ran is a failure; a crash restart waits for nobody");
   assert.match(cmd, /:run[\s\S]*goto run/);
   assert.match(cmd, /if %TRIES% GEQ 50 exit \/b 1/);
   const sh = posixLauncher("/opt/node's/bin/node", "/opt/scopebond/cli.js");
@@ -480,7 +480,7 @@ test("the Windows launcher reads as written in a profile folder with non-ASCII l
   const text = windowsLauncher("D:\\Data\\J\u00f6rg\\node.exe", "D:\\Data\\J\u00f6rg\\cli.js", "D:\\Data\\J\u00f6rg\\.sb\\agent.log");
   const lines = text.split("\r\n");
   assert.equal(lines[1], "chcp 65001 >nul", "UTF-8 before any path is read");
-  assert.match(text, /run >> "%~dp0agent\.log" 2>&1/, "the log path does not depend on the folder's name");
+  assert.match(text, /set "SCOPEBOND_AGENT_LOG=%~dp0agent\.log"/, "the log path does not depend on the folder's name");
 });
 
 test("only one agent runs per home: a live holder keeps the lock, a dead one gives it up", async () => {

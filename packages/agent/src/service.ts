@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { actOnBlocked, blockedQuestion, hookVersion, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
-import { launcherPath } from "./autostart.js";
+import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
@@ -49,6 +49,11 @@ export function writeTraySettings(dir: string, patch: unknown): TraySettings {
   writeFileSync(join(dir, TRAY_SETTINGS_FILE), JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
   return next;
 }
+
+/** Set for a replacement started directly because the launcher is an older one: it rewrites the launcher once the old agent is gone. */
+export const REFRESH_LAUNCHER_ENV = "SCOPEBOND_AGENT_REFRESH_LAUNCHER";
+/** The exit code that asks a service manager to start the agent again (systemd's Restart=on-failure), used where a detached replacement would not survive. */
+export const RESTART_EXIT_CODE = 75;
 
 export interface ServiceOptions {
   dir: string; intervalMs?: number; fetchImpl?: typeof fetch; log?: (line: string) => void;
@@ -93,17 +98,70 @@ export function repairHookEntries(harnesses: Harness[] = expectedHarnesses()): A
   return repaired;
 }
 
-/** Start a fresh agent (the updated one) that waits for this process to exit, through the
- *  autostart launcher when there is one so it finds Node the same way sign-in does. */
-export function spawnReplacement(dir: string): void {
-  const launcher = launcherPath(dir);
-  const cli = realpathSync(fileURLToPath(new URL("./cli.js", import.meta.url)));
-  const env = { ...process.env, [AFTER_PID_ENV]: String(process.pid) };
-  const [command, args] = existsSync(launcher)
-    ? process.platform === "win32" ? ["cmd.exe", ["/d", "/c", launcher]] as const : ["/bin/sh", [launcher]] as const
-    : [process.execPath, [cli, "run"]] as const;
-  const child = spawn(command, [...args], { env, detached: true, stdio: "ignore", windowsHide: true });
+/** How the updated agent takes over from this one. */
+export type Handover =
+  | { kind: "spawn"; command: string; args: string[]; env: Record<string, string | undefined>; verbatim: boolean }
+  | { kind: "service-restart" };
+
+/** Decide how to start the updated agent. Through the autostart launcher when there is one, so it finds Node the same way
+ *  sign-in does and is restarted after a crash. On Windows an older launcher cannot do it: it redirects the agent's output
+ *  into agent.log, this agent's children inherit that handle, and the new launcher's own redirect then fails, which cmd
+ *  takes for a clean exit. So under an older launcher the updated agent starts directly and rewrites the launcher once
+ *  this one is gone. Under systemd a detached child is stopped with the service, so the service manager restarts it. */
+export function handoverPlan(o: {
+  dir: string; cli: string; pid: number; execPath: string; platform: NodeJS.Platform;
+  env: Record<string, string | undefined>; launcherText: string | null;
+}): Handover {
+  if (o.platform === "linux" && o.env.INVOCATION_ID) return { kind: "service-restart" };
+  const launcher = launcherPath(o.dir, o.platform);
+  const env = { ...o.env, [AFTER_PID_ENV]: String(o.pid), [AGENT_LOG_ENV]: join(o.dir, "agent.log") };
+  if (o.launcherText !== null && launcherIsCurrent(o.launcherText, o.platform)) {
+    if (o.platform === "win32") {
+      const [command, args] = startCommands(launcher, o.platform)[1];
+      return { kind: "spawn", command, args, env, verbatim: true };
+    }
+    return { kind: "spawn", command: "/bin/sh", args: [launcher], env, verbatim: false };
+  }
+  return {
+    kind: "spawn", command: o.execPath, args: ["--disable-warning=ExperimentalWarning", o.cli, "run"], verbatim: false,
+    env: o.launcherText !== null ? { ...env, [REFRESH_LAUNCHER_ENV]: "1" } : env,
+  };
+}
+
+/** Start the updated agent, which waits for this process to exit. Returns false when a service manager restarts it instead
+ *  (this process then exits with RESTART_EXIT_CODE). */
+export function spawnReplacement(dir: string, cli = realpathSync(fileURLToPath(new URL("./cli.js", import.meta.url)))): boolean {
+  let launcherText: string | null = null;
+  try { launcherText = readFileSync(launcherPath(dir), "utf8"); } catch { /* no autostart launcher */ }
+  const plan = handoverPlan({ dir, cli, pid: process.pid, execPath: process.execPath, platform: process.platform, env: process.env, launcherText });
+  if (plan.kind === "service-restart") return false;
+  const child = spawn(plan.command, plan.args, { env: plan.env, detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: plan.verbatim });
+  child.on("error", () => { /* the next sign-in starts it */ });
   child.unref();
+  return true;
+}
+
+/** The first thing a starting agent does: wait for the agent it replaces to exit, then, when asked, rewrite the older launcher
+ *  that agent ran under (by now nothing runs it). The handover variables are dropped, so a later restart waits for nothing. */
+export async function takeOver(dir: string, cli: string, waitMs = 30_000): Promise<void> {
+  const previous = Number(process.env[AFTER_PID_ENV]);
+  const refresh = process.env[REFRESH_LAUNCHER_ENV] === "1";
+  delete process.env[AFTER_PID_ENV];
+  delete process.env[REFRESH_LAUNCHER_ENV];
+  if (Number.isInteger(previous) && previous > 0) await waitForExit(previous, waitMs);
+  if (!refresh) return;
+  // The old launcher reads its last lines after its agent exits; give it a moment to finish before its file changes.
+  await new Promise((r) => setTimeout(r, 2_000));
+  try { if (refreshLauncher(dir, cli)) console.log(`${new Date().toISOString()} rewrote the autostart launcher for this version`); }
+  catch (error) { console.log(`${new Date().toISOString()} could not rewrite the autostart launcher: ${(error as Error).message}`); }
+}
+
+export async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    try { process.kill(pid, 0); } catch { return; }
+    await new Promise((r) => setTimeout(r, 250));
+  }
 }
 
 export const AGENT_LOCK = "agent.lock";
@@ -236,10 +294,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
           lastMaintenance = result;
           if (options.onUpdated) options.onUpdated(target.agent);
           else {
-            spawnReplacement(options.dir);
+            const code = spawnReplacement(options.dir) ? 0 : RESTART_EXIT_CODE;
             // Hand over: stop, then exit. A stop that never finishes (a tray or window child that will not close) must not
             // keep the old agent alive with the replacement waiting on it, so the exit has a hard deadline.
-            setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
+            setTimeout(() => { setTimeout(() => process.exit(code), 5_000).unref(); void stop().finally(() => process.exit(code)); }, 500);
           }
           return result;
         }
