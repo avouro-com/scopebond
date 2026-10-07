@@ -18,6 +18,7 @@ import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prom
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { checkResult, trayModel, type TrayModel } from "./tray-model.js";
+import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
@@ -25,6 +26,7 @@ const INTERVAL_MS = 60_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
 const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
+const SUMMARY_EVERY_MS = 5 * 60 * 1000;
 export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
 /** The person's tray settings (D143: notifications about problems by default, none about blocks). */
 export const TRAY_SETTINGS_FILE = "agent-settings.json";
@@ -158,6 +160,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let lastCycleAt = 0;
   // A long step the person should see as "working" (an update), or null.
   let working: string | null = null;
+  // SB391: the workspace's own summary for the tray (names, links, open reviews), refreshed every five minutes; null when the
+  // workspace does not answer it (a self-hosted gateway), and the tray simply leaves those rows out.
+  let summary: ComputerSummary | null = null;
+  let summaryAt = 0;
+  const refreshSummary = async () => {
+    summaryAt = Date.now();
+    const connection = loadConnection(options.dir);
+    summary = connection ? await fetchComputerSummary(connection, options.fetchImpl) : null;
+  };
 
   const prompt = serialized(options.prompter ?? systemPrompter);
   let shownLevel: HealthLevel | null = null;
@@ -182,6 +193,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       failures = result.deliveryError ? failures + 1 : 0;
       if (result.delivered) log(`delivered ${result.delivered} record(s); ${result.pending} waiting`);
       if (result.deliveryError) log(`delivery problem: ${result.deliveryError}`);
+      // SB390: asked from the workspace's computer page. Send again now (the cycle sent before its rules check), or run the
+      // self-check; each once.
+      if (result.requested === "flush") { log("the workspace asked this computer to send now"); setTimeout(() => { void cycle(); }, 0); }
+      if (result.requested === "self_check") { log("the workspace asked this computer to check now"); setTimeout(() => { void maintain(true); }, 0); }
+      if (result.connected && Date.now() - summaryAt > SUMMARY_EVERY_MS) void refreshSummary();
       return result;
     }).finally(() => { running = null; });
     return running;
@@ -248,7 +264,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       today: activity?.today ?? null,
       recentBlocks: activity?.recent_blocks ?? [],
       version: { agent: agentVersion(), hook: hookVersion(), policy: lastMaintenance?.policy ?? "unknown", recommendedAgent: meta.recommended?.agent ?? null, recommendedHook: meta.recommended?.hook ?? null },
-      workspace: null,
+      workspace: summary ? { name: summary.workspace_name, environment: summary.environment_name, computer_url: summary.computer_url } : null,
+      openReviews: summary?.open_reviews ?? 0,
       computerName: hostname(),
     });
   };
@@ -269,6 +286,14 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       finally { working = null; }
     },
     // SB389: the newest blocks on this computer, summarised the way `log` prints them (never raw arguments).
+    // SB391: open this computer's page in the workspace, only on the workspace this computer is connected to.
+    "POST /open-workspace": () => {
+      const connection = loadConnection(options.dir);
+      const url = summary?.computer_url;
+      if (!connection || !url || !sameOrigin(url, connection.url)) return { opened: false };
+      openInBrowser(url);
+      return { opened: true };
+    },
     "GET /recent-blocks": () => ({ recent_blocks: localActivity(options.dir, { limit: 10 })?.recent_blocks ?? [] }),
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, last_maintenance: lastMaintenance } }),
     "POST /flush": async () => ({ cycle: await cycle() }),

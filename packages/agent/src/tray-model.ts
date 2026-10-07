@@ -45,6 +45,8 @@ export interface TrayInput {
   version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null };
   workspace: { name: string | null; environment: string | null; computer_url: string | null } | null;
   computerName: string;
+  /** Items about this computer waiting in the workspace's Review (from the workspace's summary). */
+  openReviews?: number;
   /** Whether the agent can run the sign-in itself (`POST /reconnect`); until then the tray shows the command. */
   canReconnect?: boolean;
 }
@@ -147,6 +149,7 @@ export function trayModel(input: TrayInput): TrayModel {
   if (input.today) {
     const parts = [`${input.today.actions} action${input.today.actions === 1 ? "" : "s"}`, `${input.today.blocked} blocked`];
     if (input.today.allowed_by_person) parts.push(`${input.today.allowed_by_person} allowed by a person`);
+    if (input.openReviews) parts.push(`${input.openReviews} in Review`);
     rows.push({ label: "Today", value: parts.join(" · ") });
   }
   rows.push({

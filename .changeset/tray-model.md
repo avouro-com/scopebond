@@ -14,3 +14,8 @@ hours before it needs attention.
 
 The hook exports `localActivity()` (today's counts and the newest blocks, read-only and bounded, summarised without
 arguments) and `ruleReport()`.
+
+The agent acts on a request the workspace carries on the rules check (`x-scopebond-request: flush | self_check`, from the
+computer's page: "Ask it to send now", "Ask it to check now"), and reads the workspace's optional `GET /v1/computer/summary`
+for the tray's workspace and environment names, Review count and **Open workspace** (links only on the connected workspace's
+own origin). A workspace without the call answers 404 and the tray leaves those rows out; the fake cloud implements it.
