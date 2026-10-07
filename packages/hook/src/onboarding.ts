@@ -6,6 +6,8 @@ export function onboardingSteps(options: {
   command: (args: string) => string;
   connected?: boolean;
   project?: boolean;
+  /** The Scopebond Agent already runs for this user: nothing to suggest installing. */
+  agentRunning?: boolean;
 }): string[] {
   const windows = process.platform === "win32";
   const lines: string[] = [];
@@ -17,6 +19,10 @@ export function onboardingSteps(options: {
       "Create the workspace, add your agent, then connect this computer from your own terminal:",
       `  ${options.command(`login https://cloud.scopebond.com${flag}${options.project ? " --project" : ""}`)}`,
     );
+  }
+  if (options.agentRunning) {
+    lines.push("The Scopebond Agent runs here: records send and Scopebond stays up to date without a coding agent open.");
+    return lines;
   }
   lines.push(
     "Keep this computer connected with the Scopebond Agent (optional):",

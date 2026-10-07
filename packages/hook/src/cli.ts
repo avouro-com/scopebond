@@ -1277,7 +1277,11 @@ function runInstall(args: string[]): void {
   const { agentKid, policyPath } = scaffold(dir, { force: args.includes("--force") });
   console.log(`Scopebond installed for this user in ${dir}`);
   console.log(`  machine key    ${agentKid}`);
-  console.log(`  policy         ${policyPath} (starter — edit the limits)`);
+  // A computer already connected keeps its connection and its workspace's rules: say so, not "starter".
+  const existing = loadConnection(dir);
+  const workspaceRules = existsSync(join(dir, MANAGED_DOC_FILE));
+  console.log(`  policy         ${policyPath} (${workspaceRules ? "set by your workspace" : "starter — edit the limits"})`);
+  if (existing) console.log(`  workspace      connected to ${existing.url} (kept)`);
   console.log("");
   const harnesses: Harness[] = harnessesFor();
   if (!args.includes("--no-install")) {
@@ -1298,7 +1302,7 @@ function runInstall(args: string[]): void {
   console.log("");
   console.log(`A project's own .scopebond policy applies only after you trust it there (${cliCommand("trust")}).`);
   console.log(`Check it: ${cliCommand("doctor")} · see decisions: ${cliCommand("log")}`);
-  console.log(onboardingSteps({ harness: harnesses[0], command: cliCommand }).join("\n"));
+  console.log(onboardingSteps({ harness: harnesses[0], command: cliCommand, connected: !!existing, agentRunning: agentPresence(userHome()).state === "running" }).join("\n"));
 }
 
 /** Size and count of the local receipt store, plus its write-ahead log. Signed evidence

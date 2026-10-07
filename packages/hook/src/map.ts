@@ -437,6 +437,10 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
         if (value !== undefined) flagValue(opt.name, value);
         continue;
       }
+      // A program whose options are known names every option that takes a value (and which of those are
+      // files: `sort -o f`, `grep -f f`); any other flag takes none. Guessing past that read
+      // `grep -o PATTERN file` as a write to PATTERN and lost the read of `file`.
+      if (spec) continue;
       const value = args[i + 1];
       if (value !== undefined && !value.startsWith("-")) {
         if (COPIERS.has(prog) && t === "-t") { write(value); i++; continue; } // cp -t DIR
@@ -448,7 +452,8 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       continue;
     }
     if (prog === "dd" && /^(?:if|of)=/.test(t)) { (t.startsWith("of=") ? write : read)(t.slice(3)); continue; }
-    if (t.startsWith("@")) { read(t.slice(1)); continue; }
+    // `@file` names a file for uploaders and the like; for a search tool `@…` is its pattern, not a file.
+    if (t.startsWith("@") && !PATTERN_FIRST.has(prog)) { read(t.slice(1)); continue; }
     operands.push(t);
   }
   if (PATTERN_FIRST.has(prog) && ![...given].some((g) => PATTERN_OPTIONS.has(g)) && !(prog === "yq" && operands.length === 1)) operands.shift();
@@ -626,15 +631,22 @@ function selfDisable(sc: SimpleCommand): boolean {
  *  shell.exec itself, plus any file reads/writes it performs. An opaque command
  *  (unparseable, or a program known only at run time) becomes a shell.exec with an
  *  empty program, evaluated, which the starter policy denies. */
-function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string): Mapped[] {
+/** What an unreadable command must name to count as touching Scopebond itself: its folder, a package,
+ *  or one of its programs. Used for the Windows reading, where `\"` (an escaped quote in a POSIX shell)
+ *  becomes `/"` and leaves a quote open, so a readable command such as `grep -o "scopebond[^\"]*" f`
+ *  would otherwise read as switching Scopebond off. */
+const NAMES_SCOPEBOND_ITSELF = /\.scopebond\b|@scopebond\/|\bscopebond-(?:hook|agent|mcp|gateway)\b|(?:^|[\s"'`;&|(])scopebond(?:\.cmd|\.exe)?(?=$|[\s"'`;&|)])/i;
+
+function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false): Mapped[] {
   if (sc.opaque) {
     const opaque: Mapped[] = [{
       intent: { action_type: "shell.exec", params: { command: redactCommand(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
       evaluated: true, source: "shell",
     }];
     // A command that cannot be read but names Scopebond (`eval "$X @scopebond/hook uninstall"`) is treated as switching it off:
-    // self-protection never depends on a readable command.
-    if (/scopebond/i.test(sc.raw)) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+    // self-protection never depends on a readable command. In the Windows reading of a command the POSIX
+    // reading already understood, only a reference to Scopebond itself counts, not the word anywhere.
+    if (windowsReading ? NAMES_SCOPEBOND_ITSELF.test(sc.raw) : /scopebond/i.test(sc.raw)) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
     return opaque;
   }
   const push = parseGitPush(sc);
@@ -692,7 +704,7 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
     let dir = "";
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = mapSimpleCommand(sc, dir, cwd);
+      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly);
       out.push(...(filesOnly ? mapped.filter((m) => m.intent.action_type.startsWith("file.")) : mapped));
       if (!sc.opaque && CD.has(canonProgram(sc.program))) {
         const target = sc.argv.find((a) => !a.startsWith("-"));
