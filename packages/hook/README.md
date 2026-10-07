@@ -542,6 +542,18 @@ first, so they stay verifiable, and it refuses outright once the log has been an
 receipt's position is its anchor leaf index, so removing one would make an existing anchor
 unverifiable.
 
+**What is sent to the workspace.** Every receipt, unless the workspace sets its evidence
+detail to *Standard* (it says so on each rules check). Then the notable receipts are sent
+in full at once — anything not plainly allowed (a block, an override, an approval, an
+action a Monitor rule matched), pushes, MCP calls, web fetches, and writes outside the
+project or to CI, agent or Scopebond settings — and the routine ones leave as one signed
+summary per five minutes (`scopebond:summary`, see `@scopebond/verify/summary`): their
+count, a Merkle root over them, counts by action type, program and folder, and the
+commands repeated. Every receipt stays here for the retention above, and anybody holding
+them can check them against the summary. The Scopebond Agent sends the summaries; without
+it, `flush` (for example at the end of a session) does; a hook call sends only when it
+recorded something notable.
+
 **What a shell command is checked for.** A command line is split into every command it
 runs (`&&`, `;`, pipes, `$( )` and backticks — also inside double quotes — `bash -c`,
 `eval`, `trap`, `su -c`, `script -c`, `watch`, `parallel`, `cmd /c`, `pwsh -Command`

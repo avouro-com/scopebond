@@ -237,6 +237,8 @@ export interface ManagedMeta {
   recommended?: Recommended | null;
   /** How many days this computer keeps receipts the workspace acknowledged, as its last rules check said (D144). */
   local_retention_days?: number | null;
+  /** D144: what this computer sends its workspace (full: every receipt; standard: notable ones and summaries). */
+  evidence_detail?: "full" | "standard" | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 

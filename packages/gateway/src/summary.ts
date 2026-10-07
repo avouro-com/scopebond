@@ -68,6 +68,8 @@ export interface SummaryOptions {
   /** Receipts in the window sent in full (not covered). */
   notableCount: number;
   now?: Date;
+  /** The summary's id (default: a new one). */
+  summaryId?: string;
 }
 
 /** Build and sign the summary of these routine receipts (in any order: the root is taken in `summaryOrder`). Throws when one is notable by
@@ -98,7 +100,7 @@ export async function buildSummary(receipts: readonly SignedReceipt[], options: 
   const end = new Date(Math.max(Date.parse(options.window.end), ...times)).toISOString();
   const payload: SummaryPayload = {
     type: "scopebond:summary", version: "1.0", canonicalization: "RFC8785", evidence_class: "summary",
-    summary_id: `sum_${randomUUID()}`,
+    summary_id: options.summaryId ?? `sum_${randomUUID()}`,
     attester: { kind: "gateway", kid: options.attester.kid },
     session_id: options.sessionId ?? null,
     harness: options.harness ?? null,

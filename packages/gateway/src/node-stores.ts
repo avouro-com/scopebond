@@ -782,6 +782,11 @@ export class SqliteCloudOutbox implements CloudOutbox {
           event_id TEXT PRIMARY KEY,
           acked_at INTEGER NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS cloud_summary_windows (
+          window_start INTEGER PRIMARY KEY,
+          summary_id TEXT NOT NULL,
+          claimed_at INTEGER NOT NULL
+        );
       `);
       // SB289: a number per queued record, kept across restarts. Queues made before it get the columns
       // here; records already in them stay unnumbered.
@@ -931,6 +936,18 @@ export class SqliteCloudOutbox implements CloudOutbox {
   }
 
   /** Records the workspace accepted outside this queue (`recover` sends them itself): they become eligible for retention. */
+  /** Summaries: a window is summarised once by this queue, whichever process flushes (the insert is the claim). Claims older
+   *  than a week are dropped; records that old are sent in full anyway. */
+  claimWindow(windowStart: number, summaryId: string): boolean {
+    const now = Date.now();
+    this.db.prepare("DELETE FROM cloud_summary_windows WHERE claimed_at < ?").run(now - 7 * 24 * 60 * 60 * 1000);
+    return Number((this.db.prepare("INSERT OR IGNORE INTO cloud_summary_windows (window_start, summary_id, claimed_at) VALUES (?, ?, ?)").run(windowStart, summaryId, now) as { changes: number | bigint }).changes) === 1;
+  }
+
+  releaseWindow(windowStart: number, summaryId: string): void {
+    this.db.prepare("DELETE FROM cloud_summary_windows WHERE window_start = ? AND summary_id = ?").run(windowStart, summaryId);
+  }
+
   markAcknowledged(ids: string[]): void {
     const acked = this.db.prepare("INSERT OR REPLACE INTO cloud_acknowledged (event_id, acked_at) VALUES (?, ?)");
     const at = this.now();

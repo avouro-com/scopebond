@@ -5,7 +5,7 @@
 // receipt log stay local-first; export is best-effort and never blocks a tool call.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,
   type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter, type ReceiptStore,
@@ -13,6 +13,7 @@ import {
 import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX } from "./delivery-report.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
+import { summaryOptions } from "./evidence-detail.js";
 
 /** The persisted connection between this machine and a Cloud workspace. Holds the
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
@@ -139,15 +140,17 @@ export function attachExporter(
   let outbox: SqliteCloudOutbox;
   try { outbox = new SqliteCloudOutbox(outboxDbPath, LOSSLESS_OUTBOX); }
   catch (error) { throw new DeliveryQueueError(outboxDbPath, error); }
-  const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl });
+  const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl,
+    summaries: summaryOptions(dirname(outboxDbPath)) });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }
 
 /** Attempt delivery with a bounded timeout so a per-invocation hook never hangs the
- *  agent; undelivered receipts stay in the durable outbox and flush next time. */
-export async function flushBounded(exporter: CloudExporter, timeoutMs = 3000): Promise<void> {
+ *  agent; undelivered receipts stay in the durable outbox and flush next time. A hook call passes `routine: false`: with
+ *  summaries on, it sends only when it queued a notable record (the agent and `flush` send the summaries). */
+export async function flushBounded(exporter: CloudExporter, timeoutMs = 3000, options: { routine?: boolean } = {}): Promise<void> {
   await Promise.race([
-    exporter.flush().catch(() => {}),
+    exporter.flush(options).catch(() => {}),
     new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, timeoutMs)).unref?.()),
   ]);
 }
