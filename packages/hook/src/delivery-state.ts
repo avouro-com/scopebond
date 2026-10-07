@@ -22,6 +22,9 @@ export interface DeliveryState {
   invalid_since: number | null;
   /** What saw the refusal: record delivery or the rules check. */
   invalid_source: "delivery" | "rules" | null;
+  /** When a hook call's bounded delivery was last cut off by its time limit. Kept as history: while records reach the
+   *  workspace (the Scopebond Agent is the reliable path), a cut-off call is expected and is not the last problem. */
+  last_timeout_at?: number | null;
 }
 
 const EMPTY: DeliveryState = {
@@ -57,6 +60,9 @@ export function httpStatusOf(message: string | null | undefined): number | null 
 
 /** The error recorded for an attempt the time limit cut off. The trailing `(timeout)` is the
  *  code `status --json` reports. */
+/** A cut-off attempt is reported as the last problem only when nothing was delivered for this long. */
+export const TIMEOUT_MATTERS_AFTER_MS = 15 * 60 * 1000;
+
 export const timeoutError = (ms: number): string => `delivery did not finish within ${ms} ms, so it was cut off (timeout)`;
 
 /** Record the outcome of one delivery attempt from the exporter's in-process status.
@@ -80,8 +86,11 @@ export function recordDeliveryAttempt(dir: string, status: Pick<CloudExporterSta
     Object.assign(patch, { last_success_at: status.lastSuccessAt, last_error: null, last_status: null, invalid_since: null, invalid_source: null });
   } else if (limitMs !== null && status.pending > 0) {
     // A refusal seen earlier is kept: a timeout says nothing about whether the workspace
-    // accepts this computer.
-    Object.assign(patch, { last_error: timeoutError(limitMs), last_status: null });
+    // accepts this computer. A timeout is the last problem only when nothing has been delivered for a while (SB385):
+    // after a recent delivery (often the agent's) it is history, not something to fix.
+    patch.last_timeout_at = at;
+    const delivered = readDeliveryState(dir).last_success_at;
+    if (delivered === null || at - delivered > TIMEOUT_MATTERS_AFTER_MS) Object.assign(patch, { last_error: timeoutError(limitMs), last_status: null });
   }
   return writeDeliveryState(dir, patch);
 }
