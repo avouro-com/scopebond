@@ -114,7 +114,7 @@ test("'Block, person may ask': the window offers only Ask an admin; the request 
   const reason = "Need to clear the build cache before the release";
   const d = await run(dir, bash("rm -rf build"), { answers: [{ decision: "ask", reason, os_user: "dev" }] });
   assert.equal(d.decision, "deny");
-  assert.deepEqual(d.asked[0].offers, { allow: false, always: false, ask: true });
+  assert.deepEqual(d.asked[0].offers, { allow: false, always: false, ask: true, fifteen: false });
   assert.equal(d.asked[0].mode, "ask");
   assert.match(d.hint, /request to allow .* was sent to your workspace's admins/);
   const [request] = readRequests(dir);
@@ -137,7 +137,7 @@ test("'Allow for 15 min' and 'Always allow this here…' also stand for the same
   const first = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason, os_user: ME, lasts: "15m" }] });
   assert.equal(first.decision, "allow");
   assert.equal(first.override.method, "agent_dialog");
-  assert.deepEqual(first.asked[0].offers, { allow: true, always: true, ask: false });
+  assert.deepEqual(first.asked[0].offers, { allow: true, always: true, ask: false, fifteen: true });
   const next = await run(dir, bash("rm -rf build"));
   assert.equal(next.override.method, "allowance", "the next one needs no window");
   const always = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "allow", reason, os_user: ME, lasts: "always" }] });
@@ -202,4 +202,29 @@ test("from the tray, allowing stops at the daily limit and when the rule no long
   writeFileSync(join(d2, MANAGED_DOC_FILE), JSON.stringify(doc(3, { "destructive-shell": { mode: "block" } })));
   assert.equal(blockedQuestion(d2, item.id), null);
   assert.equal(actOnBlocked(d2, item.id, { decision: "allow", reason: "Cleaning the build output before release" }).outcome, "gone");
+});
+
+test("a rule a person may only ask about still blocks when another rule on the same action lets a person allow", async () => {
+  const { dir } = setup({
+    "push-protected": { mode: "override", override: terms({ always: "at_once", requests: true }) },
+    "force-push-protected": { mode: "ask", override: terms({ requests: true }) },
+  });
+  const d = await run(dir, { tool_name: "Bash", tool_input: { command: "git push --force origin main" } }, { answers: [{ decision: "allow", reason: "Need to fix the release branch", os_user: ME, lasts: "once" }] });
+  assert.equal(d.decision, "deny", "allowing the push rule does not get past the force-push rule");
+});
+
+test("an older agent's 'Allow once' on a rule a person may only ask about becomes a request to an admin", async () => {
+  const { dir } = setup({ "destructive-shell": { mode: "ask", override: terms({ requests: true }) } });
+  const reason = "Need to clear the build cache before the release";
+  const d = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason, os_user: ME }] });
+  assert.equal(d.decision, "deny");
+  assert.equal(readRequests(dir).at(-1)?.reason, reason);
+});
+
+test("a workspace without the allowance terms gets no 15-minute allowance", async () => {
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms() } });
+  const d = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "15m" }] });
+  assert.equal(d.decision, "allow");
+  assert.equal(d.asked[0].offers.fifteen, false);
+  assert.equal(readAllowances(dir).length, 0, "allowed once, no standing allowance");
 });
