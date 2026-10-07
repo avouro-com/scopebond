@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scopebond.com/schema/summary-v1.json",
+  "title": "scopebond:summary v1",
+  "description": "A signed summary of routine action receipts (evidence class 'summary'). Every action still has its own signed receipt on the computer; a summary stands in for the routine ones when they are sent, and carries an RFC 9162 Merkle Tree Hash over the receipts it covers, so the full receipts can be checked against it whenever they are produced. The signature covers the UTF-8 bytes of the domain 'scopebond:summary/v1' plus one LF byte, followed by the RFC 8785 canonical payload, with the same key that signs the computer's receipts. A summary never covers a denied, overridden or approved action: those are always sent in full. The schema describes shape and closedness; a verifier additionally enforces the cross-field rules stated in the @scopebond/verify README.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["payload", "signature"],
+  "properties": {
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "version", "canonicalization", "evidence_class", "summary_id", "attester", "window", "receipt_count", "receipts_root", "notable_count", "counts", "dedupe", "timestamp"],
+      "properties": {
+        "type": { "const": "scopebond:summary" },
+        "version": { "const": "1.0" },
+        "canonicalization": { "const": "RFC8785" },
+        "evidence_class": { "const": "summary" },
+        "summary_id": { "type": "string", "minLength": 16, "maxLength": 200 },
+        "attester": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "kid"],
+          "properties": {
+            "kind": { "const": "gateway" },
+            "kid": { "type": "string", "pattern": "^key:[0-9a-f]{16}$" }
+          }
+        },
+        "session_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 200 },
+        "harness": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "start", "end"],
+          "properties": {
+            "kind": { "enum": ["interval", "session"] },
+            "start": { "$ref": "#/$defs/timestamp" },
+            "end": { "$ref": "#/$defs/timestamp" }
+          }
+        },
+        "receipt_count": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "receipts_root": { "$ref": "#/$defs/hex64", "description": "RFC 9162 Merkle Tree Hash over the leaf hash of each covered receipt's canonical payload, taken in order of timestamp, then action id, then canonical payload." },
+        "notable_count": { "type": "integer", "minimum": 0, "maximum": 1000000, "description": "Receipts in the same window that were sent in full and are not covered here." },
+        "counts": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action_type", "result", "program", "cwd_digest", "count"],
+            "properties": {
+              "action_type": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "result": { "enum": ["allow", "not_evaluated"] },
+              "program": { "type": ["string", "null"], "minLength": 1, "maxLength": 100 },
+              "cwd_digest": { "oneOf": [{ "$ref": "#/$defs/hex64" }, { "type": "null" }] },
+              "count": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+            }
+          }
+        },
+        "dedupe": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "count", "first_at", "last_at"],
+            "properties": {
+              "key": { "$ref": "#/$defs/hex64" },
+              "count": { "type": "integer", "minimum": 2, "maximum": 1000000 },
+              "first_at": { "$ref": "#/$defs/timestamp" },
+              "last_at": { "$ref": "#/$defs/timestamp" }
+            }
+          }
+        },
+        "timestamp": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alg", "sig"],
+      "properties": {
+        "alg": { "const": "Ed25519" },
+        "sig": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    }
+  },
+  "$defs": {
+    "hex64": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time", "maxLength": 40 }
+  }
+}

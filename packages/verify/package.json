@@ -39,6 +39,10 @@
     "./anchor": {
       "types": "./dist/anchor.d.ts",
       "default": "./dist/anchor.js"
+    },
+    "./summary": {
+      "types": "./dist/summary.d.ts",
+      "default": "./dist/summary.js"
     }
   },
   "files": [

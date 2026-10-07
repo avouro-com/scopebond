@@ -7,6 +7,7 @@ import actionSchemaDocument from "../schema/action.schema.json" with { type: "js
 import receiptSchemaDocument from "../schema/receipt.schema.json" with { type: "json" };
 import legacyReceiptSchemaDocument from "../schema/receipt-legacy.schema.json" with { type: "json" };
 import observationSchemaDocument from "../schema/observation.schema.json" with { type: "json" };
+import summarySchemaDocument from "../schema/summary.schema.json" with { type: "json" };
 import { canonical } from "./canonical.js";
 export { canonical } from "./canonical.js";
 export {
@@ -21,6 +22,17 @@ export const actionSchema = actionSchemaDocument as Record<string, unknown>;
 export const receiptSchema = receiptSchemaDocument as Record<string, unknown>;
 export const legacyReceiptSchema = legacyReceiptSchemaDocument as Record<string, unknown>;
 export const observationSchema = observationSchemaDocument as Record<string, unknown>;
+export const summarySchema = summarySchemaDocument as Record<string, unknown>;
+
+// Summary record (scopebond:summary v1, evidence class "summary"): a signed stand-in for routine receipts when they are
+// sent, with an RFC 9162 root over the receipts it covers. Receipts are unchanged and every action keeps its own. The
+// signature covers the domain below followed by the RFC 8785 canonical payload, with the key that signs the receipts.
+export const SUMMARY_TYPE = "scopebond:summary";
+export const SUMMARY_VERSION = "1.0";
+export const SUMMARY_DOMAIN = "scopebond:summary/v1\n";
+/** The only results a summary may count: a denied, overridden, approved or timed-out action is always sent in full. */
+export const SUMMARY_RESULTS = ["allow", "not_evaluated"] as const;
+export const SUMMARY_LIMITS = { maxCounts: 500, maxDedupe: 500, maxReceipts: 1_000_000 } as const;
 
 // Observation envelope (scopebond:observation v1): a separate, closed envelope for
 // lifecycle, health, policy-acknowledgement and independently sourced outcome
