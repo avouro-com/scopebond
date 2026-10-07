@@ -335,9 +335,9 @@ function clockedEmitter() {
 const emitted = (emitter) => emitter.store.nextBatch(100).map((r) => r.wrapper.payload);
 const tickAt = (ctx, sessionId, lastTick, advance) => { ctx.clock.t += advance; return ctx.emitter.heartbeatTick(sessionId, lastTick); };
 
-test("heartbeat: every five minutes only while a session is explicitly active, saying so; one start, one stop; nothing after the stop", () => {
+test("heartbeat: every minute only while a session is explicitly active; one start, one stop; nothing after the stop", () => {
   const c = clockedEmitter();
-  assert.equal(HEARTBEAT_INTERVAL_MS, 300_000);
+  assert.equal(HEARTBEAT_INTERVAL_MS, 60_000);
   assert.equal(c.emitter.heartbeatTick("sbs_unknown", c.clock.t), "stop", "no session, no heartbeat");
   c.emitter.sessionStart("s1", "/work");
   c.emitter.sessionStart("s1", "/work"); // a second start hook for the same session is not a second start
@@ -352,7 +352,7 @@ test("heartbeat: every five minutes only while a session is explicitly active, s
   ]);
   assert.deepEqual(items.map((p) => p.sequence), [1, 2, 3, 4, 5]);
   assert.equal(items[4].data.stop_reason, "completed");
-  for (const p of items.filter((x) => x.data.event === "heartbeat")) assert.equal(p.data.interval_s, 300);
+  for (const p of items.filter((x) => x.data.event === "heartbeat")) assert.equal(p.data.interval_s, undefined, "a workspace that does not read it expects 60 s");
   for (const p of items) assert.equal(validObservation(p), true);
   c.emitter.close();
 });
@@ -553,4 +553,18 @@ test("connect wires the lifecycle hooks only in a temporary project, and only wh
   const wire = await run(project, ["observations", "wire"], undefined, { SCOPEBOND_HOOK_DIR: on.dir });
   assert.equal(wire.status, 1, "nothing configured for Claude Code in this temporary home: refused, not invented");
   assert.equal(exists(join(project, ".claude", "settings.json")), false);
+});
+
+test("heartbeat: every five minutes, saying so, where the workspace reads the interval", () => {
+  const c = clockedEmitter();
+  writeFileSync(join(c.home.dir, "managed-meta.json"), JSON.stringify({ heartbeat_interval_s: 300 }));
+  c.emitter.sessionStart("s5", "/work");
+  let last = c.clock.t;
+  c.emitter.activity("s5", "/work");
+  assert.equal(tickAt(c, c.emitter.sessionIdOf("s5"), last, 300_000), "continue", "five minutes between beats is not a sleep");
+  const beats = emitted(c.emitter).filter((p) => p.data.event === "heartbeat");
+  assert.equal(beats.length, 1);
+  assert.equal(beats[0].data.interval_s, 300);
+  for (const p of beats) assert.equal(validObservation(p), true);
+  c.emitter.close();
 });

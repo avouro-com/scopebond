@@ -48,7 +48,7 @@ import {
 } from "./install.js";
 import {
   openObservations, describeObservations, observationStatus, stopReasonFromClaude, exitFromClaudeFailure,
-  HEARTBEAT_INTERVAL_MS, OBSERVATIONS_SCOPE, type ObservationEmitter,
+  HEARTBEAT_INTERVAL_MS, heartbeatIntervalMs, OBSERVATIONS_SCOPE, type ObservationEmitter,
 } from "./obs-emitter.js";
 import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
 import { loadOrCreateBindingKey } from "./observation.js";
@@ -1218,7 +1218,7 @@ async function runHeartbeatLoop(sessionId: string): Promise<void> {
   const { emitter } = openObservations(dir, { adapterVersion: hookVersion(), spawnHeartbeat: false, flushTimeoutMs: 3000 });
   if (!emitter) return;
   const override = Number(process.env.SCOPEBOND_HEARTBEAT_INTERVAL_MS);
-  const interval = Number.isFinite(override) && override >= 100 ? override : HEARTBEAT_INTERVAL_MS;
+  const interval = Number.isFinite(override) && override >= 100 ? override : heartbeatIntervalMs(dir);
   const endsAt = Date.now() + 24 * 60 * 60 * 1000;
   let last = Date.now();
   try {
