@@ -5,9 +5,10 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hookVersion, loadConnection, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { hookVersion, isManaged, loadConnection, localActivity, readMeta, ruleReport, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { launcherPath } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
@@ -17,6 +18,9 @@ import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prom
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
+import { checkResult, trayModel, type TrayModel } from "./tray-model.js";
+import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
+import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
@@ -24,7 +28,27 @@ const INTERVAL_MS = 60_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
 const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
+const SUMMARY_EVERY_MS = 5 * 60 * 1000;
 export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
+/** The person's tray settings (D143: notifications about problems by default, none about blocks). */
+export const TRAY_SETTINGS_FILE = "agent-settings.json";
+export type NotificationSetting = "all" | "problems" | "off";
+export interface TraySettings { notifications: NotificationSetting }
+
+export function readTraySettings(dir: string): TraySettings {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, TRAY_SETTINGS_FILE), "utf8")) as Partial<TraySettings>;
+    return { notifications: parsed.notifications === "all" || parsed.notifications === "off" ? parsed.notifications : "problems" };
+  } catch { return { notifications: "problems" }; }
+}
+
+export function writeTraySettings(dir: string, patch: unknown): TraySettings {
+  const next = readTraySettings(dir);
+  const value = (patch as { notifications?: unknown } | null)?.notifications;
+  if (value === "all" || value === "problems" || value === "off") next.notifications = value;
+  writeFileSync(join(dir, TRAY_SETTINGS_FILE), JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  return next;
+}
 
 export interface ServiceOptions {
   dir: string; intervalMs?: number; fetchImpl?: typeof fetch; log?: (line: string) => void;
@@ -132,6 +156,23 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let running: Promise<CycleResult> | null = null;
   let stopped = false;
   let lastSelfCheckAt = 0;
+  // SB388: time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
+  // computer slept (or the agent was stopped); waiting is counted again from the next cycle.
+  let awakeSince = Date.now();
+  let lastCycleAt = 0;
+  // A long step the person should see as "working" (an update), or null.
+  let working: string | null = null;
+  // SB391: the workspace's own summary for the tray (names, links, open reviews), refreshed every five minutes; null when the
+  // workspace does not answer it (a self-hosted gateway), and the tray simply leaves those rows out.
+  // SB392: a sign-in started from the tray, while it waits for approval.
+  let reconnecting: ReconnectStart | null = null;
+  let summary: ComputerSummary | null = null;
+  let summaryAt = 0;
+  const refreshSummary = async () => {
+    summaryAt = Date.now();
+    const connection = loadConnection(options.dir);
+    summary = connection ? await fetchComputerSummary(connection, options.fetchImpl) : null;
+  };
 
   const prompt = serialized(options.prompter ?? systemPrompter);
   let shownLevel: HealthLevel | null = null;
@@ -150,6 +191,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   };
   const cycle = async (): Promise<CycleResult> => {
     if (running) return running;
+    const started = Date.now();
+    const allowedGap = failures ? MAX_BACKOFF_MS + 5 * 60_000 : Math.max(3 * interval, 5 * 60_000);
+    if (lastCycleAt && started - lastCycleAt > allowedGap) awakeSince = started;
+    lastCycleAt = started;
     running = runCycle({ dir: options.dir, fetchImpl: options.fetchImpl }).then(async (result) => {
       await sendReasons();
       try { noticeHealth(); } catch { /* status is best effort */ }
@@ -157,6 +202,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       failures = result.deliveryError ? failures + 1 : 0;
       if (result.delivered) log(`delivered ${result.delivered} record(s); ${result.pending} waiting`);
       if (result.deliveryError) log(`delivery problem: ${result.deliveryError}`);
+      // SB390: asked from the workspace's computer page. Send again now (the cycle sent before its rules check), or run the
+      // self-check; each once.
+      if (result.requested === "flush") { log("the workspace asked this computer to send now"); setTimeout(() => { void cycle(); }, 0); }
+      if (result.requested === "self_check") { log("the workspace asked this computer to check now"); setTimeout(() => { void maintain(true); }, 0); }
+      if (result.connected && Date.now() - summaryAt > SUMMARY_EVERY_MS) void refreshSummary();
       return result;
     }).finally(() => { running = null; });
     return running;
@@ -210,7 +260,65 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     timer = setTimeout(() => { void cycle().finally(schedule); }, delay);
   };
 
+  const trayState = (): TrayModel => {
+    const now = Date.now();
+    const status = computerStatus(options.dir);
+    const meta = readMeta(options.dir);
+    const report = ruleReport(options.dir);
+    const modes = report ? Object.values(report).map(([mode]) => mode) : [];
+    const activity = localActivity(options.dir);
+    return trayModel({
+      status, health: health(), now, awakeSince, working,
+      rules: report ? { checked_at: meta.checked_at ? Date.parse(meta.checked_at) : null, managed: isManaged(options.dir), block: modes.filter((m) => m === "enforce").length, monitor: modes.filter((m) => m === "monitor").length } : null,
+      today: activity?.today ?? null,
+      recentBlocks: activity?.recent_blocks ?? [],
+      version: { agent: agentVersion(), hook: hookVersion(), policy: lastMaintenance?.policy ?? "unknown", recommendedAgent: meta.recommended?.agent ?? null, recommendedHook: meta.recommended?.hook ?? null },
+      workspace: summary ? { name: summary.workspace_name, environment: summary.environment_name, computer_url: summary.computer_url } : null,
+      openReviews: summary?.open_reviews ?? 0,
+      computerName: hostname(),
+      canReconnect: true,
+    });
+  };
+
   const control = await startControl(options.dir, `${AGENT_VERSION} hook/${hookVersion()}`, {
+    // SB387: what the tray draws, and the person's tray settings.
+    "GET /tray": () => ({ tray: trayState(), settings: readTraySettings(options.dir) }),
+    "POST /settings": (body) => ({ settings: writeTraySettings(options.dir, body) }),
+    // SB387: "Check now" always says what it found.
+    "POST /check": async () => {
+      const result = await maintain(true);
+      return { text: checkResult(result.selfCheck, result.error), tray: trayState() };
+    },
+    // SB389: install the version the workspace recommends now, instead of at the next six-hourly check.
+    "POST /update": async () => {
+      working = "Updating Scopebond…";
+      try { const result = await maintain(true); return { updated_to: result.updatedTo, error: result.error }; }
+      finally { working = null; }
+    },
+    // SB389: the newest blocks on this computer, summarised the way `log` prints them (never raw arguments).
+    // SB391: open this computer's page in the workspace, only on the workspace this computer is connected to.
+    "POST /open-workspace": () => {
+      const connection = loadConnection(options.dir);
+      const url = summary?.computer_url;
+      if (!connection || !url || !sameOrigin(url, connection.url)) return { opened: false };
+      openInBrowser(url);
+      return { opened: true };
+    },
+    // SB392: sign in again for the connected workspace; the tray shows the code, the approval page opens in the browser.
+    "POST /reconnect": async () => {
+      if (reconnecting) return reconnecting;
+      working = "Signing in again…";
+      const result = await startReconnect(options.dir, (ok) => {
+        reconnecting = null; working = null;
+        log(ok ? "signed in again" : "the sign-in did not finish");
+        if (ok) void cycle();
+      });
+      if ("error" in result) { working = null; return { error: result.error }; }
+      reconnecting = result.started;
+      log(`signing in again: waiting for approval of code ${result.started.user_code}`);
+      return result.started;
+    },
+    "GET /recent-blocks": () => ({ recent_blocks: localActivity(options.dir, { limit: 10 })?.recent_blocks ?? [] }),
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, last_maintenance: lastMaintenance } }),
     "POST /flush": async () => ({ cycle: await cycle() }),
     "POST /repair": () => {

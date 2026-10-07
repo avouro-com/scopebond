@@ -89,11 +89,24 @@ update handing over) ends it. `status` says whether autostart is on and working.
 
 ## Where you see it
 
-On Windows the agent shows a tray icon (from Windows' own PowerShell, nothing extra to install): a green, amber or red
-dot, what it means as its tooltip, and a menu with the one fix (Repair, Send now or Check again). It warns with a balloon
-when it turns amber or red, and closes when the agent stops. Set `SCOPEBOND_AGENT_TRAY=off` for none. On macOS and Linux
-the agent sends a system notification when things get worse, and once more when they recover. `GET /status` carries the
-same `health` (level, headline, fix).
+On Windows the agent shows a tray icon (from Windows' own PowerShell, nothing extra to install): the Scopebond "S" tile
+with a status badge, its shape and colour together — none when protected, a grey dash when the workspace cannot be
+reached (it keeps checking actions; records wait), an amber "!" when something needs attention, a red "×" for a
+problem, a blue arrow while it works (an update), and a slate tile when the computer is not connected to its workspace.
+Records waiting count only the time the computer was awake: a laptop that slept is not "stuck".
+
+Click it (left or right) for the menu: one headline; the rows that have data (Rules, Delivery, Today's actions and
+blocks, Version); the one fix when something is wrong; **Check now**, which always says what it found; **Send records
+now** when records wait; **Update now** when the workspace recommends a newer version; the last few blocks; the
+notification setting (All, Problems only — the default —, Off); Help (copy diagnostics without keys or credentials, open
+the Scopebond folder, documentation, About); and Hide icon. There is no "pause" or "quit protection": the hook decides
+every action whether or not the agent runs. A balloon appears when the state gets worse ("needs attention" only after
+five minutes, so sleep and wake do not flap) and once when it is protected again. Set `SCOPEBOND_AGENT_TRAY=off` for no
+icon. On macOS and Linux the agent sends a system notification when things get worse, and once more when they recover.
+
+The tray only draws what the agent computes: `GET /tray` on the local channel returns the model (state, headline, rows,
+fix, actions, recent blocks) and the person's settings; `POST /check`, `/update`, `/flush`, `/repair` and `/settings`
+do the work. `GET /status` carries the same `health` (level, headline, fix).
 
 ## Status
 

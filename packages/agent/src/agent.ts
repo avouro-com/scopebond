@@ -32,6 +32,8 @@ export interface CycleResult {
   deliveryError: string | null;
   rules: SyncOutcome["state"] | "skipped";
   missingHookEntries: Harness[];
+  /** A request from the workspace's computer page, carried on this cycle's rules check. */
+  requested: "flush" | "self_check" | null;
 }
 
 /** The agents on this computer whose user-level settings should hold the Scopebond hook. */
@@ -47,7 +49,7 @@ export function missingHookEntries(harnesses: Harness[] = expectedHarnesses()): 
 export async function runCycle(options: CycleOptions): Promise<CycleResult> {
   const now = options.now ?? Date.now;
   const dir = options.dir;
-  const result: CycleResult = { at: now(), connected: false, delivered: 0, pending: 0, deliveryError: null, rules: "skipped", missingHookEntries: [] };
+  const result: CycleResult = { at: now(), connected: false, delivered: 0, pending: 0, deliveryError: null, rules: "skipped", missingHookEntries: [], requested: null };
   try { result.missingHookEntries = missingHookEntries(); } catch { /* reported as none */ }
   const connection = loadConnection(dir);
   if (!connection) return result;
@@ -79,7 +81,7 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
     const keyFile = join(dir, "agent.key");
     if (existsSync(keyFile)) {
       const agentKid = createSigner({ privateKeyPem: readFileSync(keyFile, "utf8") }).kid;
-      const outcome = await syncPolicy(dir, { agentKid, hookVersion: hookVersion(), policyBuilds, fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs ?? 10_000 });
+      const outcome = await syncPolicy(dir, { agentKid, hookVersion: hookVersion(), policyBuilds, fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs ?? 10_000, onRequest: (kind) => { result.requested = kind; } });
       result.rules = outcome.state;
     }
   } catch { result.rules = "unavailable"; }

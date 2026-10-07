@@ -22,7 +22,7 @@ export { runProofFixtures, deliverProofReceipts, loadProofs, saveProofs, PROOF_F
 export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYPE } from "./budget-load.js";
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
-  inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules,
+  inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules, ruleReport,
   MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument,
 } from "./managed.js";
 export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms } from "./managed.js";
@@ -85,3 +85,5 @@ export { readAllowances, writeAllowances, makeAllowance, matchAllowance, mergeWo
 export type { Allowance, BlockedItem } from "./allowances.js";
 export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requests.js";
 export type { AdminRequest } from "./requests.js";
+export { localActivity } from "./local-activity.js";
+export type { LocalActivity } from "./local-activity.js";

@@ -195,6 +195,20 @@ function connected() {
   return h;
 }
 
+test("a request the workspace carries on the rules check reaches the agent once; anything else is ignored (SB390)", async () => {
+  const { dir, agentKid } = connected();
+  const asked = [];
+  const respond = (value) => async (url) => String(url).endsWith("/v1/policy/ack")
+    ? new Response("{}", { status: 200 })
+    : new Response(null, { status: 204, headers: value ? { "x-scopebond-request": value } : {} });
+  for (const value of ["flush", "self_check", "reboot", null]) {
+    await syncPolicy(dir, { agentKid, hookVersion: "0.21.0", policyBuilds, fetchImpl: respond(value), onRequest: (kind) => asked.push(kind) });
+  }
+  assert.deepEqual(asked, ["flush", "self_check"]);
+  // A hook call passes no handler: the header changes nothing.
+  await syncPolicy(dir, { agentKid, hookVersion: "0.21.0", policyBuilds, fetchImpl: respond("flush") });
+});
+
 test("sync installs, confirms, keeps a newer version only, and falls back to the computer's own rules", async () => {
   const { dir, agentKid } = connected();
   const localPolicy = readFileSync(join(dir, "policy.json"), "utf8");

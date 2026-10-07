@@ -80,6 +80,9 @@ export interface SyncOptions {
   afterPolicyWrite?: (dir: string) => void;
   /** Per-request timeout; defaults to five seconds. */
   timeoutMs?: number;
+  /** A request the workspace carries once on the rules check (`x-scopebond-request`): send now, or run the self-check.
+   *  Only the Scopebond Agent passes this; a hook call ignores the header. */
+  onRequest?: (kind: "flush" | "self_check") => void;
 }
 
 export async function syncPolicy(dir: string, options: SyncOptions): Promise<SyncOutcome> {
@@ -127,6 +130,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   }
 
   recommended = recommendedFrom(res.headers) ?? recommended;
+  const asked = res.headers?.get?.("x-scopebond-request")?.trim();
+  if (options.onRequest && (asked === "flush" || asked === "self_check")) { try { options.onRequest(asked); } catch { /* the request is best effort */ } }
   recordRulesCredential(dir, res.status !== 401, now.getTime());
   // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
   if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
