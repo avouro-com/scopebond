@@ -46,16 +46,16 @@ type SqliteDb = { exec(sql: string): void; prepare(sql: string): { run(...a: unk
  *  tool calls in parallel, so several hook processes can append at once. WAL lets
  *  readers and a writer proceed together, and busy_timeout waits for the write lock
  *  instead of failing immediately with SQLITE_BUSY. */
-function openSqlite(path: string, fresh?: string): SqliteDb {
+function openSqlite(path: string, fresh?: string, busyTimeoutMs = 15_000): SqliteDb {
   ensureDir(path);
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
   try {
-    db.exec("PRAGMA busy_timeout = 15000;");
+    db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))};`);
     // Page size and vacuum mode are fixed once a file is in WAL mode, so a new file gets them first.
     if (fresh && Number(Object.values((db.prepare("PRAGMA page_count").all() as Record<string, number>[])[0] ?? {})[0] ?? 0) === 0) db.exec(fresh);
-    whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"));
+    whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"), busyTimeoutMs);
     // A bounded page cache (8 MB) and temporary tables in memory: a hook call stays a few megabytes above Node itself
     // however large the file grows. No memory map: every page it touched counted toward the process's memory, so an
     // upkeep pass over a large file doubled a hook call's peak.
@@ -176,10 +176,12 @@ const HELD_STATES = "('reserved','dispatching','outcome_unknown')";
 export class SqliteReceiptStore implements ReceiptStore {
   private readonly db: SqliteDb;
   private readonly snapshots = new Map<string, string>();
-  constructor(path: string) {
+  /** `busyTimeoutMs`: how long a statement waits for another process's write lock (15 s by default; upkeep that must
+   *  not hold up a tool call passes a short one and skips the pass when the file is busy). */
+  constructor(path: string, options: { busyTimeoutMs?: number } = {}) {
     // A receipt is about 2 KB: 8 KB pages hold four, where 4 KB pages held one. Incremental vacuum returns free pages in
     // steps. Both are chosen when the file is made; an older file switches during a full rewrite in `maintain()`.
-    this.db = openSqlite(path, FRESH_STORE_PRAGMAS);
+    this.db = openSqlite(path, FRESH_STORE_PRAGMAS, options.busyTimeoutMs);
     try {
       const fresh = (this.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master").all() as { n: number }[])[0]?.n === 0;
       this.db.exec(
@@ -234,7 +236,10 @@ export class SqliteReceiptStore implements ReceiptStore {
       addColumn(this.db, "receipts", "action_id", "TEXT");
       addColumn(this.db, "authority_actions", "created_at", "TEXT");
       addColumn(this.db, "authority_actions", "terminal_receipt_id", "INTEGER");
-      if (fresh) this.db.prepare("INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('layout', ?)").run(String(LAYOUT_VERSION));
+      if (fresh) {
+        this.db.exec("CREATE INDEX IF NOT EXISTS receipts_action ON receipts (action_id) WHERE action_id IS NOT NULL;");
+        this.db.prepare("INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('layout', ?)").run(String(LAYOUT_VERSION));
+      }
     } catch (error) {
       try { this.db.close(); } catch { /* already failing */ }
       throw error;
@@ -281,10 +286,9 @@ export class SqliteReceiptStore implements ReceiptStore {
   /** Keep a policy once and return the reference stored in its place. */
   private policyRef(snapshot: string): string {
     const digest = sha256(snapshot);
-    if (this.snapshots.get(digest) !== snapshot) {
-      this.db.prepare(`INSERT OR IGNORE INTO policy_snapshots (digest, policy_json) VALUES (?, ?)`).run(digest, snapshot);
-      this.snapshots.set(digest, snapshot);
-    }
+    // Always written (a no-op when present): the call runs inside the caller's transaction, and a cache that skipped the
+    // insert would point later actions at a row a rolled-back transaction never kept.
+    this.db.prepare(`INSERT OR IGNORE INTO policy_snapshots (digest, policy_json) VALUES (?, ?)`).run(digest, snapshot);
     return `${POLICY_REF_PREFIX}${digest}`;
   }
   /** The policy text for a stored value: the text itself (layout 1) or a reference to `policy_snapshots`. */
@@ -466,7 +470,10 @@ export class SqliteReceiptStore implements ReceiptStore {
     const removed = Number(doomed[0]?.n ?? 0);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.removeFinishedState(isoTimestamp, Number.MAX_SAFE_INTEGER);
+      // Never the consumed ids of the last day, whatever the cutoff: an authorization that may still be valid keeps its
+      // replay protection.
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      this.removeFinishedState(isoTimestamp < dayAgo ? isoTimestamp : dayAgo, Number.MAX_SAFE_INTEGER);
       if (removed > 0) this.db.prepare(`DELETE FROM receipts WHERE timestamp < ?`).run(isoTimestamp);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -555,6 +562,8 @@ export class SqliteReceiptStore implements ReceiptStore {
         if (!hasAcks) report.receiptsKept = "no_delivery_queue";
         for (let n = batch, first = true; hasAcks && n === batch && (first || timeLeft()); first = false) {
           n = step(() => {
+            // Checked inside each step's transaction: an anchor made during a long pass stops the rest of it.
+            if (this.anchored()) { report.receiptsKept = "anchored"; return 0; }
             const doomed = this.db.prepare(
               `SELECT r.id, r.action_id FROM receipts r INDEXED BY receipts_timestamp
                  JOIN delivery.cloud_acknowledged a ON a.event_id = r.action_id
@@ -615,22 +624,30 @@ export class SqliteReceiptStore implements ReceiptStore {
            SELECT action_id FROM authority_actions WHERE policy_snapshot = ? LIMIT ?)`,
       ).run(this.policyRef(sample[0].policy_snapshot), sample[0].policy_snapshot, limit) as { changes?: number | bigint }
       : { changes: 0 };
-    // A finished action that was never dispatched keeps no lifecycle row and no candidate copy; its receipt is in `receipts`.
-    const finishedIds = JSON.stringify((this.db.prepare(
-      `SELECT l.action_id FROM authority_lifecycle l JOIN authority_actions a ON a.action_id = l.action_id
-        WHERE l.adapter_id IS NULL AND a.state NOT IN ${HELD_STATES} LIMIT ?`,
-    ).all(limit) as { action_id: string }[]).map((row) => row.action_id));
-    this.db.prepare(`UPDATE authority_actions SET created_at = COALESCE(created_at, json_extract(candidate_json, '$.timestamp')), candidate_json = '{}' WHERE action_id IN (SELECT value FROM json_each(?))`).run(finishedIds);
-    const finished = this.db.prepare(
-      `DELETE FROM authority_lifecycle WHERE action_id IN (SELECT value FROM json_each(?))`,
-    ).run(finishedIds) as { changes?: number | bigint };
-    // Receipts learn which action they record, so retention can match them to the workspace's acknowledgements.
+    // Receipts learn which action they record, so retention can match them to the workspace's acknowledgements and a
+    // finished action can point at its receipt. This finishes before the lifecycle rows go (they hold the receipt copy).
     const numbered = this.db.prepare(
       `UPDATE receipts SET action_id = json_extract(receipt_json, '$.payload.action_ref.action_id')
         WHERE id IN (SELECT id FROM receipts WHERE action_id IS NULL
                        AND json_extract(receipt_json, '$.payload.action_ref.action_id') IS NOT NULL LIMIT ?)`,
     ).run(limit) as { changes?: number | bigint };
-    return Number(inline.changes ?? 0) + Number(finished.changes ?? 0) + Number(numbered.changes ?? 0);
+    if (Number(numbered.changes ?? 0) > 0) return Number(inline.changes ?? 0) + Number(numbered.changes ?? 0);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS receipts_action ON receipts (action_id) WHERE action_id IS NOT NULL;`);
+    // A finished action that was never dispatched keeps no lifecycle row and no candidate copy: it points at its receipt.
+    const finishedIds = JSON.stringify((this.db.prepare(
+      `SELECT l.action_id FROM authority_lifecycle l JOIN authority_actions a ON a.action_id = l.action_id
+        WHERE l.adapter_id IS NULL AND a.state NOT IN ${HELD_STATES} LIMIT ?`,
+    ).all(limit) as { action_id: string }[]).map((row) => row.action_id));
+    this.db.prepare(
+      `UPDATE authority_actions
+          SET terminal_receipt_id = COALESCE(terminal_receipt_id, (SELECT MAX(r.id) FROM receipts r WHERE r.action_id = authority_actions.action_id)),
+              created_at = COALESCE(created_at, json_extract(candidate_json, '$.timestamp')), candidate_json = '{}'
+        WHERE action_id IN (SELECT value FROM json_each(?))`,
+    ).run(finishedIds);
+    const finished = this.db.prepare(
+      `DELETE FROM authority_lifecycle WHERE action_id IN (SELECT value FROM json_each(?))`,
+    ).run(finishedIds) as { changes?: number | bigint };
+    return Number(inline.changes ?? 0) + Number(finished.changes ?? 0);
   }
   close(): void {
     // Checkpoint before releasing the handle. A short-lived writer that exits without
@@ -864,7 +881,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
     }));
   }
 
-  acknowledge(entries: Array<{ id: string; payloadHash: string }>): void {
+  acknowledge(entries: Array<{ id: string; payloadHash: string }>, held?: ReadonlySet<string>): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const remove = this.db.prepare("DELETE FROM cloud_outbox WHERE event_id = ? AND payload_hash = ? RETURNING bytes");
@@ -876,8 +893,9 @@ export class SqliteCloudOutbox implements CloudOutbox {
         for (const row of remove.all(entry.id, entry.payloadHash) as Array<{ bytes: number }>) {
           count++;
           bytes += Number(row.bytes);
-          // D144: retention removes a local receipt only after the workspace acknowledged it; this row is that proof.
-          acked.run(entry.id, at);
+          // D144: retention removes a local receipt only after the workspace holds it; this row is that proof. A record
+          // that left the queue because the workspace refused it is not held, and stays in the local log.
+          if (held?.has(entry.id)) acked.run(entry.id, at);
         }
       }
       this.adjustTotals(-count, -bytes);

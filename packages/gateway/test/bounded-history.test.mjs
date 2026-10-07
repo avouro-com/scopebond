@@ -41,7 +41,8 @@ test("SqliteReceiptStore: the timestamp index is created idempotently", () => {
     const rows = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'receipts'`).all();
     const plan = db.prepare(`EXPLAIN QUERY PLAN SELECT receipt_json FROM receipts INDEXED BY receipts_timestamp WHERE timestamp >= ? ORDER BY id`).all("x");
     db.close();
-    assert.deepEqual(rows.map((r) => r.name), ["receipts_timestamp"]);
+    // Once each: the time index, and (on a new file) the index from a receipt to its action.
+    assert.deepEqual(rows.map((r) => r.name).sort(), ["receipts_action", "receipts_timestamp"]);
     assert.ok(plan.some((p) => /receipts_timestamp/.test(String(p.detail))), "the range query uses the index");
   } finally { cleanup(); }
 });

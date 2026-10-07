@@ -41,7 +41,9 @@ export interface CloudOutbox {
   enqueue(receipt: SignedReceipt): { queued: boolean; duplicate: boolean; gap?: CloudDeliveryGap };
   /** The oldest records first; `exclude` leaves out records this flush already kept back (a clock ahead). */
   peek(limit: number, now: number, exclude?: ReadonlySet<string>): CloudOutboxEntry[];
-  acknowledge(entries: Array<{ id: string; payloadHash: string }>): void;
+  /** Take records out of the queue. `held` names those the workspace accepted (stored or already had); only they may later
+   *  be removed from the local log by retention. A refused record leaves the queue as a gap and is never in `held`. */
+  acknowledge(entries: Array<{ id: string; payloadHash: string }>, held?: ReadonlySet<string>): void;
   status(): CloudOutboxStatus;
   /** How many records wait, from a kept total rather than a count of the queue. Optional; `status().pending` otherwise. */
   pendingCount?(): number;
@@ -340,7 +342,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           // The conflicting record is found: the rest of the queue goes in batches again.
           if (refused.some((r) => r.reason === "id_conflict")) isolate = false;
         }
-        opts.outbox.acknowledge(batch.filter((entry) => !kept.has(entry.id)).map(({ id, payloadHash }) => ({ id, payloadHash })));
+        const leaving = batch.filter((entry) => !kept.has(entry.id));
+        const refusedIds = new Set(refused.map((r) => r.id));
+        opts.outbox.acknowledge(leaving.map(({ id, payloadHash }) => ({ id, payloadHash })), new Set(leaving.filter((entry) => !refusedIds.has(entry.id)).map((entry) => entry.id)));
         for (const { id, reason } of refused) {
           const gap = opts.outbox.recordGap?.(id, reason) ?? { id, reason, at: now() };
           opts.onGap?.(gap);

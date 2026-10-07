@@ -5,6 +5,7 @@
 // itself once a day, and starts a background compaction for an older file.
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SqliteReceiptStore, type StoreMaintenanceReport } from "@scopebond/gateway/node";
@@ -24,6 +25,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const UPKEEP_FILE = "store-upkeep.json";
 const HOOK_UPKEEP_EVERY_MS = DAY_MS;
 const HOUR_MS = 60 * 60 * 1000;
+/** A hook call's upkeep waits this long at most for another process's lock, then leaves the pass for later. */
+const CALL_BUSY_MS = 100;
 
 /** The workspace's local retention, from the rules check's `x-scopebond-local-retention-days` header. Out of range is clamped;
  *  anything unreadable is ignored (the last good value, or the default, stays). */
@@ -53,6 +56,8 @@ export function localRetentionDays(dir: string): number | null {
 
 export interface UpkeepOptions {
   now?: number;
+  /** How long a step waits for another process's write lock (default 15 s; a hook call passes a short one). */
+  busyTimeoutMs?: number;
   budgetMs?: number;
   batch?: number;
   /** One full rewrite of an older file so later passes can shrink it in steps (the agent and `prune --compact`). */
@@ -65,7 +70,7 @@ export function runStoreUpkeep(dir: string, options: UpkeepOptions = {}): StoreM
   if (!existsSync(dbPath)) return null;
   const now = options.now ?? Date.now();
   const days = localRetentionDays(dir);
-  const store = new SqliteReceiptStore(dbPath);
+  const store = new SqliteReceiptStore(dbPath, options.busyTimeoutMs === undefined ? {} : { busyTimeoutMs: options.busyTimeoutMs });
   try {
     const report = store.maintain({
       now,
@@ -100,7 +105,7 @@ export function upkeepIfDue(dir: string, now = Date.now(), compact: (dir: string
     if (Number.isFinite(lastAt) && now - lastAt < HOOK_UPKEEP_EVERY_MS) return;
     const dbPath = join(dir, "receipts.db");
     if (!existsSync(dbPath)) return;
-    const store = new SqliteReceiptStore(dbPath);
+    const store = new SqliteReceiptStore(dbPath, { busyTimeoutMs: CALL_BUSY_MS });
     let current: boolean;
     try { current = store.layoutCurrent(); } finally { store.close(); }
     if (!current) {
@@ -108,7 +113,7 @@ export function upkeepIfDue(dir: string, now = Date.now(), compact: (dir: string
       ask(HOUR_MS);
       return;
     }
-    const report = runStoreUpkeep(dir, { now, budgetMs: 300, batch: 500 });
+    const report = runStoreUpkeep(dir, { now, budgetMs: 300, batch: 500, busyTimeoutMs: CALL_BUSY_MS });
     if (report?.rewriteWanted) ask(HOOK_UPKEEP_EVERY_MS);
   } catch { /* upkeep is best effort; the next call tries again */ }
 }
@@ -127,6 +132,6 @@ function writeUpkeep(dir: string, state: UpkeepState): void {
 function compactInBackground(dir: string): void {
   const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
   spawn(process.execPath, [cli, "prune", "--compact", "--quiet"], {
-    cwd: dir, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, detached: true, stdio: "ignore", windowsHide: true,
+    cwd: tmpdir(), env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, detached: true, stdio: "ignore", windowsHide: true,
   }).unref();
 }

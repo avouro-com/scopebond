@@ -56,6 +56,10 @@ test("Scopebond's folder named in an interpreter's argument is a read, through a
   assert.ok(reads(`node -e "new (require('node:sqlite').DatabaseSync)('D:/work/.scopebond/receipts.db', { readOnly: true })"`).some((p) => p.includes(".scopebond/receipts.db")));
   assert.ok(reads("python3 tools/inspect.py ~/.scopebond/receipts.db").some((p) => p.includes(".scopebond/receipts.db")));
   assert.ok(reads("sqlite3 ~/.scopebond/receipts.db 'select count(*) from receipts'").some((p) => p.includes(".scopebond/receipts.db")));
+  // Options that take values, and SQL that attaches a file, do not hide it (review finding 5).
+  assert.ok(reads(`sqlite3 -cmd ".tables" .scopebond/receipts.db`).some((p) => p.includes(".scopebond/receipts.db")));
+  assert.ok(reads(`sqlite3 -separator , -init /dev/null .scopebond/receipts.db`).some((p) => p.includes(".scopebond/receipts.db")));
+  assert.ok(reads(`sqlite3 :memory: "ATTACH '.scopebond/receipts.db' AS r; SELECT 1"`).some((p) => p.includes(".scopebond/receipts.db")));
   assert.deepEqual(reads(`node -e "console.log(1)"`), []);
   assert.deepEqual(reads("node scripts/build.mjs --out .scopebond-report"), [], "a different name that starts the same is not the folder");
 });

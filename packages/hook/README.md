@@ -522,8 +522,9 @@ peaked at 69 MB (it was 233 MB, and 504 MB for a three-part shell command).
 
 A computer connected to a workspace removes a receipt only after the workspace
 acknowledged it, once that is 30 days ago (the workspace can set 7–365 days); a receipt
-the workspace has not acknowledged is never removed, an anchored log is never pruned, and
-a policy that reads a longer window keeps that window. With no workspace, nothing is
+the workspace has not acknowledged, or refused, is never removed, an anchored log is never
+pruned, and a policy that reads a longer window keeps that window (a window widened later
+counts only the history still kept). With no workspace, nothing is
 removed automatically — these are your evidence. The Scopebond Agent does this upkeep;
 without it, a hook call does a short pass once a day. A log written by an older version
 is rewritten once to the current layout in a separate background process (767 MB became

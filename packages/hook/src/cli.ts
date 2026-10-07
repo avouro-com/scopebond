@@ -727,14 +727,33 @@ async function runPrune(args: string[]): Promise<void> {
   if (!existsSync(dbPath)) { console.log("no local receipts yet — nothing to prune."); process.exit(0); }
   const beforeIdx = args.indexOf("--before");
   if (args.includes("--compact")) {
-    const before = describeStore(dbPath);
-    let report = runStoreUpkeep(dir, { budgetMs: 10 * 60_000, allowFullVacuum: true });
-    let migrated = report?.migrated ?? 0;
-    while (report?.more) {
-      report = runStoreUpkeep(dir, { budgetMs: 10 * 60_000, allowFullVacuum: true });
-      migrated += report?.migrated ?? 0;
+    const quiet = args.includes("--quiet");
+    // One compaction at a time: parallel hook calls can each ask for one in the background.
+    const lock = join(dir, "store-compact.lock");
+    try { writeFileSync(lock, String(process.pid), { flag: "wx" }); }
+    catch {
+      let fresh = true;
+      try { fresh = Date.now() - statSync(lock).mtimeMs < 15 * 60_000; } catch { fresh = false; }
+      if (fresh) {
+        if (!quiet) console.error("another compaction of this store is running; try again in a few minutes.");
+        process.exit(quiet ? 0 : 1);
+      }
+      writeFileSync(lock, String(process.pid)); // a stale lock from a process that died
     }
-    if (args.includes("--quiet")) process.exit(0);
+    const before = describeStore(dbPath);
+    let report: ReturnType<typeof runStoreUpkeep> = null;
+    let migrated = 0;
+    try {
+      report = runStoreUpkeep(dir, { budgetMs: 10 * 60_000, allowFullVacuum: true });
+      migrated = report?.migrated ?? 0;
+      while (report?.more) {
+        report = runStoreUpkeep(dir, { budgetMs: 10 * 60_000, allowFullVacuum: true });
+        migrated += report?.migrated ?? 0;
+      }
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    if (quiet) process.exit(0);
     console.log(`local receipts   ${dbPath}`);
     console.log(`before           ${before}`);
     console.log(`after            ${describeStore(dbPath)}`);

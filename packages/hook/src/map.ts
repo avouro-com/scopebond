@@ -562,7 +562,9 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       for (const m of code.match(SENSITIVE_IN_CODE) ?? []) { read(m); write(m); }
     }
   } else if (prog === "sqlite3" || prog === "sqlite") {
+    // Options (`-cmd`, `-init`, `-separator`) take values and SQL can ATTACH any file: the first operand is not enough.
     read(operands[0]);
+    for (const w of args) for (const m of w.slice(0, CODE_SCAN_LIMIT).match(SCOPEBOND_IN_TEXT) ?? []) read(m);
   } else if (UPLOADERS.has(prog)) {
     operands.filter(isSensitiveOperand).forEach(read);
   }

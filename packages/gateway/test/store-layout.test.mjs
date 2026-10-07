@@ -174,6 +174,77 @@ test("retention removes only receipts the workspace acknowledged before the wind
   } finally { cleanup(); }
 });
 
+test("a record the workspace refused is never recorded as held, so retention keeps it (review finding 1)", async () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const { createCloudExporter } = await import("../dist/index.js");
+    const path = join(dir, "outbox.db");
+    const outbox = new SqliteCloudOutbox(path);
+    const receipt = (id) => ({ payload: { action_ref: { action_id: id }, attester: { kid: "k1" }, timestamp: new Date().toISOString() }, signature: "s" });
+    // The workspace stores "good" and refuses "bad" on its own (invalid_receipt), in one 200 answer.
+    const fetch = async (_url, init) => {
+      const index = JSON.parse(init.body).receipts.findIndex((r) => r.payload.action_ref.action_id === "bad");
+      return new Response(JSON.stringify({ accepted: 1, rejected: [{ index, code: "invalid_receipt" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const exporter = createCloudExporter({ url: "https://cloud.example/", credential: "sbm_x", outbox, batchSize: 10, flushMs: 1e9, fetch });
+    exporter.enqueue(receipt("good")); exporter.enqueue(receipt("bad"));
+    await exporter.flush();
+    exporter.stop();
+    const db = new DatabaseSync(path, { readOnly: true });
+    try {
+      assert.deepEqual(db.prepare("SELECT event_id FROM cloud_acknowledged ORDER BY event_id").all().map((r) => r.event_id), ["good"]);
+      assert.equal(one(db, "SELECT COUNT(*) FROM cloud_outbox"), 0, "both left the queue");
+    } finally { db.close(); }
+  } finally { cleanup(); }
+});
+
+test("a rolled-back action never leaves later actions pointing at a missing policy (review finding 2)", async () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const path = join(dir, "receipts.db");
+    const store = new SqliteReceiptStore(path);
+    const reservation = (id) => ({ action_id: id, candidate: { action_id: id, timestamp: new Date().toISOString() }, policy_ref: { id: "layout", version: 1, digest: "d" }, policy_snapshot: JSON.stringify(policy), authorization_ids: {} });
+    assert.throws(() => store.reserveAction(reservation("a1"), () => { throw new Error("decision failed"); }));
+    const second = store.reserveAction(reservation("a2"), () => ({ allow: true }));
+    assert.equal(second.duplicate, false);
+    assert.deepEqual(JSON.parse(store.getAction("a2").reservation.policy_snapshot), policy);
+    assert.equal(store.unresolvedActions().length, 1);
+    store.close();
+  } finally { cleanup(); }
+});
+
+test("a migrated finished action still finds its final receipt (review finding 3)", () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const path = join(dir, "receipts.db");
+    legacyStore(path, 6, Date.now());
+    const store = new SqliteReceiptStore(path);
+    for (let i = 0; i < 10 && !store.layoutCurrent(); i++) store.maintain({ batch: 4 });
+    assert.equal(store.layoutCurrent(), true);
+    const record = store.getAction("legacy-2");
+    assert.equal(record.terminal_receipt?.payload.action_ref.action_id, "legacy-2");
+    assert.equal(record.realtime_result, "allow");
+    store.close();
+  } finally { cleanup(); }
+});
+
+test("upkeep with a short lock wait gives up quickly when another process holds the file (review finding 4)", () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const path = join(dir, "receipts.db");
+    new SqliteReceiptStore(path).close();
+    const holder = new DatabaseSync(path);
+    holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE;");
+    try {
+      const started = Date.now();
+      const store = new SqliteReceiptStore(path, { busyTimeoutMs: 100 });
+      assert.throws(() => store.maintain({ now: Date.now(), budgetMs: 0 }), /locked|busy/i);
+      store.close();
+      assert.ok(Date.now() - started < 3_000, `waited ${Date.now() - started} ms`);
+    } finally { holder.exec("ROLLBACK"); holder.close(); }
+  } finally { cleanup(); }
+});
+
 test("the queue keeps its totals, records acknowledgements, and status() corrects a wrong total", () => {
   const { dir, cleanup } = tmp();
   try {
@@ -183,7 +254,7 @@ test("the queue keeps its totals, records acknowledgements, and status() correct
     for (const id of ["a", "b", "c"]) outbox.enqueue(receipt(id));
     assert.equal(outbox.pendingCount(), 3);
     const [first] = outbox.peek(1, Date.now());
-    outbox.acknowledge([{ id: first.id, payloadHash: first.payloadHash }]);
+    outbox.acknowledge([{ id: first.id, payloadHash: first.payloadHash }], new Set([first.id]));
     assert.equal(outbox.pendingCount(), 2);
     assert.equal(outbox.status().pending, 2);
     outbox.close();
