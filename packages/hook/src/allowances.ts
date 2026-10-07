@@ -134,6 +134,9 @@ export interface BlockedItem {
   action_key: string;
   summary: string;
   harness: string;
+  /** What a person did about it afterwards, from the tray: allowed it (an allowance), or asked an admin. */
+  acted?: "allowed" | "asked";
+  acted_at?: string;
 }
 
 export function readBlocked(dir: string): BlockedItem[] {
@@ -150,4 +153,10 @@ export function recordBlocked(dir: string, item: BlockedItem, now = Date.now()):
       .filter((b) => now - Date.parse(b.at) < 7 * DAY_MS).slice(-50);
     writeAtomic(join(dir, BLOCKED_FILE), `${JSON.stringify({ items }, null, 1)}\n`);
   } catch { /* the receipt is the record; the list is a convenience */ }
+}
+
+/** Note what a person did about a block, so the tray says so and does not offer it again. */
+export function markBlocked(dir: string, id: string, acted: "allowed" | "asked", now = Date.now()): void {
+  const items = readBlocked(dir).map((b) => (b.id === id ? { ...b, acted, acted_at: new Date(now).toISOString() } : b));
+  writeAtomic(join(dir, BLOCKED_FILE), `${JSON.stringify({ items }, null, 1)}\n`);
 }

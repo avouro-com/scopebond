@@ -97,7 +97,9 @@ Records waiting count only the time the computer was awake: a laptop that slept 
 
 Click it (left or right) for the menu: one headline; the rows that have data (Rules, Delivery, Today's actions and
 blocks, Version); the one fix when something is wrong; **Check now**, which always says what it found; **Send records
-now** when records wait; **Update now** when the workspace recommends a newer version; the last few blocks; the
+now** when records wait; **Update now** when the workspace recommends a newer version; the last few blocks (**Recently blocked**: where the
+workspace lets a person allow a blocked action or ask an admin, clicking one opens the Scopebond window for it, and the
+person can allow it once, for 15 minutes or always, or ask an admin; Scopebond never runs it again by itself); the
 notification setting (All, Problems only — the default —, Off); Help (copy diagnostics without keys or credentials, open
 the Scopebond folder, documentation, About); and Hide icon. There is no "pause" or "quit protection": the hook decides
 every action whether or not the agent runs. A balloon appears when the state gets worse ("needs attention" only after
@@ -105,8 +107,8 @@ five minutes, so sleep and wake do not flap) and once when it is protected again
 icon. On macOS and Linux the agent sends a system notification when things get worse, and once more when they recover.
 
 The tray only draws what the agent computes: `GET /tray` on the local channel returns the model (state, headline, rows,
-fix, actions, recent blocks) and the person's settings; `POST /check`, `/update`, `/flush`, `/repair` and `/settings`
-do the work. `GET /status` carries the same `health` (level, headline, fix).
+fix, actions, recent blocks) and the person's settings; `POST /check`, `/update`, `/flush`, `/repair`, `/settings`
+and `/blocked` (an earlier block, answered only in the Scopebond window) do the work. `GET /status` carries the same `health` (level, headline, fix).
 
 ## Status
 

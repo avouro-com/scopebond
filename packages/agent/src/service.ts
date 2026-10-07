@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, wr
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hookVersion, isManaged, loadConnection, localActivity, readMeta, ruleReport, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { actOnBlocked, blockedQuestion, hookVersion, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { launcherPath } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
@@ -18,7 +18,7 @@ import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prom
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
-import { checkResult, trayModel, type TrayModel } from "./tray-model.js";
+import { checkResult, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
@@ -260,6 +260,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     timer = setTimeout(() => { void cycle().finally(schedule); }, delay);
   };
 
+  // D144: a block under a rule a person may allow or ask about can be acted on afterwards, from the tray.
+  const actionable = (blocks: Array<{ action_id: string | null; summary: string; at: string; rule: string | null }>, now: number): RecentBlock[] => {
+    const known = new Map(readBlocked(options.dir).map((b) => [b.id, b]));
+    return blocks.map((b) => {
+      const item = b.action_id ? known.get(b.action_id) : undefined;
+      return { ...b, rule: b.rule ?? item?.rule ?? null, can_act: Boolean(item && b.action_id && blockedQuestion(options.dir, b.action_id, now)), acted: item?.acted ?? null };
+    });
+  };
+
   const trayState = (): TrayModel => {
     const now = Date.now();
     const status = computerStatus(options.dir);
@@ -271,7 +280,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       status, health: health(), now, awakeSince, working,
       rules: report ? { checked_at: meta.checked_at ? Date.parse(meta.checked_at) : null, managed: isManaged(options.dir), block: modes.filter((m) => m === "enforce").length, monitor: modes.filter((m) => m === "monitor").length } : null,
       today: activity?.today ?? null,
-      recentBlocks: activity?.recent_blocks ?? [],
+      recentBlocks: actionable(activity?.recent_blocks ?? [], now),
       version: { agent: agentVersion(), hook: hookVersion(), policy: lastMaintenance?.policy ?? "unknown", recommendedAgent: meta.recommended?.agent ?? null, recommendedHook: meta.recommended?.hook ?? null },
       workspace: summary ? { name: summary.workspace_name, environment: summary.environment_name, computer_url: summary.computer_url } : null,
       openReviews: summary?.open_reviews ?? 0,
@@ -318,7 +327,23 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       log(`signing in again: waiting for approval of code ${result.started.user_code}`);
       return result.started;
     },
-    "GET /recent-blocks": () => ({ recent_blocks: localActivity(options.dir, { limit: 10 })?.recent_blocks ?? [] }),
+    "GET /recent-blocks": () => ({ recent_blocks: actionable(localActivity(options.dir, { limit: 10 })?.recent_blocks ?? [], Date.now()) }),
+    // D144: allow an earlier block, or ask an admin, from the tray. The caller names the block; only the Scopebond window
+    // answers (the same window the hook uses), so whoever calls this channel cannot allow anything by itself. Scopebond never
+    // runs the action: the person or the coding agent runs it again.
+    "POST /blocked": async (body) => {
+      const id = typeof (body as { action_id?: unknown } | null)?.action_id === "string" ? String((body as { action_id: string }).action_id) : "";
+      const q = id ? blockedQuestion(options.dir, id) : null;
+      if (!q) return { outcome: "gone", text: "This block can no longer be allowed or sent to an admin from here." };
+      log(`asking about an earlier block under "${q.title}"`);
+      const answer = await prompt({ action_id: id, rule: q.item.rule, title: q.title, summary: q.item.summary, reason_min: q.reason_min,
+        lasts: "the next time it runs", timeout_ms: 55_000, mode: q.mode, offers: q.offers });
+      if (answer.decision === "unavailable") return { outcome: "unavailable", text: "The Scopebond window could not be shown." };
+      const done = actOnBlocked(options.dir, id, answer);
+      if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
+      log(`earlier block under "${q.title}": ${done.outcome}`);
+      return { outcome: done.outcome, text: blockedText(done.outcome) };
+    },
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, last_maintenance: lastMaintenance } }),
     "POST /flush": async () => ({ cycle: await cycle() }),
     "POST /repair": () => {
@@ -366,4 +391,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     maintenanceTimer.unref?.();
   }
   return { port: control.endpoint.port, cycleNow: cycle, maintainNow: () => maintain(true), stop };
+}
+
+/** What the tray says after a person acted on an earlier block. */
+export function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone"): string {
+  switch (outcome) {
+    case "allowed": return "Allowed. Run it again, or let the coding agent retry.";
+    case "proposed": return "Allowed for 15 minutes. Your workspace's admins decide whether it stands; run it again meanwhile.";
+    case "asked": return "Asked your workspace's admins. The Scopebond icon shows their answer; then run it again.";
+    case "declined": return "Nothing was allowed.";
+    case "gone": return "This block can no longer be allowed or sent to an admin from here.";
+  }
 }

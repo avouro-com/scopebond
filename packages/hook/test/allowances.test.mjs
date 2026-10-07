@@ -11,7 +11,7 @@ const ME = userInfo().username; // a person-scoped allowance applies to the acco
 import { join } from "node:path";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, inspectManaged, compileManaged, digestRules, defaultRules,
-  createOverrideHandler, overrideHint, MANAGED_DOC_FILE, makeAllowance, readAllowances, writeAllowances, readRequests, readBlocked,
+  createOverrideHandler, overrideHint, MANAGED_DOC_FILE, makeAllowance, readAllowances, writeAllowances, readRequests, readBlocked, blockedQuestion, actOnBlocked,
 } from "../dist/index.js";
 import { actionKey } from "../dist/override.js";
 
@@ -154,4 +154,52 @@ test("an 'always' choice that needs an admin is proposed, and the person is cove
   const states = readAllowances(dir).map((a) => a.state).sort();
   assert.deepEqual(states, ["active", "proposed"]);
   assert.equal((await run(dir, bash("rm -rf build"))).override.method, "allowance");
+});
+
+test("from the tray, a person allows an earlier block for the next try, or asks an admin; it is offered once", async () => {
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ always: "at_once", requests: true, daily_limit: 2 }) } });
+  // The window was not there when the block happened: the block is kept for the tray.
+  const blocked = await run(dir, bash("rm -rf build"), { answers: [] });
+  assert.equal(blocked.decision, "deny");
+  const item = readBlocked(dir).at(-1);
+  const q = blockedQuestion(dir, item.id);
+  assert.deepEqual(q.offers, { allow: true, always: true, ask: true });
+  assert.equal(q.title, "Destructive command");
+  assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "short" }), { outcome: "declined" }, "the reason length still applies");
+  assert.deepEqual(actOnBlocked(dir, item.id, { decision: "deny" }), { outcome: "declined" });
+  assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "once" }), { outcome: "allowed" });
+  assert.equal(readBlocked(dir).at(-1).acted, "allowed");
+  assert.equal(blockedQuestion(dir, item.id), null, "not offered again");
+  assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "Cleaning the build output before release", lasts: "always" }), { outcome: "gone" });
+  // Scopebond does not run it again; the next try is allowed by the allowance, once.
+  const again = await run(dir, bash("rm -rf build"));
+  assert.equal(again.decision, "allow");
+  assert.equal(again.override.method, "allowance");
+  assert.equal((await run(dir, bash("rm -rf build"), { answers: [] })).decision, "deny", "a one-time allowance is used once");
+
+  // Ask an admin from the tray: the request waits for the agent, the block stands.
+  const other = await run(dir, bash("rm -rf dist"), { answers: [] });
+  assert.equal(other.decision, "deny");
+  const second = readBlocked(dir).at(-1);
+  assert.deepEqual(actOnBlocked(dir, second.id, { decision: "ask", reason: "Need dist cleared for the release", os_user: ME }), { outcome: "asked" });
+  const request = readRequests(dir).at(-1);
+  assert.equal(request.action_id, second.id);
+  assert.equal(request.summary, "rm -rf dist");
+  assert.equal(request.sent_at, null);
+});
+
+test("from the tray, allowing stops at the daily limit and when the rule no longer lets a person allow", async () => {
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ daily_limit: 1 }) } });
+  await run(dir, bash("rm -rf a1"), { answers: [] });
+  await run(dir, bash("rm -rf a2"), { answers: [] });
+  const [one, two] = readBlocked(dir);
+  assert.equal(actOnBlocked(dir, one.id, { decision: "allow", reason: "Cleaning the build output before release", os_user: ME }).outcome, "allowed");
+  assert.equal(blockedQuestion(dir, two.id), null, "the daily limit is used, and asking is not on: nothing to offer");
+  // The workspace sets the rule back to Block: nothing is offered for earlier blocks.
+  const { dir: d2 } = setup({ "destructive-shell": { mode: "override", override: terms() } });
+  await run(d2, bash("rm -rf b1"), { answers: [] });
+  const item = readBlocked(d2).at(-1);
+  writeFileSync(join(d2, MANAGED_DOC_FILE), JSON.stringify(doc(3, { "destructive-shell": { mode: "block" } })));
+  assert.equal(blockedQuestion(d2, item.id), null);
+  assert.equal(actOnBlocked(d2, item.id, { decision: "allow", reason: "Cleaning the build output before release" }).outcome, "gone");
 });

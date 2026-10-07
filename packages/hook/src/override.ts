@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
 import { compileManaged, floorDocument, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type ManagedDocument, type ManagedRuleId } from "./managed.js";
-import { makeAllowance, matchAllowance, mergeWorkspaceAllowances, readAllowances, recordBlocked, writeAllowances } from "./allowances.js";
+import { makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, writeAllowances, type BlockedItem } from "./allowances.js";
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
@@ -214,6 +214,70 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     return null;
   };
   return { handler, note: () => last };
+}
+
+/** A block a person may act on afterwards, from the tray (D144): what the Scopebond window may offer for it now. */
+export interface BlockedQuestion {
+  item: BlockedItem;
+  title: string;
+  reason_min: number;
+  mode: "override" | "ask";
+  offers: { allow: boolean; always: boolean; ask: boolean };
+}
+
+/** What the window may offer for an earlier block, under the rules as they are now; null when it is gone, was already acted
+ *  on, is older than a week, or the rule no longer lets a person allow or ask. Allowing stops at the daily limit. */
+export function blockedQuestion(dir: string, id: string, now = Date.now()): BlockedQuestion | null {
+  const item = readBlocked(dir).find((b) => b.id === id);
+  if (!item || item.acted || !(now - Date.parse(item.at) < 7 * DAY_MS)) return null;
+  let doc: ManagedDocument;
+  try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
+  const setting = doc.rules?.[item.rule as ManagedRuleId];
+  if (!personMayAct(setting) || !setting?.override) return null;
+  const terms = setting.override;
+  const dayStart = now - (now % DAY_MS);
+  const underLimit = readState(dir).entries.filter((e) => e.rule === item.rule && e.at >= dayStart).length < terms.daily_limit;
+  const offers = {
+    allow: setting.mode === "override" && underLimit,
+    always: setting.mode === "override" && underLimit && terms.always !== undefined && terms.always !== "off",
+    ask: setting.mode === "ask" || terms.requests === true,
+  };
+  if (!offers.allow && !offers.ask) return null;
+  return { item, title: RULE_TITLE[item.rule as ManagedRuleId] ?? item.rule, reason_min: terms.reason_min, mode: setting.mode as "override" | "ask", offers };
+}
+
+/** Act on an earlier block with the window's answer. Allowing makes an allowance (once: the next try; 15 minutes; or always,
+ *  waiting for an admin when the workspace says so) and counts as one of today's overrides; asking queues "Ask an admin".
+ *  Scopebond never runs the action itself: the person or the coding agent runs it again. */
+export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now = Date.now()): { outcome: "allowed" | "proposed" | "asked" | "declined" | "gone" } {
+  const q = blockedQuestion(dir, id, now);
+  if (!q) return { outcome: "gone" };
+  const reason = (answer.reason ?? "").trim();
+  if (answer.decision !== "allow" && answer.decision !== "ask") return { outcome: "declined" };
+  if (reason.length < q.reason_min || reason.length > 500) return { outcome: "declined" };
+  const osDigest = answer.os_user ? digestOf(answer.os_user) : osUserDigest();
+  if (answer.decision === "ask") {
+    if (!q.offers.ask) return { outcome: "declined" };
+    queueRequest(dir, { rule: q.item.rule, action_key: q.item.action_key, action_id: q.item.id, summary: q.item.summary, reason, os_user_digest: osDigest, harness: q.item.harness, now });
+    markBlocked(dir, id, "asked", now);
+    return { outcome: "asked" };
+  }
+  if (!q.offers.allow) return { outcome: "declined" };
+  const lasts = answer.lasts === "always" && q.offers.always ? "always" : answer.lasts === "15m" ? "15m" : "once";
+  let doc: ManagedDocument | null = null;
+  try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { /* checked above */ }
+  const terms = doc?.rules?.[q.item.rule as ManagedRuleId]?.override;
+  const made = makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts,
+    alwaysDays: terms?.always_days, needsAdmin: terms?.always === "needs_admin", now });
+  const allowances = [...readAllowances(dir), made];
+  // Waiting for an admin, the person is still covered for 15 minutes.
+  if (made.state === "proposed") allowances.push(makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts: "15m", now }));
+  writeAllowances(dir, allowances, now);
+  const state = readState(dir);
+  state.entries.push({ rule: q.item.rule, action_key: q.item.action_key, action_id: q.item.id, at: now, reason_digest: made.reason_digest, reason_length: made.reason_length });
+  try { writeState(dir, state, now); } catch { /* the allowance stands; the workspace counts it again */ }
+  markBlocked(dir, id, "allowed", now);
+  return { outcome: made.state === "proposed" ? "proposed" : "allowed" };
 }
 
 function osUserDigest(): string | null {

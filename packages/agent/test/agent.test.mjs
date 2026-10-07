@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA } from "@scopebond/hook";
+import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readAllowances, readBlocked } from "@scopebond/hook";
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
@@ -289,6 +289,30 @@ test("the agent answers an override only from its window, and sends the reason t
     await service.cycleNow();
     assert.deepEqual(ws.reasons, [{ action_id: "action-0000000000001", reason: "Cleaning the build folder" }]);
     assert.equal(pendingReasons(dir), 0);
+  } finally { await service.stop(); ws.close(); }
+});
+
+test("from the tray, an earlier block is allowed or sent to an admin only through the Scopebond window", async () => {
+  const ws = await workspace();
+  const dir = await computerWithQueue(ws.url, 0);
+  const answers = [{ decision: "deny" }, { decision: "allow", reason: "Cleaning the build output before release", os_user: "dev", lasts: "once" }];
+  const shown = [];
+  const service = await startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false,
+    prompter: async (q) => { shown.push(q); return answers.shift() ?? { decision: "unavailable" }; } });
+  try {
+    writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ rules: { "destructive-shell": { mode: "override", override: { reason_min: 10, minutes: 0, daily_limit: 5, harness_prompt: false, requests: true } } } }));
+    const id = "action-blocked-00000001";
+    recordBlocked(dir, { id, at: new Date().toISOString(), rule: "destructive-shell", mode: "override", action_key: "a".repeat(64), summary: "rm -rf build", harness: "claude" });
+    assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: "action-unknown-0000001" }, 10_000)).outcome, "gone");
+    assert.equal(shown.length, 0, "an unknown block opens no window");
+    assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000)).outcome, "declined");
+    const allowed = await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000);
+    assert.deepEqual(allowed, { outcome: "allowed", text: "Allowed. Run it again, or let the coding agent retry." });
+    assert.deepEqual(shown[1].offers, { allow: true, always: false, ask: true });
+    assert.equal(shown[1].summary, "rm -rf build");
+    assert.equal(readAllowances(dir).filter((a) => a.once).length, 1);
+    assert.equal(readBlocked(dir)[0].acted, "allowed");
+    assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000)).outcome, "gone", "offered once");
   } finally { await service.stop(); ws.close(); }
 });
 

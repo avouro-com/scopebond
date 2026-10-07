@@ -28,8 +28,11 @@ export interface TrayModel {
   actions: TrayAction[];
   /** A sign-in or similar step no button can do, in words. */
   hint: string | null;
-  recent_blocks: Array<{ summary: string; at: string; rule: string | null }>;
+  recent_blocks: RecentBlock[];
 }
+
+/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray (D144); `acted`: what they did. */
+export interface RecentBlock { action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | null }
 
 export interface TrayInput {
   status: StatusJson;
@@ -41,7 +44,7 @@ export interface TrayInput {
   working: string | null;
   rules: { checked_at: number | null; managed: boolean; block: number; monitor: number } | null;
   today: { actions: number; blocked: number; allowed_by_person: number } | null;
-  recentBlocks?: Array<{ summary: string; at: string; rule: string | null }>;
+  recentBlocks?: RecentBlock[];
   version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null };
   workspace: { name: string | null; environment: string | null; computer_url: string | null } | null;
   computerName: string;

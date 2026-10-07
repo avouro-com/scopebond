@@ -106,7 +106,14 @@ function Refresh {
   if ($m.recent_blocks.Count -gt 0) {
     [void]$menu.Items.Add('-')
     $blocks = $menu.Items.Add('Recently blocked')
-    foreach ($b in $m.recent_blocks) { $when = $(try { ([datetime]$b.at).ToLocalTime().ToString('HH:mm') } catch { '' }); [void]$blocks.DropDownItems.Add($b.summary + '   ' + $when).Enabled }
+    foreach ($b in $m.recent_blocks) {
+      $when = $(try { ([datetime]$b.at).ToLocalTime().ToString('HH:mm') } catch { '' })
+      $note = $(if ($b.acted -eq 'allowed') { '   (allowed)' } elseif ($b.acted -eq 'asked') { '   (asked an admin)' } elseif ($b.can_act) { '   Allow or ask…' } else { '' })
+      $row = $blocks.DropDownItems.Add($b.summary + '   ' + $when + $note)
+      # D144: the Scopebond window asks; the person allows it (once, 15 min, always) or asks an admin. Nothing runs again by itself.
+      if ($b.can_act) { $id = $b.action_id; $row.Add_Click({ try { $r = Call 'POST' '/blocked' @{ action_id = $id }; [Windows.Forms.MessageBox]::Show($r.text, 'Scopebond') | Out-Null } catch {} ; Refresh }.GetNewClosure()) }
+      else { $row.Enabled = $false }
+    }
   }
   [void]$menu.Items.Add('-')
   $notes = $menu.Items.Add('Notifications')
