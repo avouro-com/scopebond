@@ -16,6 +16,7 @@ import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
+import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
@@ -141,6 +142,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     if (!connection) return;
     try { const sent = await flushReasons(options.dir, connection, options.fetchImpl); if (sent) log(`sent ${sent} override reason(s) to the workspace`); }
     catch { /* they wait for the next cycle */ }
+    // D144: allowances a person made here, and their requests to an admin.
+    try {
+      const sent = await sendAllowancesAndRequests(options.dir, connection, options.fetchImpl);
+      if (sent.allowances || sent.requests) log(`sent ${sent.allowances} allowance(s) and ${sent.requests} request(s) to the workspace`);
+    } catch { /* they wait for the next cycle */ }
   };
   const cycle = async (): Promise<CycleResult> => {
     if (running) return running;
@@ -226,7 +232,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       log(`asking whether to allow "${question.title}"`);
       const answer = await prompt(question);
       log(`override ${answer.decision === "allow" ? "given" : answer.decision === "deny" ? "not given" : "not available"} for "${question.title}"`);
-      if (answer.decision === "allow" && answer.reason) { queueReason(options.dir, question.action_id, answer.reason); void sendReasons(); }
+      if (answer.decision === "allow" && answer.reason) { queueReason(options.dir, question.action_id, answer.reason); setTimeout(() => { void sendReasons(); }, 1_000); }
+      // The hook writes the request or allowance after this answer; send it shortly after.
+      if (answer.decision === "ask" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);
       return answer;
     },
   });

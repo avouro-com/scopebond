@@ -59,13 +59,30 @@ const OPAQUE = /^[A-Za-z0-9._:-]{1,128}$/;
 /** What the computer enforces for a rule set to "Block, user may override": the shortest reason accepted, how long one override
  *  lasts (0 = this action only), how many a person may make per rule per day, and whether the coding agent's own prompt may be
  *  used when the Scopebond window is not available. Who may override is the workspace's decision: it sends "override" only then. */
-export interface OverrideTerms { reason_min: number; minutes: number; daily_limit: number; harness_prompt: boolean }
-export type ManagedRule = { mode: "monitor" | "block" | "override"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
-const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
-function validTerms(t: unknown): t is OverrideTerms {
-  return isObject(t) && Object.keys(t).length === 4 && intIn(t.reason_min, 10, 200) && intIn(t.minutes, 0, 60) && intIn(t.daily_limit, 1, 50)
-    && typeof t.harness_prompt === "boolean";
+export interface OverrideTerms {
+  reason_min: number; minutes: number; daily_limit: number; harness_prompt: boolean;
+  /** D144 (sent only to a hook that reports the `allowances` capability): what a person's "Always allow this here…" does —
+   *  applies at once (listed in the workspace for an admin to confirm or revoke), waits for an admin, or is not offered. */
+  always?: "at_once" | "needs_admin" | "off";
+  /** Days an "always" allowance lasts (30 by default). */
+  always_days?: number;
+  /** Whether the window offers "Ask an admin". */
+  requests?: boolean;
 }
+/** D144 rule modes, in the workspace's words: monitor = Monitor, block = Block, override = "Block, person may allow",
+ *  ask = "Block, person may ask". */
+export type ManagedRule = { mode: "monitor" | "block" | "override" | "ask"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
+const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+const TERM_KEYS = new Set(["reason_min", "minutes", "daily_limit", "harness_prompt", "always", "always_days", "requests"]);
+function validTerms(t: unknown): t is OverrideTerms {
+  return isObject(t) && Object.keys(t).every((k) => TERM_KEYS.has(k)) && intIn(t.reason_min, 10, 200) && intIn(t.minutes, 0, 60) && intIn(t.daily_limit, 1, 50)
+    && typeof t.harness_prompt === "boolean"
+    && (t.always === undefined || t.always === "at_once" || t.always === "needs_admin" || t.always === "off")
+    && (t.always_days === undefined || intIn(t.always_days, 1, 365))
+    && (t.requests === undefined || typeof t.requests === "boolean");
+}
+/** Whether a person at the computer may act on a block under this rule (allow it, or ask an admin). */
+export const personMayAct = (rule: ManagedRule | undefined): boolean => rule?.mode === "override" || rule?.mode === "ask";
 /** The clause that carries each workspace rule on the computer, for naming the rule a denial came from. */
 export const RULE_OF_CLAUSE: Readonly<Record<string, ManagedRuleId>> = {
   "protect-branches": "push-protected", "protect-branch-history": "force-push-protected", "safe-shell": "destructive-shell",
@@ -75,7 +92,7 @@ export const RULE_OF_CLAUSE: Readonly<Record<string, ManagedRuleId>> = {
  *  (another rule on Block, or Scopebond's own floor). */
 export function floorDocument(doc: ManagedDocument): ManagedDocument {
   const rules = Object.fromEntries(Object.entries(doc.rules).map(([id, rule]) => {
-    if (rule.mode !== "override") return [id, rule];
+    if (!personMayAct(rule)) return [id, rule];
     const { override: _terms, excluded_paths: _p, excluded_branches: _b, ...rest } = rule;
     return [id, { ...rest, mode: "monitor" }];
   })) as ManagedDocument["rules"];
@@ -93,6 +110,9 @@ export interface ManagedDocument {
   rules_digest: string;
   /** Whether a person may change a rule on this computer (`rules enforce|monitor`); absent means no. */
   local_changes?: boolean;
+  /** D144: allowances the workspace holds for this computer (approved requests, confirmed ones), and the ones it revoked. */
+  allowances?: unknown[];
+  revoked_allowances?: string[];
 }
 
 export type RefusalReason = "invalid_document" | "stale_revision" | "wrong_computer" | "unsupported" | "write_failed";
@@ -123,8 +143,9 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   }
   for (const id of MANAGED_RULE_IDS) {
     const rule = rules[id];
-    if (!isObject(rule) || (rule.mode !== "monitor" && rule.mode !== "block" && rule.mode !== "override")) return bad(`rule ${id} has no valid mode`);
-    if ((rule.mode === "override") !== ("override" in rule) || (rule.mode === "override" && !validTerms(rule.override))) return bad(`rule ${id} has invalid override terms`);
+    if (!isObject(rule) || (rule.mode !== "monitor" && rule.mode !== "block" && rule.mode !== "override" && rule.mode !== "ask")) return bad(`rule ${id} has no valid mode`);
+    const acts = rule.mode === "override" || rule.mode === "ask";
+    if (acts !== ("override" in rule) || (acts && !validTerms(rule.override))) return bad(`rule ${id} has invalid override terms`);
     for (const key of Object.keys(rule)) {
       if (key === "mode" || key === "override") continue;
       const listKey = LIST_OF[id];

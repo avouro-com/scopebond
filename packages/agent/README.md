@@ -25,7 +25,10 @@ agent never takes part in a decision. It only keeps everything around the decisi
   shows its own window (Windows PowerShell with Windows Forms, macOS `osascript`, Linux `zenity`): the rule, the action and a
   reason field. Only the window answers; whatever calls the local channel can open a window but never decide it. One window
   at a time; it closes itself before the hook stops waiting. The reason goes to the workspace once, and waits in the
-  Scopebond home while the computer is offline.
+  Scopebond home while the computer is offline. As the workspace allows, the window offers **Allow once**, **Allow for 15
+  min**, **Always allow this here…** and **Ask an admin** (only the last for a rule set to *Block, person may ask*). The
+  agent sends a person's allowances and requests to the workspace (`POST /v1/allowances`, `POST /v1/requests`), each
+  signed with the key this computer enrolled with, once; a workspace without these calls leaves them on the computer.
 - **Health.** It reports the same machine-readable status as `scopebond status --json` (`scopebond.status.v1`).
 
 ## Use

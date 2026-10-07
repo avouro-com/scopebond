@@ -161,13 +161,13 @@
         },
         "override": {
           "type": "object",
-          "description": "A person at the computer allowed an action a rule blocked (agent_dialog, with a reason whose SHA-256 is reason_digest), or the coding agent's own permission prompt was offered for it (harness_prompt). Present only with realtime_result \"approved\".",
+          "description": "A person at the computer allowed an action a rule blocked (agent_dialog, with a reason whose SHA-256 is reason_digest), the coding agent's own permission prompt was offered for it (harness_prompt), or it matched a standing allowance (allowance: repeat_of names the allowance and reason_digest is the SHA-256 of the reason it was made with). Present only with realtime_result \"approved\".",
           "required": ["version", "rule", "method", "state", "repeat_of", "reason_digest", "reason_length", "os_user_digest", "decided_at"],
           "additionalProperties": false,
           "properties": {
             "version": { "const": 1 },
             "rule": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
-            "method": { "enum": ["agent_dialog", "harness_prompt"] },
+            "method": { "enum": ["agent_dialog", "harness_prompt", "allowance"] },
             "state": { "enum": ["allowed", "offered"] },
             "repeat_of": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 16, "maxLength": 200 }] },
             "reason_digest": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-f]{64}$" }] },
@@ -177,7 +177,8 @@
           },
           "oneOf": [
             { "properties": { "method": { "const": "agent_dialog" }, "state": { "const": "allowed" }, "reason_digest": { "type": "string" }, "reason_length": { "type": "integer" } } },
-            { "properties": { "method": { "const": "harness_prompt" }, "state": { "const": "offered" }, "reason_digest": { "type": "null" }, "reason_length": { "type": "null" }, "repeat_of": { "type": "null" } } }
+            { "properties": { "method": { "const": "harness_prompt" }, "state": { "const": "offered" }, "reason_digest": { "type": "null" }, "reason_length": { "type": "null" }, "repeat_of": { "type": "null" } } },
+            { "properties": { "method": { "const": "allowance" }, "state": { "const": "allowed" }, "repeat_of": { "type": "string" }, "reason_digest": { "type": "string" }, "reason_length": { "type": "integer" } } }
           ]
         }
       },

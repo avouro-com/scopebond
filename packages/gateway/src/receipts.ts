@@ -90,8 +90,9 @@ export interface OverrideRecord {
   /** The workspace rule that blocked the action. */
   rule: string;
   /** agent_dialog: the Scopebond Agent's own window, with a reason. harness_prompt: the coding agent's permission prompt,
-   *  which takes no reason and does not prove a person answered. */
-  method: "agent_dialog" | "harness_prompt";
+   *  which takes no reason and does not prove a person answered. allowance: a standing allowance a person or an admin made
+   *  for this action (`repeat_of` names it; the reason is the one it was made with). */
+  method: "agent_dialog" | "harness_prompt" | "allowance";
   /** allowed (agent_dialog) or offered (harness_prompt: whether the person said yes is known only from after-action events). */
   state: "allowed" | "offered";
   /** The action an earlier override allowed, when this one is the same action inside the time that override allowed. */
@@ -110,14 +111,15 @@ const OVERRIDE_RULE = /^[a-z0-9-]{1,64}$/;
 export function validateOverrideRecord(o: unknown): o is OverrideRecord {
   if (!isRecord(o) || !hasOnlyKeys(o, OVERRIDE_KEYS) || Object.keys(o).length !== OVERRIDE_KEYS.length) return false;
   if (o.version !== 1 || typeof o.rule !== "string" || !OVERRIDE_RULE.test(o.rule)) return false;
-  if (o.method !== "agent_dialog" && o.method !== "harness_prompt") return false;
+  if (o.method !== "agent_dialog" && o.method !== "harness_prompt" && o.method !== "allowance") return false;
   if (o.state !== "allowed" && o.state !== "offered") return false;
   if (o.repeat_of !== null && (typeof o.repeat_of !== "string" || o.repeat_of.length < 16 || o.repeat_of.length > 200)) return false;
   if (o.os_user_digest !== null && (typeof o.os_user_digest !== "string" || !HEX_64.test(o.os_user_digest))) return false;
   if (typeof o.decided_at !== "string" || !Number.isFinite(Date.parse(o.decided_at))) return false;
-  if (o.method === "agent_dialog") {
+  if (o.method === "agent_dialog" || o.method === "allowance") {
     return o.state === "allowed" && typeof o.reason_digest === "string" && HEX_64.test(o.reason_digest)
-      && Number.isInteger(o.reason_length) && (o.reason_length as number) >= 1 && (o.reason_length as number) <= 500;
+      && Number.isInteger(o.reason_length) && (o.reason_length as number) >= 1 && (o.reason_length as number) <= 500
+      && (o.method === "agent_dialog" || typeof o.repeat_of === "string");
   }
   return o.state === "offered" && o.reason_digest === null && o.reason_length === null && o.repeat_of === null;
 }

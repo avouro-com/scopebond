@@ -318,6 +318,19 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   but only in a permission mode where Claude Code really asks; that prompt takes no reason and is
   recorded as *offered*. Scopebond's own protection, rules set to Block and the kill switch are
   never overridable, and the workspace's daily limit holds.
+- **Allowances and "Ask an admin".** In the window a person may also choose **Allow for 15 min**
+  or **Always allow this here…** (when the workspace offers it): the same action — the same type
+  and parameters, whatever tool call it comes from — is then allowed by a standing *allowance*
+  that expires (30 days by default) and that the workspace lists for an admin to confirm or
+  revoke. A rule set to *Block, person may ask* offers only **Ask an admin**: the action stays
+  blocked and the request goes to the workspace; an approved request comes back as an allowance
+  with the next rules check. The receipt of an action an allowance lets through says
+  `method: "allowance"` and names it. An allowance is bound to one rule, never applies to
+  Scopebond's own protection, and stops applying when it expires, is used up (a one-time one) or
+  the workspace revokes it. The hook keeps them, and the last blocks a person may act on, in its
+  own folder (`allowances.json`, `requests.json`, `blocked.json`), which the coding agent cannot
+  change. The hook tells the workspace it understands these settings
+  (`x-scopebond-hook-capabilities: allowances`); a workspace sends them only then.
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left

@@ -14,8 +14,12 @@ export interface OverrideQuestion {
   reason_min: number;
   lasts: string;
   timeout_ms: number;
+  /** D144: override = "Block, person may allow"; ask = "Block, person may ask" (only Ask an admin). */
+  mode: "override" | "ask";
+  /** Which choices the workspace allows: allow (once or 15 minutes), always (an allowance), ask (Ask an admin). */
+  offers: { allow: boolean; always: boolean; ask: boolean };
 }
-export interface OverrideAnswer { decision: "allow" | "deny" | "unavailable"; reason?: string; os_user?: string }
+export interface OverrideAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always" }
 export type Prompter = (question: OverrideQuestion) => Promise<OverrideAnswer>;
 
 const ID = /^[A-Za-z0-9._:-]{16,200}$/;
@@ -29,14 +33,22 @@ export function parseQuestion(raw: unknown): OverrideQuestion | null {
   const reasonMin = Number(r.reason_min);
   const timeout = Number(r.timeout_ms);
   if (!Number.isInteger(reasonMin) || reasonMin < 10 || reasonMin > 200) return null;
+  const mode = r.mode === "ask" ? "ask" : "override";
+  const o = (r.offers && typeof r.offers === "object" ? r.offers : {}) as Record<string, unknown>;
+  // A hook before D144 sends no offers: the window offers "Allow once", as it always did.
+  const offers = r.offers === undefined ? { allow: true, always: false, ask: false }
+    : { allow: mode === "override" && o.allow === true, always: mode === "override" && o.always === true, ask: o.ask === true };
   return {
     action_id: r.action_id, rule: r.rule, title: clip(r.title, 120) || r.rule, summary: clip(r.summary, 200), reason_min: reasonMin,
     lasts: clip(r.lasts, 80) || "this action only", timeout_ms: Number.isFinite(timeout) ? Math.min(Math.max(timeout, 5_000), 55_000) : 45_000,
+    mode, offers,
   };
 }
 
 export function questionText(q: OverrideQuestion): string {
-  return `Your workspace's rule "${q.title}" blocked this action:\n\n${q.summary}\n\nYou may allow it (${q.lasts}). Say why, in at least ${q.reason_min} characters. Your name, the reason and the action are recorded in your workspace.`;
+  const head = `Scopebond blocked this. Your workspace's rule "${q.title}" blocked this action:\n\n${q.summary}\n\n`;
+  if (!q.offers.allow) return `${head}You may ask an admin to allow it. Say why, in at least ${q.reason_min} characters. The action stays blocked until an admin answers; your name, the reason and the action are recorded in your workspace.`;
+  return `${head}You may allow it. Say why, in at least ${q.reason_min} characters. Your name, the reason and the action are recorded in your workspace.`;
 }
 
 function run(command: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string }> {
@@ -69,33 +81,41 @@ $f.StartPosition = 'CenterScreen'
 $f.FormBorderStyle = 'FixedDialog'
 $f.MaximizeBox = $false
 $f.MinimizeBox = $false
-$f.ClientSize = New-Object Drawing.Size(460, 250)
+$f.ClientSize = New-Object Drawing.Size(640, 250)
 $l = New-Object Windows.Forms.Label
 $l.Text = (T '${b64(questionText(q))}')
-$l.SetBounds(12, 10, 436, 130)
+$l.SetBounds(12, 10, 616, 130)
 $r = New-Object Windows.Forms.TextBox
-$r.SetBounds(12, 145, 436, 24)
-$a = New-Object Windows.Forms.Button
-$a.Text = (T '${b64("Allow once")}')
-$a.SetBounds(256, 200, 92, 30)
-$a.Enabled = $false
-$d = New-Object Windows.Forms.Button
-$d.Text = (T '${b64("Don't allow")}')
-$d.SetBounds(356, 200, 92, 30)
-$r.Add_TextChanged({ $a.Enabled = ($r.Text.Trim().Length -ge $min) })
+$r.SetBounds(12, 145, 616, 24)
 $script:answer = 'deny'
-$a.Add_Click({ $script:answer = 'allow'; $f.Close() })
-$d.Add_Click({ $f.Close() })
+$script:lasts = 'once'
+$needReason = @()
+$x = 628
+function Btn($label, $width, $decision, $lasts, $needs) {
+  $b = New-Object Windows.Forms.Button
+  $b.Text = (T $label)
+  $script:x0 = $x - $width
+  $b.SetBounds($x - $width, 200, $width, 30)
+  $b.Add_Click({ $script:answer = $decision; $script:lasts = $lasts; $f.Close() }.GetNewClosure())
+  if ($needs) { $b.Enabled = $false; $script:needReason += $b }
+  $f.Controls.Add($b)
+  $b
+}
+$d = Btn '${b64("Don't allow")}' 100 'deny' 'once' $false; $x -= 108
+${q.offers.ask ? `[void](Btn '${b64("Ask an admin")}' 110 'ask' 'once' $true); $x -= 118` : ""}
+${q.offers.always ? `[void](Btn '${b64("Always allow this here…")}' 150 'allow' 'always' $true); $x -= 158` : ""}
+${q.offers.allow ? `[void](Btn '${b64("Allow for 15 min")}' 120 'allow' '15m' $true); $x -= 128; [void](Btn '${b64("Allow once")}' 92 'allow' 'once' $true)` : ""}
+$r.Add_TextChanged({ foreach ($b in $script:needReason) { $b.Enabled = ($r.Text.Trim().Length -ge $min) } })
 $f.AcceptButton = $d
 $f.CancelButton = $d
-$f.Controls.AddRange(@($l, $r, $a, $d))
+$f.Controls.AddRange(@($l, $r))
 $t = New-Object Windows.Forms.Timer
 $t.Interval = ${q.timeout_ms}
 $t.Add_Tick({ $t.Stop(); $f.Close() })
 $t.Start()
 $f.Add_Shown({ $f.Activate(); $r.Focus() })
 [void]$f.ShowDialog()
-$out = @{ decision = $script:answer; reason = $(if ($script:answer -eq 'allow') { $r.Text.Trim() } else { '' }) }
+$out = @{ decision = $script:answer; lasts = $script:lasts; reason = $(if ($script:answer -ne 'deny') { $r.Text.Trim() } else { '' }) }
 [Console]::Out.Write((ConvertTo-Json $out -Compress))
 `;
 }
@@ -105,8 +125,11 @@ async function promptWindows(q: OverrideQuestion): Promise<OverrideAnswer> {
   const { code, stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-EncodedCommand", encoded], q.timeout_ms);
   if (code !== 0) return { decision: "unavailable" };
   try {
-    const parsed = JSON.parse(stdout.trim()) as { decision?: string; reason?: string };
-    return parsed.decision === "allow" ? { decision: "allow", reason: String(parsed.reason ?? "") } : { decision: "deny" };
+    const parsed = JSON.parse(stdout.trim()) as { decision?: string; reason?: string; lasts?: string };
+    const lasts = parsed.lasts === "15m" || parsed.lasts === "always" ? parsed.lasts : "once";
+    if (parsed.decision === "allow" && q.offers.allow && (lasts !== "always" || q.offers.always)) return { decision: "allow", reason: String(parsed.reason ?? ""), lasts };
+    if (parsed.decision === "ask" && q.offers.ask) return { decision: "ask", reason: String(parsed.reason ?? "") };
+    return { decision: "deny" };
   } catch { return { decision: "unavailable" }; }
 }
 
@@ -121,21 +144,28 @@ const MAC_SCRIPT = [
 ];
 
 async function promptMac(q: OverrideQuestion): Promise<OverrideAnswer> {
-  const args = MAC_SCRIPT.flatMap((line) => ["-e", line]);
+  // macOS dialogs take three buttons: "Allow once" where allowing is offered, otherwise "Ask an admin".
+  const asking = !q.offers.allow && q.offers.ask;
+  if (!q.offers.allow && !asking) return { decision: "unavailable" };
+  const script = asking ? MAC_SCRIPT.map((line) => line.replace(/Allow once/g, "Ask an admin").replace('return "allow"', 'return "ask"')) : MAC_SCRIPT;
+  const args = script.flatMap((line) => ["-e", line]);
   const { code, stdout } = await run("osascript", [...args, questionText(q), String(Math.round(q.timeout_ms / 1000))], q.timeout_ms);
   if (code === null) return { decision: "unavailable" };
   if (code !== 0) return { decision: "deny" }; // "Don't allow" is the cancel button
   const [first, ...rest] = stdout.replace(/\r?\n$/, "").split("\n");
-  return first === "allow" ? { decision: "allow", reason: rest.join("\n") } : { decision: "deny" };
+  if (first === "ask") return { decision: "ask", reason: rest.join("\n") };
+  return first === "allow" ? { decision: "allow", reason: rest.join("\n"), lasts: "once" } : { decision: "deny" };
 }
 
 async function promptLinux(q: OverrideQuestion): Promise<OverrideAnswer> {
+  const asking = !q.offers.allow && q.offers.ask;
+  if (!q.offers.allow && !asking) return { decision: "unavailable" };
   const { code, stdout } = await run("zenity", [
-    "--entry", "--title=Scopebond", `--text=${questionText(q)}`, "--ok-label=Allow once", "--cancel-label=Don't allow",
+    "--entry", "--title=Scopebond", `--text=${questionText(q)}`, `--ok-label=${asking ? "Ask an admin" : "Allow once"}`, "--cancel-label=Don't allow",
     `--timeout=${Math.round(q.timeout_ms / 1000)}`,
   ], q.timeout_ms);
   if (code === null) return { decision: "unavailable" };
-  if (code === 0) return { decision: "allow", reason: stdout.replace(/\r?\n$/, "") };
+  if (code === 0) return asking ? { decision: "ask", reason: stdout.replace(/\r?\n$/, "") } : { decision: "allow", reason: stdout.replace(/\r?\n$/, ""), lasts: "once" };
   // 1: Don't allow; 5: timed out; anything else (no display, not installed): no window.
   return code === 1 || code === 5 ? { decision: "deny" } : { decision: "unavailable" };
 }
@@ -143,12 +173,12 @@ async function promptLinux(q: OverrideQuestion): Promise<OverrideAnswer> {
 /** The window for this operating system. A reason shorter than the workspace accepts is refused here as well. */
 export const systemPrompter: Prompter = async (q) => {
   const answer = process.platform === "win32" ? await promptWindows(q) : process.platform === "darwin" ? await promptMac(q) : await promptLinux(q);
-  if (answer.decision !== "allow") return answer;
+  if (answer.decision !== "allow" && answer.decision !== "ask") return answer;
   const reason = (answer.reason ?? "").trim();
   if (reason.length < q.reason_min) return { decision: "deny" };
   let os_user: string | undefined;
   try { os_user = userInfo().username; } catch { /* not known */ }
-  return { decision: "allow", reason: reason.slice(0, 500), ...(os_user ? { os_user } : {}) };
+  return { ...answer, reason: reason.slice(0, 500), ...(os_user ? { os_user } : {}) };
 };
 
 /** One window at a time: a second request waits for the first, and gives up as no answer if it would wait too long. */

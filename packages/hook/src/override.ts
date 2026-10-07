@@ -17,7 +17,9 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
-import { compileManaged, floorDocument, MANAGED_DOC_FILE, RULE_OF_CLAUSE, writeAtomic, type ManagedDocument, type ManagedRuleId } from "./managed.js";
+import { compileManaged, floorDocument, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type ManagedDocument, type ManagedRuleId } from "./managed.js";
+import { makeAllowance, matchAllowance, mergeWorkspaceAllowances, readAllowances, recordBlocked, writeAllowances } from "./allowances.js";
+import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
 
@@ -70,13 +72,16 @@ export function actionSummary(intent: { action_type?: string; params?: Record<st
 
 /** The same action, whatever tool call it came from: its type and parameters without the per-call group id. */
 export function actionKey(intent: { action_type?: string; params?: Record<string, unknown> }): string {
-  const { action_group: _group, ...params } = intent.params ?? {};
+  // The group fields name the tool call an action came from (its id, size and place in it), so they are left out.
+  const { action_group: _group, action_group_size: _size, action_group_seq: _seq, ...params } = intent.params ?? {};
   const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
     : v && typeof v === "object" ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
   return digestOf(JSON.stringify({ action_type: intent.action_type ?? "", params: sorted(params) }));
 }
 
-export interface AgentAnswer { decision: "allow" | "deny" | "unavailable"; reason?: string; os_user?: string }
+/** The window's answer. allow: allow this action (`lasts`: once, or also for 15 minutes, or always via an allowance). ask: send
+ *  "Ask an admin" with the reason; the action stays blocked. */
+export interface AgentAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always" }
 
 /** Ask the resident Scopebond Agent to show its window. Returns "unavailable" when no agent answers. */
 export async function askAgent(home: string, request: Record<string, unknown>, timeoutMs: number, fetchImpl: typeof fetch = fetch): Promise<AgentAnswer> {
@@ -91,7 +96,10 @@ export async function askAgent(home: string, request: Record<string, unknown>, t
     });
     if (!res.ok) return { decision: "unavailable" };
     const body = await res.json() as AgentAnswer;
-    if (body.decision === "allow" && typeof body.reason === "string") return { decision: "allow", reason: body.reason, ...(typeof body.os_user === "string" ? { os_user: body.os_user } : {}) };
+    const user = typeof body.os_user === "string" ? { os_user: body.os_user } : {};
+    const lasts = body.lasts === "15m" || body.lasts === "always" ? body.lasts : "once";
+    if (body.decision === "allow" && typeof body.reason === "string") return { decision: "allow", reason: body.reason, lasts, ...user };
+    if (body.decision === "ask" && typeof body.reason === "string") return { decision: "ask", reason: body.reason, ...user };
     return { decision: body.decision === "deny" ? "deny" : "unavailable" };
   } catch { return { decision: "unavailable" }; }
 }
@@ -112,19 +120,19 @@ export interface OverrideContext {
 }
 
 /** What happened when the last override was considered, so a denial can say how an override would be possible. */
-export interface OverrideNote { rule: ManagedRuleId; title: string; outcome: "declined" | "limit" | "unavailable" | "not_overridable" }
+export interface OverrideNote { rule: ManagedRuleId; title: string; outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" }
 
 export function createOverrideHandler(ctx: OverrideContext): { handler: OverrideHandler; note(): OverrideNote | null } | null {
   let doc: ManagedDocument;
   try { doc = JSON.parse(readFileSync(join(ctx.dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
-  if (!Object.values(doc.rules ?? {}).some((r) => r?.mode === "override")) return null;
+  if (!Object.values(doc.rules ?? {}).some((r) => personMayAct(r))) return null;
   const now = ctx.now ?? Date.now;
   let last: OverrideNote | null = null;
   const handler: OverrideHandler = async ({ verdict, action_id, intent, intent_hash }) => {
     const key = actionKey(intent as never);
     const rule = RULE_OF_CLAUSE[verdict.clause_id ?? ""];
     const setting = rule ? doc.rules[rule] : undefined;
-    if (!rule || setting?.mode !== "override" || !setting.override) return null;
+    if (!rule || !personMayAct(setting) || !setting?.override) return null;
     const terms = setting.override;
     const title = RULE_TITLE[rule];
     // Would the action still be denied with every overridable rule only recorded? Then a Block rule or Scopebond's own
@@ -134,6 +142,24 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     if (!atFloor.allow) { last = { rule, title, outcome: "not_overridable" }; return null; }
 
     const t = now();
+    const osDigest = osUserDigest();
+    // D144: a standing allowance for this rule and this exact action lets it through, and the receipt names it.
+    let allowances = readAllowances(ctx.dir);
+    if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, doc.allowances, doc.revoked_allowances);
+    const standing = matchAllowance(allowances, { rule, actionKey: key, osUserDigest: osDigest, now: t });
+    if (standing) {
+      standing.uses += 1;
+      try { writeAllowances(ctx.dir, allowances, t); } catch { /* the receipt records the use; a one-time allowance may be used again */ }
+      return { version: 1, rule, method: "allowance", state: "allowed", repeat_of: standing.id, reason_digest: standing.reason_digest,
+        reason_length: standing.reason_length, os_user_digest: osDigest, decided_at: new Date(t).toISOString() };
+    }
+    const summary = actionSummary(intent as never);
+    const blocked = () => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting!.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness }, t);
+    const offers = {
+      allow: setting!.mode === "override",
+      always: setting!.mode === "override" && terms.always !== undefined && terms.always !== "off",
+      ask: setting!.mode === "ask" || terms.requests === true,
+    };
     const state = readState(ctx.dir);
     const dayStart = t - (t % DAY_MS);
     // Inside the time an earlier override allowed, the same action is allowed again without asking, and says so.
@@ -144,28 +170,47 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
           reason_length: earlier.reason_length, os_user_digest: osUserDigest(), decided_at: new Date(t).toISOString() };
       }
     }
-    if (state.entries.filter((e) => e.rule === rule && e.at >= dayStart).length >= terms.daily_limit) { last = { rule, title, outcome: "limit" }; return null; }
+    if (offers.allow && state.entries.filter((e) => e.rule === rule && e.at >= dayStart).length >= terms.daily_limit) { last = { rule, title, outcome: "limit" }; blocked(); return null; }
 
     const answer = await (ctx.ask ?? askAgent)(ctx.home, {
-      action_id, rule, title, summary: actionSummary(intent as never), reason_min: terms.reason_min,
+      action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting!.mode, offers,
       lasts: terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only", timeout_ms: ctx.waitMs ?? 45_000,
     }, (ctx.waitMs ?? 45_000) + 2_000);
-    if (answer.decision === "allow") {
+    // Ask an admin: the action stays blocked; the request waits for the agent to send it.
+    if (answer.decision === "ask" && offers.ask) {
+      const reason = (answer.reason ?? "").trim();
+      if (reason.length < terms.reason_min || reason.length > 500) { last = { rule, title, outcome: "declined" }; blocked(); return null; }
+      try { queueRequest(ctx.dir, { rule, action_key: key, action_id, summary, reason, os_user_digest: answer.os_user ? digestOf(answer.os_user) : osDigest, harness: ctx.harness, now: t }); }
+      catch { /* the block stands either way */ }
+      last = { rule, title, outcome: "asked" }; blocked(); return null;
+    }
+    if (answer.decision === "allow" && offers.allow) {
       const reason = (answer.reason ?? "").trim();
       if (reason.length < terms.reason_min || reason.length > 500) { last = { rule, title, outcome: "declined" }; return null; }
       const record: OverrideRecord = { version: 1, rule, method: "agent_dialog", state: "allowed", repeat_of: null, reason_digest: digestOf(reason),
         reason_length: reason.length, os_user_digest: answer.os_user ? digestOf(answer.os_user) : osUserDigest(), decided_at: new Date(t).toISOString() };
       state.entries.push({ rule, action_key: key, action_id, at: t, reason_digest: record.reason_digest!, reason_length: reason.length });
       try { writeState(ctx.dir, state, t); } catch { /* the receipt still records it; the count is checked again in the workspace */ }
+      // "Allow for 15 min" and "Always allow this here…" also stand for the same action afterwards (D144).
+      if (answer.lasts === "15m" || (answer.lasts === "always" && offers.always)) {
+        try {
+          const made = makeAllowance({ rule, actionKey: key, reason, osUserDigest: record.os_user_digest, lasts: answer.lasts,
+            alwaysDays: terms.always_days, needsAdmin: terms.always === "needs_admin", now: t });
+          writeAllowances(ctx.dir, [...allowances, made], t);
+          // Waiting for an admin, the person is still covered for 15 minutes.
+          if (made.state === "proposed") writeAllowances(ctx.dir, [...allowances, made, makeAllowance({ rule, actionKey: key, reason, osUserDigest: record.os_user_digest, lasts: "15m", now: t })], t);
+        } catch { /* this action is allowed by the receipt; the next one asks again */ }
+      }
       return record;
     }
-    if (answer.decision === "deny") { last = { rule, title, outcome: "declined" }; return null; }
+    if (answer.decision === "deny") { last = { rule, title, outcome: "declined" }; blocked(); return null; }
     // No window: Claude Code's own prompt, only where the workspace allows it and Claude Code really asks the person.
-    if (terms.harness_prompt && ctx.harness === "claude" && PROMPTING_MODES.has(ctx.permissionMode ?? "")) {
+    if (offers.allow && terms.harness_prompt && ctx.harness === "claude" && PROMPTING_MODES.has(ctx.permissionMode ?? "")) {
       return { version: 1, rule, method: "harness_prompt", state: "offered", repeat_of: null, reason_digest: null, reason_length: null,
         os_user_digest: osUserDigest(), decided_at: new Date(t).toISOString() };
     }
-    last = { rule, title, outcome: "unavailable" };
+    last = { rule, title, outcome: offers.allow ? "unavailable" : "ask_unavailable" };
+    blocked();
     return null;
   };
   return { handler, note: () => last };
@@ -183,6 +228,8 @@ export function overrideHint(note: OverrideNote | null): string | null {
     case "limit": return `You have used today's overrides for "${note.title}". It blocks until tomorrow.`;
     case "declined": return `The override was not given.`;
     case "not_overridable": return null;
+    case "asked": return `A request to allow "${note.title}" was sent to your workspace's admins. The Scopebond icon shows their answer; then run it again.`;
+    case "ask_unavailable": return `Your workspace lets you ask an admin to allow this, from the Scopebond window, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
   }
 }
 

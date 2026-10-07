@@ -116,7 +116,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     res = await fetchImpl(`${base}/v1/policy`, {
       // The hook's version tells the workspace which settings this computer understands (for example exact-target
       // exclusions), so it is never sent a document an older hook would refuse.
-      headers: { ...auth, ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
+      // D144: the settings this hook understands beyond its version (the workspace sends allowances, "Block, person may ask"
+      // and the always/requests terms only to a hook that says so).
+      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances", ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
