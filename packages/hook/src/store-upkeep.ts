@@ -8,7 +8,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SqliteReceiptStore, type StoreMaintenanceReport } from "@scopebond/gateway/node";
-import { historyNeed } from "@scopebond/gateway";
+// A namespace import, so a hook running beside an older gateway (one without `historyNeed`) still loads; it then keeps
+// every receipt, which is the safe answer.
+import * as gatewayCore from "@scopebond/gateway";
+
+type HistoryNeedOf = (policy: unknown) => { kind: "none" } | { kind: "all" } | { kind: "window"; ms: number };
 import { loadConnection } from "./cloud.js";
 import { OUTBOX_FILE } from "./delivery-report.js";
 import { readMeta } from "./managed.js";
@@ -37,8 +41,10 @@ export function localRetentionDays(dir: string): number | null {
   let days = typeof set === "number" && Number.isFinite(set)
     ? Math.min(MAX_RETENTION_DAYS, Math.max(MIN_RETENTION_DAYS, Math.round(set)))
     : DEFAULT_RETENTION_DAYS;
+  const historyNeed = (gatewayCore as { historyNeed?: HistoryNeedOf }).historyNeed;
+  if (!historyNeed) return null;
   try {
-    const need = historyNeed(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8").replace(/^﻿/, "")) as Parameters<typeof historyNeed>[0]);
+    const need = historyNeed(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8").replace(/^﻿/, "")));
     if (need.kind === "all") return null;
     if (need.kind === "window") days = Math.max(days, Math.ceil(need.ms / DAY_MS) + 1);
   } catch { return null; } // no readable policy: keep everything
