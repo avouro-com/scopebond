@@ -151,3 +151,9 @@ test("on Windows, an agent started by an older launcher still hands over, and th
   assert.equal(launcherIsCurrent(readFileSync(launcherPath(dir, "win32"), "utf8"), "win32"), true, "rewritten once the old agent was gone");
   assert.match(logs(dir), /replacement \d+/, "the replacement's lines are in a log");
 });
+
+test("the single executable starts its update as itself with `run`, with no cli.js and no Node options", () => {
+  const plan = handoverPlan({ dir: "/opt/sb", cli: "/opt/sb/scopebond-agent", pid: 7, execPath: "/opt/sb/scopebond-agent", platform: "linux", env: {}, launcherText: null, singleExecutable: true });
+  assert.equal(plan.command, "/opt/sb/scopebond-agent");
+  assert.deepEqual(plan.args, ["run"]);
+});

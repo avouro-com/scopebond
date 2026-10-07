@@ -10,6 +10,11 @@
 // enforcing, a clock behind that mark denies until it catches up.
 
 import { createRequire } from "node:module";
+
+/** `node:sqlite` from Node's built-ins (a bundled build cannot resolve it through a module path), else by require. */
+function nodeSqlite(): unknown {
+  return process.getBuiltinModule?.("node:sqlite") ?? createRequire(import.meta.url)("node:sqlite");
+}
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { PrincipalKeyRegistry } from "./auth.js";
@@ -31,8 +36,7 @@ export const CLOCK_TOLERANCE_MS = 2_000;
 
 function open(path: string): Db {
   mkdirSync(dirname(path), { recursive: true });
-  const require = createRequire(import.meta.url);
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => Db };
+  const { DatabaseSync } = nodeSqlite() as { DatabaseSync: new (p: string) => Db };
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 15000;");
   whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));

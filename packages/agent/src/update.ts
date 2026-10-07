@@ -5,17 +5,18 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import {
-  absoluteHookCommand, ensureDurableRuntime,
-  configuredHookCommands, hookCommandResolves, hookVersion, isScopebondHookCommand, userHarnessFile, writeHarnessConfig,
-  type Harness, type HookConnection,
+  absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isScopebondHookCommand, userHarnessFile, writeHarnessConfig, type Harness, type HookConnection,
 } from "@scopebond/hook";
 
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 
+/** Set by the single executable's build (esbuild `define`); absent from the npm package. */
+declare const __SCOPEBOND_AGENT_VERSION__: string | undefined;
+
 export function agentVersion(): string {
+  if (typeof __SCOPEBOND_AGENT_VERSION__ === "string") return __SCOPEBOND_AGENT_VERSION__;
   try {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
     return typeof pkg.version === "string" ? pkg.version : "0.0.0";
@@ -58,8 +59,7 @@ export function commandHookVersion(command: string): string | null {
 export function maintainedHookCommand(harness: Harness, version = hookVersion()): string {
   if (version === hookVersion()) {
     try {
-      const cli = join(dirname(createRequire(import.meta.url).resolve("@scopebond/hook")), "cli.js");
-      const pin = ensureDurableRuntime(cli, version);
+      const pin = ensureDurableRuntime(hookCliPath(), version);
       if (pin.cli) return absoluteHookCommand(pin.cli, harness);
     } catch { /* fall back below */ }
   }

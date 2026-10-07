@@ -2,8 +2,8 @@
 // bounded: one indexed count since local midnight and a scan of at most the newest few thousand rows for blocks, so a large
 // store costs the tray nothing. Works with no workspace: these are the computer's own receipts.
 import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
 import { join } from "node:path";
+import { nodeSqlite } from "./self.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 
 export interface LocalActivity {
@@ -24,7 +24,7 @@ export function localActivity(dir: string, options: { now?: Date; limit?: number
   const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
   let db: Db | null = null;
   try {
-    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (p: string, o: { readOnly: boolean }) => Db };
+    const { DatabaseSync } = nodeSqlite<{ DatabaseSync: new (p: string, o: { readOnly: boolean }) => Db }>();
     db = new DatabaseSync(path, { readOnly: true });
     const counts = db.prepare(
       `SELECT COUNT(*) AS actions,

@@ -7,8 +7,8 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { SqliteReceiptStore, type StoreMaintenanceReport } from "@scopebond/gateway/node";
+import { hookSelfCommand } from "./self.js";
 // A namespace import, so a hook running beside an older gateway (one without `historyNeed`) still loads; it then keeps
 // every receipt, which is the safe answer.
 import * as gatewayCore from "@scopebond/gateway";
@@ -130,8 +130,8 @@ function writeUpkeep(dir: string, state: UpkeepState): void {
 
 /** `prune --compact --quiet` in a detached process, for this store's folder. */
 function compactInBackground(dir: string): void {
-  const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
-  spawn(process.execPath, [cli, "prune", "--compact", "--quiet"], {
+  const [program, args] = hookSelfCommand(["prune", "--compact", "--quiet"]);
+  spawn(program, args, {
     cwd: tmpdir(), env: { ...process.env, SCOPEBOND_HOOK_DIR: dir }, detached: true, stdio: "ignore", windowsHide: true,
   }).unref();
 }

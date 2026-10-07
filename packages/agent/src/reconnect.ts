@@ -4,9 +4,7 @@
 // the background. The workspace lets the same computer keep its key, so records waiting on it are delivered as they are.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
-import { loadConnection } from "@scopebond/hook";
+import { hookSelfCommand, loadConnection } from "@scopebond/hook";
 import { openInBrowser, sameOrigin } from "./summary.js";
 
 export interface ReconnectStart { user_code: string; verification_url: string }
@@ -25,13 +23,12 @@ export function startReconnect(dir: string, onDone: (ok: boolean) => void, spawn
   const connection = loadConnection(dir);
   if (!connection) return Promise.resolve({ error: "this computer was never connected to a workspace; sign in from a terminal first" });
   const origin = new URL(connection.url).origin;
-  let cli: string;
-  try { cli = join(dirname(createRequire(import.meta.url).resolve("@scopebond/hook")), "cli.js"); }
-  catch { return Promise.resolve({ error: "the Scopebond hook this agent carries could not be found" }); }
+  // The hook this agent carries: its cli.js from npm, or this same file in the single executable.
+  const [program, args] = hookSelfCommand(["login", origin, "--no-install"]);
   return new Promise((resolve) => {
     let output = "";
     let settled = false;
-    const child = spawnImpl(process.execPath, [cli, "login", origin, "--no-install"], {
+    const child = spawnImpl(program, args, {
       env: { ...process.env, SCOPEBOND_HOME: dir }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
     });
     const timer = setTimeout(() => { if (!settled) { settled = true; resolve({ error: "the workspace did not start a sign-in in time" }); } }, 30_000);

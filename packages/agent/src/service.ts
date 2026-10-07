@@ -4,12 +4,12 @@
 // versions to run, and once a day it runs the end-to-end self-check.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { actOnBlocked, blockedQuestion, hookVersion, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
+import { agentCliPath } from "./self.js";
 import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
@@ -110,6 +110,8 @@ export type Handover =
  *  this one is gone. Under systemd a detached child is stopped with the service, so the service manager restarts it. */
 export function handoverPlan(o: {
   dir: string; cli: string; pid: number; execPath: string; platform: NodeJS.Platform;
+  /** The single executable: the program is the agent itself, with no cli.js and no Node options. */
+  singleExecutable?: boolean;
   env: Record<string, string | undefined>; launcherText: string | null;
 }): Handover {
   if (o.platform === "linux" && o.env.INVOCATION_ID) return { kind: "service-restart" };
@@ -123,17 +125,17 @@ export function handoverPlan(o: {
     return { kind: "spawn", command: "/bin/sh", args: [launcher], env, verbatim: false };
   }
   return {
-    kind: "spawn", command: o.execPath, args: ["--disable-warning=ExperimentalWarning", o.cli, "run"], verbatim: false,
+    kind: "spawn", command: o.execPath, args: o.singleExecutable ? ["run"] : ["--disable-warning=ExperimentalWarning", o.cli, "run"], verbatim: false,
     env: o.launcherText !== null ? { ...env, [REFRESH_LAUNCHER_ENV]: "1" } : env,
   };
 }
 
 /** Start the updated agent, which waits for this process to exit. Returns false when a service manager restarts it instead
  *  (this process then exits with RESTART_EXIT_CODE). */
-export function spawnReplacement(dir: string, cli = realpathSync(fileURLToPath(new URL("./cli.js", import.meta.url)))): boolean {
+export function spawnReplacement(dir: string, cli = agentCliPath()): boolean {
   let launcherText: string | null = null;
   try { launcherText = readFileSync(launcherPath(dir), "utf8"); } catch { /* no autostart launcher */ }
-  const plan = handoverPlan({ dir, cli, pid: process.pid, execPath: process.execPath, platform: process.platform, env: process.env, launcherText });
+  const plan = handoverPlan({ dir, cli, pid: process.pid, execPath: process.execPath, platform: process.platform, env: process.env, launcherText, singleExecutable: isSingleExecutable() });
   if (plan.kind === "service-restart") return false;
   const child = spawn(plan.command, plan.args, { env: plan.env, detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: plan.verbatim });
   child.on("error", () => { /* the next sign-in starts it */ });

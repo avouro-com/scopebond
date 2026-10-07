@@ -91,3 +91,4 @@ export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEF
 export type { UpkeepOptions } from "./store-upkeep.js";
 export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-detail.js";
 export type { EvidenceDetail } from "./evidence-detail.js";
+export { isSingleExecutable, hookCliPath, hookSelfCommand, nodeSqlite } from "./self.js";

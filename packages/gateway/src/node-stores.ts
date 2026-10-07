@@ -5,6 +5,11 @@
 import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
+
+/** `node:sqlite` from Node's built-ins (a bundled build cannot resolve it through a module path), else by require. */
+function nodeSqlite(): unknown {
+  return process.getBuiltinModule?.("node:sqlite") ?? createRequire(import.meta.url)("node:sqlite");
+}
 import { canonical, sha256 } from "./crypto.js";
 import { randomQueueId, type CloudDeliveryGap, type CloudOutbox, type CloudOutboxEntry, type CloudOutboxStatus, WINDOW_LEASE_MS } from "./cloud.js";
 import type {
@@ -48,8 +53,7 @@ type SqliteDb = { exec(sql: string): void; prepare(sql: string): { run(...a: unk
  *  instead of failing immediately with SQLITE_BUSY. */
 function openSqlite(path: string, fresh?: string, busyTimeoutMs = 15_000): SqliteDb {
   ensureDir(path);
-  const require = createRequire(import.meta.url);
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
+  const { DatabaseSync } = nodeSqlite() as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
   try {
     db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))};`);
@@ -80,7 +84,7 @@ export function whileBusy<T>(step: () => T, limitMs = 15_000): T {
 
 /** Whether this Node has the built-in `node:sqlite` module. */
 function sqliteAvailable(): boolean {
-  try { createRequire(import.meta.url)("node:sqlite"); return true; } catch { return false; }
+  try { nodeSqlite(); return true; } catch { return false; }
 }
 
 /** Append-only JSONL receipt log: durable, dependency-free, append-only (so the

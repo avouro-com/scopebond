@@ -22,10 +22,9 @@
 // a stop with reason `sleep` and emits nothing for the gap).
 
 import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { hookSelfCommand, nodeSqlite } from "./self.js";
 import { spawn, execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { ingestUrl, loadConnection, type HookConnection } from "./cloud.js";
 import {
   operationsForCall, capabilityProofData, digestPolicy, heartbeatData, intentData, loadOrCreateBindingKey, observationSigner,
@@ -214,8 +213,8 @@ export class ObservationEmitter {
     if (this.options.spawnHeartbeat === false || process.env.SCOPEBOND_OBSERVATIONS_HEARTBEAT === "off") return;
     try {
       if (!this.store.claimHeartbeat(sessionId, 2.5 * heartbeatIntervalMs(this.dir))) return;
-      const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
-      const child = spawn(process.execPath, [cli, "observations", "heartbeat", sessionId], {
+      const [program, args] = hookSelfCommand(["observations", "heartbeat", sessionId]);
+      const child = spawn(program, args, {
         detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env, SCOPEBOND_HOOK_DIR: this.dir },
       });
       child.on("error", () => { /* the lease lapses and the next hook call tries again */ });
@@ -367,8 +366,7 @@ export function receiptBacklog(dir: string): { count: number; oldestAt: number }
   const file = join(dir, "receipts.db.cloud-outbox.db");
   if (!existsSync(file)) return null;
   try {
-    const require = createRequire(import.meta.url);
-    const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => { prepare(s: string): { get(): unknown }; close(): void } };
+    const { DatabaseSync } = nodeSqlite<{ DatabaseSync: new (p: string) => { prepare(s: string): { get(): unknown }; close(): void } }>();
     const db = new DatabaseSync(file);
     try {
       const row = db.prepare("SELECT COUNT(*) AS n, MIN(enqueued_at) AS o FROM cloud_outbox").get() as { n: number; o: number | null };
