@@ -335,23 +335,24 @@ function clockedEmitter() {
 const emitted = (emitter) => emitter.store.nextBatch(100).map((r) => r.wrapper.payload);
 const tickAt = (ctx, sessionId, lastTick, advance) => { ctx.clock.t += advance; return ctx.emitter.heartbeatTick(sessionId, lastTick); };
 
-test("heartbeat: 60s cadence only while a session is explicitly active; one start, one stop; nothing after the stop", () => {
+test("heartbeat: every five minutes only while a session is explicitly active, saying so; one start, one stop; nothing after the stop", () => {
   const c = clockedEmitter();
-  assert.equal(HEARTBEAT_INTERVAL_MS, 60_000);
+  assert.equal(HEARTBEAT_INTERVAL_MS, 300_000);
   assert.equal(c.emitter.heartbeatTick("sbs_unknown", c.clock.t), "stop", "no session, no heartbeat");
   c.emitter.sessionStart("s1", "/work");
   c.emitter.sessionStart("s1", "/work"); // a second start hook for the same session is not a second start
   let last = c.clock.t;
-  for (let i = 0; i < 3; i += 1) { assert.equal(tickAt(c, c.emitter.sessionIdOf("s1"), last, 60_000), "continue"); last = c.clock.t; }
+  for (let i = 0; i < 3; i += 1) { c.emitter.activity("s1", "/work"); assert.equal(tickAt(c, c.emitter.sessionIdOf("s1"), last, HEARTBEAT_INTERVAL_MS), "continue"); last = c.clock.t; }
   c.emitter.sessionStop("s1", "completed");
   c.emitter.sessionStop("s1", "completed");
-  assert.equal(tickAt(c, c.emitter.sessionIdOf("s1"), last, 60_000), "stop");
+  assert.equal(tickAt(c, c.emitter.sessionIdOf("s1"), last, HEARTBEAT_INTERVAL_MS), "stop");
   const items = emitted(c.emitter);
   assert.deepEqual(items.map((p) => `${p.kind}:${p.data.event}${p.data.lease_active === undefined ? "" : `:${p.data.lease_active}`}`), [
     "session:start", "health:heartbeat:true", "health:heartbeat:true", "health:heartbeat:true", "session:stop",
   ]);
   assert.deepEqual(items.map((p) => p.sequence), [1, 2, 3, 4, 5]);
   assert.equal(items[4].data.stop_reason, "completed");
+  for (const p of items.filter((x) => x.data.event === "heartbeat")) assert.equal(p.data.interval_s, 300);
   for (const p of items) assert.equal(validObservation(p), true);
   c.emitter.close();
 });

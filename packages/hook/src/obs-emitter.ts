@@ -9,7 +9,7 @@
 //
 // Kinds emitted (an agent-adapter key may emit these and no others):
 //   session      start / stop, from Claude Code's SessionStart and SessionEnd hooks
-//   health       heartbeat (60 s while a session is explicitly active), queue telemetry
+//   health       heartbeat (every five minutes while a session is explicitly active, saying so), queue telemetry
 //   capability   proof, from the `capabilities --prove` runner
 //   policy_ack   loaded / rejected, from `policy load` once an exported policy is verified or refused
 //   tool_intent  the request binding of each dispatched action, linked to its receipt
@@ -39,11 +39,13 @@ import { isProtectedBranch, loadRules } from "./rules.js";
 import { uploadPending, type UploadOutcome } from "./obs-upload.js";
 
 export const OBSERVATIONS_SCOPE = "observations:write";
-export const HEARTBEAT_INTERVAL_MS = 60_000;
+/** Every five minutes, said in each heartbeat (`interval_s`): a workspace waits three of these before calling a computer lost.
+ *  It was 60 s, which made a busy workspace's computers send hundreds of thousands of heartbeats a day. */
+export const HEARTBEAT_INTERVAL_MS = 300_000;
 /** A loop that finds the clock moved by more than this since its last tick treats the host as slept. */
 export const SLEEP_GAP_MS = 3 * HEARTBEAT_INTERVAL_MS;
 /** Heartbeats continue this long after the last hook activity, then the lease is released. */
-export const IDLE_LIMIT_MS = 10 * 60_000;
+export const IDLE_LIMIT_MS = 15 * 60_000;
 export const HEARTBEAT_LEASE_MS = 2.5 * HEARTBEAT_INTERVAL_MS;
 export const QUEUE_TELEMETRY_INTERVAL_MS = 5 * 60_000;
 /** At most this many typed operations are recorded per tool call; the rest are counted. */
@@ -252,11 +254,11 @@ export class ObservationEmitter {
       return "stop";
     }
     if (at - row.last_activity_at > IDLE_LIMIT_MS) {
-      this.emit({ kind: "health", occurredAt: at, sessionId, data: heartbeatData(false, { policyDigest: this.policyDigest() }) });
+      this.emit({ kind: "health", occurredAt: at, sessionId, data: heartbeatData(false, { policyDigest: this.policyDigest(), intervalS: HEARTBEAT_INTERVAL_MS / 1000 }) });
       this.store.releaseHeartbeat(sessionId);
       return "stop";
     }
-    this.emit({ kind: "health", occurredAt: at, sessionId, data: heartbeatData(true, { policyDigest: this.policyDigest() }) });
+    this.emit({ kind: "health", occurredAt: at, sessionId, data: heartbeatData(true, { policyDigest: this.policyDigest(), intervalS: HEARTBEAT_INTERVAL_MS / 1000 }) });
     this.queueTelemetry();
     return this.store.renewHeartbeat(sessionId, HEARTBEAT_LEASE_MS, true) ? "continue" : "stop";
   }
