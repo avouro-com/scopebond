@@ -84,6 +84,14 @@ opens at sign-in. If the agent stops with an error, the launcher starts it again
 each noted in `agent.log`), as launchd and systemd do on macOS and Linux; a clean stop (`stop`, `autostart off`, an
 update handing over) ends it. `status` says whether autostart is on and working.
 
+The agent writes `agent.log` itself, a line at a time, so an agent handing over to its update and the updated one
+can both write it. When it updates itself, the updated agent starts through the same launcher and waits for the old
+one to exit; under systemd the service restarts it instead. A launcher written by agent 0.4.6 or earlier redirected
+the agent's output into `agent.log`, which kept the updated agent from starting on Windows: an agent under such a
+launcher starts its update directly, and the update rewrites the launcher (until the next sign-in, its log lines go
+to `agent-handover.log`). After `check` updates the agent, it waits for the updated one, starts it if it did not
+start, and says which version runs.
+
 ## Where you see it
 
 On Windows the agent shows a tray icon (from Windows' own PowerShell, nothing extra to install): a green, amber or red
