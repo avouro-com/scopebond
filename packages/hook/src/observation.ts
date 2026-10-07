@@ -224,10 +224,12 @@ export const sessionStartData = (repositoryId?: string) => compact({ event: "sta
 export const sessionStopData = (reason: SessionStopReason, repositoryId?: string) =>
   compact({ event: "stop", stop_reason: reason, repository_id: repositoryId });
 
-export const heartbeatData = (leaseActive: boolean, extra: { policyDigest?: string; clockOffsetMs?: number } = {}) =>
+export const heartbeatData = (leaseActive: boolean, extra: { policyDigest?: string; clockOffsetMs?: number; intervalS?: number } = {}) =>
   compact({
     event: "heartbeat", lease_active: leaseActive, policy_digest: extra.policyDigest,
     clock_offset_ms: extra.clockOffsetMs === undefined ? undefined : Math.max(-86_400_000, Math.min(86_400_000, Math.round(extra.clockOffsetMs))),
+    // How often this computer beats, so the workspace waits three of these before calling it lost (60–900 s).
+    interval_s: extra.intervalS !== undefined && Number.isInteger(extra.intervalS) && extra.intervalS >= 60 && extra.intervalS <= 900 ? extra.intervalS : undefined,
   });
 
 /** Oldest pending receipt time and backlog size. `count` 0 reports a drained queue

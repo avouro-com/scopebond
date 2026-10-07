@@ -261,6 +261,8 @@ export interface ManagedMeta {
   local_retention_days?: number | null;
   /** D144: what this computer sends its workspace (full: every receipt; standard: notable ones and summaries). */
   evidence_detail?: "full" | "standard" | null;
+  /** How often this computer's session heartbeat may beat, in seconds, as its workspace says on each rules check (absent: 60). */
+  heartbeat_interval_s?: number | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 

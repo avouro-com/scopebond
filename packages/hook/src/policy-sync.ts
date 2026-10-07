@@ -102,7 +102,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let retention = meta.local_retention_days ?? null;
   // And the evidence detail: what this computer sends (D144).
   let detail = meta.evidence_detail ?? null;
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, ...patch, checked_at: now.toISOString() });
+  // A workspace that reads a heartbeat's interval says so; until then heartbeats stay every 60 s.
+  let heartbeatInterval = meta.heartbeat_interval_s ?? null;
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, ...patch, checked_at: now.toISOString() });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
@@ -140,6 +142,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   if (options.onRequest && (asked === "flush" || asked === "self_check")) { try { options.onRequest(asked); } catch { /* the request is best effort */ } }
   retention = retentionDaysFrom(res.headers) ?? retention;
   detail = evidenceDetailFrom(res.headers) ?? detail;
+  heartbeatInterval = heartbeatIntervalFrom(res.headers) ?? heartbeatInterval;
   recordRulesCredential(dir, res.status !== 401, now.getTime());
   // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
   if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
@@ -237,4 +240,12 @@ export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, bud
 
 export function releaseSyncLock(dir: string): void {
   try { rmSync(join(dir, LOCK_FILE), { force: true }); } catch { /* expires on its own */ }
+}
+
+/** The heartbeat interval a workspace allows (`x-scopebond-heartbeat-interval-s`, 60–900), or null when it does not say. */
+export function heartbeatIntervalFrom(headers: { get(name: string): string | null } | undefined): number | null {
+  const raw = headers?.get?.("x-scopebond-heartbeat-interval-s")?.trim() ?? "";
+  if (!/^\d{2,3}$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= 60 && n <= 900 ? n : null;
 }
