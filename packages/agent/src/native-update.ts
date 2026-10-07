@@ -31,7 +31,10 @@ export type InstallKind = "npm" | "per-user" | "per-machine";
 /** How this agent was installed: from npm, by the installer for this user, or for every user (Program Files). */
 export function installKind(execPath = process.execPath, single = isSingleExecutable(), programFiles = process.env.ProgramFiles ?? "C:\\Program Files"): InstallKind {
   if (!single) return "npm";
-  return execPath.toLowerCase().startsWith(`${programFiles.toLowerCase().replace(/[\\/]+$/, "")}\\`) ? "per-machine" : "per-user";
+  // The folder without trailing separators (a loop, not a regular expression, on a value from the environment).
+  let folder = programFiles.toLowerCase();
+  while (folder.endsWith("\\") || folder.endsWith("/")) folder = folder.slice(0, -1);
+  return execPath.toLowerCase().startsWith(`${folder}\\`) ? "per-machine" : "per-user";
 }
 
 export interface ReleaseManifest { type: "scopebond:agent-release"; version: string; files: Array<{ name: string; sha256: string; size: number }> }
