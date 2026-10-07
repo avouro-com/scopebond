@@ -19,3 +19,7 @@ The agent acts on a request the workspace carries on the rules check (`x-scopebo
 computer's page: "Ask it to send now", "Ask it to check now"), and reads the workspace's optional `GET /v1/computer/summary`
 for the tray's workspace and environment names, Review count and **Open workspace** (links only on the connected workspace's
 own origin). A workspace without the call answers 404 and the tray leaves those rows out; the fake cloud implements it.
+
+**Reconnect…** in the tray signs this computer in again with no terminal: the agent runs the hook's own sign-in for the
+workspace it is already connected to, opens the approval page there and shows the code. A workspace that lets the same
+computer keep its key delivers the records waiting on it as they are.

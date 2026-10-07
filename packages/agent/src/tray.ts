@@ -92,7 +92,12 @@ function Refresh {
   foreach ($row in $m.rows) { [void](Item $menu ('    ' + $row.label + ':  ' + $row.value) $false $null) }
   if ($m.hint) { [void](Item $menu $m.hint $false $null) }
   [void]$menu.Items.Add('-')
-  if ($m.fix) { $route = $m.fix.route; $f = Item $menu $m.fix.label $true ({ Run $route }.GetNewClosure()); $f.Font = New-Object Drawing.Font($f.Font, [Drawing.FontStyle]::Bold) }
+  if ($m.fix) {
+    $route = $m.fix.route
+    if ($route -eq '/reconnect') { $f = Item $menu $m.fix.label $true ({ try { $r = Call 'POST' '/reconnect'; if ($r.user_code) { [Windows.Forms.MessageBox]::Show(('Approve this computer in your workspace (the page is opening in your browser).' + [Environment]::NewLine + [Environment]::NewLine + 'Check that it shows the code ' + $r.user_code), 'Scopebond: reconnect') | Out-Null } else { Tell 'Scopebond' ('Could not start the sign-in: ' + $r.error) 'Warning' } } catch {} ; Refresh }) }
+    else { $f = Item $menu $m.fix.label $true ({ Run $route }.GetNewClosure()) }
+    $f.Font = New-Object Drawing.Font($f.Font, [Drawing.FontStyle]::Bold)
+  }
   foreach ($a in $m.actions) {
     $route = $a.route
     if ($route -eq '/check') { [void](Item $menu $a.label $true ({ try { $r = Call 'POST' '/check'; Tell 'Scopebond' $r.text 'Info' } catch { Tell 'Scopebond' 'Check could not reach the Scopebond Agent' 'Warning' } ; Refresh })) }

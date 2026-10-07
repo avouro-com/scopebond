@@ -19,6 +19,7 @@ import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { checkResult, trayModel, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
+import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
@@ -162,6 +163,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let working: string | null = null;
   // SB391: the workspace's own summary for the tray (names, links, open reviews), refreshed every five minutes; null when the
   // workspace does not answer it (a self-hosted gateway), and the tray simply leaves those rows out.
+  // SB392: a sign-in started from the tray, while it waits for approval.
+  let reconnecting: ReconnectStart | null = null;
   let summary: ComputerSummary | null = null;
   let summaryAt = 0;
   const refreshSummary = async () => {
@@ -267,6 +270,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       workspace: summary ? { name: summary.workspace_name, environment: summary.environment_name, computer_url: summary.computer_url } : null,
       openReviews: summary?.open_reviews ?? 0,
       computerName: hostname(),
+      canReconnect: true,
     });
   };
 
@@ -293,6 +297,20 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (!connection || !url || !sameOrigin(url, connection.url)) return { opened: false };
       openInBrowser(url);
       return { opened: true };
+    },
+    // SB392: sign in again for the connected workspace; the tray shows the code, the approval page opens in the browser.
+    "POST /reconnect": async () => {
+      if (reconnecting) return reconnecting;
+      working = "Signing in again…";
+      const result = await startReconnect(options.dir, (ok) => {
+        reconnecting = null; working = null;
+        log(ok ? "signed in again" : "the sign-in did not finish");
+        if (ok) void cycle();
+      });
+      if ("error" in result) { working = null; return { error: result.error }; }
+      reconnecting = result.started;
+      log(`signing in again: waiting for approval of code ${result.started.user_code}`);
+      return result.started;
     },
     "GET /recent-blocks": () => ({ recent_blocks: localActivity(options.dir, { limit: 10 })?.recent_blocks ?? [] }),
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, last_maintenance: lastMaintenance } }),
