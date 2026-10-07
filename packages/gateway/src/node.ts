@@ -2,6 +2,7 @@
 // the package root so the core stays importable in edge runtimes.
 export { loadOrCreateAttester } from "./node-keys.js";
 export { FileReceiptStore, SqliteReceiptStore, SqliteCloudOutbox, openReceiptStore } from "./node-stores.js";
+export type { StoreMaintenanceOptions, StoreMaintenanceReport } from "./node-stores.js";
 export type { SqliteCloudOutboxOptions } from "./node-stores.js";
 export { DispatchStore, createDispatchGuard, DISPATCH_DB, CLOCK_TOLERANCE_MS } from "./dispatch-store.js";
 export type { DispatchGuardConfig } from "./dispatch-store.js";

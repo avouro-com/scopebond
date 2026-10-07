@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { connectionPath, type HookConnection } from "./cloud.js";
+import { forgetCached } from "./config-cache.js";
 
 export const REFRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -48,6 +49,7 @@ export async function refreshIfDue(
     const next: HookConnection = { ...current, credential: body.credential, credential_id: body.id, expires_at: body.expires_at };
     const temp = `${path}.${process.pid}.tmp`;
     writeFileSync(temp, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+    forgetCached(path);
     renameSync(temp, path);
     return "renewed";
   } catch {

@@ -514,19 +514,31 @@ Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.
 
 **Where receipts live, and how much room they take.** `.scopebond/receipts.db` in the
-project, roughly 25 KiB per tool call. A tool call's decision does not read that log
-unless the policy has a windowed limit, and then only the window, so a large log does not
-slow the agent down. Nothing is ever deleted automatically — these are your evidence — so
-`status` reports the count and size, and `prune` bounds it when you choose to:
+project, about 3 KiB per action (each receipt is kept once and each policy once). A tool
+call's decision does not read that log unless the policy has a windowed limit, and then
+only the window; the replay check is one indexed lookup. So neither the time nor the
+memory of a call grows with the log: on a 767 MB log written by an older version, a call
+peaked at 69 MB (it was 233 MB, and 504 MB for a three-part shell command).
+
+A computer connected to a workspace removes a receipt only after the workspace
+acknowledged it, once that is 30 days ago (the workspace can set 7–365 days); a receipt
+the workspace has not acknowledged is never removed, an anchored log is never pruned, and
+a policy that reads a longer window keeps that window. With no workspace, nothing is
+removed automatically — these are your evidence. The Scopebond Agent does this upkeep;
+without it, a hook call does a short pass once a day. A log written by an older version
+is rewritten once to the current layout in a separate background process (767 MB became
+93 MB with every receipt kept). `prune` reports the footprint and the retention, and
+bounds it when you choose to:
 
 ```
-npx -y @scopebond/hook@latest prune                      # report the footprint
+npx -y @scopebond/hook@latest prune                      # report the footprint and the retention
+npx -y @scopebond/hook@latest prune --compact            # run the upkeep now and return the free space
 npx -y @scopebond/hook@latest prune --before 90d --yes   # archive, then remove, anything older
 ```
 
-`prune` writes the receipts it will remove to a JSONL file beside the database first, so
-they stay verifiable, and it refuses outright once the log has been anchored — a receipt's
-position is its anchor leaf index, so removing one would make an existing anchor
+`prune --before` writes the receipts it will remove to a JSONL file beside the database
+first, so they stay verifiable, and it refuses outright once the log has been anchored — a
+receipt's position is its anchor leaf index, so removing one would make an existing anchor
 unverifiable.
 
 **What a shell command is checked for.** A command line is split into every command it
@@ -569,8 +581,10 @@ in the workspace first, the workspace raises a critical alert. A workspace that 
 reached never stops the uninstall; the command says it could not tell it.
 
 **Limits.** The hook sees the command text, not what a program does at run time. It
-does not follow a variable whose value it cannot see (`cat $FILE`), a path assembled
-inside a script or interpreter (`python script.py`), aliases and functions defined in
+does not follow a variable whose value it cannot see (`cat $FILE` records no read unless
+the text around the variable could name a protected file), a path assembled inside a
+script or interpreter (`python script.py`; Scopebond's own folder named in an
+interpreter's arguments or inline code is treated as read), aliases and functions defined in
 an earlier call, git aliases from a config file, recursive reads of a parent of a
 protected directory (`grep -r . `, `cp -r ~ /tmp`), or deletion expressed as arguments
 (`find -delete`, `git clean`). Commands whose written files are named only inside their

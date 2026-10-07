@@ -95,7 +95,8 @@ test("prune reports the footprint and removes nothing without a cutoff", () => {
   const out = execFileSync(process.execPath, [cli, "prune"], {
     cwd: dir, encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: config },
   });
-  assert.match(out, /Nothing is removed automatically/);
+  assert.match(out, /retention\s+none: with no workspace connected, every receipt stays until you prune/);
+  assert.match(out, /prune --compact/);
   assert.match(out, /1 receipt\(s\)/);
   assert.equal(sizeOf(db), before, "reporting does not change the store");
 });

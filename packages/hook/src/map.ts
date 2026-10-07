@@ -191,6 +191,9 @@ function fileIntent(action: "file.read" | "file.write", word: string, dir: strin
   if (UNRESOLVED.test(w)) {
     const hit = protectedCandidate(normPath(w));
     if (hit) return pathIntents(action, hit, "shell", { pattern: path });
+    // `cat $f` or `cat *` names no file a rule could match: recording a read of a file literally called "$f" was a
+    // wrong row. A word with any literal text (`$D/notes.txt`, `src/*`) is still recorded.
+    if (action === "file.read" && !/[^/\\]/.test(w.replace(EXPANSION, "").replace(/["']/g, ""))) return [];
   }
   return pathIntents(action, path, "shell");
 }
@@ -246,6 +249,8 @@ const INTERPRETERS = new Set(["node", "deno", "bun", "python", "python3", "py", 
 // Path literals inside inline code. Each alternative starts at a boundary (not after
 // a word character — so `process.env` is not `.env`) and has no overlapping repeats,
 // keeping the scan linear; input is capped per argument.
+// Scopebond's own folder, and what follows it, wherever it appears in an argument.
+const SCOPEBOND_IN_TEXT = /(?<![\w-])\.scopebond(?:[\\/][\w.-]*)?(?![\w-])/gi;
 const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
 // A file or process API in the same inline snippet, required in call or member form
 // (not a bare English word — "your .env file" must not read like `File`). Without one,
@@ -288,8 +293,9 @@ const OPTIONS = new Map<string, OptionSpec>([
   ["gpg", { short: "orRu", long: ["--output", "--recipient", "--local-user", "--homedir", "--default-key"] }],
 ]);
 // Programs whose first operand is a pattern or program text, not a file — unless the
-// pattern came from an option (`grep -e p`, `awk -f prog`, `jq -f filter`).
-const PATTERN_FIRST = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack", "awk", "gawk", "mawk", "nawk", "jq", "yq", "select-string", "sls"]);
+// pattern came from an option (`grep -e p`, `awk -f prog`, `jq -f filter`, `sed -e s/a/b/`).
+// `sed -n 3420,3760p f` reads f, not a file named "3420,3760p".
+const PATTERN_FIRST = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack", "awk", "gawk", "mawk", "nawk", "jq", "yq", "sed", "select-string", "sls"]);
 const PATTERN_OPTIONS = new Set(["-e", "-f", "--regexp", "--file", "--from-file", "--expression"]);
 
 /** If `t` is an option that takes a value under `spec`, its name and any attached value. */
@@ -519,12 +525,8 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   } else if (READERS.has(prog)) {
     operands.forEach(read);
     if (prog === "yq" && args.some(inPlace)) operands.forEach(write);
-    // `sed -i 's/x/y/' f…` rewrites its operands in place; the first operand is the
-    // script unless `-e`/`-f` supplied one.
-    if (prog === "sed" && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith("--in-place"))) {
-      const scriptGiven = args.some((a) => a === "-e" || a === "-f" || a.startsWith("--expression")) || given.has("-e") || given.has("-f");
-      (scriptGiven ? operands : operands.slice(1)).forEach(write);
-    }
+    // `sed -i 's/x/y/' f…` rewrites its operands in place (the script was already taken off them above).
+    if (prog === "sed" && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith("--in-place"))) operands.forEach(write);
   } else if (EDITORS.has(prog)) {
     operands.forEach(read);
     operands.forEach(write);
@@ -553,9 +555,14 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     // Code that assembles a path at run time is beyond a cooperative hook (use a gateway).
     for (const w of args) {
       const code = w.slice(0, CODE_SCAN_LIMIT);
+      // Scopebond's own folder is read through any API (`DatabaseSync('…/.scopebond/receipts.db')`) or handed to a
+      // script as an argument: naming it is enough. The read floor is a classifier, not a sandbox (see the README).
+      for (const m of code.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
       if (!FILE_API.test(code)) continue;
       for (const m of code.match(SENSITIVE_IN_CODE) ?? []) { read(m); write(m); }
     }
+  } else if (prog === "sqlite3" || prog === "sqlite") {
+    read(operands[0]);
   } else if (UPLOADERS.has(prog)) {
     operands.filter(isSensitiveOperand).forEach(read);
   }

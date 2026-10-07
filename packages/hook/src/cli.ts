@@ -58,6 +58,7 @@ import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { compileManaged, isManaged, readMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
 import { agentPresence, healthLines, recommendedFrom } from "./client-health.js";
+import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.js";
 import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
@@ -248,6 +249,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // open is what made the write-ahead log grow without bound.
     runtime.close();
     runtime = undefined;
+    keepStore(dir);
     if (decision.decision === "deny") deny(decision.reason);
     // Only Claude Code is ever offered "ask" (override.ts); any other harness treats it as a denial.
     if (decision.decision === "ask") { if (harness === "claude") askClaude(decision.reason); deny(decision.reason); }
@@ -301,6 +303,13 @@ function denyCursor(reason: string): never {
   process.exit(0);
 }
 
+/** Keep the local store small when the Scopebond Agent does not (it keeps the user home while it runs). */
+function keepStore(dir: string): void {
+  const home = userHome();
+  if (resolve(dir) === resolve(home) && agentPresence(home).state === "running") return;
+  upkeepIfDue(dir);
+}
+
 async function runCursor(): Promise<void> {
   // Unparseable input denies, like every other adapter. Previously this fell through
   // to evaluation with an empty payload, which mapped to no known action and so
@@ -335,6 +344,9 @@ async function runCursor(): Promise<void> {
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
     observer?.close();
+    runtime.close();
+    runtime = undefined;
+    keepStore(dir);
     // An `afterFileEdit` violation is real and recorded, but the edit has already
     // landed. Say so rather than letting "blocked" imply it was stopped.
     postHoc = mapped.some((m) => m.postHoc);
@@ -714,10 +726,33 @@ async function runPrune(args: string[]): Promise<void> {
   const dbPath = join(dir, "receipts.db");
   if (!existsSync(dbPath)) { console.log("no local receipts yet — nothing to prune."); process.exit(0); }
   const beforeIdx = args.indexOf("--before");
+  if (args.includes("--compact")) {
+    const before = describeStore(dbPath);
+    let report = runStoreUpkeep(dir, { budgetMs: 10 * 60_000, allowFullVacuum: true });
+    let migrated = report?.migrated ?? 0;
+    while (report?.more) {
+      report = runStoreUpkeep(dir, { budgetMs: 10 * 60_000, allowFullVacuum: true });
+      migrated += report?.migrated ?? 0;
+    }
+    if (args.includes("--quiet")) process.exit(0);
+    console.log(`local receipts   ${dbPath}`);
+    console.log(`before           ${before}`);
+    console.log(`after            ${describeStore(dbPath)}`);
+    if (report) {
+      console.log(`removed          ${report.receiptsRemoved} acknowledged receipt(s) past retention, ${report.stateRemoved} finished check record(s)`);
+      if (migrated) console.log(`rewrote          ${migrated} older row(s) to keep each policy and receipt once`);
+    }
+    process.exit(0);
+  }
   if (beforeIdx < 0) {
+    const days = localRetentionDays(dir);
     console.log(`local receipts   ${dbPath}`);
     console.log(`                 ${describeStore(dbPath)}`);
-    console.log(`\nNothing is removed automatically. To bound it, name a cutoff:`);
+    console.log(days === null
+      ? `retention        none: with no workspace connected, every receipt stays until you prune`
+      : `retention        receipts the workspace acknowledged are removed after ${days} days; never one it has not`);
+    console.log(`\nShrink the file now (keeps every receipt the retention rule keeps): ${cliCommand("prune --compact")}`);
+    console.log(`To remove older receipts yourself, name a cutoff:`);
     console.log(`  ${cliCommand("prune --before 90d")}      # older than 90 days`);
     console.log(`  ${cliCommand("prune --before 2026-01-01")}`);
     console.log(`Receipts are archived beside the database before removal.`);
@@ -1811,9 +1846,11 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
   { name: "test", args: '"<shell command>"',
     summary: "show the decision for a command without running or recording it",
     detail: [`e.g. ${cliCommand('test "rm -rf /"')}`] },
-  { name: "prune", args: "[--before 90d] [--yes]",
+  { name: "prune", args: "[--compact] [--before 90d] [--yes]",
     summary: "report the local store's size, or bound it",
     detail: [
+      "--compact runs the upkeep now: older rows are rewritten to keep each policy and receipt once,",
+      "receipts the workspace acknowledged are removed after its retention window, and the file shrinks.",
       "With no --before it only reports. With one, it archives the receipts it will remove",
       "to a JSONL file beside the database, then removes them. Refuses once the log has been",
       "anchored, because a receipt's position is its anchor leaf index.",

@@ -21,6 +21,7 @@ import { readDeliveryState, recordRulesCredential } from "./delivery-state.js";
 import { queueStatus } from "./delivery-report.js";
 import { refreshIfDue } from "./credential-refresh.js";
 import { recommendedFrom } from "./client-health.js";
+import { retentionDaysFrom } from "./store-upkeep.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
  *  the portal can say "checking in but not delivering" instead of "reporting". Counts and one
@@ -93,7 +94,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const meta = readMeta(dir);
   // The workspace's recommended versions ride on every rules check; kept with the rules' state.
   let recommended = meta.recommended ?? null;
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, ...patch, checked_at: now.toISOString() });
+  // So does the local retention the workspace chose (D144).
+  let retention = meta.local_retention_days ?? null;
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, ...patch, checked_at: now.toISOString() });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
@@ -125,6 +128,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   }
 
   recommended = recommendedFrom(res.headers) ?? recommended;
+  retention = retentionDaysFrom(res.headers) ?? retention;
   recordRulesCredential(dir, res.status !== 401, now.getTime());
   // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
   if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });

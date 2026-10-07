@@ -616,6 +616,10 @@ export interface ReceiptStore {
   recent?(limit: number): SignedReceipt[] | Promise<SignedReceipt[]>;
   /** How many receipts are stored, without reading them. Optional. */
   count?(): number | Promise<number>;
+  /** Whether a request or approval id was already used by an action recorded at or after `since` (an ISO time), or is
+   *  held by an unfinished action. Optional: without it the gateway reads the whole log to answer. A store MUST NOT
+   *  answer false for an id it holds at or after `since`. */
+  authorizationUsed?(kind: "request_id" | "approval_id", id: string, since: string): boolean | Promise<boolean>;
   /** Release any underlying handle (e.g. a SQLite connection). Optional, but a
    *  short-lived writer SHOULD call it: an unclosed SQLite handle leaves its
    *  write-ahead log on disk for the next process to grow further. */

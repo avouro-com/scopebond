@@ -46,12 +46,21 @@ type SqliteDb = { exec(sql: string): void; prepare(sql: string): { run(...a: unk
  *  tool calls in parallel, so several hook processes can append at once. WAL lets
  *  readers and a writer proceed together, and busy_timeout waits for the write lock
  *  instead of failing immediately with SQLITE_BUSY. */
-function openSqlite(path: string): SqliteDb {
+function openSqlite(path: string, fresh?: string): SqliteDb {
   ensureDir(path);
   const require = createRequire(import.meta.url);
   const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
   const db = new DatabaseSync(path);
-  try { db.exec("PRAGMA busy_timeout = 15000;"); whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")); }
+  try {
+    db.exec("PRAGMA busy_timeout = 15000;");
+    // Page size and vacuum mode are fixed once a file is in WAL mode, so a new file gets them first.
+    if (fresh && Number(Object.values((db.prepare("PRAGMA page_count").all() as Record<string, number>[])[0] ?? {})[0] ?? 0) === 0) db.exec(fresh);
+    whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"));
+    // A bounded page cache (8 MB) and temporary tables in memory: a hook call stays a few megabytes above Node itself
+    // however large the file grows. No memory map: every page it touched counted toward the process's memory, so an
+    // upkeep pass over a large file doubled a hook call's peak.
+    db.exec("PRAGMA cache_size = -8000; PRAGMA temp_store = MEMORY;");
+  }
   catch (error) { try { db.close(); } catch { /* already failing */ } throw error; }
   return db;
 }
@@ -118,59 +127,128 @@ export class FileReceiptStore implements ReceiptStore {
   }
 }
 
+/** What one bounded maintenance pass did. */
+export interface StoreMaintenanceReport {
+  /** Older rows rewritten to the current layout this pass, and whether any are left. */
+  migrated: number;
+  layoutCurrent: boolean;
+  /** Receipts removed because the workspace acknowledged them before the retention window. */
+  receiptsRemoved: number;
+  /** Why receipts were not considered for removal, when they were not. */
+  receiptsKept?: "no_retention" | "anchored" | "no_delivery_queue";
+  /** Finished authority records removed after `stateRetentionMs`. */
+  stateRemoved: number;
+  /** Pages returned to the filesystem, and whether a full rewrite was needed to switch on incremental vacuum. */
+  pagesFreed: number;
+  fullVacuum: boolean;
+  /** Free space only a full rewrite can return (an older file without incremental vacuum); run one with `allowFullVacuum`. */
+  rewriteWanted: boolean;
+  /** Whether more work is left (call again). */
+  more: boolean;
+}
+
+export interface StoreMaintenanceOptions {
+  now?: number;
+  /** Remove receipts the workspace acknowledged more than this long ago, recorded before the same time. Omit to keep every receipt. */
+  retainAcknowledgedMs?: number;
+  /** The delivery queue whose acknowledgements say which receipts the workspace holds. Without one, no receipt is removed. */
+  outboxPath?: string;
+  /** Keep finished authority records this long (default seven days; a signed authorization lives five minutes). */
+  stateRetentionMs?: number;
+  /** Rows per step (default 2,000). */
+  batch?: number;
+  /** Stop starting new steps after this long (default 2 seconds). */
+  budgetMs?: number;
+  /** Allow a one-time full rewrite of the file when that is the only way to return its free space. Off for per-call processes. */
+  allowFullVacuum?: boolean;
+}
+
+const LAYOUT_VERSION = 2;
+const HELD_STATES = "('reserved','dispatching','outcome_unknown')";
+
 /** SQLite-backed receipt store using Node's built-in `node:sqlite` (no native
- *  dependency). Durable and queryable; mirrors the D1 store used at the edge. */
+ *  dependency). Durable and queryable; mirrors the D1 store used at the edge.
+ *
+ *  Layout 2 keeps each policy once (`policy_snapshots`, referenced by digest), each receipt once (`receipts`; a finished
+ *  action points at its row), and no lifecycle row for an action that finished without being dispatched. Layout 1
+ *  copied the policy into every action twice and the receipt twice: about 89% of a long-used file. Older rows are
+ *  rewritten in bounded steps by `maintain()`, and are read correctly until then. */
 export class SqliteReceiptStore implements ReceiptStore {
   private readonly db: SqliteDb;
+  private readonly snapshots = new Map<string, string>();
   constructor(path: string) {
-    this.db = openSqlite(path);
-    this.db.exec(
-      `CREATE TABLE IF NOT EXISTS receipts (
-         id INTEGER PRIMARY KEY AUTOINCREMENT,
-         intent_hash TEXT NOT NULL,
-         policy_hash TEXT NOT NULL,
-         realtime_result TEXT NOT NULL,
-         executed INTEGER NOT NULL,
-         timestamp TEXT NOT NULL,
-         receipt_json TEXT NOT NULL
-       );
-       CREATE TABLE IF NOT EXISTS anchors (
-         seq INTEGER PRIMARY KEY,
-         anchor_json TEXT NOT NULL
-       );
-       CREATE TABLE IF NOT EXISTS authority_actions (
-         action_id TEXT PRIMARY KEY,
-         state TEXT NOT NULL,
-         candidate_json TEXT NOT NULL,
-         policy_ref_json TEXT NOT NULL,
-         policy_snapshot TEXT NOT NULL
-       );
-       CREATE TABLE IF NOT EXISTS authority_consumptions (
-         kind TEXT NOT NULL,
-         value TEXT NOT NULL,
-         action_id TEXT NOT NULL,
-         PRIMARY KEY (kind, value)
-       );
-       CREATE TABLE IF NOT EXISTS authority_lifecycle (
-         action_id TEXT PRIMARY KEY,
-         reservation_json TEXT NOT NULL,
-         realtime_result TEXT,
-         adapter_id TEXT,
-         pre_receipt_json TEXT,
-         terminal_receipt_json TEXT
-       );
-       CREATE TABLE IF NOT EXISTS gateway_stops (
-         target TEXT PRIMARY KEY,
-         stopped INTEGER NOT NULL
-       );
-       CREATE INDEX IF NOT EXISTS receipts_timestamp ON receipts (timestamp);`,
-    );
+    // A receipt is about 2 KB: 8 KB pages hold four, where 4 KB pages held one. Incremental vacuum returns free pages in
+    // steps. Both are chosen when the file is made; an older file switches during a full rewrite in `maintain()`.
+    this.db = openSqlite(path, FRESH_STORE_PRAGMAS);
+    try {
+      const fresh = (this.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master").all() as { n: number }[])[0]?.n === 0;
+      this.db.exec(
+        `CREATE TABLE IF NOT EXISTS receipts (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           intent_hash TEXT NOT NULL,
+           policy_hash TEXT NOT NULL,
+           realtime_result TEXT NOT NULL,
+           executed INTEGER NOT NULL,
+           timestamp TEXT NOT NULL,
+           receipt_json TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS anchors (
+           seq INTEGER PRIMARY KEY,
+           anchor_json TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS authority_actions (
+           action_id TEXT PRIMARY KEY,
+           state TEXT NOT NULL,
+           candidate_json TEXT NOT NULL,
+           policy_ref_json TEXT NOT NULL,
+           policy_snapshot TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS authority_consumptions (
+           kind TEXT NOT NULL,
+           value TEXT NOT NULL,
+           action_id TEXT NOT NULL,
+           PRIMARY KEY (kind, value)
+         );
+         CREATE TABLE IF NOT EXISTS authority_lifecycle (
+           action_id TEXT PRIMARY KEY,
+           reservation_json TEXT NOT NULL,
+           realtime_result TEXT,
+           adapter_id TEXT,
+           pre_receipt_json TEXT,
+           terminal_receipt_json TEXT
+         );
+         CREATE TABLE IF NOT EXISTS gateway_stops (
+           target TEXT PRIMARY KEY,
+           stopped INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS policy_snapshots (
+           digest TEXT PRIMARY KEY,
+           policy_json TEXT NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS store_metadata (
+           key TEXT PRIMARY KEY,
+           value TEXT NOT NULL
+         ) WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS receipts_timestamp ON receipts (timestamp);`,
+      );
+      addColumn(this.db, "receipts", "action_id", "TEXT");
+      addColumn(this.db, "authority_actions", "created_at", "TEXT");
+      addColumn(this.db, "authority_actions", "terminal_receipt_id", "INTEGER");
+      if (fresh) this.db.prepare("INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('layout', ?)").run(String(LAYOUT_VERSION));
+    } catch (error) {
+      try { this.db.close(); } catch { /* already failing */ }
+      throw error;
+    }
+  }
+  private insertReceipt(r: SignedReceipt): number {
+    const p = r.payload;
+    const result = this.db
+      .prepare(`INSERT INTO receipts (intent_hash,policy_hash,realtime_result,executed,timestamp,receipt_json,action_id) VALUES (?,?,?,?,?,?,?)`)
+      .run(p.intent_hash, p.policy_hash, p.realtime_result, p.executed ? 1 : 0, p.timestamp, JSON.stringify(r), p.action_ref?.action_id ?? null) as { lastInsertRowid?: number | bigint };
+    return Number(result.lastInsertRowid ?? 0);
   }
   put(r: SignedReceipt): void {
-    const p = r.payload;
-    this.db
-      .prepare(`INSERT INTO receipts (intent_hash,policy_hash,realtime_result,executed,timestamp,receipt_json) VALUES (?,?,?,?,?,?)`)
-      .run(p.intent_hash, p.policy_hash, p.realtime_result, p.executed ? 1 : 0, p.timestamp, JSON.stringify(r));
+    this.insertReceipt(r);
   }
   list(): SignedReceipt[] {
     const rows = this.db.prepare(`SELECT receipt_json FROM receipts ORDER BY id`).all() as { receipt_json: string }[];
@@ -187,9 +265,38 @@ export class SqliteReceiptStore implements ReceiptStore {
       : this.db.prepare(`SELECT receipt_json FROM receipts ORDER BY id`).all() as { receipt_json: string }[];
     const receipts = stored.map((row) => (JSON.parse(row.receipt_json) as SignedReceipt).payload as unknown as Receipt);
     const rows = this.db.prepare(
-      `SELECT candidate_json FROM authority_actions WHERE state IN ('reserved', 'dispatching', 'outcome_unknown') ORDER BY rowid`,
+      `SELECT candidate_json FROM authority_actions WHERE state IN ${HELD_STATES} ORDER BY rowid`,
     ).all() as { candidate_json: string }[];
     return [...receipts, ...rows.map((row) => JSON.parse(row.candidate_json) as Receipt)];
+  }
+  /** One indexed lookup instead of the whole log: the authority table holds every id an action consumed, and the
+   *  receipt tail since `since` covers a receipt written without a reservation. */
+  authorizationUsed(kind: "request_id" | "approval_id", id: string, since: string): boolean {
+    if (this.db.prepare(`SELECT 1 FROM authority_consumptions WHERE kind = ? AND value = ? LIMIT 1`).all(kind, id).length > 0) return true;
+    const path = kind === "request_id" ? "$.payload.authorization.agent.request_id" : "$.payload.authorization.approval.approval_id";
+    return this.db.prepare(
+      `SELECT 1 FROM receipts INDEXED BY receipts_timestamp WHERE timestamp >= ? AND json_extract(receipt_json, ?) = ? LIMIT 1`,
+    ).all(since, path, id).length > 0;
+  }
+  /** Keep a policy once and return the reference stored in its place. */
+  private policyRef(snapshot: string): string {
+    const digest = sha256(snapshot);
+    if (this.snapshots.get(digest) !== snapshot) {
+      this.db.prepare(`INSERT OR IGNORE INTO policy_snapshots (digest, policy_json) VALUES (?, ?)`).run(digest, snapshot);
+      this.snapshots.set(digest, snapshot);
+    }
+    return `${POLICY_REF_PREFIX}${digest}`;
+  }
+  /** The policy text for a stored value: the text itself (layout 1) or a reference to `policy_snapshots`. */
+  private policyText(stored: string): string {
+    if (!stored.startsWith(POLICY_REF_PREFIX)) return stored;
+    const digest = stored.slice(POLICY_REF_PREFIX.length);
+    const cached = this.snapshots.get(digest);
+    if (cached !== undefined) return cached;
+    const rows = this.db.prepare(`SELECT policy_json FROM policy_snapshots WHERE digest = ?`).all(digest) as { policy_json: string }[];
+    if (!rows[0]) throw new Error(`the policy ${digest} recorded for an action is missing from the store`);
+    this.snapshots.set(digest, rows[0].policy_json);
+    return rows[0].policy_json;
   }
   reserveAction<T extends { allow: boolean }>(
     reservation: AuthorityReservation,
@@ -214,24 +321,28 @@ export class SqliteReceiptStore implements ReceiptStore {
         }
       }
       const decision = decide(this.executed(scope));
+      const policyRef = this.policyRef(reservation.policy_snapshot);
       this.db.prepare(
-        `INSERT INTO authority_actions (action_id,state,candidate_json,policy_ref_json,policy_snapshot) VALUES (?,?,?,?,?)`,
+        `INSERT INTO authority_actions (action_id,state,candidate_json,policy_ref_json,policy_snapshot,created_at) VALUES (?,?,?,?,?,?)`,
       ).run(
         reservation.action_id,
         decision.allow ? "reserved" : "denied",
         JSON.stringify(reservation.candidate),
         JSON.stringify(reservation.policy_ref),
-         reservation.policy_snapshot,
-       );
+        policyRef,
+        new Date().toISOString(),
+      );
       for (const [kind, value] of Object.entries(reservation.authorization_ids ?? {})) {
         if (value) this.db.prepare(
           `INSERT INTO authority_consumptions (kind,value,action_id) VALUES (?,?,?)`,
         ).run(kind, value, reservation.action_id);
       }
       const realtimeResult = "realtime_result" in decision ? decision.realtime_result as RealtimeResult : null;
+      // The candidate, policy reference and policy are already in `authority_actions`; the lifecycle row keeps the rest.
+      const { candidate: _candidate, policy_ref: _ref, policy_snapshot: _snapshot, ...rest } = reservation;
       this.db.prepare(
         `INSERT INTO authority_lifecycle (action_id,reservation_json,realtime_result) VALUES (?,?,?)`,
-      ).run(reservation.action_id, JSON.stringify(reservation), realtimeResult);
+      ).run(reservation.action_id, JSON.stringify({ ...rest, [SLIM_RESERVATION]: 1 }), realtimeResult);
       this.db.exec("COMMIT");
       return { duplicate: false, decision };
     } catch (error) {
@@ -259,37 +370,36 @@ export class SqliteReceiptStore implements ReceiptStore {
     try {
       const rows = this.db.prepare(`SELECT action_id FROM authority_actions WHERE action_id = ?`).all(actionId);
       if (rows.length === 0) throw new Error(`unknown authority reservation ${actionId}`);
-      const p = receipt.payload;
-      this.db
-        .prepare(`INSERT INTO receipts (intent_hash,policy_hash,realtime_result,executed,timestamp,receipt_json) VALUES (?,?,?,?,?,?)`)
-        .run(p.intent_hash, p.policy_hash, p.realtime_result, p.executed ? 1 : 0, p.timestamp, JSON.stringify(receipt));
-      this.db.prepare(`UPDATE authority_actions SET state = ? WHERE action_id = ?`).run(state, actionId);
-      this.db.prepare(
-        `UPDATE authority_lifecycle SET terminal_receipt_json = ? WHERE action_id = ?`,
-      ).run(JSON.stringify(receipt), actionId);
+      const receiptId = this.insertReceipt(receipt);
+      this.db.prepare(`UPDATE authority_actions SET state = ?, terminal_receipt_id = ? WHERE action_id = ?`).run(state, receiptId, actionId);
+      // An action that was never dispatched (a check-only decision, a denial) has nothing left to reconcile: its receipt
+      // is the record, so neither the lifecycle row nor the candidate copy is kept. A dispatched one keeps both (adapter,
+      // pre-dispatch attestation) for reconciliation.
+      const removed = this.db.prepare(`DELETE FROM authority_lifecycle WHERE action_id = ? AND adapter_id IS NULL`).run(actionId) as { changes?: number | bigint };
+      if (Number(removed.changes ?? 0) > 0) this.db.prepare(`UPDATE authority_actions SET candidate_json = '{}' WHERE action_id = ?`).run(actionId);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
     }
   }
-  getAction(actionId: string): ActionLifecycleRecord | null {
+  private lifecycleRows(where: string, ...args: unknown[]): ActionLifecycleRecord[] {
     const rows = this.db.prepare(
       `SELECT a.action_id,a.state,a.candidate_json,a.policy_ref_json,a.policy_snapshot,
-              l.reservation_json,l.realtime_result,l.adapter_id,l.pre_receipt_json,l.terminal_receipt_json
-         FROM authority_actions a LEFT JOIN authority_lifecycle l ON l.action_id = a.action_id
-        WHERE a.action_id = ?`,
-    ).all(actionId) as LifecycleRow[];
-    return rows[0] ? rowToLifecycle(rows[0]) : null;
+              l.reservation_json,l.realtime_result,l.adapter_id,l.pre_receipt_json,
+              COALESCE(l.terminal_receipt_json, r.receipt_json) AS terminal_receipt_json
+         FROM authority_actions a
+         LEFT JOIN authority_lifecycle l ON l.action_id = a.action_id
+         LEFT JOIN receipts r ON r.id = a.terminal_receipt_id
+        WHERE ${where} ORDER BY a.rowid`,
+    ).all(...args) as LifecycleRow[];
+    return rows.map((row) => rowToLifecycle(row, (stored) => this.policyText(stored)));
+  }
+  getAction(actionId: string): ActionLifecycleRecord | null {
+    return this.lifecycleRows("a.action_id = ?", actionId)[0] ?? null;
   }
   unresolvedActions(): ActionLifecycleRecord[] {
-    const rows = this.db.prepare(
-      `SELECT a.action_id,a.state,a.candidate_json,a.policy_ref_json,a.policy_snapshot,
-              l.reservation_json,l.realtime_result,l.adapter_id,l.pre_receipt_json,l.terminal_receipt_json
-         FROM authority_actions a LEFT JOIN authority_lifecycle l ON l.action_id = a.action_id
-        WHERE a.state IN ('reserved','dispatching','outcome_unknown') ORDER BY a.rowid`,
-    ).all() as LifecycleRow[];
-    return rows.map(rowToLifecycle);
+    return this.lifecycleRows(`a.state IN ${HELD_STATES}`);
   }
   getStopState(): StopState {
     const rows = this.db.prepare(`SELECT target FROM gateway_stops WHERE stopped = 1 ORDER BY target`).all() as { target: string }[];
@@ -339,27 +449,188 @@ export class SqliteReceiptStore implements ReceiptStore {
       .all(isoTimestamp) as { receipt_json: string }[];
     return rows.map((row) => JSON.parse(row.receipt_json) as SignedReceipt);
   }
-  /** Remove receipts recorded before an ISO timestamp, and return the space.
+  /** Remove receipts recorded before an ISO timestamp, the finished authority records of the same age, and return
+   *  the space.
    *
    *  A receipt's position in `list()` is its anchor leaf index, so removing one changes
    *  every later index and makes an existing anchor unverifiable. This therefore refuses
    *  outright once anything has been anchored — the caller cannot opt out, because the
    *  alternative is silently invalidating published evidence. */
   removeBefore(isoTimestamp: string): { removed: number } {
-    const anchored = this.db.prepare(`SELECT COUNT(*) AS n FROM anchors`).all() as { n: number }[];
-    if (Number(anchored[0]?.n ?? 0) > 0) {
+    if (this.anchored()) {
       throw new Error(
         "this log has anchors: a receipt's position is its anchor leaf index, so removing older receipts would make an existing anchor unverifiable. Archive the database instead of pruning it.",
       );
     }
     const doomed = this.db.prepare(`SELECT COUNT(*) AS n FROM receipts WHERE timestamp < ?`).all(isoTimestamp) as { n: number }[];
     const removed = Number(doomed[0]?.n ?? 0);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.removeFinishedState(isoTimestamp, Number.MAX_SAFE_INTEGER);
+      if (removed > 0) this.db.prepare(`DELETE FROM receipts WHERE timestamp < ?`).run(isoTimestamp);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
     if (removed === 0) return { removed: 0 };
-    this.db.prepare(`DELETE FROM receipts WHERE timestamp < ?`).run(isoTimestamp);
     // VACUUM is what actually returns the pages to the filesystem; without it the file
-    // keeps its high-water mark and the prune looks like it did nothing.
-    try { this.db.exec("VACUUM;"); } catch { /* a locked db keeps its size; rows are still gone */ }
+    // keeps its high-water mark and the prune looks like it did nothing. It also switches
+    // an older file to incremental vacuum, so later maintenance can shrink it in steps.
+    if (!this.rewriteFile()) { /* a locked db keeps its size; rows are still gone */ }
     return { removed };
+  }
+  private anchored(): boolean {
+    const rows = this.db.prepare(`SELECT COUNT(*) AS n FROM anchors`).all() as { n: number }[];
+    return Number(rows[0]?.n ?? 0) > 0;
+  }
+  /** Finished authority records created before `isoTimestamp`, at most `limit`. Held ones (reserved, dispatching,
+   *  outcome unknown) are never removed: they still count against limits until they are reconciled. */
+  private removeFinishedState(isoTimestamp: string, limit: number): number {
+    const doomed = this.db.prepare(
+      `SELECT action_id FROM authority_actions
+        WHERE state NOT IN ${HELD_STATES}
+          AND COALESCE(created_at, json_extract(candidate_json, '$.timestamp')) < ?
+        LIMIT ?`,
+    ).all(isoTimestamp, limit) as { action_id: string }[];
+    if (!doomed.length) return 0;
+    const ids = JSON.stringify(doomed.map((row) => row.action_id));
+    this.db.prepare(`DELETE FROM authority_consumptions WHERE action_id IN (SELECT value FROM json_each(?))`).run(ids);
+    this.db.prepare(`DELETE FROM authority_lifecycle WHERE action_id IN (SELECT value FROM json_each(?))`).run(ids);
+    this.db.prepare(`DELETE FROM authority_actions WHERE action_id IN (SELECT value FROM json_each(?))`).run(ids);
+    return doomed.length;
+  }
+  /** Whether every row is in the current layout. */
+  layoutCurrent(): boolean {
+    const rows = this.db.prepare(`SELECT value FROM store_metadata WHERE key = 'layout'`).all() as { value: string }[];
+    return Number(rows[0]?.value ?? 1) >= LAYOUT_VERSION;
+  }
+  /** One bounded pass of upkeep: rewrite older rows to the current layout, remove what the retention rules allow, and
+   *  return free pages to the filesystem. Safe to run from several processes; each step is its own short transaction,
+   *  so a hook call deciding an action waits at most one step. Call again while `more` is true. */
+  maintain(options: StoreMaintenanceOptions = {}): StoreMaintenanceReport {
+    const now = options.now ?? Date.now();
+    const batch = Math.max(1, Math.floor(options.batch ?? 2_000));
+    const deadline = Date.now() + Math.max(0, options.budgetMs ?? 2_000);
+    const report: StoreMaintenanceReport = {
+      migrated: 0, layoutCurrent: this.layoutCurrent(), receiptsRemoved: 0, stateRemoved: 0, pagesFreed: 0, fullVacuum: false, rewriteWanted: false, more: false,
+    };
+    const step = (work: () => number): number => {
+      this.db.exec("BEGIN IMMEDIATE");
+      try { const n = work(); this.db.exec("COMMIT"); return n; }
+      catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    };
+    const timeLeft = () => Date.now() < deadline;
+
+    // 1. Layout: each policy once, receipts numbered by action, finished actions without lifecycle rows.
+    for (let first = true; !report.layoutCurrent && (first || timeLeft()); first = false) {
+      const n = step(() => this.migrateStep(batch));
+      report.migrated += n;
+      if (n === 0) {
+        this.db.prepare(`INSERT OR REPLACE INTO store_metadata (key, value) VALUES ('layout', ?)`).run(String(LAYOUT_VERSION));
+        report.layoutCurrent = true;
+      }
+    }
+
+    // 2. Finished authority records: a signed authorization lives minutes, so after a week they protect nothing.
+    const stateCutoff = new Date(now - (options.stateRetentionMs ?? 7 * 24 * 60 * 60 * 1000)).toISOString();
+    for (let n = batch, first = true; n === batch && (first || timeLeft()); first = false) {
+      n = step(() => this.removeFinishedState(stateCutoff, batch));
+      report.stateRemoved += n;
+    }
+
+    // 3. Receipts the workspace acknowledged before the retention window. Never one it has not acknowledged, never in
+    //    an anchored log, and only once the layout says which action each receipt belongs to.
+    if (options.retainAcknowledgedMs === undefined) report.receiptsKept = "no_retention";
+    else if (!options.outboxPath || !existsSync(options.outboxPath)) report.receiptsKept = "no_delivery_queue";
+    else if (this.anchored()) report.receiptsKept = "anchored";
+    else if (report.layoutCurrent) {
+      const cutoffMs = now - Math.max(0, options.retainAcknowledgedMs);
+      const cutoff = new Date(cutoffMs).toISOString();
+      this.db.prepare(`ATTACH DATABASE ? AS delivery`).run(options.outboxPath);
+      try {
+        const hasAcks = this.db.prepare(
+          `SELECT 1 FROM delivery.sqlite_master WHERE type = 'table' AND name = 'cloud_acknowledged'`,
+        ).all().length > 0;
+        if (!hasAcks) report.receiptsKept = "no_delivery_queue";
+        for (let n = batch, first = true; hasAcks && n === batch && (first || timeLeft()); first = false) {
+          n = step(() => {
+            const doomed = this.db.prepare(
+              `SELECT r.id, r.action_id FROM receipts r INDEXED BY receipts_timestamp
+                 JOIN delivery.cloud_acknowledged a ON a.event_id = r.action_id
+                WHERE r.timestamp < ? AND a.acked_at < ?
+                ORDER BY r.timestamp LIMIT ?`,
+            ).all(cutoff, cutoffMs, batch) as { id: number; action_id: string }[];
+            if (!doomed.length) return 0;
+            this.db.prepare(`DELETE FROM receipts WHERE id IN (SELECT value FROM json_each(?))`).run(JSON.stringify(doomed.map((d) => d.id)));
+            this.db.prepare(`DELETE FROM delivery.cloud_acknowledged WHERE event_id IN (SELECT value FROM json_each(?))`)
+              .run(JSON.stringify(doomed.map((d) => d.action_id)));
+            return doomed.length;
+          });
+          report.receiptsRemoved += n;
+        }
+      } finally {
+        try { this.db.exec(`DETACH DATABASE delivery`); } catch { /* released on close */ }
+      }
+    }
+
+    // 4. Space: an incremental-vacuum file returns free pages in steps; an older file needs one full rewrite first.
+    const pragma = (sql: string) => Number(Object.values((this.db.prepare(sql).all() as Record<string, number>[])[0] ?? {})[0] ?? 0);
+    const free = pragma("PRAGMA freelist_count");
+    if (free > 0) {
+      if (pragma("PRAGMA auto_vacuum") === 2) {
+        this.db.exec(`PRAGMA incremental_vacuum(${Math.min(free, 25_000)});`);
+        report.pagesFreed = free - pragma("PRAGMA freelist_count");
+      } else if (options.allowFullVacuum && report.layoutCurrent && timeLeft()) {
+        report.fullVacuum = this.rewriteFile();
+        if (report.fullVacuum) report.pagesFreed = free;
+      }
+      report.rewriteWanted = !report.fullVacuum && pragma("PRAGMA auto_vacuum") !== 2;
+    }
+    report.more = !report.layoutCurrent || !timeLeft();
+    return report;
+  }
+  /** Rewrite the whole file once with the current page size and incremental vacuum. The page size can only change outside
+   *  WAL mode, which needs the file to itself; when another process has it open, the rewrite keeps the page size. */
+  private rewriteFile(): boolean {
+    try {
+      this.db.exec("PRAGMA journal_mode = DELETE;");
+      try { this.db.exec(`${FRESH_STORE_PRAGMAS} VACUUM;`); }
+      finally { whileBusy(() => this.db.exec("PRAGMA journal_mode = WAL;")); }
+      return true;
+    } catch { /* fall through: another process holds the file */ }
+    try { this.db.exec("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;"); return true; }
+    catch { return false; } // the next pass tries again
+  }
+  /** Rewrite up to `limit` layout-1 rows. Returns how many changed (0 when the layout is current). */
+  private migrateStep(limit: number): number {
+    // Policies copied into each action become one row referenced by digest. A file holds few distinct policies, so each
+    // step takes one of them and replaces its copies inside SQLite (the copies never pass through this process's memory).
+    const sample = this.db.prepare(
+      `SELECT policy_snapshot FROM authority_actions WHERE policy_snapshot NOT LIKE '${POLICY_REF_PREFIX}%' LIMIT 1`,
+    ).all() as { policy_snapshot: string }[];
+    const inline = sample[0]
+      ? this.db.prepare(
+        `UPDATE authority_actions SET policy_snapshot = ? WHERE action_id IN (
+           SELECT action_id FROM authority_actions WHERE policy_snapshot = ? LIMIT ?)`,
+      ).run(this.policyRef(sample[0].policy_snapshot), sample[0].policy_snapshot, limit) as { changes?: number | bigint }
+      : { changes: 0 };
+    // A finished action that was never dispatched keeps no lifecycle row and no candidate copy; its receipt is in `receipts`.
+    const finishedIds = JSON.stringify((this.db.prepare(
+      `SELECT l.action_id FROM authority_lifecycle l JOIN authority_actions a ON a.action_id = l.action_id
+        WHERE l.adapter_id IS NULL AND a.state NOT IN ${HELD_STATES} LIMIT ?`,
+    ).all(limit) as { action_id: string }[]).map((row) => row.action_id));
+    this.db.prepare(`UPDATE authority_actions SET created_at = COALESCE(created_at, json_extract(candidate_json, '$.timestamp')), candidate_json = '{}' WHERE action_id IN (SELECT value FROM json_each(?))`).run(finishedIds);
+    const finished = this.db.prepare(
+      `DELETE FROM authority_lifecycle WHERE action_id IN (SELECT value FROM json_each(?))`,
+    ).run(finishedIds) as { changes?: number | bigint };
+    // Receipts learn which action they record, so retention can match them to the workspace's acknowledgements.
+    const numbered = this.db.prepare(
+      `UPDATE receipts SET action_id = json_extract(receipt_json, '$.payload.action_ref.action_id')
+        WHERE id IN (SELECT id FROM receipts WHERE action_id IS NULL
+                       AND json_extract(receipt_json, '$.payload.action_ref.action_id') IS NOT NULL LIMIT ?)`,
+    ).run(limit) as { changes?: number | bigint };
+    return Number(inline.changes ?? 0) + Number(finished.changes ?? 0) + Number(numbered.changes ?? 0);
   }
   close(): void {
     // Checkpoint before releasing the handle. A short-lived writer that exits without
@@ -371,6 +642,10 @@ export class SqliteReceiptStore implements ReceiptStore {
     this.db.close();
   }
 }
+
+const POLICY_REF_PREFIX = "policy-ref:sha256:";
+const FRESH_STORE_PRAGMAS = "PRAGMA page_size = 8192; PRAGMA auto_vacuum = INCREMENTAL;";
+const SLIM_RESERVATION = "scopebond_slim";
 
 interface LifecycleRow {
   action_id: string;
@@ -385,24 +660,41 @@ interface LifecycleRow {
   terminal_receipt_json: string | null;
 }
 
-function rowToLifecycle(row: LifecycleRow): ActionLifecycleRecord {
-  const reservation = row.reservation_json
-    ? JSON.parse(row.reservation_json) as AuthorityReservation
-    : {
-        action_id: row.action_id,
-        candidate: JSON.parse(row.candidate_json) as Receipt,
-        policy_ref: JSON.parse(row.policy_ref_json),
-        policy_snapshot: row.policy_snapshot,
-      };
+function rowToLifecycle(row: LifecycleRow, policyText: (stored: string) => string): ActionLifecycleRecord {
+  const fromAction = () => ({
+    action_id: row.action_id,
+    candidate: JSON.parse(row.candidate_json) as Receipt,
+    policy_ref: JSON.parse(row.policy_ref_json),
+    policy_snapshot: policyText(row.policy_snapshot),
+  });
+  let reservation: AuthorityReservation;
+  if (!row.reservation_json) reservation = fromAction();
+  else {
+    const stored = JSON.parse(row.reservation_json) as AuthorityReservation & Record<string, unknown>;
+    if (stored[SLIM_RESERVATION]) {
+      const { [SLIM_RESERVATION]: _slim, ...rest } = stored;
+      reservation = { ...(rest as Partial<AuthorityReservation>), ...fromAction() } as AuthorityReservation;
+    } else reservation = stored;
+  }
+  const terminal = row.terminal_receipt_json ? JSON.parse(row.terminal_receipt_json) as SignedReceipt : null;
   return {
     action_id: row.action_id,
     state: row.state,
     reservation,
-    realtime_result: row.realtime_result,
+    realtime_result: row.realtime_result ?? terminal?.payload.realtime_result ?? null,
     adapter_id: row.adapter_id,
     pre_receipt: row.pre_receipt_json ? JSON.parse(row.pre_receipt_json) as SignedReceipt : null,
-    terminal_receipt: row.terminal_receipt_json ? JSON.parse(row.terminal_receipt_json) as SignedReceipt : null,
+    terminal_receipt: terminal,
   };
+}
+
+/** Add a column to a table made by an older version. Two processes can open an old file at once: the one that loses
+ *  the race finds the column already added, which is the state it wanted. */
+function addColumn(db: SqliteDb, table: string, column: string, definition: string): void {
+  const has = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
+  if (has) return;
+  try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); }
+  catch (error) { if (!/duplicate column/i.test((error as Error).message)) throw error; }
 }
 
 /** Open a durable store: SQLite when `db` is given, otherwise the append-only file.
@@ -469,6 +761,10 @@ export class SqliteCloudOutbox implements CloudOutbox {
         );
         INSERT OR IGNORE INTO cloud_outbox_metadata (singleton, total_gaps)
           SELECT 1, COUNT(*) FROM cloud_delivery_gaps;
+        CREATE TABLE IF NOT EXISTS cloud_acknowledged (
+          event_id TEXT PRIMARY KEY,
+          acked_at INTEGER NOT NULL
+        ) WITHOUT ROWID;
       `);
       // SB289: a number per queued record, kept across restarts. Queues made before it get the columns
       // here; records already in them stay unnumbered.
@@ -486,6 +782,10 @@ export class SqliteCloudOutbox implements CloudOutbox {
       // SB289: the queue's id, made once. Two processes opening a new queue at once both try; the
       // first write wins and both read the same id back.
       addColumn("cloud_outbox_metadata", "queue_id", "TEXT");
+      // SB406: the queue's totals, kept here instead of counted on every record. NULL means "count once": a queue made
+      // before them. A total an older version left behind is corrected whenever `status()` runs.
+      addColumn("cloud_outbox_metadata", "pending_count", "INTEGER");
+      addColumn("cloud_outbox_metadata", "pending_bytes", "INTEGER");
       this.db.prepare("UPDATE cloud_outbox_metadata SET queue_id = ? WHERE singleton = 1 AND queue_id IS NULL").run(randomQueueId());
     } catch (error) {
       try { this.db.close(); } catch { /* already failing */ }
@@ -515,10 +815,8 @@ export class SqliteCloudOutbox implements CloudOutbox {
         this.db.exec("COMMIT");
         return { queued: false, duplicate: false, gap };
       }
-      const totals = this.db.prepare(
-        "SELECT COUNT(*) AS count, COALESCE(SUM(bytes), 0) AS bytes FROM cloud_outbox",
-      ).all() as Array<{ count: number; bytes: number }>;
-      if ((totals[0]?.count ?? 0) >= this.maxPending || (totals[0]?.bytes ?? 0) + bytes > this.maxBytes) {
+      const totals = this.totals();
+      if (totals.count >= this.maxPending || totals.bytes + bytes > this.maxBytes) {
         const gap = this.gap(id, "capacity", at);
         this.db.exec("COMMIT");
         return { queued: false, duplicate: false, gap };
@@ -529,6 +827,9 @@ export class SqliteCloudOutbox implements CloudOutbox {
       this.db.prepare(
         "INSERT INTO cloud_outbox (event_id, payload_hash, receipt_json, enqueued_at, bytes, seq) VALUES (?, ?, ?, ?, ?, ?)",
       ).run(id, payloadHash, receiptJson, at, bytes, seq);
+      this.db.prepare(
+        "UPDATE cloud_outbox_metadata SET pending_count = ?, pending_bytes = ? WHERE singleton = 1",
+      ).run(totals.count + 1, totals.bytes + bytes);
       this.db.exec("COMMIT");
       return { queued: true, duplicate: false };
     } catch (error) {
@@ -566,8 +867,20 @@ export class SqliteCloudOutbox implements CloudOutbox {
   acknowledge(entries: Array<{ id: string; payloadHash: string }>): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const remove = this.db.prepare("DELETE FROM cloud_outbox WHERE event_id = ? AND payload_hash = ?");
-      for (const entry of entries) remove.run(entry.id, entry.payloadHash);
+      const remove = this.db.prepare("DELETE FROM cloud_outbox WHERE event_id = ? AND payload_hash = ? RETURNING bytes");
+      const acked = this.db.prepare("INSERT OR REPLACE INTO cloud_acknowledged (event_id, acked_at) VALUES (?, ?)");
+      const at = this.now();
+      let count = 0;
+      let bytes = 0;
+      for (const entry of entries) {
+        for (const row of remove.all(entry.id, entry.payloadHash) as Array<{ bytes: number }>) {
+          count++;
+          bytes += Number(row.bytes);
+          // D144: retention removes a local receipt only after the workspace acknowledged it; this row is that proof.
+          acked.run(entry.id, at);
+        }
+      }
+      this.adjustTotals(-count, -bytes);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -590,6 +903,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
     try {
       const remove = this.db.prepare("DELETE FROM cloud_outbox WHERE event_id = ?");
       for (const row of rows) { remove.run(row.event_id); this.gap(row.event_id, "rekeyed", at); }
+      this.resetTotals();
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -598,11 +912,62 @@ export class SqliteCloudOutbox implements CloudOutbox {
     return rows.length;
   }
 
+  /** Records the workspace accepted outside this queue (`recover` sends them itself): they become eligible for retention. */
+  markAcknowledged(ids: string[]): void {
+    const acked = this.db.prepare("INSERT OR REPLACE INTO cloud_acknowledged (event_id, acked_at) VALUES (?, ?)");
+    const at = this.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of ids) acked.run(id, at);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  pendingCount(): number {
+    return this.totals().count;
+  }
+
+  /** The kept totals, counted once when missing. */
+  private totals(): { count: number; bytes: number } {
+    const kept = this.db.prepare(
+      "SELECT pending_count AS count, pending_bytes AS bytes FROM cloud_outbox_metadata WHERE singleton = 1",
+    ).all() as Array<{ count: number | null; bytes: number | null }>;
+    if (kept[0] && kept[0].count !== null && kept[0].bytes !== null) return { count: Number(kept[0].count), bytes: Number(kept[0].bytes) };
+    return this.resetTotals();
+  }
+
+  private resetTotals(): { count: number; bytes: number } {
+    const counted = (this.db.prepare(
+      "SELECT COUNT(*) AS count, COALESCE(SUM(bytes), 0) AS bytes FROM cloud_outbox",
+    ).all() as Array<{ count: number; bytes: number }>)[0] ?? { count: 0, bytes: 0 };
+    this.db.prepare("UPDATE cloud_outbox_metadata SET pending_count = ?, pending_bytes = ? WHERE singleton = 1")
+      .run(Number(counted.count), Number(counted.bytes));
+    return { count: Number(counted.count), bytes: Number(counted.bytes) };
+  }
+
+  private adjustTotals(count: number, bytes: number): void {
+    if (count === 0 && bytes === 0) return;
+    this.db.prepare(
+      `UPDATE cloud_outbox_metadata SET pending_count = MAX(0, pending_count + ?), pending_bytes = MAX(0, pending_bytes + ?)
+        WHERE singleton = 1 AND pending_count IS NOT NULL AND pending_bytes IS NOT NULL`,
+    ).run(count, bytes);
+  }
+
   status(): CloudOutboxStatus {
     const total = this.db.prepare(
       `SELECT COUNT(*) AS count, COALESCE(SUM(bytes), 0) AS bytes,
               MIN(enqueued_at) AS oldest FROM cloud_outbox`,
     ).all() as Array<{ count: number; bytes: number; oldest: number | null }>;
+    // The exact count corrects a kept total that an older version (which keeps none) left behind.
+    try {
+      this.db.prepare(
+        `UPDATE cloud_outbox_metadata SET pending_count = ?, pending_bytes = ?
+          WHERE singleton = 1 AND (pending_count IS NOT ? OR pending_bytes IS NOT ?)`,
+      ).run(total[0]?.count ?? 0, total[0]?.bytes ?? 0, total[0]?.count ?? 0, total[0]?.bytes ?? 0);
+    } catch { /* a read-only queue still reports */ }
     const gapCount = this.db.prepare(
       "SELECT total_gaps AS count, queue_id, next_seq FROM cloud_outbox_metadata WHERE singleton = 1",
     ).all() as Array<{ count: number; queue_id: string | null; next_seq: number }>;
@@ -636,7 +1001,9 @@ export class SqliteCloudOutbox implements CloudOutbox {
       "SELECT event_id FROM cloud_outbox WHERE enqueued_at < ? ORDER BY enqueued_at, event_id",
     ).all(at - this.maxAgeMs) as Array<{ event_id: string }>;
     for (const row of expired) this.gap(row.event_id, "expired", at);
+    if (!expired.length) return;
     this.db.prepare("DELETE FROM cloud_outbox WHERE enqueued_at < ?").run(at - this.maxAgeMs);
+    this.resetTotals();
   }
 
   /** Delivery gaps by reason, over the retained gap records (for a machine-readable status). */

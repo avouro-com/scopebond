@@ -43,6 +43,8 @@ export interface CloudOutbox {
   peek(limit: number, now: number, exclude?: ReadonlySet<string>): CloudOutboxEntry[];
   acknowledge(entries: Array<{ id: string; payloadHash: string }>): void;
   status(): CloudOutboxStatus;
+  /** How many records wait, from a kept total rather than a count of the queue. Optional; `status().pending` otherwise. */
+  pendingCount?(): number;
   /** Record a delivery gap the exporter learned of (a record the workspace refused on its own). */
   recordGap?(id: string | null, reason: CloudDeliveryGap["reason"]): CloudDeliveryGap;
   close?(): void;
@@ -369,7 +371,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       try {
         const result = opts.outbox.enqueue(structuredClone(receipt));
         if (result.gap) opts.onGap?.(result.gap);
-        if (result.queued && !result.duplicate && opts.outbox.status().pending >= batchSize) void flush();
+        if (result.queued && !result.duplicate && (opts.outbox.pendingCount?.() ?? opts.outbox.status().pending) >= batchSize) void flush();
       } catch (error) {
         const gap = { id: receipt.payload.action_ref?.action_id ?? null, reason: "outbox_error" as const, at: now() };
         opts.onGap?.(gap);
@@ -378,7 +380,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     },
     flush,
     stop() { stopped = true; clearInterval(timer as unknown as ReturnType<typeof setInterval>); opts.outbox.close?.(); },
-    pending() { return opts.outbox.status().pending; },
+    pending() { return opts.outbox.pendingCount?.() ?? opts.outbox.status().pending; },
     status() { return { ...opts.outbox.status(), consecutiveFailures, nextAttemptAt, lastSuccessAt, lastError }; },
   };
 }
@@ -389,6 +391,9 @@ export function withCloudExporter(store: ReceiptStore, exporter: CloudExporter):
     list: () => store.list(),
     executed: (scope) => store.executed(scope),
     ...(store.close ? { close: () => store.close!() } : {}),
+    ...(store.recent ? { recent: (limit) => store.recent!(limit) } : {}),
+    ...(store.count ? { count: () => store.count!() } : {}),
+    ...(store.authorizationUsed ? { authorizationUsed: (kind, id, since) => store.authorizationUsed!(kind, id, since) } : {}),
     ...(store.putAnchor ? { putAnchor: (a) => store.putAnchor!(a) } : {}),
     ...(store.anchors ? { anchors: () => store.anchors!() } : {}),
     ...(store.reserveAction ? { reserveAction: store.reserveAction.bind(store) } : {}),

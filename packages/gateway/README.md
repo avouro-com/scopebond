@@ -252,6 +252,21 @@ trims it with `boundPrior`, so a custom store that ignores `scope` stays correct
 slower. `SqliteReceiptStore` answers `since` from an index on `receipts.timestamp`
 (created on open), so the cost of a decision no longer grows with the log.
 
+The replay check works the same way: a store that implements the optional
+`authorizationUsed(kind, id, since)` answers whether a request or approval id was already
+used with one lookup, within the time a still-valid authorization could have been used
+(its lifetime plus the accepted clock skew). A store without it is read in full, as before.
+
+`SqliteReceiptStore` keeps each policy once (actions reference it by digest), each receipt
+once (a finished action points at its row), and no lifecycle row or candidate copy for an
+action that finished without being dispatched. A new file uses 8 KiB pages and incremental
+vacuum. `maintain(options)` does bounded upkeep: it rewrites a file from an earlier version
+to this layout, removes finished authority records after a week, removes receipts a
+delivery queue acknowledged before `retainAcknowledgedMs` (never one it did not, never in an
+anchored log), and returns free pages; with `allowFullVacuum` it rewrites the whole file
+once so an older file can shrink. `SqliteCloudOutbox` records each acknowledged record for
+that purpose and keeps its pending totals instead of counting the queue per record.
+
 ### Constrained support refund adapter
 
 `createSupportRefundExecutor` is the first narrow dispatch integration. It accepts

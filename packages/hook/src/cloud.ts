@@ -12,6 +12,7 @@ import {
 } from "@scopebond/gateway";
 import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX } from "./delivery-report.js";
+import { forgetCached, readTextCached } from "./config-cache.js";
 
 /** The persisted connection between this machine and a Cloud workspace. Holds the
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
@@ -52,9 +53,10 @@ export const connectionPath = (dir: string): string => join(dir, "cloud.json");
 /** Read the persisted connection, or null when the hook is not connected to Cloud. */
 export function loadConnection(dir: string): HookConnection | null {
   const path = connectionPath(dir);
-  if (!existsSync(path)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as Partial<HookConnection>;
+    const text = readTextCached(path);
+    if (text === null) return null;
+    const parsed = JSON.parse(text.replace(/^\uFEFF/, "")) as Partial<HookConnection>;
     if (typeof parsed.url === "string" && typeof parsed.credential === "string") return parsed as HookConnection;
   } catch { /* fall through */ }
   return null;
@@ -89,6 +91,7 @@ export async function connectCloud(
   const { ingest_url: offered, ...enrolled } = result as typeof result & { ingest_url?: unknown };
   const ingest = safeIngestOrigin(offered);
   const connection: HookConnection = { url, ...enrolled, ...(ingest ? { ingest_url: ingest } : {}) };
+  forgetCached(connectionPath(dir));
   writeFileSync(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n", { mode: 0o600 });
   let setAside = 0;
   const outboxPath = join(dir, "receipts.db.cloud-outbox.db");

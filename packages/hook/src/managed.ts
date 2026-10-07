@@ -235,6 +235,8 @@ export interface ManagedMeta {
   last_error: string | null;
   /** The Scopebond versions the workspace recommends for its computers, as its last rules check said. */
   recommended?: Recommended | null;
+  /** How many days this computer keeps receipts the workspace acknowledged, as its last rules check said (D144). */
+  local_retention_days?: number | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 
