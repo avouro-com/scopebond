@@ -155,3 +155,86 @@ test("a per-call flush (routine: false) sends only after a notable record was qu
     assert.equal(exporter.pending(), 0);
   } finally { exporter.stop(); }
 });
+
+test("a window another flush is sending waits for it; it never also goes in full", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "sb-sum-busy-")), "outbox.db");
+  const lossless = { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER };
+  const outbox = new SqliteCloudOutbox(file, lossless);
+  const otherProcess = new SqliteCloudOutbox(file, lossless);
+  const calls = { ingest: [], summaries: [] };
+  let releaseFirst;
+  const gate = new Promise((r) => { releaseFirst = r; });
+  const slowFetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (url.endsWith("/v1/summaries")) { if (!calls.summaries.length) { calls.summaries.push(body); await gate; } else calls.summaries.push(body); return { ok: true, status: 200, json: async () => ({ accepted: body.summaries.length }), headers: new Map() }; }
+    calls.ingest.push(body); return { ok: true, status: 200, json: async () => ({}), text: async () => "{}", headers: new Map() };
+  };
+  const at = () => W0 + 60 * 60_000;
+  const first = createCloudExporter({ url: "https://ws.example", credential: "sbm_x", outbox, flushMs: 1e9, fetch: slowFetch, now: at, summaries: { detail: () => "standard", attester } });
+  const second = createCloudExporter({ url: "https://ws.example", credential: "sbm_x", outbox: otherProcess, flushMs: 1e9, fetch: slowFetch, now: at, summaries: { detail: () => "standard", attester } });
+  try {
+    for (const r of await receiptsAt([W0, W0 + 1000], { action_type: "file.read", params: { path: "b.txt" } })) first.enqueue(r);
+    const sending = first.flush();
+    await new Promise((r) => setTimeout(r, 20));
+    await second.flush();
+    assert.equal(calls.ingest.flatMap((b) => b.receipts).length, 0, "the second flush left the window to the first");
+    releaseFirst();
+    await sending;
+    assert.equal(calls.summaries.length, 1);
+    assert.equal(first.pending(), 0);
+  } finally { first.stop(); second.stop(); }
+});
+
+test("a summary the workspace did not confirm stays queued and is sent again under the same id", async () => {
+  const outbox = new SqliteCloudOutbox(join(mkdtempSync(join(tmpdir(), "sb-sum-partial-")), "outbox.db"), { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER });
+  const ids = [];
+  let confirm = false;
+  const fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (url.endsWith("/v1/summaries")) { ids.push(...body.summaries.map((s) => s.summary.payload.summary_id)); return { ok: true, status: 200, json: async () => ({ accepted: confirm ? body.summaries.length : 0 }), headers: new Map() }; }
+    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}", headers: new Map() };
+  };
+  let clock = W0 + 60 * 60_000;
+  const exporter = createCloudExporter({ url: "https://ws.example", credential: "sbm_x", outbox, flushMs: 1000, maxRetryMs: 1000, fetch, now: () => clock, summaries: { detail: () => "standard", attester } });
+  try {
+    for (const r of await receiptsAt([W0], { action_type: "file.read", params: { path: "c.txt" } })) exporter.enqueue(r);
+    await exporter.flush();
+    assert.equal(exporter.pending(), 1, "not confirmed: still queued");
+    assert.match(exporter.status().lastError ?? "", /answered for 0 of 1/);
+    confirm = true; clock += 5_000;
+    await exporter.flush();
+    assert.equal(exporter.pending(), 0);
+    assert.equal(new Set(ids).size, 1, "the same summary, sent again");
+  } finally { exporter.stop(); }
+});
+
+test("a window's summary counts the records of it already sent in full, and notable records go before summaries", async () => {
+  const ws = workspace();
+  const outbox = new SqliteCloudOutbox(join(mkdtempSync(join(tmpdir(), "sb-sum-count-")), "outbox.db"), { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER });
+  const exporter = createCloudExporter({ url: "https://ws.example", credential: "sbm_x", outbox, flushMs: 1e9, fetch: ws.fetch, now: () => W0 + 60 * 60_000, summaries: { detail: () => "standard", attester } });
+  try {
+    for (const r of await receiptsAt([W0], { action_type: "file.read", params: { path: "d.txt" } })) exporter.enqueue(r);
+    exporter.enqueue((await receiptsAt([W0 + 500], { action_type: "git.push", params: { remote: "origin", ref: "count" } }))[0]);
+    await exporter.flush({ routine: false });
+    assert.equal(ws.calls.ingest.flatMap((b) => b.receipts).length, 1);
+    const [item] = ws.calls.summaries.flatMap((b) => b.summaries);
+    assert.equal(item.summary.payload.notable_count, 1, "the push, sent first, is counted in its window's summary");
+    assert.equal(exporter.pending(), 0);
+  } finally { exporter.stop(); }
+});
+
+test("without anything notable, a hook call sends the summaries once routine records have waited half an hour", async () => {
+  const ws = workspace();
+  const outbox = new SqliteCloudOutbox(join(mkdtempSync(join(tmpdir(), "sb-sum-age-")), "outbox.db"), { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER });
+  let clock = Date.now() + 10_000;
+  const exporter = createCloudExporter({ url: "https://ws.example", credential: "sbm_x", outbox, flushMs: 1e9, fetch: ws.fetch, now: () => clock, summaries: { detail: () => "standard", attester } });
+  try {
+    for (const r of await receiptsAt([Date.now() - 45 * 60_000], { action_type: "file.read", params: { path: "e.txt" } })) exporter.enqueue(r);
+    await exporter.flush({ routine: false });
+    assert.equal(ws.calls.summaries.length, 0, "queued just now: a hook call leaves it to the agent");
+    clock = Date.now() + 40 * 60_000;
+    await exporter.flush({ routine: false });
+    assert.equal(ws.calls.summaries.length, 1);
+    assert.equal(exporter.pending(), 0);
+  } finally { exporter.stop(); }
+});

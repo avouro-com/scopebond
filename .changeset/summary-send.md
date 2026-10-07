@@ -16,3 +16,9 @@ Also: enqueueing never starts a flush while summaries are on, and a hook call's 
 something notable (`flush({ routine: false })`); the agent's cycle and `scopebond-hook flush` send the summaries. New:
 `CloudSummaryOptions`, `seqRanges`, outbox `claimWindow`/`releaseWindow`; hook `evidenceDetail`, `evidenceDetailFrom`,
 `summaryOptions`. A 1,000-action session over 20 minutes ships 4 summaries and its 5 pushes.
+
+Review fixes before release: a window's claim is a lease, so a window another process is sending waits instead of also going
+in full, and a claim a process abandoned is taken over under the same summary id; records leave the queue only for the
+summaries the workspace says it has (a summary it refused sends its records in full; a short answer is retried under the
+same ids); a summary's `notable_count` counts the window's records sent in full, kept in the outbox; notable records go
+before summaries; a computer without the agent sends summaries from a hook call once routine records have waited 30 minutes.

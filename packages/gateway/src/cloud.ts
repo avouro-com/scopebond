@@ -50,11 +50,18 @@ export interface CloudOutbox {
   pendingCount?(): number;
   /** Record a delivery gap the exporter learned of (a record the workspace refused on its own). */
   recordGap?(id: string | null, reason: CloudDeliveryGap["reason"]): CloudDeliveryGap;
-  /** Summaries: claim a window so it is summarised once by this queue, whichever process flushes. True for the first claim.
+  /** Summaries: claim a window so it is summarised once by this queue, whichever process flushes. `claimed`: build and send
+   *  its summary under `summaryId` (the one first chosen for it, so a retried summary is the same summary); `busy`: another
+   *  flush is sending it now (its records wait); `sent`: it was summarised (a record for it that turns up now goes in full).
    *  An outbox without claims is never sent summaries. */
-  claimWindow?(windowStart: number, summaryId: string): boolean;
-  /** Give a claim back (the summary could not be sent this time). */
-  releaseWindow?(windowStart: number, summaryId: string): void;
+  claimWindow?(windowStart: number, summaryId: string, now: number): { state: "claimed" | "busy" | "sent"; summaryId: string };
+  /** Let a claim go without sending (another flush may take it at once, under the same summary id). */
+  releaseWindow?(windowStart: number): void;
+  /** The workspace has the window's summary. */
+  markWindowSent?(windowStart: number): void;
+  /** Records of a window sent in full (notable, or late), counted so its summary can say how many. */
+  countFull?(windowStart: number, n: number): void;
+  fullCount?(windowStart: number): number;
   close?(): void;
 }
 
@@ -113,6 +120,11 @@ const SUMMARY_PEEK = 2_000;
 const SUMMARY_GRACE_MS = 30_000;
 /** Summaries per POST. */
 const SUMMARIES_PER_POST = 20;
+/** How long a flush holds a window's claim while it sends; a claim older than this was abandoned (a process that exited) and is
+ *  taken over, under the same summary id. */
+export const WINDOW_LEASE_MS = 120_000;
+/** A computer without the agent sends routine records' summaries from a hook call once the oldest waiting record is this old. */
+const ROUTINE_MAX_WAIT_MS = 30 * 60_000;
 
 /** The record numbers a summary covers, as closed ranges. Records queued before numbering are counted apart. */
 export function seqRanges(seqs: Array<number | undefined>): { ranges: Array<[number, number]>; unnumbered: number } {
@@ -145,7 +157,7 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
   const maxAgeMs = options.maxAgeMs ?? 7 * 24 * 60 * 60 * 1000;
   const now = options.now ?? Date.now;
   const entries = new Map<string, CloudOutboxEntry>();
-  const windows = new Map<number, string>();
+  const windows = new Map<number, { summaryId: string | null; claimedAt: number; sent: boolean; full: number }>();
   let nextSeq = 1;
   let queueId: string | undefined;
   let gapCount = 0;
@@ -179,14 +191,23 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
   };
 
   return {
-    claimWindow(windowStart: number, summaryId: string): boolean {
-      if (windows.has(windowStart)) return false;
-      windows.set(windowStart, summaryId);
-      return true;
+    claimWindow(windowStart: number, summaryId: string, at: number) {
+      const w = windows.get(windowStart) ?? { summaryId: null as string | null, claimedAt: 0, sent: false, full: 0 };
+      windows.set(windowStart, w);
+      if (w.sent) return { state: "sent" as const, summaryId: w.summaryId ?? summaryId };
+      if (w.summaryId && at - w.claimedAt < WINDOW_LEASE_MS) return { state: "busy" as const, summaryId: w.summaryId };
+      w.summaryId ??= summaryId;
+      w.claimedAt = at;
+      return { state: "claimed" as const, summaryId: w.summaryId };
     },
-    releaseWindow(windowStart: number, summaryId: string): void {
-      if (windows.get(windowStart) === summaryId) windows.delete(windowStart);
+    releaseWindow(windowStart: number): void { const w = windows.get(windowStart); if (w) w.claimedAt = 0; },
+    markWindowSent(windowStart: number): void { const w = windows.get(windowStart); if (w) w.sent = true; },
+    countFull(windowStart: number, n: number): void {
+      const w = windows.get(windowStart) ?? { summaryId: null, claimedAt: 0, sent: false, full: 0 };
+      w.full += n;
+      windows.set(windowStart, w);
     },
+    fullCount(windowStart: number): number { return windows.get(windowStart)?.full ?? 0; },
     enqueue(receipt) {
       expire(now());
       const id = receipt.payload.action_ref?.action_id;
@@ -353,7 +374,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   /** Send the closed windows' routine records as summaries. `sent`: some left the queue; `late`: records of a window already
    *  summarised, to send in full. Without summaries at the workspace nothing is sent here (the records then go as receipts).
    *  Throws for a failure worth retrying. */
-  async function sendSummaries(entries: CloudOutboxEntry[], notableByWindow: Map<number, number>, queue: string | undefined | null): Promise<{ sent: boolean; late: CloudOutboxEntry[] }> {
+  async function sendSummaries(entries: CloudOutboxEntry[], notableByWindow: Map<number, number>, queue: string | undefined | null): Promise<{ sent: boolean; late: CloudOutboxEntry[]; busy: CloudOutboxEntry[] }> {
     const s = opts.summaries!;
     const windowMs = Math.max(60_000, Math.trunc(s.windowMs ?? 300_000));
     const groups = new Map<number, CloudOutboxEntry[]>();
@@ -361,26 +382,29 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       const w = Math.floor(Date.parse(e.receipt.payload.timestamp) / windowMs);
       groups.set(w, [...(groups.get(w) ?? []), e]);
     }
-    // Each window is summarised once by this queue. Records for a window already summarised (late ones, or ones another
-    // process is sending) go in full, so a window's summary covers exactly its routine records that were not sent in full.
+    // Each window is summarised once by this queue. Records for a window already summarised go in full, so a window's summary
+    // covers exactly its routine records that were not sent in full; a window another flush is sending waits for it.
     const late: CloudOutboxEntry[] = [];
+    const busy: CloudOutboxEntry[] = [];
     const claimed: Array<[number, CloudOutboxEntry[], string]> = [];
     for (const [w, group] of groups) {
-      const id = `sum_${randomQueueId()}`;
-      if (opts.outbox.claimWindow!(w * windowMs, id)) claimed.push([w, group, id]); else late.push(...group);
+      const claim = opts.outbox.claimWindow!(w * windowMs, `sum_${randomQueueId()}`, now());
+      if (claim.state === "claimed") claimed.push([w, group, claim.summaryId]);
+      else if (claim.state === "sent") late.push(...group);
+      else busy.push(...group);
     }
     const items = await Promise.all(claimed.map(async ([w, group, id]) => ({
       group, w, id,
       body: {
         summary: await buildSummary(group.map((e) => e.receipt), { summaryId: id,
-          attester: s.attester, notableCount: notableByWindow.get(w) ?? 0, now: new Date(now()),
+          attester: s.attester, notableCount: (opts.outbox.fullCount?.(w * windowMs) ?? 0) + (notableByWindow.get(w) ?? 0), now: new Date(now()),
           window: { kind: "interval", start: new Date(w * windowMs).toISOString(), end: new Date((w + 1) * windowMs - 1).toISOString() },
         }),
         // Beside the signed summary, like a receipt's number: which of this queue's records it stands for.
         seq: seqRanges(group.map((e) => e.seq)),
       },
     })));
-    const release = (from: number) => { for (const p of items.slice(from)) opts.outbox.releaseWindow?.(p.w * windowMs, p.id); };
+    const release = (from: number) => { for (const p of items.slice(from)) opts.outbox.releaseWindow?.(p.w * windowMs); };
     for (let i = 0; i < items.length; i += SUMMARIES_PER_POST) {
       const part = items.slice(i, i + SUMMARIES_PER_POST);
       let res: Response;
@@ -391,24 +415,40 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           body: JSON.stringify({ summaries: part.map((p) => p.body), ...(queue ? { queue } : {}) }),
         });
       } catch (error) { release(i); throw error; }
-      if (res.status === 404 || res.status === 405) { release(i); summariesRefused = true; return { sent: false, late: [] }; }
+      if (res.status === 404 || res.status === 405) { release(i); summariesRefused = true; return { sent: false, late: [], busy }; }
       if (!res.ok) {
         release(i);
         const text = (typeof res.text === "function" ? await res.text().catch(() => "") : "").slice(0, 4096);
         // A summary the workspace refuses as it is: send those records in full instead, for the life of this exporter.
-        if (res.status === 400 || res.status === 413 || res.status === 422) { summariesRefused = true; opts.onError?.(new Error(refusalMessage(res.status, text))); return { sent: false, late: [] }; }
+        if (res.status === 400 || res.status === 413 || res.status === 422) { summariesRefused = true; opts.onError?.(new Error(refusalMessage(res.status, text))); return { sent: false, late: [], busy }; }
         throw Object.assign(new Error(refusalMessage(res.status, text)), { retryAfterMs: retryAfter(res, now()) });
       }
-      const covered = part.flatMap((p) => p.group);
-      opts.outbox.acknowledge(covered.map(({ id, payloadHash }) => ({ id, payloadHash })), new Set(covered.map((e) => e.id)));
+      // Only what the workspace says it has leaves the queue: a summary it refused on its own sends its records in full; a
+      // count that does not add up is a failure, retried under the same summary ids.
+      const answer = await (typeof res.json === "function" ? res.json().catch(() => null) : Promise.resolve(null)) as { accepted?: unknown; duplicates?: unknown; rejected?: Array<{ index?: unknown }> } | null;
+      const refusedAt = new Set((Array.isArray(answer?.rejected) ? answer!.rejected : []).map((r) => Number(r?.index)).filter((n) => Number.isInteger(n)));
+      const held = Number(answer?.accepted ?? NaN) + Number(answer?.duplicates ?? 0);
+      if (!Number.isFinite(held) || held + refusedAt.size < part.length) {
+        release(i);
+        throw new Error(`the workspace answered for ${Number.isFinite(held) ? held : "none"} of ${part.length} summaries; retrying`);
+      }
+      for (const [k, p] of part.entries()) {
+        opts.outbox.markWindowSent?.(p.w * windowMs);
+        if (refusedAt.has(k)) { late.push(...p.group); continue; }
+        opts.outbox.acknowledge(p.group.map(({ id, payloadHash }) => ({ id, payloadHash })), new Set(p.group.map((e) => e.id)));
+      }
     }
-    return { sent: items.length > 0, late };
+    return { sent: items.length > 0, late, busy };
   }
 
   async function flush(options: { routine?: boolean } = {}): Promise<void> {
     if (sending || stopped || (nextAttemptAt !== null && now() < nextAttemptAt)) return;
     // Routine records wait for their summary; a per-call flush with nothing notable to send has nothing to do.
-    if (options.routine === false && summarising() && !notableQueued) return;
+    if (options.routine === false && summarising() && !notableQueued) {
+      // Without an agent, a hook call still sends the summaries once routine records have waited long enough.
+      const oldest = opts.outbox.status().oldestEnqueuedAt;
+      if (oldest === null || now() - oldest < ROUTINE_MAX_WAIT_MS) return;
+    }
     notableQueued = false;
     sending = true;
     // After a 409 id_conflict on a batch, the rest of this flush goes one record at a time.
@@ -453,17 +493,22 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           // One window busier than a whole pass would never complete: its oldest records go in full rather than wait forever.
           if (truncated && !closed.length && !full.length) for (const e of open.slice(0, batchSize)) lateThisFlush.add(e.id);
           // Records in a window still open stay queued; each pass looks at them again, so a window that closes meanwhile is whole.
-          if (closed.length) {
+          // Notable records go first: a block or an allow must not wait behind the summaries.
+          for (const e of seen) if (lateThisFlush.has(e.id)) full.push(e);
+          if (full.length) {
+            batch = full.slice(0, isolate ? 1 : batchSize);
+          } else if (closed.length) {
             if (queue === null) queue = opts.outbox.status().queueId;
             const outcome = await sendSummaries(closed, notableByWindow, queue);
             if (outcome.sent) { consecutiveFailures = 0; nextAttemptAt = null; lastError = null; lastSuccessAt = now(); movedThisFlush = true; }
-            if (!outcome.sent && !outcome.late.length) continue; // no summaries after all: every record goes as a receipt
+            for (const e of outcome.busy) keptThisFlush.add(e.id); // another flush is sending their summary
             for (const e of outcome.late) lateThisFlush.add(e.id);
-            if (outcome.sent) continue; // look again: the summarised records are gone
+            if (outcome.sent || outcome.late.length || outcome.busy.length) continue; // look again
+            continue; // no summaries after all: every record goes as a receipt
+          } else {
+            batch = [];
           }
-          for (const e of seen) if (lateThisFlush.has(e.id)) full.push(e);
-          batch = full.slice(0, isolate ? 1 : batchSize);
-          if (!batch.length) break; // only records in open windows are left
+          if (!batch.length) break; // only records in open windows (or windows another flush is sending) are left
         } else {
           batch = opts.outbox.peek(isolate ? 1 : batchSize, now(), skip());
         }
@@ -508,6 +553,16 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
         const leaving = batch.filter((entry) => !kept.has(entry.id));
         const refusedIds = new Set(refused.map((r) => r.id));
         opts.outbox.acknowledge(leaving.map(({ id, payloadHash }) => ({ id, payloadHash })), new Set(leaving.filter((entry) => !refusedIds.has(entry.id)).map((entry) => entry.id)));
+        // With summaries, a window's summary says how many of its records went in full.
+        if (summarising() && opts.outbox.countFull) {
+          const windowMs = Math.max(60_000, Math.trunc(opts.summaries!.windowMs ?? 300_000));
+          const byWindow = new Map<number, number>();
+          for (const entry of leaving) {
+            const t = Date.parse(entry.receipt.payload.timestamp);
+            if (Number.isFinite(t)) byWindow.set(Math.floor(t / windowMs) * windowMs, (byWindow.get(Math.floor(t / windowMs) * windowMs) ?? 0) + 1);
+          }
+          for (const [w, n] of byWindow) opts.outbox.countFull(w, n);
+        }
         for (const { id, reason } of refused) {
           const gap = opts.outbox.recordGap?.(id, reason) ?? { id, reason, at: now() };
           opts.onGap?.(gap);

@@ -6,7 +6,7 @@ import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } fro
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
 import { canonical, sha256 } from "./crypto.js";
-import { randomQueueId, type CloudDeliveryGap, type CloudOutbox, type CloudOutboxEntry, type CloudOutboxStatus } from "./cloud.js";
+import { randomQueueId, type CloudDeliveryGap, type CloudOutbox, type CloudOutboxEntry, type CloudOutboxStatus, WINDOW_LEASE_MS } from "./cloud.js";
 import type {
   ReceiptStore, SignedReceipt, Anchor, AuthorityReservation,
   AuthorityReservationResult, AuthorityFinalState, StopState, ActionLifecycleRecord, RealtimeResult, PriorScope,
@@ -784,8 +784,11 @@ export class SqliteCloudOutbox implements CloudOutbox {
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS cloud_summary_windows (
           window_start INTEGER PRIMARY KEY,
-          summary_id TEXT NOT NULL,
-          claimed_at INTEGER NOT NULL
+          summary_id TEXT,
+          claimed_at INTEGER NOT NULL DEFAULT 0,
+          sent INTEGER NOT NULL DEFAULT 0,
+          full_count INTEGER NOT NULL DEFAULT 0,
+          touched_at INTEGER NOT NULL
         );
       `);
       // SB289: a number per queued record, kept across restarts. Queues made before it get the columns
@@ -936,16 +939,45 @@ export class SqliteCloudOutbox implements CloudOutbox {
   }
 
   /** Records the workspace accepted outside this queue (`recover` sends them itself): they become eligible for retention. */
-  /** Summaries: a window is summarised once by this queue, whichever process flushes (the insert is the claim). Claims older
-   *  than a week are dropped; records that old are sent in full anyway. */
-  claimWindow(windowStart: number, summaryId: string): boolean {
-    const now = Date.now();
-    this.db.prepare("DELETE FROM cloud_summary_windows WHERE claimed_at < ?").run(now - 7 * 24 * 60 * 60 * 1000);
-    return Number((this.db.prepare("INSERT OR IGNORE INTO cloud_summary_windows (window_start, summary_id, claimed_at) VALUES (?, ?, ?)").run(windowStart, summaryId, now) as { changes: number | bigint }).changes) === 1;
+  /** Summaries: a window is summarised once by this queue, whichever process flushes. The claim is a lease taken in one
+   *  transaction; a lease older than WINDOW_LEASE_MS was abandoned and is taken over under the same summary id. Windows older
+   *  than a week are forgotten; records that old are sent in full anyway. */
+  claimWindow(windowStart: number, summaryId: string, now: number): { state: "claimed" | "busy" | "sent"; summaryId: string } {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM cloud_summary_windows WHERE touched_at < ?").run(now - 7 * 24 * 60 * 60 * 1000);
+      this.db.prepare("INSERT OR IGNORE INTO cloud_summary_windows (window_start, touched_at) VALUES (?, ?)").run(windowStart, now);
+      const row = this.db.prepare("SELECT summary_id, claimed_at, sent FROM cloud_summary_windows WHERE window_start = ?").all(windowStart)[0] as { summary_id: string | null; claimed_at: number; sent: number };
+      let answer: { state: "claimed" | "busy" | "sent"; summaryId: string };
+      if (row.sent) answer = { state: "sent", summaryId: row.summary_id ?? summaryId };
+      else if (row.summary_id && now - row.claimed_at < WINDOW_LEASE_MS) answer = { state: "busy", summaryId: row.summary_id };
+      else {
+        const id = row.summary_id ?? summaryId;
+        this.db.prepare("UPDATE cloud_summary_windows SET summary_id = ?, claimed_at = ?, touched_at = ? WHERE window_start = ?").run(id, now, now, windowStart);
+        answer = { state: "claimed", summaryId: id };
+      }
+      this.db.exec("COMMIT");
+      return answer;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
-  releaseWindow(windowStart: number, summaryId: string): void {
-    this.db.prepare("DELETE FROM cloud_summary_windows WHERE window_start = ? AND summary_id = ?").run(windowStart, summaryId);
+  releaseWindow(windowStart: number): void {
+    this.db.prepare("UPDATE cloud_summary_windows SET claimed_at = 0 WHERE window_start = ? AND sent = 0").run(windowStart);
+  }
+
+  markWindowSent(windowStart: number): void {
+    this.db.prepare("UPDATE cloud_summary_windows SET sent = 1 WHERE window_start = ?").run(windowStart);
+  }
+
+  countFull(windowStart: number, n: number): void {
+    this.db.prepare(
+      `INSERT INTO cloud_summary_windows (window_start, full_count, touched_at) VALUES (?, ?, ?)
+       ON CONFLICT (window_start) DO UPDATE SET full_count = full_count + excluded.full_count, touched_at = excluded.touched_at`,
+    ).run(windowStart, n, Date.now());
+  }
+
+  fullCount(windowStart: number): number {
+    return (this.db.prepare("SELECT full_count FROM cloud_summary_windows WHERE window_start = ?").all(windowStart)[0] as { full_count: number } | undefined)?.full_count ?? 0;
   }
 
   markAcknowledged(ids: string[]): void {
