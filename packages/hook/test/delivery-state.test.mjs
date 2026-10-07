@@ -156,6 +156,21 @@ test("a bounded attempt cut off with records waiting is recorded as a timeout, n
   assert.equal(readDeliveryState(dir).invalid_since, 3_000);
 });
 
+test("after a recent delivery a cut-off hook call is history, not the last problem (SB385)", () => {
+  const dir = fresh();
+  const minute = 60_000;
+  // The agent delivered at 10:00; a hook call at 10:02 was cut off at 800 ms while records waited.
+  recordDeliveryAttempt(dir, { lastSuccessAt: 10 * 60 * minute, lastError: null, pending: 0 }, 10 * 60 * minute, null);
+  recordDeliveryAttempt(dir, { lastSuccessAt: null, lastError: null, pending: 3 }, 10 * 60 * minute + 2 * minute, null, 800);
+  let state = readDeliveryState(dir);
+  assert.equal(state.last_error, null, "green stays green");
+  assert.equal(state.last_timeout_at, 10 * 60 * minute + 2 * minute, "kept as history");
+  // Nothing delivered for 20 minutes: now the timeout is the problem.
+  recordDeliveryAttempt(dir, { lastSuccessAt: null, lastError: null, pending: 3 }, 10 * 60 * minute + 20 * minute, null, 800);
+  state = readDeliveryState(dir);
+  assert.match(state.last_error, /\(timeout\)$/);
+});
+
 /** A computer whose queue holds `count` records queued `ageMs` ago. */
 async function queued(count, ageMs) {
   const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
