@@ -399,7 +399,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     else await store.put(receipt);
 
     const reason = guardDenied ? guardDenied : d.allow
-      ? override ? `allowed by override (${override.method === "agent_dialog" ? "a person allowed it" : "offered at the agent's prompt"})` : (d.clause_mode === "monitor" ? "allowed (monitored, out of policy — covered at claim time)" : "allowed")
+      ? override ? `allowed by override (${override.method === "agent_dialog" ? "a person allowed it" : override.method === "allowance" ? "a standing allowance" : "offered at the agent's prompt"})` : (d.clause_mode === "monitor" ? "allowed (monitored, out of policy — covered at claim time)" : "allowed")
       : (d.verdict.explanation || "denied");
     return {
       allowed: d.allow && !stoppedBeforeDispatch,

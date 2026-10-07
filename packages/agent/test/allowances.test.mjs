@@ -10,7 +10,7 @@ import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { makeAllowance, queueRequest, readAllowances, readRequests, writeAllowances } from "@scopebond/hook";
 import { createPublicKey, verify } from "node:crypto";
 import { parseQuestion, questionText, windowsScript } from "../dist/prompt.js";
-import { sendAllowancesAndRequests } from "../dist/allowance-sender.js";
+import { sendAllowancesAndRequests, ALLOWANCE_DOMAIN, REQUEST_DOMAIN } from "../dist/allowance-sender.js";
 
 const question = (extra = {}) => ({ action_id: "act-0123456789abcdef", rule: "destructive-shell", title: "Destructive command", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 45_000, ...extra });
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
@@ -22,7 +22,9 @@ test("the window offers what the rule allows: allow (once, 15 minutes, always) o
   const script = windowsScript(full);
   for (const label of ["Allow once", "Allow for 15 min", "Always allow this here…", "Ask an admin", "Don't allow"]) assert.ok(script.includes(b64(label)), label);
   const asking = parseQuestion(question({ mode: "ask", offers: { allow: true, always: true, ask: true } }));
-  assert.deepEqual(asking.offers, { allow: false, always: false, ask: true }, "'Block, person may ask' never allows on the spot");
+  assert.deepEqual(asking.offers, { allow: false, always: false, ask: true, fifteen: false }, "'Block, person may ask' never allows on the spot");
+  const noFifteen = windowsScript(parseQuestion(question({ mode: "override", offers: { allow: true, always: false, ask: false, fifteen: false } })));
+  assert.ok(!noFifteen.includes(b64("Allow for 15 min")), "15 minutes only where the workspace knows allowances");
   const askScript = windowsScript(asking);
   assert.ok(askScript.includes(b64("Ask an admin")));
   assert.ok(!askScript.includes(b64("Allow once")));
@@ -37,22 +39,30 @@ test("allowances and requests a person made are sent once, signed by the compute
   writeAllowances(dir, [allowance, refused]);
   queueRequest(dir, { rule: "destructive-shell", action_key: "c".repeat(64), action_id: "act-0123456789abcdef", summary: "rm -rf build", reason: "need it for the release", os_user_digest: null, harness: "claude" });
   const posts = [];
+  let addedDuringSend = false;
   const fetchImpl = async (url, init) => {
     const body = JSON.parse(init.body);
     posts.push({ path: new URL(url).pathname, body });
-    const ok = verify(null, Buffer.from(canonical(body.record)), createPublicKey(attester.publicKeyPem), Buffer.from(body.signature, "base64url"))
-      || verify(null, Buffer.from(canonical(body.record)), createPublicKey(attester.publicKeyPem), Buffer.from(body.signature, "base64"));
-    assert.ok(ok, "signed by the enrolled key");
+    const domain = new URL(url).pathname === "/v1/allowances" ? ALLOWANCE_DOMAIN : REQUEST_DOMAIN;
+    const signedBytes = Buffer.from(domain + canonical(body.record));
+    const ok = verify(null, signedBytes, createPublicKey(attester.publicKeyPem), Buffer.from(body.signature, "base64url"))
+      || verify(null, signedBytes, createPublicKey(attester.publicKeyPem), Buffer.from(body.signature, "base64"));
+    assert.ok(ok, "signed by the enrolled key over its domain line");
+    // The hook adds an allowance while this send is waiting: it survives the write.
+    if (posts.length === 1 && !addedDuringSend) addedDuringSend = true, writeAllowances(dir, [...readAllowances(dir), makeAllowance({ rule: "destructive-shell", actionKey: "d".repeat(64), reason: "made while sending, keep me", osUserDigest: null, lasts: "15m" })]);
     assert.equal(body.kid, attester.kid);
     return new Response("{}", { status: body.record.id === refused.id ? 400 : 200 });
   };
   const connection = { url: "https://cloud.example.test", credential: "sbm_x" };
   assert.deepEqual(await sendAllowancesAndRequests(dir, connection, fetchImpl), { allowances: 1, requests: 1 });
+  assert.ok(readAllowances(dir).some((a) => a.action_key === "d".repeat(64)), "an allowance made during the send is kept");
   assert.deepEqual(posts.map((p) => p.path).sort(), ["/v1/allowances", "/v1/allowances", "/v1/requests"]);
   assert.equal(posts.find((p) => p.body.record.id === allowance.id).body.record.reason, "release clean-up step", "the workspace gets the text");
-  assert.ok(readAllowances(dir).every((a) => a.sent_at), "both settled");
+  assert.ok(readAllowances(dir).filter((a) => a.action_key !== "d".repeat(64)).every((a) => a.sent_at), "both settled");
   assert.equal(readAllowances(dir).find((a) => a.id === allowance.id).reason, undefined, "the computer keeps only the digest once sent");
   assert.ok(readRequests(dir)[0].sent_at);
+  posts.length = 0;
+  assert.deepEqual(await sendAllowancesAndRequests(dir, connection, fetchImpl), { allowances: 1, requests: 0 }, "only the one made during the first send goes now");
   posts.length = 0;
   assert.deepEqual(await sendAllowancesAndRequests(dir, connection, fetchImpl), { allowances: 0, requests: 0 });
   assert.equal(posts.length, 0, "nothing is sent twice");

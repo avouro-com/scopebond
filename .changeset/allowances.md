@@ -20,3 +20,9 @@ understand them.
 
 Also: the action key that recognises "the same action" leaves out the tool call's group size and position, so an earlier
 override's repeat window applies to the same command in any call.
+
+Review fixes before release: the floor check keeps a rule a person may only ask about blocking when another rule on the same
+action lets a person allow; the agent re-reads its files before writing, so an allowance or request the hook wrote during a
+send is kept; allowances and requests are signed over `scopebond:allowance/v1` and `scopebond:request/v1` domain lines;
+"Allow for 15 min" is offered only where the workspace sends the allowance terms; an older agent's "Allow once" on an
+ask-only rule becomes a request to an admin.

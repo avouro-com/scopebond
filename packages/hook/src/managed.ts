@@ -88,11 +88,12 @@ export const RULE_OF_CLAUSE: Readonly<Record<string, ManagedRuleId>> = {
   "protect-branches": "push-protected", "protect-branch-history": "force-push-protected", "safe-shell": "destructive-shell",
   "protect-read": "secret-read", "protect-write": "ci-config-write", "allowed-sites": "network-egress",
 };
-/** The same document with every overridable rule recorded instead of blocked: what still denies under it is never overridable
- *  (another rule on Block, or Scopebond's own floor). */
-export function floorDocument(doc: ManagedDocument): ManagedDocument {
+/** The same document with every rule a person may allow, and the rule being decided, recorded instead of blocked: what still
+ *  denies under it is never allowed on the spot (another rule on Block, another rule a person may only ask about, or
+ *  Scopebond's own floor). */
+export function floorDocument(doc: ManagedDocument, decided?: string): ManagedDocument {
   const rules = Object.fromEntries(Object.entries(doc.rules).map(([id, rule]) => {
-    if (!personMayAct(rule)) return [id, rule];
+    if (!(rule?.mode === "override" || (id === decided && personMayAct(rule)))) return [id, rule];
     const { override: _terms, excluded_paths: _p, excluded_branches: _b, ...rest } = rule;
     return [id, { ...rest, mode: "monitor" }];
   })) as ManagedDocument["rules"];

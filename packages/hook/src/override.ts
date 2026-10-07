@@ -137,7 +137,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     const title = RULE_TITLE[rule];
     // Would the action still be denied with every overridable rule only recorded? Then a Block rule or Scopebond's own
     // protection denies it too, and no one may override that.
-    const floor = compileManaged(loadRules(ctx.dir) ?? defaultRules(), floorDocument(doc), ctx.agentKid);
+    const floor = compileManaged(loadRules(ctx.dir) ?? defaultRules(), floorDocument(doc, rule), ctx.agentKid);
     const atFloor = evaluate(floor as never, [], { intent, intent_hash }, new Date(now()).toISOString(), { cooperative: true });
     if (!atFloor.allow) { last = { rule, title, outcome: "not_overridable" }; return null; }
 
@@ -155,10 +155,14 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     }
     const summary = actionSummary(intent as never);
     const blocked = () => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting!.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness }, t);
+    // A workspace that sends the D144 terms knows allowances; an older one gets "Allow once" only (its receipts could not
+    // carry an allowance's use).
+    const knowsAllowances = terms.always !== undefined || terms.requests !== undefined;
     const offers = {
       allow: setting!.mode === "override",
       always: setting!.mode === "override" && terms.always !== undefined && terms.always !== "off",
       ask: setting!.mode === "ask" || terms.requests === true,
+      fifteen: setting!.mode === "override" && knowsAllowances,
     };
     const state = readState(ctx.dir);
     const dayStart = t - (t % DAY_MS);
@@ -172,11 +176,13 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     }
     if (offers.allow && state.entries.filter((e) => e.rule === rule && e.at >= dayStart).length >= terms.daily_limit) { last = { rule, title, outcome: "limit" }; blocked(); return null; }
 
-    const answer = await (ctx.ask ?? askAgent)(ctx.home, {
+    let answer = await (ctx.ask ?? askAgent)(ctx.home, {
       action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting!.mode, offers,
       lasts: terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only", timeout_ms: ctx.waitMs ?? 45_000,
     }, (ctx.waitMs ?? 45_000) + 2_000);
     // Ask an admin: the action stays blocked; the request waits for the agent to send it.
+    // An older Scopebond Agent shows only "Allow once"; where only asking is offered, its answer is a request to an admin.
+    if (answer.decision === "allow" && !offers.allow && offers.ask) answer = { ...answer, decision: "ask" };
     if (answer.decision === "ask" && offers.ask) {
       const reason = (answer.reason ?? "").trim();
       if (reason.length < terms.reason_min || reason.length > 500) { last = { rule, title, outcome: "declined" }; blocked(); return null; }
@@ -192,7 +198,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
       state.entries.push({ rule, action_key: key, action_id, at: t, reason_digest: record.reason_digest!, reason_length: reason.length });
       try { writeState(ctx.dir, state, t); } catch { /* the receipt still records it; the count is checked again in the workspace */ }
       // "Allow for 15 min" and "Always allow this here…" also stand for the same action afterwards (D144).
-      if (answer.lasts === "15m" || (answer.lasts === "always" && offers.always)) {
+      if ((answer.lasts === "15m" && offers.fifteen) || (answer.lasts === "always" && offers.always)) {
         try {
           const made = makeAllowance({ rule, actionKey: key, reason, osUserDigest: record.os_user_digest, lasts: answer.lasts,
             alwaysDays: terms.always_days, needsAdmin: terms.always === "needs_admin", now: t });

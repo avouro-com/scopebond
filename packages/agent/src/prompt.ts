@@ -16,8 +16,8 @@ export interface OverrideQuestion {
   timeout_ms: number;
   /** D144: override = "Block, person may allow"; ask = "Block, person may ask" (only Ask an admin). */
   mode: "override" | "ask";
-  /** Which choices the workspace allows: allow (once or 15 minutes), always (an allowance), ask (Ask an admin). */
-  offers: { allow: boolean; always: boolean; ask: boolean };
+  /** Which choices the workspace allows: allow (once), fifteen (for 15 minutes), always (an allowance), ask (Ask an admin). */
+  offers: { allow: boolean; always: boolean; ask: boolean; fifteen?: boolean };
 }
 export interface OverrideAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always" }
 export type Prompter = (question: OverrideQuestion) => Promise<OverrideAnswer>;
@@ -37,7 +37,9 @@ export function parseQuestion(raw: unknown): OverrideQuestion | null {
   const o = (r.offers && typeof r.offers === "object" ? r.offers : {}) as Record<string, unknown>;
   // A hook before D144 sends no offers: the window offers "Allow once", as it always did.
   const offers = r.offers === undefined ? { allow: true, always: false, ask: false }
-    : { allow: mode === "override" && o.allow === true, always: mode === "override" && o.always === true, ask: o.ask === true };
+    : { allow: mode === "override" && o.allow === true, always: mode === "override" && o.always === true, ask: o.ask === true,
+        // A hook that does not say offers 15 minutes wherever it offers "always" (both came with allowances).
+        fifteen: mode === "override" && (o.fifteen === true || (o.fifteen === undefined && o.always === true)) };
   return {
     action_id: r.action_id, rule: r.rule, title: clip(r.title, 120) || r.rule, summary: clip(r.summary, 200), reason_min: reasonMin,
     lasts: clip(r.lasts, 80) || "this action only", timeout_ms: Number.isFinite(timeout) ? Math.min(Math.max(timeout, 5_000), 55_000) : 45_000,
@@ -104,7 +106,7 @@ function Btn($label, $width, $decision, $lasts, $needs) {
 $d = Btn '${b64("Don't allow")}' 100 'deny' 'once' $false; $x -= 108
 ${q.offers.ask ? `[void](Btn '${b64("Ask an admin")}' 110 'ask' 'once' $true); $x -= 118` : ""}
 ${q.offers.always ? `[void](Btn '${b64("Always allow this here…")}' 150 'allow' 'always' $true); $x -= 158` : ""}
-${q.offers.allow ? `[void](Btn '${b64("Allow for 15 min")}' 120 'allow' '15m' $true); $x -= 128; [void](Btn '${b64("Allow once")}' 92 'allow' 'once' $true)` : ""}
+${q.offers.allow && q.offers.fifteen ? `[void](Btn '${b64("Allow for 15 min")}' 120 'allow' '15m' $true); $x -= 128; ` : ""}${q.offers.allow ? `[void](Btn '${b64("Allow once")}' 92 'allow' 'once' $true)` : ""}
 $r.Add_TextChanged({ foreach ($b in $script:needReason) { $b.Enabled = ($r.Text.Trim().Length -ge $min) } })
 $f.AcceptButton = $d
 $f.CancelButton = $d
@@ -127,7 +129,7 @@ async function promptWindows(q: OverrideQuestion): Promise<OverrideAnswer> {
   try {
     const parsed = JSON.parse(stdout.trim()) as { decision?: string; reason?: string; lasts?: string };
     const lasts = parsed.lasts === "15m" || parsed.lasts === "always" ? parsed.lasts : "once";
-    if (parsed.decision === "allow" && q.offers.allow && (lasts !== "always" || q.offers.always)) return { decision: "allow", reason: String(parsed.reason ?? ""), lasts };
+    if (parsed.decision === "allow" && q.offers.allow && (lasts !== "always" || q.offers.always) && (lasts !== "15m" || q.offers.fifteen)) return { decision: "allow", reason: String(parsed.reason ?? ""), lasts };
     if (parsed.decision === "ask" && q.offers.ask) return { decision: "ask", reason: String(parsed.reason ?? "") };
     return { decision: "deny" };
   } catch { return { decision: "unavailable" }; }
