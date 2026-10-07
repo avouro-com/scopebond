@@ -9,8 +9,11 @@
 //   scopebond-agent check               update check, hook upkeep and the end-to-end self-check, now
 //   scopebond-agent autostart on|off    start with this user's sign-in, or stop doing so (off also stops it now)
 //   scopebond-agent stop                stop the running agent (autostart still starts it at the next sign-in)
+//   scopebond-agent uninstall [--purge] autostart off, stop, the hook's uninstall (tells the workspace); what the installer runs
 
-import { isEphemeralPath, userHome } from "@scopebond/hook";
+import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
+import { hookSelfCommand, isEphemeralPath, userHome } from "@scopebond/hook";
 import { computerStatus } from "./agent.js";
 import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
@@ -38,6 +41,7 @@ function help(): void {
   ${c("check")}check for updates and run the end-to-end self-check now
   ${c("autostart on|off")}start with your sign-in, or stop doing so (off also stops it now)
   ${c("stop")}stop the running agent until the next sign-in
+  ${c("uninstall [--purge]")}stop it, stop starting it, take the hook out and tell the workspace
 
 The hook keeps deciding every action on its own; the agent only keeps delivery, rules and the
 connection current. Home: ${dir}`);
@@ -106,6 +110,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
     case "stop": {
       console.log(await stopRunning() ? "Stopped the Scopebond Agent." : "The Scopebond Agent was not running.");
+      return;
+    }
+    case "uninstall": {
+      // What the Windows installer runs when Scopebond is removed (and anyone may run): stop and unregister the agent,
+      // then the hook's own uninstall, which tells the workspace and takes the hook out of the coding agents' settings.
+      // The Scopebond folder (keys, receipts) stays unless --purge.
+      console.log(disableAutostart(dir));
+      if (await stopRunning()) console.log("Stopped the running Scopebond Agent.");
+      const [program, args] = hookSelfCommand(["uninstall", "--yes", ...(rest.includes("--purge") ? ["--purge"] : [])]);
+      const removal = spawnSync(program, args, { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: dir } });
+      process.exitCode = removal.status ?? 1;
       return;
     }
     case "autostart": {

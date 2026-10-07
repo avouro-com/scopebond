@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Scopebond Agent for Windows: the single executable (agent + hook), installed per user by default
+  (%LOCALAPPDATA%\Programs\Scopebond, no administrator prompt) or for every user with ALLUSERS=1 (Program Files; Intune,
+  Group Policy). Built by build-msi.mjs with WiX 5; signed with the executable in the release workflow.
+
+    msiexec /i scopebond-agent-<version>-x64.msi /qn                     per user, silent
+    msiexec /i scopebond-agent-<version>-x64.msi /qn ALLUSERS=1          every user
+    msiexec /i … WORKSPACE=https://cloud.scopebond.com                   the workspace `setup` connects to
+
+  Removing it runs `scopebond-agent.exe uninstall` first, as the person removing it: autostart off, the agent stopped,
+  the hook taken out of the coding agents' settings and the workspace told. The Scopebond folder (keys, receipts) stays.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="Scopebond Agent" Manufacturer="Avouro LLC" Version="$(var.Version)" UpgradeCode="{92E9376F-D496-4CBE-A4B5-0E860E488A44}"
+           Scope="perUserOrMachine" Compressed="yes" Language="1033">
+    <SummaryInformation Description="Scopebond Agent: guardrails and signed records for AI coding agents" Manufacturer="Avouro LLC" />
+    <!-- The new version is installed before the old one leaves, so the hook's executable is never missing for long. -->
+    <MajorUpgrade Schedule="afterInstallExecute" DowngradeErrorMessage="A newer Scopebond Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="WORKSPACE" Secure="yes" />
+    <Property Id="ARPURLINFOABOUT" Value="https://scopebond.com" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/avouro-com/scopebond" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Scopebond">
+        <Component Id="AgentExecutable">
+          <File Id="AgentExe" Source="$(var.ExePath)" Name="scopebond-agent.exe" KeyPath="yes" />
+        </Component>
+        <Component Id="InstallSettings">
+          <RegistryValue Root="HKMU" Key="Software\Avouro\Scopebond" Name="InstallPath" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        </Component>
+        <Component Id="WorkspaceSetting" Condition="WORKSPACE">
+          <RegistryValue Root="HKMU" Key="Software\Avouro\Scopebond" Name="Workspace" Type="string" Value="[WORKSPACE]" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- One Start-menu entry: the agent's status in a window. Its AppUserModelID lets the agent's notifications name it. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="StatusShortcut" Name="Scopebond Agent status" Description="What the Scopebond Agent reports about this computer"
+                  Target="[System64Folder]cmd.exe" Arguments="/k &quot;&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; status&quot;" WorkingDirectory="INSTALLFOLDER">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="Avouro.Scopebond" />
+        </Shortcut>
+        <RegistryValue Root="HKMU" Key="Software\Avouro\Scopebond" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Scopebond Agent">
+      <ComponentRef Id="AgentExecutable" />
+      <ComponentRef Id="InstallSettings" />
+      <ComponentRef Id="WorkspaceSetting" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <!-- On removal (not on an upgrade), before the files go: the agent's own uninstall, as the person removing it, with no
+         window. A failure never stops the removal. -->
+    <SetProperty Id="ReportUninstall" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; uninstall" Before="ReportUninstall" Sequence="execute" />
+    <CustomAction Id="ReportUninstall" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="ReportUninstall" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

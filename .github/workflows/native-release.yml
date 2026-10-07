@@ -80,6 +80,13 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # The source, for the installer's definition (no dependencies are installed here).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.20.0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: unsigned-windows
@@ -89,14 +96,14 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Sign with Artifact Signing (timestamped)
+      - name: Sign the executable with Artifact Signing (timestamped)
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
           files-folder: out
-          files-folder-filter: exe,msi
+          files-folder-filter: exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -112,6 +119,39 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
+      # The installer is built around the signed executable, then signed itself.
+      - name: Build the installer (WiX 5)
+        shell: pwsh
+        run: |
+          node packages/native/build-msi.mjs out/scopebond-agent.exe
+          New-Item -ItemType Directory -Force msi | Out-Null
+          Move-Item packages/native/build/scopebond-agent-*-x64.msi msi/
+      - name: Sign the installer with Artifact Signing (timestamped)
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: msi
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Scopebond Agent
+          description-url: https://github.com/avouro-com/scopebond
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Put the installer with the other files
+        shell: pwsh
+        run: Move-Item msi/*.msi out/
       - name: Verify every signature, its timestamp and the publisher
         shell: pwsh
         run: |
@@ -138,7 +178,9 @@ jobs:
           Pop-Location
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: out/scopebond-agent.exe
+          subject-path: |
+            out/scopebond-agent.exe
+            out/scopebond-agent-*-x64.msi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed-windows
@@ -236,5 +278,5 @@ jobs:
           sed -i "s/  scopebond-agent.exe\$/  scopebond-agent-${VERSION}-x64.exe/" out/SHA256SUMS
           gh release create "$tag" --repo "$REPO" --target "$SHA" --draft --prerelease \
             --title "Scopebond Agent ${VERSION} for Windows (signed)" \
-            --notes "The Scopebond Agent and hook as one signed file (Avouro LLC, Azure Artifact Signing, timestamped). Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})." \
+            --notes "The Scopebond Agent and hook as one signed file, and its signed installer (per user by default; ALLUSERS=1 for every user). Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})." \
             out/*

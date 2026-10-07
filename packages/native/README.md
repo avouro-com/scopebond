@@ -40,3 +40,21 @@ Windows).
 4. **release**: a draft, pre-release GitHub release with the signed files, for a person to check and publish.
 
 A fork can run the build job and gets an unsigned file; it cannot reach either signing environment.
+
+## Installer
+
+`node packages/native/build-msi.mjs [scopebond-agent.exe]` builds `build/scopebond-agent-<version>-x64.msi` with WiX 5
+(a local dotnet tool, `.config/dotnet-tools.json`; WiX 6 and later carry a maintenance-fee licence term, so the build
+stays on 5). The installer:
+
+- installs per user by default, with no administrator prompt (`%LOCALAPPDATA%\Programs\Scopebond`), or for every user
+  with `ALLUSERS=1` (Program Files; for Intune or Group Policy);
+- records its folder in `HKCU` (or `HKLM`) `\Software\Avouro\Scopebond\InstallPath`, and `WORKSPACE=<url>` as
+  `Workspace` there;
+- adds a Start-menu entry "Scopebond Agent status" with the AppUserModelID `Avouro.Scopebond`;
+- installs a new version before removing the old one, so the hook's executable is never missing for long;
+- on removal, first runs `scopebond-agent.exe uninstall` as the person removing it: autostart off, the agent stopped,
+  the hook taken out of the coding agents' settings and the workspace told (the Scopebond folder stays).
+
+Signing in, the hook entries and autostart come from `scopebond-agent.exe setup <workspace-url>` after installing, as with
+npm. CI installs and removes it, per user and for every user (`test/msi.test.mjs`, only with `SCOPEBOND_MSI=1`).

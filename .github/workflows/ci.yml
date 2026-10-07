@@ -107,6 +107,12 @@ jobs:
         run: node --test packages/native/test/sea.test.mjs
         env:
           SCOPEBOND_SEA: "1"
+      # The installer (WiX 5, a local dotnet tool): silent install and removal per user and for every user, on this
+      # throwaway runner only.
+      - name: Install and remove the MSI
+        run: node --test packages/native/test/msi.test.mjs
+        env:
+          SCOPEBOND_MSI: "1"
 
   install-matrix:
     name: "install (${{ matrix.os }}, node ${{ matrix.node }})"
