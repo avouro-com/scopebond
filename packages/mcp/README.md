@@ -34,6 +34,17 @@ scopebond-mcp --server filesystem --policy scopebond.policy.json --key scopebond
 through. A denial returns a JSON-RPC error to the client and is never sent
 upstream. Set `--receipts log.jsonl` to keep the signed receipts locally.
 
+A receipt never holds the tool's arguments, only `args_digest`: an HMAC-SHA-256
+(`hmac-sha256:…`) under a local key that never leaves the computer. The CLI uses the
+hook's per-machine digest key when `--observations-dir` names the hook's folder, and
+otherwise the key file beside your signing key (`<key>.binding`, made on first use).
+A short argument (a one-time code, a password) cannot be confirmed by hashing guesses.
+
+When the proxy is connected to a workspace, receipts wait for delivery in a durable
+queue beside the key (`<key>.cloud-outbox.db`) with no cap and no expiry, so an
+outage delays them instead of dropping them. A record the queue could not keep is
+recorded there and reported on stderr.
+
 A JSON-RPC batch (an array of messages on one line) is rejected with a `-32600`
 error and never forwarded, so every call is decided on its own.
 

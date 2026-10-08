@@ -216,7 +216,14 @@ const { valid } = verifyReceipt(receipt, publicKeyPem);
 V1 receipts use explicit execution states: `simulated`, `observed_not_evaluated`,
 `denied`, `allowed_pending`, `executed`, `failed`, and `outcome_unknown`. Before
 signing, known credential fields are replaced with `[REDACTED]` and request bodies
-with a SHA-256 digest plus byte length. Policy evaluation and a configured executor
+with a SHA-256 digest plus byte length. Credential shapes inside other string values
+are replaced with `***`: a credential-named URL query parameter, URL userinfo, a SQL
+password literal, an `Authorization:` header or `NAME=value` assignment with a
+credential-like name, and well-known token formats (GitHub, GitLab, npm, Slack,
+Stripe, AWS, Google, JWT, PEM private keys). Each scrubbed path is listed in
+`redaction.paths`. `action_type`, `asset`, `amount` and `currency` are kept exactly
+as given. Other values (paths, refs, plain URLs, email addresses) are kept as they
+are. Policy evaluation and a configured executor
 still receive the original action; stores and exporters receive only the minimized,
 signed receipt.
 

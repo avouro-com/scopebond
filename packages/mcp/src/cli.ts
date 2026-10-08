@@ -48,7 +48,7 @@ import { readLines, upstreamEnv, MAX_LINE_BYTES } from "./stdio.js";
 import { requestBinderFromHex, type ObservationSink, type RequestBinder, type TypedAdapterConfig } from "./typed.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
 import { scaffold } from "./init.js";
 import { openApprovalBinder, openDispatchGuard } from "@scopebond/gateway/node";
@@ -194,6 +194,14 @@ const upstream: McpUpstream = {
 // The typed adapter is off unless a typed config is given. Its binding key and observation
 // outbox come from the hook when it is installed and enrolled; otherwise the key is a local
 // file beside the signing key (never uploaded) and nothing is queued.
+// The proxy's local key: a file beside the signing key, made on first use and never uploaded. It keys the typed
+// adapter's request binding (when the hook does not supply one) and every receipt's args_digest.
+function localBindingKey(): string {
+  const file = `${keyPath}.binding`;
+  let hex = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+  if (!/^[0-9a-f]{64}$/.test(hex)) { hex = randomBytes(32).toString("hex"); writeFileSync(file, hex + "\n", { mode: 0o600 }); }
+  return hex;
+}
 const typedPath = arg("--typed", process.env.SCOPEBOND_MCP_TYPED);
 let typed: TypedAdapterConfig | undefined;
 let observations: { flush(): Promise<unknown>; close(): void } | undefined;
@@ -212,12 +220,7 @@ if (typedPath) {
       else process.stderr.write(`scopebond-mcp: observations are not on (${opened.status.reason ?? opened.status.state}); the typed adapter runs without them\n`);
     } catch (e) { process.stderr.write(`scopebond-mcp: the hook package is not available for observations (${(e as Error).message})\n`); }
   }
-  if (!binder) {
-    const file = `${keyPath}.binding`;
-    let hex = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
-    if (!/^[0-9a-f]{64}$/.test(hex)) { hex = randomBytes(32).toString("hex"); writeFileSync(file, hex + "\n", { mode: 0o600 }); }
-    binder = requestBinderFromHex(hex);
-  }
+  if (!binder) binder = requestBinderFromHex(localBindingKey());
   typed = { ...(raw as object), mode: raw.mode, binder, ...(sink ? { sink } : {}) } as TypedAdapterConfig;
 }
 
@@ -234,9 +237,24 @@ if (dispatchDir) {
 
 }
 
+// args_digest is keyed: with the hook's per-machine digest key when the hook's folder is given and has one, else with
+// the proxy's local key.
+function argsDigestKeyHex(): string {
+  const hookDir = arg("--observations-dir", process.env.SCOPEBOND_HOOK_DIR);
+  if (hookDir) {
+    try {
+      const hex = readFileSync(join(resolve(hookDir), "digest.key"), "utf8").trim();
+      if (/^[0-9a-f]{64}$/.test(hex)) return hex;
+    } catch { /* fall back to the proxy's own key */ }
+  }
+  return localBindingKey();
+}
+let argsDigestKey: string;
+try { argsDigestKey = argsDigestKeyHex(); } catch (e) { die(`could not read or create the local key ${keyPath}.binding: ${(e as Error).message}`); }
+
 const proxy = createMcpProxy({
   policy, principal: { subject: `client:${principal}`, issuer: "scopebond:mcp-proxy" }, server: server as string,
-  attesterKeyPem, upstream, ...(dispatch ? { dispatch } : {}), ...(typed ? { typed, adapterVersion: "scopebond-mcp" } : {}),
+  attesterKeyPem, argsDigestKey, upstream, ...(dispatch ? { dispatch } : {}), ...(typed ? { typed, adapterVersion: "scopebond-mcp" } : {}),
   onReceipt: (r: SignedReceipt) => {
     if (receiptsPath) { try { appendFileSync(receiptsPath, JSON.stringify(r) + "\n"); } catch { /* best effort */ } }
     exporter?.enqueue(r); // mirror to the workspace when connected
