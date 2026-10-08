@@ -18,3 +18,5 @@ The hook:
 - no longer replaces the agent's recent delivery error with its own cut-off message.
 
 An agent that the workspace's plan paused now says so in the tray and in `status`, instead of offering Send records now.
+
+The rules check now sends `x-scopebond-accepts-requests`: `flush,self_check` from the agent and `none` from a hook call. A workspace that reads the header then leaves a request from its computer page (send now, check now) for the agent.
