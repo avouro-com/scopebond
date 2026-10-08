@@ -60,13 +60,17 @@ function hasKeys(o: Obj, required: readonly string[]): boolean {
 /** A finite JSON value (RFC 8259 shape): null, boolean, string, finite number,
  *  array of JSON values, or a plain object of JSON values. Rejects NaN/Infinity,
  *  functions, undefined, symbols and non-plain objects. */
-function isFiniteJsonValue(v: unknown): boolean {
+/** How deeply a JSON value may nest (an action's parameters are shallow; a deeper value is refused, not walked). */
+export const MAX_JSON_DEPTH = 64;
+
+function isFiniteJsonValue(v: unknown, depth = 0): boolean {
   if (v === null) return true;
   const t = typeof v;
   if (t === "boolean" || t === "string") return true;
   if (t === "number") return Number.isFinite(v);
-  if (Array.isArray(v)) return v.every(isFiniteJsonValue);
-  if (isPlainObject(v)) return Object.values(v).every(isFiniteJsonValue);
+  if (depth >= MAX_JSON_DEPTH) return false;
+  if (Array.isArray(v)) return v.every((x) => isFiniteJsonValue(x, depth + 1));
+  if (isPlainObject(v)) return Object.values(v).every((x) => isFiniteJsonValue(x, depth + 1));
   return false;
 }
 

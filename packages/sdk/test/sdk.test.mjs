@@ -30,7 +30,7 @@ test("submit POSTs the intent to /v1/evaluate", async () => {
   let captured;
   const fakeFetch = async (url, init) => {
     captured = { url, body: JSON.parse(init.body) };
-    return { json: async () => ({ allowed: true, reason: "allowed", receipt: {} }) };
+    return { ok: true, status: 200, json: async () => ({ allowed: true, reason: "allowed", receipt: {} }) };
   };
   const res = await submit("http://localhost:8787/", signed, fakeFetch);
   assert.equal(captured.url, "http://localhost:8787/v1/evaluate");

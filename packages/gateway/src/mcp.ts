@@ -45,7 +45,8 @@ export async function handleMcp(body: any, handleAction: HandleAction): Promise<
       if (!args?.intent?.action_type) return fail(-32602, "intent.action_type required");
       let result: ActionResultLike;
       try { result = await handleAction({ intent: args.intent, authorization: args.authorization, approval: args.approval }); }
-      catch (error) { return fail(-32602, error instanceof Error ? error.message : "invalid action"); }
+      // Only a refusal meant for the caller is passed on; anything else is reported generically (no internal detail).
+      catch (error) { return fail(-32602, error instanceof Error && typeof (error as { status?: unknown }).status === "number" ? error.message : "the action could not be evaluated"); }
       return ok({
         content: [{ type: "text", text: JSON.stringify({ allowed: result.allowed, reason: result.reason, receipt: result.receipt }) }],
         isError: !result.allowed,

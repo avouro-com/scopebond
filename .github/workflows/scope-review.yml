@@ -5,34 +5,59 @@ name: Scope Review (agent)
 # LLM key is set (ANTHROPIC_API_KEY → Claude, or DEEPSEEK_TOKEN → DeepSeek); no-ops
 # if neither is set.
 #
-# Security: uses pull_request_target so the job has a write token and secrets, but
-# it checks out the TRUSTED base (our SCOPE.md + script) and reads the PR diff via
-# the API — it never checks out or executes the PR's code.
+# Security: runs on `pull_request`, never `pull_request_target`, so a pull request
+# from a fork gets no secrets and a read-only token, and the review no-ops. A
+# maintainer reviews a fork's pull request by running this workflow by hand with
+# its number (Actions → Scope Review → Run workflow); that run has the keys and
+# reads the PR only through the API. Every run checks out the TRUSTED base (our
+# SCOPE.md + script) — never the PR's code. The LLM keys are read only in the
+# `agent-review` environment's jobs.
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number to review"
+        required: true
+        type: number
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
+permissions: {}
 
 concurrency:
-  group: scope-review-${{ github.event.pull_request.number }}
+  group: scope-review-pr-${{ github.event.pull_request.number || inputs.pr }}
   cancel-in-progress: true
 
 jobs:
   scope-review:
+    name: scope review
     runs-on: ubuntu-latest
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
+    environment:
+      name: agent-review
+      deployment: false
+    permissions:
+      contents: read # check out SCOPE.md and the review script, and read the PR diff
+      pull-requests: write # read the pull request and comment on it
+      issues: write # apply the verdict labels (labels are an issues API)
     steps:
       - id: gate
-        run: echo "enabled=${{ env.ANTHROPIC_API_KEY != '' || env.DEEPSEEK_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY}${DEEPSEEK_TOKEN}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "No LLM key in this run (none configured, or a pull request from a fork). A maintainer can run this workflow by hand with the PR number."
+          fi
       - if: steps.gate.outputs.enabled == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 — base ref (trusted); do NOT check out PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The base commit (trusted) for a pull request; the default branch for a manual run.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
       - if: steps.gate.outputs.enabled == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 22 }
@@ -41,4 +66,4 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}

@@ -28,7 +28,10 @@ gateway, so signatures and intent hashes use identical bytes across packages.
   bound to the exact intent and active policy version/digest.
 - `verifyIntentSignature(signed, publicKeyPem)` checks the signature, digest,
   signer and fingerprint-bound key id.
-- `submit(gatewayUrl, signed, fetchImpl?)` preserves the full signed envelope.
+- `submit(gatewayUrl, signed, fetchImpl?, { timeoutMs? })` preserves the full signed envelope.
+  It fails closed: it rejects on a network error, a timeout (default 10 s), a
+  non-JSON answer, an answer without a boolean `allowed`, or a non-2xx answer
+  that is not an explicit deny.
 
 The gateway rejects unsigned, expired, future, substituted and replayed
 authorizations. Key rotation and hardware-backed signers remain planned.
