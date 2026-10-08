@@ -109,3 +109,14 @@ test("the tray script takes the home and agent id as data and draws all six stat
   assert.match(script, /GET' '\/tray'/);
   assert.match(script, /'Problems only'/);
 });
+
+test("a workspace at its monthly limit is said plainly, not 'sending'; another refusal names its status", () => {
+  const atLimit = trayModel(input(status({ pending: 6037, oldest_pending_age_s: 4 * 3600, last_error: "ingest failed: HTTP 429 (quota): The workspace reached its monthly limit. Records stay queued on the computer and send once the limit allows." })));
+  assert.equal(atLimit.state, "attention");
+  assert.equal(atLimit.headline, "Workspace limit reached: 6037 records waiting");
+  assert.equal(atLimit.fix?.id, "open_workspace");
+  assert.match(atLimit.hint, /monthly limit/);
+  assert.equal(atLimit.rows.find((r) => r.label === "Delivery")?.value, "6037 waiting · workspace limit reached");
+  const refused = trayModel(input(status({ pending: 4, oldest_pending_age_s: 60, last_error: "ingest failed: HTTP 413: too large" })));
+  assert.equal(refused.rows.find((r) => r.label === "Delivery")?.value, "4 waiting · last try refused (HTTP 413)");
+});

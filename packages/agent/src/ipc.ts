@@ -41,7 +41,7 @@ export async function startControl(dir: string, version: string, routes: Record<
   const token = randomBytes(24).toString("base64url");
   const expected = Buffer.from(token);
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
-    const send = (status: number, body: unknown) => { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
+    const send = (status: number, body: unknown) => { res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
     const offered = Buffer.from(String(req.headers[TOKEN_HEADER] ?? ""));
     if (offered.length !== expected.length || !timingSafeEqual(offered, expected)) return send(401, { error: "unauthorized" });
     const handler = routes[`${req.method} ${(req.url ?? "/").split("?")[0]}`];

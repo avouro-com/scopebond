@@ -54,6 +54,8 @@ test("loopback stays on by default for one release, for the tray that still uses
     const endpoint = readEndpoint(dir);
     assert.ok(endpoint.port > 0);
     const res = await fetch(`http://127.0.0.1:${endpoint.port}/status`, { headers: { [TOKEN_HEADER]: endpoint.token } });
+    // Windows PowerShell 5.1 (the tray) decodes a body without a charset as Latin-1: "·" would show as "Â·".
+    assert.equal(res.headers.get("content-type"), "application/json; charset=utf-8");
     assert.deepEqual(await res.json(), { ok: true });
   } finally { await control.close(); }
 });
