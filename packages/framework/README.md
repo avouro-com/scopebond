@@ -79,4 +79,44 @@ manifest mapping to a richer type). "Allow search and read; cap transfers":
 An unlisted tool is denied by the closed allowlist (fail closed). `createToolGuard`
 returns `{ check(name, args) }` if you drive the tool loop yourself.
 
+## What a receipt keeps of the tool's arguments
+
+A receipt records the tool's arguments as `intent.params`. Before the receipt is
+signed, stored or sent anywhere, each field is minimized:
+
+| Field | What the receipt keeps |
+|---|---|
+| A credential-named key (`authorization`, `cookie`, `password`, `secret`, `token`, `api_key`, `*_token`, `*_secret`, …) | `[REDACTED]` |
+| `body` / `request_body` | a SHA-256 digest and the byte length |
+| `asset`, `amount`, `currency` (and the action type) | the value exactly as given (spend limits read them) |
+| Any other string | the value, with credential shapes inside it replaced by `***`: a credential-named URL query parameter (`?api_token=…`), URL userinfo (`https://user:pass@…`), a SQL password literal (`PASSWORD '…'`, `IDENTIFIED BY '…'`), an `Authorization: Bearer …` header, a `NAME=value` with a credential-like name, and well-known token formats (GitHub, GitLab, npm, Slack, Stripe, AWS, Google, JWT, PEM private keys) |
+| Numbers, booleans | the value |
+
+Each path that was changed is listed in the receipt's `redaction.paths`. The policy
+check runs on the original arguments; only the receipt holds the minimized copy.
+Scrubbing recognises shapes, not meaning: a password in a field with an ordinary
+name and no recognisable shape, a recipient's email address, or personal data in a
+free-text field other than `body` stays as written. Keep such values out of tool
+arguments you guard, or map the tool to an action whose parameters you control.
+
+## Scopebond Cloud
+
+```js
+import { createToolGuard, connectCloud } from "@scopebond/framework";
+
+const connection = await connectCloud(attesterKeyPem, workspaceUrl, enrollmentBundle);
+const guard = createToolGuard({
+  policy, agentKeyPem, attesterKeyPem,
+  cloud: { connection, outboxPath: "./scopebond-outbox.db" },
+});
+```
+
+With `outboxPath`, receipts wait in a durable SQLite queue with no cap and no
+expiry, so an outage or a restart delays them instead of losing them (needs Node
+22.5 or later). Without it, the queue is in memory, bounded at 10,000 records, and
+anything still waiting when the process exits is lost. A record dropped at the bound
+takes its sequence number first, so the workspace shows it as missing. Every gap is
+passed to `cloud.onGap` (a warning on stderr by default). Call `guard.flush()` before
+the process exits.
+
 Experimental alpha; controlled test use only.

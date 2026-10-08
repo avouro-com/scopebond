@@ -11,7 +11,7 @@ import { buildPepReceipt, attesterFromPrivateKeyPem } from "@scopebond/gateway";
 import { requestHash } from "@scopebond/gateway";
 import type { SignedReceipt, Attester, DispatchGuard, DispatchDecision } from "@scopebond/gateway";
 import { canonical } from "@scopebond/policy-schema/canonical";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { describeToolCall, intentDraft, manifestHash, outcomeDraft, type ExitCategory, type TypedAdapterConfig } from "./typed.js";
 
 export interface JsonRpcMessage {
@@ -25,12 +25,30 @@ export interface JsonRpcMessage {
 
 const digest = (value: unknown): string => "sha256:" + createHash("sha256").update(canonical(value as never)).digest("hex");
 
+const ARGS_DIGEST_DOMAIN = "scopebond:mcp-args-digest/v1\n";
+
+/** The keyed digest of a tool call's arguments: HMAC-SHA-256 under a local key (64 hex), labelled `hmac-sha256:`. A
+ *  plain hash of a 6-digit code or a short password could be confirmed offline by anyone holding the receipt; keyed,
+ *  it still tells identical calls under one key apart from different ones but cannot be tested against guesses. */
+export function keyedArgsDigest(keyHex: string): (args: unknown) => string {
+  if (!/^[0-9a-f]{64}$/i.test(keyHex)) throw new TypeError("the argument digest key must be 64 hex characters");
+  const key = Buffer.from(keyHex, "hex");
+  return (args) => "hmac-sha256:" + createHmac("sha256", key).update(ARGS_DIGEST_DOMAIN + canonical(args as never), "utf8").digest("hex");
+}
+
+// Without a configured key: a random key for this process (safe; digests then compare only within the process).
+let processArgsDigest: ((args: unknown) => string) | undefined;
+const defaultArgsDigest = (args: unknown): string =>
+  (processArgsDigest ??= keyedArgsDigest(randomBytes(32).toString("hex")))(args);
+
 /** Map an MCP `tools/call` to a normalized `mcp.tool.call` action. Arguments are
- * digested, never stored. */
-export function mapMcpToolCall(server: string, params: Record<string, unknown> | undefined): { action_type: string; params: Record<string, unknown> } {
+ * digested (keyed), never stored. */
+export function mapMcpToolCall(
+  server: string, params: Record<string, unknown> | undefined, argsDigest: (args: unknown) => string = defaultArgsDigest,
+): { action_type: string; params: Record<string, unknown> } {
   return {
     action_type: "mcp.tool.call",
-    params: { server, tool: String(params?.name ?? ""), args_digest: digest(params?.arguments ?? {}) },
+    params: { server, tool: String(params?.name ?? ""), args_digest: argsDigest(params?.arguments ?? {}) },
   };
 }
 
@@ -57,6 +75,9 @@ export interface McpProxyConfig {
   server: string;
   /** PEM of the key that signs the PEP receipts (the enrolled proxy key). */
   attesterKeyPem: string;
+  /** The local key (64 hex, never uploaded) for the receipts' `args_digest`, an HMAC of the tool arguments. The CLI
+   *  uses the proxy's binding key file. Without one, a random key for this process is used. */
+  argsDigestKey?: string;
   upstream: McpUpstream;
   now?: () => string;
   /** Sink for each emitted receipt (e.g. a local log / exporter). */
@@ -114,6 +135,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
   const history: CountableCall[] = [...(config.history ?? [])];
   const typed = config.typed;
   const nowMs = (): number => (config.now ? Date.parse(config.now()) : Date.now());
+  const argsDigest = config.argsDigestKey ? keyedArgsDigest(config.argsDigestKey) : defaultArgsDigest;
 
   // The live tool list is read from the upstream itself, and again after the recheck interval,
   // so a manifest pinned to one revision is not trusted for a server that has since changed.
@@ -187,7 +209,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       // Everything below is decided on, digested and forwarded from one private copy of the
       // request, so what the binding covers is exactly what reaches the upstream.
       const dispatched = JSON.parse(JSON.stringify(message)) as JsonRpcMessage;
-      const intent = mapMcpToolCall(config.server, dispatched.params);
+      const intent = mapMcpToolCall(config.server, dispatched.params, argsDigest);
       const timestamp = config.now?.() ?? new Date().toISOString();
       const claimed = { intent, executed: true, timestamp, intent_hash: digest(intent).slice(7) };
       const verdict = violates(config.policy as never, history as never, claimed as never, { at: timestamp });

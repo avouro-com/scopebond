@@ -852,14 +852,17 @@ export class SqliteCloudOutbox implements CloudOutbox {
         return { queued: false, duplicate: false, gap };
       }
       const totals = this.totals();
-      if (totals.count >= this.maxPending || totals.bytes + bytes > this.maxBytes) {
-        const gap = this.gap(id, "capacity", at);
-        this.db.exec("COMMIT");
-        return { queued: false, duplicate: false, gap };
-      }
-      const seq = (this.db.prepare(
+      const takeSeq = (): number | null => (this.db.prepare(
         "UPDATE cloud_outbox_metadata SET next_seq = next_seq + 1 WHERE singleton = 1 RETURNING next_seq - 1 AS seq",
       ).all() as Array<{ seq: number }>)[0]?.seq ?? null;
+      if (totals.count >= this.maxPending || totals.bytes + bytes > this.maxBytes) {
+        // The dropped record still takes its number, so the workspace sees a hole where it was.
+        const dropped = takeSeq();
+        const gap = this.gap(id, "capacity", at);
+        this.db.exec("COMMIT");
+        return { queued: false, duplicate: false, gap: dropped === null ? gap : { ...gap, seq: dropped } };
+      }
+      const seq = takeSeq();
       this.db.prepare(
         "INSERT INTO cloud_outbox (event_id, payload_hash, receipt_json, enqueued_at, bytes, seq) VALUES (?, ?, ?, ?, ?, ?)",
       ).run(id, payloadHash, receiptJson, at, bytes, seq);

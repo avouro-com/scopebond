@@ -3,8 +3,9 @@
 // signs the intent, so the receipt is the strongest class. Framework-agnostic —
 // the adapters wrap each framework's tool loop around `check`.
 
-import { createGateway, StaticPrincipalKeyRegistry, MemoryReceiptStore, createAttester, attesterFromPrivateKeyPem, createCloudExporter, createMemoryCloudOutbox, withCloudExporter } from "@scopebond/gateway";
-import type { SignedReceipt, ReceiptStore, CloudExporter, CloudOutbox } from "@scopebond/gateway";
+import { createGateway, StaticPrincipalKeyRegistry, MemoryReceiptStore, createAttester, attesterFromPrivateKeyPem, createCloudExporter, createMemoryCloudOutbox, withCloudExporter, LOSSLESS_CLOUD_OUTBOX } from "@scopebond/gateway";
+import type { SignedReceipt, ReceiptStore, CloudExporter, CloudOutbox, CloudDeliveryGap } from "@scopebond/gateway";
+import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 
 export interface ToolGuardConfig {
@@ -24,9 +25,23 @@ export interface ToolGuardConfig {
   /** Injectable store (defaults to in-memory). */
   store?: ReceiptStore;
   /** Connect to a Scopebond workspace so receipts are mirrored to the hosted portal.
-   *  `connection` comes from `connectCloud`. `outbox` defaults to in-memory (fine for
-   *  a long-running agent); pass a durable one to survive restarts. */
-  cloud?: { connection: { url: string; credential: string }; outbox?: CloudOutbox; fetch?: typeof fetch };
+   *  `connection` comes from `connectCloud`.
+   *  - `outboxPath`: a SQLite file for a durable, lossless queue (no cap, no expiry; the
+   *    hook's and the agent's kind), so receipts waiting to be delivered survive a
+   *    restart. Needs Node 22.5 or later (`node:sqlite`).
+   *  - `outbox`: your own queue instead.
+   *  - Neither: an in-memory queue, bounded at 10,000 records / 64 MiB / 7 days. Records
+   *    still waiting when the process exits are lost. A record dropped at the bound takes
+   *    its number first, so the workspace sees it as missing.
+   *  - `onGap`: called for every record the queue could not keep or the workspace
+   *    refused. Defaults to a warning on stderr. */
+  cloud?: {
+    connection: { url: string; credential: string };
+    outbox?: CloudOutbox;
+    outboxPath?: string;
+    onGap?: (gap: CloudDeliveryGap) => void;
+    fetch?: typeof fetch;
+  };
 }
 
 export interface ToolDecision {
@@ -53,14 +68,18 @@ export function createToolGuard(config: ToolGuardConfig): ToolGuard {
     { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },
   ]);
   const attester = config.attesterKeyPem ? attesterFromPrivateKeyPem(config.attesterKeyPem) : createAttester();
-  // When connected, mirror receipts to the workspace through a bounded outbox.
+  // When connected, mirror receipts to the workspace through an outbox: a durable lossless one when a path is given,
+  // else the caller's, else a bounded in-memory one. Gaps are always reported.
   const baseStore = config.store ?? new MemoryReceiptStore();
   let store = baseStore;
   let exporter: CloudExporter | undefined;
   if (config.cloud) {
+    const outbox = config.cloud.outbox
+      ?? (config.cloud.outboxPath ? new SqliteCloudOutbox(config.cloud.outboxPath, LOSSLESS_CLOUD_OUTBOX) : createMemoryCloudOutbox());
     exporter = createCloudExporter({
       url: config.cloud.connection.url, credential: config.cloud.connection.credential,
-      outbox: config.cloud.outbox ?? createMemoryCloudOutbox(), fetch: config.cloud.fetch,
+      outbox, fetch: config.cloud.fetch,
+      onGap: config.cloud.onGap ?? ((gap) => console.warn(`scopebond: cloud delivery gap: ${gap.reason}${gap.id ? ` (${gap.id})` : ""}`)),
     });
     store = withCloudExporter(baseStore, exporter);
   }
