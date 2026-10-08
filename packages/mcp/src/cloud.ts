@@ -6,8 +6,8 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import {
-  completeCloudEnrollment, createCloudExporter,
-  type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
+  completeCloudEnrollment, createCloudExporter, LOSSLESS_CLOUD_OUTBOX,
+  type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
 } from "@scopebond/gateway";
 import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
 
@@ -40,8 +40,17 @@ export async function connectCloud(
 }
 
 /** A durable exporter for a connection; enqueue each receipt and it flushes on the
- *  proxy's lifetime (timer) plus an explicit flush on shutdown. */
-export function openExporter(keyPath: string, connection: McpConnection, fetchImpl?: typeof fetch): CloudExporter {
-  const outbox = new SqliteCloudOutbox(keyPath + ".cloud-outbox.db");
-  return createCloudExporter({ url: connection.url, credential: connection.credential, outbox, fetch: fetchImpl });
+ *  proxy's lifetime (timer) plus an explicit flush on shutdown. The outbox is lossless,
+ *  like the hook's and the agent's: no cap and no expiry, so a long outage delays
+ *  records instead of dropping them. Any gap it does record (a record with no id, one
+ *  the workspace refused) is kept as a row in the outbox and passed to `onGap`. */
+export function openExporter(
+  keyPath: string, connection: McpConnection, fetchImpl?: typeof fetch,
+  options: { onGap?: (gap: CloudDeliveryGap) => void } = {},
+): CloudExporter {
+  const outbox = new SqliteCloudOutbox(keyPath + ".cloud-outbox.db", LOSSLESS_CLOUD_OUTBOX);
+  return createCloudExporter({
+    url: connection.url, credential: connection.credential, outbox, fetch: fetchImpl,
+    onGap: options.onGap ?? ((gap) => process.stderr.write(`scopebond-mcp: cloud delivery gap: ${gap.reason}${gap.id ? ` (${gap.id})` : ""}\n`)),
+  });
 }

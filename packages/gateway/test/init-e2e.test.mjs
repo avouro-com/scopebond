@@ -61,6 +61,6 @@ test("init → serve → SDK sign → submit → verify runs end to end against 
   // 3. An action signed by a key the registry does not trust is never allowed.
   const stranger = createSigner();
   const forged = stranger.sign({ action_type: "payout.create", asset: "USDC", amount: 1 });
-  const rejected = await submit("http://gateway.local", forged, fetchImpl);
-  assert.notEqual(rejected.allowed, true, "an untrusted signer cannot obtain an allow");
+  // The gateway answers 401 with no decision, so submit() rejects rather than return a result.
+  await assert.rejects(submit("http://gateway.local", forged, fetchImpl), /HTTP 401/, "an untrusted signer cannot obtain an allow");
 });

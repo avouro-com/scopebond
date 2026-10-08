@@ -160,9 +160,12 @@ attester, and is chained to the previous anchor so the anchor log is itself
 tamper-evident. Anyone can prove a specific receipt is covered with an **inclusion
 proof**, without seeing the others, and verify it themselves:
 
+Proofs are public by the receipt's leaf hash, which only someone holding the receipt can compute. A lookup by
+`intent_hash` says whether an action happened, so it needs the control token.
+
 ```bash
-curl -sX POST localhost:8787/v1/anchor                 # anchor now (also runs on a timer)
-curl -s "localhost:8787/v1/anchors/proof?intent_hash=<hash>"   # { leaf_index, tree_size, audit_path, anchor }
+curl -sX POST -H "authorization: Bearer $CONTROL_TOKEN" localhost:8787/v1/anchor   # anchor now (also runs on a timer)
+curl -s "localhost:8787/v1/anchors/proof?leaf=<leaf-hash>"         # { leaf_index, tree_size, audit_path, anchor }
 curl -s "localhost:8787/v1/anchors/consistency?from=1&to=2"    # the later anchor extends the earlier one
 ```
 
@@ -216,7 +219,14 @@ const { valid } = verifyReceipt(receipt, publicKeyPem);
 V1 receipts use explicit execution states: `simulated`, `observed_not_evaluated`,
 `denied`, `allowed_pending`, `executed`, `failed`, and `outcome_unknown`. Before
 signing, known credential fields are replaced with `[REDACTED]` and request bodies
-with a SHA-256 digest plus byte length. Policy evaluation and a configured executor
+with a SHA-256 digest plus byte length. Credential shapes inside other string values
+are replaced with `***`: a credential-named URL query parameter, URL userinfo, a SQL
+password literal, an `Authorization:` header or `NAME=value` assignment with a
+credential-like name, and well-known token formats (GitHub, GitLab, npm, Slack,
+Stripe, AWS, Google, JWT, PEM private keys). Each scrubbed path is listed in
+`redaction.paths`. `action_type`, `asset`, `amount` and `currency` are kept exactly
+as given. Other values (paths, refs, plain URLs, email addresses) are kept as they
+are. Policy evaluation and a configured executor
 still receive the original action; stores and exporters receive only the minimized,
 signed receipt.
 

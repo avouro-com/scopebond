@@ -29,14 +29,20 @@ import { evidenceDetailFrom } from "./evidence-detail.js";
  *  error line only; never a record. */
 function deliveryHeaders(dir: string): Record<string, string> {
   try {
-    const { pending, oldest, queueId, seqAssigned } = queueStatus(dir);
+    const { pending, oldest, queueId, seqAssigned, gapsTotal, gapsByReason } = queueStatus(dir);
     const state = readDeliveryState(dir);
     return {
       "x-scopebond-pending": String(pending),
       ...(oldest !== null ? { "x-scopebond-oldest-pending-at": String(oldest) } : {}),
+      // The oldest time is in this computer's clock; sending the clock beside it lets the workspace measure how long records
+      // have waited on its own clock, and see a clock running ahead (its records are then refused as signed in the future).
+      ...(oldest !== null ? { "x-scopebond-clock": String(Date.now()) } : {}),
       // SB289: which queue, and the highest number it has given a record. If this queue is later
       // removed, the workspace knows how many of its numbers never arrived.
       ...(queueId ? { "x-scopebond-queue-id": queueId, "x-scopebond-seq-assigned": String(seqAssigned ?? 0) } : {}),
+      // Records that missed normal delivery (refused, a failed queue write, set aside after a key change...): the queue's
+      // lifetime total and its counts by reason code, so the workspace sees them and not only a hole in the numbering.
+      ...(gapsTotal > 0 ? { "x-scopebond-gaps-total": String(gapsTotal), "x-scopebond-gaps-by-reason": JSON.stringify(gapsByReason) } : {}),
       ...(state.last_error ? { "x-scopebond-last-error": state.last_error.replace(/[^\x20-\x7e]/g, " ").slice(0, 200) } : {}),
       // D140: the rule settings this computer runs and who set each, so the workspace shows what is true here.
       ...rulesHeader(dir),
@@ -129,7 +135,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // exclusions), so it is never sent a document an older hook would refuse.
       // D144: the settings this hook understands beyond its version (the workspace sends allowances, "Block, person may ask"
       // and the always/requests terms only to a hook that says so).
-      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances", ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
+      // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
+      // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
+      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances", "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {

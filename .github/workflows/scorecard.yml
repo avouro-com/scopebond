@@ -19,7 +19,12 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-permissions: read-all
+permissions: {}
+
+# Runs on every push to main; a newer run supersedes one still in flight.
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analysis:
@@ -29,8 +34,8 @@ jobs:
     permissions:
       security-events: write # upload the SARIF result
       id-token: write        # publish the result so the badge can resolve
-      contents: read
-      actions: read
+      contents: read         # read the repository and its workflow files
+      actions: read          # read workflow runs (the CI-Tests and SAST checks)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
