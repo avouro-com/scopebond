@@ -91,6 +91,10 @@ jobs:
         with:
           name: unsigned-windows
           path: out
+      # The installer tools (WiX 5 and its Util extension, pinned) are fetched before the Azure login, so no code
+      # downloaded at run time executes while the signing session is open.
+      - name: Restore the installer tools (WiX 5)
+        run: node packages/native/build-msi.mjs --restore
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -123,7 +127,7 @@ jobs:
       - name: Build the installer (WiX 5)
         shell: pwsh
         run: |
-          node packages/native/build-msi.mjs out/scopebond-agent.exe
+          node packages/native/build-msi.mjs --no-restore out/scopebond-agent.exe
           New-Item -ItemType Directory -Force msi | Out-Null
           Move-Item packages/native/build/scopebond-agent-*-x64.msi msi/
       - name: Sign the installer with Artifact Signing (timestamped)
@@ -182,11 +186,13 @@ jobs:
           Pop-Location
       # The manifest signed installs trust before updating themselves (the updater key, separate from Authenticode).
       # Without the secret there is no manifest, and signed installs leave this release to a person to install.
+      # The manifest names the commit it was built from, so a signed release is bound to one source tree.
       - name: Signed release manifest
         env:
           UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
           VERSION: ${{ needs.build.outputs.version }}
-        run: node packages/native/manifest.mjs "$env:VERSION" out
+          COMMIT: ${{ github.sha }}
+        run: node packages/native/manifest.mjs "$env:VERSION" out "$env:COMMIT"
         shell: pwsh
       # The winget manifests (Avouro.Scopebond) for this release's installer; the owner submits them to winget-pkgs.
       - name: winget manifests

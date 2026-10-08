@@ -1,0 +1,183 @@
+// The release workflows hold the publishing credentials (the npm token, the automation token, the signing session), so
+// their shape is locked here: credentials only in the step that uses them, publishing only from the merged
+// "Version packages" pull request, and no build-time or tool-restore code running beside a credential it does not need.
+//
+// The workflows are read as text with a small indentation reader (GitHub's own layout: jobs at two spaces, job keys at
+// four, steps at six), so the test needs no YAML package.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const workflowsDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows");
+const NPM_SECRET = /secrets\.NPM_TOKEN\w*/;
+const AUTOMATION_SECRET = /secrets\.PERSONAL_ACCESS_TOKEN/;
+
+const indentOf = (line) => line.length - line.trimStart().length;
+
+/** A workflow as top-level text, and each job's header (keys before `steps:`) and steps, comments removed. */
+function readWorkflow(name) {
+  const lines = readFileSync(join(workflowsDir, name), "utf8").replace(/\r\n/g, "\n").split("\n")
+    .filter((line) => !/^\s*#/.test(line));
+  const top = [];
+  const jobs = new Map();
+  let inJobs = false;
+  let job = null;
+  let inSteps = false;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const indent = indentOf(line);
+    if (indent === 0) {
+      inJobs = line.startsWith("jobs:");
+      job = null;
+      if (!inJobs) top.push(line);
+      continue;
+    }
+    if (!inJobs) { top.push(line); continue; }
+    if (indent === 2) {
+      job = { name: line.trim().replace(/:$/, ""), header: [], steps: [] };
+      jobs.set(job.name, job);
+      inSteps = false;
+      continue;
+    }
+    if (!job) continue;
+    if (indent === 4) {
+      inSteps = line.trim() === "steps:";
+      if (!inSteps) job.header.push(line);
+      continue;
+    }
+    if (inSteps && indent === 6 && line.trimStart().startsWith("- ")) { job.steps.push([line]); continue; }
+    if (inSteps && job.steps.length) job.steps[job.steps.length - 1].push(line);
+    else job.header.push(line);
+  }
+  return {
+    top: top.join("\n"),
+    jobs: [...jobs.values()].map((j) => ({ name: j.name, header: j.header.join("\n"), steps: j.steps.map((s) => s.join("\n")) })),
+  };
+}
+
+/** The lines under `key:` inside a block of text (one level deeper than the key). */
+function section(text, key) {
+  const lines = text.split("\n");
+  const at = lines.findIndex((line) => line.trim() === `${key}:`);
+  if (at === -1) return "";
+  const base = indentOf(lines[at]);
+  const out = [];
+  for (const line of lines.slice(at + 1)) {
+    if (indentOf(line) <= base) break;
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
+const isCheckout = (step) => /uses:\s*actions\/checkout@/.test(step);
+const workflowNames = () => readdirSync(workflowsDir).filter((name) => /\.ya?ml$/.test(name));
+
+test("the release workflow grants nothing at the top and checks out without keeping a token", () => {
+  const release = readWorkflow("release.yml");
+  assert.match(release.top, /^permissions: \{\}$/m, "release.yml: top-level permissions are empty; each job asks for its own");
+  for (const job of release.jobs) assert.match(job.header, /^ {4}permissions:/m, `release.yml ${job.name}: job-level permissions`);
+  const checkouts = release.jobs.flatMap((job) => job.steps.filter(isCheckout));
+  assert.ok(checkouts.length >= 1, "release.yml checks out the repository");
+  for (const step of checkouts) assert.match(step, /persist-credentials: false/, "release.yml: checkout keeps no token in the git config");
+});
+
+test("the npm token reaches only the publish step, never install, build or the job's environment", () => {
+  const release = readWorkflow("release.yml");
+  assert.doesNotMatch(release.top, NPM_SECRET, "release.yml: no workflow-level npm token");
+  const holders = release.jobs.flatMap((job) => job.steps.filter((step) => NPM_SECRET.test(step)).map((step) => ({ job, step })));
+  assert.equal(holders.length, 1, "release.yml: exactly one step has the npm token");
+  const [{ job, step }] = holders;
+  assert.doesNotMatch(job.header, NPM_SECRET, `release.yml ${job.name}: no job-level npm token`);
+  assert.match(section(step, "env"), NPM_SECRET, "release.yml: the npm token is in the publish step's env");
+  assert.doesNotMatch(step, /pnpm install|-r build|pnpm release|version:packages/, "release.yml: the publish step does not install or build");
+  assert.doesNotMatch(job.header + job.steps.join("\n"), AUTOMATION_SECRET, "release.yml: the publish job has no automation token");
+  for (const other of job.steps) {
+    if (other !== step) assert.doesNotMatch(other, /secrets\./, "release.yml: the publish job's other steps have no secrets");
+  }
+  assert.match(job.header, /^ {4}environment:/m, "release.yml: the publish job runs in a named environment");
+});
+
+test("publishing runs only for the merged Version packages pull request with no changesets left", () => {
+  const release = readWorkflow("release.yml");
+  const publishJob = release.jobs.find((job) => job.steps.some((step) => NPM_SECRET.test(step)));
+  const condition = publishJob.header.match(/^ {4}if: (.*)$/m)?.[1] ?? "";
+  assert.match(condition, /hasChangesets == 'false'/, "release.yml: no publish while changesets are pending");
+  assert.match(condition, /versionMerge == 'true'/, "release.yml: publish only for the Version packages merge");
+  const versionJob = release.jobs.find((job) => job.steps.some((step) => /versionMerge=/.test(step)));
+  assert.ok(versionJob, "release.yml: a step works out whether this push is the Version packages merge");
+  const check = versionJob.steps.find((step) => /versionMerge=/.test(step));
+  assert.match(check, /changeset-release\/main/, "the check names the Version packages branch");
+  assert.match(check, /merge_commit_sha/, "the check ties the pull request to this exact commit");
+  assert.doesNotMatch(check, AUTOMATION_SECRET, "the check reads with the workflow token only");
+  // The step holding the automation token opens the Version packages pull request and publishes nothing.
+  for (const job of release.jobs) {
+    for (const step of job.steps.filter((s) => AUTOMATION_SECRET.test(s))) {
+      assert.doesNotMatch(step, /^\s+publish:/m, "release.yml: the version step has no publish command");
+      assert.doesNotMatch(step, NPM_SECRET, "release.yml: the version step has no npm token");
+    }
+  }
+});
+
+test("release installs run no dependency scripts and restore no shared cache", () => {
+  const release = readWorkflow("release.yml");
+  const steps = release.jobs.flatMap((job) => job.steps);
+  const installs = steps.filter((step) => /pnpm install/.test(step));
+  assert.ok(installs.length >= 1);
+  for (const step of installs) {
+    assert.match(step, /--frozen-lockfile/, "release.yml: installs from the lockfile");
+    assert.match(step, /--ignore-scripts/, "release.yml: installs run no dependency scripts");
+  }
+  for (const step of steps) assert.doesNotMatch(step, /^\s+cache:/m, "release.yml: no dependency cache in the release jobs");
+});
+
+test("only the release workflow can publish to npm, and no manual publish runs from an arbitrary ref", () => {
+  for (const name of workflowNames()) {
+    if (name === "release.yml") continue;
+    const text = readFileSync(join(workflowsDir, name), "utf8");
+    assert.doesNotMatch(text, NPM_SECRET, `${name}: npm tokens belong to the release workflow only`);
+    assert.doesNotMatch(text, /changeset publish/, `${name}: publishes nothing`);
+  }
+  assert.equal(existsSync(join(workflowsDir, "publish.yml")), false, "the manual publish workflow is gone");
+});
+
+test("native signing: the Azure session starts only after the installer tools are restored", () => {
+  const native = readWorkflow("native-release.yml");
+  const sign = native.jobs.find((job) => job.name === "sign");
+  assert.ok(sign, "native-release.yml has the sign job");
+  const login = sign.steps.findIndex((step) => /uses:\s*azure\/login@/.test(step));
+  const restore = sign.steps.findIndex((step) => /build-msi\.mjs --restore\b/.test(step));
+  assert.ok(login > -1 && restore > -1, "the sign job restores the tools and logs in to Azure");
+  assert.ok(restore < login, "the tool restore runs before the Azure login");
+  for (const step of sign.steps.slice(login + 1)) {
+    assert.doesNotMatch(step, /dotnet tool restore|wix extension add/, "nothing is fetched after the Azure login");
+    if (/build-msi\.mjs/.test(step)) assert.match(step, /--no-restore/, "the installer build after login restores nothing");
+  }
+  for (const step of native.jobs.flatMap((job) => job.steps.filter(isCheckout))) {
+    assert.match(step, /persist-credentials: false/, "native-release.yml: checkout keeps no token in the git config");
+  }
+});
+
+test("native signing: the signed update manifest names the commit it was built from", () => {
+  const native = readWorkflow("native-release.yml");
+  const sign = native.jobs.find((job) => job.name === "sign");
+  const manifest = sign.steps.find((step) => /manifest\.mjs/.test(step));
+  assert.ok(manifest, "the sign job writes the update manifest");
+  assert.match(manifest, /github\.sha/, "the manifest step passes the commit");
+});
+
+test("no workflow runs wrangler unpinned or with a job-wide Cloudflare token", () => {
+  for (const name of workflowNames()) {
+    const workflow = readWorkflow(name);
+    assert.doesNotMatch(section(workflow.top, "env"), /secrets\.CLOUDFLARE/, `${name}: no workflow-level Cloudflare token`);
+    for (const job of workflow.jobs) {
+      assert.doesNotMatch(section(job.header, "env"), /secrets\.CLOUDFLARE/, `${name} ${job.name}: no job-level Cloudflare token`);
+      for (const step of job.steps.filter((s) => /wrangler/.test(s))) {
+        assert.doesNotMatch(step, /\b(npx|dlx)\b[^\n]*wrangler/, `${name} ${job.name}: wrangler runs from the lockfile, not npx`);
+        if (/\b(npm|pnpm) (install|i|add|ci)\b/.test(step)) assert.match(step, /--ignore-scripts/, `${name} ${job.name}: wrangler installs without scripts`);
+      }
+    }
+  }
+});

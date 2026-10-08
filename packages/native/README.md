@@ -45,7 +45,9 @@ A fork can run the build job and gets an unsigned file; it cannot reach either s
 
 `node packages/native/build-msi.mjs [scopebond-agent.exe]` builds `build/scopebond-agent-<version>-x64.msi` with WiX 5
 (a local dotnet tool, `.config/dotnet-tools.json`; WiX 6 and later carry a maintenance-fee licence term, so the build
-stays on 5). The installer:
+stays on 5). `--restore` only fetches WiX and its extension, and `--no-restore` builds with the tools already fetched;
+the release workflow restores them before its Azure login, so nothing downloaded at run time runs during signing. The
+installer:
 
 - installs per user by default, with no administrator prompt (`%LOCALAPPDATA%\Programs\Scopebond`), or for every user
   with `ALLUSERS=1` (Program Files; for Intune or Group Policy);
@@ -62,7 +64,8 @@ npm. CI installs and removes it, per user and for every user (`test/msi.test.mjs
 ## Updates
 
 A per-user install updates itself when its workspace recommends a newer agent, with the release's installer, after three
-checks: the release manifest (`scopebond-agent-<version>.manifest.json`, each file's SHA-256 and size) is signed with the
+checks: the release manifest (`scopebond-agent-<version>.manifest.json`: the commit it was built from, and each file's
+SHA-256 and size) is signed with the
 updater key, an Ed25519 key separate from the Authenticode certificate whose public half (`updater-public-key.txt`) is
 built into the program; the downloaded installer's digest and size are the manifest's; and its Authenticode signature is
 valid and names Avouro LLC. Then a detached helper waits for the agent to exit, installs it with `msiexec /qn` and starts
