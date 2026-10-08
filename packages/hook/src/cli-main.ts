@@ -8,7 +8,7 @@
 // Config dir: $SCOPEBOND_HOOK_DIR, else ./.scopebond
 // Fail-closed: any error denies the action with a repair message.
 
-import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync, readdirSync } from "node:fs";
 import { hookCliPath, isSingleExecutable } from "./self.js";
 import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
@@ -25,6 +25,8 @@ import { scaffold, harnessSnippet, placeHook, migrateToMonitorDefault, type Hook
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
 import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand, unreachableHint } from "./windows-hints.js";
+import { approvalSummary, retryAfterSeconds } from "./login-approval.js";
+import { createInterface } from "node:readline/promises";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
@@ -707,6 +709,17 @@ async function runRules(args: string[]): Promise<void> {
  *  database first, and it refuses entirely once the log has been anchored, because a
  *  receipt's position is its anchor leaf index. Without a `--before` it reports the
  *  footprint and exits. */
+/** The archives earlier prunes wrote beside the database, with their sizes. */
+function receiptArchives(dir: string): Array<{ name: string; bytes: number }> {
+  try {
+    return readdirSync(dir).filter((name) => /^receipts-archived-.*\.jsonl$/.test(name)).map((name) => {
+      let bytes = 0;
+      try { bytes = statSync(join(dir, name)).size; } catch { /* gone meanwhile */ }
+      return { name, bytes };
+    });
+  } catch { return []; }
+}
+
 async function runPrune(args: string[]): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
   const dbPath = join(dir, "receipts.db");
@@ -760,7 +773,14 @@ async function runPrune(args: string[]): Promise<void> {
     console.log(`To remove older receipts yourself, name a cutoff:`);
     console.log(`  ${cliCommand("prune --before 90d")}      # older than 90 days`);
     console.log(`  ${cliCommand("prune --before 2026-01-01")}`);
-    console.log(`Receipts are archived beside the database before removal.`);
+    console.log(`Receipts are archived beside the database before removal (add --no-archive to skip that).`);
+    // Earlier prunes' archives are plain copies of signed receipts that nothing removes: say where they are and how big.
+    const archives = receiptArchives(dir);
+    if (archives.length) {
+      const bytes = archives.reduce((n, a) => n + a.bytes, 0);
+      console.log(`\narchives         ${archives.length} file(s), ${(bytes / 1024 / 1024).toFixed(1)} MB, beside the database (receipts-archived-*.jsonl).`);
+      console.log(`                 They are kept until you delete them; they hold the same details as the receipts.`);
+    }
     process.exit(0);
   }
   const cutoff = parseSince(args[beforeIdx + 1]);
@@ -788,14 +808,19 @@ async function runPrune(args: string[]): Promise<void> {
       console.error(`  ${cliCommand(`prune --before ${args[beforeIdx + 1]} --yes`)}`);
       process.exit(1);
     }
-    const archive = join(dir, `receipts-archived-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
-    writeFileSync(archive, `${doomed.map((r) => JSON.stringify(r)).join("\n")}\n`);
-    console.log(`archived to      ${archive}`);
+    const archived = !args.includes("--no-archive");
+    if (archived) {
+      const archive = join(dir, `receipts-archived-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
+      writeFileSync(archive, `${doomed.map((r) => JSON.stringify(r)).join("\n")}\n`, { mode: 0o600 });
+      console.log(`archived to      ${archive}`);
+    } else {
+      console.log(`archived to      nothing (--no-archive)`);
+    }
     const { removed } = sqlite.removeBefore(iso);
     console.log(`removed          ${removed} receipt(s)`);
     store.close?.();
     console.log(`store now        ${describeStore(dbPath)}`);
-    console.log(`\nThe archive is a plain JSONL of signed receipts — still verifiable, still yours.`);
+    if (archived) console.log(`\nThe archive is a plain JSONL of signed receipts — still verifiable, still yours. It stays until you delete it.`);
     process.exit(0);
   } catch (error) {
     try { store.close?.(); } catch { /* closing after a failure */ }
@@ -1070,12 +1095,15 @@ async function runRecover(args: string[]): Promise<void> {
 async function runFlush(): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
   if (!loadConnection(dir)) { console.error(`not connected to a workspace; run \`${cliCommand("connect <workspace-url> <enrollment>")}\` first`); process.exit(1); }
-  const runtime = createHookRuntime(runtimePaths(dir));
+  // No time limit here, so the queue waits as long as the agent's flush does for another process's lock.
+  const runtime = createHookRuntime({ ...runtimePaths(dir), queueBusyTimeoutMs: 15_000 });
   const before = runtime.exporter?.status().lastSuccessAt ?? null;
+  // First, anything the queue never got (a failed queue write, an evaluation that was cut off).
+  await runtime.repair();
   await runtime.exporter?.flush();
   const status = runtime.exporter?.status();
   // Unbounded, so its outcome is a real one: `status` and `doctor` show it like any other.
-  if (status) recordDeliveryAttempt(dir, status, Date.now(), before);
+  if (status) recordDeliveryAttempt(dir, status, Date.now(), before, null, "hook");
   runtime.exporter?.stop();
   console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
   // Let pending HTTP handles close normally (forced exit can abort on Windows).
@@ -1686,7 +1714,7 @@ function runTrust(args: string[]): void {
  *  `connect` does. Nothing secret is printed: the device code stays in memory. */
 /** The flags a login was run with, to repeat it exactly. */
 function loginFlags(args: string[]): string[] {
-  return args.filter((a) => ["--claude", "--cursor", "--codex", "--no-install", "--project"].includes(a));
+  return args.filter((a) => ["--claude", "--cursor", "--codex", "--no-install", "--project", "--yes"].includes(a));
 }
 
 async function runLogin(args: string[]): Promise<void> {
@@ -1699,16 +1727,16 @@ async function runLogin(args: string[]): Promise<void> {
     if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) throw new Error("https required");
     origin = parsed.origin;
   } catch {
-    console.error(`usage: ${cliCommand("login <workspace-url> [--claude|--cursor|--codex] [--no-install] [--project]")}`);
+    console.error(`usage: ${cliCommand("login <workspace-url> [--claude|--cursor|--codex] [--no-install] [--project] [--yes]")}`);
     console.error("The workspace URL is the address of your Scopebond workspace, for example https://cloud.scopebond.com.");
     process.exit(1);
   }
-  const post = async (path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> => {
+  const post = async (path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown>; retryAfter: string | null }> => {
     const response = await fetch(new URL(path, origin), {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
       redirect: "error", signal: AbortSignal.timeout(15_000),
     });
-    return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, unknown> };
+    return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, unknown>, retryAfter: response.headers.get("retry-after") };
   };
   // SB276: run from inside an agent session (its own terminal or tool call), a sign-in can
   // land in the agent's working folder rather than this person's, and the person may never
@@ -1734,11 +1762,25 @@ async function runLogin(args: string[]): Promise<void> {
   scaffold(dir, {});
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    let polled: { status: number; json: Record<string, unknown> };
+    let polled: { status: number; json: Record<string, unknown>; retryAfter: string | null };
     try { polled = await post("/v1/device/token", { device_code: deviceCode }); }
     catch { continue; } // a transient network error: keep waiting until the deadline
+    // A busy or rate-limited workspace: wait as it says and keep polling until the deadline.
+    if (polled.status === 429 || polled.status === 503) { intervalMs = Math.max(intervalMs, retryAfterSeconds(polled.retryAfter) * 1000); continue; }
     if (polled.status === 200 && polled.json.enrollment && typeof polled.json.enrollment === "object") {
-      console.log("✓ Approved");
+      const summary = approvalSummary(polled.json);
+      console.log(summary ? `✓ ${summary}` : "✓ Approved");
+      // Someone else could have approved this code into their own workspace: the person here confirms it before anything
+      // is set up. A script (no terminal) passes --yes.
+      if (summary && process.stdin.isTTY && !args.includes("--yes")) {
+        const prompt = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = (await prompt.question("Connect this computer to that workspace? [y/N] ")).trim().toLowerCase();
+        prompt.close();
+        if (answer !== "y" && answer !== "yes") {
+          console.error(`Nothing was connected. If you did not expect that workspace, tell its owner. To ask again: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`);
+          process.exit(1);
+        }
+      }
       await finishConnect(dir, origin, polled.json.enrollment as CloudEnrollmentBundle, harness, args);
       return;
     }
@@ -1853,16 +1895,17 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
   { name: "test", args: '"<shell command>"',
     summary: "show the decision for a command without running or recording it",
     detail: [`e.g. ${cliCommand('test "rm -rf /"')}`] },
-  { name: "prune", args: "[--compact] [--before 90d] [--yes]",
+  { name: "prune", args: "[--compact] [--before 90d] [--yes] [--no-archive]",
     summary: "report the local store's size, or bound it",
     detail: [
       "--compact runs the upkeep now: older rows are rewritten to keep each policy and receipt once,",
       "receipts the workspace acknowledged are removed after its retention window, and the file shrinks.",
       "With no --before it only reports. With one, it archives the receipts it will remove",
       "to a JSONL file beside the database, then removes them. Refuses once the log has been",
-      "anchored, because a receipt's position is its anchor leaf index.",
+      "anchored, because a receipt's position is its anchor leaf index. --no-archive removes without the copy;",
+      "an archive stays until you delete it (the report lists them).",
     ] },
-  { name: "login", args: "<workspace-url> [--claude|--cursor|--codex] [--no-install] [--project]",
+  { name: "login", args: "<workspace-url> [--claude|--cursor|--codex] [--no-install] [--project] [--yes]",
     summary: "connect this computer to a Scopebond Cloud workspace by approving a short code there",
     detail: [
       "Prints a code and a link; someone who manages the workspace opens it, checks the code",
@@ -1870,6 +1913,8 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "It sets Scopebond up for you across projects (~/.scopebond and your user-level agent",
       "settings), whatever folder you run it from. --project connects the current folder's",
       "own setup instead. If the folder has a project setup that takes precedence, it says so.",
+      "Once approved it names the workspace and who approved it and asks before connecting;",
+      "--yes connects without asking (scripts).",
     ] },
   { name: "connect", args: "<workspace-url> <enrollment> [--claude|--cursor|--codex]",
     summary: "send receipts to a Scopebond Cloud workspace as well as keeping them locally" },

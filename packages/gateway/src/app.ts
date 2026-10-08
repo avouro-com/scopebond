@@ -3,6 +3,7 @@
 // is runtime-agnostic (ADR-004) and testable in-process via app.request().
 
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { Context } from "hono";
 import { evaluate } from "./engine.js";
 import type { Decision } from "./engine.js";
@@ -55,6 +56,8 @@ export const noopExecutor: Executor = {
 
 export interface GatewayConfig {
   policy: Policy;
+  /** The largest request body accepted, in bytes (default 1 MiB). A larger one is refused with 413 before it is read. */
+  maxBodyBytes?: number;
   store?: ReceiptStore;
   executor?: Executor;
   attester?: Attester;
@@ -604,6 +607,8 @@ export function createGateway(config: GatewayConfig): Gateway {
   }
 
   const app = new Hono();
+  // Every request body is bounded before it is read or parsed (a gateway that runs out of memory fails closed for everyone).
+  app.use("*", bodyLimit({ maxSize: config.maxBodyBytes ?? 1024 * 1024, onError: (c) => c.json({ error: "request body too large" }, 413) }));
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/v1/status", async (c) => {
     const denied = requireControl(c); if (denied) return denied;
@@ -674,7 +679,22 @@ export function createGateway(config: GatewayConfig): Gateway {
   // inclusion itself — the client verifies (verifyInclusionProof +
   // verifyAnchorSignature from @scopebond/verify/anchor). Leaf positions are the
   // receipts' append-order sequence in the log.
+  // A receipt's v2 leaf hash, computed once: the proof routes are public and would otherwise re-hash the whole log on
+  // every request. Keyed by the receipt's signature, which is unique to it.
+  const leafCache = new Map<string, string>();
+  const leafOf = async (r: SignedReceipt): Promise<string> => {
+    const key = typeof r.signature === "object" && r.signature ? JSON.stringify(r.signature) : null;
+    const hit = key ? leafCache.get(key) : undefined;
+    if (hit) return hit;
+    const leaf = await receiptLeafHash(r.payload);
+    if (key) leafCache.set(key, leaf);
+    return leaf;
+  };
+
   app.get("/v1/anchors/proof", async (c) => {
+    // Whether an action happened is not public: a lookup by its intent hash needs the control token; anyone may look a
+    // receipt up by its leaf hash (which only someone holding the receipt can compute).
+    if (c.req.query("intent_hash") !== undefined) { const denied = requireControl(c); if (denied) return denied; }
     const target = await findAnchor(c.req.query("anchor_seq"));
     if (!target) return c.json({ error: "anchor not found — POST /v1/anchor first" }, 404);
     const size = isAnchorV2(target) ? target.tree_size : target.count;
@@ -682,7 +702,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     const wantLeaf = c.req.query("leaf");
     const wantIntent = c.req.query("intent_hash");
     if (isAnchorV2(target)) {
-      const leaves = await Promise.all(receipts.map((r) => receiptLeafHash(r.payload)));
+      const leaves = await Promise.all(receipts.map(leafOf));
       let index = -1;
       if (wantLeaf) index = leaves.indexOf(wantLeaf);
       else if (wantIntent) index = receipts.findIndex((r) => r.payload.intent_hash === wantIntent);
@@ -715,7 +735,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     if (first.tree_size > second.tree_size) return c.json({ error: "from must not be larger than to" }, 400);
     const receipts = ((await store.list()) as SignedReceipt[]).slice(0, second.tree_size);
     if (receipts.length < second.tree_size) return c.json({ error: "receipt log is shorter than the anchor" }, 409);
-    const leaves = await Promise.all(receipts.map((r) => receiptLeafHash(r.payload)));
+    const leaves = await Promise.all(receipts.map(leafOf));
     const proof = await consistencyProof(leaves, first.tree_size);
     return c.json({ ...proof, first_root: first.root, second_root: second.root, first, second });
   });

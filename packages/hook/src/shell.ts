@@ -415,7 +415,18 @@ function findExecCommands(argv: string[]): string[] {
   return out;
 }
 
-interface Heredoc { line: number; delim: string; dashed: boolean; ownerIsShell: boolean }
+interface Heredoc { line: number; delim: string; dashed: boolean; ownerIsShell: boolean; owner: string }
+
+/** Programs that run code given inline, in a here-document or on standard input (the map scans that code for paths). */
+export const INTERPRETERS = new Set(["node", "deno", "bun", "python", "python3", "py", "ruby", "perl", "php", "osascript", "lua", "tclsh"]);
+/** The options that hand an interpreter its code inline (`python -c`, `node -e`, `perl -E`, `php -r`). */
+const INLINE_CODE = /^(?:-c|-e|-E|-r|-p|--eval|--print|--command)$|^--eval=|^--print=/;
+/** Whether this interpreter takes its program from standard input: no inline code and no script operand, or `-`. */
+export function interpreterReadsStdin(argv: string[]): boolean {
+  if (argv.some((a) => INLINE_CODE.test(a))) return false;
+  const operands = argv.filter((a) => !a.startsWith("-") || a === "-");
+  return operands.length === 0 || operands[0] === "-";
+}
 
 /** Find here-document openers (`<<word`, `<<-word`, `<< 'word'`, `<<\word`) in the
  *  whole command, honoring quotes and command-substitution nesting so a `<<` inside
@@ -507,7 +518,7 @@ function findHeredocs(src: string): Heredoc[] {
         const cmdText = src.slice(cmdStart, i);
         const { tokens } = stripPrefixes(words(cmdText));
         const prog = tokens.length ? canonProgram(tokens[0]) : "";
-        const opener = { line, delim, dashed, ownerIsShell: SHELLS.has(prog) };
+        const opener = { line, delim, dashed, ownerIsShell: SHELLS.has(prog), owner: prog };
         found.push(opener);
         pending.push(opener);
       }
@@ -524,16 +535,18 @@ function findHeredocs(src: string): Heredoc[] {
  *  write) — except a body fed to a shell (`bash <<EOF …`), which runs and is returned
  *  for its own decomposition. A `<<` whose delimiter never recurs on a later line is
  *  left untouched (it was arithmetic or otherwise not a here-doc). */
-function stripHeredocs(src: string): { text: string; scripts: string[] } {
-  if (!src.includes("<<")) return { text: src, scripts: [] };
+function stripHeredocs(src: string): { text: string; scripts: string[]; code: Array<{ program: string; body: string }> } {
+  if (!src.includes("<<")) return { text: src, scripts: [], code: [] };
   const openers = findHeredocs(src);
-  if (openers.length === 0) return { text: src, scripts: [] };
+  if (openers.length === 0) return { text: src, scripts: [], code: [] };
   const strip = (s: string) => s.replace(/^\t+/, "");
   const byLine = new Map<number, Heredoc[]>();
   for (const op of openers) { const l = byLine.get(op.line) ?? []; l.push(op); byLine.set(op.line, l); }
   const lines = src.split("\n");
   const out: string[] = [];
   const scripts: string[] = [];
+  // A body fed to an interpreter (`python3 <<EOF … EOF`) is that interpreter's program: kept for the same scan as `-c` code.
+  const code: Array<{ program: string; body: string }> = [];
   for (let i = 0; i < lines.length; i++) {
     out.push(lines[i]);
     const ops = byLine.get(i);
@@ -547,10 +560,11 @@ function stripHeredocs(src: string): { text: string; scripts: string[] } {
       if (end === -1) continue;
       const body = lines.slice(i + 1, end).map((l) => (op.dashed ? strip(l) : l));
       if (op.ownerIsShell) scripts.push(body.join("\n"));
+      else if (INTERPRETERS.has(op.owner)) code.push({ program: op.owner, body: body.join("\n") });
       i = end; // skip the body and the terminator line
     }
   }
-  return { text: out.join("\n"), scripts };
+  return { text: out.join("\n"), scripts, code };
 }
 
 /** Decompose a command line into the simple commands it will run. Recurses into
@@ -561,8 +575,10 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
   const opaque = (raw = src): SimpleCommand[] => [{ program: "", programRaw: "", argv: [], redirects: [], raw, opaque: true }];
   if (depth > MAX_DEPTH) return opaque();
 
-  const { text, scripts } = stripHeredocs(src);
+  const { text, scripts, code } = stripHeredocs(src);
   const fromHeredocs = scripts.flatMap((s) => decomposeShell(s, depth + 1));
+  // An interpreter's here-document is its code: recorded as that interpreter run with the code inline.
+  for (const c of code) fromHeredocs.push({ program: c.program, programRaw: c.program, argv: ["-e", c.body], redirects: [], raw: `${c.program} <<heredoc`, opaque: false });
 
   const { segments, unbalanced } = splitTopLevel(text);
   // Unreadable: kept as the text without its here-document bodies, which are data (a commit message that says "scopebond"
@@ -601,6 +617,10 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
       // standard input (`curl … | sh`, `sh -s`): the text that will run is not in the
       // command, so it is opaque rather than safe.
       if (script === null && !argv.some((a) => !a.startsWith("-")) && !argv.some((a) => /^--(?:version|help)$/.test(a))) out.push(...opaque(seg));
+    } else if (INTERPRETERS.has(canon) && interpreterReadsStdin(argv) && depth === 0) {
+      // Code on standard input (`echo "…" | python3`, `python -`) is not in the command, but what feeds it is: the whole
+      // command line is scanned as that interpreter's code, so a path named anywhere in it counts.
+      out.push({ program, programRaw: tokens[0], argv: ["-e", src], redirects: [], raw: seg, opaque: false });
     } else if (canon === "eval" || canon === "iex" || canon === "invoke-expression") {
       nested(argv.join(" "));
     } else if (canon === "trap") {

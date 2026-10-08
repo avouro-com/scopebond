@@ -51,11 +51,21 @@ const VALUE = String.raw`("[^"]*"|'[^']*'|\S+)`;
 // quantifiers), so matching stays linear in the command length.
 const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, MASK],
-  [new RegExp(String.raw`(--?(?:password|passwd|pwd|token|secret|api[-_]?key|access[-_]?key|auth|credentials?)[=\s]+)${VALUE}`, "gi"), `$1${MASK}`],
+  [new RegExp(String.raw`(--?(?:password|passwd|pwd|token|secret|api[-_]?key|access[-_]?key|auth|credentials?|key|[a-z]+-key|[a-z]+-secret|[a-z]+-password)[=\s]+)${VALUE}`, "gi"), `$1${MASK}`],
   [new RegExp(String.raw`((?:^|\s)(?:-u|--user)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
   [/(Authorization:\s*(?:Bearer|Basic|Token)\s+)[^\s"']+/gi, `$1${MASK}`],
   [/((?:x-api-key|api-key|x-auth-token|x-access-token|private-token)\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
-  [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, `$1${MASK}@`],                     // URL userinfo
+  // Any URL userinfo: user:password@, a token alone (an Azure DevOps or GitHub token as the user), or :password@.
+  [/(:\/\/)[^\s/@]+@/g, `$1${MASK}@`],
+  // A credential in a URL query (an Azure SAS signature, an OAuth token or code).
+  [/([?&](?:sig|signature|sas|token|access_token|refresh_token|id_token|key|api_?key|code|password|secret|client_secret)=)[^&\s"'#]+/gi, `$1${MASK}`],
+  // Cookies: the header's value runs to the end of the quoted string; curl's -b/--cookie takes one value.
+  [/(\bCookie:\s*)[^"'\n]+/gi, `$1${MASK}`],
+  [new RegExp(String.raw`((?:^|\s)(?:-b|--cookie)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
+  // PowerShell: a plain-text secure string, and an environment assignment with spaces ($env:NAME = "value").
+  [new RegExp(String.raw`(ConvertTo-SecureString\s+(?:-String\s+)?)${VALUE}`, "gi"), `$1${MASK}`],
+  [/(\bhv[sb]\.)[A-Za-z0-9_-]{20,}/g, `$1${MASK}`],                  // Vault tokens
+  [/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, MASK],          // SendGrid keys
   [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, MASK],                           // GitHub tokens
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, MASK],                         // GitHub fine-grained tokens
   [/\bglpat-[A-Za-z0-9_-]{20,}/g, MASK],                             // GitLab tokens
@@ -79,6 +89,9 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
 //    Bare `key:` is deliberately excluded so ordinary `key: value` text is untouched.
 const HEAD_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/(^|\s)(-[pu])[^\s=-]\S*/g, `$1$2${MASK}`],
+  // A space-separated `-p <password>` after a program whose -p is a password (it is a port or a parent flag elsewhere),
+  // within the same simple command.
+  [new RegExp(String.raw`(\b(?:sshpass|login|mysql|mysqladmin|mariadb|htpasswd|redis-cli)\b[^|;&\n]*?\s-p\s+)${VALUE}`, "g"), `$1${MASK}`],
   // `auth` is omitted: `Authorization:` is handled above (with its Bearer/Basic label),
   // and other auth headers (`X-Auth-Token`) still match on `token`.
   [/(\b[\w-]*(?:secret|token|api[-_]?key|apikey|password|passwd|credential)[\w-]*\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
@@ -92,18 +105,34 @@ const BLOB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
 ];
 
 const SECRET_NAME = /token|secret|passw|pwd|api_?key|access_?key|private_?key|auth|credential|session/i;
+// Short password names (`DB_PASS`, `PASS`, `DB_PW`) and anything ending in KEY (`SERVICE_KEY`).
+const SHORT_SECRET_NAME = /(?:^|[_$:])(?:pass|pw)(?:_|$)|key$/i;
+const secretName = (name: string): boolean => SECRET_NAME.test(name) || SHORT_SECRET_NAME.test(name);
 
 // `NAME=value` where the name looks like a credential (`GH_TOKEN=…`, `export
 // AWS_SECRET_ACCESS_KEY=…`). Done per whitespace-delimited word rather than with
-// one regex so a long identifier cannot cause backtracking.
+// one regex so a long identifier cannot cause backtracking. PowerShell's `$env:NAME = "value"` (spaces around `=`) is
+// handled as well.
 function scrubAssignments(text: string): string {
-  return text.replace(/\S+/g, (word) => {
+  const words = text.replace(/\S+/g, (word) => {
     const eq = word.indexOf("=");
     if (eq <= 0 || eq === word.length - 1) return word;
     const name = word.slice(0, eq);
-    if (name.startsWith("-") || !SECRET_NAME.test(name)) return word; // flags are handled by SECRET_RULES
+    if (name.startsWith("-") || !secretName(name.replace(/^.*[?&/]/, ""))) return word; // flags are handled by SECRET_RULES
     return `${name}=${MASK}`;
   });
+  return words.replace(/(\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)("[^"]*"|'[^']*'|\S+)/gi, (all, head: string, name: string) => secretName(name) ? `${head}${MASK}` : all);
+}
+
+/** A URL path as a record keeps it: segments that look like a secret (long and mixing letters and digits, or a bot token)
+ *  or carry an email address are masked; short, ordinary segments stay for policy matching. */
+export function scrubUrlPath(path: string): string {
+  return scrubParam(path).split("/").map((segment) => {
+    if (segment.includes("@")) return MASK;
+    if (/^bot\d+:/i.test(segment)) return `bot${MASK}`;
+    if (segment.length >= 20 && /[0-9]/.test(segment) && /[A-Za-z]/.test(segment)) return MASK;
+    return segment;
+  }).join("/");
 }
 
 /** Scrub a structured parameter (a program name, a remote, a URL path): credential

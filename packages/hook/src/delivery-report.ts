@@ -14,19 +14,32 @@ export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
 export const LOSSLESS_OUTBOX = { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER } as const;
 
 /** How many records wait to send and since when, read without changing the queue. */
-export function queueStatus(dir: string): { pending: number; oldest: number | null; queueId?: string; seqAssigned?: number; error?: string } {
+export function queueStatus(dir: string): {
+  pending: number; oldest: number | null; queueId?: string; seqAssigned?: number; error?: string;
+  /** Records that left the queue without being delivered as queued, over the queue's lifetime, and their counts by reason. */
+  gapsTotal: number; gapsByReason: Record<string, number>;
+} {
   const outboxPath = join(dir, OUTBOX_FILE);
-  if (!existsSync(outboxPath)) return { pending: 0, oldest: null };
+  if (!existsSync(outboxPath)) return { pending: 0, oldest: null, gapsTotal: 0, gapsByReason: {} };
   try {
     const outbox = new SqliteCloudOutbox(outboxPath, LOSSLESS_OUTBOX);
     try {
       const status = outbox.status();
-      return { pending: status.pending, oldest: status.oldestEnqueuedAt, ...(status.queueId ? { queueId: status.queueId, seqAssigned: status.seqAssigned ?? 0 } : {}) };
+      return {
+        pending: status.pending, oldest: status.oldestEnqueuedAt, ...(status.queueId ? { queueId: status.queueId, seqAssigned: status.seqAssigned ?? 0 } : {}),
+        gapsTotal: status.gaps, gapsByReason: status.gapsByReason ?? {},
+      };
     } finally { outbox.close(); }
   } catch (error) {
-    // Not "nothing waiting": the queue cannot be opened, so the hook fails closed on every action.
-    return { pending: 0, oldest: null, error: `${outboxPath}: ${(error as Error).message}` };
+    // Not "nothing waiting": the queue cannot be opened. Actions stay allowed and are recorded on this computer; each record
+    // written meanwhile is noted and queued once the queue can be written again.
+    return { pending: 0, oldest: null, error: `${outboxPath}: ${(error as Error).message}`, gapsTotal: 0, gapsByReason: {} };
   }
+}
+
+/** "rejected 2, outbox_error 1": the counts by reason, largest first. */
+export function gapReasons(byReason: Record<string, number>): string {
+  return Object.entries(byReason).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([r, n]) => `${r} ${n}`).join(", ");
 }
 
 /** How long the oldest waiting record may wait, with nothing accepted since it was queued,
@@ -53,12 +66,13 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   const state = readDeliveryState(dir);
   const lines: string[] = [];
   const problems: string[] = [];
-  const { pending, oldest, error: queueError } = queueStatus(dir);
+  const { pending, oldest, error: queueError, gapsTotal, gapsByReason } = queueStatus(dir);
   let fix: string | null = null;
   if (queueError) {
     lines.push(`DELIVERY QUEUE UNUSABLE: ${queueError}`);
+    lines.push("actions stay allowed and are recorded on this computer; they are sent once the queue can be written again");
     lines.push("fix: free some disk space, or make that file and its -wal and -shm files writable for your user (do not delete it: it holds records waiting to be sent)");
-    problems.push(`the delivery queue cannot be opened (${queueError}); every action is blocked until it can`);
+    problems.push(`the delivery queue cannot be opened (${queueError}); actions stay allowed and are recorded on this computer, and are sent once the queue can be written again`);
   }
   if (state.invalid_since !== null) {
     fix = cliCommand(`login ${connection.url}`);
@@ -71,7 +85,17 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   const age = oldest !== null ? `, oldest from ${ago(oldest, now)}` : "";
   if (!queueError) lines.push(`waiting to send  ${pending} record(s)${age}`);
   if (state.last_error && state.invalid_since === null) lines.push(`last problem     ${state.last_error}`);
-  if (state.invalid_since === null && deliveryStalled(state, pending, oldest, now)) {
+  // Gaps are history (the workspace hears of them on the rules check), so they are shown, not counted as a problem.
+  if (gapsTotal > 0) {
+    const reasons = gapReasons(gapsByReason);
+    lines.push(`delivery gaps    ${gapsTotal} record(s) missed normal delivery${reasons ? ` (${reasons})` : ""}; each stays in this computer's log`);
+  }
+  const paused = /HTTP 402 \(agent_paused\)/.test(state.last_error ?? "");
+  if (state.invalid_since === null && paused && pending > 0) {
+    // The plan paused this agent: sending again changes nothing, so no flush is suggested.
+    lines.unshift(`PAUSED BY THE WORKSPACE'S PLAN: ${pending} record(s) wait on this computer and send once an owner keeps this agent active or changes the plan (Settings, Plan and billing).`);
+    problems.push(`the workspace's plan paused this agent; ${pending} record(s) wait until an owner keeps it active or changes the plan`);
+  } else if (state.invalid_since === null && deliveryStalled(state, pending, oldest, now)) {
     const since = state.last_success_at === null ? "nothing from this computer has ever reached the workspace" : `nothing has reached the workspace since ${ago(state.last_success_at, now)}`;
     const why = state.last_error ?? "no attempt recorded an error, so the cause is unknown";
     const flush = cliCommand("flush");
