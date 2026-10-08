@@ -468,6 +468,27 @@ const LOCAL_HOSTS = new Set(["", "localhost", "127.0.0.1", "::1", "[::1]"]);
 const PSQL_VALUED_LONG = ["--host", "--port", "--username", "--dbname", "--command", "--file", "--output", "--set", "--variable", "--pset", "--field-separator", "--record-separator", "--table-attr", "--log-file"];
 const PSQL_SHORT = "hpUdcfoLvPFRT";
 
+/** Where psql connects as far as the command says: `-h`/`--host`, a `host=` connection string or URI, an inline `PGHOST=`,
+ *  or a service (`service=`, `PGSERVICE=`), which names a remote host defined elsewhere. Undefined when nothing names one. */
+function psqlHost(sc: SimpleCommand): string | undefined {
+  const argv = sc.argv;
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "-h" || t === "--host") return argv[i + 1] ?? "";
+    if (t.startsWith("--host=")) return t.slice(7);
+    if (/^-h./.test(t)) return t.slice(2);
+    const uri = /^postgres(?:ql)?:\/\/(?:[^@/]*@)?([^:/?]+)/i.exec(t);
+    if (uri) return uri[1];
+    const kv = /(?:^|\s)host=([^\s]+)/.exec(t);
+    if (kv) return kv[1];
+    if (/(?:^|\s)service=/.test(t)) return "pg-service";
+  }
+  const inline = inlineAssignment(sc.raw, "PGHOST");
+  if (inline !== undefined) return inline;
+  if (inlineAssignment(sc.raw, "PGSERVICE") !== undefined) return "pg-service";
+  return undefined;
+}
+
 function psqlFacts(sc: SimpleCommand, ctx: ReadContext): DatabaseFacts | null {
   const commands: string[] = [];
   const files: string[] = [];
@@ -508,10 +529,13 @@ function psqlFacts(sc: SimpleCommand, ctx: ReadContext): DatabaseFacts | null {
   const target = db ?? positional[0];
   if (target && /^postgres(?:ql)?:\/\//i.test(target)) {
     try { const u = new URL(target); host ??= u.hostname; port ??= u.port; db = decodeURIComponent(u.pathname.replace(/^\//, "")); } catch { return null; }
-  } else if (target && /(?:^|\s)(?:host|dbname|port)=/.test(target)) {
+  } else if (target && /(?:^|\s)(?:host|dbname|port|service)=/.test(target)) {
     const kv = (k: string): string | undefined => new RegExp(`(?:^|\\s)${k}=([^\\s]+)`).exec(target)?.[1];
     host ??= kv("host"); port ??= kv("port"); db = kv("dbname");
+    if (host === undefined && kv("service")) host = "pg-service";
   } else db = target;
+  // An assignment on the command itself (`PGHOST=… psql`, `PGSERVICE=…`) sets the host for this run.
+  host ??= inlineAssignment(sc.raw, "PGHOST") ?? (inlineAssignment(sc.raw, "PGSERVICE") !== undefined ? "pg-service" : undefined);
   host ??= envOf(ctx, "PGHOST") ?? "";
   port ??= envOf(ctx, "PGPORT") ?? "5432";
   db ??= envOf(ctx, "PGDATABASE") ?? "";
@@ -629,7 +653,12 @@ export function databaseGuardActions(command: string, dialect: "posix" | "powers
       out.push({ provider: "cloudflare_d1", verb: "unknown", scope: w.s.flags.has("--remote") ? "remote" : "unknown", risk: "unknown" });
     } else if (canonProgram(sc.program) === "psql") {
       const raw = sc.argv.join(" ");
-      if (!/(?:^|\s)(?:-h\s*|--host[= ])(?:localhost|127\.0\.0\.1)\b/.test(raw) && /\s-[a-zA-Z]*[cf]|--command|--file/.test(` ${raw}`)) out.push({ provider: "postgres", verb: "unknown", scope: "unknown", risk: "unknown" });
+      const host = psqlHost(sc);
+      const remote = host !== undefined && !LOCAL_HOSTS.has(host.toLowerCase());
+      // SQL the command does not show (standard input, a redirect, a here-document) sent to a host that is not this machine
+      // cannot be judged: it is unknown, like unreadable -c/-f SQL.
+      if (remote) out.push({ provider: "postgres", verb: "unknown", scope: "remote", risk: "unknown" });
+      else if (!/(?:^|\s)(?:-h\s*|--host[= ])(?:localhost|127\.0\.0\.1)\b/.test(raw) && /\s-[a-zA-Z]*[cf]|--command|--file/.test(` ${raw}`)) out.push({ provider: "postgres", verb: "unknown", scope: "unknown", risk: "unknown" });
     }
   }
   return out;

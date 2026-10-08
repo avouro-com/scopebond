@@ -1,5 +1,70 @@
 # @scopebond/agent
 
+## 0.5.5
+
+### Patch Changes
+
+- Updated dependencies [b35ae68]
+  - @scopebond/hook@0.21.4
+
+## 0.5.4
+
+### Patch Changes
+
+- b9c0504: Each delivery batch's record numbers are now signed with the computer's enrolled key. The Cloud exporter takes an optional `sequenceProof` (the attester and the machine credential's id) and sends `seq_proof: { kid, signature }` beside `seq` and `queue`, over `"scopebond:delivery-sequence/v1\n"` followed by the canonical JSON of the credential id, the queue id, the numbers and the SHA-256 of each receipt as sent. A party holding only the bearer credential can no longer attach numbers to records of its choosing. The hook and the agent sign with the key that signs their receipts; an exporter without a key sends the numbers unsigned, as before.
+- Updated dependencies [bc4999d]
+- Updated dependencies [ddb4033]
+- Updated dependencies [b7bbe7a]
+- Updated dependencies [b9c0504]
+  - @scopebond/hook@0.21.3
+  - @scopebond/gateway@0.17.2
+
+## 0.5.3
+
+### Patch Changes
+
+- 258cdb6: Records that miss normal delivery are now kept, put right and reported.
+
+  - When a receipt is written locally but its delivery-queue write fails (the queue cannot be opened, or another process holds its lock), the action stays allowed and recorded on the computer as before. The miss is now noted, kept as an `outbox_error` gap on the next flush, and the receipt is queued then (every receipt written since the miss that the queue does not know yet, in log order). A tool call waits at most 2 seconds for the queue's lock, so an override wait plus a lock wait stays inside the coding agent's hook time limit; after an override wait, the local log also waits less for its lock. `flush` and the Scopebond Agent keep the longer wait.
+  - An evaluation stopped between its reservation and its receipt (a hook time limit, a crash) is closed after five minutes by the next hook call or the Scopebond Agent, with a signed receipt whose outcome is unknown (`execution.state: outcome_unknown`, reference `scopebond:evaluation-interrupted`, the policy's decision kept), queued like any other.
+  - The delivery queue keeps a lifetime count of gaps per reason (`status().gapsByReason`), beside the lifetime total; the gap rows themselves are still trimmed to the newest 10,000. `SqliteCloudOutbox` takes a `busyTimeoutMs` option and has `setBusyTimeout()` and `known()`; `SqliteReceiptStore` has `interruptedActions()`, `settleAction()`, `lastId()` and `setBusyTimeout()`.
+  - The rules check sends `x-scopebond-gaps-total` (the lifetime total) and `x-scopebond-gaps-by-reason` (compact JSON of reason code to count) when the queue has any gaps. `status` and `doctor` show a "delivery gaps" line, and `status --json` adds `delivery.gaps_total` and counts `delivery.gaps_by_reason` over the queue's lifetime.
+  - The status texts no longer say an unusable delivery queue blocks every action: actions stay allowed and recorded on the computer, and are sent once the queue can be written again.
+
+- d6996ad: Delivery no longer stalls on a request that never answers. Each delivery request now has a time limit (30 seconds by default, `requestTimeoutMs`), and the limit also covers reading the answer.
+
+  The Scopebond Agent:
+
+  - caps each delivery cycle at 10 minutes and goes on to the next cycle;
+  - starts its maintenance before the first cycle;
+  - answers Send now and stop without waiting on a stuck cycle;
+  - reports when the running cycle started (`cycle_started_at` in `/status`).
+
+  The hook:
+
+  - waits on a flush that is already sending instead of returning at once, so a backlog of 100 or more records drains from hook calls;
+  - records a cut-off only when its time limit really ran out;
+  - no longer replaces the agent's recent delivery error with its own cut-off message.
+
+  An agent that the workspace's plan paused now says so in the tray and in `status`, instead of offering Send records now.
+
+  The rules check now sends `x-scopebond-accepts-requests`: `flush,self_check` from the agent and `none` from a hook call. A workspace that reads the header then leaves a request from its computer page (send now, check now) for the agent.
+
+- Updated dependencies [258cdb6]
+- Updated dependencies [d6996ad]
+- Updated dependencies [7fc5efb]
+- Updated dependencies [0f7268b]
+- Updated dependencies [0f7268b]
+- Updated dependencies [af23f31]
+- Updated dependencies [6529530]
+- Updated dependencies [f52a2ff]
+- Updated dependencies [3839ff8]
+- Updated dependencies [d066717]
+- Updated dependencies [88a6380]
+  - @scopebond/gateway@0.17.1
+  - @scopebond/hook@0.21.2
+  - @scopebond/sdk@0.1.6
+
 ## 0.5.2
 
 ### Patch Changes
