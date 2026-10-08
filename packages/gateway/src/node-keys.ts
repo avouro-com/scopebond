@@ -6,6 +6,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { attesterFromPrivateKeyPem } from "./receipts.js";
+import { restrictToOwner } from "./node-permissions.js";
 import type { Attester } from "./receipts.js";
 
 /** Load the attester key from `file`, or generate + persist one (0600) if absent.
@@ -20,5 +21,8 @@ export function loadOrCreateAttester(opts: { file: string; kid?: string }): { at
   const dir = dirname(file);
   if (dir) mkdirSync(dir, { recursive: true });
   writeFileSync(file, pem, { mode: 0o600 });
+  // On Windows the mode is ignored: the key would inherit its folder's access list. Readable by its owner alone.
+  const restricted = restrictToOwner(file);
+  if (restricted) process.emitWarning(`could not restrict the key file ${file} to this user: ${restricted}`);
   return { attester: attesterFromPrivateKeyPem(pem, kid), created: true };
 }

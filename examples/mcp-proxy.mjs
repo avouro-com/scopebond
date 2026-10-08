@@ -9,8 +9,8 @@ import { createMcpProxy, starterMcpPolicy } from "@scopebond/mcp";
 
 const attesterKeyPem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 
-// starterMcpPolicy allows non-destructive tools on the named server and denies
-// delete_/write_/remove_/drop_/rm_ tools.
+// starterMcpPolicy allows only tools whose names mark them read-only (read_, list_,
+// get_, search_, describe_, view_) on the named server and denies every other tool.
 const policy = starterMcpPolicy("filesystem");
 
 // A stub upstream that records the last tool it was asked to run.
@@ -39,5 +39,5 @@ async function call(label, name, args) {
   console.log(`  forwarded to upstream: ${lastForwardedTool === null ? "no (blocked before forwarding)" : `yes (${lastForwardedTool})`}`);
 }
 
-await call("read_file (non-destructive → allowed, forwarded)", "read_file", { path: "notes.txt" });
-await call("delete_file (destructive → denied, never forwarded)", "delete_file", { path: "notes.txt" });
+await call("read_file (read-only name → allowed, forwarded)", "read_file", { path: "notes.txt" });
+await call("delete_file (not a read-only name → denied, never forwarded)", "delete_file", { path: "notes.txt" });

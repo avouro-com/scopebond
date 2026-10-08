@@ -58,13 +58,13 @@ test("conformance: an MCP tool from a non-allowlisted server is denied; an allow
 });
 
 test("conformance: an unknown tool is not evaluated and grants nothing", async () => {
-  const d = await freshRuntime().evaluate(mapClaudeToolUse(claude("Glob", { pattern: "**/*" })));
+  const d = await freshRuntime().evaluate(mapClaudeToolUse(claude("Frobnicate", { pattern: "**/*" })));
   assert.equal(d.decision, "not_evaluated");
   assert.equal(d.receipt.payload.execution.state, "observed_not_evaluated");
 });
 
 test("strict mode: an unknown/unmapped tool is denied by the closed allowlist, not observed", async () => {
-  const d = await freshRuntime({ strict: true }).evaluate(mapClaudeToolUse(claude("Glob", { pattern: "**/*" })));
+  const d = await freshRuntime({ strict: true }).evaluate(mapClaudeToolUse(claude("Frobnicate", { pattern: "**/*" })));
   assert.equal(d.decision, "deny", "fail-closed for tools with no taxonomy mapping");
   assert.equal(d.receipt.payload.realtime_result, "deny");
   assert.match(d.reason, /not allowlisted/);

@@ -73,6 +73,11 @@ export function overQuota(error: string | null | undefined): boolean {
   return !!error && /HTTP 429 \(quota\)/.test(error);
 }
 
+/** The workspace's plan keeps fewer agents active than it has, and this one is paused (HTTP 402 agent_paused). */
+export function planPaused(error: string | null | undefined): boolean {
+  return !!error && /HTTP 402 \(agent_paused\)/.test(error);
+}
+
 /** The HTTP status of a refusal the workspace answered (not "unreachable"), or null. */
 export function refusedStatus(error: string | null | undefined): number | null {
   const m = error ? /HTTP (\d{3})/.exec(error) : null;
@@ -134,6 +139,11 @@ export function trayModel(input: TrayInput): TrayModel {
     // Not "sending": the workspace refuses them until its limit allows. Nothing is lost; say so, and where it is changed.
     state = "attention"; headline = `Workspace limit reached: ${pending} record${pending === 1 ? "" : "s"} waiting`;
     hint = "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows; a workspace owner can change the plan.";
+    fix = ACTIONS.open_workspace;
+  } else if (pending > 0 && planPaused(d.last_error) && health.fix?.route !== "/repair") {
+    // Not a delivery problem to retry: the plan paused this agent. Sending again changes nothing; an owner decides.
+    state = "attention"; headline = `Paused by your workspace's plan: ${pending} record${pending === 1 ? "" : "s"} waiting`;
+    hint = "Your workspace's plan keeps fewer agents active than it has, and this one is paused. This computer keeps checking actions and keeps its records; they send once an owner keeps this agent active or changes the plan.";
     fix = ACTIONS.open_workspace;
   } else if (health.level === "red") {
     state = "problem"; headline = health.headline; hint = health.hint;
