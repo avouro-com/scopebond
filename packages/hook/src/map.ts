@@ -874,7 +874,12 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
   if (name === "Grep") {
     const reads = pathIntents("file.read", rel(ti.path ?? ".", cwd), name);
     const glob = typeof ti.glob === "string" ? ti.glob : "";
-    if (/\.scopebond/i.test(glob)) reads.push(...pathIntents("file.read", rel(glob.replace(/[*?[{].*$/, "") || glob, cwd), name));
+    if (/\.scopebond/i.test(glob)) {
+      // The fixed part of the filter, up to its first wildcard (a linear scan; no regular expression over the input).
+      let end = 0;
+      while (end < glob.length && !"*?[{".includes(glob[end])) end++;
+      reads.push(...pathIntents("file.read", rel(glob.slice(0, end) || glob, cwd), name));
+    }
     return reads;
   }
   if (name === "WebFetch") {
