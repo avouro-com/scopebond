@@ -163,10 +163,10 @@ The open-source packages are experimental. Start with controlled test systems an
 review each package's coverage and operational limits before important work.
 Source availability is not a certification of production protection.
 
-Current release set: `@scopebond/policy-schema@0.6.0`, `@scopebond/verify@0.5.0`,
-`@scopebond/gateway@0.16.2`, `@scopebond/sdk@0.1.4`, `@scopebond/hook@0.20.1`,
-`@scopebond/agent@0.4.6`, `@scopebond/github-action@0.5.7`, `@scopebond/mcp@2.0.6`,
-and `@scopebond/framework@0.3.11`. Release tooling keeps these references in step
+Current release set: `@scopebond/policy-schema@0.7.0`, `@scopebond/verify@0.6.0`,
+`@scopebond/gateway@0.17.0`, `@scopebond/sdk@0.1.5`, `@scopebond/hook@0.21.0`,
+`@scopebond/agent@0.5.0`, `@scopebond/github-action@0.5.8`, `@scopebond/mcp@2.0.7`,
+and `@scopebond/framework@0.3.12`. Release tooling keeps these references in step
 with package manifests. Public setup selects npm's latest published release;
 generated hook configuration and managed workspace updates can pin versions
 separately.

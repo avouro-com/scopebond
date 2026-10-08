@@ -1,5 +1,48 @@
 # @scopebond/policy-schema
 
+## 0.7.0
+
+### Minor Changes
+
+- cb4d4e0: People may allow blocked actions for a while, or ask an admin. In the Scopebond window a person may choose **Allow once**,
+  **Allow for 15 min**, **Always allow this here…** or **Ask an admin**, as the workspace allows. "For 15 min" and "always"
+  leave a standing _allowance_ for the same action (the same type and parameters, whatever tool call it comes from): it is
+  bound to one rule, expires (30 days by default), and never applies to Scopebond's own protection. A new rule mode, _Block,
+  person may ask_, offers only **Ask an admin**: the action stays blocked and the request goes to the workspace, which answers
+  with an allowance on the next rules check. The agent sends a person's allowances and requests to the workspace once, signed
+  by the computer's enrolled key.
+
+  The receipt of an action an allowance lets through carries `override.method: "allowance"`, with `repeat_of` naming the
+  allowance and `reason_digest` the reason it was made with (receipt schema and `validateOverrideRecord`). The hook reports
+  `x-scopebond-hook-capabilities: allowances` on its rules check, so a workspace sends the new mode and terms only to hooks that
+  understand them.
+
+  Also: the action key that recognises "the same action" leaves out the tool call's group size and position, so an earlier
+  override's repeat window applies to the same command in any call.
+
+  Review fixes before release: the floor check keeps a rule a person may only ask about blocking when another rule on the same
+  action lets a person allow; the agent re-reads its files before writing, so an allowance or request the hook wrote during a
+  send is kept; allowances and requests are signed over `scopebond:allowance/v1` and `scopebond:request/v1` domain lines;
+  "Allow for 15 min" is offered only where the workspace sends the allowance terms; an older agent's "Allow once" on an
+  ask-only rule becomes a request to an admin.
+
+- e0f2de4: A session's heartbeat can be sent every five minutes instead of every minute, where the workspace says it reads the
+  interval (`x-scopebond-heartbeat-interval-s` on the rules check). Each such heartbeat says so (`interval_s: 300`; the schema
+  allows 60–900), and the workspace waits three intervals before calling a computer lost. A workspace that does not say gets
+  heartbeats every minute without `interval_s`, as before. Heartbeats continue fifteen minutes after the last hook activity
+  (it was ten), so an idle session still sends at least two.
+- c877e45: Summary records. A signed `scopebond:summary` document (evidence class `summary`) stands in for many routine receipts when
+  a computer sends its evidence: their number, an RFC 9162 root over the receipts it covers, counts by action type, result,
+  program and working folder, and the actions repeated in the window. Every action keeps its own signed receipt; a denied,
+  overridden, approved or timed-out action is never covered.
+
+  - `@scopebond/policy-schema`: `summary.schema.json`, `summarySchema`, `SUMMARY_TYPE`, `SUMMARY_DOMAIN`, `SUMMARY_RESULTS`,
+    `SUMMARY_LIMITS`.
+  - `@scopebond/verify/summary`: `validateSummary`, `verifySummarySignature` (domain-separated, so a summary never passes as
+    a receipt), `verifySummaryCoverage` (count, root, window, routine only, totals), `summaryRoot`, `summarySigningInput`.
+  - `@scopebond/gateway`: `buildSummary` (signs with the receipts' key; at most 500 count lines, the rest folded by action
+    type so the counts always add up), `isNotable` (the default test for what is always sent in full) and `repeatKey`.
+
 ## 0.6.0
 
 ### Minor Changes
