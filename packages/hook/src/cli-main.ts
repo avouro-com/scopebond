@@ -1072,8 +1072,11 @@ async function runRecover(args: string[]): Promise<void> {
 async function runFlush(): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
   if (!loadConnection(dir)) { console.error(`not connected to a workspace; run \`${cliCommand("connect <workspace-url> <enrollment>")}\` first`); process.exit(1); }
-  const runtime = createHookRuntime(runtimePaths(dir));
+  // No time limit here, so the queue waits as long as the agent's flush does for another process's lock.
+  const runtime = createHookRuntime({ ...runtimePaths(dir), queueBusyTimeoutMs: 15_000 });
   const before = runtime.exporter?.status().lastSuccessAt ?? null;
+  // First, anything the queue never got (a failed queue write, an evaluation that was cut off).
+  await runtime.repair();
   await runtime.exporter?.flush();
   const status = runtime.exporter?.status();
   // Unbounded, so its outcome is a real one: `status` and `doctor` show it like any other.

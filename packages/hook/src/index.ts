@@ -74,6 +74,9 @@ export type { SqlClass, SqlVerb } from "./sql-classify.js";
 export { readDeliveryState, writeDeliveryState, recordDeliveryAttempt, recordRulesCredential, DELIVERY_STATE_FILE } from "./delivery-state.js";
 export type { DeliveryState } from "./delivery-state.js";
 export { describeDelivery, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
+export {
+  repairDelivery, repairDeliveryAt, backfillQueue, settleInterruptedActions, noteQueueMiss, BACKFILL_FILE, INTERRUPTED_AFTER_MS, INTERRUPTED_REFERENCE,
+} from "./delivery-repair.js";
 export { buildStatusJson, STATUS_SCHEMA } from "./status-json.js";
 export type { StatusJson } from "./status-json.js";
 export { refreshIfDue, refreshProof, REFRESH_WINDOW_MS } from "./credential-refresh.js";

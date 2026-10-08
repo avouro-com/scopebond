@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import {
   CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,
-  type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter, type ReceiptStore,
+  type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter, type ReceiptStore,
 } from "@scopebond/gateway";
 import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX } from "./delivery-report.js";
@@ -120,7 +120,8 @@ export function retireAttesterKey(dir: string, kid: string): string {
  *  exported to Cloud. Returns the wrapped store and the exporter (flush + stop). */
 /** The delivery queue could not be opened or written: a full disk, a read-only or locked file. The
  *  decision still happens and the record stays in the local log; the runtime reports this error (file and fix,
- *  since `init` does not) as `deliveryUnavailable`. The queue is never deleted: it holds waiting records. */
+ *  since `init` does not) as `deliveryUnavailable`, notes the record, and queues it once the queue can be written again
+ *  (delivery-repair.ts). The queue is never deleted: it holds waiting records. */
 export class DeliveryQueueError extends Error {
   readonly repair: string;
   constructor(file: string, cause: unknown) {
@@ -132,16 +133,18 @@ export class DeliveryQueueError extends Error {
 
 export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
+  options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void } = {},
 ): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
   // Lossless (SB275): no cap and no expiry. A record leaves the queue only when the workspace
   // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
   // gateway's defaults (10,000 records, 64 MiB, 7 days) dropped the newest records once a long
   // outage filled the queue.
   let outbox: SqliteCloudOutbox;
-  try { outbox = new SqliteCloudOutbox(outboxDbPath, LOSSLESS_OUTBOX); }
+  try { outbox = new SqliteCloudOutbox(outboxDbPath, { ...LOSSLESS_OUTBOX, ...(options.busyTimeoutMs === undefined ? {} : { busyTimeoutMs: options.busyTimeoutMs }) }); }
   catch (error) { throw new DeliveryQueueError(outboxDbPath, error); }
+  // `onGap`: a record the queue could not take (its write failed after the local write) is kept as a gap by the caller.
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl,
-    summaries: summaryOptions(dirname(outboxDbPath)) });
+    summaries: summaryOptions(dirname(outboxDbPath)), ...(options.onGap ? { onGap: options.onGap } : {}) });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }
 

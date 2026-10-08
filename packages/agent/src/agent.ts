@@ -11,7 +11,7 @@ import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import {
   LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, hookVersion, ingestUrl,
-  isHarnessConfigured, loadConnection, policyBuilds, recordDeliveryAttempt, summaryOptions, syncPolicy, userHarnessFile,
+  isHarnessConfigured, loadConnection, policyBuilds, recordDeliveryAttempt, repairDeliveryAt, summaryOptions, syncPolicy, userHarnessFile,
   type Harness, type StatusJson, type SyncOutcome,
 } from "@scopebond/hook";
 
@@ -60,6 +60,9 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
   // 1. Deliver everything the hook queued, in batches, until the queue is empty or the workspace refuses.
   try {
     const outbox = new SqliteCloudOutbox(join(dir, OUTBOX_FILE), LOSSLESS_OUTBOX);
+    // First, what the queue never got: evaluations a hook process was stopped in the middle of (closed as outcome-unknown
+    // records) and receipts whose queue write failed. Best effort; never stops delivery.
+    await repairDeliveryAt(dir, outbox, now());
     const before = outbox.status().pending;
     const exporter = createCloudExporter({
       url: ingestUrl(connection), credential: connection.credential, outbox,

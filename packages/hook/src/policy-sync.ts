@@ -29,7 +29,7 @@ import { evidenceDetailFrom } from "./evidence-detail.js";
  *  error line only; never a record. */
 function deliveryHeaders(dir: string): Record<string, string> {
   try {
-    const { pending, oldest, queueId, seqAssigned } = queueStatus(dir);
+    const { pending, oldest, queueId, seqAssigned, gapsTotal, gapsByReason } = queueStatus(dir);
     const state = readDeliveryState(dir);
     return {
       "x-scopebond-pending": String(pending),
@@ -40,6 +40,9 @@ function deliveryHeaders(dir: string): Record<string, string> {
       // SB289: which queue, and the highest number it has given a record. If this queue is later
       // removed, the workspace knows how many of its numbers never arrived.
       ...(queueId ? { "x-scopebond-queue-id": queueId, "x-scopebond-seq-assigned": String(seqAssigned ?? 0) } : {}),
+      // Records that missed normal delivery (refused, a failed queue write, set aside after a key change...): the queue's
+      // lifetime total and its counts by reason code, so the workspace sees them and not only a hole in the numbering.
+      ...(gapsTotal > 0 ? { "x-scopebond-gaps-total": String(gapsTotal), "x-scopebond-gaps-by-reason": JSON.stringify(gapsByReason) } : {}),
       ...(state.last_error ? { "x-scopebond-last-error": state.last_error.replace(/[^\x20-\x7e]/g, " ").slice(0, 200) } : {}),
       // D140: the rule settings this computer runs and who set each, so the workspace shows what is true here.
       ...rulesHeader(dir),
