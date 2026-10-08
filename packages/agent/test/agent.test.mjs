@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readAllowances, readBlocked } from "@scopebond/hook";
+import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readAllowances, readBlocked, noteQueueMiss, OUTBOX_FILE as OUTBOX_FILE_NAME } from "@scopebond/hook";
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
@@ -71,6 +71,28 @@ test("a cycle delivers what the hook queued and runs the rules check", async () 
     assert.equal(result.deliveryError, null);
     assert.equal(result.rules, "own_rules");
     assert.equal(ws.received.length, 3);
+  } finally { ws.close(); }
+});
+
+test("a cycle queues a receipt whose queue write failed, and keeps the miss as a gap", async () => {
+  const ws = await workspace();
+  try {
+    const dir = await computerWithQueue(ws.url, 2);
+    // The first record's queue write failed: it is in the local log, not in the queue, and the hook noted the miss.
+    const { DatabaseSync } = await import("node:sqlite");
+    const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
+    const db = new DatabaseSync(join(dir, OUTBOX_FILE_NAME));
+    const [first] = db.prepare("SELECT event_id FROM cloud_outbox ORDER BY seq LIMIT 1").all();
+    db.prepare("DELETE FROM cloud_outbox WHERE event_id = ?").run(first.event_id);
+    db.prepare("UPDATE cloud_outbox_metadata SET pending_count = NULL").run();
+    db.close();
+    noteQueueMiss(dir, 0, first.event_id);
+    const result = await runCycle({ dir });
+    assert.equal(result.pending, 0);
+    assert.equal(ws.received.length, 2, "both receipts reach the workspace");
+    assert.ok(ws.received.some((r) => r.payload.action_ref.action_id === first.event_id));
+    const outbox = new SqliteCloudOutbox(join(dir, OUTBOX_FILE_NAME));
+    try { assert.deepEqual(outbox.status().gapsByReason, { outbox_error: 1 }); } finally { outbox.close(); }
   } finally { ws.close(); }
 });
 
@@ -336,7 +358,8 @@ test("health says green, amber or red in plain words, with the one fix", async (
   assert.deepEqual([check.level, check.fix.route], ["amber", "/maintain"]);
   const blocked = healthOf({ ...base, state: "recording_locally", delivery: { ...base.delivery, queue_error: "/srv/sb/receipts.db.cloud-outbox.db: attempt to write a readonly database" } }, null);
   assert.equal(blocked.level, "red");
-  assert.match(blocked.headline, /Every action is blocked/);
+  assert.match(blocked.headline, /delivery queue cannot be opened/);
+  assert.doesNotMatch(blocked.headline, /blocked/i, "an unusable queue does not block actions");
   assert.match(blocked.hint, /-wal and -shm/);
   assert.match(check.headline, /autostart/);
 });

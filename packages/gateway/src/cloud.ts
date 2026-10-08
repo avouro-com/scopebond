@@ -22,7 +22,14 @@ export interface CloudDeliveryGap {
   id: string | null;
   reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error" | "rekeyed" | "rejected";
   at: number;
+  /** The record's number in this queue, when it had one. A record dropped at capacity takes the next number before it is
+   *  dropped, so the numbers the workspace sees leave a hole where it was. */
+  seq?: number;
 }
+
+/** Outbox options with no cap and no expiry: nothing is ever dropped for space or age. The hook and the agent open their
+ *  queue this way; any exporter that must not lose records should too. */
+export const LOSSLESS_CLOUD_OUTBOX = { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER } as const;
 
 export interface CloudOutboxStatus {
   pending: number;
@@ -36,6 +43,9 @@ export interface CloudOutboxStatus {
   queueId?: string;
   /** SB289: the highest number this queue has given a record so far (0 before the first). */
   seqAssigned?: number;
+  /** Gaps by reason over the queue's lifetime (`gaps` is their total), kept apart from the gap rows, which are trimmed to
+   *  the newest ones. A queue made before these counts starts from its retained rows, so the counts may sum below `gaps`. */
+  gapsByReason?: Record<string, number>;
 }
 
 export interface CloudOutbox {
@@ -101,6 +111,10 @@ export interface CloudExporterOptions {
   /** Summary records (evidence detail "standard"): routine receipts leave as one signed summary per window instead of one
    *  record each; notable ones are sent in full at once. Without this, or while `detail()` says "full", every receipt is sent. */
   summaries?: CloudSummaryOptions;
+  /** How long one delivery request may take, the answer's body included, before it is abandoned and counted as a failure
+   *  (the records stay queued). Default 30 seconds. A connection that never answers (a half-open socket after sleep or a
+   *  network change) would otherwise hold the flush, and every later one, for good. */
+  requestTimeoutMs?: number;
 }
 
 export interface CloudSummaryOptions {
@@ -108,6 +122,9 @@ export interface CloudSummaryOptions {
   detail(): "full" | "standard";
   /** The key that signs this computer's receipts; it signs the summaries too. */
   attester: Attester;
+  /** This computer's digest key (64 hex) for the summaries' working-folder digests, so one folder groups under one keyed
+   *  digest across summaries. Without it, a random key for the process is used. */
+  digestKey?: string;
   /** One summary per window of this length (default five minutes). A window is summarised once it has closed. */
   windowMs?: number;
   /** An extra test for receipts that must be sent in full (for example, an action a Monitor rule matches). */
@@ -161,11 +178,13 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
   let nextSeq = 1;
   let queueId: string | undefined;
   let gapCount = 0;
+  const gapsByReason: Record<string, number> = {};
   let latestGap: CloudDeliveryGap | null = null;
 
   const recordGap = (id: string | null, reason: CloudDeliveryGap["reason"]): CloudDeliveryGap => {
     const gap = { id, reason, at: now() };
     gapCount += 1;
+    gapsByReason[reason] = (gapsByReason[reason] ?? 0) + 1;
     latestGap = gap;
     return gap;
   };
@@ -187,6 +206,7 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
       latestGap,
       queueId: (queueId ??= randomQueueId()),
       seqAssigned: nextSeq - 1,
+      gapsByReason: { ...gapsByReason },
     };
   };
 
@@ -222,7 +242,8 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
       const bytes = new TextEncoder().encode(receiptJson).byteLength;
       const current = status();
       if (current.pending >= maxPending || current.pendingBytes + bytes > maxBytes) {
-        return { queued: false, duplicate: false, gap: recordGap(id, "capacity") };
+        // The dropped record still takes its number, so the workspace sees a hole where it was.
+        return { queued: false, duplicate: false, gap: { ...recordGap(id, "capacity"), seq: nextSeq++ } };
       }
       entries.set(id, { id, payloadHash, receipt: structuredClone(receipt), enqueuedAt: now(), bytes, seq: nextSeq++ });
       return { queued: true, duplicate: false };
@@ -334,7 +355,10 @@ const keepForClock = (entry: Pick<CloudOutboxEntry, "enqueuedAt">, code: unknown
 export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   if (!opts.url.trim()) throw new TypeError("Cloud export URL is required");
   if (!opts.credential.trim()) throw new TypeError("Cloud machine credential is required");
-  const doFetch = opts.fetch ?? fetch;
+  const rawFetch = opts.fetch ?? fetch;
+  const requestTimeoutMs = Math.max(1, Math.trunc(opts.requestTimeoutMs ?? 30_000));
+  // The signal also ends a body that trickles: reading the answer fails once it fires.
+  const doFetch: typeof fetch = (input, init) => rawFetch(input, { ...init, signal: AbortSignal.timeout(requestTimeoutMs) });
   const now = opts.now ?? Date.now;
   const batchSize = Math.max(1, Math.min(100, Math.trunc(opts.batchSize ?? 100)));
   const flushMs = Math.max(100, Math.trunc(opts.flushMs ?? 15_000));
@@ -397,7 +421,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       group, w, id,
       body: {
         summary: await buildSummary(group.map((e) => e.receipt), { summaryId: id,
-          attester: s.attester, notableCount: (opts.outbox.fullCount?.(w * windowMs) ?? 0) + (notableByWindow.get(w) ?? 0), now: new Date(now()),
+          attester: s.attester, ...(s.digestKey ? { digestKey: s.digestKey } : {}), notableCount: (opts.outbox.fullCount?.(w * windowMs) ?? 0) + (notableByWindow.get(w) ?? 0), now: new Date(now()),
           window: { kind: "interval", start: new Date(w * windowMs).toISOString(), end: new Date((w + 1) * windowMs - 1).toISOString() },
         }),
         // Beside the signed summary, like a receipt's number: which of this queue's records it stands for.
@@ -441,7 +465,18 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     return { sent: items.length > 0, late, busy };
   }
 
-  async function flush(options: { routine?: boolean } = {}): Promise<void> {
+  // A flush asked for while one is sending waits for that one instead of returning at once, so a caller that bounds its wait
+  // (a hook call) waits on real work, and can tell when its time ran out.
+  let inflight: Promise<void> | null = null;
+  function flush(options: { routine?: boolean } = {}): Promise<void> {
+    if (inflight) return inflight;
+    const run = flushOnce(options);
+    if (!sending) return run; // nothing was due: it settled at once
+    inflight = run.finally(() => { inflight = null; });
+    return inflight;
+  }
+
+  async function flushOnce(options: { routine?: boolean } = {}): Promise<void> {
     if (sending || stopped || (nextAttemptAt !== null && now() < nextAttemptAt)) return;
     // Routine records wait for their summary; a per-call flush with nothing notable to send has nothing to do.
     if (options.routine === false && summarising() && !notableQueued) {

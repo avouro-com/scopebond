@@ -51,7 +51,7 @@ export {
 export type { PinResult } from "./runtime-install.js";
 export { connectCloud, ingestUrl, loadConnection, attachExporter, flushBounded, connectionPath, reportUninstall } from "./cloud.js";
 export type { HookConnection } from "./cloud.js";
-export { scrubSecrets, scrubParam, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
+export { scrubSecrets, scrubParam, scrubUrlPath, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 export {
   AGENT_KINDS, assertAgentKind, observationSigner, signObservation, observationHash, sourceReceiptHash, signingBytes,
   buildPayload, buildOperation, operationsForCall, bindingKeyFromHex, loadOrCreateBindingKey, digestPolicy,
@@ -74,6 +74,9 @@ export type { SqlClass, SqlVerb } from "./sql-classify.js";
 export { readDeliveryState, writeDeliveryState, recordDeliveryAttempt, recordRulesCredential, DELIVERY_STATE_FILE } from "./delivery-state.js";
 export type { DeliveryState } from "./delivery-state.js";
 export { describeDelivery, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
+export {
+  repairDelivery, repairDeliveryAt, backfillQueue, settleInterruptedActions, noteQueueMiss, BACKFILL_FILE, INTERRUPTED_AFTER_MS, INTERRUPTED_REFERENCE,
+} from "./delivery-repair.js";
 export { buildStatusJson, STATUS_SCHEMA } from "./status-json.js";
 export type { StatusJson } from "./status-json.js";
 export { refreshIfDue, refreshProof, REFRESH_WINDOW_MS } from "./credential-refresh.js";

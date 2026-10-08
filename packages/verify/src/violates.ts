@@ -179,6 +179,16 @@ function globMatch(glob: string, s: string): boolean {
   return new RegExp("^" + re + "$").test(s);
 }
 
+/** An HTTP host as a policy compares it: lowercase, without one trailing dot. Null when it is not a bare host name or address
+ *  with an optional port (userinfo, a path, a backslash or spaces), which no list can safely match. */
+export function bareHost(host: unknown): string | null {
+  if (typeof host !== "string") return null;
+  const h = host.trim().toLowerCase().replace(/\.$/, "");
+  if (!h || h.length > 260) return null;
+  if (/^\[[0-9a-f:.]+\](?::\d{1,5})?$/.test(h)) return h;
+  return /^(?:[a-z0-9_-]+\.)*[a-z0-9_-]+(?::\d{1,5})?$/.test(h) ? h : null;
+}
+
 function inputsHash(policy: Policy, receipts: Receipt[], claimed: Receipt, at: string | undefined): string {
   return createHash("sha256").update(canonical({ policy, receipts, claimed, at })).digest("hex");
 }
@@ -415,18 +425,29 @@ export function violates(
 
     else if (t === "endpoint_allowlist") {
       if (p.host != null) {
-        const hostOk = clause.hosts.includes(p.host);
-        const pathOk = !clause.paths || clause.paths.length === 0 || clause.paths.some((g: string) => globMatch(g, p.path ?? ""));
+        // The host is compared as an HTTP client resolves it (case, a trailing dot); one that is not a bare host, or a path
+        // that does not start with "/", could be read as another host and is never allowed.
+        const host = bareHost(p.host);
+        const path = p.path ?? "/";
+        const hostOk = host !== null && clause.hosts.some((h: string) => bareHost(h) === host);
+        const pathOk = typeof path === "string" && path.startsWith("/")
+          && (!clause.paths || clause.paths.length === 0 || clause.paths.some((g: string) => globMatch(g, path)));
         const methodOk = !clause.methods || clause.methods.length === 0 || clause.methods.includes(p.method);
         if (!(hostOk && pathOk && methodOk)) { record(clause, `HTTP ${p.method ?? ""} ${p.host}${p.path ?? ""} not allowlisted`); continue; }
       }
     }
 
     else if (t === "endpoint_denylist") {
-      if (p.host != null && clause.hosts.includes(p.host)) {
-        const pathHit = !clause.paths || clause.paths.length === 0 || clause.paths.some((g: string) => globMatch(g, p.path ?? ""));
-        const methodHit = !clause.methods || clause.methods.length === 0 || clause.methods.includes(p.method);
-        if (pathHit && methodHit) { record(clause, `HTTP ${p.host}${p.path ?? ""} is denied`); continue; }
+      if (p.host != null) {
+        const host = bareHost(p.host);
+        const path = p.path ?? "/";
+        // A host or path that cannot be compared safely is treated as denied: it may name a denied host another way.
+        if (host === null || typeof path !== "string" || !path.startsWith("/")) { record(clause, `HTTP ${p.host}${p.path ?? ""} is not a plain host and path`); continue; }
+        if (clause.hosts.some((h: string) => bareHost(h) === host)) {
+          const pathHit = !clause.paths || clause.paths.length === 0 || clause.paths.some((g: string) => globMatch(g, path));
+          const methodHit = !clause.methods || clause.methods.length === 0 || clause.methods.includes(p.method);
+          if (pathHit && methodHit) { record(clause, `HTTP ${p.host}${p.path ?? ""} is denied`); continue; }
+        }
       }
     }
 

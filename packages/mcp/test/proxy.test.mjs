@@ -31,7 +31,7 @@ test("mapMcpToolCall digests arguments and never stores them", () => {
   assert.equal(a.action_type, "mcp.tool.call");
   assert.equal(a.params.server, "filesystem");
   assert.equal(a.params.tool, "read_file");
-  assert.match(String(a.params.args_digest), /^sha256:[0-9a-f]{64}$/);
+  assert.match(String(a.params.args_digest), /^hmac-sha256:[0-9a-f]{64}$/);
   assert.equal(JSON.stringify(a).includes("/etc/passwd"), false, "raw arguments are not retained");
 });
 

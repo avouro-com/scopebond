@@ -53,7 +53,8 @@ export { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
 export type { Ed25519Jwk } from "./webcrypto.js";
 export { KvReceiptStore, loadOrCreateKvAttester, createWorkerGateway } from "./workers.js";
 export type { KvLike } from "./workers.js";
-export { createCloudExporter, createMemoryCloudOutbox, withCloudExporter, seqRanges } from "./cloud.js";
+export { createCloudExporter, createMemoryCloudOutbox, withCloudExporter, seqRanges, LOSSLESS_CLOUD_OUTBOX } from "./cloud.js";
+export { scrubSecretText } from "./scrub.js";
 export { completeCloudEnrollment, CloudEnrollmentError } from "./enrollment.js";
 export type { CloudEnrollmentBundle, CloudEnrollmentResult } from "./enrollment.js";
 export type {
