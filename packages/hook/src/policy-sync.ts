@@ -34,6 +34,9 @@ function deliveryHeaders(dir: string): Record<string, string> {
     return {
       "x-scopebond-pending": String(pending),
       ...(oldest !== null ? { "x-scopebond-oldest-pending-at": String(oldest) } : {}),
+      // The oldest time is in this computer's clock; sending the clock beside it lets the workspace measure how long records
+      // have waited on its own clock, and see a clock running ahead (its records are then refused as signed in the future).
+      ...(oldest !== null ? { "x-scopebond-clock": String(Date.now()) } : {}),
       // SB289: which queue, and the highest number it has given a record. If this queue is later
       // removed, the workspace knows how many of its numbers never arrived.
       ...(queueId ? { "x-scopebond-queue-id": queueId, "x-scopebond-seq-assigned": String(seqAssigned ?? 0) } : {}),
