@@ -5,9 +5,9 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { hostname, uptime } from "node:os";
 import { join } from "node:path";
-import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
 import { fetchVerifiedInstaller, installAfterExit, installKind } from "./native-update.js";
@@ -23,6 +23,8 @@ import { checkResult, trayModel, type RecentBlock, type TrayModel } from "./tray
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
+import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
+import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
@@ -66,6 +68,8 @@ export interface ServiceOptions {
   prompter?: Prompter;
   /** The Windows tray icon (default on Windows; SCOPEBOND_AGENT_TRAY=off turns it off). */
   tray?: boolean;
+  /** Runs one local store upkeep pass (default: `scopebond-agent upkeep` in a child process; tests replace it). */
+  upkeep?: (dir: string) => Promise<UpkeepReport>;
   /** Called once the agent has stopped because `stop` (or `autostart off`) asked it to; the CLI exits. */
   onStopped?: () => void;
 }
@@ -84,7 +88,7 @@ export interface MaintenanceResult {
   hookEntries: Array<{ harness: Harness; file: string; reason: string }>;
   selfCheck: Awaited<ReturnType<typeof runSelfCheck>>;
   /** The local store's upkeep this pass (D144): rows rewritten, receipts past retention removed, space returned. */
-  store?: ReturnType<typeof runStoreUpkeep>;
+  store?: UpkeepReport;
   error: string | null;
 }
 
@@ -220,8 +224,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let stopped = false;
   let lastSelfCheckAt = 0;
   // SB388: time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
-  // computer slept (or the agent was stopped); waiting is counted again from the next cycle.
-  let awakeSince = Date.now();
+  // computer slept (or the agent was stopped); waiting is counted again from the next cycle. The wake time is kept across
+  // restarts of the agent alone (awake.ts), so a restart never hides a backlog.
+  const allowedGapMs = Math.max(3 * interval, 5 * 60_000);
+  let awakeSince = awakeSinceAtStart({ saved: readAwake(options.dir), now: Date.now(), uptimeMs: uptime() * 1000, allowedGapMs });
   let lastCycleAt = 0;
   // A long step the person should see as "working" (an update), or null.
   let working: string | null = null;
@@ -255,9 +261,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const cycle = async (): Promise<CycleResult> => {
     if (running) return running;
     const started = Date.now();
-    const allowedGap = failures ? MAX_BACKOFF_MS + 5 * 60_000 : Math.max(3 * interval, 5 * 60_000);
+    const allowedGap = failures ? MAX_BACKOFF_MS + 5 * 60_000 : allowedGapMs;
     if (lastCycleAt && started - lastCycleAt > allowedGap) awakeSince = started;
     lastCycleAt = started;
+    writeAwake(options.dir, { awake_since: awakeSince, last_cycle_at: started });
     running = runCycle({ dir: options.dir, fetchImpl: options.fetchImpl }).then(async (result) => {
       await sendReasons();
       try { noticeHealth(); } catch { /* status is best effort */ }
@@ -268,6 +275,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // SB390: asked from the workspace's computer page. Send again now (the cycle sent before its rules check), or run the
       // self-check; each once.
       if (result.requested === "flush") { log("the workspace asked this computer to send now"); setTimeout(() => { void cycle(); }, 0); }
+      // A long queue: this cycle's sending time ran out, so the next one starts right away instead of at the next interval.
+      else if (result.more && !stopped) setTimeout(() => { void cycle(); }, 1_000);
       if (result.requested === "self_check") { log("the workspace asked this computer to check now"); setTimeout(() => { void maintain(true); }, 0); }
       if (result.connected && Date.now() - summaryAt > SUMMARY_EVERY_MS) void refreshSummary();
       return result;
@@ -330,7 +339,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // The local store: older rows rewritten, acknowledged receipts past the retention window removed, space returned.
       // The agent may rewrite the whole file once (the hook never does that during a tool call).
       try {
-        result.store = runStoreUpkeep(options.dir, { budgetMs: 30_000, allowFullVacuum: true });
+        // In a process of its own: a pass is synchronous SQLite work for up to 30 s, and the agent keeps answering meanwhile.
+        result.store = await (options.upkeep ?? runUpkeepApart)(options.dir);
         const kept = result.store;
         if (kept && (kept.migrated || kept.receiptsRemoved || kept.stateRemoved || kept.pagesFreed)) {
           log(`local store: ${kept.migrated} row(s) rewritten, ${kept.receiptsRemoved} receipt(s) past retention removed, ${kept.stateRemoved} finished check record(s) removed, ${kept.pagesFreed} page(s) returned`);

@@ -120,3 +120,25 @@ test("a workspace at its monthly limit is said plainly, not 'sending'; another r
   const refused = trayModel(input(status({ pending: 4, oldest_pending_age_s: 60, last_error: "ingest failed: HTTP 413: too large" })));
   assert.equal(refused.rows.find((r) => r.label === "Delivery")?.value, "4 waiting · last try refused (HTTP 413)");
 });
+
+test("after a restart of the agent alone, waiting counts from the saved wake time, so a backlog is attention at once", async () => {
+  const { awakeSinceAtStart } = await import("../dist/index.js");
+  const H = 60 * MIN;
+  const gap = 5 * MIN;
+  const boot = NOW - 48 * H;
+  const uptimeMs = NOW - boot;
+  // The agent restarted 30 s after its last cycle; the computer has been awake for four hours.
+  const since = awakeSinceAtStart({ saved: { awake_since: NOW - 4 * H, last_cycle_at: NOW - 30_000 }, now: NOW, uptimeMs, allowedGapMs: gap });
+  assert.equal(since, NOW - 4 * H);
+  const model = trayModel(input(status({ pending: 42, oldest_pending_age_s: 4 * 3600 }), { awakeSince: since }));
+  assert.equal(model.state, "attention");
+  // Restarted soon after a cycle, with a saved wake time from before the computer last started: from its start.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 30_000 }, now: NOW, uptimeMs: 2 * H, allowedGapMs: gap }), NOW - 2 * H);
+  // The computer was switched off and started 10 minutes ago: awake since it started, never since before.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 20 * H }, now: NOW, uptimeMs: 10 * MIN, allowedGapMs: gap }), NOW - 10 * MIN);
+  // A long gap with no restart of the computer (asleep, or the agent stopped): from now, as before; sleep never counts.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 3 * H }, now: NOW, uptimeMs, allowedGapMs: gap }), NOW);
+  // Nothing saved, or a saved time from the future (a clock that moved back): from now.
+  assert.equal(awakeSinceAtStart({ saved: null, now: NOW, uptimeMs, allowedGapMs: gap }), NOW);
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - H, last_cycle_at: NOW + H }, now: NOW, uptimeMs, allowedGapMs: gap }), NOW);
+});

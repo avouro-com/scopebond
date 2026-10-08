@@ -23,6 +23,7 @@ import { agentVersion } from "./update.js";
 import { writeOutputTo } from "./log-file.js";
 import { removeAppsEntry, writeAppsEntry } from "./apps-entry.js";
 import { installKind } from "./native-update.js";
+import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
 
 let cmd = "help";
@@ -63,6 +64,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const stop = () => { void service.stop().finally(() => process.exit(0)); };
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
+      return;
+    }
+    case "upkeep": {
+      // Internal: the agent runs its local store upkeep through this, in a process of its own.
+      upkeepCommand(dir, rest);
       return;
     }
     case "status": {
