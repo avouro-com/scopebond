@@ -16,7 +16,7 @@ export interface AwakeState {
 
 /** Where waiting is counted from when the agent starts.
  *  - The last cycle was recent and after the computer started: the agent restarted while the computer stayed awake, so the
- *    saved wake time stands.
+ *    saved wake time stands (never earlier than the computer's start).
  *  - The computer started after the last cycle: it was off (or rebooted), so it has been awake since it started.
  *  - Otherwise (no saved state, or a long gap without a restart of the computer: asleep, or the agent stopped): from now. */
 export function awakeSinceAtStart(input: { saved: AwakeState | null; now: number; uptimeMs: number; allowedGapMs: number }): number {
@@ -24,7 +24,7 @@ export function awakeSinceAtStart(input: { saved: AwakeState | null; now: number
   const bootAt = now - Math.max(0, input.uptimeMs);
   if (!saved) return now;
   const { awake_since: since, last_cycle_at: last } = saved;
-  if (last <= now && now - last <= input.allowedGapMs && since <= last && since >= bootAt) return since;
+  if (last <= now && now - last <= input.allowedGapMs && since <= last && last >= bootAt) return Math.max(since, bootAt);
   if (last < bootAt && bootAt <= now) return bootAt;
   return now;
 }

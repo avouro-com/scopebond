@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, uptime } from "node:os";
 import { join } from "node:path";
 import { startService, AWAKE_FILE } from "../dist/index.js";
 
@@ -14,7 +14,11 @@ test("the service saves its wake time each cycle and a restart keeps it", async 
   try {
     await service.cycleNow();
     const saved = JSON.parse(readFileSync(join(dir, AWAKE_FILE), "utf8"));
-    assert.equal(saved.awake_since, fourHoursAgo, "the wake time from before the restart stands");
+    // The wake time from before the restart stands, never earlier than this computer's start (a CI runner may be younger).
+    const bootAt = Date.now() - uptime() * 1000;
+    const expected = Math.max(fourHoursAgo, bootAt);
+    assert.ok(Math.abs(saved.awake_since - expected) < 5_000, `awake since ${new Date(saved.awake_since).toISOString()}, expected ${new Date(expected).toISOString()}`);
+    assert.ok(Date.now() - saved.awake_since > 60_000, "not counted from the agent's start");
     assert.ok(Date.now() - saved.last_cycle_at < 5_000);
   } finally { await service.stop(); }
 });

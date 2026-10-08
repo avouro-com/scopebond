@@ -132,6 +132,8 @@ test("after a restart of the agent alone, waiting counts from the saved wake tim
   assert.equal(since, NOW - 4 * H);
   const model = trayModel(input(status({ pending: 42, oldest_pending_age_s: 4 * 3600 }), { awakeSince: since }));
   assert.equal(model.state, "attention");
+  // Restarted soon after a cycle, with a saved wake time from before the computer last started: from its start.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 30_000 }, now: NOW, uptimeMs: 2 * H, allowedGapMs: gap }), NOW - 2 * H);
   // The computer was switched off and started 10 minutes ago: awake since it started, never since before.
   assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 20 * H }, now: NOW, uptimeMs: 10 * MIN, allowedGapMs: gap }), NOW - 10 * MIN);
   // A long gap with no restart of the computer (asleep, or the agent stopped): from now, as before; sleep never counts.
