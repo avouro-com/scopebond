@@ -134,9 +134,20 @@ export function normalizeRemote(url: string): { host: string; path: string } | n
     while (start < body.length && body.charCodeAt(start) === 47) start++;
     return body.slice(start);
   };
-  // Userinfo runs to the LAST "@" before the path, as URL parsers (and npm, pip) read it: a password may contain "@".
-  let m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(text);
-  if (m && !/^file$/i.test(text.slice(0, 4))) return { host: m[1].toLowerCase(), path: strip(m[2]) };
+  // Userinfo runs to the LAST "@" before the path, as URL parsers (and npm, pip) read it: a password may contain "@". Found by
+  // scanning, not by a pattern, so no input can make it backtrack.
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(text);
+  if (scheme && !/^file$/i.test(text.slice(0, 4))) {
+    const rest = text.slice(scheme[0].length);
+    const slash = rest.indexOf("/");
+    const authority = slash > 0 ? rest.slice(0, slash) : "";
+    const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+    const colon = hostPort.indexOf(":");
+    const host = colon === -1 ? hostPort : /^\d+$/.test(hostPort.slice(colon + 1)) ? hostPort.slice(0, colon) : "";
+    const path = slash > 0 ? rest.slice(slash + 1) : "";
+    if (host && path) return { host: host.toLowerCase(), path: strip(path) };
+  }
+  let m: RegExpExecArray | null;
   m = /^(?:[^@/\s]+@)?([^/:\s]+):(?!\/\/)([^\s]+)$/.exec(text);
   if (m && !/^[A-Za-z]$/.test(m[1])) return { host: m[1].toLowerCase(), path: strip(m[2]) };
   // A local path: a drive-letter or POSIX path, absolute or relative.
