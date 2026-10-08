@@ -225,9 +225,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let lastSelfCheckAt = 0;
   // SB388: time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
   // computer slept (or the agent was stopped); waiting is counted again from the next cycle. The wake time is kept across
-  // restarts of the agent alone (awake.ts), so a restart never hides a backlog.
+  // restarts of the agent alone (awake.ts), so a restart never hides a backlog; after a long gap the waiting records decide.
   const allowedGapMs = Math.max(3 * interval, 5 * 60_000);
-  let awakeSince = awakeSinceAtStart({ saved: readAwake(options.dir), now: Date.now(), uptimeMs: uptime() * 1000, allowedGapMs });
+  const startedAt = Date.now();
+  let oldestPendingAt: number | null = null;
+  try {
+    const age = computerStatus(options.dir, startedAt).delivery.oldest_pending_age_s;
+    oldestPendingAt = age === null ? null : startedAt - age * 1000;
+  } catch { /* no store yet: nothing waiting */ }
+  let awakeSince = awakeSinceAtStart({ saved: readAwake(options.dir), now: startedAt, uptimeMs: uptime() * 1000, allowedGapMs, oldestPendingAt });
   let lastCycleAt = 0;
   // A long step the person should see as "working" (an update), or null.
   let working: string | null = null;
