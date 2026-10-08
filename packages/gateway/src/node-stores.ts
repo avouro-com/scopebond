@@ -5,6 +5,7 @@
 import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
+import { restrictToOwner } from "./node-permissions.js";
 
 /** `node:sqlite` from Node's built-ins (a bundled build cannot resolve it through a module path), else by require. */
 function nodeSqlite(): unknown {
@@ -54,7 +55,10 @@ type SqliteDb = { exec(sql: string): void; prepare(sql: string): { run(...a: unk
 function openSqlite(path: string, fresh?: string, busyTimeoutMs = 15_000): SqliteDb {
   ensureDir(path);
   const { DatabaseSync } = nodeSqlite() as { DatabaseSync: new (p: string) => SqliteDb };
+  const created = !existsSync(path);
   const db = new DatabaseSync(path);
+  // A new database holds signed evidence: readable by its owner alone (on Windows the inherited access list is replaced).
+  if (created) restrictToOwner(path);
   try {
     db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))};`);
     // Page size and vacuum mode are fixed once a file is in WAL mode, so a new file gets them first.
@@ -108,7 +112,10 @@ export class FileReceiptStore implements ReceiptStore {
     }
   }
   private append(file: string, line: string): void {
-    appendFileSync(file, line + "\n");
+    const fresh = !existsSync(file);
+    appendFileSync(file, line + "\n", { mode: 0o600 });
+    // A new log holds signed evidence: readable by its owner alone (on Windows the mode is ignored).
+    if (fresh) restrictToOwner(file);
   }
   put(r: SignedReceipt): void {
     const serialized = JSON.stringify(r);
