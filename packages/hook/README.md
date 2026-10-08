@@ -561,9 +561,9 @@ workspace's *Standard* evidence detail never sends; the retention above applies 
 record until the workspace acknowledges it. The local observation queue keeps the newest 1,000 refused observations and
 counts the older ones it removes. Archives written by `prune --before` stay until you delete them.
 
-**What is sent to the workspace.** Every receipt, unless the workspace sets its evidence
-detail to *Standard* (it says so on each rules check). Then the notable receipts are sent
-in full at once — anything not plainly allowed (a block, an override, an approval, an
+**What is sent to the workspace.** By default the *Standard* evidence detail, until the
+workspace sets its evidence detail to *Full* (it says so on each rules check); then every
+receipt is sent. Under *Standard*, the notable receipts are sent in full at once — anything not plainly allowed (a block, an override, an approval, an
 action a Monitor rule matched), pushes, MCP calls, web fetches, and writes outside the
 project or to CI, agent or Scopebond settings — and the routine ones leave as one signed
 summary per five minutes (`scopebond:summary`, see `@scopebond/verify/summary`): their
