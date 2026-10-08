@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { hookSelfCommand, loadConnection, nodeTooOldLines, readDeliveryState, type Harness } from "@scopebond/hook";
 import { autostartHealth, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
-import { compareVersions, ownNpm } from "./update.js";
+import { compareVersions, npmEnvironment, npmInstallArgs, ownNpm } from "./update.js";
 import { repairHookEntries } from "./service.js";
 
 export type SetupStep = "login" | "install_agent" | "autostart";
@@ -65,13 +65,13 @@ export function addToPathCommand(dir: string): string {
   return `[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";${dir}", "User")`;
 }
 
-function npm(args: string[]): { ok: boolean; out: string } {
+function npm(args: string[], env?: NodeJS.ProcessEnv): { ok: boolean; out: string } {
   const win = process.platform === "win32";
   // This Node's own npm, without a shell; otherwise npm on PATH (a .cmd on Windows, started through a shell, each argument quoted).
   const own = ownNpm();
   const r = own
-    ? spawnSync(own[0], [...own[1], ...args], { encoding: "utf8", windowsHide: true, timeout: 5 * 60_000 })
-    : spawnSync(win ? "npm.cmd" : "npm", win ? args.map((a) => `"${a}"`) : args, { encoding: "utf8", shell: win, windowsHide: true, timeout: 5 * 60_000 });
+    ? spawnSync(own[0], [...own[1], ...args], { encoding: "utf8", windowsHide: true, timeout: 5 * 60_000, env })
+    : spawnSync(win ? "npm.cmd" : "npm", win ? args.map((a) => `"${a}"`) : args, { encoding: "utf8", shell: win, windowsHide: true, timeout: 5 * 60_000, env });
   return { ok: r.status === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
@@ -124,7 +124,8 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   if (steps.includes("install_agent")) {
     const spec = process.env.SCOPEBOND_AGENT_INSTALL_SPEC || `@scopebond/agent@${o.version}`;
     say(`Installing the Scopebond Agent for this user: ${process.platform === "win32" ? "npm.cmd" : "npm"} install -g ${spec}`);
-    const installed = npm(["install", "-g", spec, "--no-fund", "--no-audit"]);
+    // Package scripts off and the public registry pinned, as the agent's own updates do.
+    const installed = npm(npmInstallArgs(spec), npmEnvironment());
     if (!installed.ok) { console.error(`Setup stopped: npm could not install the agent.\n${installed.out.slice(-1500)}`); return 1; }
     cli = globalAgent().cli;
     if (!cli) { console.error("Setup stopped: npm reported success but the agent is not in npm's global folder."); return 1; }

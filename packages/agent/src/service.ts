@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
-import { fetchVerifiedInstaller, installAfterExit, installKind } from "./native-update.js";
+import { fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind } from "./native-update.js";
 import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
@@ -22,7 +22,9 @@ import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { checkResult, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
-import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
+import {
+  agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
+} from "./update.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
@@ -62,6 +64,8 @@ export interface ServiceOptions {
   maintenance?: boolean;
   /** Called after a successful update instead of restarting (tests). */
   onUpdated?: (version: string) => void;
+  /** Confirms the newly installed agent starts and reports its version before this one hands over (tests replace it). */
+  startCheck?: (version: string) => Promise<{ ok: boolean; output: string }>;
   /** Shows the Scopebond window for an override (tests replace it). */
   prompter?: Prompter;
   /** The Windows tray icon (default on Windows; SCOPEBOND_AGENT_TRAY=off turns it off). */
@@ -163,7 +167,10 @@ export async function takeOver(dir: string, cli: string, waitMs = 30_000): Promi
   const refresh = process.env[REFRESH_LAUNCHER_ENV] === "1";
   delete process.env[AFTER_PID_ENV];
   delete process.env[REFRESH_LAUNCHER_ENV];
-  if (Number.isInteger(previous) && previous > 0) await waitForExit(previous, waitMs);
+  // The agent being replaced stops serving (control channel closed, lock released) and then waits for this one to answer
+  // before it exits, so it can go back to its own version if this one never starts. Unless the launcher must be rewritten
+  // (nothing may still run it), its stopping is enough.
+  if (Number.isInteger(previous) && previous > 0) await waitForExit(previous, waitMs, refresh ? undefined : () => !lockHeldBy(dir, previous));
   if (!refresh) return;
   // The old launcher reads its last lines after its agent exits; give it a moment to finish before its file changes.
   await new Promise((r) => setTimeout(r, 2_000));
@@ -171,12 +178,32 @@ export async function takeOver(dir: string, cli: string, waitMs = 30_000): Promi
   catch (error) { console.log(`${new Date().toISOString()} could not rewrite the autostart launcher: ${(error as Error).message}`); }
 }
 
-export async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
+export async function waitForExit(pid: number, timeoutMs: number, released?: () => boolean): Promise<void> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     try { process.kill(pid, 0); } catch { return; }
+    if (released?.()) return;
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+/** Whether the one-agent lock names `pid`. */
+export function lockHeldBy(dir: string, pid: number): boolean {
+  try { return readFileSync(join(dir, AGENT_LOCK), "utf8").trim().split(/\s+/)[0] === String(pid); } catch { return false; }
+}
+
+/** How long the agent that handed over waits for its replacement to answer before going back to its own version. */
+export const HANDOVER_CONFIRM_MS = 3 * 60_000;
+
+/** Wait until an agent other than this process answers on the local channel reporting `version`. */
+export async function waitForAgentVersion(dir: string, version: string, timeoutMs: number): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const status = await callAgent(dir, "GET", "/status", undefined, 2_000) as { agent?: { pid?: number; version?: string } | null } | null;
+    if (status?.agent && status.agent.pid !== process.pid && status.agent.version === `agent/${version}`) return true;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return false;
 }
 
 export const AGENT_LOCK = "agent.lock";
@@ -309,48 +336,52 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const target = connection ? await fetchClientVersion(connection, options.fetchImpl) : null;
       if (target) result.policy = target.policy;
       const current = agentVersion();
-      // Hook entries first: under "recommended" they move to the newest hook named or carried; under "hold" only broken ones
-      // are repaired, at the version they already name or the one the agent carries. Done before a self-update, so an update
-      // whose handover fails never leaves the hook behind.
-      const hookTarget = target?.policy === "recommended" && target.hook && compareVersions(target.hook, hookVersion()) > 0 ? target.hook : hookVersion();
-      result.hookEntries = maintainHookEntries(harnesses, hookTarget, target?.policy !== "hold");
+      // Hook entries first: always the hook this agent carries, by its path (never a version the workspace names, and never
+      // an npx form resolved at run time). Under "hold" only broken ones are repaired. After an update the new agent pins
+      // them to the hook it carries at its own first upkeep.
+      result.hookEntries = maintainHookEntries(harnesses, target?.policy !== "hold");
       for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
       const kind = installKind();
-      if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 && kind === "per-machine") {
+      const newer = target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 ? target.agent : null;
+      if (newer && kind === "per-machine") {
         // Installed for every user: the organisation that deployed it updates it.
-        log(`the workspace recommends the Scopebond Agent ${target.agent}; this install is updated by your organization`);
-      } else if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 && kind === "per-user") {
-        log(`updating the Scopebond Agent ${current} -> ${target.agent} (signed installer)`);
-        const verified = await fetchVerifiedInstaller(target.agent, { dir: options.dir, fetchImpl: options.fetchImpl });
-        if (verified.ok) {
-          result.updatedTo = target.agent;
+        log(`the workspace recommends the Scopebond Agent ${newer}; this install is updated by your organization`);
+      } else if (newer && kind === "per-user") {
+        log(`updating the Scopebond Agent ${current} -> ${newer} (signed installer)`);
+        const verified = await fetchVerifiedInstaller(newer, { dir: options.dir, fetchImpl: options.fetchImpl });
+        if (verified.ok && installerUnchanged(verified)) {
+          result.updatedTo = newer;
           lastMaintenance = result;
-          if (options.onUpdated) options.onUpdated(target.agent);
+          if (options.onUpdated) options.onUpdated(newer);
           else {
-            // The installer replaces this file, so it runs after this agent has exited, and starts the agent again.
-            installAfterExit(verified.path, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null);
+            // The installer replaces this file, so it runs after this agent has exited, and starts the agent again. The helper
+            // checks the installer once more right before msiexec runs it.
+            installAfterExit(verified, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null);
             setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
           }
           return result;
         }
-        result.error = `update to ${target.agent} could not be verified: ${verified.reason}; nothing was installed`;
+        result.error = `update to ${newer} could not be verified: ${verified.ok ? "the installer changed after it was checked" : verified.reason}; nothing was installed`;
         log(result.error);
-      } else if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0) {
-        log(`updating the Scopebond Agent ${current} -> ${target.agent}`);
-        const installed = await installAgent(target.agent);
-        if (installed.ok) {
-          result.updatedTo = target.agent;
+      } else if (newer && recentlyFailedUpdate(options.dir, newer)) {
+        log(`the Scopebond Agent ${newer} did not start here earlier; staying on ${current} for now`);
+      } else if (newer) {
+        log(`updating the Scopebond Agent ${current} -> ${newer}`);
+        const installed = await installAgent(newer, { fetchImpl: options.fetchImpl });
+        const started = installed.ok ? await (options.startCheck ?? startCheck)(newer) : null;
+        if (installed.ok && started?.ok) {
+          result.updatedTo = newer;
           lastMaintenance = result;
-          if (options.onUpdated) options.onUpdated(target.agent);
-          else {
-            const code = spawnReplacement(options.dir) ? 0 : RESTART_EXIT_CODE;
-            // Hand over: stop, then exit. A stop that never finishes (a tray or window child that will not close) must not
-            // keep the old agent alive with the replacement waiting on it, so the exit has a hard deadline.
-            setTimeout(() => { setTimeout(() => process.exit(code), 5_000).unref(); void stop().finally(() => process.exit(code)); }, 500);
-          }
+          if (options.onUpdated) options.onUpdated(newer);
+          else handOver(newer, current);
           return result;
         }
-        result.error = `update to ${target.agent} failed: ${installed.output.slice(-300)}`;
+        if (installed.ok) {
+          // Installed, but the new program does not start: put the running version back.
+          recordFailedUpdate(options.dir, newer);
+          const back = await installAgent(current, { provenance: false });
+          result.error = `the Scopebond Agent ${newer} did not start (${(started?.output ?? "").slice(-200)}); ${back.ok ? `went back to ${current}` : `going back to ${current} failed: ${back.output.slice(-200)}`}`;
+        } else result.error = `update to ${newer} failed: ${installed.output.slice(-300)}`;
         log(result.error);
       }
       // The local store: older rows rewritten, acknowledged receipts past the retention window removed, space returned.
@@ -499,6 +530,28 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     if (running) await Promise.race([running.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2_000).unref?.())]);
     await control.close();
     releaseAgentLock(lock);
+  };
+  /** Hand over to the agent just installed: start it, stop serving, and wait for it to answer with the new version. If it
+   *  never does, put `previous` back, start that, and exit. A service manager (systemd) restarts the agent itself instead. */
+  const handOver = (version: string, previous: string) => {
+    setTimeout(() => {
+      void (async () => {
+        // Whatever happens below, this process ends.
+        setTimeout(() => process.exit(0), HANDOVER_CONFIRM_MS + 10 * 60_000).unref();
+        const spawned = spawnReplacement(options.dir);
+        // A stop that never finishes (a tray or window child that will not close) must not keep this agent serving.
+        await Promise.race([stop().catch(() => undefined), new Promise((r) => setTimeout(r, 5_000))]);
+        if (!spawned) process.exit(RESTART_EXIT_CODE);
+        if (await waitForAgentVersion(options.dir, version, HANDOVER_CONFIRM_MS)) process.exit(0);
+        log(`the Scopebond Agent ${version} did not answer within ${Math.round(HANDOVER_CONFIRM_MS / 1000)} s; going back to ${previous}`);
+        recordFailedUpdate(options.dir, version);
+        const back = await installAgent(previous, { provenance: false });
+        log(back.ok ? `went back to the Scopebond Agent ${previous}` : `going back to ${previous} failed: ${back.output.slice(-300)}`);
+        // The replacement's launcher may restart it on the files just put back; otherwise start the previous version now.
+        if (!await waitForAgentVersion(options.dir, previous, 45_000)) spawnReplacement(options.dir);
+        process.exit(0);
+      })();
+    }, 500);
   };
   log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on 127.0.0.1:${control.endpoint.port})`);
   // Maintenance is armed before the first cycle, so a first cycle that hangs cannot keep it from ever starting.

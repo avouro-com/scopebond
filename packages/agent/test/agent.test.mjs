@@ -12,7 +12,7 @@ import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
   parseQuestion, windowsScript, serialized, queueReason, pendingReasons, acquireAgentLock, releaseAgentLock, AGENT_LOCK,
-  compareVersions, commandHookVersion, maintainHookEntries, fetchClientVersion, localChecks, runSelfCheck, selfCheckProof,
+  compareVersions, commandHookVersion, maintainHookEntries, maintainedHookCommand, fetchClientVersion, localChecks, runSelfCheck, selfCheckProof,
 } from "../dist/index.js";
 
 function workspace() {
@@ -203,7 +203,7 @@ test("versions compare numerically and hook commands name the version they run",
   assert.equal(commandHookVersion("my-own-hook claude"), null);
 });
 
-test("hook upkeep moves older Scopebond entries forward, repairs broken ones, holds when asked, and leaves other hooks alone", () => {
+test("hook upkeep pins older Scopebond entries to the carried hook, repairs broken ones, holds when asked, and leaves other hooks alone", () => {
   const home = mkdtempSync(join(tmpdir(), "sb-agent-home-"));
   const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
   process.env.HOME = home; process.env.USERPROFILE = home;
@@ -216,16 +216,17 @@ test("hook upkeep moves older Scopebond entries forward, repairs broken ones, ho
     ] } }));
     const commands = () => JSON.parse(readFileSync(file, "utf8")).hooks.PreToolUse.flatMap((m) => m.hooks.map((h) => h.command));
     write("npx -y @scopebond/hook@0.14.0 claude");
-    assert.deepEqual(maintainHookEntries(["claude"], "0.15.0", false), [], "held: an older working entry stays");
-    const moved = maintainHookEntries(["claude"], "0.15.0");
+    assert.deepEqual(maintainHookEntries(["claude"], false), [], "held: an older working entry stays");
+    const moved = maintainHookEntries(["claude"]);
     assert.equal(moved.length, 1);
-    assert.match(moved[0].reason, /moved to hook 0\.15\.0/);
-    assert.ok(commands().includes("npx -y @scopebond/hook@0.15.0 claude"));
+    assert.match(moved[0].reason, /pinned to the hook this agent carries/);
+    assert.ok(commands().includes(maintainedHookCommand("claude")), "the carried hook, by its path");
+    assert.ok(!commands().some((c) => c.includes("npx")), "never an npx form");
     assert.ok(commands().includes("my-own-hook --strict"), "another tool's hook is untouched");
     assert.equal(JSON.parse(readFileSync(file, "utf8")).model, "opus");
-    assert.deepEqual(maintainHookEntries(["claude"], "0.15.0"), [], "nothing to do the second time");
+    assert.deepEqual(maintainHookEntries(["claude"]), [], "nothing to do the second time");
     write(`"${join(home, "gone", "node.exe")}" "${join(home, "gone", "runtime", "0.15.0", "cli.js")}" claude`);
-    const repaired = maintainHookEntries(["claude"], "0.15.0", false);
+    const repaired = maintainHookEntries(["claude"], false);
     assert.equal(repaired.length, 1, "a broken entry is repaired even while held");
     assert.match(repaired[0].reason, /could not start/);
   } finally {
@@ -238,6 +239,7 @@ test("the agent reads the versions its workspace names, and treats anything odd 
     { status: 200, body: { policy: "recommended", hook: "0.15.0", agent: "0.2.0" } },
     { status: 200, body: { policy: "hold", hook: null, agent: null } },
     { status: 200, body: { policy: "recommended", hook: "latest; rm -rf", agent: "0.2.0" } },
+    { status: 200, body: { policy: "stop", hook: null, agent: "0.2.0" } },
     { status: 401, body: { error: "revoked" } },
   ];
   const seen = [];
@@ -249,7 +251,8 @@ test("the agent reads the versions its workspace names, and treats anything odd 
   const connection = { url: "https://workspace.example", credential: "sbm_test" };
   assert.deepEqual(await fetchClientVersion(connection, fake), { policy: "recommended", hook: "0.15.0", agent: "0.2.0" });
   assert.deepEqual(await fetchClientVersion(connection, fake), { policy: "hold", hook: null, agent: null });
-  assert.deepEqual(await fetchClientVersion(connection, fake), { policy: "recommended", hook: null, agent: "0.2.0" }, "a malformed version is dropped");
+  assert.equal(await fetchClientVersion(connection, fake), null, "a malformed version refuses the whole answer");
+  assert.equal(await fetchClientVersion(connection, fake), null, "an unknown policy refuses the whole answer");
   assert.equal(await fetchClientVersion(connection, fake), null);
   assert.equal(seen[0].url, "https://workspace.example/v1/client-version");
   assert.equal(seen[0].auth, "Bearer sbm_test");

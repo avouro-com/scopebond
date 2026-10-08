@@ -10,10 +10,11 @@
 //   scopebond-agent autostart on|off    start with this user's sign-in, or stop doing so (off also stops it now)
 //   scopebond-agent stop                stop the running agent (autostart still starts it at the next sign-in)
 //   scopebond-agent uninstall [--purge] autostart off, stop, the hook's uninstall (tells the workspace); what the installer runs
+//   scopebond-agent version             this program's version and the hook it carries (an update checks the new one starts)
 
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { hookSelfCommand, isEphemeralPath, userHome } from "@scopebond/hook";
+import { hookSelfCommand, hookVersion, isEphemeralPath, userHome } from "@scopebond/hook";
 import { computerStatus } from "./agent.js";
 import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
@@ -63,6 +64,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       process.on("SIGTERM", stop);
       return;
     }
+    case "version":
+    case "--version":
+      console.log(`agent/${agentVersion()} hook/${hookVersion()}`);
+      return;
     case "status": {
       const live = await callAgent(dir, "GET", "/status") as (ReturnType<typeof computerStatus> & { agent?: AgentReport | null }) | null;
       const status = { ...(live ?? { ...computerStatus(dir), agent: null }), autostart: autostartHealth(dir) };

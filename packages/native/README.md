@@ -65,9 +65,19 @@ A per-user install updates itself when its workspace recommends a newer agent, w
 checks: the release manifest (`scopebond-agent-<version>.manifest.json`, each file's SHA-256 and size) is signed with the
 updater key, an Ed25519 key separate from the Authenticode certificate whose public half (`updater-public-key.txt`) is
 built into the program; the downloaded installer's digest and size are the manifest's; and its Authenticode signature is
-valid and names Avouro LLC. Then a detached helper waits for the agent to exit, installs it with `msiexec /qn` and starts
-the agent again through autostart's launcher. If any check fails, nothing is installed and the agent reports that the
-update could not be verified. An install for every user (Program Files) never updates itself.
+valid and names Avouro LLC. Then a detached helper waits for the agent to exit, opens the installer so it cannot be
+changed, checks its size, SHA-256 and Authenticode signature again, installs it with `msiexec /qn` (Windows' own tools,
+by their full paths under the system folder) and starts the agent again through autostart's launcher. If any check
+fails, nothing is installed and the agent reports that the update could not be verified. An install for every user
+(Program Files) never updates itself.
+
+The agent can trust more than one updater key: `updater-keys.json`, when present, lists them as
+`{ "kid", "key", "not_after" }` (the key id is the first 16 hex digits of the SHA-256 of the key's SPKI bytes;
+`not_after` is the key's last day, `YYYY-MM-DD`, or null). Without it the build trusts the single key in
+`updater-public-key.txt`. The signed manifest names the id of the key that signed it, and a key past its `not_after`
+signs nothing. To rotate: `node packages/native/updater-key.mjs --add new-key.pem` adds a new key to the list; ship a
+release (still signed with the old key) so installs trust both; then switch `UPDATER_SIGNING_KEY` to the new private key,
+give the old entry a `not_after`, and remove it once every install has moved.
 
 The updater key is made once by the owner: `node packages/native/updater-key.mjs` writes the public half here and the
 private half to a file, which goes into the `signing` environment as `UPDATER_SIGNING_KEY` and is then kept offline. The
