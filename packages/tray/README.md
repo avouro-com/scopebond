@@ -29,7 +29,9 @@ PowerShell tray.
 - **Notifications**: one when the state gets worse (for "needs attention", only once it has lasted five minutes, so
   sleep and wake do not flap) and one when it is protected again; none for blocks unless the person chose *All* (then
   one per new block); none at all with *Off*. An agent that has not answered for two minutes while the tray keeps trying
-  counts as a problem; one stopped on purpose does not. *Check now* chosen from the menu says what it found. They carry
+  counts as a problem, and so, at once, does one whose pipe accepts connections but that has given no model for half a
+  minute; one stopped on purpose does not. An agent that stopped without anyone asking and with nothing in its place is
+  told about once when the tray starts it again. *Check now* chosen from the menu says what it found. They carry
   the AppUserModelID `Avouro.Scopebond`, the one the installer's Start-menu entry sets. The rules are plain decisions in
   `src/notify.rs` with unit tests.
 

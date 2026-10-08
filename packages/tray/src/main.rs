@@ -323,6 +323,16 @@ fn supervise_agent(shared: &Arc<Shared>) {
                     supervise::Notice::StartingAgain => "the agent stopped and nothing replaced it: starting it again",
                     supervise::Notice::Restarting => "the agent has not answered: restarting it",
                 });
+                // An agent that stopped without anyone asking is told about (as the person's setting allows). A hung agent
+                // was already told about once, as a problem, when it was shown as not answering.
+                let setting = lock(&shared.answer).as_ref().map(|a| a.settings.notifications).unwrap_or_default();
+                if notice == supervise::Notice::StartingAgain && setting != Notifications::Off {
+                    show_toast(Toast {
+                        kind: Kind::Problem,
+                        title: "Scopebond".into(),
+                        text: "The Scopebond Agent stopped and nothing started in its place; starting it again".into(),
+                    });
+                }
             }
             if sup.link() != before || *lock(&shared.supervised) != sup.link() {
                 log::line(&format!("agent: {}", link_name(sup.link())));
@@ -381,7 +391,10 @@ fn notify(shared: &Arc<Shared>, answer: Option<&TrayAnswer>, link: AgentLink, se
         // update's replacement or starting: nothing to tell.
         (None, AgentLink::NotAnswering | AgentLink::Missing) => {
             let since = *lock(&shared.silent_since).get_or_insert(now);
-            let state = if now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
+            // An agent whose pipe accepts but that has given no model for half a minute already waited its time: a
+            // problem at once (one notification; the notifier says it once).
+            let hung = link == AgentLink::NotAnswering && unresponsive(shared, now);
+            let state = if hung || now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
             (state, menu::header(None, link).trim_start_matches("Scopebond — ").to_string(), Vec::new())
         }
         (None, _) => {
