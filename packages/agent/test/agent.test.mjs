@@ -4,8 +4,10 @@ import http from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash, createPublicKey, verify } from "node:crypto";
+import { canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readAllowances, readBlocked } from "@scopebond/hook";
+import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readAllowances, readBlocked, noteQueueMiss, OUTBOX_FILE as OUTBOX_FILE_NAME } from "@scopebond/hook";
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
@@ -16,13 +18,14 @@ import {
 function workspace() {
   const received = [];
   const reasons = [];
+  const bodies = [];
   let ingestStatus = 200;
   const server = http.createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => { raw += c; });
     req.on("end", () => {
       if (req.url === "/v1/ingest") {
-        if (ingestStatus === 200) received.push(...(JSON.parse(raw).receipts ?? []));
+        if (ingestStatus === 200) { received.push(...(JSON.parse(raw).receipts ?? [])); bodies.push(JSON.parse(raw)); }
         res.writeHead(ingestStatus, { "content-type": "application/json" });
         res.end(JSON.stringify(ingestStatus === 200 ? { ok: true } : { error: "down", code: "unavailable" }));
         return;
@@ -34,7 +37,7 @@ function workspace() {
     });
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({
-    url: `http://127.0.0.1:${server.address().port}`, received, reasons, setIngest: (s) => { ingestStatus = s; }, close: () => server.close(),
+    url: `http://127.0.0.1:${server.address().port}`, received, reasons, bodies, setIngest: (s) => { ingestStatus = s; }, close: () => server.close(),
   })));
 }
 
@@ -71,6 +74,44 @@ test("a cycle delivers what the hook queued and runs the rules check", async () 
     assert.equal(result.deliveryError, null);
     assert.equal(result.rules, "own_rules");
     assert.equal(ws.received.length, 3);
+  } finally { ws.close(); }
+});
+
+test("a cycle signs the delivered record numbers with the computer's enrolled key", async () => {
+  const ws = await workspace();
+  try {
+    const dir = await computerWithQueue(ws.url, 2);
+    await runCycle({ dir });
+    const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
+    assert.equal(ws.bodies.length, 1);
+    const [body] = ws.bodies;
+    assert.deepEqual(body.seq, [1, 2]);
+    assert.equal(body.seq_proof.kid, attester.kid);
+    const digests = body.receipts.map((r) => createHash("sha256").update(Buffer.from(canonical(r), "utf8")).digest("hex"));
+    const material = "scopebond:delivery-sequence/v1\n" + canonical({ credential_id: "cred-1", queue: body.queue ?? null, seq: body.seq, receipts: digests });
+    assert.ok(verify(null, Buffer.from(material, "utf8"), createPublicKey(attester.publicKeyPem), Buffer.from(body.seq_proof.signature, "base64")));
+  } finally { ws.close(); }
+});
+
+test("a cycle queues a receipt whose queue write failed, and keeps the miss as a gap", async () => {
+  const ws = await workspace();
+  try {
+    const dir = await computerWithQueue(ws.url, 2);
+    // The first record's queue write failed: it is in the local log, not in the queue, and the hook noted the miss.
+    const { DatabaseSync } = await import("node:sqlite");
+    const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
+    const db = new DatabaseSync(join(dir, OUTBOX_FILE_NAME));
+    const [first] = db.prepare("SELECT event_id FROM cloud_outbox ORDER BY seq LIMIT 1").all();
+    db.prepare("DELETE FROM cloud_outbox WHERE event_id = ?").run(first.event_id);
+    db.prepare("UPDATE cloud_outbox_metadata SET pending_count = NULL").run();
+    db.close();
+    noteQueueMiss(dir, 0, first.event_id);
+    const result = await runCycle({ dir });
+    assert.equal(result.pending, 0);
+    assert.equal(ws.received.length, 2, "both receipts reach the workspace");
+    assert.ok(ws.received.some((r) => r.payload.action_ref.action_id === first.event_id));
+    const outbox = new SqliteCloudOutbox(join(dir, OUTBOX_FILE_NAME));
+    try { assert.deepEqual(outbox.status().gapsByReason, { outbox_error: 1 }); } finally { outbox.close(); }
   } finally { ws.close(); }
 });
 
@@ -337,7 +378,8 @@ test("health says green, amber or red in plain words, with the one fix", async (
   assert.deepEqual([check.level, check.fix.route], ["amber", "/maintain"]);
   const blocked = healthOf({ ...base, state: "recording_locally", delivery: { ...base.delivery, queue_error: "/srv/sb/receipts.db.cloud-outbox.db: attempt to write a readonly database" } }, null);
   assert.equal(blocked.level, "red");
-  assert.match(blocked.headline, /Every action is blocked/);
+  assert.match(blocked.headline, /delivery queue cannot be opened/);
+  assert.doesNotMatch(blocked.headline, /blocked/i, "an unusable queue does not block actions");
   assert.match(blocked.hint, /-wal and -shm/);
   assert.match(check.headline, /autostart/);
 });

@@ -4,7 +4,7 @@
  * SCOPE.md, using an LLM. Self-contained: Node built-ins only (global fetch).
  * Called from GitHub Actions:
  *
- *   node scripts/agent-review.mjs pr      # pull_request event
+ *   node scripts/agent-review.mjs pr      # pull_request event, or workflow_dispatch with inputs.pr
  *   node scripts/agent-review.mjs issue   # issues event
  *
  * Provider is auto-detected from whichever secret is set:
@@ -79,6 +79,14 @@ export function buildBody(mode, v) {
   return `**Scope review${mode === "issue" ? " (triage)" : ""}: ${v.verdict}**\n\n${summary}\n\n${reasons.map((r) => `- ${r}`).join("\n")}\n\n${v.verdict === "OUT-OF-SCOPE" ? "Routed to a maintainer for a decision — not closed automatically." : ""}\n\n_Automated first pass against [SCOPE.md](SCOPE.md); a maintainer makes the final call._`;
 }
 
+/** The pull request a run reviews: the event's own, or the number a maintainer gave a
+ * manual run (workflow_dispatch inputs.pr). Anything but a positive integer is none. */
+export function prNumber(event) {
+  const input = String(event?.inputs?.pr ?? "").trim();
+  const n = event?.pull_request?.number ?? (/^[0-9]+$/.test(input) ? Number(input) : NaN);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
 /** Wrap untrusted third-party text in an unguessable nonce fence so an injected
  * instruction can neither break out of the data region nor forge the delimiter. */
 export function fenceUntrusted(subject, nonce = globalThis.crypto.randomUUID()) {
@@ -135,10 +143,13 @@ async function main() {
 
   let number, subject;
   if (MODE === "pr") {
-    number = event.pull_request?.number;
+    number = prNumber(event);
+    if (!number) { console.log("agent-review: no PR number — skipping."); return; }
+    // A manual run carries only the number; read the title and description from the API.
+    const pr = event.pull_request ?? await (await gh(`/repos/${owner}/${repo}/pulls/${number}`)).json();
     const diffRes = await gh(`/repos/${owner}/${repo}/pulls/${number}`, { headers: { accept: "application/vnd.github.v3.diff" } });
     const diff = (await diffRes.text()).slice(0, 60000);
-    subject = `Title: ${event.pull_request?.title}\n\nDescription:\n${event.pull_request?.body || "(none)"}\n\nDiff (truncated to 60k):\n${diff}`;
+    subject = `Title: ${pr?.title}\n\nDescription:\n${pr?.body || "(none)"}\n\nDiff (truncated to 60k):\n${diff}`;
   } else {
     number = event.issue?.number;
     subject = `Title: ${event.issue?.title}\n\nBody:\n${event.issue?.body || "(none)"}`;

@@ -9,11 +9,19 @@
 // policy it is checked against and pass its own check. A PR that introduces or changes
 // the policy is therefore checked against the policy already on the base branch.
 //
-//   scopebond-verify-pr [--policy scopebond.policy.json] [--event <event.json>] [--paths-file <list>]
+//   scopebond-verify-pr [--policy scopebond.policy.json] [--event <event.json>]
+//                       [--files-json <list>]   one JSON array per changed file: [name, previous name?]
+//                       [--paths-z <list>]      NUL-delimited paths (git diff -z)
+//                       [--paths-file <list>]   newline-delimited paths (local testing only)
 //                       [--policy-source base|workspace]   (workspace: local testing only)
 //                       [--evidence-out <file>]   the exact commit, digests and check result as JSON
 //
-// Env: GITHUB_EVENT_PATH, GITHUB_EVENT_NAME, SCOPEBOND_POLICY, SCOPEBOND_POLICY_SOURCE, GITHUB_OUTPUT.
+// The first non-empty list is used. Its entries (not its lines) are counted against the pull
+// request's changed_files, and a path holding a control character (a newline among them) fails
+// the check closed: such a name could otherwise split into several fake entries.
+//
+// Env: GITHUB_EVENT_PATH, GITHUB_EVENT_NAME, SCOPEBOND_POLICY, SCOPEBOND_POLICY_SOURCE, GITHUB_OUTPUT,
+//      SCOPEBOND_PR_FILES, SCOPEBOND_PR_PATHS_Z, SCOPEBOND_PR_PATHS.
 
 import { execFileSync } from "node:child_process";
 import { isAbsolute, relative } from "node:path";
@@ -32,6 +40,8 @@ function die(message: string): never { console.error(`Scopebond: ${message}`); p
 
 const eventPath = arg("--event", process.env.GITHUB_EVENT_PATH);
 const policyPath = arg("--policy", process.env.SCOPEBOND_POLICY ?? "scopebond.policy.json");
+const filesJson = arg("--files-json", process.env.SCOPEBOND_PR_FILES);
+const pathsZ = arg("--paths-z", process.env.SCOPEBOND_PR_PATHS_Z);
 const pathsFile = arg("--paths-file", process.env.SCOPEBOND_PR_PATHS);
 
 if (!eventPath) die("no GitHub event available (set GITHUB_EVENT_PATH or --event)");
@@ -72,10 +82,39 @@ catch (e) { die(`could not read the policy ${policyPath}: ${(e as Error).message
 if (!validatePolicy(policy).valid) die(`policy ${policyPath} is invalid (fail closed)`);
 
 const pr = event!.pull_request ?? {};
-let paths: string[] = [];
-if (pathsFile) {
-  try { paths = readFileSync(pathsFile, "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean); }
+const readList = (file: string): string => {
+  try { return readFileSync(file, "utf8"); }
   catch (e) { die(`could not read the changed-paths file: ${(e as Error).message}`); }
+};
+// C0 and C1 controls, DEL, and the Unicode line and paragraph separators.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+let paths: string[] = [];
+let entries = 0; // changed files listed, counted per entry (a renamed file is one entry with two names)
+const jsonText = filesJson ? readList(filesJson) : "";
+const zText = pathsZ ? readList(pathsZ) : "";
+if (jsonText.trim() !== "") {
+  jsonText.split("\n").forEach((raw, i) => {
+    const line = raw.replace(/\r$/, "");
+    if (line.trim() === "") return;
+    let entry: unknown;
+    try { entry = JSON.parse(line); } catch { die(`entry ${i + 1} of the changed-file list is not JSON; failing closed`); }
+    if (!Array.isArray(entry) || entry.length < 1 || entry.length > 2 || !entry.every((p) => typeof p === "string" && p !== "")) {
+      die(`entry ${i + 1} of the changed-file list is not a list of one or two file names; failing closed`);
+    }
+    entries++;
+    paths.push(...(entry as string[]));
+  });
+} else if (zText !== "") {
+  const parts = zText.split("\0");
+  if (parts[parts.length - 1] === "") parts.pop();
+  for (const p of parts) { if (p === "") die("the changed-path list holds an empty path; failing closed"); entries++; paths.push(p); }
+} else if (pathsFile) {
+  // Newline-delimited (local testing): a name holding a newline cannot be told apart here.
+  paths = readList(pathsFile).split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
+  entries = paths.length;
+}
+if (paths.some((p) => CONTROL.test(p))) {
+  die("a changed path contains a control character (such as a newline), so the file list cannot be relied on; failing closed");
 }
 paths = [...new Set(paths)];
 
@@ -86,7 +125,7 @@ const ctx: PullRequestContext = {
   head: pr.head?.ref ?? "",
   headSha: pr.head?.sha ?? "",
   paths,
-  filesChanged: typeof pr.changed_files === "number" ? pr.changed_files : paths.length,
+  filesChanged: typeof pr.changed_files === "number" ? pr.changed_files : entries,
   additions: typeof pr.additions === "number" ? pr.additions : 0,
   deletions: typeof pr.deletions === "number" ? pr.deletions : 0,
   actor: pr.user?.login ?? event!.sender?.login ?? "",
@@ -100,8 +139,8 @@ if (ctx.paths.length === 0 && ctx.filesChanged > 0) {
 // Fail closed on a partial list too: the pull-request files API stops at 3000 files,
 // so a larger PR would otherwise be judged on the files it happened to list while an
 // out-of-policy path hides past the cut-off.
-if (ctx.paths.length < ctx.filesChanged) {
-  die(`the pull request changed ${ctx.filesChanged} files but only ${ctx.paths.length} paths were resolved (the file list was truncated); failing closed`);
+if (entries < ctx.filesChanged) {
+  die(`the pull request changed ${ctx.filesChanged} files but only ${entries} were listed (the file list was truncated); failing closed`);
 }
 
 const decision = evaluatePullRequest(ctx, policy);

@@ -1,21 +1,37 @@
-// SB112 — cross-platform install smoke. Run AFTER the packed tarball is installed
-// globally (`npm i -g`). Exercises the once-per-machine install, doctor, the evaluate
-// path (deny + allow) and a connect against a fake in-process Cloud — all by spawning
-// the globally-installed `scopebond` bin, so it proves the real user experience on
-// Windows/macOS/Linux × Node 22/24. Exits non-zero on the first failure.
+// SB112 — cross-platform install smoke. Installs the packed tarball globally (`npm i -g`,
+// as a user would; SCOPEBOND_PACK_DIR names the folder `pnpm pack` wrote it to), or runs
+// against one already installed. Exercises the once-per-machine install, doctor, the
+// evaluate path (deny + allow) and a connect against a fake in-process Cloud — all by
+// spawning the globally-installed `scopebond` bin, so it proves the real user experience
+// on Windows/macOS/Linux × Node 22/24. Exits non-zero on the first failure.
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startFakeCloud } from "./fake-cloud.mjs";
 
 const isWin = process.platform === "win32";
+
+/** The global install under test: the hook tarball this run packed, installed the way a user installs it. */
+function installPackedTarball(packDir) {
+  const tarball = readdirSync(packDir).filter((name) => name.endsWith(".tgz")).map((name) => join(packDir, name))[0];
+  if (!tarball) throw new Error(`no packed tarball in ${packDir}`);
+  // npm is a .cmd shim on Windows, which only runs through a shell; the path is quoted for it.
+  const npm = (args) => {
+    const res = spawnSync("npm", args, { encoding: "utf8", shell: isWin, stdio: ["ignore", "pipe", "inherit"] });
+    if (res.status !== 0) throw new Error(`npm ${args.join(" ")} exited ${res.status}`);
+    return res.stdout.trim();
+  };
+  npm(["install", "--global", isWin ? `"${tarball}"` : tarball]);
+  return join(npm(["root", "--global"]), "@scopebond", "hook", "dist", "cli.js");
+}
+
 // Prefer SCOPEBOND_CLI (an absolute path to the *installed* dist/cli.js) so we spawn
 // `node <cli.js>` with no shell — robust across Windows/macOS/Linux and still proof the
 // global install placed the code. Fall back to the bin shim on PATH.
-const CLI = process.env.SCOPEBOND_CLI;
+const CLI = process.env.SCOPEBOND_CLI || (process.env.SCOPEBOND_PACK_DIR ? installPackedTarball(process.env.SCOPEBOND_PACK_DIR) : undefined);
 const BIN = process.env.SCOPEBOND_BIN || (isWin ? "scopebond.cmd" : "scopebond");
 
 /** Like sb(), but the event loop keeps running, so an in-process fake Cloud can answer. */

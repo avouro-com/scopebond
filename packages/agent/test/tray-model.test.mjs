@@ -177,3 +177,9 @@ test("after a long gap without a restart of the computer, the waiting records de
   assert.equal(rebooted, NOW - 30 * MIN);
   assert.equal(trayModel(input(status({ pending: 3, oldest_pending_age_s: 5 * 3600 }), { awakeSince: rebooted })).state, "attention");
 });
+
+test("an agent the workspace's plan paused says so, with Open workspace as the fix, not Send records now", () => {
+  const m = trayModel(input(status({ pending: 12, oldest_pending_age_s: 3 * 60 * 60, last_error: "ingest failed: HTTP 402 (agent_paused)" }), { awakeSince: NOW - 3 * 60 * MIN }));
+  assert.match(m.headline, /^Paused by your workspace's plan: 12 records waiting$/);
+  assert.equal(m.fix.id, "open_workspace");
+});
