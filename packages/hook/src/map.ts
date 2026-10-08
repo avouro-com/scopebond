@@ -271,6 +271,8 @@ const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+
 // file_get_contents) and PowerShell (Get-/Set-Content, Out-File, Invoke-*).
 const FILE_API = /\b(?:open|fopen|readlink|read_file|readfile|read_to_string|readfilesync|writefile|writefilesync|appendfile|appendfilesync|createreadstream|createwritestream|openfile|opensync|copyfile|copyfilesync|rename|renamesync|unlink|unlinksync|popen|spawn|spawnsync|exec|execsync|execfile|execfilesync|system|shell_exec|proc_open|file_get_contents|file_put_contents|urlopen)\s*\(|\b(?:fs|io|os|subprocess|child_process|pathlib|shutil|File|Dir|IO|Pathname|Path|FileUtils)\s*\.\s*\w|\bimport\s+(?:os|subprocess|shutil|pathlib|io)\b|\brequire\s*\(\s*['"`](?:node:)?(?:fs|child_process)|\b(?:Get-Content|Set-Content|Out-File|Add-Content|Import-Csv|Invoke-\w+)\b/i;
 const CODE_SCAN_LIMIT = 20000;
+// A path that is only known at run time: a variable, a command substitution (the parser's placeholder) or a backtick.
+const COMPUTED_TARGET = /\$|`|__sb_subst/;
 // .NET file and stream types as PowerShell names them: `[System.IO.File]::…`, `[IO.Directory]::…`, `New-Object IO.StreamWriter`.
 const DOTNET_FILE_API = /\[\s*(?:System\.)?IO\.(?:File|Directory|FileInfo|DirectoryInfo|FileStream|StreamWriter|StreamReader|Path)\s*\]\s*::|New-Object\s+(?:-TypeName\s+)?(?:System\.)?IO\.(?:FileInfo|DirectoryInfo|FileStream|StreamWriter|StreamReader)\b/i;
 
@@ -408,7 +410,12 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   let unknownTarget = false;
   const prog = canonProgram(sc.program);
   const read = (w: string | undefined) => { if (w !== undefined && isPathWord(w)) ops.push(...fileIntent("file.read", w, dir, cwd)); };
-  const write = (w: string | undefined) => { if (w !== undefined && isPathWord(w)) ops.push(...fileIntent("file.write", w, dir, cwd)); };
+  const write = (w: string | undefined) => {
+    if (w === undefined) return;
+    // A target computed at run time (`> "$P"`, `tee $(…)`) cannot be judged from the text: it is also an unknown write.
+    if (COMPUTED_TARGET.test(w)) unknownTarget = true;
+    if (isPathWord(w)) ops.push(...fileIntent("file.write", w, dir, cwd));
+  };
   const args = sc.argv;
   const spec = OPTIONS.get(prog);
   const flagFiles = READERS.has(prog) || EDITORS.has(prog) || COPIERS.has(prog) || UPLOADERS.has(prog);
@@ -483,7 +490,12 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   if (git) {
     const sub = git.sub?.toLowerCase();
     const a = git.args;
-    if (sub === "add") {
+    if (sub === "clone") {
+      // `git clone URL DIR` writes DIR (the repository's name in the working folder when none is given).
+      const { before } = gitPositionals(a, ["-b", "--branch", "-o", "--origin", "-u", "--upload-pack", "--reference", "--separate-git-dir", "--depth", "-c", "--config", "--template", "-j", "--jobs", "--filter"]);
+      if (before[1] !== undefined) write(before[1]);
+      else unknownTarget = true;
+    } else if (sub === "add") {
       // Staging a secret is one commit away from publishing it.
       const { before, after } = gitPositionals(a, ["--pathspec-from-file"]);
       [...before, ...(after ?? [])].filter(isSensitiveOperand).forEach(read);
@@ -518,6 +530,18 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     const local = (p: string | undefined) => p !== undefined && (!/^[^/\\]+:/.test(p) || /^[A-Za-z]:[\\/]/.test(p));
     if (local(operands[1])) read(operands[1]);
     if (local(operands[2])) write(operands[2]);
+  } else if (prog === "certutil" && args.some((w) => /^[-/](?:decode|decodehex|encode|encodehex|urlcache)$/i.test(w))) {
+    // `certutil -decode IN OUT` and `certutil -urlcache -split -f URL OUT` write their last operand.
+    const words = operands.filter((w) => !/^[-/]/.test(w));
+    if (words.length) write(words[words.length - 1]);
+  } else if (prog === "expand" || prog === "bitsadmin") {
+    // `expand SRC DST` and `bitsadmin /transfer JOB URL DST` write their last operand.
+    const words = operands.filter((w) => !/^[-/]/.test(w) || /^\/[^/]+\//.test(w));
+    if (words.length > 1) write(words[words.length - 1]);
+  } else if (prog === "split" || prog === "csplit") {
+    // `split [opts] FILE PREFIX` writes PREFIXaa, PREFIXab…: a write of PREFIX's place.
+    if (operands.length > 1) write(operands[operands.length - 1]);
+    else unknownTarget = true;
   } else if (prog === "patch") {
     // The file a patch changes is named inside the patch; an explicit operand is written.
     unknownTarget = true;
