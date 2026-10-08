@@ -118,7 +118,7 @@ test("the typed adapter over stdio: an unlisted tool and an unapproved resource 
 
   const proc = spawn(process.execPath, [
     cli, "--server", "github", "--policy", join(dir, "policy.json"), "--key", join(dir, "key.pem"), "--typed", join(dir, "typed.json"),
-    "--observations-dir", home, "--", process.execPath, join(dir, "upstream.mjs"),
+    "--observations-dir", home, "--env", "CALL_LOG", "--", process.execPath, join(dir, "upstream.mjs"),
   ], { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, CALL_LOG: callLog, SCOPEBOND_OBSERVATIONS_HEARTBEAT: "off" } });
   const responses = new Map(); const waiters = new Map();
   createInterface({ input: proc.stdout }).on("line", (line) => {

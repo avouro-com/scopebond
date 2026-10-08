@@ -4,15 +4,21 @@
 import { writeFileSync, existsSync } from "node:fs";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 
-/** A starter MCP policy: allow read-ish tools on the server, deny destructive
- *  ones by name. Every threshold is the operator's to edit. */
+/** The tool-name pattern of the starter policy: an allowlist of names that conventionally mark
+ *  a read-only tool. Every other tool, including any whose name does not say what it does, is
+ *  denied. */
+export const READ_ONLY_TOOL_PATTERN = "^(read|list|get|search|describe|view)_[A-Za-z0-9_]+$";
+
+/** A starter MCP policy: allow only tools whose names mark them read-only on the server, deny
+ *  everything else. A name is a convention, not a guarantee: review the server's tools/list and
+ *  edit the pattern (every threshold is the operator's to edit). */
 export function starterMcpPolicy(server: string): Record<string, unknown> {
   return {
     vocabulary_version: "1.0", policy_id: "mcp", version: 1,
     clauses: [{
       id: "tools", type: "action_allowlist", mode: "enforce", action_types: ["mcp.tool.call"],
-      param_bounds: { server: { enum: [server] }, tool: { pattern: "^(?!delete_|write_|remove_|drop_|rm_).+" } },
-      description: `Allow non-destructive tools on ${server}; deny delete/write/remove/drop/rm tools.`,
+      param_bounds: { server: { enum: [server] }, tool: { pattern: READ_ONLY_TOOL_PATTERN } },
+      description: `Allow only read-only tools on ${server} (names starting read_, list_, get_, search_, describe_ or view_); deny every other tool. Review the server's tool list and edit the pattern.`,
     }],
   };
 }

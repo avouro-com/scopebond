@@ -20,10 +20,11 @@ export function healthOf(status: StatusJson, selfCheck: { ok: boolean; failed: s
   if (!status.delivery.connected) {
     return { level: "red", headline: "Not connected to a workspace: records stay on this computer", fix: null, hint: "Connect it: npx @scopebond/hook login https://<your-workspace>" };
   }
-  // W20: the hook blocks every action while its delivery queue cannot be opened.
+  // While the hook's delivery queue cannot be opened, actions stay allowed and are recorded on this computer only; they are
+  // sent once the queue can be written again.
   const queueError = (status.delivery as { queue_error?: string | null }).queue_error;
   if (queueError) {
-    return { level: "red", headline: "Every action is blocked: the delivery queue cannot be opened", fix: null, hint: `${queueError}. Free some disk space, or make that file and its -wal and -shm files writable (do not delete it).` };
+    return { level: "red", headline: "Records stay on this computer: the delivery queue cannot be opened", fix: null, hint: `${queueError}. Free some disk space, or make that file and its -wal and -shm files writable (do not delete it).` };
   }
   if (status.delivery.connection_refused_since !== null) {
     return { level: "red", headline: "The workspace refuses this computer's connection", fix: null, hint: "Sign in again: npx @scopebond/hook login https://<your-workspace>" };

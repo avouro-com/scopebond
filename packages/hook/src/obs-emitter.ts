@@ -32,7 +32,7 @@ import {
   type BindingKey, type CallRequest, type ExitCategory, type ObservationSigner, type PolicyAckInput, type SessionStopReason, type CapabilityProofInput,
 } from "./observation.js";
 import { openApprovalBinder } from "@scopebond/gateway/node";
-import { OBSERVATION_DB, ObservationStore, type EnqueueResult } from "./obs-store.js";
+import { MAX_TERMINAL, OBSERVATION_DB, ObservationStore, type EnqueueResult } from "./obs-store.js";
 import type { GitProbe } from "./typed-ops.js";
 import { isProtectedBranch, loadRules } from "./rules.js";
 import { uploadPending, type UploadOutcome } from "./obs-upload.js";
@@ -408,6 +408,10 @@ export function describeObservations(dir: string): string[] {
     const head = state.capability === "active" ? "on" : state.capability === "unsupported" ? "unsupported by this workspace" : "paused";
     lines.push(`${head}${state.reason ? ` (${state.reason})` : ""}; generation ${state.generation}; ${pending.count} pending${pending.oldest_at ? ` since ${new Date(pending.oldest_at).toISOString()}` : ""}`);
     if (terminalTotal > 0) lines.push(`${terminalTotal} refused or unsendable, kept locally: ${Object.entries(terminal).map(([code, n]) => `${code} ${n}`).join(", ")}`);
+    // Only the newest refused ones are kept; the older ones removed are counted, so the total is never understated.
+    const trimmed = store.terminalTrimmed();
+    const trimmedTotal = Object.values(trimmed).reduce((a, b) => a + b, 0);
+    if (trimmedTotal > 0) lines.push(`${trimmedTotal} older refused or unsendable removed to keep the newest ${MAX_TERMINAL}: ${Object.entries(trimmed).map(([code, n]) => `${code} ${n}`).join(", ")}`);
     if (state.dropped > 0) lines.push(`${state.dropped} not queued (local queue full)`);
     if (state.last_error) lines.push(`last upload problem: ${state.last_error}`);
     return lines;
