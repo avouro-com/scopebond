@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { hookSelfCommand, isSingleExecutable, loadConnection, nodeTooOldLines, readDeliveryState, type Harness } from "@scopebond/hook";
 import { agentCliPath, agentSelfCommand } from "./self.js";
 import { autostartHealth, enableAutostart, startNow } from "./autostart.js";
+import { writeAppsEntry } from "./apps-entry.js";
+import { installKind } from "./native-update.js";
 import { callAgent } from "./ipc.js";
 import { compareVersions, ownNpm } from "./update.js";
 import { repairHookEntries } from "./service.js";
@@ -155,6 +157,11 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   if (steps.includes("autostart") && cli) {
     say(enableAutostart(o.dir, cli));
   } else say("✓ The agent already starts with your sign-in.");
+  // Listed in Settings -> Apps, so it can be removed there like any other app (refreshed each run: the version moves).
+  if (cli && process.platform === "win32" && installKind() === "npm") {
+    try { const listed = writeAppsEntry(o.dir, { version: globalAgent().version ?? o.version, cli }); if (listed) say(`✓ ${listed}`); }
+    catch (error) { say(`Note: could not list Scopebond in Settings -> Apps (${(error as Error).message}).`); }
+  }
   if (cli && !await callAgent(o.dir, "GET", "/status", undefined, 2_000)) {
     const up = async (tries: number) => {
       for (let i = 0; i < tries; i++) { if (await callAgent(o.dir, "GET", "/status", undefined, 1_000)) return true; await new Promise((r) => setTimeout(r, 500)); }
