@@ -27,8 +27,11 @@ PowerShell tray.
   the colours are CSS variables with the PowerShell tray's palette. Every control is reachable with the keyboard and has
   an accessible name, and the status line is a live region, so a screen reader hears what changed.
 - **Notifications**: one when the state gets worse (for "needs attention", only once it has lasted five minutes, so
-  sleep and wake do not flap) and one when it is protected again; none for blocks unless the person chose *All*. They
-  carry the AppUserModelID `Avouro.Scopebond`, the one the installer's Start-menu entry sets.
+  sleep and wake do not flap) and one when it is protected again; none for blocks unless the person chose *All* (then
+  one per new block); none at all with *Off*. An agent that has not answered for two minutes while the tray keeps trying
+  counts as a problem; one stopped on purpose does not. *Check now* chosen from the menu says what it found. They carry
+  the AppUserModelID `Avouro.Scopebond`, the one the installer's Start-menu entry sets. The rules are plain decisions in
+  `src/notify.rs` with unit tests.
 
 ## How it works
 
@@ -91,4 +94,4 @@ changes.
 - [x] The pipe client, the menu from the live model, the status panel.
 - [x] Supervision of the agent.
 - [x] The installer ships the signed tray and starts it at sign-in; the updater restarts it.
-- [ ] Notifications.
+- [x] Notifications.

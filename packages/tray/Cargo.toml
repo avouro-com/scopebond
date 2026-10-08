@@ -29,6 +29,8 @@ serde_json = "1"
 tauri-plugin-single-instance = "=2.5.2"
 
 [target.'cfg(windows)'.dependencies]
+# Windows notifications under the installer's AppUserModelID.
+tauri-winrt-notification = "=0.8.1"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_System_DataExchange",

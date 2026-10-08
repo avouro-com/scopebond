@@ -8,6 +8,7 @@ pub mod icon;
 pub mod log;
 pub mod menu;
 pub mod model;
+pub mod notify;
 pub mod panel;
 pub mod supervise;
 #[cfg(windows)]

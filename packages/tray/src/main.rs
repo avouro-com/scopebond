@@ -14,6 +14,7 @@ use scopebond_tray::agent::{scopebond_home, AgentClient};
 use scopebond_tray::icon::{self, IconState};
 use scopebond_tray::menu::{self, AgentLink, Autostart, Command, Entry, MenuContext};
 use scopebond_tray::model::{Notifications, TrayAction, TrayAnswer};
+use scopebond_tray::notify::{Kind, Notifier, Toast};
 use scopebond_tray::panel::{self, Area, PANEL_HEIGHT, PANEL_WIDTH};
 use scopebond_tray::supervise::{self, Decision, Observation, Supervisor};
 use scopebond_tray::{log, win};
@@ -63,6 +64,9 @@ struct Shared {
     supervised: Mutex<AgentLink>,
     /// The person asked for the agent to be started.
     start_requested: AtomicBool,
+    notifier: Mutex<Notifier>,
+    /// Since when the agent has not answered (for a notification when that lasts).
+    silent_since: Mutex<Option<Instant>>,
 }
 
 impl Shared {
@@ -79,6 +83,8 @@ impl Shared {
             anchor: Mutex::new(None),
             supervised: Mutex::new(AgentLink::Starting),
             start_requested: AtomicBool::new(false),
+            notifier: Mutex::new(Notifier::new()),
+            silent_since: Mutex::new(None),
         }
     }
 
@@ -290,9 +296,54 @@ fn refresh(app: &AppHandle, shared: &Arc<Shared>) {
         (None, AgentLink::Answering) => AgentLink::Starting,
         (None, link) => link,
     };
-    *lock(&shared.answer) = answer;
+    // The notification setting lives in the agent; while it does not answer, the last one it gave holds.
+    let setting = answer.as_ref().or(lock(&shared.answer).as_ref()).map(|a| a.settings.notifications).unwrap_or_default();
+    *lock(&shared.answer) = answer.clone();
     *lock(&shared.link) = link;
     draw(app, shared);
+    notify(shared, answer.as_ref(), link, setting);
+}
+
+/// How long the agent may not answer (while the tray tries to start it) before that is worth a notification.
+const SILENT_FOR: Duration = Duration::from_secs(2 * 60);
+
+fn notify(shared: &Arc<Shared>, answer: Option<&TrayAnswer>, link: AgentLink, setting: Notifications) {
+    let now = Instant::now();
+    let (state, headline, blocks) = match (answer, link) {
+        (Some(a), _) => {
+            *lock(&shared.silent_since) = None;
+            (a.tray.icon_state(), a.tray.headline.clone(), a.tray.recent_blocks.clone())
+        }
+        // Not answering although the tray keeps trying: a problem once it has lasted. Stopped on purpose, waiting for an
+        // update's replacement or starting: nothing to tell.
+        (None, AgentLink::NotAnswering | AgentLink::Missing) => {
+            let since = *lock(&shared.silent_since).get_or_insert(now);
+            let state = if now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
+            (state, menu::header(None, link).trim_start_matches("Scopebond — ").to_string(), Vec::new())
+        }
+        (None, _) => {
+            *lock(&shared.silent_since) = None;
+            (IconState::Working, String::new(), Vec::new())
+        }
+    };
+    for toast in lock(&shared.notifier).observe(state, &headline, &blocks, setting, now) {
+        show_toast(toast);
+    }
+}
+
+/// A Windows notification under the installer's AppUserModelID (the Start-menu entry carries it). Shown on its own
+/// thread; a failure (no Start-menu entry, notifications turned off in Windows) is only logged.
+fn show_toast(toast: Toast) {
+    thread::spawn(move || {
+        let mut t = tauri_winrt_notification::Toast::new("Avouro.Scopebond").title(&toast.title).text1(&toast.text);
+        if matches!(toast.kind, Kind::Recovered | Kind::Block) {
+            t = t.sound(None);
+        }
+        match t.show() {
+            Ok(()) => log::line(&format!("notified: {}", toast.text)),
+            Err(e) => log::line(&format!("could not notify ({e}): {}", toast.text)),
+        }
+    });
 }
 
 fn draw(app: &AppHandle, shared: &Arc<Shared>) {
@@ -374,6 +425,13 @@ fn run_action(app: &AppHandle, shared: &Arc<Shared>, action: TrayAction, from_me
     shared.set_note(text);
     shared.wake();
     // The sign-in code has to be seen, and so does a failure; otherwise the icon and tooltip say enough.
+    // "Check now" from the menu says what it found, as the person's setting allows.
+    let setting = lock(&shared.answer).as_ref().map(|a| a.settings.notifications).unwrap_or_default();
+    if from_menu && !failed && action.id == "check_now" && setting != Notifications::Off {
+        if let Some(Note { text, .. }) = lock(&shared.note).as_ref() {
+            show_toast(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: text.clone() });
+        }
+    }
     if from_menu && (failed || action.id == "reconnect") {
         open_panel(app, shared, None);
     }
