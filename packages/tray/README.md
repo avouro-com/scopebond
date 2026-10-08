@@ -39,7 +39,9 @@ nothing. The mapping from model to menu is a pure Rust module (`src/menu.rs`) wi
 **The channel.** The agent listens on a named pipe and writes the pipe's name and a token to `agent.json` in the
 Scopebond home (`%USERPROFILE%\.scopebond`, or `SCOPEBOND_HOME`). The tray reads that file and sends the same HTTP
 requests over the pipe that the agent's other clients (the CLI, the hook's override window) send, with the token in the
-`x-scopebond-agent-token` header.
+`x-scopebond-agent-token` header. Every call has a deadline: the pipe is opened for overlapped I/O, and at the deadline
+the read or write is cancelled and its end awaited before the pipe is closed, so an agent that accepts a connection and
+never answers costs the caller the timeout and leaves no thread or handle behind.
 
 **Supervision.** The installer starts the tray at sign-in; the tray starts the agent (`scopebond-agent.exe run`, the
 program beside it in the install folder) when nothing answers, with no console window. If the agent exits on its own, the
