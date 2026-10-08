@@ -20,7 +20,7 @@ export { parseQuestion, questionText, windowsScript, systemPrompter, serialized 
 export type { OverrideQuestion, OverrideAnswer, Prompter } from "./prompt.js";
 export { queueReason, flushReasons, pendingReasons, REASONS_FILE } from "./override-reasons.js";
 export type { SelfCheckItem } from "./selfcheck.js";
-export { setupPlan, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
+export { setupPlan, agentOnThisComputer, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
 export type { SetupState, SetupStep, SetupOptions } from "./setup.js";
 export { installKind, updaterPublicKey, verifyManifest, fetchVerifiedInstaller, installerName, MANIFEST_DOMAIN, PUBLISHER } from "./native-update.js";
 export type { InstallKind, ReleaseManifest } from "./native-update.js";
