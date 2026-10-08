@@ -7,7 +7,18 @@
 //
 //   scopebond-mcp init --server <id>          scaffold a key + starter policy
 //   scopebond-mcp --server <id> [--policy p.json] [--key k.pem] [--principal sub] \
-//       [--receipts log.jsonl] [--typed typed.json] [--dispatch-dir dir] [--delegation id] -- <upstream-command...>
+//       [--receipts log.jsonl] [--typed typed.json] [--dispatch-dir dir] [--delegation id] \
+//       [--env NAME[=value]]... [--timeout-ms 120000] -- <upstream-command...>
+//
+// The upstream is started with a minimal environment (PATH, HOME/USERPROFILE, the temp and system
+// directories, locale), not the proxy's whole environment. Pass anything else it needs with
+// --env NAME (copied from the proxy's environment) or --env NAME=value, repeatable, or list names
+// in SCOPEBOND_MCP_UPSTREAM_ENV (comma-separated). The upstream still runs as the same OS user, so
+// it can read any file the proxy can, including the signing key and a stored Cloud credential.
+//
+// Limits: a JSON-RPC line over 8 MiB from either side is dropped (never relayed), and a request
+// the upstream has not answered within --timeout-ms (default 120000, SCOPEBOND_MCP_TIMEOUT_MS)
+// fails closed with a JSON-RPC error. A JSON-RPC batch from the client is rejected (-32600).
 //
 // --dispatch-dir turns on the dispatch boundary (off by default): the directory holds dispatch.json
 // (require_approval, approver_keys, budgets), an approvals/ inbox and the shared dispatch.db. Each
@@ -31,21 +42,29 @@
 
 import { readFileSync, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 import type { SignedReceipt, CloudExporter } from "@scopebond/gateway";
-import { createMcpProxy } from "./proxy.js";
+import { createMcpProxy, invalidMessageReason } from "./proxy.js";
+import { readLines, upstreamEnv, MAX_LINE_BYTES } from "./stdio.js";
 import { requestBinderFromHex, type ObservationSink, type RequestBinder, type TypedAdapterConfig } from "./typed.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
 import { scaffold } from "./init.js";
 import { openApprovalBinder, openDispatchGuard } from "@scopebond/gateway/node";
 import { connectCloud, loadMcpConnection, connectionFileFor, openExporter } from "./cloud.js";
 
+// Options are read only before `--`: everything after it belongs to the upstream command.
+const optionEnd = process.argv.indexOf("--") < 0 ? process.argv.length : process.argv.indexOf("--");
+const options = process.argv.slice(0, optionEnd);
 function arg(name: string, fallback?: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : fallback;
+  const i = options.indexOf(name);
+  return i >= 0 ? options[i + 1] : fallback;
+}
+function args(name: string): string[] {
+  const out: string[] = [];
+  options.forEach((a, i) => { if (a === name && options[i + 1] !== undefined) out.push(options[i + 1]); });
+  return out;
 }
 interface RequestBinderHolder { binding: RequestBinder }
 function die(message: string): never { process.stderr.write(`scopebond-mcp: ${message}\n`); process.exit(1); }
@@ -107,8 +126,18 @@ if (connection) {
   catch (e) { die(`durable Cloud outbox could not open: ${(e as Error).message}`); }
 }
 
-// Spawn the upstream server and correlate its responses by id.
-const child = spawn(upstreamCmd[0], upstreamCmd.slice(1), { stdio: ["pipe", "pipe", "inherit"] });
+const timeoutRaw = arg("--timeout-ms", process.env.SCOPEBOND_MCP_TIMEOUT_MS ?? "120000") as string;
+const timeoutMs = Number(timeoutRaw);
+if (!/^\d+$/.test(timeoutRaw) || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) die(`--timeout-ms must be a positive whole number of milliseconds, not "${timeoutRaw}"`);
+
+let childEnv: Record<string, string> = {};
+try {
+  const listed = (process.env.SCOPEBOND_MCP_UPSTREAM_ENV ?? "").split(",").map((n) => n.trim()).filter(Boolean);
+  childEnv = upstreamEnv(process.env, [...listed, ...args("--env")]);
+} catch (e) { die((e as Error).message); }
+
+// Spawn the upstream server with an allow-listed environment and correlate its responses by id.
+const child = spawn(upstreamCmd[0], upstreamCmd.slice(1), { stdio: ["pipe", "pipe", "inherit"], env: childEnv });
 child.on("error", (e) => die(`could not start the upstream server: ${e.message}`));
 const shutdown = (code: number) => {
   const done = (): never => process.exit(code);
@@ -119,26 +148,44 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
 const pending = new Map<string, (m: JsonRpcMessage) => void>();
+const timedOut = new Set<string>();
 const key = (id: unknown) => JSON.stringify(id ?? null);
+const isObject = (m: unknown): m is JsonRpcMessage => m !== null && typeof m === "object" && !Array.isArray(m);
 
-createInterface({ input: child.stdout }).on("line", (line) => {
+readLines(child.stdout, MAX_LINE_BYTES, (line) => {
   if (!line.trim()) return;
-  let msg: JsonRpcMessage;
+  let msg: unknown;
   try { msg = JSON.parse(line); } catch { return; }
-  const waiter = msg.id !== undefined ? pending.get(key(msg.id)) : undefined;
-  if (waiter) { pending.delete(key(msg.id)); waiter(msg); return; }
-  process.stdout.write(line + "\n"); // upstream-initiated notification → pass to the client
-});
+  // A response (no method) settles the request it answers; a late answer to a timed-out request is dropped.
+  if (isObject(msg) && msg.method === undefined && msg.id !== undefined && msg.id !== null) {
+    const k = key(msg.id);
+    const waiter = pending.get(k);
+    if (waiter) { pending.delete(k); waiter(msg); return; }
+    if (timedOut.delete(k)) return;
+  }
+  process.stdout.write(line + "\n"); // upstream-initiated request or notification → pass to the client
+}, () => process.stderr.write(`scopebond-mcp: dropped an upstream message over ${MAX_LINE_BYTES} bytes\n`));
 
 const upstream: McpUpstream = {
   call(message) {
     return new Promise((resolve) => {
-      if (message.id === undefined || message.id === null) { // notification: fire and forget
+      if (!isObject(message)) throw new Error("only single JSON-RPC objects are forwarded");
+      // A notification, or the client's response to an upstream request: nothing comes back.
+      if (message.id === undefined || message.id === null || typeof message.method !== "string") {
         child.stdin.write(JSON.stringify(message) + "\n");
         resolve({ jsonrpc: "2.0", result: null });
         return;
       }
-      pending.set(key(message.id), resolve);
+      const k = key(message.id);
+      const timer = setTimeout(() => {
+        if (pending.get(k) !== settle) return;
+        pending.delete(k);
+        timedOut.add(k);
+        if (timedOut.size > 10_000) timedOut.delete(timedOut.values().next().value as string);
+        resolve({ jsonrpc: "2.0", id: message.id, error: { code: -32001, message: `scopebond-mcp: the upstream did not answer within ${timeoutMs} ms (failed closed)` } });
+      }, timeoutMs);
+      const settle = (m: JsonRpcMessage): void => { clearTimeout(timer); resolve(m); };
+      pending.set(k, settle);
       child.stdin.write(JSON.stringify(message) + "\n");
     });
   },
@@ -147,6 +194,14 @@ const upstream: McpUpstream = {
 // The typed adapter is off unless a typed config is given. Its binding key and observation
 // outbox come from the hook when it is installed and enrolled; otherwise the key is a local
 // file beside the signing key (never uploaded) and nothing is queued.
+// The proxy's local key: a file beside the signing key, made on first use and never uploaded. It keys the typed
+// adapter's request binding (when the hook does not supply one) and every receipt's args_digest.
+function localBindingKey(): string {
+  const file = `${keyPath}.binding`;
+  let hex = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+  if (!/^[0-9a-f]{64}$/.test(hex)) { hex = randomBytes(32).toString("hex"); writeFileSync(file, hex + "\n", { mode: 0o600 }); }
+  return hex;
+}
 const typedPath = arg("--typed", process.env.SCOPEBOND_MCP_TYPED);
 let typed: TypedAdapterConfig | undefined;
 let observations: { flush(): Promise<unknown>; close(): void } | undefined;
@@ -165,12 +220,7 @@ if (typedPath) {
       else process.stderr.write(`scopebond-mcp: observations are not on (${opened.status.reason ?? opened.status.state}); the typed adapter runs without them\n`);
     } catch (e) { process.stderr.write(`scopebond-mcp: the hook package is not available for observations (${(e as Error).message})\n`); }
   }
-  if (!binder) {
-    const file = `${keyPath}.binding`;
-    let hex = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
-    if (!/^[0-9a-f]{64}$/.test(hex)) { hex = randomBytes(32).toString("hex"); writeFileSync(file, hex + "\n", { mode: 0o600 }); }
-    binder = requestBinderFromHex(hex);
-  }
+  if (!binder) binder = requestBinderFromHex(localBindingKey());
   typed = { ...(raw as object), mode: raw.mode, binder, ...(sink ? { sink } : {}) } as TypedAdapterConfig;
 }
 
@@ -187,27 +237,46 @@ if (dispatchDir) {
 
 }
 
+// args_digest is keyed: with the hook's per-machine digest key when the hook's folder is given and has one, else with
+// the proxy's local key.
+function argsDigestKeyHex(): string {
+  const hookDir = arg("--observations-dir", process.env.SCOPEBOND_HOOK_DIR);
+  if (hookDir) {
+    try {
+      const hex = readFileSync(join(resolve(hookDir), "digest.key"), "utf8").trim();
+      if (/^[0-9a-f]{64}$/.test(hex)) return hex;
+    } catch { /* fall back to the proxy's own key */ }
+  }
+  return localBindingKey();
+}
+let argsDigestKey: string;
+try { argsDigestKey = argsDigestKeyHex(); } catch (e) { die(`could not read or create the local key ${keyPath}.binding: ${(e as Error).message}`); }
+
 const proxy = createMcpProxy({
   policy, principal: { subject: `client:${principal}`, issuer: "scopebond:mcp-proxy" }, server: server as string,
-  attesterKeyPem, upstream, ...(dispatch ? { dispatch } : {}), ...(typed ? { typed, adapterVersion: "scopebond-mcp" } : {}),
+  attesterKeyPem, argsDigestKey, upstream, ...(dispatch ? { dispatch } : {}), ...(typed ? { typed, adapterVersion: "scopebond-mcp" } : {}),
   onReceipt: (r: SignedReceipt) => {
     if (receiptsPath) { try { appendFileSync(receiptsPath, JSON.stringify(r) + "\n"); } catch { /* best effort */ } }
     exporter?.enqueue(r); // mirror to the workspace when connected
   },
 });
 
-createInterface({ input: process.stdin }).on("line", async (line) => {
+const reply = (m: unknown): void => { process.stdout.write(JSON.stringify(m) + "\n"); };
+readLines(process.stdin, MAX_LINE_BYTES, async (line) => {
   if (!line.trim()) return;
-  let msg: JsonRpcMessage;
-  try { msg = JSON.parse(line); } catch { return; }
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return; }
+  // A batch or other non-message is answered here and never forwarded.
+  const invalid = invalidMessageReason(parsed);
+  if (invalid) { reply(await proxy.handle(parsed)); return; }
+  const msg = parsed as JsonRpcMessage;
+  const expectsReply = typeof msg.method === "string" && msg.id !== undefined && msg.id !== null;
   try {
     const response = await proxy.handle(msg);
-    if (msg.id !== undefined && msg.id !== null) process.stdout.write(JSON.stringify(response) + "\n");
+    if (expectsReply) reply(response);
   } catch (e) {
     // Fail closed: a proxy error becomes a JSON-RPC error, never a silent forward.
-    if (msg.id !== undefined && msg.id !== null) {
-      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `scopebond-mcp failed closed: ${(e as Error).message}` } }) + "\n");
-    }
+    if (expectsReply) reply({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `scopebond-mcp failed closed: ${(e as Error).message}` } });
   }
-});
+}, () => reply({ jsonrpc: "2.0", id: null, error: { code: -32600, message: `Invalid Request: message over ${MAX_LINE_BYTES} bytes` } }));
 }

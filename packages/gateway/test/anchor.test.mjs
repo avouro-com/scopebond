@@ -55,7 +55,8 @@ test("v2 anchor commits to receipts; the client verifies the audit path and sign
   assert.equal(await verifyInclusionProof({ leaf_hash: leaf, leaf_index: p1.leaf_index, tree_size: p1.anchor.tree_size, audit_path: p1.audit_path, root: p1.anchor.root }), true);
   assert.equal(await verifyInclusionProof({ leaf_hash: leaf, leaf_index: 0, tree_size: 3, audit_path: p1.audit_path, root: a1.root }), false);
 
-  const p2 = await (await gw.app.request("/v1/anchors/proof?intent_hash=" + receipts[2].payload.intent_hash)).json();
+  // A lookup by intent hash says whether an action happened, so it needs the control token.
+  const p2 = await (await gw.app.request("/v1/anchors/proof?intent_hash=" + receipts[2].payload.intent_hash, { headers: { authorization: `Bearer ${CONTROL_TOKEN}` } })).json();
   assert.equal(p2.leaf_index, 2);
   assert.equal(await verifyInclusionProof({ leaf_hash: await receiptLeafHash(receipts[2].payload), ...p2, root: a1.root }), true);
 
