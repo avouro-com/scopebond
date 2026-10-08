@@ -102,7 +102,9 @@ test("the tray's checks run when the agent or the hook it starts changes", () =>
 });
 
 test("on Windows, the signature check refuses an unsigned program and one signed by another publisher", { skip: process.platform !== "win32" && "Windows only" }, () => {
-  const run = (folder) => spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(native, "verify-signed.ps1"), "-Folder", folder], { encoding: "utf8" });
+  // Windows PowerShell, without the module path a PowerShell 7 parent (CI's shell) would hand it.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath"));
+  const run = (folder) => spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(native, "verify-signed.ps1"), "-Folder", folder], { encoding: "utf8", env });
   const unsigned = mkdtempSync(join(tmpdir(), "sb-verify-unsigned-"));
   writeFileSync(join(unsigned, "scopebond-agent.exe"), "not a program");
   const a = run(unsigned);
