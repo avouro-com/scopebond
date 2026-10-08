@@ -50,9 +50,9 @@ html, body {
 #panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   height: 100%;
-  padding: 14px 16px 10px;
+  padding: 12px 14px 8px;
   border: 1px solid var(--border);
   overflow-y: auto;
 }
@@ -100,7 +100,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wr
 .status.empty { display: none; }
 .hint { margin: 0; color: var(--muted); }
 
-.rows { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+.rows { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
 .rows dt { color: var(--muted); }
 .rows dd { margin: 0; overflow-wrap: anywhere; }
 
@@ -110,7 +110,7 @@ button {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 12px;
+  padding: 5px 10px;
   cursor: pointer;
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
@@ -122,9 +122,9 @@ button.close { border: none; background: none; font-size: 18px; line-height: 1; 
 
 .actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
-.blocks h2 { margin: 4px 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.blocks h2 { margin: 2px 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .blocks ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
-.blocks li { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.blocks li { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 5px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
 .blocks .summary { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; grid-column: 1 / -1; }
 .blocks .when { color: var(--muted); font-size: 12px; }
 .blocks .acted { color: var(--muted); font-size: 12px; }
