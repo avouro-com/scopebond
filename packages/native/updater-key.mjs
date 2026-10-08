@@ -18,4 +18,6 @@ writeFileSync(privateFile, privateKey.export({ type: "pkcs8", format: "pem" }), 
 writeFileSync(publicFile, `${publicKey.export({ type: "spki", format: "der" }).toString("base64")}\n`);
 console.log(`Public key: ${publicFile} (commit it).`);
 console.log(`Private key: ${privateFile}. Store it as the signing environment's secret, then keep it offline and delete this copy:`);
-console.log(`  gh secret set UPDATER_SIGNING_KEY --env signing --repo avouro-com/scopebond < "${privateFile}"`);
+console.log(process.platform === "win32"
+  ? `  Get-Content -Raw "${privateFile}" | gh secret set UPDATER_SIGNING_KEY --env signing --repo avouro-com/scopebond`
+  : `  gh secret set UPDATER_SIGNING_KEY --env signing --repo avouro-com/scopebond < "${privateFile}"`);
