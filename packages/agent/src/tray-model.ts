@@ -68,6 +68,17 @@ export function unreachable(error: string | null | undefined): boolean {
   return !!error && !/HTTP \d{3}/.test(error) && /fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|getaddrinfo|network|socket|could not reach/i.test(error);
 }
 
+/** The workspace refused records because it reached its monthly limit (they stay on the computer). */
+export function overQuota(error: string | null | undefined): boolean {
+  return !!error && /HTTP 429 \(quota\)/.test(error);
+}
+
+/** The HTTP status of a refusal the workspace answered (not "unreachable"), or null. */
+export function refusedStatus(error: string | null | undefined): number | null {
+  const m = error ? /HTTP (\d{3})/.exec(error) : null;
+  return m ? Number(m[1]) : null;
+}
+
 export function ago(at: number, now: number): string {
   const s = Math.max(0, Math.round((now - at) / 1000));
   if (s < 60) return "just now";
@@ -119,6 +130,11 @@ export function trayModel(input: TrayInput): TrayModel {
   } else if (health.level === "red" && d.connection_refused_since !== null) {
     state = "disconnected"; headline = "Not connected to your workspace: using this computer's own rules";
     if (input.canReconnect) fix = ACTIONS.reconnect; else hint = health.hint;
+  } else if (pending > 0 && overQuota(d.last_error) && health.fix?.route !== "/repair") {
+    // Not "sending": the workspace refuses them until its limit allows. Nothing is lost; say so, and where it is changed.
+    state = "attention"; headline = `Workspace limit reached: ${pending} record${pending === 1 ? "" : "s"} waiting`;
+    hint = "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows; a workspace owner can change the plan.";
+    fix = ACTIONS.open_workspace;
   } else if (health.level === "red") {
     state = "problem"; headline = health.headline; hint = health.hint;
     if (health.fix?.route === "/repair") fix = ACTIONS.repair;
@@ -146,6 +162,8 @@ export function trayModel(input: TrayInput): TrayModel {
     const value = pending === 0
       ? (d.last_success_at ? `All sent · ${ago(d.last_success_at, now)}` : "Nothing to send yet")
       : offline ? `${pending} waiting since ${oldestAt ? clock(oldestAt) : "earlier"} · offline`
+      : overQuota(d.last_error) ? `${pending} waiting · workspace limit reached`
+      : refusedStatus(d.last_error) ? `${pending} waiting · last try refused (HTTP ${refusedStatus(d.last_error)})`
       : `${pending} waiting · sending`;
     rows.push({ label: "Delivery", value });
   }
