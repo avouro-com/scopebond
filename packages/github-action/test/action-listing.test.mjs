@@ -15,7 +15,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const cli = join(here, "..", "dist", "cli.js");
 const actionYml = readFileSync(join(here, "..", "action.yml"), "utf8");
 const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
-const BASH = process.platform === "win32" && existsSync(GIT_BASH) ? GIT_BASH : "bash";
+// An absolute path: step 1 may run with a PATH that no longer holds bash's own directory.
+const onPath = (tool) => (process.env.PATH ?? process.env.Path ?? "").split(delimiter).map((p) => join(p, tool)).find((p) => existsSync(p));
+const BASH = process.platform === "win32" && existsSync(GIT_BASH) ? GIT_BASH : (onPath("bash") ?? "bash");
 const fwd = (p) => p.replace(/\\/g, "/");
 
 // Step 1 exactly as shipped: the `run: |` block of the first composite step.
