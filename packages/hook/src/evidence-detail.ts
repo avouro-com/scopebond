@@ -13,6 +13,7 @@ import { join } from "node:path";
 import type { CloudSummaryOptions } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { readMeta } from "./managed.js";
+import { loadOrCreateDigestKey } from "./minimize.js";
 
 export type EvidenceDetail = "full" | "standard";
 
@@ -30,5 +31,8 @@ export function evidenceDetail(dir: string): EvidenceDetail {
 export function summaryOptions(dir: string): CloudSummaryOptions | undefined {
   const keyFile = join(dir, "attester.key");
   if (!existsSync(keyFile)) return undefined;
-  return { detail: () => evidenceDetail(dir), attester: loadOrCreateAttester({ file: keyFile }).attester };
+  // The summaries' folder digests are keyed with this computer's digest key, so one folder has one digest in every summary.
+  let digestKey: string | undefined;
+  try { digestKey = loadOrCreateDigestKey(dir); } catch { digestKey = undefined; }
+  return { detail: () => evidenceDetail(dir), attester: loadOrCreateAttester({ file: keyFile }).attester, ...(digestKey ? { digestKey } : {}) };
 }

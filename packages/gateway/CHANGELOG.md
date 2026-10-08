@@ -1,5 +1,54 @@
 # @scopebond/gateway
 
+## 0.17.2
+
+### Patch Changes
+
+- b9c0504: Each delivery batch's record numbers are now signed with the computer's enrolled key. The Cloud exporter takes an optional `sequenceProof` (the attester and the machine credential's id) and sends `seq_proof: { kid, signature }` beside `seq` and `queue`, over `"scopebond:delivery-sequence/v1\n"` followed by the canonical JSON of the credential id, the queue id, the numbers and the SHA-256 of each receipt as sent. A party holding only the bearer credential can no longer attach numbers to records of its choosing. The hook and the agent sign with the key that signs their receipts; an exporter without a key sends the numbers unsigned, as before.
+
+## 0.17.1
+
+### Patch Changes
+
+- 258cdb6: Records that miss normal delivery are now kept, put right and reported.
+
+  - When a receipt is written locally but its delivery-queue write fails (the queue cannot be opened, or another process holds its lock), the action stays allowed and recorded on the computer as before. The miss is now noted, kept as an `outbox_error` gap on the next flush, and the receipt is queued then (every receipt written since the miss that the queue does not know yet, in log order). A tool call waits at most 2 seconds for the queue's lock, so an override wait plus a lock wait stays inside the coding agent's hook time limit; after an override wait, the local log also waits less for its lock. `flush` and the Scopebond Agent keep the longer wait.
+  - An evaluation stopped between its reservation and its receipt (a hook time limit, a crash) is closed after five minutes by the next hook call or the Scopebond Agent, with a signed receipt whose outcome is unknown (`execution.state: outcome_unknown`, reference `scopebond:evaluation-interrupted`, the policy's decision kept), queued like any other.
+  - The delivery queue keeps a lifetime count of gaps per reason (`status().gapsByReason`), beside the lifetime total; the gap rows themselves are still trimmed to the newest 10,000. `SqliteCloudOutbox` takes a `busyTimeoutMs` option and has `setBusyTimeout()` and `known()`; `SqliteReceiptStore` has `interruptedActions()`, `settleAction()`, `lastId()` and `setBusyTimeout()`.
+  - The rules check sends `x-scopebond-gaps-total` (the lifetime total) and `x-scopebond-gaps-by-reason` (compact JSON of reason code to count) when the queue has any gaps. `status` and `doctor` show a "delivery gaps" line, and `status --json` adds `delivery.gaps_total` and counts `delivery.gaps_by_reason` over the queue's lifetime.
+  - The status texts no longer say an unusable delivery queue blocks every action: actions stay allowed and recorded on the computer, and are sent once the queue can be written again.
+
+- d6996ad: Delivery no longer stalls on a request that never answers. Each delivery request now has a time limit (30 seconds by default, `requestTimeoutMs`), and the limit also covers reading the answer.
+
+  The Scopebond Agent:
+
+  - caps each delivery cycle at 10 minutes and goes on to the next cycle;
+  - starts its maintenance before the first cycle;
+  - answers Send now and stop without waiting on a stuck cycle;
+  - reports when the running cycle started (`cycle_started_at` in `/status`).
+
+  The hook:
+
+  - waits on a flush that is already sending instead of returning at once, so a backlog of 100 or more records drains from hook calls;
+  - records a cut-off only when its time limit really ran out;
+  - no longer replaces the agent's recent delivery error with its own cut-off message.
+
+  An agent that the workspace's plan paused now says so in the tray and in `status`, instead of offering Send records now.
+
+  The rules check now sends `x-scopebond-accepts-requests`: `flush,self_check` from the agent and `none` from a hook call. A workspace that reads the header then leaves a request from its computer page (send now, check now) for the agent.
+
+- 7fc5efb: Self-hosted gateway hardening.
+
+  - **HTTP executor:** an allowed `http.call` now reaches only the host its policy checked. The executor builds the URL with `new URL`, requires a path that starts with a single `/`, and checks the parsed host again. Before, a path such as `@other.example/x` sent the call to another host.
+  - **Host lists:** `endpoint_allowlist` and `endpoint_denylist` compare hosts as an HTTP client resolves them, ignoring case and one trailing dot. A host that is not a bare name or address, or a path that does not start with `/`, is never allowed and counts as denied.
+  - **Request bodies:** every request body is limited to 1 MiB (`maxBodyBytes`) before it is read, and JSON nested deeper than 64 levels is refused. MCP errors no longer echo internal exception text.
+  - **File access:** key files, the receipt database and the JSONL logs are readable by their owner alone. On Windows the inherited access list is replaced with the current user and SYSTEM; on POSIX the mode is 0600.
+  - **Anchor proofs:** leaf hashes are computed once instead of on every request. A lookup by `intent_hash` needs the control token; a lookup by leaf hash stays public.
+
+- 0f7268b: Receipts now scrub credential shapes inside string values, not only under credential-named keys: a credential-named URL query parameter, URL userinfo, a SQL password literal, an `Authorization:` header or credential-like `NAME=value` in a command, and well-known token formats are replaced with `***` before a receipt is signed, stored or exported (the `/v1/evaluate` and MCP ingress paths, the in-process check, and the PEP and boundary receipt builders). Each scrubbed path is listed in `redaction.paths`; `action_type`, `asset`, `amount` and `currency` are kept exactly as given. The scrubber is exported as `scrubSecretText`. A summary's `cwd_digest` is now an HMAC under a key passed as `digestKey` (in `buildSummary` options and in the exporter's `summaries` options) instead of a plain SHA-256, so a folder path cannot be confirmed by hashing a guess; without a key, a random key for the process is used. A record a bounded outbox drops at capacity now takes its sequence number before it is dropped (the gap carries it as `seq`), so the workspace counts it as missing. New `LOSSLESS_CLOUD_OUTBOX` options (no cap, no expiry) for exporters that must not drop records.
+- Updated dependencies [7fc5efb]
+  - @scopebond/verify@0.6.1
+
 ## 0.17.0
 
 ### Minor Changes

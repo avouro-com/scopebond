@@ -209,6 +209,18 @@ test("a request the workspace carries on the rules check reaches the agent once;
   await syncPolicy(dir, { agentKid, hookVersion: "0.21.0", policyBuilds, fetchImpl: respond("flush") });
 });
 
+test("the rules check says whether its caller acts on a request, so a hook call never takes the agent's", async () => {
+  const { dir, agentKid } = connected();
+  const sent = [];
+  const record = async (url, init) => {
+    if (String(url).endsWith("/v1/policy")) sent.push(new Headers(init?.headers).get("x-scopebond-accepts-requests"));
+    return String(url).endsWith("/v1/policy/ack") ? new Response("{}", { status: 200 }) : new Response(null, { status: 204 });
+  };
+  await syncPolicy(dir, { agentKid, hookVersion: "0.21.0", policyBuilds, fetchImpl: record, onRequest: () => {} });
+  await syncPolicy(dir, { agentKid, hookVersion: "0.21.0", policyBuilds, fetchImpl: record });
+  assert.deepEqual(sent, ["flush,self_check", "none"]);
+});
+
 test("sync installs, confirms, keeps a newer version only, and falls back to the computer's own rules", async () => {
   const { dir, agentKid } = connected();
   const localPolicy = readFileSync(join(dir, "policy.json"), "utf8");
@@ -350,6 +362,10 @@ test("the rules check names the delivery queue and the highest number it has giv
     assert.equal(w.calls[0].headers["x-scopebond-queue-id"], queueId);
     assert.equal(w.calls[0].headers["x-scopebond-seq-assigned"], "2");
     assert.equal(w.calls[0].headers["x-scopebond-pending"], "2");
+    // With records waiting, the computer's own clock goes beside their oldest time, so the workspace can compare them.
+    const clock = Number(w.calls[0].headers["x-scopebond-clock"]);
+    assert.ok(Math.abs(clock - Date.now()) < 60_000, "the clock header carries this computer's current time");
+    assert.ok(Number(w.calls[0].headers["x-scopebond-oldest-pending-at"]) <= clock);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
