@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Wait a week after a version is published before proposing it: a hijacked or broken
+    # release is usually caught and pulled within days. Security updates are not delayed.
+    cooldown:
+      default-days: 7
     ignore:
       # @types/node must track the lowest Node we support, not the newest. The
       # packages declare engines ">=20" (hook: ">=22.13"); newer majors of the
@@ -24,6 +28,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Wait a week after a version is published before proposing it: a hijacked or broken
+    # release is usually caught and pulled within days. Security updates are not delayed.
+    cooldown:
+      default-days: 7
     ignore:
       # changesets/action@v2 refuses to run with @changesets/cli 2, renames every
       # input release.yml uses (version -> version-script, publish ->

@@ -10,11 +10,7 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-  pull-requests: write
-  # npm provenance: the registry records which workflow run built each package.
-  id-token: write
+permissions: {}
 
 concurrency:
   group: release
@@ -22,10 +18,23 @@ concurrency:
 
 jobs:
   version:
+    name: version or publish
     runs-on: ubuntu-latest
+    # The automation and npm tokens are read only in this environment's jobs
+    # (deployment: false — this job versions and publishes; it deploys nothing).
+    environment:
+      name: npm
+      deployment: false
+    permissions:
+      contents: write # push the changeset-release/main branch with the version bumps
+      pull-requests: write # open and update the "Version packages" pull request
+      id-token: write # npm provenance: the registry records which workflow run built each package
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          # Not kept in .git/config: changesets/action writes its own ~/.netrc from its
+          # github-token input (the same token) before it pushes the version branch.
+          persist-credentials: false
           # The repository currently disallows Actions' default token from
           # creating pull requests. Reuse the existing company automation PAT
           # when configured, while retaining github.token for forks/dev copies.
