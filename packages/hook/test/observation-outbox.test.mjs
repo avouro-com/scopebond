@@ -376,3 +376,15 @@ test("a batch in flight is reserved for the process that took it; a lapsed or re
   assert.equal(store.nextBatch(undefined, true).length, 3, "a crashed sender's reservation lapses");
   store.close();
 });
+
+test("refused observations past the newest 1,000 are removed and counted, so the total is never understated", () => {
+  const { store } = seeded(1_500);
+  // A new generation makes every pending observation unsendable (stale_generation): 1,500 refused in all.
+  assert.equal(store.bindGeneration(2).ok, true);
+  const kept = store.terminalCounts();
+  const trimmed = store.terminalTrimmed();
+  assert.deepEqual(kept, { stale_generation: 1_000 });
+  assert.deepEqual(trimmed, { stale_generation: 500 });
+  assert.equal(Object.values(kept).reduce((a, b) => a + b, 0) + Object.values(trimmed).reduce((a, b) => a + b, 0), 1_500);
+  store.close();
+});

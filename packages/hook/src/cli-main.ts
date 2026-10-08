@@ -8,7 +8,7 @@
 // Config dir: $SCOPEBOND_HOOK_DIR, else ./.scopebond
 // Fail-closed: any error denies the action with a repair message.
 
-import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync, readdirSync } from "node:fs";
 import { hookCliPath, isSingleExecutable } from "./self.js";
 import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
@@ -709,6 +709,17 @@ async function runRules(args: string[]): Promise<void> {
  *  database first, and it refuses entirely once the log has been anchored, because a
  *  receipt's position is its anchor leaf index. Without a `--before` it reports the
  *  footprint and exits. */
+/** The archives earlier prunes wrote beside the database, with their sizes. */
+function receiptArchives(dir: string): Array<{ name: string; bytes: number }> {
+  try {
+    return readdirSync(dir).filter((name) => /^receipts-archived-.*\.jsonl$/.test(name)).map((name) => {
+      let bytes = 0;
+      try { bytes = statSync(join(dir, name)).size; } catch { /* gone meanwhile */ }
+      return { name, bytes };
+    });
+  } catch { return []; }
+}
+
 async function runPrune(args: string[]): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
   const dbPath = join(dir, "receipts.db");
@@ -762,7 +773,14 @@ async function runPrune(args: string[]): Promise<void> {
     console.log(`To remove older receipts yourself, name a cutoff:`);
     console.log(`  ${cliCommand("prune --before 90d")}      # older than 90 days`);
     console.log(`  ${cliCommand("prune --before 2026-01-01")}`);
-    console.log(`Receipts are archived beside the database before removal.`);
+    console.log(`Receipts are archived beside the database before removal (add --no-archive to skip that).`);
+    // Earlier prunes' archives are plain copies of signed receipts that nothing removes: say where they are and how big.
+    const archives = receiptArchives(dir);
+    if (archives.length) {
+      const bytes = archives.reduce((n, a) => n + a.bytes, 0);
+      console.log(`\narchives         ${archives.length} file(s), ${(bytes / 1024 / 1024).toFixed(1)} MB, beside the database (receipts-archived-*.jsonl).`);
+      console.log(`                 They are kept until you delete them; they hold the same details as the receipts.`);
+    }
     process.exit(0);
   }
   const cutoff = parseSince(args[beforeIdx + 1]);
@@ -790,14 +808,19 @@ async function runPrune(args: string[]): Promise<void> {
       console.error(`  ${cliCommand(`prune --before ${args[beforeIdx + 1]} --yes`)}`);
       process.exit(1);
     }
-    const archive = join(dir, `receipts-archived-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
-    writeFileSync(archive, `${doomed.map((r) => JSON.stringify(r)).join("\n")}\n`);
-    console.log(`archived to      ${archive}`);
+    const archived = !args.includes("--no-archive");
+    if (archived) {
+      const archive = join(dir, `receipts-archived-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
+      writeFileSync(archive, `${doomed.map((r) => JSON.stringify(r)).join("\n")}\n`, { mode: 0o600 });
+      console.log(`archived to      ${archive}`);
+    } else {
+      console.log(`archived to      nothing (--no-archive)`);
+    }
     const { removed } = sqlite.removeBefore(iso);
     console.log(`removed          ${removed} receipt(s)`);
     store.close?.();
     console.log(`store now        ${describeStore(dbPath)}`);
-    console.log(`\nThe archive is a plain JSONL of signed receipts — still verifiable, still yours.`);
+    if (archived) console.log(`\nThe archive is a plain JSONL of signed receipts — still verifiable, still yours. It stays until you delete it.`);
     process.exit(0);
   } catch (error) {
     try { store.close?.(); } catch { /* closing after a failure */ }
@@ -1872,14 +1895,15 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
   { name: "test", args: '"<shell command>"',
     summary: "show the decision for a command without running or recording it",
     detail: [`e.g. ${cliCommand('test "rm -rf /"')}`] },
-  { name: "prune", args: "[--compact] [--before 90d] [--yes]",
+  { name: "prune", args: "[--compact] [--before 90d] [--yes] [--no-archive]",
     summary: "report the local store's size, or bound it",
     detail: [
       "--compact runs the upkeep now: older rows are rewritten to keep each policy and receipt once,",
       "receipts the workspace acknowledged are removed after its retention window, and the file shrinks.",
       "With no --before it only reports. With one, it archives the receipts it will remove",
       "to a JSONL file beside the database, then removes them. Refuses once the log has been",
-      "anchored, because a receipt's position is its anchor leaf index.",
+      "anchored, because a receipt's position is its anchor leaf index. --no-archive removes without the copy;",
+      "an archive stays until you delete it (the report lists them).",
     ] },
   { name: "login", args: "<workspace-url> [--claude|--cursor|--codex] [--no-install] [--project] [--yes]",
     summary: "connect this computer to a Scopebond Cloud workspace by approving a short code there",
