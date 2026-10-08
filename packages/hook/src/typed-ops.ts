@@ -134,7 +134,8 @@ export function normalizeRemote(url: string): { host: string; path: string } | n
     while (start < body.length && body.charCodeAt(start) === 47) start++;
     return body.slice(start);
   };
-  let m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(text);
+  // Userinfo runs to the LAST "@" before the path, as URL parsers (and npm, pip) read it: a password may contain "@".
+  let m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(text);
   if (m && !/^file$/i.test(text.slice(0, 4))) return { host: m[1].toLowerCase(), path: strip(m[2]) };
   m = /^(?:[^@/\s]+@)?([^/:\s]+):(?!\/\/)([^\s]+)$/.exec(text);
   if (m && !/^[A-Za-z]$/.test(m[1])) return { host: m[1].toLowerCase(), path: strip(m[2]) };

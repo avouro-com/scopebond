@@ -8,7 +8,7 @@
 // map to a single intent (a one-element array), or one per spelling of an
 // ambiguous Windows short path.
 
-import { digest, redactCommand, scrubParam, scrubSecrets } from "./minimize.js";
+import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
 
 export interface NormalizedIntent {
@@ -762,7 +762,7 @@ export function parseMcpName(name: string): { server: string; tool: string } | n
 
 function splitUrl(url: string): { host: string; path: string } {
   // The query string is dropped; a token in the path or an unparseable URL is scrubbed.
-  try { const u = new URL(url); return { host: u.host, path: scrubParam(u.pathname) }; }
+  try { const u = new URL(url); return { host: u.host, path: scrubUrlPath(u.pathname) }; }
   catch { return { host: scrubParam(url), path: "" }; }
 }
 
