@@ -7,7 +7,7 @@
 // the working folder or to CI configuration or an agent's or Scopebond's own settings; an MCP tool call; a network fetch.
 // An action a Monitor rule matched is recorded as out of policy (and allowed), so it is never routine either.
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { summaryRoot, summarySigningInput, type SummaryCount, type SummaryPayload, type SummaryRecord, type SummaryRepeat } from "@scopebond/verify/summary";
 import type { Attester, ReceiptPayload, SignedReceipt } from "./receipts.js";
@@ -70,7 +70,19 @@ export interface SummaryOptions {
   now?: Date;
   /** The summary's id (default: a new one). */
   summaryId?: string;
+  /** The key (64 hex) for the working-folder digest: an HMAC, so a folder cannot be confirmed by hashing a guessed path.
+   *  Pass the computer's own digest key so one folder has one digest across summaries; without one, a random key for this
+   *  process is used, and folders then group only within the process. */
+  digestKey?: string;
 }
+
+let processDigestKey: Buffer | null = null;
+/** The keyed digest of a working folder, as 64 hex (the summary schema's form). */
+function folderDigest(cwd: string, key: string | undefined): string {
+  const bytes = key && /^[0-9a-f]{64}$/i.test(key) ? Buffer.from(key, "hex") : (processDigestKey ??= randomBytes(32));
+  return createHmac("sha256", bytes).update(FOLDER_DIGEST_DOMAIN + cwd, "utf8").digest("hex");
+}
+const FOLDER_DIGEST_DOMAIN = "scopebond:summary-cwd/v1\n";
 
 /** Build and sign the summary of these routine receipts (in any order: the root is taken in `summaryOrder`). Throws when one is notable by
  *  the default rules or the list is empty: a summary never stands in for a notable action. */
@@ -82,7 +94,7 @@ export async function buildSummary(receipts: readonly SignedReceipt[], options: 
     if (isNotable(payload)) throw new TypeError("a notable receipt cannot be summarised");
     const params = payload.intent.params ?? {};
     const program = typeof params.program === "string" && params.program.length > 0 ? params.program.slice(0, 100) : null;
-    const cwd = typeof params.cwd === "string" && params.cwd.length > 0 ? sha256(params.cwd) : null;
+    const cwd = typeof params.cwd === "string" && params.cwd.length > 0 ? folderDigest(params.cwd, options.digestKey) : null;
     const result = payload.realtime_result as SummaryCount["result"];
     const countKey = canonical([payload.intent.action_type, result, program, cwd]);
     const c = counts.get(countKey);

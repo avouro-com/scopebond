@@ -1,3 +1,20 @@
 packages:
   - "packages/*"
   - "examples"
+
+# Supply-chain settings (pnpm >= 10.26):
+# - Resolve only versions published at least seven days ago (in minutes); a hijacked
+#   release is usually caught and pulled within days. Our own packages are exempt, so a
+#   release can be consumed here as soon as it is published.
+minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  - "@scopebond/*"
+# - Refuse an update whose publisher trust evidence (trusted publishing, provenance) is
+#   weaker than an earlier version's.
+trustPolicy: no-downgrade
+# - Transitive dependencies come from the registry only, never a git URL or tarball.
+blockExoticSubdeps: true
+# Dependencies whose install scripts run (pnpm 10 runs none unless listed): esbuild
+# checks and links its platform binary, as it did under pnpm 9.
+onlyBuiltDependencies:
+  - esbuild

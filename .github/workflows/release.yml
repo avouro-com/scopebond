@@ -10,11 +10,7 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-  pull-requests: write
-  # npm provenance: the registry records which workflow run built each package.
-  id-token: write
+permissions: {}
 
 concurrency:
   group: release
@@ -22,10 +18,23 @@ concurrency:
 
 jobs:
   version:
+    name: version or publish
     runs-on: ubuntu-latest
+    # The automation and npm tokens are read only in this environment's jobs
+    # (deployment: false — this job versions and publishes; it deploys nothing).
+    environment:
+      name: npm
+      deployment: false
+    permissions:
+      contents: write # push the changeset-release/main branch with the version bumps
+      pull-requests: write # open and update the "Version packages" pull request
+      id-token: write # npm provenance: the registry records which workflow run built each package
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          # Not kept in .git/config: changesets/action commits the version branch and
+          # creates tags and releases through the GitHub API with its github-token input.
+          persist-credentials: false
           # The repository currently disallows Actions' default token from
           # creating pull requests. Reuse the existing company automation PAT
           # when configured, while retaining github.token for forks/dev copies.
@@ -35,25 +44,24 @@ jobs:
         with:
           node-version: 22.20.0
           cache: pnpm
+          # Writes an .npmrc for the npm registry that reads NODE_AUTH_TOKEN (set below).
+          registry-url: "https://registry.npmjs.org"
       - run: pnpm install --frozen-lockfile
       - name: Configure company commit identity
         run: |
           git config user.name "avourohq"
           git config user.email "founder@avouro.com"
-      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
+      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
-          setupGitUser: false
-          version: pnpm version:packages
-          commit: "chore: version packages"
-          title: "Version packages"
+          version-script: pnpm version:packages
+          commit-message: "chore: version packages"
+          pr-title: "Version packages"
           # Publish-on-merge: with pending changesets this opens/updates the Version
           # PR; once that PR is merged (no changesets left) it runs `pnpm release`,
           # which builds and `changeset publish`es the bumped packages to npm.
-          publish: pnpm release
+          publish-script: pnpm release
         env:
-          # changesets/action writes ~/.npmrc from NPM_TOKEN before `changeset
-          # publish`; NODE_AUTH_TOKEN alone is not enough (ENEEDAUTH).
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
+          # Read by the .npmrc that setup-node wrote (changesets/action v2 writes none).
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
           NPM_CONFIG_PROVENANCE: "true"

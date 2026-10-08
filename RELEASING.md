@@ -26,9 +26,10 @@ merging a version PR is a publication decision, not just a documentation update.
 
 ## Configuration and checks
 
-- Use the Node version in `.nvmrc` and pnpm 9.12.0 from `package.json`.
-- The workflow supplies `NPM_TOKEN_SCOPEBOND` as both `NPM_TOKEN` and
-  `NODE_AUTH_TOKEN`, and enables npm provenance. Keep credentials in repository
+- Use the Node version in `.nvmrc` and pnpm 10.34.6 from `package.json`.
+- The workflow supplies `NPM_TOKEN_SCOPEBOND` as `NODE_AUTH_TOKEN` (read through the
+  `.npmrc` that `actions/setup-node` writes for the npm registry), in the `npm`
+  environment, and enables npm provenance. Keep credentials in repository
   secrets; never put their values in source or release instructions.
 - Public packages set `publishConfig.access: public`. The Changesets ignore list
   is empty; the gateway is already published, not awaiting its first release.

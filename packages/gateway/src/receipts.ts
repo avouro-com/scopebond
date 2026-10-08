@@ -14,6 +14,7 @@ export type { AnchorV1, AnchorV2 } from "@scopebond/verify/anchor";
 import { validateAuthorizationEvidence, verifyAuthorizationEvidenceSignatures } from "./auth.js";
 import type { AuthorizationEvidence, PrincipalKeyRecord } from "./auth.js";
 import { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
+import { scrubSecretText } from "./scrub.js";
 export { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
 
 export type RealtimeResult = "allow" | "deny" | "approved" | "timeout" | "not_evaluated";
@@ -550,8 +551,17 @@ function byteLength(value: unknown): number {
   return Buffer.byteLength(canonical(value));
 }
 
+/** Fields kept exactly as given: the action type and the money fields a spend limit reads. */
+const CLEAR_KEYS = new Set(["action-type", "asset", "amount", "currency"]);
+
 function minimizeValue(value: unknown, path: string, redacted: string[]): unknown {
   if (Array.isArray(value)) return value.map((item, index) => minimizeValue(item, `${path}[${index}]`, redacted));
+  if (typeof value === "string") {
+    // A credential inside an ordinary value (a URL query token, a SQL password literal, a Bearer header in a command).
+    const scrubbed = scrubSecretText(value);
+    if (scrubbed !== value) redacted.push(path);
+    return scrubbed;
+  }
   if (!value || typeof value !== "object") return value;
   const output: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
@@ -566,6 +576,8 @@ function minimizeValue(value: unknown, path: string, redacted: string[]): unknow
         byte_length: byteLength(child),
       };
       redacted.push(childPath);
+    } else if (CLEAR_KEYS.has(normalized) && typeof child !== "object") {
+      output[key] = child;
     } else {
       output[key] = minimizeValue(child, childPath, redacted);
     }

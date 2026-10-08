@@ -120,6 +120,10 @@ test("prune archives before it removes, and keeps newer receipts", () => {
   assert.match(out, /removed\s+1 receipt/);
   const archives = readdirSync(config).filter((f) => f.startsWith("receipts-archived-"));
   assert.equal(archives.length, 1, "exactly one archive was written");
+  // The report lists the archive, which stays until the person deletes it.
+  const report = execFileSync(process.execPath, [cli, "prune"], { cwd: dir, encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: config } });
+  assert.match(report, /archives\s+1 file\(s\), [0-9.]+ MB, beside the database/);
+  assert.match(report, /--no-archive/);
   const archived = readFileSync(join(config, archives[0]), "utf8").trim().split("\n");
   assert.equal(archived.length, 1);
   // The archive is still a signed receipt, not a summary. Note the signed payload is
@@ -213,4 +217,18 @@ test("init backs up an existing agent config before changing it", () => {
   const merged = JSON.parse(readFileSync(settings, "utf8"));
   assert.equal(merged.theme, "light", "and the user's own settings survived the merge");
   assert.deepEqual(merged.permissions.allow, ["Bash(npm test)"]);
+});
+
+test("prune --before --no-archive removes without writing an archive", () => {
+  const { dir, config } = project("prune-no-archive");
+  toolCall(config, dir, "npm test");
+  const handle = new DatabaseSync(join(config, "receipts.db"));
+  handle.prepare("UPDATE receipts SET timestamp = ?").run("2020-01-01T00:00:00.000Z");
+  handle.close();
+  const out = execFileSync(process.execPath, [cli, "prune", "--before", "2021-01-01", "--yes", "--no-archive"], {
+    cwd: dir, encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: config },
+  });
+  assert.match(out, /archived to\s+nothing \(--no-archive\)/);
+  assert.match(out, /removed\s+1 receipt/);
+  assert.equal(readdirSync(config).filter((f) => f.startsWith("receipts-archived-")).length, 0);
 });

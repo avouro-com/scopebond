@@ -7,7 +7,8 @@
 //             capability (active / unsupported / blocked) and a backoff deadline
 //   pending   signed observations not yet acknowledged, in sequence order
 //   terminal  observations the server refused permanently (or a stale generation made
-//             unsendable). They are kept, visible in `status`, and never retried.
+//             unsendable). The newest 1,000 are kept, visible in `status`, and never retried;
+//             older ones are removed and counted per code (also in `status`).
 //   sessions  which harness sessions are active, and the heartbeat owner lease
 //   calls     the operation of each dispatched tool call, so the after-action hook can
 //             echo the same binding
@@ -340,7 +341,20 @@ export class ObservationStore {
     return out;
   }
 
+  /** Refused observations removed to keep the terminal list at MAX_TERMINAL, per code, over the store's life. */
+  terminalTrimmed(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const r of this.db.prepare("SELECT name, value FROM marks WHERE name LIKE 'trimmed:%'").all() as Array<{ name: string; value: number }>) out[r.name.slice("trimmed:".length)] = r.value;
+    return out;
+  }
+
   private trimTerminal(): void {
+    // The oldest refused observations beyond the cap are removed, and counted per code, so status can say how many.
+    const removed = this.db.prepare("SELECT code, COUNT(*) AS n FROM terminal WHERE id NOT IN (SELECT id FROM terminal ORDER BY id DESC LIMIT ?) GROUP BY code").all(MAX_TERMINAL) as Array<{ code: string; n: number }>;
+    if (!removed.length) return;
+    for (const r of removed) {
+      this.db.prepare("INSERT INTO marks (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = value + excluded.value").run(`trimmed:${r.code}`, r.n);
+    }
     this.db.prepare("DELETE FROM terminal WHERE id NOT IN (SELECT id FROM terminal ORDER BY id DESC LIMIT ?)").run(MAX_TERMINAL);
   }
 

@@ -173,12 +173,13 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
 
 const union = (a: readonly string[], b: readonly string[] | undefined): string[] => [...new Set([...a, ...(b ?? [])])];
 const branchGlob = (b: string): string => (b.endsWith("/*") ? `${b.slice(0, -1)}**` : b);
+const escapeRegex = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
+/** Every regular-expression character in a host is escaped, not only the dots: validation admits only letters, digits, hyphens
+ *  and dots today, and this pattern stays literal even if that check ever widens. */
 const hostPattern = (hosts: readonly string[]): string =>
-  `^(?:${hosts.map((h) => (h.startsWith("*.") ? `(?:[^.]+\\.)+${ci(h.slice(2).replace(/\./g, "\\."))}` : ci(h.replace(/\./g, "\\.")))).join("|")})$`;
+  `^(?:${hosts.map((h) => (h.startsWith("*.") ? `(?:[^.]+\\.)+${ci(escapeRegex(h.slice(2)))}` : ci(escapeRegex(h)))).join("|")})$`;
 
 type Clause = Record<string, unknown> & { id: string };
-
-const escapeRegex = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
 /** Exclusions that passed validation (the document check refuses the rest; this is a second line of defence). */
 const safeExclusions = (paths: readonly string[] | undefined): string[] => (paths ?? []).filter((path) => EXCLUSION_PATTERN.excluded_paths.test(path) && !path.includes(".."));
 /** An allow pattern that also allows exactly these paths (a trailing /** allows everything under the folder). The added alternative
