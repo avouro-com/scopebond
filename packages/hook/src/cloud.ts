@@ -8,7 +8,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import {
   CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,
-  type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter, type ReceiptStore,
+  type Attester, type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
+  type CloudSequenceProofOptions, type ReceiptStore,
 } from "@scopebond/gateway";
 import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX } from "./delivery-report.js";
@@ -131,6 +132,17 @@ export class DeliveryQueueError extends Error {
   }
 }
 
+/** How this computer signs each batch's record numbers: the enrolled key (the one that signs its receipts) and the machine
+ *  credential's id from the connection. None when either is missing, or when the key on disk is not the one this connection
+ *  enrolled, since a proof under any other key could never verify. */
+export function sequenceProofFor(
+  connection: Pick<HookConnection, "credential_id" | "attester_kid">, attester: Attester | undefined,
+): CloudSequenceProofOptions | undefined {
+  if (!attester || typeof connection.credential_id !== "string" || !connection.credential_id.trim()) return undefined;
+  if (typeof connection.attester_kid === "string" && connection.attester_kid !== attester.kid) return undefined;
+  return { attester, credentialId: connection.credential_id };
+}
+
 export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
   options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void } = {},
@@ -143,8 +155,10 @@ export function attachExporter(
   try { outbox = new SqliteCloudOutbox(outboxDbPath, { ...LOSSLESS_OUTBOX, ...(options.busyTimeoutMs === undefined ? {} : { busyTimeoutMs: options.busyTimeoutMs }) }); }
   catch (error) { throw new DeliveryQueueError(outboxDbPath, error); }
   // `onGap`: a record the queue could not take (its write failed after the local write) is kept as a gap by the caller.
+  const summaries = summaryOptions(dirname(outboxDbPath));
+  const sequenceProof = sequenceProofFor(connection, summaries?.attester);
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl,
-    summaries: summaryOptions(dirname(outboxDbPath)), ...(options.onGap ? { onGap: options.onGap } : {}) });
+    summaries, ...(sequenceProof ? { sequenceProof } : {}), ...(options.onGap ? { onGap: options.onGap } : {}) });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }
 
