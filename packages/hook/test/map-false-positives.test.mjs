@@ -63,3 +63,35 @@ test("Scopebond's folder named in an interpreter's argument is a read, through a
   assert.deepEqual(reads(`node -e "console.log(1)"`), []);
   assert.deepEqual(reads("node scripts/build.mjs --out .scopebond-report"), [], "a different name that starts the same is not the folder");
 });
+
+test("a second here-document after a body with an apostrophe is still data: no false switch-off", () => {
+  for (const command of [
+    ["cat > a <<'EOF'", "it's", "EOF", "cat > b <<'EOF'", "it's", "EOF", "echo scopebond"].join("\n"),
+    ["cd /c/GitHub/scopebond-native/packages && cat >> agent/test/x.test.mjs <<'EOF'", "// the agent's own check", "EOF",
+      "cat > native/test/y.test.mjs <<'EOF'", `import { verifyManifest } from "@scopebond/agent";`, "// it's the workflow's", "EOF",
+      `grep -n '"devDependencies"' -A4 native/package.json`].join("\n"),
+    ["git commit -q -F - <<'EOF'", "It's the updater's key", "EOF", `gh pr create --body "$(cat <<'EOF'`, "Don't merge before @scopebond/hook", "EOF", `)"`].join("\n"),
+  ]) assert.deepEqual(paths(bash(command), "file.write").filter((p) => p.includes(".scopebond")), [], command);
+});
+
+test("a search for an escaped quote next to a mention of Scopebond is not a switch-off in the Windows reading", () => {
+  for (const command of [
+    String.raw`grep -n "x\"" a.ts; echo scopebond`,
+    String.raw`for f in a.ts b.ts; do c=$(grep -c "\bjoin\b" $f); [ "$c" = "1" ] && echo "$f"; done; grep -n "@scopebond/hook\"" a.ts b.ts`,
+  ]) assert.deepEqual(paths(bash(command), "file.write"), [], command);
+});
+
+test("here-documents and the Windows reading still fail closed on a real switch-off or write", () => {
+  const touches = (command) => ["file.write", "file.delete"].some((type) => paths(bash(command), type).some((p) => String(p).includes(".scopebond")));
+  for (const command of [
+    String.raw`eval "$X @scopebond/hook uninstall`,
+    String.raw`echo hi > .scopebond\policy.json "x\""`,
+    String.raw`echo "\" & npx @scopebond/hook uninstall & echo "\"\"`,
+    ["cat > a <<'EOF'", "it's", "EOF", "cat > .scopebond/policy.json <<'EOF'", "{}", "EOF"].join("\n"),
+    ["bash <<'EOF'", "npx @scopebond/hook uninstall", "EOF"].join("\n"),
+    ["cat > a <<'EOF'", "it's", "EOF", "bash <<'EOF'", "npx @scopebond/hook uninstall", "EOF"].join("\n"),
+  ]) assert.ok(touches(command), command);
+  // A here-document with no terminator is no here-document: the lines after it are still commands.
+  const unterminated = bash(["cat <<EOF", "no terminator here", "rm .scopebond/policy.json"].join("\n"));
+  assert.ok(unterminated.some((m) => m.intent.action_type === "shell.exec" && m.intent.params.program === "rm"));
+});
