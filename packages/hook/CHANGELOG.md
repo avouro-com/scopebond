@@ -1,5 +1,118 @@
 # @scopebond/hook
 
+## 0.21.0
+
+### Minor Changes
+
+- cb4d4e0: People may allow blocked actions for a while, or ask an admin. In the Scopebond window a person may choose **Allow once**,
+  **Allow for 15 min**, **Always allow this here…** or **Ask an admin**, as the workspace allows. "For 15 min" and "always"
+  leave a standing _allowance_ for the same action (the same type and parameters, whatever tool call it comes from): it is
+  bound to one rule, expires (30 days by default), and never applies to Scopebond's own protection. A new rule mode, _Block,
+  person may ask_, offers only **Ask an admin**: the action stays blocked and the request goes to the workspace, which answers
+  with an allowance on the next rules check. The agent sends a person's allowances and requests to the workspace once, signed
+  by the computer's enrolled key.
+
+  The receipt of an action an allowance lets through carries `override.method: "allowance"`, with `repeat_of` naming the
+  allowance and `reason_digest` the reason it was made with (receipt schema and `validateOverrideRecord`). The hook reports
+  `x-scopebond-hook-capabilities: allowances` on its rules check, so a workspace sends the new mode and terms only to hooks that
+  understand them.
+
+  Also: the action key that recognises "the same action" leaves out the tool call's group size and position, so an earlier
+  override's repeat window applies to the same command in any call.
+
+  Review fixes before release: the floor check keeps a rule a person may only ask about blocking when another rule on the same
+  action lets a person allow; the agent re-reads its files before writing, so an allowance or request the hook wrote during a
+  send is kept; allowances and requests are signed over `scopebond:allowance/v1` and `scopebond:request/v1` domain lines;
+  "Allow for 15 min" is offered only where the workspace sends the allowance terms; an older agent's "Allow once" on an
+  ask-only rule becomes a request to an admin.
+
+- e0f2de4: A session's heartbeat can be sent every five minutes instead of every minute, where the workspace says it reads the
+  interval (`x-scopebond-heartbeat-interval-s` on the rules check). Each such heartbeat says so (`interval_s: 300`; the schema
+  allows 60–900), and the workspace waits three intervals before calling a computer lost. A workspace that does not say gets
+  heartbeats every minute without `interval_s`, as before. Heartbeats continue fifteen minutes after the last hook activity
+  (it was ten), so an idle session still sends at least two.
+- ce7728c: A small, steady local store. A hook call's memory and time no longer grow with the local history: the replay check is one
+  indexed lookup instead of reading every receipt (a call on a 767 MB log peaked at 69 MB, down from 233 MB, and 504 MB for a
+  three-part shell command; it took 0.26 s instead of 1–1.8 s). The SQLite store keeps each policy once and each receipt once,
+  and keeps nothing for an action that finished without being dispatched; a log from an earlier version is rewritten to this
+  layout and shrinks (767 MB became 93 MB with every receipt kept).
+
+  Receipts a workspace acknowledged are removed 30 days after it did (the workspace can set 7–365 days); a receipt it has not
+  acknowledged is never removed, an anchored log is never pruned, and a computer with no workspace keeps everything. The
+  Scopebond Agent runs this upkeep; a hook-only install runs a short pass once a day and leaves rewriting an older file to a
+  background process. `prune` reports the retention, and `prune --compact` runs the upkeep now.
+
+  Also: `sed -n a,bp f` reads `f`, not a file named after the script; `cat $f` no longer records a read of a file called `$f`;
+  Scopebond's own folder named in an interpreter's arguments (`node -e`, `python script.py ~/.scopebond/…`, `sqlite3`) is
+  treated as a read of it; `rules.json` and `cloud.json` are read once per call; the delivery queue keeps its totals.
+  `@scopebond/gateway` adds `ReceiptStore.authorizationUsed`, `SqliteReceiptStore.maintain`, `SqliteCloudOutbox.markAcknowledged`
+  and `pendingCount`, and re-exports `historyNeed`.
+
+- b2f5af9: Act on a block afterwards, from the tray. When a rule lets a person allow a blocked action or ask an admin, the block is
+  kept for a week and the tray's **Recently blocked** list offers it: a click opens the Scopebond window for that action, and
+  the person may allow it once (the next try), for 15 minutes or always, or ask an admin, as the workspace allows now. The
+  reason length and the daily limit apply as in the window; a block is offered once; Scopebond never runs the action again by
+  itself. New: `blockedQuestion` and `actOnBlocked` in the hook, `POST /blocked` on the agent's local channel (it only names
+  the block; the answer comes from the window), and `can_act` / `acted` on the tray model's recent blocks.
+- d4b34d8: Send summaries instead of every routine receipt when the workspace asks for it. The workspace names its evidence detail on
+  each rules check (`x-scopebond-evidence-detail: full | standard`); the hook keeps it beside the local retention. With
+  _standard_, the exporter sends notable receipts in full at once and the routine ones of each closed five-minute window as one
+  signed summary (`POST /v1/summaries`, with the queue's record numbers it stands for beside it, so the workspace's gap check
+  stays exact). Each window is summarised once per queue (a claim in the outbox), so a window's summary covers exactly its
+  routine receipts that were not sent in full; a record that turns up for a window already summarised is sent in full. A
+  workspace without summaries (404, 405) or that refuses one (400, 413, 422) is sent every receipt, as before.
+
+  Also: enqueueing never starts a flush while summaries are on, and a hook call's flush runs only when the call recorded
+  something notable (`flush({ routine: false })`); the agent's cycle and `scopebond-hook flush` send the summaries. New:
+  `CloudSummaryOptions`, `seqRanges`, outbox `claimWindow`/`releaseWindow`; hook `evidenceDetail`, `evidenceDetailFrom`,
+  `summaryOptions`. A 1,000-action session over 20 minutes ships 4 summaries and its 5 pushes.
+
+  Review fixes before release: a window's claim is a lease, so a window another process is sending waits instead of also going
+  in full, and a claim a process abandoned is taken over under the same summary id; records leave the queue only for the
+  summaries the workspace says it has (a summary it refused sends its records in full; a short answer is retried under the
+  same ids); a summary's `notable_count` counts the window's records sent in full, kept in the outbox; notable records go
+  before summaries; a computer without the agent sends summaries from a hook call once routine records have waited 30 minutes.
+
+- c20849f: The tray says what is true and offers only what applies. The Windows tray draws the Scopebond "S" tile with a status badge
+  (protected, working, offline, needs attention, problem, not connected) from a model the agent computes (`GET /tray`), so the
+  tray, `status` and the workspace agree. Its menu shows Rules, Delivery, Today's actions and blocks, and Version (each only
+  with data), the one fix when something is wrong, **Check now** with what it found, **Send records now** only when records
+  wait, **Update now** only when the workspace recommends a newer version, the last few blocks, a notification setting (All,
+  Problems only by default, Off) and Help (copy diagnostics, open the Scopebond folder, documentation, About). Records waiting
+  count only time the computer was awake, and the workspace being unreachable is offline (still checking actions) for four
+  hours before it needs attention.
+
+  The hook exports `localActivity()` (today's counts and the newest blocks, read-only and bounded, summarised without
+  arguments) and `ruleReport()`.
+
+  The agent acts on a request the workspace carries on the rules check (`x-scopebond-request: flush | self_check`, from the
+  computer's page: "Ask it to send now", "Ask it to check now"), and reads the workspace's optional `GET /v1/computer/summary`
+  for the tray's workspace and environment names, Review count and **Open workspace** (links only on the connected workspace's
+  own origin). A workspace without the call answers 404 and the tray leaves those rows out; the fake cloud implements it.
+
+  **Reconnect…** in the tray signs this computer in again with no terminal: the agent runs the hook's own sign-in for the
+  workspace it is already connected to, opens the approval page there and shows the code. A workspace that lets the same
+  computer keep its key delivers the records waiting on it as they are.
+
+### Patch Changes
+
+- d29fe87: The Scopebond Agent's local channel now runs over a named pipe on Windows (a random name, kept in `agent.json` in the user's own Scopebond folder) and a Unix socket elsewhere (in a folder only the user can open, the socket itself 0600). Another user can neither find nor open them, unlike a loopback port, which any program on the computer can reach. The `scopebond-agent` commands and the hook's override window use it; the token is still required. The loopback port stays on for one more release, for the PowerShell tray, and `SCOPEBOND_AGENT_LOOPBACK=0` turns it off.
+- e343292: Groundwork for a single-file Windows build. The hook's and the agent's commands are now `main(argv)` functions in `cli-main.js` (the `cli.js` programs that agent settings and autostart name are unchanged and call them); every place that starts the hook or the agent again goes through one helper (`hookSelfCommand`, `agentCliPath`); Node's SQLite is taken from Node's built-ins; versions can be set at build time. No change in behaviour for npm installs.
+- 4e59097: When Scopebond runs as the single executable, the coding agents' settings name the executable itself (`"…\scopebond-agent.exe" hook claude`), with no Node, npm or npx; `init`, `install`, sign-in and the agent's upkeep all write that form, and an npm agent leaves a working one alone. Autostart's launcher starts the executable with `run` (and still restarts it after a crash).
+- c66d872: Less noise in `status` and `doctor`. Run from the user's home folder, they no longer report the user-level Scopebond folder as
+  an untrusted project setup. A hook call whose bounded delivery was cut off is no longer shown as the last problem while records
+  reach the workspace (often through the Scopebond Agent): it is kept as history (`last_timeout_at`), and becomes the last problem
+  only when nothing has been delivered for 15 minutes.
+- Updated dependencies [cb4d4e0]
+- Updated dependencies [e343292]
+- Updated dependencies [e0f2de4]
+- Updated dependencies [ce7728c]
+- Updated dependencies [c877e45]
+- Updated dependencies [d4b34d8]
+  - @scopebond/policy-schema@0.7.0
+  - @scopebond/gateway@0.17.0
+  - @scopebond/sdk@0.1.5
+
 ## 0.20.1
 
 ### Patch Changes

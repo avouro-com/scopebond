@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/sdk",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Open-source Scopebond SDK for signing action intents and approvals and submitting them to a policy gateway.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
