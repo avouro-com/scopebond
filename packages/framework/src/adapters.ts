@@ -71,21 +71,29 @@ export interface VercelTool {
   [key: string]: unknown;
 }
 
-/** Wrap a Vercel AI SDK `tools` record so each tool checks policy before it runs. */
+/** Wrap a Vercel AI SDK `tools` record so each tool checks policy before it runs.
+ *
+ *  Like `guardedTool`, it throws on a tool with no `execute` function rather than return it
+ *  unguarded. A tool the app deliberately runs on the client (no `execute`) is outside what the
+ *  guard can check: keep it out of the record you wrap and add it beside the wrapped tools. */
 export function wrapVercelTools<T extends Record<string, VercelTool>>(tools: T, guard: ToolGuard, opts: WrapOptions = {}): T {
   const wrapped: Record<string, VercelTool> = {};
   for (const [name, tool] of Object.entries(tools)) {
-    const original = tool.execute;
-    wrapped[name] = original
-      ? {
-          ...tool,
-          execute: async (args: Record<string, unknown>, options?: unknown) => {
-            const decision = await guard.check(name, args ?? {});
-            if (!decision.allowed) return deniedResult(opts, name, decision.reason, args);
-            return original(args, options);
-          },
-        }
-      : { ...tool };
+    const original = tool?.execute;
+    if (typeof original !== "function") {
+      throw new Error(
+        `scopebond: cannot guard tool "${name}" — it has no execute() function. ` +
+        "A client-side tool is not checked by the guard: leave it out of the record passed to wrapVercelTools.",
+      );
+    }
+    wrapped[name] = {
+      ...tool,
+      execute: async (args: Record<string, unknown>, options?: unknown) => {
+        const decision = await guard.check(name, args ?? {});
+        if (!decision.allowed) return deniedResult(opts, name, decision.reason, args);
+        return original(args, options);
+      },
+    };
   }
   return wrapped as T;
 }
@@ -98,21 +106,64 @@ export interface LangChainTool {
   [key: string]: unknown;
 }
 
+/** The methods through which a LangChain-style tool runs. Each one present on the tool is
+ *  guarded, so calling `call`, `_call`, `func`, `stream` or `batch` directly cannot skip the
+ *  policy check that `invoke` has. */
+const LANGCHAIN_ENTRY_POINTS = ["invoke", "call", "_call", "func"] as const;
+
 /** Wrap a LangChain/LangGraph tool so it checks policy before it runs. Returns a
- *  proxy that preserves the tool instance and overrides only `invoke`. */
+ *  proxy that preserves the tool instance and guards every entry point it has
+ *  (`invoke`, `call`, `_call`, `func`, `stream`, `batch`). The originals run against
+ *  the unwrapped tool, so one allowed call is checked once. */
 export function wrapLangGraphTool<T extends LangChainTool>(tool: T, guard: ToolGuard, opts: WrapOptions = {}): T {
-  const originalInvoke = tool.invoke.bind(tool);
+  type Fn = (...a: unknown[]) => unknown;
+  const decide = async (input: unknown): Promise<{ denied: false } | { denied: true; value: unknown }> => {
+    const args = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : { input };
+    const decision = await guard.check(tool.name, args);
+    return decision.allowed ? { denied: false } : { denied: true, value: deniedResult(opts, tool.name, decision.reason, input) };
+  };
+  const original = (prop: string): Fn | undefined => {
+    const fn = (tool as Record<string, unknown>)[prop];
+    return typeof fn === "function" ? (fn as Fn).bind(tool) : undefined;
+  };
+  const wrappers = new Map<PropertyKey, Fn>();
+  for (const prop of LANGCHAIN_ENTRY_POINTS) {
+    const fn = original(prop);
+    if (!fn) continue;
+    wrappers.set(prop, async (input: unknown, ...rest: unknown[]) => {
+      const d = await decide(input);
+      return d.denied ? d.value : fn(input, ...rest);
+    });
+  }
+  const stream = original("stream");
+  if (stream) {
+    wrappers.set("stream", async (input: unknown, ...rest: unknown[]) => {
+      const d = await decide(input);
+      if (!d.denied) return stream(input, ...rest);
+      return (async function* () { yield d.value; })();
+    });
+  }
+  const batch = original("batch");
+  const invoke = original("invoke");
+  if (batch) {
+    wrappers.set("batch", async (inputs: unknown, ...rest: unknown[]) => {
+      if (!Array.isArray(inputs)) throw new TypeError(`scopebond: ${tool.name}.batch() expects an array of inputs`);
+      const decisions = await Promise.all(inputs.map(decide));
+      if (decisions.every((d) => !d.denied)) return batch(inputs, ...rest);
+      // Some inputs are denied: run only the allowed ones, one by one, and keep the order.
+      const config = Array.isArray(rest[0]) ? undefined : rest[0];
+      return Promise.all(inputs.map((input, i) => {
+        const d = decisions[i];
+        if (d.denied) return d.value;
+        if (!invoke) throw new TypeError(`scopebond: ${tool.name} has no invoke() to run an allowed batch item`);
+        return invoke(input, config);
+      }));
+    });
+  }
   return new Proxy(tool, {
     get(target, prop, receiver) {
-      if (prop === "invoke") {
-        return async (input: unknown, config?: unknown) => {
-          const args = input && typeof input === "object" ? (input as Record<string, unknown>) : { input };
-          const decision = await guard.check(target.name, args);
-          if (!decision.allowed) return deniedResult(opts, target.name, decision.reason, input);
-          return originalInvoke(input, config);
-        };
-      }
-      return Reflect.get(target, prop, receiver);
+      const wrapper = wrappers.get(prop);
+      return wrapper ?? Reflect.get(target, prop, receiver);
     },
   });
 }

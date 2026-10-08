@@ -12,6 +12,7 @@ import {
   scaffold, createHookRuntime, mapClaudeToolUse, inspectManaged, compileManaged, digestRules, defaultRules,
   createOverrideHandler, overrideHint, digestOf, MANAGED_DOC_FILE,
 } from "../dist/index.js";
+import { actionSummary, revealHidden } from "../dist/override.js";
 
 const INSTALLATION = "gw-test-1";
 const terms = (extra = {}) => ({ reason_min: 10, minutes: 0, daily_limit: 5, harness_prompt: false, ...extra });
@@ -151,4 +152,13 @@ test("without the window, Claude Code's prompt is offered only where allowed and
       assert.equal(auto.decision, "deny", `permission mode ${mode}`);
     }
   } finally { for (const s of [off, on]) rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("the one-line summary writes out control, bidi and zero-width characters, so it reads as what runs", () => {
+  const rlo = String.fromCharCode(0x202e), zwsp = String.fromCharCode(0x200b);
+  const summary = actionSummary({ action_type: "shell.exec", params: { command: `rm -rf ~/${rlo}txt.sgol${zwsp}` } });
+  assert.equal(summary, "rm -rf ~/⟨U+202E⟩txt.sgol⟨U+200B⟩");
+  assert.equal(summary.includes(rlo), false);
+  assert.equal(revealHidden("git push origin main"), "git push origin main");
+  assert.equal(actionSummary({ action_type: "repo.write", params: { path: `src/${String.fromCharCode(0x2066)}a.ts` } }), "src/⟨U+2066⟩a.ts");
 });

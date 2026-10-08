@@ -5,7 +5,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createGateway, StaticPrincipalKeyRegistry, type CloudExporter } from "@scopebond/gateway";
+import { createGateway, StaticPrincipalKeyRegistry, withCloudExporter, type CloudExporter } from "@scopebond/gateway";
 import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
@@ -16,6 +16,7 @@ import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
 import { recordDeliveryAttempt } from "./delivery-state.js";
+import { isRepairableStore, noteQueueMiss, repairDelivery } from "./delivery-repair.js";
 import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
 
@@ -34,6 +35,10 @@ export interface RuntimeConfig {
   /** When connected to a Cloud workspace, receipts are auto-exported to the portal.
    *  Export is best-effort and never changes the local decision. */
   cloud?: { connection: HookConnection; fetch?: typeof fetch; flushTimeoutMs?: number };
+  /** How long a delivery-queue statement waits for another process's write lock. A tool call keeps it short
+   *  (`HOT_PATH_QUEUE_BUSY_MS`), so an override wait plus a lock wait stays inside the coding agent's hook time limit; a write
+   *  that fails then is kept as a gap and queued on the next flush. `flush` (no time limit) passes a longer one. */
+  queueBusyTimeoutMs?: number;
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
    *  (see override.ts). `hint` explains, in a denial, how an override would have been possible. */
   override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null } | null;
@@ -98,7 +103,7 @@ export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + ".+";
 export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("");
 /** The read protection that is always on, whoever manages the rules: the hook's own folder, which holds this computer's
  *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
-export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + ".+";
+export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
 
 /** Scopebond's own protection, always enforced and never relaxed by a rule set or a workspace: the hook's folder (its keys,
  *  connection and policy) and the coding agents' hook settings can be neither changed nor read by the coding agent, and an
@@ -114,7 +119,7 @@ export function selfProtectionClauses(): Array<Record<string, unknown>> {
     {
       id: "protect-scopebond-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
       param_bounds: { path: { pattern: GUARDRAIL_READ_PATTERN } },
-      description: "Never read Scopebond's own folder, which holds this computer's key and connection (always on; it cannot be relaxed).",
+      description: "Never read Scopebond's own folder, which holds this computer's key and connection, or a copy of the connection file (cloud.json) anywhere (always on; it cannot be relaxed).",
     },
   ];
 }
@@ -216,6 +221,16 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
   };
 }
 
+/** How long a tool call's delivery-queue writes wait for another process's lock. Codex's hook entry allows 30 s and its
+ *  override wait is 20 s; this, with the local log's shorter wait after an override (below), keeps a call inside it. */
+export const HOT_PATH_QUEUE_BUSY_MS = 2_000;
+/** How long the local log waits for a lock once a person has been asked (the override wait has used most of the time limit). */
+const AFTER_OVERRIDE_STORE_BUSY_MS = 5_000;
+/** How long the end-of-call repair pass waits for a lock before leaving the work to the next flush. */
+const REPAIR_BUSY_MS = 250;
+/** The local log's usual lock wait (the store's default). */
+const STORE_BUSY_MS = 15_000;
+
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
  *  key, unavailable store) — the CLI turns that into a fail-closed deny. */
 export function createHookRuntime(config: RuntimeConfig) {
@@ -235,19 +250,33 @@ export function createHookRuntime(config: RuntimeConfig) {
   // durable outbox. The wrapped store's decision is unchanged; export is best-effort.
   let store = baseStore;
   let exporter: CloudExporter | undefined;
-  let outbox: { close(): void } | undefined;
+  let outbox: ReturnType<typeof attachExporter>["outbox"] | undefined;
   let deliveryUnavailable: string | null = null;
+  const dir = dirname(config.dbPath);
+  const repairable = isRepairableStore(baseStore) ? baseStore : null;
   if (config.cloud) {
+    // Receipts this process writes have row ids above this one: a queue write that fails is noted with it, and the next
+    // flush queues what the queue never got from there on.
+    const after = repairable ? repairable.lastId() : 0;
     try {
-      const attached = attachExporter(config.dbPath + ".cloud-outbox.db", config.cloud.connection, baseStore, config.cloud.fetch);
+      const attached = attachExporter(config.dbPath + ".cloud-outbox.db", config.cloud.connection, baseStore, config.cloud.fetch, {
+        busyTimeoutMs: config.queueBusyTimeoutMs ?? HOT_PATH_QUEUE_BUSY_MS,
+        onGap: (gap) => { if (gap.reason === "outbox_error") noteQueueMiss(dir, after, gap.id, gap.at); },
+      });
       store = attached.store;
       exporter = attached.exporter;
       outbox = attached.outbox;
     } catch (error) {
-      // A full disk or a read-only or locked queue file does not stop the decision: the record stays in the local log, and
-      // the runtime reports the file and the fix as `deliveryUnavailable` until the queue can be written again.
+      // A full disk or a read-only or locked queue file does not stop the decision: the action stays allowed and its record
+      // stays in the local log. The runtime reports the file and the fix as `deliveryUnavailable`, and each record written
+      // meanwhile is noted so the next flush that can write the queue keeps the miss as a gap and queues the record.
       if (!(error instanceof DeliveryQueueError)) throw error;
       deliveryUnavailable = `${error.message}. ${error.repair}`;
+      store = withCloudExporter(baseStore, {
+        enqueue: (r) => noteQueueMiss(dir, after, r.payload.action_ref?.action_id ?? null),
+        flush: async () => {}, stop: () => {}, pending: () => 0,
+        status: () => ({ pending: 0, pendingBytes: 0, oldestEnqueuedAt: null, gaps: 0, retainedGapRecords: 0, latestGap: null, consecutiveFailures: 0, nextAttemptAt: null, lastSuccessAt: null, lastError: deliveryUnavailable }),
+      });
     }
   }
   const scopeRoots = loadRules(dirname(config.policyPath))?.allowed_roots ?? [];
@@ -257,7 +286,28 @@ export function createHookRuntime(config: RuntimeConfig) {
   let boundaryVerdict: DispatchDecision | null = null;
   const gatewayGuard: DispatchGuard = { authorize: async () => boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] } };
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only", dispatchGuard: gatewayGuard });
-  const override = config.override?.(agent.kid) ?? null;
+  const made = config.override?.(agent.kid) ?? null;
+  // Once a person has been asked, most of the hook's time limit is gone: the receipt that follows waits less for the local
+  // log's lock (a write that still fails denies the call, and the open action is closed later as an interrupted one).
+  const override = made ? {
+    hint: () => made.hint(),
+    handler: (async (ctx) => {
+      try { return await made.handler(ctx); }
+      finally { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(AFTER_OVERRIDE_STORE_BUSY_MS); } catch { /* keeps its wait */ } }
+    }) as OverrideHandler,
+  } : null;
+
+  /** Close interrupted evaluations and queue what the queue never got, waiting briefly for locks. Never throws. */
+  const repair = async (): Promise<void> => {
+    if (!repairable) return;
+    const set = (ms: number) => { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(ms); } catch { /* best effort */ } };
+    set(REPAIR_BUSY_MS);
+    try {
+      if ((baseStore as { layoutCurrent?: () => boolean }).layoutCurrent?.() === false) return; // an older file: the agent or upkeep migrates it first
+      await repairDelivery({ dir, store: repairable, queue: outbox ?? null, attester, connected: !!config.cloud });
+    } catch { /* the next flush tries again */ }
+    finally { set(STORE_BUSY_MS); }
+  };
 
   return {
     gateway,
@@ -265,18 +315,22 @@ export function createHookRuntime(config: RuntimeConfig) {
     exporter,
     /** Why records are kept only in the local log this call (the delivery queue could not be opened), or null. */
     deliveryUnavailable,
+    /** Close interrupted evaluations and queue receipts the queue never got (`flush` runs this first). */
+    repair,
     /** Deliver queued receipts to Cloud with a bounded timeout, then it is safe to
      *  exit. Undelivered receipts persist in the durable outbox for the next run. */
     async flush(): Promise<void> {
+      await repair();
       if (!exporter) return;
       const before = exporter.status().lastSuccessAt;
       const timeoutMs = config.cloud?.flushTimeoutMs ?? 3000;
-      await flushBounded(exporter, timeoutMs, { routine: false });
+      const cutOff = await flushBounded(exporter, timeoutMs, { routine: false });
       // The process exits after this call; keep what the attempt saw for `status` and `doctor`.
       // An attempt the time limit cut off has an outcome too: the exit abandons the request,
       // and a workspace slower than the limit used to leave only "last tried" moving, with no
       // error. A limit of 0 defers delivery on purpose (to a session-end `flush`).
-      try { recordDeliveryAttempt(dirname(config.dbPath), exporter.status(), Date.now(), before, timeoutMs > 0 ? timeoutMs : null); } catch { /* diagnostic only */ }
+      // A timeout is recorded only when the wait really ran out with a delivery under way.
+      try { recordDeliveryAttempt(dirname(config.dbPath), exporter.status(), Date.now(), before, timeoutMs > 0 && cutOff ? timeoutMs : null, "hook"); } catch { /* diagnostic only */ }
     },
     /** Release the SQLite handles. The hook is a per-tool-call process, and a writer that
      *  exits without closing leaves its write-ahead log on disk for the next process to

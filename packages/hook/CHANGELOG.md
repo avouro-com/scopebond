@@ -1,5 +1,89 @@
 # @scopebond/hook
 
+## 0.21.4
+
+### Patch Changes
+
+- b35ae68: Workspace allowed-site patterns escape every regular-expression character in a host name, not only the dots. The document check already admits only letters, digits, hyphens and dots, so no current policy changes; the pattern now stays literal even if that check ever widens.
+
+## 0.21.3
+
+### Patch Changes
+
+- bc4999d: The always-on protection of Scopebond's own folder and the coding agents' hook settings holds in more cases. The signed
+  executable's own commands (`scopebond-agent.exe hook uninstall`, `rules` changes, `login`/`connect`, `uninstall`, `setup`),
+  removing the signed or npm install through Windows (msiexec, winget, the Settings → Apps uninstall script, the Run value),
+  and stopping the tray by name are treated as switching Scopebond off. NTFS stream and index suffixes in a path are read as
+  the plain path. PowerShell's .NET file calls (`[IO.File]::…`, `New-Object IO.StreamWriter`), `Tee-Object -FilePath` and
+  `Expand-Archive -DestinationPath` are read as file reads and writes. Claude Code's Grep tool is a read of what it searches.
+  Deleting Scopebond's files or the agents' hook settings (`rm`, `Remove-Item`, `find -delete`) is a protected write.
+- ddb4033: More commands are read as writing the file they name: `certutil -decode`/`-urlcache … OUT`, `expand SRC DST`,
+  `bitsadmin /transfer … DST`, `git clone URL DIR` and `split FILE PREFIX`. A write whose target is only known at run time
+  (`> "$P"`, `tee $(…)`, a clone into the repository's own name) is also recorded as a write the hook cannot judge, so strict
+  mode refuses it and normal mode records it, instead of treating it as an ordinary write.
+- b7bbe7a: Scopebond's always-on protection now also holds when code reaches an interpreter on standard input or in a here-document, when a path is built from pieces or matched by a wildcard, when files are deleted through `find -delete`/`-exec rm`, `git clean` or an SQL `ATTACH`, when a home folder is copied or archived, when the connection file is read from a copy, when a coding agent is started with its hooks off or another config folder, and for Glob over the hook's folder. The remote-database rule treats psql SQL it cannot read (standard input, a redirect, a here-document) and inline `PGHOST`/service hosts as unknown, and the SQL classifier refuses text the PostgreSQL and SQLite lexers read differently.
+- b9c0504: Each delivery batch's record numbers are now signed with the computer's enrolled key. The Cloud exporter takes an optional `sequenceProof` (the attester and the machine credential's id) and sends `seq_proof: { kid, signature }` beside `seq` and `queue`, over `"scopebond:delivery-sequence/v1\n"` followed by the canonical JSON of the credential id, the queue id, the numbers and the SHA-256 of each receipt as sent. A party holding only the bearer credential can no longer attach numbers to records of its choosing. The hook and the agent sign with the key that signs their receipts; an exporter without a key sends the numbers unsigned, as before.
+- Updated dependencies [b9c0504]
+  - @scopebond/gateway@0.17.2
+
+## 0.21.2
+
+### Patch Changes
+
+- 258cdb6: Records that miss normal delivery are now kept, put right and reported.
+
+  - When a receipt is written locally but its delivery-queue write fails (the queue cannot be opened, or another process holds its lock), the action stays allowed and recorded on the computer as before. The miss is now noted, kept as an `outbox_error` gap on the next flush, and the receipt is queued then (every receipt written since the miss that the queue does not know yet, in log order). A tool call waits at most 2 seconds for the queue's lock, so an override wait plus a lock wait stays inside the coding agent's hook time limit; after an override wait, the local log also waits less for its lock. `flush` and the Scopebond Agent keep the longer wait.
+  - An evaluation stopped between its reservation and its receipt (a hook time limit, a crash) is closed after five minutes by the next hook call or the Scopebond Agent, with a signed receipt whose outcome is unknown (`execution.state: outcome_unknown`, reference `scopebond:evaluation-interrupted`, the policy's decision kept), queued like any other.
+  - The delivery queue keeps a lifetime count of gaps per reason (`status().gapsByReason`), beside the lifetime total; the gap rows themselves are still trimmed to the newest 10,000. `SqliteCloudOutbox` takes a `busyTimeoutMs` option and has `setBusyTimeout()` and `known()`; `SqliteReceiptStore` has `interruptedActions()`, `settleAction()`, `lastId()` and `setBusyTimeout()`.
+  - The rules check sends `x-scopebond-gaps-total` (the lifetime total) and `x-scopebond-gaps-by-reason` (compact JSON of reason code to count) when the queue has any gaps. `status` and `doctor` show a "delivery gaps" line, and `status --json` adds `delivery.gaps_total` and counts `delivery.gaps_by_reason` over the queue's lifetime.
+  - The status texts no longer say an unusable delivery queue blocks every action: actions stay allowed and recorded on the computer, and are sent once the queue can be written again.
+
+- d6996ad: Delivery no longer stalls on a request that never answers. Each delivery request now has a time limit (30 seconds by default, `requestTimeoutMs`), and the limit also covers reading the answer.
+
+  The Scopebond Agent:
+
+  - caps each delivery cycle at 10 minutes and goes on to the next cycle;
+  - starts its maintenance before the first cycle;
+  - answers Send now and stop without waiting on a stuck cycle;
+  - reports when the running cycle started (`cycle_started_at` in `/status`).
+
+  The hook:
+
+  - waits on a flush that is already sending instead of returning at once, so a backlog of 100 or more records drains from hook calls;
+  - records a cut-off only when its time limit really ran out;
+  - no longer replaces the agent's recent delivery error with its own cut-off message.
+
+  An agent that the workspace's plan paused now says so in the tray and in `status`, instead of offering Send records now.
+
+  The rules check now sends `x-scopebond-accepts-requests`: `flush,self_check` from the agent and `none` from a hook call. A workspace that reads the header then leaves a request from its computer page (send now, check now) for the agent.
+
+- 0f7268b: Summaries now key their working-folder digests (`cwd_digest`) with this computer's digest key, so one folder keeps one digest across summaries while a folder path can no longer be confirmed by hashing a guess.
+- af23f31: Refused observations removed past the newest 1,000 are counted and shown in status. `prune` lists earlier archives and their size, archives are written readable by the user only, and `prune --before --no-archive` removes without writing one. The README says what stays on the computer and for how long.
+- 6529530: `scopebond login` now names the workspace that approved its code, where that workspace keeps its data, and who approved it, then asks before connecting. Pass `--yes` to connect without asking, for example from a script. A rate-limited or busy workspace (429 or 503) no longer ends the login: it waits as the workspace asks and keeps polling until the code expires.
+- f52a2ff: More credential shapes are removed before a record is signed or sent:
+
+  - any URL userinfo, including a token alone, an Azure DevOps or GitHub token in a `git push` or `git remote` URL, and `redis://:password@`;
+  - a signature or token in a URL query (an Azure SAS `sig=`, OAuth `code=`);
+  - cookies (`Cookie:` headers and curl `-b`);
+  - PowerShell `$env:NAME = "value"` and `ConvertTo-SecureString … -AsPlainText`;
+  - a space-separated `-p <password>` after `sshpass`, `docker login`, `mysql` and similar;
+  - short password names such as `DB_PASS=` and `PASS=`, and names ending in `KEY`;
+  - `--key` and `--*-key` flags;
+  - Vault (`hvs.`) and SendGrid (`SG.`) keys;
+  - secret-looking segments and email addresses in a fetched URL's path (Slack, Discord and Telegram webhooks).
+
+  A package operation's URL now drops userinfo up to the last `@`, so a password containing `@` leaves nothing behind.
+
+- 3839ff8: The rules check sends the computer's clock beside the oldest waiting record's time, so the workspace can tell how long records have waited and notice a clock that runs ahead (its records are refused as signed in the future).
+- d066717: The one-line summary of a blocked action (shown in the Scopebond Agent's window and sent with "Ask an admin") writes out control, bidi and zero-width characters as ⟨U+XXXX⟩, so a command cannot read as a different one to the person or the admin approving it.
+- Updated dependencies [258cdb6]
+- Updated dependencies [d6996ad]
+- Updated dependencies [7fc5efb]
+- Updated dependencies [0f7268b]
+- Updated dependencies [88a6380]
+  - @scopebond/gateway@0.17.1
+  - @scopebond/sdk@0.1.6
+
 ## 0.21.1
 
 ### Patch Changes
