@@ -9,9 +9,9 @@ inputs:
     required: false
     default: "scopebond.policy.json"
   version:
-    description: "The @scopebond/github-action version to run. Pin an exact version for reproducible checks."
+    description: "The @scopebond/github-action version to run. Leave empty (the default) to run the version this action's own package.json names, so pinning the action to a commit SHA pins the code that runs. A version older than the action may not read its file list and then fails closed."
     required: false
-    default: "latest"
+    default: ""
   workspace-url:
     description: "Optional Scopebond workspace URL to mirror the signed boundary receipt to. Also set the SCOPEBOND_ATTESTER_KEY and SCOPEBOND_CLOUD_CREDENTIAL job env from repository secrets. Export is best-effort and never fails the check."
     required: false
@@ -38,36 +38,65 @@ runs:
         CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
       run: |
         set -uo pipefail
-        out="$RUNNER_TEMP/scopebond-pr-paths.txt"
-        : > "$out"
+        files="$RUNNER_TEMP/scopebond-pr-files.jsonl"
+        diffz="$RUNNER_TEMP/scopebond-pr-paths.z"
+        : > "$files"
+        : > "$diffz"
         # Preferred: the pull request's own file list from the API (exact, includes the
-        # old name of a renamed file). The API stops at 3000 files: a list with fewer
-        # files than the PR changed is discarded. Fallback: a diff from the merge base
-        # (with rename detection off, so both names of a rename are listed). If neither
-        # yields the full list, the check fails closed.
+        # old name of a renamed file), written as one JSON array per changed file, so a name
+        # holding a newline is still one entry (the check rejects any control character).
+        # The API stops at 3000 files: a list with fewer entries than the PR changed is
+        # discarded. Fallback: a NUL-delimited diff from the merge base (with rename
+        # detection off, so both names of a rename are listed). If neither yields the full
+        # list, the check fails closed.
         if command -v gh >/dev/null 2>&1 && [ -n "${PR_NUMBER:-}" ]; then
           gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-            --jq '.[] | .filename, (.previous_filename // empty)' > "$out" 2>/dev/null || : > "$out"
-          listed=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' 2>/dev/null | wc -l | tr -d ' ')
+            --jq '.[] | [.filename, (.previous_filename // empty)] | @json' > "$files" 2>/dev/null || : > "$files"
+          listed=$(grep -c '^\[' "$files" || true)
           if [ -n "${CHANGED_FILES:-}" ] && [ "${listed:-0}" -lt "$CHANGED_FILES" ]; then
             echo "Scopebond: the files API listed $listed of $CHANGED_FILES changed files; using a git diff instead"
-            : > "$out"
+            : > "$files"
           fi
         fi
-        if [ ! -s "$out" ] && [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
+        if [ ! -s "$files" ] && [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
           git fetch --no-tags --quiet origin "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true
           git fetch --no-tags --quiet --deepen=200 origin 2>/dev/null || true
-          git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA" > "$out" 2>/dev/null || : > "$out"
+          git diff -z --no-renames --name-only "$BASE_SHA...$HEAD_SHA" > "$diffz" 2>/dev/null || : > "$diffz"
         fi
-        echo "Scopebond: $(wc -l < "$out" | tr -d ' ') changed path(s) resolved"
+        if [ -s "$files" ]; then
+          echo "Scopebond: $(grep -c '^\[' "$files") changed file(s) listed by the API"
+        else
+          echo "Scopebond: $(tr -cd '\000' < "$diffz" | wc -c | tr -d ' ') changed path(s) from the git diff"
+        fi
     - name: Scopebond policy check
       id: check
       shell: bash
+      working-directory: ${{ runner.temp }}
       env:
         SCOPEBOND_EVIDENCE_OUT: ${{ inputs.evidence-out }}
-        SCOPEBOND_PR_PATHS: ${{ runner.temp }}/scopebond-pr-paths.txt
+        SCOPEBOND_PR_FILES: ${{ runner.temp }}/scopebond-pr-files.jsonl
+        SCOPEBOND_PR_PATHS_Z: ${{ runner.temp }}/scopebond-pr-paths.z
         SCOPEBOND_CLOUD_URL: ${{ inputs.workspace-url }}
         SCOPEBOND_POLICY_SOURCE: base
-      run: >
-        npx --yes -p "@scopebond/github-action@${{ inputs.version }}" scopebond-verify-pr
-        --policy "${{ inputs.policy }}"
+        SCOPEBOND_POLICY: ${{ inputs.policy }}
+        SCOPEBOND_ACTION_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        # The CLI version: the version input when given, otherwise the version this action's
+        # own package.json names, so pinning the action to a commit pins the code that runs.
+        version="${SCOPEBOND_ACTION_VERSION:-}"
+        if [ -z "$version" ]; then
+          version=$(node -e 'process.stdout.write(String(require(process.argv[1]).version || ""))' "$GITHUB_ACTION_PATH/package.json")
+        fi
+        case "$version" in
+          ""|*[!0-9A-Za-z.+-]*) echo "Scopebond: the version input is not a valid package version (failing closed)" >&2; exit 1 ;;
+        esac
+        # Install outside the checked-out workspace (this step runs in the runner's temp
+        # directory, so no workspace node_modules or .npmrc is consulted) and without
+        # lifecycle scripts; then run the installed CLI from the workspace.
+        prefix="$RUNNER_TEMP/scopebond-cli"
+        rm -rf "$prefix"
+        mkdir -p "$prefix"
+        npm install --prefix "$prefix" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund --loglevel=error "@scopebond/github-action@$version"
+        cd "$GITHUB_WORKSPACE"
+        node "$prefix/node_modules/@scopebond/github-action/dist/cli.js" --policy "$SCOPEBOND_POLICY"

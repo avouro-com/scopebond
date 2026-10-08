@@ -142,10 +142,28 @@ export function verifyIntentSignature(signed: SignedIntent, publicKeyPem: string
 
 export interface SubmitResult { allowed: boolean; reason: string; receipt: unknown }
 
-/** Submit the complete signed envelope to a gateway's /v1/evaluate. */
-export async function submit(gatewayUrl: string, signed: SignedIntent, fetchImpl: typeof fetch = fetch): Promise<SubmitResult> {
+export interface SubmitOptions {
+  /** Abort the request if the gateway has not answered in this many milliseconds (default 10000). */
+  timeoutMs?: number;
+}
+
+/** Submit the complete signed envelope to a gateway's /v1/evaluate.
+ *
+ *  Fails closed: it rejects when the gateway cannot be reached, does not answer within the
+ *  timeout, answers with something other than JSON, or answers without a boolean `allowed`. A
+ *  non-2xx answer is returned only when it is an explicit deny (`allowed: false`); any other
+ *  non-2xx answer rejects, so an error page can never read as an allow. */
+export async function submit(gatewayUrl: string, signed: SignedIntent, fetchImpl: typeof fetch = fetch, options: SubmitOptions = {}): Promise<SubmitResult> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
   const res = await fetchImpl(gatewayUrl.replace(/\/$/, "") + "/v1/evaluate", {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(signed),
+    signal: AbortSignal.timeout(timeoutMs),
   });
-  return res.json() as Promise<SubmitResult>;
+  let body: unknown;
+  try { body = await res.json(); }
+  catch (e) { throw new Error(`gateway answered HTTP ${res.status} without a JSON decision: ${(e as Error).message}`); }
+  const allowed = body !== null && typeof body === "object" ? (body as { allowed?: unknown }).allowed : undefined;
+  if (typeof allowed !== "boolean") throw new Error(`gateway answered HTTP ${res.status} without a boolean "allowed" (failing closed)`);
+  if (!res.ok && allowed !== false) throw new Error(`gateway answered HTTP ${res.status} (failing closed)`);
+  return body as SubmitResult;
 }
