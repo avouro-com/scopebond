@@ -52,10 +52,19 @@ export function verifyManifest(text: string, signatureB64: string, publicKeyB64:
 
 export const installerName = (version: string) => `scopebond-agent-${version}-x64.msi`;
 
+/** The environment for Windows PowerShell (powershell.exe, 5.1): this one's, without `PSModulePath`, plus `extra`. An
+ *  agent started from PowerShell 7 inherits its module path, and Windows PowerShell then cannot load its own security
+ *  module (Get-AuthenticodeSignature), so every check would fail; without the variable it uses its own default. */
+export function powershellEnv(extra: Record<string, string>, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(base)) if (key.toLowerCase() !== "psmodulepath") env[key] = value;
+  return { ...env, ...extra };
+}
+
 /** The Authenticode check: Windows' own verdict on the file, and the signer's subject. */
 export function authenticode(file: string): { valid: boolean; subject: string } {
   const script = `$s = Get-AuthenticodeSignature -LiteralPath $env:SB_FILE; [Console]::Out.Write((@{ status = "$($s.Status)"; subject = "$($s.SignerCertificate.Subject)" } | ConvertTo-Json -Compress))`;
-  const run = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", env: { ...process.env, SB_FILE: file }, windowsHide: true, timeout: 60_000 });
+  const run = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", env: powershellEnv({ SB_FILE: file }), windowsHide: true, timeout: 60_000 });
   try { const r = JSON.parse(run.stdout) as { status: string; subject: string }; return { valid: r.status === "Valid", subject: r.subject }; }
   catch { return { valid: false, subject: "" }; }
 }
@@ -173,7 +182,7 @@ export function installHelper(installer: { path: string; version: string; sha256
  *  because the installer replaces this very file; it checks the installer again first (INSTALL_HELPER_SCRIPT). */
 export function installAfterExit(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null): void {
   const helper = installHelper(installer, pid, launcher);
-  const child = spawn(helper.program, helper.args, { detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env, ...helper.env } });
+  const child = spawn(helper.program, helper.args, { detached: true, stdio: "ignore", windowsHide: true, env: powershellEnv(helper.env) });
   child.on("error", () => { /* the next sign-in starts the agent */ });
   child.unref();
 }

@@ -115,6 +115,12 @@ test("the install helper is constant text; the installer, its digest, size and p
   assert.doesNotMatch(INSTALL_HELPER_SCRIPT, /Invoke-Expression|iex |\$\{/);
 });
 
+test("Windows PowerShell is started without another PowerShell's module path", async () => {
+  const { powershellEnv } = await import("../dist/native-update.js");
+  const env = powershellEnv({ SB_FILE: "x" }, { PATH: "p", PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules", psmodulepath: "y" });
+  assert.deepEqual(env, { PATH: "p", SB_FILE: "x" });
+});
+
 test("a verified installer carries the manifest's digest and size, for the check right before installing", async () => {
   const k = keys();
   const dir = mkdtempSync(join(tmpdir(), "sb-update-"));
@@ -126,7 +132,7 @@ test("a verified installer carries the manifest's digest and size, for the check
 // The helper itself, in Windows PowerShell, with a stand-in msiexec. A copy of this Node (signed by its own publisher) stands
 // in for a signed installer; nothing is installed.
 test("on Windows, the helper installs nothing and records why when the installer changed or is not signed by the publisher", { skip: process.platform !== "win32" && "Windows only", timeout: 300_000 }, async () => {
-  const { authenticode, installHelper, takeInstallResult } = await import("../dist/native-update.js");
+  const { authenticode, installHelper, powershellEnv, takeInstallResult } = await import("../dist/native-update.js");
   const dir = mkdtempSync(join(tmpdir(), "sb-helper-"));
   const updates = join(dir, "updates");
   mkdirSync(updates, { recursive: true });
@@ -136,7 +142,7 @@ test("on Windows, the helper installs nothing and records why when the installer
   const runHelper = (installer, publisher) => {
     rmSync(ran, { force: true });
     const h = installHelper(installer, 2 ** 31 - 2, null, { msiexec: fakeMsiexec, publisher });
-    const r = spawnSync(h.program, h.args.filter((a) => a !== "-WindowStyle" && a !== "Hidden"), { encoding: "utf8", env: { ...process.env, ...h.env }, timeout: 120_000 });
+    const r = spawnSync(h.program, h.args.filter((a) => a !== "-WindowStyle" && a !== "Hidden"), { encoding: "utf8", env: powershellEnv(h.env), timeout: 120_000 });
     assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
     return { result: takeInstallResult(dir), msiexec: existsSync(ran) ? readFileSync(ran, "utf8").trim() : null };
   };
