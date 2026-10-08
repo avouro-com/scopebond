@@ -22,5 +22,5 @@ export { queueReason, flushReasons, pendingReasons, REASONS_FILE } from "./overr
 export type { SelfCheckItem } from "./selfcheck.js";
 export { setupPlan, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
 export type { SetupState, SetupStep, SetupOptions } from "./setup.js";
-export { installKind, updaterPublicKey, verifyManifest, fetchVerifiedInstaller, installerName, MANIFEST_DOMAIN, PUBLISHER } from "./native-update.js";
+export { installKind, updaterPublicKey, verifyManifest, fetchVerifiedInstaller, installerName, installHelper, takeInstallResult, INSTALL_HELPER_SCRIPT, INSTALL_RESULT, MANIFEST_DOMAIN, PUBLISHER } from "./native-update.js";
 export type { InstallKind, ReleaseManifest } from "./native-update.js";

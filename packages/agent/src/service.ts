@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
-import { fetchVerifiedInstaller, installAfterExit, installKind } from "./native-update.js";
+import { fetchVerifiedInstaller, installAfterExit, installKind, takeInstallResult } from "./native-update.js";
 import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
@@ -210,6 +210,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
   const lock = acquireAgentLock(options.dir);
   if (!lock) throw new Error("a Scopebond Agent is already running for this computer");
+  // What the install helper of a signed update recorded before this start (installAfterExit).
+  const installed = takeInstallResult(options.dir);
+  if (installed) log(installed.installed ? `the Scopebond Agent ${installed.version} was installed` : `the update to ${installed.version} was not installed: ${installed.reason ?? "unknown"}`);
   const interval = options.intervalMs ?? INTERVAL_MS;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
@@ -302,7 +305,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
           if (options.onUpdated) options.onUpdated(target.agent);
           else {
             // The installer replaces this file, so it runs after this agent has exited, and starts the agent again.
-            installAfterExit(verified.path, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null);
+            installAfterExit(verified, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null);
             setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
           }
           return result;
