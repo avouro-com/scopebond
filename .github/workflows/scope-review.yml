@@ -26,7 +26,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: scope-review-${{ github.event.pull_request.number || inputs.pr }}
+  group: scope-review-pr-${{ github.event.pull_request.number || inputs.pr }}
   cancel-in-progress: true
 
 jobs:
