@@ -1,5 +1,0 @@
----
-"@scopebond/mcp": patch
----
-
-Harden the MCP proxy. A JSON-RPC batch, a non-object message or a non-string `method` is rejected with a -32600 error and never forwarded, in the library `handle` and in the stdio CLI. The manifest pin now hashes every page of the client's own `tools/list`, keeps the server unverified until restart once a full list that differs from the pin has been seen, treats an incomplete paginated listing as unverified, and gives its own probes random ids. The CLI starts the upstream with an allow-listed environment (pass anything else with the new repeatable `--env NAME[=value]` option or `SCOPEBOND_MCP_UPSTREAM_ENV`), drops JSON-RPC lines over 8 MiB, and fails a request closed when the upstream has not answered within `--timeout-ms` (default 120000). The starter policy written by `scopebond-mcp init` now allows only read-only tool names (read_, list_, get_, search_, describe_, view_) instead of denying a few mutating prefixes, and the README example and wording match. Upgrade note: an upstream server that reads a token from the environment now needs it passed with `--env`.

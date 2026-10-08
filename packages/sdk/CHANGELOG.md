@@ -1,5 +1,11 @@
 # @scopebond/sdk
 
+## 0.1.6
+
+### Patch Changes
+
+- 88a6380: `submit()` now fails closed: it rejects on a non-2xx answer that is not an explicit deny, on an answer without a boolean `allowed`, and after a timeout (default 10 s, set with the new `{ timeoutMs }` option).
+
 ## 0.1.5
 
 ### Patch Changes
