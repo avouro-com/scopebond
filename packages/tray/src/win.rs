@@ -115,3 +115,83 @@ pub fn process_alive(pid: u32) -> bool {
         ok && code == STILL_ACTIVE as u32
     }
 }
+
+/// Whether a path Windows reports names `program` (case, `\\?\` and slashes aside).
+pub fn same_path(reported: &str, program: &std::path::Path) -> bool {
+    let norm = |s: &str| s.trim_start_matches(r"\\?\").replace('/', "\\").to_lowercase();
+    norm(reported) == norm(&program.to_string_lossy())
+}
+
+/// End process `pid`, but only when it runs `program` (checked on the same handle that ends it, so a reused process id
+/// never ends something else), and wait at most `wait` for it to be gone. Ok once it is gone; otherwise why not.
+pub fn end_if_running(pid: u32, program: &std::path::Path, wait: std::time::Duration) -> Result<(), String> {
+    use windows_sys::Win32::System::Threading::{QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject};
+    const PROCESS_TERMINATE: u32 = 0x0001;
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_OBJECT_0: u32 = 0;
+    if pid == 0 {
+        return Err("no process id".into());
+    }
+    // SAFETY: one process handle, closed on every path; the buffer outlives the call that fills it, and `len` says how
+    // much of it was filled.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return if process_alive(pid) { Err(format!("process {pid} could not be opened")) } else { Ok(()) };
+        }
+        let mut buf = vec![0u16; 32 * 1024];
+        let mut len = buf.len() as u32;
+        let path = if QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len) != 0 {
+            Some(String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())]))
+        } else {
+            None
+        };
+        let result = match path {
+            Some(path) if same_path(&path, program) => {
+                TerminateProcess(handle, 1);
+                let ms = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX - 1).min(u32::MAX - 1);
+                if WaitForSingleObject(handle, ms) == WAIT_OBJECT_0 {
+                    Ok(())
+                } else {
+                    Err(format!("process {pid} did not end"))
+                }
+            }
+            Some(path) => Err(format!("process {pid} runs {path}, not {}", program.display())),
+            None => Err(format!("what process {pid} runs could not be read")),
+        };
+        CloseHandle(handle);
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use std::time::Duration;
+
+    #[test]
+    fn paths_compare_as_windows_compares_them() {
+        let program = Path::new(r"C:\Program Files\Scopebond\scopebond-agent.exe");
+        assert!(same_path(r"C:\Program Files\Scopebond\scopebond-agent.exe", program));
+        assert!(same_path(r"c:\program files\scopebond\SCOPEBOND-AGENT.EXE", program));
+        assert!(same_path(r"\\?\C:\Program Files\Scopebond\scopebond-agent.exe", program));
+        assert!(!same_path(r"C:\Program Files\Scopebond\scopebond-agent.exe.bak", program));
+        assert!(!same_path(r"C:\Windows\System32\cmd.exe", program));
+    }
+
+    #[test]
+    fn ends_a_process_only_when_it_runs_the_program_named() {
+        let comspec = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
+        let mut child = std::process::Command::new(&comspec).args(["/d", "/c", "ping -n 60 127.0.0.1 > nul"]).spawn().unwrap();
+        let pid = child.id();
+        let other = Path::new(r"C:\Program Files\Scopebond\scopebond-agent.exe");
+        let refused = end_if_running(pid, other, Duration::from_secs(5));
+        assert!(refused.is_err(), "{refused:?}");
+        assert!(process_alive(pid), "a process that is not the agent is left alone");
+        assert_eq!(end_if_running(pid, Path::new(&comspec), Duration::from_secs(10)), Ok(()));
+        assert!(!process_alive(pid));
+        let _ = child.wait();
+        assert_eq!(end_if_running(0, Path::new(&comspec), Duration::from_secs(1)), Err("no process id".into()));
+    }
+}

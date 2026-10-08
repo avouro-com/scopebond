@@ -1,7 +1,8 @@
 name: Tray
 
 # The native Windows tray (packages/tray: Rust, Tauri 2), built and tested on Windows. It runs only when the tray, the
-# installer (packages/native) or a workflow changes. It is not one of the required checks, so a pull request that does
+# installer (packages/native), the agent or the hook it starts and talks to (packages/agent, packages/hook) or a workflow
+# changes. It is not one of the required checks, so a pull request that does
 # not touch these paths is never left waiting for it.
 
 on:
@@ -10,6 +11,8 @@ on:
     paths:
       - "packages/tray/**"
       - "packages/native/**"
+      - "packages/agent/**"
+      - "packages/hook/**"
       - ".github/workflows/**"
   workflow_dispatch: {}
 

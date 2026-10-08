@@ -52,6 +52,8 @@ struct Shared {
     client: AgentClient,
     answer: Mutex<Option<TrayAnswer>>,
     link: Mutex<AgentLink>,
+    /// Since when the agent's pipe has accepted connections without giving a model (none in time, or an error).
+    model_failing_since: Mutex<Option<Instant>>,
     note: Mutex<Option<Note>>,
     /// The action running now (one at a time), so the panel can say so and not start a second.
     busy: Mutex<Option<String>>,
@@ -75,6 +77,7 @@ impl Shared {
             client,
             answer: Mutex::new(None),
             link: Mutex::new(AgentLink::Starting),
+            model_failing_since: Mutex::new(None),
             note: Mutex::new(None),
             busy: Mutex::new(None),
             wake: (Mutex::new(false), Condvar::new()),
@@ -225,6 +228,26 @@ fn other_agent_starting(home: &Path, own: Option<u32>) -> bool {
     }
 }
 
+/// Whether the agent's pipe has accepted connections without a model (or with only errors) for UNRESPONSIVE_AFTER.
+fn unresponsive(shared: &Shared, now: Instant) -> bool {
+    lock(&shared.model_failing_since).is_some_and(|since| now.duration_since(since) >= supervise::UNRESPONSIVE_AFTER)
+}
+
+/// End the agent that does not answer: the tray's own child when it is the one in `agent.json`, or else the process
+/// `agent.json` names, but only when that process runs the agent program beside this tray. Never anything else.
+fn end_hung_agent(child: &mut Option<Child>, pid: u32, program: Option<&Path>) -> Result<(), String> {
+    if let Some(own) = child.as_mut() {
+        if pid == 0 || own.id() == pid {
+            own.kill().map_err(|e| e.to_string())?;
+            let _ = own.wait();
+            *child = None;
+            return Ok(());
+        }
+    }
+    let program = program.ok_or("there is no agent program beside the tray")?;
+    win::end_if_running(pid, program, Duration::from_secs(10))
+}
+
 /// Keep the agent running (every rule is in supervise.rs). It looks every second while the agent is not answering, and
 /// every three seconds while it is.
 fn supervise_agent(shared: &Arc<Shared>) {
@@ -250,16 +273,38 @@ fn supervise_agent(shared: &Arc<Shared>) {
                 child = None;
             }
             let own = child.as_ref().map(|c| c.id());
+            let answering = shared.client.answers();
             let observation = Observation {
-                answering: shared.client.answers(),
+                answering,
                 child: child_state,
                 other_starting: other_agent_starting(&home, own),
                 endpoint_file: shared.client.endpoint().is_some(),
                 agent_present: program.as_ref().is_some_and(|p| p.exists()),
+                unresponsive: answering && unresponsive(shared, Instant::now()),
+                stopped_on_purpose: home.join(supervise::STOPPED_FILE).exists(),
             };
             let before = sup.link();
             let now = Instant::now();
-            if sup.tick(&observation, now) == Decision::Start {
+            let decision = sup.tick(&observation, now);
+            let start = match decision {
+                Decision::Wait => false,
+                Decision::Start => true,
+                Decision::Restart => {
+                    let pid = shared.client.endpoint().map(|e| e.pid).unwrap_or(0);
+                    match end_hung_agent(&mut child, pid, program.as_deref()) {
+                        Ok(()) => {
+                            log::line(&format!("ended the agent that did not answer (process {pid}); starting it again"));
+                            *lock(&shared.model_failing_since) = None;
+                            true
+                        }
+                        Err(why) => {
+                            log::line(&format!("the agent does not answer and was not ended: {why}"));
+                            false
+                        }
+                    }
+                }
+            };
+            if start {
                 if let Some(program) = &program {
                     match start_agent(program, &home) {
                         Ok(c) => {
@@ -271,6 +316,22 @@ fn supervise_agent(shared: &Arc<Shared>) {
                             sup.start_failed(now);
                         }
                     }
+                }
+            }
+            if let Some(notice) = sup.take_notice() {
+                log::line(match notice {
+                    supervise::Notice::StartingAgain => "the agent stopped and nothing replaced it: starting it again",
+                    supervise::Notice::Restarting => "the agent has not answered: restarting it",
+                });
+                // An agent that stopped without anyone asking is told about (as the person's setting allows). A hung agent
+                // was already told about once, as a problem, when it was shown as not answering.
+                let setting = lock(&shared.answer).as_ref().map(|a| a.settings.notifications).unwrap_or_default();
+                if notice == supervise::Notice::StartingAgain && setting != Notifications::Off {
+                    show_toast(Toast {
+                        kind: Kind::Problem,
+                        title: "Scopebond".into(),
+                        text: "The Scopebond Agent stopped and nothing started in its place; starting it again".into(),
+                    });
                 }
             }
             if sup.link() != before || *lock(&shared.supervised) != sup.link() {
@@ -290,8 +351,20 @@ fn supervise_agent(shared: &Arc<Shared>) {
 /// this waits for, so nothing on the main thread may wait for this).
 fn refresh(app: &AppHandle, shared: &Arc<Shared>) {
     let answer = shared.client.tray();
+    let now = Instant::now();
+    {
+        // Since when the pipe has accepted connections without giving a model (no answer in time, or an error).
+        let mut failing = lock(&shared.model_failing_since);
+        if answer.is_some() || !shared.client.answers() {
+            *failing = None;
+        } else if failing.is_none() {
+            *failing = Some(now);
+        }
+    }
     let link = match (&answer, *lock(&shared.supervised)) {
         (Some(_), _) => AgentLink::Answering,
+        // Its pipe accepts connections, but no model for half a minute: not answering (supervision restarts it).
+        (None, _) if unresponsive(shared, now) => AgentLink::NotAnswering,
         // Its pipe accepts connections but it gave no model yet: still starting.
         (None, AgentLink::Answering) => AgentLink::Starting,
         (None, link) => link,
@@ -318,7 +391,10 @@ fn notify(shared: &Arc<Shared>, answer: Option<&TrayAnswer>, link: AgentLink, se
         // update's replacement or starting: nothing to tell.
         (None, AgentLink::NotAnswering | AgentLink::Missing) => {
             let since = *lock(&shared.silent_since).get_or_insert(now);
-            let state = if now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
+            // An agent whose pipe accepts but that has given no model for half a minute already waited its time: a
+            // problem at once (one notification; the notifier says it once).
+            let hung = link == AgentLink::NotAnswering && unresponsive(shared, now);
+            let state = if hung || now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
             (state, menu::header(None, link).trim_start_matches("Scopebond — ").to_string(), Vec::new())
         }
         (None, _) => {
@@ -723,7 +799,9 @@ fn main() {
                 if std::panic::catch_unwind(AssertUnwindSafe(|| refresh(&app_refresh, &s_refresh))).is_err() {
                     log::line("the refresh failed; trying again");
                 }
-                s_refresh.sleep(REFRESH_EVERY);
+                // While the pipe accepts but gives no model, ask again soon, so "not answering" shows when it is due.
+                let failing = lock(&s_refresh.model_failing_since).is_some();
+                s_refresh.sleep(if failing { Duration::from_secs(5) } else { REFRESH_EVERY });
             });
             if open_at_start {
                 open_panel(&handle, &shared, None);

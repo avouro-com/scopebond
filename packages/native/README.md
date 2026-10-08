@@ -30,16 +30,23 @@ Windows).
 
 `.github/workflows/native-release.yml`, run by hand from `main`:
 
-1. **build** (windows-latest, no secrets): the executable and its CycloneDX SBOM (`sbom.mjs`, from the bundle's metafile),
-   and the native tray (`packages/tray`, `cargo build --release --locked` from its committed `Cargo.lock`).
-2. **sign**, in the protected `signing` environment (an owner approves each run; protected branches only): Azure
-   Artifact Signing through GitHub's OIDC token (no stored secret), every signature timestamped, for the executable and
-   the tray, then the installer built around both and signed too; then `signtool verify
-   /pa`, a check that the publisher is Avouro LLC and that a timestamp is present, `SHA256SUMS`, and a build provenance
-   attestation (`gh attestation verify <file> --repo avouro-com/scopebond`).
-3. **sign-macos**: the Apple build (Developer ID, hardened runtime, notarized), in its own `signing-apple` environment;
+1. **build** (windows-latest, no secrets): the executable, the native tray (`packages/tray`, `cargo build --release
+   --locked` from its committed `Cargo.lock`), and their CycloneDX SBOM (`sbom.mjs`: the bundle's packages from its
+   metafile, Node, and every crate in the tray's `Cargo.lock`).
+2. **sign**, in the protected `signing` environment (an owner approves it; protected branches only): Azure Artifact
+   Signing through GitHub's OIDC token (no stored secret), timestamped, for the executable and the tray. Nothing else
+   runs there: no dependency, no build tool.
+3. **installer** (no secrets and no OIDC token): checks that both programs are signed by Avouro LLC, then builds the
+   installer around them with WiX (`dotnet tool restore`, its extension, `wix build`). The build tools never run in a job
+   that can ask for a signing token.
+4. **sign-installer**, in the `signing` environment again (a second approval): signs the installer, then
+   `verify-signed.ps1` (`signtool verify /pa`, a valid signature, a timestamp, and the publisher: the subject's `O=` is
+   exactly `Avouro LLC`, the rule the updater uses), `SHA256SUMS`, the signed release manifest (the run fails without
+   `UPDATER_SIGNING_KEY`), the winget manifests and a build provenance attestation (`gh attestation verify <file> --repo
+   avouro-com/scopebond`).
+5. **sign-macos**: the Apple build (Developer ID, hardened runtime, notarized), in its own `signing-apple` environment;
    off until `APPLE_SIGNING_ENABLED` is set with the Apple secrets.
-4. **release**: a draft, pre-release GitHub release with the signed files, for a person to check and publish.
+6. **release**: a draft, pre-release GitHub release with the signed files, for a person to check and publish.
 
 A fork can run the build job and gets an unsigned file; it cannot reach either signing environment.
 
@@ -90,12 +97,13 @@ update could not be verified. An install for every user (Program Files) never up
 
 The updater key is made once by the owner: `node packages/native/updater-key.mjs` writes the public half here and the
 private half to a file, which goes into the `signing` environment as `UPDATER_SIGNING_KEY` and is then kept offline. The
-release workflow signs the manifest with it (`manifest.mjs`); without it there is no manifest, and signed installs do not
-update themselves to that release.
+release workflow signs the manifest with it (`manifest.mjs`); without it the release fails, because signed installs
+update themselves only to a release with a signed manifest.
 
 ## Release checklist (owner)
 
-1. Actions → *Native release (signed)* → Run workflow on `main`; approve the `signing` environment when asked.
+1. Actions → *Native release (signed)* → Run workflow on `main`; approve the `signing` environment when asked (twice: once
+   for the programs, once for the installer).
 2. Check the draft release: the agent exe, the tray exe and the msi, `SHA256SUMS`, the signed manifest and its `.sig`, the SBOM, the three
    winget manifests; `gh attestation verify scopebond-agent-<version>-x64.msi --repo avouro-com/scopebond`.
 3. Submit the exe and the msi to Microsoft's file submission portal (Security Intelligence, as a software developer) so

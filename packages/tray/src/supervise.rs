@@ -5,8 +5,13 @@
 //! - It exits on its own (a crash, or it was ended from Task Manager): start it again after 2 s, then 4 s, 8 s … at most
 //!   60 s apart. The wait starts over once it has answered for five minutes.
 //! - It exits cleanly (exit code 0, or it removed its endpoint file): either someone stopped it on purpose, or it is
-//!   handing over to its updated replacement. Wait for a replacement to answer; if none does, leave it stopped until the
-//!   person asks for it (the menu offers to start it).
+//!   handing over to its updated replacement. Stopped on purpose (`scopebond-agent stop`: the agent leaves
+//!   `agent-stopped.json`): leave it stopped until the person asks for it (the menu offers to start it). Otherwise wait a
+//!   minute for a replacement to answer; if none does, say so (a notification) and start it again, with the same waits
+//!   as after a crash.
+//! - Its pipe accepts connections but it has given no model, or only errors, for half a minute: it is shown as not
+//!   answering, and after another half minute it is ended (only the process that is the agent beside this tray) and
+//!   started again, with the same waits.
 //! - Another agent is starting (its lock file is fresh and its process is alive): wait for it. Never two.
 
 use std::time::{Duration, Instant};
@@ -41,6 +46,22 @@ pub const STABLE_AFTER: Duration = Duration::from_secs(5 * 60);
 pub const HANDOVER_WAIT: Duration = Duration::from_secs(60);
 /// The agent's own rule: a lock younger than this belongs to an agent that is still starting.
 pub const LOCK_STARTING_MS: u64 = 60_000;
+/// An agent whose pipe accepts connections but that gives no model (or only errors) this long is not answering.
+pub const UNRESPONSIVE_AFTER: Duration = Duration::from_secs(30);
+/// How long an agent shown as not answering is given before it is ended and started again.
+pub const RESTART_HUNG_AFTER: Duration = Duration::from_secs(30);
+/// What the agent leaves in the Scopebond folder when this computer's user stops it (`scopebond-agent stop`); it removes
+/// the file when it starts.
+pub const STOPPED_FILE: &str = "agent-stopped.json";
+
+/// Something supervision did that the person should be told about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Notice {
+    /// The agent exited cleanly, nothing replaced it within HANDOVER_WAIT and nobody asked it to stop: it is started again.
+    StartingAgain,
+    /// The agent did not answer for UNRESPONSIVE_AFTER + RESTART_HUNG_AFTER: it is ended and started again.
+    Restarting,
+}
 
 /// What the tray's own child (the agent it started) did since the last look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,12 +84,18 @@ pub struct Observation {
     pub endpoint_file: bool,
     /// The agent program is beside the tray.
     pub agent_present: bool,
+    /// The pipe accepts connections but the agent has given no model, or only errors, for UNRESPONSIVE_AFTER.
+    pub unresponsive: bool,
+    /// The agent was stopped by this computer's user (it left STOPPED_FILE).
+    pub stopped_on_purpose: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     Wait,
     Start,
+    /// End the agent that does not answer (only if it is the agent beside the tray), then start it.
+    Restart,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +109,9 @@ pub struct Supervisor {
     clean_exit_at: Option<Instant>,
     /// Stopped on purpose: no start until asked.
     stopped: bool,
+    /// Since when it has been shown as not answering although its pipe accepts connections.
+    hung_since: Option<Instant>,
+    notice: Option<Notice>,
     link: AgentLink,
 }
 
@@ -100,12 +130,19 @@ impl Supervisor {
             was_answering: false,
             clean_exit_at: None,
             stopped: false,
+            hung_since: None,
+            notice: None,
             link: AgentLink::Starting,
         }
     }
 
     pub fn link(&self) -> AgentLink {
         self.link
+    }
+
+    /// What to tell the person since the last look, once.
+    pub fn take_notice(&mut self) -> Option<Notice> {
+        self.notice.take()
     }
 
     /// The person asked for the agent (the menu's "Start the Scopebond Agent"): start it at the next look.
@@ -127,6 +164,21 @@ impl Supervisor {
     }
 
     pub fn tick(&mut self, o: &Observation, now: Instant) -> Decision {
+        if o.answering && o.unresponsive {
+            // Hung: its pipe accepts connections, but no model comes. Shown as not answering; after a further wait it is
+            // ended and started again, with the waits that grow after each failure.
+            self.answering_since = None;
+            self.link = AgentLink::NotAnswering;
+            let since = *self.hung_since.get_or_insert(now);
+            if now.duration_since(since) >= RESTART_HUNG_AFTER && self.not_before.is_none_or(|t| now >= t) {
+                self.hung_since = None;
+                self.not_before = Some(now + self.backoff.next());
+                self.notice = Some(Notice::Restarting);
+                return Decision::Restart;
+            }
+            return Decision::Wait;
+        }
+        self.hung_since = None;
         if o.answering {
             self.stopped = false;
             self.clean_exit_at = None;
@@ -166,12 +218,18 @@ impl Supervisor {
             return Decision::Wait;
         }
         if let Some(at) = self.clean_exit_at {
-            if now.duration_since(at) < HANDOVER_WAIT {
+            if o.stopped_on_purpose {
+                self.clean_exit_at = None;
+                self.stopped = true;
+            } else if now.duration_since(at) < HANDOVER_WAIT {
                 self.link = AgentLink::Waiting;
                 return Decision::Wait;
+            } else {
+                // No replacement, and nobody asked it to stop: start it again, after the wait a crash would get.
+                self.clean_exit_at = None;
+                self.not_before = Some(now + self.backoff.next());
+                self.notice = Some(Notice::StartingAgain);
             }
-            self.clean_exit_at = None;
-            self.stopped = true;
         }
         if self.stopped {
             self.link = AgentLink::Stopped;
@@ -201,7 +259,7 @@ mod tests {
     use super::*;
 
     fn obs(answering: bool, child: Child) -> Observation {
-        Observation { answering, child, other_starting: false, endpoint_file: true, agent_present: true }
+        Observation { answering, child, other_starting: false, endpoint_file: true, agent_present: true, unresponsive: false, stopped_on_purpose: false }
     }
 
     struct Clock(Instant);
@@ -310,13 +368,113 @@ mod tests {
         let mut s = Supervisor::new();
         s.tick(&obs(false, Child::None), c.at(0));
         s.tick(&obs(true, Child::Running), c.at(5));
-        s.tick(&obs(false, Child::Exited(Some(0))), c.at(100));
+        // `scopebond-agent stop`: the agent exits with 0 and leaves its note.
+        let stopped = Observation { stopped_on_purpose: true, ..obs(false, Child::Exited(Some(0))) };
+        assert_eq!(s.tick(&stopped, c.at(100)), Decision::Wait);
+        assert_eq!(s.link(), AgentLink::Stopped, "no wait for a replacement");
+        let still = Observation { stopped_on_purpose: true, ..obs(false, Child::None) };
         for t in 101..1000 {
-            assert_eq!(s.tick(&obs(false, Child::None), c.at(t)), Decision::Wait);
+            assert_eq!(s.tick(&still, c.at(t)), Decision::Wait);
         }
         assert_eq!(s.link(), AgentLink::Stopped);
+        assert_eq!(s.take_notice(), None, "nothing to tell: the person stopped it");
         s.start_requested();
-        assert_eq!(s.tick(&obs(false, Child::None), c.at(1000)), Decision::Start);
+        assert_eq!(s.tick(&still, c.at(1000)), Decision::Start);
+    }
+
+    #[test]
+    fn a_clean_exit_with_no_replacement_is_told_and_started_again_with_growing_waits() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        s.tick(&obs(true, Child::Running), c.at(5));
+        let mut t = 100;
+        let mut waits = Vec::new();
+        for _ in 0..4 {
+            assert_eq!(s.tick(&obs(false, Child::Exited(Some(0))), c.at(t)), Decision::Wait);
+            assert_eq!(s.link(), AgentLink::Waiting);
+            let exited = t;
+            // A minute for a replacement; none comes.
+            while c.at(t).duration_since(c.at(exited)) < HANDOVER_WAIT {
+                t += 1;
+                assert_eq!(s.tick(&obs(false, Child::None), c.at(t)), Decision::Wait);
+                if c.at(t).duration_since(c.at(exited)) < HANDOVER_WAIT {
+                    assert_eq!(s.link(), AgentLink::Waiting);
+                    assert_eq!(s.take_notice(), None);
+                }
+            }
+            assert_eq!(s.take_notice(), Some(Notice::StartingAgain), "told once");
+            assert_eq!(s.take_notice(), None);
+            assert_ne!(s.link(), AgentLink::Stopped, "not left stopped");
+            let gave_up = t;
+            loop {
+                t += 1;
+                if s.tick(&obs(false, Child::None), c.at(t)) == Decision::Start {
+                    break;
+                }
+                assert_eq!(s.link(), AgentLink::NotAnswering);
+            }
+            waits.push(t - gave_up);
+            t += 1;
+            assert_eq!(s.tick(&obs(false, Child::Running), c.at(t)), Decision::Wait);
+            t += 1;
+            assert_eq!(s.tick(&obs(true, Child::Running), c.at(t)), Decision::Wait);
+            t += 1;
+        }
+        assert_eq!(waits, [2, 4, 8, 16]);
+    }
+
+    #[test]
+    fn an_agent_that_accepts_but_gives_no_model_is_not_answering_then_restarted() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        s.tick(&obs(true, Child::Running), c.at(5));
+        assert_eq!(s.link(), AgentLink::Answering);
+        // The pipe accepts, but no model for half a minute (the tray decides that): not answering, not "starting".
+        let hung = Observation { unresponsive: true, ..obs(true, Child::Running) };
+        let first = 40;
+        for t in first..first + RESTART_HUNG_AFTER.as_secs() {
+            assert_eq!(s.tick(&hung, c.at(t)), Decision::Wait);
+            assert_eq!(s.link(), AgentLink::NotAnswering);
+        }
+        assert_eq!(s.tick(&hung, c.at(first + RESTART_HUNG_AFTER.as_secs())), Decision::Restart);
+        assert_eq!(s.take_notice(), Some(Notice::Restarting));
+        // The new agent starts, then hangs as well: shown as not answering again, then restarted again.
+        assert_eq!(s.tick(&obs(false, Child::Running), c.at(80)), Decision::Wait);
+        assert_eq!(s.link(), AgentLink::Starting);
+        let mut t = 81;
+        let restarted = loop {
+            if s.tick(&hung, c.at(t)) == Decision::Restart {
+                break t;
+            }
+            t += 1;
+            assert!(t < 400, "never restarted");
+        };
+        assert!(restarted - 81 >= RESTART_HUNG_AFTER.as_secs());
+        // A model again: answering, and nothing is restarted.
+        for t in restarted + 1..restarted + 100 {
+            assert_eq!(s.tick(&obs(true, Child::Running), c.at(t)), Decision::Wait);
+        }
+        assert_eq!(s.link(), AgentLink::Answering);
+    }
+
+    #[test]
+    fn an_agent_that_keeps_hanging_is_restarted_ever_less_often() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        let hung = Observation { unresponsive: true, ..obs(true, Child::Running) };
+        let mut restarts = Vec::new();
+        for t in 1..1000 {
+            if s.tick(&hung, c.at(t)) == Decision::Restart {
+                restarts.push(t);
+            }
+        }
+        let gaps: Vec<u64> = restarts.windows(2).map(|w| w[1] - w[0]).collect();
+        assert_eq!(restarts[0], 1 + RESTART_HUNG_AFTER.as_secs(), "half a minute shown as not answering first");
+        assert!(gaps.iter().all(|g| *g >= RESTART_HUNG_AFTER.as_secs()), "{gaps:?}");
+        assert_eq!(gaps.last(), Some(&Backoff::MAX.as_secs()), "at most once a minute: {gaps:?}");
     }
 
     #[test]
@@ -327,14 +485,21 @@ mod tests {
         s.tick(&obs(true, Child::None), c.at(0));
         assert_eq!(s.tick(&obs(false, Child::None), c.at(10)), Decision::Wait);
         assert_eq!(s.tick(&obs(false, Child::None), c.at(12)), Decision::Start);
-        // Stopped with `scopebond-agent stop`: it removed its file, so the tray waits and then leaves it stopped.
+        // Stopped with `scopebond-agent stop`: it removed its file and left its note, so the tray leaves it stopped.
+        let mut s = Supervisor::new();
+        s.tick(&obs(true, Child::None), c.at(0));
+        let stopped = Observation { endpoint_file: false, stopped_on_purpose: true, ..obs(false, Child::None) };
+        for t in 10..200 {
+            assert_eq!(s.tick(&stopped, c.at(t)), Decision::Wait);
+        }
+        assert_eq!(s.link(), AgentLink::Stopped);
+        // It removed its file but nobody stopped it, and no replacement came: started again after a minute and the wait.
         let mut s = Supervisor::new();
         s.tick(&obs(true, Child::None), c.at(0));
         let gone = Observation { endpoint_file: false, ..obs(false, Child::None) };
-        for t in 10..200 {
-            assert_eq!(s.tick(&gone, c.at(t)), Decision::Wait);
-        }
-        assert_eq!(s.link(), AgentLink::Stopped);
+        let first_start = (10..200).find(|t| s.tick(&gone, c.at(*t)) == Decision::Start);
+        assert_eq!(first_start, Some(10 + HANDOVER_WAIT.as_secs() + 2));
+        assert_eq!(s.take_notice(), Some(Notice::StartingAgain));
     }
 
     #[test]

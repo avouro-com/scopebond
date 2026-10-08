@@ -33,7 +33,9 @@ tauri-plugin-single-instance = "=2.5.2"
 tauri-winrt-notification = "=0.8.1"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Storage_FileSystem",
   "Win32_System_DataExchange",
+  "Win32_System_IO",
   "Win32_System_Memory",
   "Win32_System_Registry",
   "Win32_System_Threading",
