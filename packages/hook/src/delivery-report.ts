@@ -71,7 +71,12 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   const age = oldest !== null ? `, oldest from ${ago(oldest, now)}` : "";
   if (!queueError) lines.push(`waiting to send  ${pending} record(s)${age}`);
   if (state.last_error && state.invalid_since === null) lines.push(`last problem     ${state.last_error}`);
-  if (state.invalid_since === null && deliveryStalled(state, pending, oldest, now)) {
+  const paused = /HTTP 402 \(agent_paused\)/.test(state.last_error ?? "");
+  if (state.invalid_since === null && paused && pending > 0) {
+    // The plan paused this agent: sending again changes nothing, so no flush is suggested.
+    lines.unshift(`PAUSED BY THE WORKSPACE'S PLAN: ${pending} record(s) wait on this computer and send once an owner keeps this agent active or changes the plan (Settings, Plan and billing).`);
+    problems.push(`the workspace's plan paused this agent; ${pending} record(s) wait until an owner keeps it active or changes the plan`);
+  } else if (state.invalid_since === null && deliveryStalled(state, pending, oldest, now)) {
     const since = state.last_success_at === null ? "nothing from this computer has ever reached the workspace" : `nothing has reached the workspace since ${ago(state.last_success_at, now)}`;
     const why = state.last_error ?? "no attempt recorded an error, so the cause is unknown";
     const flush = cliCommand("flush");

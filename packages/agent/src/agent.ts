@@ -20,8 +20,10 @@ export interface CycleOptions {
   dir: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
-  /** Per-request timeout for the workspace, in milliseconds. */
+  /** Per-request timeout for the workspace's rules check, in milliseconds. */
   timeoutMs?: number;
+  /** Per-request timeout for each delivery request, its answer included (default 30 s). */
+  deliveryTimeoutMs?: number;
 }
 
 export interface CycleResult {
@@ -61,7 +63,7 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
     const before = outbox.status().pending;
     const exporter = createCloudExporter({
       url: ingestUrl(connection), credential: connection.credential, outbox,
-      flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries: summaryOptions(dir),
+      flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries: summaryOptions(dir), requestTimeoutMs: options.deliveryTimeoutMs ?? 30_000,
     });
     try {
       const lastSuccess = exporter.status().lastSuccessAt;

@@ -101,6 +101,10 @@ export interface CloudExporterOptions {
   /** Summary records (evidence detail "standard"): routine receipts leave as one signed summary per window instead of one
    *  record each; notable ones are sent in full at once. Without this, or while `detail()` says "full", every receipt is sent. */
   summaries?: CloudSummaryOptions;
+  /** How long one delivery request may take, the answer's body included, before it is abandoned and counted as a failure
+   *  (the records stay queued). Default 30 seconds. A connection that never answers (a half-open socket after sleep or a
+   *  network change) would otherwise hold the flush, and every later one, for good. */
+  requestTimeoutMs?: number;
 }
 
 export interface CloudSummaryOptions {
@@ -334,7 +338,10 @@ const keepForClock = (entry: Pick<CloudOutboxEntry, "enqueuedAt">, code: unknown
 export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   if (!opts.url.trim()) throw new TypeError("Cloud export URL is required");
   if (!opts.credential.trim()) throw new TypeError("Cloud machine credential is required");
-  const doFetch = opts.fetch ?? fetch;
+  const rawFetch = opts.fetch ?? fetch;
+  const requestTimeoutMs = Math.max(1, Math.trunc(opts.requestTimeoutMs ?? 30_000));
+  // The signal also ends a body that trickles: reading the answer fails once it fires.
+  const doFetch: typeof fetch = (input, init) => rawFetch(input, { ...init, signal: AbortSignal.timeout(requestTimeoutMs) });
   const now = opts.now ?? Date.now;
   const batchSize = Math.max(1, Math.min(100, Math.trunc(opts.batchSize ?? 100)));
   const flushMs = Math.max(100, Math.trunc(opts.flushMs ?? 15_000));
@@ -441,7 +448,18 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     return { sent: items.length > 0, late, busy };
   }
 
-  async function flush(options: { routine?: boolean } = {}): Promise<void> {
+  // A flush asked for while one is sending waits for that one instead of returning at once, so a caller that bounds its wait
+  // (a hook call) waits on real work, and can tell when its time ran out.
+  let inflight: Promise<void> | null = null;
+  function flush(options: { routine?: boolean } = {}): Promise<void> {
+    if (inflight) return inflight;
+    const run = flushOnce(options);
+    if (!sending) return run; // nothing was due: it settled at once
+    inflight = run.finally(() => { inflight = null; });
+    return inflight;
+  }
+
+  async function flushOnce(options: { routine?: boolean } = {}): Promise<void> {
     if (sending || stopped || (nextAttemptAt !== null && now() < nextAttemptAt)) return;
     // Routine records wait for their summary; a per-call flush with nothing notable to send has nothing to do.
     if (options.routine === false && summarising() && !notableQueued) {
