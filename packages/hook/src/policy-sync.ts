@@ -129,7 +129,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // exclusions), so it is never sent a document an older hook would refuse.
       // D144: the settings this hook understands beyond its version (the workspace sends allowances, "Block, person may ask"
       // and the always/requests terms only to a hook that says so).
-      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances", ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
+      // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
+      // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
+      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances", "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {

@@ -271,12 +271,13 @@ export function createHookRuntime(config: RuntimeConfig) {
       if (!exporter) return;
       const before = exporter.status().lastSuccessAt;
       const timeoutMs = config.cloud?.flushTimeoutMs ?? 3000;
-      await flushBounded(exporter, timeoutMs, { routine: false });
+      const cutOff = await flushBounded(exporter, timeoutMs, { routine: false });
       // The process exits after this call; keep what the attempt saw for `status` and `doctor`.
       // An attempt the time limit cut off has an outcome too: the exit abandons the request,
       // and a workspace slower than the limit used to leave only "last tried" moving, with no
       // error. A limit of 0 defers delivery on purpose (to a session-end `flush`).
-      try { recordDeliveryAttempt(dirname(config.dbPath), exporter.status(), Date.now(), before, timeoutMs > 0 ? timeoutMs : null); } catch { /* diagnostic only */ }
+      // A timeout is recorded only when the wait really ran out with a delivery under way.
+      try { recordDeliveryAttempt(dirname(config.dbPath), exporter.status(), Date.now(), before, timeoutMs > 0 && cutOff ? timeoutMs : null, "hook"); } catch { /* diagnostic only */ }
     },
     /** Release the SQLite handles. The hook is a per-tool-call process, and a writer that
      *  exits without closing leaves its write-ahead log on disk for the next process to

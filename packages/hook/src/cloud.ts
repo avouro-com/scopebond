@@ -148,11 +148,16 @@ export function attachExporter(
 /** Attempt delivery with a bounded timeout so a per-invocation hook never hangs the
  *  agent; undelivered receipts stay in the durable outbox and flush next time. A hook call passes `routine: false`: with
  *  summaries on, it sends only when it queued a notable record (the agent and `flush` send the summaries). */
-export async function flushBounded(exporter: CloudExporter, timeoutMs = 3000, options: { routine?: boolean } = {}): Promise<void> {
-  await Promise.race([
-    exporter.flush(options).catch(() => {}),
-    new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, timeoutMs)).unref?.()),
+export async function flushBounded(exporter: CloudExporter, timeoutMs = 3000, options: { routine?: boolean } = {}): Promise<boolean> {
+  // Resolves true only when the time limit ran out first: a flush that had nothing to do, or was waiting out a retry, is not a
+  // cut-off delivery.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = await Promise.race([
+    exporter.flush(options).then(() => false, () => false),
+    new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), Math.max(0, timeoutMs)); timer.unref?.(); }),
   ]);
+  if (timer) clearTimeout(timer);
+  return timedOut;
 }
 
 export interface UninstallReport { workspace: string; told: boolean; authorized: boolean | null }

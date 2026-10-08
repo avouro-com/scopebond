@@ -1075,7 +1075,7 @@ async function runFlush(): Promise<void> {
   await runtime.exporter?.flush();
   const status = runtime.exporter?.status();
   // Unbounded, so its outcome is a real one: `status` and `doctor` show it like any other.
-  if (status) recordDeliveryAttempt(dir, status, Date.now(), before);
+  if (status) recordDeliveryAttempt(dir, status, Date.now(), before, null, "hook");
   runtime.exporter?.stop();
   console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
   // Let pending HTTP handles close normally (forced exit can abort on Windows).
