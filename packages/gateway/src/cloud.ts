@@ -2,6 +2,7 @@
 // a bounded outbox then retries evidence-v1 receipts without weakening execution.
 
 import { canonical, sha256 } from "./crypto.js";
+import { isSignedChainHead, type SignedChainHead } from "@scopebond/verify/chain";
 import type { Attester, ReceiptPayload, ReceiptStore, SignedReceipt } from "./receipts.js";
 import { buildSummary, isNotable } from "./summary.js";
 
@@ -119,6 +120,11 @@ export interface CloudExporterOptions {
    *  only the bearer credential cannot attach numbers to records of its choosing. Needs both the key and the machine
    *  credential's id; without them the numbers are sent unsigned, as before. */
   sequenceProof?: CloudSequenceProofOptions;
+  /** Called with the chain head a workspace's delivery answer carries (`chain_head`: the environment chain's newest sequence
+   *  number and evidence segment, signed by the workspace). Keep it: heads held outside the workspace let anyone show later
+   *  that its evidence chain lost, reordered or re-chained records (see @scopebond/verify/chain). A failing callback never
+   *  affects delivery. */
+  onChainHead?: (head: SignedChainHead) => void;
 }
 
 export interface CloudSequenceProofOptions {
@@ -342,10 +348,13 @@ function retryAfter(res: Response, at: number): number {
 }
 
 /** The action ids of records a successful response lists as refused (`rejected[].index`). */
-async function refusedIn(res: Response, batch: CloudOutboxEntry[]): Promise<Array<{ entry: CloudOutboxEntry; code: string | null }>> {
+async function answerOf(res: Response): Promise<unknown> {
+  try { return typeof res.json === "function" ? await res.json() : null; } catch { return null; }
+}
+
+function refusedIn(answer: unknown, batch: CloudOutboxEntry[]): Array<{ entry: CloudOutboxEntry; code: string | null }> {
   try {
-    if (typeof res.json !== "function") return [];
-    const body = await res.json() as { rejected?: Array<{ index?: unknown; code?: unknown }> };
+    const body = answer as { rejected?: Array<{ index?: unknown; code?: unknown }> } | null;
     if (!Array.isArray(body?.rejected)) return [];
     return body.rejected.flatMap((r) => typeof r?.index === "number" && batch[r.index]
       ? [{ entry: batch[r.index], code: typeof r.code === "string" ? r.code : null }] : []);
@@ -408,6 +417,12 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   // Both parts or none: a proof without the credential's id (or the key) could never verify.
   const proofKey = opts.sequenceProof?.attester && typeof opts.sequenceProof.credentialId === "string" && opts.sequenceProof.credentialId.trim()
     ? opts.sequenceProof : null;
+  // The chain head an answer carries goes to the caller; a malformed one, or a callback that throws, is ignored.
+  const keepHead = (answer: unknown) => {
+    const head = (answer as { chain_head?: unknown } | null)?.chain_head;
+    if (!opts.onChainHead || !isSignedChainHead(head)) return;
+    try { opts.onChainHead(head); } catch { /* never affects delivery */ }
+  };
 
   const fail = (error: unknown, retryAfterMs = 0) => {
     consecutiveFailures += 1;
@@ -473,6 +488,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       // Only what the workspace says it has leaves the queue: a summary it refused on its own sends its records in full; a
       // count that does not add up is a failure, retried under the same summary ids.
       const answer = await (typeof res.json === "function" ? res.json().catch(() => null) : Promise.resolve(null)) as { accepted?: unknown; duplicates?: unknown; rejected?: Array<{ index?: unknown }> } | null;
+      keepHead(answer);
       const refusedAt = new Set((Array.isArray(answer?.rejected) ? answer!.rejected : []).map((r) => Number(r?.index)).filter((n) => Number.isInteger(n)));
       const held = Number(answer?.accepted ?? NaN) + Number(answer?.duplicates ?? 0);
       if (!Number.isFinite(held) || held + refusedAt.size < part.length) {
@@ -603,7 +619,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           // A record the workspace refused on its own (the rest of the batch was stored) can never be
           // accepted as it is: it leaves the queue as a "rejected" gap, so it never holds up the records
           // behind it. It stays in the local log.
-          const listed = await refusedIn(res, batch);
+          const answer = await answerOf(res);
+          keepHead(answer);
+          const listed = refusedIn(answer, batch);
           // A record refused for a reason that can pass (a clock ahead, a key not enrolled) stays queued and is sent again.
           kept = new Set(listed.filter((r) => keepForClock(r.entry, r.code, now())).map((r) => r.entry.id));
           refused = listed.filter((r) => !kept.has(r.entry.id)).map((r) => ({ id: r.entry.id, reason: "rejected" as const }));

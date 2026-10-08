@@ -50,6 +50,8 @@ export {
 } from "./runtime-install.js";
 export type { PinResult } from "./runtime-install.js";
 export { connectCloud, ingestUrl, loadConnection, attachExporter, sequenceProofFor, flushBounded, connectionPath, reportUninstall } from "./cloud.js";
+export { checkChains } from "./chain-verify.js";
+export type { ChainCheckOptions, ChainCheckReport } from "./chain-verify.js";
 export type { HookConnection } from "./cloud.js";
 export { scrubSecrets, scrubParam, scrubUrlPath, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 export {

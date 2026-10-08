@@ -7,7 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createCloudExporter } from "@scopebond/gateway";
-import { SqliteCloudOutbox } from "@scopebond/gateway/node";
+import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import {
   LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, hookVersion, ingestUrl,
@@ -71,6 +71,8 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
       url: ingestUrl(connection), credential: connection.credential, outbox,
       flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries, requestTimeoutMs: options.deliveryTimeoutMs ?? 30_000,
       ...(sequenceProof ? { sequenceProof } : {}),
+      // The chain head each answer carries is kept beside the hook's receipts (chain-heads.json).
+      onChainHead: chainHeadRecorder(join(dir, CHAIN_HEADS_FILE)),
     });
     try {
       const lastSuccess = exporter.status().lastSuccessAt;
