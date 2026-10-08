@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseVerdict, sanitize, buildBody, fenceUntrusted, LABELS } from "./agent-review.mjs";
+import { parseVerdict, sanitize, buildBody, fenceUntrusted, LABELS, prNumber } from "./agent-review.mjs";
 
 test("parseVerdict extracts the first JSON object, or null", () => {
   assert.deepEqual(parseVerdict('{"verdict":"ALIGNED","summary":"ok"}'), { verdict: "ALIGNED", summary: "ok" });
@@ -60,4 +60,13 @@ test("sanitize leaves no tag behind when stripping one would form another", () =
     assert.equal(/[<>]/.test(out), false, `no angle bracket survives: ${JSON.stringify(input)} → ${JSON.stringify(out)}`);
   }
   assert.equal(sanitize("a <b>bold</b> c"), "a bold c");
+});
+
+test("prNumber reads the pull request event, or a maintainer's manual run, and nothing else", () => {
+  assert.equal(prNumber({ pull_request: { number: 42 } }), 42);
+  assert.equal(prNumber({ inputs: { pr: "17" } }), 17);
+  assert.equal(prNumber({ inputs: { pr: 17 } }), 17);
+  for (const bad of [{}, { inputs: { pr: "" } }, { inputs: { pr: "0" } }, { inputs: { pr: "-3" } }, { inputs: { pr: "1.5" } }, { inputs: { pr: "0x1A" } }, { inputs: { pr: "12; rm -rf /" } }, null]) {
+    assert.equal(prNumber(bad), undefined, JSON.stringify(bad));
+  }
 });

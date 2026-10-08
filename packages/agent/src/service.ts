@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
 import { fetchVerifiedInstaller, installAfterExit, installKind, nativeTrayPath } from "./native-update.js";
@@ -71,7 +71,19 @@ export interface ServiceOptions {
   tray?: boolean;
   /** Called once the agent has stopped because `stop` (or `autostart off`) asked it to; the CLI exits. */
   onStopped?: () => void;
+  /** Each delivery request's time limit (default 30 s) and one cycle's (default 10 minutes). A cycle that runs past its
+   *  limit is counted as a failure and the next one is scheduled; nothing waits on it. */
+  deliveryTimeoutMs?: number;
+  cycleLimitMs?: number;
 }
+
+/** The agent's own delivery problem, kept apart from a hook call's cut-off. */
+function recordAgentError(dir: string, message: string): void {
+  writeDeliveryState(dir, { last_error: message, last_status: null, last_error_source: "agent", last_error_at: Date.now() });
+}
+
+/** How long one delivery cycle may run before the agent stops waiting for it. */
+export const CYCLE_LIMIT_MS = 10 * 60_000;
 
 export interface Service {
   stop(): Promise<void>;
@@ -222,6 +234,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   let running: Promise<CycleResult> | null = null;
+  let cycleStartedAt: number | null = null;
+  const cycleLimit = options.cycleLimitMs ?? CYCLE_LIMIT_MS;
   let stopped = false;
   let lastSelfCheckAt = 0;
   // SB388: time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
@@ -263,7 +277,19 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const allowedGap = failures ? MAX_BACKOFF_MS + 5 * 60_000 : Math.max(3 * interval, 5 * 60_000);
     if (lastCycleAt && started - lastCycleAt > allowedGap) awakeSince = started;
     lastCycleAt = started;
-    running = runCycle({ dir: options.dir, fetchImpl: options.fetchImpl }).then(async (result) => {
+    cycleStartedAt = started;
+    // A cycle that does not finish within its limit is left behind (its requests time out on their own), counted as
+    // a failure, and the loop goes on. Nothing — the next cycle, Send now, stop — waits on it.
+    let limitTimer: ReturnType<typeof setTimeout> | undefined;
+    const overrun = new Promise<CycleResult>((resolve) => {
+      limitTimer = setTimeout(() => resolve({ at: started, connected: true, delivered: 0, pending: computerStatus(options.dir).delivery.pending,
+        deliveryError: `a delivery cycle did not finish within ${Math.round(cycleLimit / 1000)} s`, rules: "skipped", missingHookEntries: [], requested: null }), cycleLimit);
+      limitTimer.unref?.();
+    });
+    const work = runCycle({ dir: options.dir, fetchImpl: options.fetchImpl, deliveryTimeoutMs: options.deliveryTimeoutMs });
+    running = Promise.race([work, overrun]).then(async (result) => {
+      if (limitTimer) clearTimeout(limitTimer);
+      if (result.deliveryError?.startsWith("a delivery cycle did not finish")) recordAgentError(options.dir, result.deliveryError);
       await sendReasons();
       try { noticeHealth(); } catch { /* status is best effort */ }
       last = result;
@@ -276,7 +302,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (result.requested === "self_check") { log("the workspace asked this computer to check now"); setTimeout(() => { void maintain(true); }, 0); }
       if (result.connected && Date.now() - summaryAt > SUMMARY_EVERY_MS) void refreshSummary();
       return result;
-    }).finally(() => { running = null; });
+    }).finally(() => { running = null; cycleStartedAt = null; });
     return running;
   };
 
@@ -442,7 +468,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       log(`earlier block under "${q.title}": ${done.outcome}`);
       return { outcome: done.outcome, text: blockedText(done.outcome) };
     },
-    "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, last_maintenance: lastMaintenance } }),
+    "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance } }),
     "POST /flush": async () => ({ cycle: await cycle() }),
     "POST /repair": () => {
       const repaired = repairHookEntries();
@@ -478,19 +504,21 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     try { tray?.kill(); } catch { /* already gone */ }
     if (timer) clearTimeout(timer);
     if (maintenanceTimer) clearInterval(maintenanceTimer);
-    await running?.catch(() => undefined);
+    // A cycle under way gets a moment to finish; stop never waits on one that does not.
+    if (running) await Promise.race([running.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2_000).unref?.())]);
     await control.close();
     releaseAgentLock(lock);
   };
   log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on 127.0.0.1:${control.endpoint.port})`);
-  await cycle();
-  schedule();
+  // Maintenance is armed before the first cycle, so a first cycle that hangs cannot keep it from ever starting.
   if (options.maintenance !== false) {
     // Shortly after start (so a fresh sign-in is not slowed), then every six hours.
     setTimeout(() => { if (!stopped) void maintain(); }, 2 * 60_000).unref?.();
     maintenanceTimer = setInterval(() => { if (!stopped) void maintain(); }, UPDATE_EVERY_MS);
     maintenanceTimer.unref?.();
   }
+  await cycle();
+  schedule();
   return { port: control.endpoint.port, cycleNow: cycle, maintainNow: () => maintain(true), stop };
 }
 

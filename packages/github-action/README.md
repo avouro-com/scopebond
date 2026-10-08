@@ -58,8 +58,18 @@ that adds or edits `scopebond.policy.json` is checked against the policy already
 the base branch. Merge policy changes through a reviewed (human) pull request first.
 The changed-file list comes from the pull request API (including the old name of a
 renamed file), falling back to a merge-base diff; if neither yields the full list —
-no paths, or fewer paths than the PR's `changed_files` (the API stops at 3000
-files) — the check fails closed.
+no paths, or fewer listed files than the PR's `changed_files` (the API stops at 3000
+files) — the check fails closed. Files are counted per entry, never per line, and a
+path that contains a control character (a newline, for example) fails the check
+closed.
+
+**What code runs.** The check step installs `@scopebond/github-action` at the
+version this action's own `package.json` names (unless you set the `version` input),
+so pinning the action to a full commit SHA also pins the checking code. It installs
+into the runner's temp directory with lifecycle scripts off, so a `node_modules` or
+`.npmrc` in the checked-out workspace cannot choose the code, and inputs reach the
+script through environment variables, never template expansion. A `version` older
+than the action may not read the file list the action writes and then fails closed.
 
 ## Policy
 

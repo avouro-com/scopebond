@@ -1,5 +1,18 @@
 # @scopebond/mcp
 
+## 2.0.8
+
+### Patch Changes
+
+- 0f7268b: `args_digest` on the proxy's receipts is now an HMAC-SHA-256 (`hmac-sha256:…`) of the tool arguments under a local key instead of a plain SHA-256, so a short argument cannot be confirmed offline from a receipt. The CLI keys it with the hook's per-machine digest key when `--observations-dir` names the hook's folder, else with the key file beside the signing key (`<key>.binding`, made on first use); the library takes `argsDigestKey` (64 hex) and exports `keyedArgsDigest`. The Cloud outbox is now lossless (no cap, no expiry, like the hook's and the agent's), and `openExporter` reports delivery gaps to an `onGap` option (stderr by default). Upgrade note: `args_digest` values change format, so they no longer match digests recorded by earlier versions.
+- 88a6380: Harden the MCP proxy. A JSON-RPC batch, a non-object message or a non-string `method` is rejected with a -32600 error and never forwarded, in the library `handle` and in the stdio CLI. The manifest pin now hashes every page of the client's own `tools/list`, keeps the server unverified until restart once a full list that differs from the pin has been seen, treats an incomplete paginated listing as unverified, and gives its own probes random ids. The CLI starts the upstream with an allow-listed environment (pass anything else with the new repeatable `--env NAME[=value]` option or `SCOPEBOND_MCP_UPSTREAM_ENV`), drops JSON-RPC lines over 8 MiB, and fails a request closed when the upstream has not answered within `--timeout-ms` (default 120000). The starter policy written by `scopebond-mcp init` now allows only read-only tool names (read*, list*, get*, search*, describe*, view*) instead of denying a few mutating prefixes, and the README example and wording match. Upgrade note: an upstream server that reads a token from the environment now needs it passed with `--env`.
+- Updated dependencies [258cdb6]
+- Updated dependencies [d6996ad]
+- Updated dependencies [7fc5efb]
+- Updated dependencies [0f7268b]
+  - @scopebond/gateway@0.17.1
+  - @scopebond/verify@0.6.1
+
 ## 2.0.7
 
 ### Patch Changes

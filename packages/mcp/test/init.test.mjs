@@ -9,7 +9,7 @@ import { starterMcpPolicy } from "../dist/index.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
-test("starterMcpPolicy allows non-destructive tools and denies destructive ones by name", () => {
+test("starterMcpPolicy allows read-only tool names and denies every other tool", () => {
   const p = starterMcpPolicy("filesystem");
   const bound = p.clauses[0].param_bounds;
   assert.deepEqual(bound.server.enum, ["filesystem"]);

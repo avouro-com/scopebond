@@ -3,7 +3,7 @@
 import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -47,6 +47,16 @@ test("the rules check keeps the workspace's level; until it says, every receipt 
     const options = summaryOptions(dir);
     assert.equal(options.detail(), "full");
     assert.ok(options.attester.kid.startsWith("key:"));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("summaries key their folder digests with this computer's digest key", () => {
+  const { dir } = connected();
+  try {
+    const key = readFileSync(join(dir, "digest.key"), "utf8").trim();
+    assert.match(key, /^[0-9a-f]{64}$/);
+    assert.equal(summaryOptions(dir).digestKey, key);
+    assert.equal(summaryOptions(dir).digestKey, key, "the same key on every call, so one folder has one digest");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

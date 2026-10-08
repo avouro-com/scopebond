@@ -67,8 +67,8 @@ test("WebFetch maps to net.fetch; an unknown tool falls back to tool.<name>, not
   const f = only(mapClaudeToolUse({ tool_name: "WebFetch", tool_input: { url: "https://api.example/x?q=1" } }));
   assert.equal(f.intent.action_type, "net.fetch");
   assert.equal(f.intent.params.host, "api.example");
-  const u = only(mapClaudeToolUse({ tool_name: "Glob", tool_input: { pattern: "**/*.ts" } }));
-  assert.equal(u.intent.action_type, "tool.glob");
+  const u = only(mapClaudeToolUse({ tool_name: "Frobnicate", tool_input: { pattern: "**/*.ts" } }));
+  assert.equal(u.intent.action_type, "tool.frobnicate");
   assert.equal(u.evaluated, false);
 });
 
