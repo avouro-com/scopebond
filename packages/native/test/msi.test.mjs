@@ -95,6 +95,9 @@ test("with the native tray: it starts at sign-in and keeps the agent running, an
   assert.ok(pid, "the tray started the agent");
   assert.equal(running("scopebond-tray.exe").length, 1, "one tray");
   assert.equal(running("scopebond-agent.exe").length, 1, "one agent");
+  const endpoint = JSON.parse(readFileSync(join(home, "agent.json"), "utf8"));
+  assert.equal(endpoint.port, 0, "beside the tray the agent listens on its pipe only, not on 127.0.0.1");
+  assert.match(endpoint.socket, /^\\\\\.\\pipe\\scopebond-agent-/);
 
   // Ended from outside (as Task Manager would): the tray starts it again within 30 seconds.
   spawnSync("taskkill", ["/F", "/PID", String(pid)]);
