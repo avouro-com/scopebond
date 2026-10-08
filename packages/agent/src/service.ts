@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { hostname, uptime } from "node:os";
 import { join } from "node:path";
 import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -24,6 +24,7 @@ import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary }
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
+import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
@@ -223,8 +224,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let stopped = false;
   let lastSelfCheckAt = 0;
   // SB388: time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
-  // computer slept (or the agent was stopped); waiting is counted again from the next cycle.
-  let awakeSince = Date.now();
+  // computer slept (or the agent was stopped); waiting is counted again from the next cycle. The wake time is kept across
+  // restarts of the agent alone (awake.ts), so a restart never hides a backlog.
+  const allowedGapMs = Math.max(3 * interval, 5 * 60_000);
+  let awakeSince = awakeSinceAtStart({ saved: readAwake(options.dir), now: Date.now(), uptimeMs: uptime() * 1000, allowedGapMs });
   let lastCycleAt = 0;
   // A long step the person should see as "working" (an update), or null.
   let working: string | null = null;
@@ -258,9 +261,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const cycle = async (): Promise<CycleResult> => {
     if (running) return running;
     const started = Date.now();
-    const allowedGap = failures ? MAX_BACKOFF_MS + 5 * 60_000 : Math.max(3 * interval, 5 * 60_000);
+    const allowedGap = failures ? MAX_BACKOFF_MS + 5 * 60_000 : allowedGapMs;
     if (lastCycleAt && started - lastCycleAt > allowedGap) awakeSince = started;
     lastCycleAt = started;
+    writeAwake(options.dir, { awake_since: awakeSince, last_cycle_at: started });
     running = runCycle({ dir: options.dir, fetchImpl: options.fetchImpl }).then(async (result) => {
       await sendReasons();
       try { noticeHealth(); } catch { /* status is best effort */ }
