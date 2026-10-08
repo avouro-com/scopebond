@@ -1,0 +1,87 @@
+name: Tray
+
+# The native Windows tray (packages/tray: Rust, Tauri 2), built and tested on Windows. It runs only when the tray, the
+# installer (packages/native) or a workflow changes. It is not one of the required checks, so a pull request that does
+# not touch these paths is never left waiting for it.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/tray/**"
+      - "packages/native/**"
+      - ".github/workflows/**"
+  workflow_dispatch: {}
+
+concurrency:
+  group: tray-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  tray:
+    name: tray (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: packages/tray
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          if ($LASTEXITCODE -ne 0) { rustup show }
+          rustc --version
+          cargo --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/tray
+      - name: Lockfile
+        run: |
+          if (-not (Test-Path Cargo.lock)) {
+            # First build of a new dependency set: make the lockfile, and keep it as an artifact to commit.
+            cargo generate-lockfile
+            "::warning::Cargo.lock was generated; commit the artifact 'cargo-lock'"
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cargo-lock
+          path: packages/tray/Cargo.lock
+          retention-days: 7
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Build (release)
+        run: cargo build --release --locked
+      - name: A Windows program, not a console one
+        run: |
+          $bytes = [IO.File]::ReadAllBytes("target/release/scopebond-tray.exe")
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C)
+          "subsystem $subsystem (2 = Windows GUI, 3 = console)"
+          if ($subsystem -ne 2) { throw "scopebond-tray.exe would open a console window" }
+      - name: Idle memory (under 25 MB working set)
+        run: |
+          $home0 = Join-Path $env:RUNNER_TEMP "scopebond-home"
+          New-Item -ItemType Directory -Force $home0 | Out-Null
+          $env:SCOPEBOND_HOME = $home0
+          $p = Start-Process -FilePath "target/release/scopebond-tray.exe" -PassThru
+          Start-Sleep -Seconds 15
+          $p.Refresh()
+          if ($p.HasExited) { throw "the tray exited with code $($p.ExitCode)" }
+          $mb = [math]::Round($p.WorkingSet64 / 1MB, 1)
+          $private = [math]::Round($p.PrivateMemorySize64 / 1MB, 1)
+          "working set $mb MB, private $private MB"
+          "| tray at idle | $mb MB working set | $private MB private |" >> $env:GITHUB_STEP_SUMMARY
+          Stop-Process -Id $p.Id -Force
+          if ($mb -ge 25) { throw "idle working set $mb MB is over 25 MB" }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scopebond-tray-unsigned
+          path: packages/tray/target/release/scopebond-tray.exe
+          if-no-files-found: error
+          retention-days: 7
