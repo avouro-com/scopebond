@@ -76,9 +76,9 @@ jobs:
     runs-on: windows-latest
     environment: signing
     permissions:
-      contents: read
-      id-token: write
-      attestations: write
+      contents: read # check out the source the installer is built from
+      id-token: write # sign in to Azure (Artifact Signing) and sign the provenance attestation
+      attestations: write # record the build provenance attestation
     steps:
       # The source, for the installer's definition (no dependencies are installed here).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -225,9 +225,9 @@ jobs:
     runs-on: macos-latest
     environment: signing-apple
     permissions:
-      contents: read
-      id-token: write
-      attestations: write
+      contents: read # check out the source the installer is built from
+      id-token: write # sign in to Azure (Artifact Signing) and sign the provenance attestation
+      attestations: write # record the build provenance attestation
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -288,7 +288,7 @@ jobs:
     if: inputs.release
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # create the draft release and upload the signed files to it
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

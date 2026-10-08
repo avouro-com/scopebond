@@ -58,6 +58,14 @@ function writeState(dir: string, state: OverrideState, now: number): void {
   writeAtomic(join(dir, OVERRIDE_STATE_FILE), `${JSON.stringify({ entries: kept })}\n`);
 }
 
+/** Control, bidi and zero-width characters: shown to a person, they can make a command read as a different one. */
+const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/g;
+
+/** The text with each such character written out as ⟨U+XXXX⟩, so the summary a person (and an admin) reads is what runs. */
+export function revealHidden(text: string): string {
+  return text.replace(HIDDEN, (ch) => `⟨U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}⟩`);
+}
+
 /** One line a person can judge at a glance, from the minimized intent: never file contents or command output. */
 export function actionSummary(intent: { action_type?: string; params?: Record<string, unknown> }): string {
   const p = intent.params ?? {};
@@ -67,7 +75,7 @@ export function actionSummary(intent: { action_type?: string; params?: Record<st
     : intent.action_type === "net.fetch" ? pick("url") || pick("host")
     : pick("path") || intent.action_type || "an action";
   // Arguments the hook keeps only as a keyed digest stay out of the window.
-  const shown = text.slice(0, 2000).replace(/ ?\(hmac-sha256:[0-9a-f]{64}\)/g, "").trim();
+  const shown = revealHidden(text.slice(0, 2000).replace(/ ?\(hmac-sha256:[0-9a-f]{64}\)/g, "").trim());
   return shown.length > 200 ? `${shown.slice(0, 197)}...` : shown;
 }
 

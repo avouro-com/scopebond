@@ -24,15 +24,22 @@ export interface SqlClass {
 const MAX_SQL = 1_000_000;
 const SEVERITY: Record<SqlVerb, number> = { read: 0, insert: 1, create: 2, update: 3, delete: 4, alter: 5, delete_all: 6, drop: 7 };
 
-/** Comments removed, string literals reduced to `'s'` (or kept as `'%'` when only wildcards),
- *  quoted identifiers unquoted. Null when a quote or comment is left open or a dollar-quoted body is present. */
+/** Comments removed, string literals reduced to `'s'` (or kept as `'%'` when only wildcards), quoted identifiers reduced to
+ *  the opaque token `ident_` (a quoted name is never read as a keyword). Null when a quote or comment is left open, a
+ *  dollar-quoted body is present, a block comment nests (PostgreSQL nests them; SQLite does not, so the two read the text
+ *  differently), a literal holds a backslash (`E'…'` escapes), or a backslash stands outside a literal (a psql meta-command). */
 function clean(text: string): string | null {
   let out = "";
   for (let i = 0; i < text.length;) {
     const c = text[i];
     const next = text[i + 1];
     if (c === "-" && next === "-") { const e = text.indexOf("\n", i); i = e < 0 ? text.length : e; out += " "; continue; }
-    if (c === "/" && next === "*") { const e = text.indexOf("*/", i + 2); if (e < 0) return null; i = e + 2; out += " "; continue; }
+    if (c === "/" && next === "*") {
+      const e = text.indexOf("*/", i + 2);
+      if (e < 0 || text.slice(i + 2, e).includes("/*")) return null;
+      i = e + 2; out += " "; continue;
+    }
+    if (c === "\\") return null;
     if (c === "'") {
       let j = i + 1;
       let body = "";
@@ -40,6 +47,7 @@ function clean(text: string): string | null {
         if (j >= text.length) return null;
         if (text[j] === "'" && text[j + 1] === "'") { body += "'"; j += 2; continue; }
         if (text[j] === "'") break;
+        if (text[j] === "\\") return null;
         body += text[j++];
       }
       out += /^[%_]+$/.test(body) ? `'${body}'` : "'s'";
@@ -49,11 +57,11 @@ function clean(text: string): string | null {
     if (c === '"' || c === "`") {
       const e = text.indexOf(c, i + 1);
       if (e < 0) return null;
-      out += ` ${text.slice(i + 1, e).replace(/[^A-Za-z0-9_]/g, "_")} `;
+      out += " ident_ ";
       i = e + 1;
       continue;
     }
-    if (c === "[" && /^\[[A-Za-z0-9_ ]+\]/.test(text.slice(i))) { const e = text.indexOf("]", i); out += ` ${text.slice(i + 1, e).replace(/ /g, "_")} `; i = e + 1; continue; }
+    if (c === "[" && /^\[[A-Za-z0-9_ ]+\]/.test(text.slice(i))) { const e = text.indexOf("]", i); out += " ident_ "; i = e + 1; continue; }
     if (c === "$" && (next === "$" || /[A-Za-z_]/.test(next ?? ""))) return null; // dollar-quoted body
     out += c;
     i++;
@@ -161,12 +169,14 @@ function one(stmt: string): One | "neutral" | null {
   switch (first) {
     case "SELECT": return /\binto\b/i.test(s) ? { verb: "create", predicate: "not_applicable" } : { verb: "read", predicate: "not_applicable" };
     case "SHOW": case "DESCRIBE": case "DESC": return { verb: "read", predicate: "not_applicable" };
-    case "PRAGMA": return s.includes("=") ? null : { verb: "read", predicate: "not_applicable" };
+    // `PRAGMA name = value` and `PRAGMA name(value)` change settings; only the bare form reads.
+    case "PRAGMA": return s.includes("=") || s.includes("(") ? null : { verb: "read", predicate: "not_applicable" };
     case "EXPLAIN": {
       const rest = s.replace(/^explain\s+(?:analyze\s+|verbose\s+|query\s+plan\s+)*(?:\([^)]*\)\s*)?/i, "");
       return rest === s || rest === "" ? null : one(rest);
     }
-    case "WITH": return /\b(?:insert|update|delete|merge)\b/i.test(s) ? null : { verb: "read", predicate: "not_applicable" };
+    case "WITH": return /\b(?:insert|update|delete|merge)\b/i.test(s) ? null
+      : /\binto\b/i.test(s) ? { verb: "create", predicate: "not_applicable" } : { verb: "read", predicate: "not_applicable" };
     case "INSERT": case "REPLACE": return { verb: "insert", predicate: "not_applicable" };
     case "UPDATE": return { verb: "update", predicate: predicateOf(s) };
     case "DELETE": { const p = predicateOf(s); return { verb: p === "all" ? "delete_all" : "delete", predicate: p }; }

@@ -1,5 +1,19 @@
 # @scopebond/framework
 
+## 0.3.13
+
+### Patch Changes
+
+- 88a6380: `wrapVercelTools` throws on a tool with no `execute`, like `guardedTool`, instead of passing it through unchecked. `wrapLangGraphTool` now guards every entry point the tool has (`invoke`, `call`, `_call`, `func`, `stream`, `batch`), not only `invoke`.
+- 0f7268b: Tool arguments in a guard's receipts now have credential shapes scrubbed inside their values (a token in a URL query, a SQL password literal, a Bearer header in a command, and more) before the receipt is signed and sent to Cloud; `asset`, `amount` and `currency` stay in clear. The README documents what a receipt keeps of each field. New `cloud.outboxPath` opens a durable, lossless SQLite queue (no cap, no expiry; Node 22.5 or later) so waiting receipts survive a restart, and `cloud.onGap` reports any record the queue could not keep (a warning on stderr by default). Without `outboxPath` the queue stays in memory and bounded, and a record dropped at the bound now takes its sequence number first, so the workspace counts it as missing.
+- Updated dependencies [258cdb6]
+- Updated dependencies [d6996ad]
+- Updated dependencies [7fc5efb]
+- Updated dependencies [0f7268b]
+- Updated dependencies [88a6380]
+  - @scopebond/gateway@0.17.1
+  - @scopebond/sdk@0.1.6
+
 ## 0.3.12
 
 ### Patch Changes
