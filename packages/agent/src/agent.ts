@@ -11,7 +11,7 @@ import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import {
   LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, hookVersion, ingestUrl,
-  isHarnessConfigured, loadConnection, policyBuilds, recordDeliveryAttempt, repairDeliveryAt, summaryOptions, syncPolicy, userHarnessFile,
+  isHarnessConfigured, loadConnection, policyBuilds, recordDeliveryAttempt, repairDeliveryAt, sequenceProofFor, summaryOptions, syncPolicy, userHarnessFile,
   type Harness, type StatusJson, type SyncOutcome,
 } from "@scopebond/hook";
 
@@ -64,9 +64,13 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
     // records) and receipts whose queue write failed. Best effort; never stops delivery.
     await repairDeliveryAt(dir, outbox, now());
     const before = outbox.status().pending;
+    // The record numbers are signed with the same enrolled key that signs the receipts and summaries.
+    const summaries = summaryOptions(dir);
+    const sequenceProof = sequenceProofFor(connection, summaries?.attester);
     const exporter = createCloudExporter({
       url: ingestUrl(connection), credential: connection.credential, outbox,
-      flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries: summaryOptions(dir), requestTimeoutMs: options.deliveryTimeoutMs ?? 30_000,
+      flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries, requestTimeoutMs: options.deliveryTimeoutMs ?? 30_000,
+      ...(sequenceProof ? { sequenceProof } : {}),
     });
     try {
       const lastSuccess = exporter.status().lastSuccessAt;

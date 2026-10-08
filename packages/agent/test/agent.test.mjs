@@ -4,6 +4,8 @@ import http from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash, createPublicKey, verify } from "node:crypto";
+import { canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readAllowances, readBlocked, noteQueueMiss, OUTBOX_FILE as OUTBOX_FILE_NAME } from "@scopebond/hook";
 import {
@@ -16,13 +18,14 @@ import {
 function workspace() {
   const received = [];
   const reasons = [];
+  const bodies = [];
   let ingestStatus = 200;
   const server = http.createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => { raw += c; });
     req.on("end", () => {
       if (req.url === "/v1/ingest") {
-        if (ingestStatus === 200) received.push(...(JSON.parse(raw).receipts ?? []));
+        if (ingestStatus === 200) { received.push(...(JSON.parse(raw).receipts ?? [])); bodies.push(JSON.parse(raw)); }
         res.writeHead(ingestStatus, { "content-type": "application/json" });
         res.end(JSON.stringify(ingestStatus === 200 ? { ok: true } : { error: "down", code: "unavailable" }));
         return;
@@ -34,7 +37,7 @@ function workspace() {
     });
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({
-    url: `http://127.0.0.1:${server.address().port}`, received, reasons, setIngest: (s) => { ingestStatus = s; }, close: () => server.close(),
+    url: `http://127.0.0.1:${server.address().port}`, received, reasons, bodies, setIngest: (s) => { ingestStatus = s; }, close: () => server.close(),
   })));
 }
 
@@ -71,6 +74,22 @@ test("a cycle delivers what the hook queued and runs the rules check", async () 
     assert.equal(result.deliveryError, null);
     assert.equal(result.rules, "own_rules");
     assert.equal(ws.received.length, 3);
+  } finally { ws.close(); }
+});
+
+test("a cycle signs the delivered record numbers with the computer's enrolled key", async () => {
+  const ws = await workspace();
+  try {
+    const dir = await computerWithQueue(ws.url, 2);
+    await runCycle({ dir });
+    const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
+    assert.equal(ws.bodies.length, 1);
+    const [body] = ws.bodies;
+    assert.deepEqual(body.seq, [1, 2]);
+    assert.equal(body.seq_proof.kid, attester.kid);
+    const digests = body.receipts.map((r) => createHash("sha256").update(Buffer.from(canonical(r), "utf8")).digest("hex"));
+    const material = "scopebond:delivery-sequence/v1\n" + canonical({ credential_id: "cred-1", queue: body.queue ?? null, seq: body.seq, receipts: digests });
+    assert.ok(verify(null, Buffer.from(material, "utf8"), createPublicKey(attester.publicKeyPem), Buffer.from(body.seq_proof.signature, "base64")));
   } finally { ws.close(); }
 });
 
