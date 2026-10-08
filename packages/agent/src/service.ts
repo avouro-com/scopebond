@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
-import { fetchVerifiedInstaller, installAfterExit, installKind, takeInstallResult } from "./native-update.js";
-import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, startCommands } from "./autostart.js";
+import { fetchVerifiedInstaller, installAfterExit, installKind, nativeTrayPath, takeInstallResult } from "./native-update.js";
+import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
@@ -31,6 +31,9 @@ const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const SUMMARY_EVERY_MS = 5 * 60 * 1000;
 export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
+/** Left in the Scopebond folder when this computer's user stops the agent (`scopebond-agent stop`), and removed when it
+ *  starts: the native tray then leaves it stopped instead of starting it again. */
+export const STOPPED_FILE = "agent-stopped.json";
 /** The person's tray settings (D143: notifications about problems by default, none about blocks). */
 export const TRAY_SETTINGS_FILE = "agent-settings.json";
 export type NotificationSetting = "all" | "problems" | "off";
@@ -210,10 +213,12 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
   const lock = acquireAgentLock(options.dir);
   if (!lock) throw new Error("a Scopebond Agent is already running for this computer");
+  rmSync(join(options.dir, STOPPED_FILE), { force: true });
   // What the install helper of a signed update recorded before this start (installAfterExit).
   const installed = takeInstallResult(options.dir);
   if (installed) log(installed.installed ? `the Scopebond Agent ${installed.version} was installed` : `the update to ${installed.version} was not installed: ${installed.reason ?? "unknown"}`);
   const interval = options.intervalMs ?? INTERVAL_MS;
+  const nativeTray = process.platform === "win32" ? nativeTrayPath() : null;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
   let failures = 0;
@@ -304,8 +309,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
           lastMaintenance = result;
           if (options.onUpdated) options.onUpdated(target.agent);
           else {
-            // The installer replaces this file, so it runs after this agent has exited, and starts the agent again.
-            installAfterExit(verified, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null);
+            // The installer replaces this file, so it runs after this agent has exited, checks it again, and starts the tray
+            // (which starts the agent) or the agent again.
+            installAfterExit(verified, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null, nativeTray);
             setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
           }
           return result;
@@ -450,6 +456,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // `scopebond-agent stop` and `autostart off`: answer first, then stop, so the caller hears back.
     "POST /stop": () => {
       log("stopping: asked to by this computer's user");
+      try { writeFileSync(join(options.dir, STOPPED_FILE), `${JSON.stringify({ stopped_at: new Date().toISOString(), pid: process.pid })}\n`); } catch { /* the tray may start it again */ }
       setTimeout(() => { void stop().finally(() => options.onStopped?.()); }, 50);
       return { stopping: true };
     },
@@ -465,8 +472,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (answer.decision === "ask" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);
       return answer;
     },
-  });
-  const tray = (options.tray ?? true) && process.env.SCOPEBOND_AGENT_TRAY !== "off" ? startTray(options.dir) : null;
+  }, nativeTray ? { loopback: false } : {}); // beside the native tray nothing uses loopback: its tray and its hook use the pipe
+  // Beside the native tray (the signed install), the tray is that program: it started this agent, or starts at sign-in.
+  const tray = (options.tray ?? true) && process.env.SCOPEBOND_AGENT_TRAY !== "off" && !nativeTray ? startTray(options.dir) : null;
+  if (nativeTray && retireLauncherRunValue()) log("removed the ScopebondAgent sign-in entry: the Scopebond tray starts the agent");
   const stop = async () => {
     stopped = true;
     try { tray?.kill(); } catch { /* already gone */ }
@@ -476,7 +485,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     await control.close();
     releaseAgentLock(lock);
   };
-  log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on 127.0.0.1:${control.endpoint.port})`);
+  log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on ${[control.endpoint.socket, control.endpoint.port ? `127.0.0.1:${control.endpoint.port}` : null].filter(Boolean).join(" and ")})`);
   await cycle();
   schedule();
   if (options.maintenance !== false) {

@@ -32,3 +32,8 @@ updates:
       # would stop publishing. Migrate together with @changesets/cli 3 (see above).
       - dependency-name: "changesets/action"
         update-types: ["version-update:semver-major"]
+  - package-ecosystem: "cargo"
+    directory: "/packages/tray"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

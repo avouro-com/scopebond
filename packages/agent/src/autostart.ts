@@ -11,6 +11,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir } from "node:os";
 import { dirname, join, win32 } from "node:path";
 import { isSingleExecutable } from "@scopebond/hook";
+import { nativeTrayPath } from "./native-update.js";
 
 export const LABEL = "com.scopebond.agent";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -186,8 +187,38 @@ export function startCommands(launcher: string, platform: NodeJS.Platform = proc
   return [["conhost.exe", ["--headless", "cmd.exe", cmdRun(launcher)]], ["cmd.exe", [cmdRun(launcher)]]];
 }
 
-/** Start the agent now with the `attempt`-th way (0 first), detached from this terminal. Returns whether it tried one. */
-export function startNow(scopebondHome: string, platform = process.platform, attempt = 0): boolean {
+// The signed Windows install with its native tray (`scopebond-tray.exe` beside the agent): the installer adds a Run value
+// `Scopebond` that starts the tray, and the tray starts the agent and keeps it running. Autostart then means that value,
+// not the launcher's `ScopebondAgent`, which would start a second agent (refused by its lock) at every sign-in.
+
+/** Runs `reg.exe` with these arguments; whether it succeeded. Tests pass their own. */
+export type RegRunner = (args: string[]) => boolean;
+const runReg: RegRunner = (args) => {
+  try { execFileSync("reg", args, { stdio: "ignore", windowsHide: true }); return true; } catch { return false; }
+};
+export const TRAY_RUN_VALUE = "Scopebond";
+const MACHINE_RUN_KEY = "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const trayFor = (platform: NodeJS.Platform) => (platform === "win32" ? nativeTrayPath() : null);
+/** The tray's Run value set for every user (an install with ALLUSERS=1): only whoever installed it changes it. */
+const trayForEveryone = (reg: RegRunner) => reg(["query", MACHINE_RUN_KEY, "/v", TRAY_RUN_VALUE]);
+
+/** The launcher's Run value is not used beside the native tray. Whether there was one to remove. */
+export function retireLauncherRunValue(reg: RegRunner = runReg): boolean {
+  return reg(["query", RUN_KEY, "/v", RUN_VALUE]) && reg(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"]);
+}
+
+/** Start the agent now with the `attempt`-th way (0 first), detached from this terminal. Returns whether it tried one.
+ *  Beside the native tray, the one way is to start the tray (it starts the agent; a second tray gives way to the first). */
+export function startNow(scopebondHome: string, platform = process.platform, attempt = 0, tray: string | null = trayFor(platform)): boolean {
+  if (tray) {
+    if (attempt > 0) return false;
+    try {
+      const child = spawn(tray, [], { detached: true, stdio: "ignore", windowsHide: true });
+      child.on("error", () => { /* the next sign-in starts it */ });
+      child.unref();
+      return true;
+    } catch { return false; }
+  }
   const launcher = launcherPath(scopebondHome, platform);
   const command = startCommands(launcher, platform)[attempt];
   if (!command || !existsSync(launcher)) return false;
@@ -200,7 +231,13 @@ export function startNow(scopebondHome: string, platform = process.platform, att
 }
 
 /** Turn autostart on for this user. Returns a one-line description of what changed. */
-export function enableAutostart(scopebondHome: string, cli: string, node = process.execPath, platform = process.platform): string {
+export function enableAutostart(scopebondHome: string, cli: string, node = process.execPath, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg): string {
+  if (tray) {
+    retireLauncherRunValue(reg);
+    if (trayForEveryone(reg)) return "the Scopebond tray starts for every user of this computer and keeps the agent running";
+    if (!reg(["add", RUN_KEY, "/v", TRAY_RUN_VALUE, "/t", "REG_SZ", "/d", `"${noQuotes(tray)}"`, "/f"])) throw new Error(`could not add ${TRAY_RUN_VALUE} to ${RUN_KEY}`);
+    return `added ${TRAY_RUN_VALUE} to ${RUN_KEY}: the Scopebond tray starts with your sign-in and keeps the agent running`;
+  }
   const launcher = writeLauncher(scopebondHome, node, cli, platform);
   const paths = autostartPaths();
   if (platform === "win32") {
@@ -220,9 +257,15 @@ export function enableAutostart(scopebondHome: string, cli: string, node = proce
   return `wrote and enabled ${paths.linuxUnit}`;
 }
 
-export function disableAutostart(scopebondHome: string, platform = process.platform): string {
+export function disableAutostart(scopebondHome: string, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg): string {
   const paths = autostartPaths();
   rmSync(launcherPath(scopebondHome, platform), { force: true });
+  if (tray) {
+    const launcherValue = retireLauncherRunValue(reg);
+    const trayValue = reg(["query", RUN_KEY, "/v", TRAY_RUN_VALUE]) && reg(["delete", RUN_KEY, "/v", TRAY_RUN_VALUE, "/f"]);
+    if (trayValue || launcherValue) return `removed ${trayValue ? TRAY_RUN_VALUE : RUN_VALUE} from ${RUN_KEY}`;
+    return trayForEveryone(reg) ? "Scopebond starts for every user of this computer; whoever installed it changes that" : "autostart was not on";
+  }
   if (platform === "win32") {
     try { execFileSync("reg", ["delete", RUN_KEY, "/v", RUN_VALUE, "/f"], { stdio: "ignore" }); } catch { return "autostart was not on"; }
     return `removed ${RUN_VALUE} from ${RUN_KEY}`;
@@ -240,7 +283,13 @@ export function disableAutostart(scopebondHome: string, platform = process.platf
 }
 
 /** Whether autostart is on and its launcher can start the agent now. */
-export function autostartHealth(scopebondHome: string, platform = process.platform): { on: boolean; ok: boolean; detail: string } {
+export function autostartHealth(scopebondHome: string, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg): { on: boolean; ok: boolean; detail: string } {
+  if (tray) {
+    const on = reg(["query", RUN_KEY, "/v", TRAY_RUN_VALUE]) || trayForEveryone(reg);
+    return on
+      ? { on, ok: true, detail: "starts with sign-in (the Scopebond tray keeps the agent running)" }
+      : { on, ok: false, detail: "the Scopebond tray does not start with sign-in (turn on Start with Windows in its menu, or run: scopebond-agent.exe autostart on)" };
+  }
   const paths = autostartPaths();
   let on = false;
   if (platform === "win32") {

@@ -8,8 +8,8 @@
 
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, win32 } from "node:path";
 import { isSingleExecutable } from "@scopebond/hook";
 
 /** Where the signed releases are published. */
@@ -128,6 +128,8 @@ export const INSTALL_HELPER_SCRIPT = [
   "    [IO.File]::WriteAllText($env:SB_RESULT, $json, (New-Object Text.UTF8Encoding $false))",
   "  } catch { }",
   "}",
+  // The native tray first: it would start the old agent again, and the installer replaces its file. Only this install's.
+  "if ($env:SB_TRAY) { try { Get-Process -Name scopebond-tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:SB_TRAY } | Stop-Process -Force -ErrorAction SilentlyContinue } catch { } }",
   "try { Wait-Process -Id ([int]$env:SB_PID) -Timeout 60 -ErrorAction SilentlyContinue } catch { }",
   "$lock = $null",
   "$reason = $null",
@@ -156,11 +158,26 @@ export const INSTALL_HELPER_SCRIPT = [
   "    } catch { Write-Result $false \"msiexec could not start: $($_.Exception.Message)\" $null }",
   "  }",
   "} finally { if ($lock) { $lock.Dispose() } }",
-  "if ($env:SB_LAUNCHER) { Start-Process -FilePath cmd.exe -ArgumentList @('/d', '/s', '/c', ('\"\"' + $env:SB_LAUNCHER + '\"\"')) -WindowStyle Hidden }",
+  // Installed or not, the tray starts again (it starts the agent), or else the agent through autostart's launcher.
+  "if ($env:SB_TRAY) { Start-Process -FilePath $env:SB_TRAY } elseif ($env:SB_LAUNCHER) { Start-Process -FilePath cmd.exe -ArgumentList @('/d', '/s', '/c', ('\"\"' + $env:SB_LAUNCHER + '\"\"')) -WindowStyle Hidden }",
 ].join("\n");
 
+/** The helper's script (INSTALL_HELPER_SCRIPT): stop the native tray, wait for this agent to exit, check the installer
+ *  again, install, then start the tray again (or the agent through autostart's launcher). */
+export function installAfterExitScript(): string {
+  return INSTALL_HELPER_SCRIPT;
+}
+
+/** The native Scopebond tray the installer puts beside the single executable (`scopebond-tray.exe`), when it is there. It
+ *  starts the agent at sign-in and keeps it running, so the agent leaves the tray to it. */
+export function nativeTrayPath(execPath = process.execPath, single = isSingleExecutable(), exists: (path: string) => boolean = existsSync): string | null {
+  if (!single) return null;
+  const tray = win32.join(win32.dirname(execPath), "scopebond-tray.exe");
+  return exists(tray) ? tray : null;
+}
+
 /** The helper's program, arguments and environment values (pure, so it can be tested). */
-export function installHelper(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, o: { msiexec?: string; publisher?: RegExp } = {}): { program: string; args: string[]; env: Record<string, string> } {
+export function installHelper(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, o: { msiexec?: string; publisher?: RegExp; tray?: string | null } = {}): { program: string; args: string[]; env: Record<string, string> } {
   return {
     program: "powershell.exe",
     args: ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", INSTALL_HELPER_SCRIPT],
@@ -174,14 +191,15 @@ export function installHelper(installer: { path: string; version: string; sha256
       SB_RESULT: join(dirname(installer.path), INSTALL_RESULT),
       SB_MSIEXEC: o.msiexec ?? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "msiexec.exe"),
       SB_LAUNCHER: launcher ?? "",
+      SB_TRAY: o.tray ?? "",
     },
   };
 }
 
-/** Install it once this agent has exited, then start the agent again through autostart's launcher. A detached helper does it,
- *  because the installer replaces this very file; it checks the installer again first (INSTALL_HELPER_SCRIPT). */
-export function installAfterExit(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null): void {
-  const helper = installHelper(installer, pid, launcher);
+/** Install it once this agent has exited, then start the tray again (or the agent through autostart's launcher). A detached
+ *  helper does it, because the installer replaces this very file; it checks the installer again first (INSTALL_HELPER_SCRIPT). */
+export function installAfterExit(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, tray: string | null = null): void {
+  const helper = installHelper(installer, pid, launcher, { tray });
   const child = spawn(helper.program, helper.args, { detached: true, stdio: "ignore", windowsHide: true, env: powershellEnv(helper.env) });
   child.on("error", () => { /* the next sign-in starts the agent */ });
   child.unref();

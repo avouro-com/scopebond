@@ -1,0 +1,186 @@
+name: Tray
+
+# The native Windows tray (packages/tray: Rust, Tauri 2), built and tested on Windows. It runs only when the tray, the
+# installer (packages/native), the agent or the hook it starts and talks to (packages/agent, packages/hook) or a workflow
+# changes. It is not one of the required checks, so a pull request that does
+# not touch these paths is never left waiting for it.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/tray/**"
+      - "packages/native/**"
+      - "packages/agent/**"
+      - "packages/hook/**"
+      - ".github/workflows/**"
+  workflow_dispatch: {}
+
+concurrency:
+  group: tray-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  tray:
+    name: tray (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: packages/tray
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          if ($LASTEXITCODE -ne 0) { rustup show }
+          rustc --version
+          cargo --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/tray
+      # The committed Cargo.lock decides every dependency. When Cargo.toml changed and the lockfile was not updated, the
+      # job fails and keeps the updated lockfile (only the new dependencies resolved) as the artifact 'cargo-lock'.
+      - name: Cargo.lock is committed and current
+        run: |
+          cargo metadata --locked --format-version 1 *> $null
+          if ($LASTEXITCODE -ne 0) {
+            cargo update --workspace
+            throw "Cargo.lock is missing or out of date; commit the artifact 'cargo-lock'"
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: cargo-lock
+          path: packages/tray/Cargo.lock
+          retention-days: 7
+      - name: The panel script parses
+        run: node --check ui/panel.js
+      # Unit tests, and the pipe client against a Node server on a named pipe (as the agent serves its channel).
+      - name: Tests
+        run: cargo test --locked
+      - name: Build (release)
+        run: cargo build --release --locked
+      - name: A Windows program, not a console one
+        run: |
+          $bytes = [IO.File]::ReadAllBytes("target/release/scopebond-tray.exe")
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C)
+          "subsystem $subsystem (2 = Windows GUI, 3 = console)"
+          if ($subsystem -ne 2) { throw "scopebond-tray.exe would open a console window" }
+      - name: Idle memory (under 25 MB working set)
+        run: |
+          $home0 = Join-Path $env:RUNNER_TEMP "scopebond-home"
+          New-Item -ItemType Directory -Force $home0 | Out-Null
+          $env:SCOPEBOND_HOME = $home0
+          $p = Start-Process -FilePath "target/release/scopebond-tray.exe" -PassThru
+          Start-Sleep -Seconds 15
+          $p.Refresh()
+          if ($p.HasExited) { throw "the tray exited with code $($p.ExitCode)" }
+          $mb = [math]::Round($p.WorkingSet64 / 1MB, 1)
+          $private = [math]::Round($p.PrivateMemorySize64 / 1MB, 1)
+          "working set $mb MB, private $private MB"
+          "| tray at idle | $mb MB working set | $private MB private |" >> $env:GITHUB_STEP_SUMMARY
+          Stop-Process -Id $p.Id -Force
+          if ($mb -ge 25) { throw "idle working set $mb MB is over 25 MB" }
+      # The status panel as a person sees it, beside a stand-in agent (tests/fake-agent.mjs) on a named pipe: three states,
+      # light and dark, kept as screenshots for review.
+      - name: Status panel screenshots
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $shots = Join-Path $env:RUNNER_TEMP "panel"
+          New-Item -ItemType Directory -Force $shots | Out-Null
+          function Shot($name) {
+            $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object Drawing.Bitmap $b.Width, $b.Height
+            $g = [Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [Drawing.Point]::Empty, $b.Size)
+            $bmp.Save((Join-Path $shots "$name.png"))
+            $g.Dispose(); $bmp.Dispose()
+          }
+          $personalize = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+          if (-not (Test-Path $personalize)) { New-Item $personalize | Out-Null }
+          $runs = @(
+            @{ theme = 1; scenario = "attention"; name = "light-attention" },
+            @{ theme = 0; scenario = "protected"; name = "dark-protected" },
+            @{ theme = 1; scenario = "disconnected"; name = "light-disconnected" }
+          )
+          foreach ($run in $runs) {
+            Set-ItemProperty $personalize AppsUseLightTheme $run.theme -Type DWord
+            $home0 = Join-Path $env:RUNNER_TEMP ("home-" + $run.name)
+            New-Item -ItemType Directory -Force $home0 | Out-Null
+            $env:SCOPEBOND_HOME = $home0
+            $agent = Start-Process node -ArgumentList @("tests/fake-agent.mjs", $home0, $run.scenario) -PassThru -NoNewWindow
+            $until = (Get-Date).AddSeconds(20)
+            while (-not (Test-Path (Join-Path $home0 "agent.json"))) {
+              if ((Get-Date) -gt $until) { throw "the stand-in agent did not start" }
+              Start-Sleep -Milliseconds 200
+            }
+            $tray = Start-Process "target/release/scopebond-tray.exe" -ArgumentList "--status" -PassThru
+            Start-Sleep -Seconds 10
+            Shot $run.name
+            $tray.Refresh()
+            if ($tray.HasExited) { throw "the tray exited with code $($tray.ExitCode)" }
+            Stop-Process -Id $tray.Id -Force
+            Stop-Process -Id $agent.Id -Force
+            "--- $($run.name)"
+            Get-Content (Join-Path $home0 "tray.log")
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: status-panel-screenshots
+          path: ${{ runner.temp }}/panel
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scopebond-tray-unsigned
+          path: packages/tray/target/release/scopebond-tray.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # The installer with the tray, on this throwaway runner: install per user, the tray starts the agent, the agent killed
+  # comes back within 30 seconds, a second tray gives way, and removing it leaves nothing running and nothing behind.
+  installer:
+    name: tray installer (windows)
+    needs: tray
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.20.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: scopebond-tray-unsigned
+          path: tray-build
+      - name: Install, start, kill, come back, remove
+        run: node --test --test-name-pattern "with the native tray" packages/native/test/msi.test.mjs
+        env:
+          SCOPEBOND_MSI: "1"
+          SCOPEBOND_TRAY_EXE: ${{ github.workspace }}/tray-build/scopebond-tray.exe
+      - name: Collect the logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/tray-logs" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP/msi-tray-*.log", "$env:USERPROFILE/.scopebond/*.log" "$env:RUNNER_TEMP/tray-logs" -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: tray-installer-logs
+          path: ${{ runner.temp }}/tray-logs
+          if-no-files-found: ignore
+          retention-days: 7

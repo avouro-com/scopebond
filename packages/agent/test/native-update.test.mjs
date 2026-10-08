@@ -83,7 +83,7 @@ test("the manifest's signature covers its exact bytes, in its own domain", () =>
 test("the install helper is constant text; the installer, its digest, size and publisher rule reach it as environment values", async () => {
   const { installHelper, INSTALL_HELPER_SCRIPT, INSTALL_RESULT, PUBLISHER } = await import("../dist/index.js");
   const installer = { path: join("D:", "Apps", "O'Brien $x", ".scopebond", "updates", installerName(VERSION)), version: VERSION, sha256: "ab".repeat(32), size: 1234 };
-  const helper = installHelper(installer, 4242, join("D:", "Apps", "launch.cmd"));
+  const helper = installHelper(installer, 4242, join("D:", "Apps", "launch.cmd"), { tray: join("D:", "Apps", "scopebond-tray.exe") });
   assert.equal(helper.program, "powershell.exe");
   assert.deepEqual(helper.args, ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", INSTALL_HELPER_SCRIPT]);
   for (const value of [installer.path, installer.sha256, "1234", VERSION, "4242", "O'Brien"]) {
@@ -97,9 +97,12 @@ test("the install helper is constant text; the installer, its digest, size and p
   assert.equal(helper.env.SB_PUBLISHER, PUBLISHER.source, "the same anchored publisher rule as the first check");
   assert.equal(helper.env.SB_RESULT, join("D:", "Apps", "O'Brien $x", ".scopebond", "updates", INSTALL_RESULT));
   assert.match(helper.env.SB_MSIEXEC, /System32[\\/]msiexec\.exe$/);
+  assert.equal(helper.env.SB_TRAY, join("D:", "Apps", "scopebond-tray.exe"));
+  assert.equal(installHelper(installer, 4242, null).env.SB_TRAY, "", "without the native tray: none to stop or start");
   // Checked again right before installing, holding the file: size, then SHA-256, then the signature and its publisher, then msiexec.
   const at = (s) => { const i = INSTALL_HELPER_SCRIPT.indexOf(s); assert.ok(i >= 0, `the script has ${s}`); return i; };
   const order = [
+    at("Stop-Process -Force"),
     at("Wait-Process -Id ([int]$env:SB_PID)"),
     at("[IO.FileShare]::Read)"),
     at("$lock.Length -ne [long]$env:SB_SIZE"),
@@ -110,8 +113,9 @@ test("the install helper is constant text; the installer, its digest, size and p
     at("if ($reason) { Write-Result $false $reason $null }"),
     at("Start-Process -FilePath $env:SB_MSIEXEC"),
     at("finally { if ($lock) { $lock.Dispose() } }"),
+    at("Start-Process -FilePath $env:SB_TRAY"),
   ];
-  assert.deepEqual([...order].sort((a, b) => a - b), order, "wait, hold, size, digest, signature, publisher, then install, then release");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "stop the tray, wait, hold, size, digest, signature, publisher, install, release, start the tray");
   assert.doesNotMatch(INSTALL_HELPER_SCRIPT, /Invoke-Expression|iex |\$\{/);
 });
 
@@ -184,4 +188,60 @@ test("on Windows, the helper installs nothing and records why when the installer
   assert.equal(installed.result.installed, true, installed.result.reason);
   assert.equal(installed.result.exit_code, 0);
   assert.match(installed.msiexec, /^\/i ".*signed\.msi" \/qn \/norestart$/);
+});
+
+test("the native tray beside the single executable, and only there", async () => {
+  const { nativeTrayPath } = await import("../dist/index.js");
+  const exe = "D:\\Programs\\Scopebond\\scopebond-agent.exe";
+  assert.equal(nativeTrayPath(exe, true, () => true), "D:\\Programs\\Scopebond\\scopebond-tray.exe");
+  assert.equal(nativeTrayPath(exe, true, () => false), null, "an install without the tray");
+  assert.equal(nativeTrayPath("D:\\node\\node.exe", false, () => true), null, "npm installs keep the PowerShell tray");
+});
+
+test("after an update the helper stops the tray first, installs, then starts the tray again", async () => {
+  const { installAfterExitScript } = await import("../dist/index.js");
+  const script = installAfterExitScript();
+  const at = (s) => script.indexOf(s);
+  assert.ok(at("Stop-Process") >= 0 && at("Stop-Process") < at("Wait-Process"), "the tray would otherwise start the old agent again");
+  assert.match(script, /Where-Object \{ \$_\.Path -eq \$env:SB_TRAY \}/, "only this install's tray");
+  assert.ok(at("Start-Process -FilePath $env:SB_MSIEXEC") >= 0, "it installs");
+  assert.ok(at("Start-Process -FilePath $env:SB_MSIEXEC") < at("Start-Process -FilePath $env:SB_TRAY"), "the new tray starts the new agent");
+  // The tray is started again also when nothing was installed (the check refused the installer): never left without one.
+  assert.ok(at("finally { if ($lock) { $lock.Dispose() } }") < at("Start-Process -FilePath $env:SB_TRAY"));
+  assert.match(script, /elseif \(\$env:SB_LAUNCHER\)/, "without the tray, the launcher as before");
+  assert.doesNotMatch(script, /scopebond-agent\.exe|Programs/, "paths reach it as environment variables only");
+});
+
+test("beside the native tray, autostart is the tray's Run value and the launcher's is retired", async () => {
+  const { enableAutostart, disableAutostart, autostartHealth, startNow, TRAY_RUN_VALUE } = await import("../dist/index.js");
+  const tray = "D:\\Programs\\Scopebond\\scopebond-tray.exe";
+  const fakeReg = (values) => {
+    const calls = [];
+    const reg = (args) => {
+      calls.push(args.join(" "));
+      const [verb, key, , name] = args;
+      const id = `${key.startsWith("HKLM") ? "HKLM" : "HKCU"}:${name}`;
+      if (verb === "query") return values.has(id);
+      if (verb === "delete") return values.delete(id);
+      if (verb === "add") { values.add(id); return true; }
+      return false;
+    };
+    return { reg, calls, values };
+  };
+  const home = mkdtempSync(join(tmpdir(), "sb-tray-autostart-"));
+  const user = fakeReg(new Set(["HKCU:ScopebondAgent"]));
+  assert.match(enableAutostart(home, "", "x", "win32", tray, user.reg), new RegExp(`added ${TRAY_RUN_VALUE}`));
+  assert.deepEqual([...user.values], [`HKCU:${TRAY_RUN_VALUE}`], "the launcher's ScopebondAgent value is gone");
+  assert.ok(user.calls.some((c) => c.includes(`/d "${tray}"`)), "the tray's path, quoted");
+  assert.equal(existsSync(join(home, "agent-launch.cmd")), false, "no launcher is written");
+  assert.equal(autostartHealth(home, "win32", tray, user.reg).ok, true);
+  assert.match(disableAutostart(home, "win32", tray, user.reg), new RegExp(`removed ${TRAY_RUN_VALUE}`));
+  assert.equal(autostartHealth(home, "win32", tray, user.reg).on, false);
+  // Installed for every user: the machine's value starts it, and this user's is never added.
+  const machine = fakeReg(new Set([`HKLM:${TRAY_RUN_VALUE}`]));
+  assert.match(enableAutostart(home, "", "x", "win32", tray, machine.reg), /every user/);
+  assert.ok(!machine.calls.some((c) => c.startsWith("add")));
+  assert.equal(autostartHealth(home, "win32", tray, machine.reg).on, true);
+  assert.match(disableAutostart(home, "win32", tray, machine.reg), /whoever installed it/);
+  assert.equal(startNow(home, "win32", 1, tray), false, "one way to start it: the tray");
 });
