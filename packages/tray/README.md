@@ -17,7 +17,9 @@ PowerShell tray.
   when the agent's model offers them), *Start with Windows*, *Notifications* ▸ *All* / *Problems only* / *Off*, *Help* ▸
   *Copy diagnostics* / *Open logs folder* / *About Scopebond*, and *Hide icon*. There is no *Quit* and no *Pause
   protection*: the hook decides every action of a coding agent whether or not the tray runs. *Hide icon* hides the icon
-  until the next sign-in, or until the tray is started again (the Start-menu entry opens the status panel).
+  until the next sign-in, or until the tray is started again (the Start-menu entry opens the status panel). *Start with
+  Windows* turns the installer's sign-in entry (the Run value `Scopebond`) on or off for this person, and the choice is
+  kept across upgrades; for an install for every user it is shown, not changed.
 - **Status panel** (left-click, or *Open status…*): about 360 × 420 next to the tray, created when it opens and destroyed
   when it closes (it closes when it loses focus and on Esc). The headline and state, the rows the agent reports (Rules,
   Delivery, Today, Version), the one fix as the main button, a hint when no button can fix it, the other actions, and the
@@ -88,5 +90,5 @@ changes.
 - [x] The package, the icon, the model-to-menu mapping and its tests, the CI job.
 - [x] The pipe client, the menu from the live model, the status panel.
 - [x] Supervision of the agent.
-- [ ] The installer ships the signed tray and starts it at sign-in; the updater restarts it.
+- [x] The installer ships the signed tray and starts it at sign-in; the updater restarts it.
 - [ ] Notifications.

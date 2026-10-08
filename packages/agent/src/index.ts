@@ -9,7 +9,7 @@ export type { AgentEndpoint } from "./ipc.js";
 export {
   launcherPath, windowsLauncher, posixLauncher, windowsRunCommand, macLaunchAgent, linuxUserUnit,
   enableAutostart, disableAutostart, autostartHealth, autostartPaths, startCommands, startNow, LABEL,
-  AGENT_LOG_ENV, LAUNCHER_MARK, launcherIsCurrent, refreshLauncher,
+  AGENT_LOG_ENV, LAUNCHER_MARK, launcherIsCurrent, refreshLauncher, retireLauncherRunValue, TRAY_RUN_VALUE,
 } from "./autostart.js";
 export {
   agentVersion, fetchClientVersion, compareVersions, commandHookVersion, maintainedHookCommand, maintainHookEntries, installAgent, ownNpm,
@@ -22,5 +22,5 @@ export { queueReason, flushReasons, pendingReasons, REASONS_FILE } from "./overr
 export type { SelfCheckItem } from "./selfcheck.js";
 export { setupPlan, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
 export type { SetupState, SetupStep, SetupOptions } from "./setup.js";
-export { installKind, updaterPublicKey, verifyManifest, fetchVerifiedInstaller, installerName, MANIFEST_DOMAIN, PUBLISHER } from "./native-update.js";
+export { installKind, updaterPublicKey, verifyManifest, fetchVerifiedInstaller, installerName, installAfterExitScript, nativeTrayPath, MANIFEST_DOMAIN, PUBLISHER } from "./native-update.js";
 export type { InstallKind, ReleaseManifest } from "./native-update.js";

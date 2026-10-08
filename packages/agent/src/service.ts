@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
-import { fetchVerifiedInstaller, installAfterExit, installKind } from "./native-update.js";
-import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, startCommands } from "./autostart.js";
+import { fetchVerifiedInstaller, installAfterExit, installKind, nativeTrayPath } from "./native-update.js";
+import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
@@ -211,6 +211,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const lock = acquireAgentLock(options.dir);
   if (!lock) throw new Error("a Scopebond Agent is already running for this computer");
   const interval = options.intervalMs ?? INTERVAL_MS;
+  const nativeTray = process.platform === "win32" ? nativeTrayPath() : null;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
   let failures = 0;
@@ -301,8 +302,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
           lastMaintenance = result;
           if (options.onUpdated) options.onUpdated(target.agent);
           else {
-            // The installer replaces this file, so it runs after this agent has exited, and starts the agent again.
-            installAfterExit(verified.path, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null);
+            // The installer replaces this file, so it runs after this agent has exited, and starts the tray (which starts the
+            // agent) or the agent again.
+            installAfterExit(verified.path, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null, nativeTray);
             setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
           }
           return result;
@@ -463,7 +465,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return answer;
     },
   });
-  const tray = (options.tray ?? true) && process.env.SCOPEBOND_AGENT_TRAY !== "off" ? startTray(options.dir) : null;
+  // Beside the native tray (the signed install), the tray is that program: it started this agent, or starts at sign-in.
+  const tray = (options.tray ?? true) && process.env.SCOPEBOND_AGENT_TRAY !== "off" && !nativeTray ? startTray(options.dir) : null;
+  if (nativeTray && retireLauncherRunValue()) log("removed the ScopebondAgent sign-in entry: the Scopebond tray starts the agent");
   const stop = async () => {
     stopped = true;
     try { tray?.kill(); } catch { /* already gone */ }

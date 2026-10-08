@@ -8,8 +8,8 @@
 
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, win32 } from "node:path";
 import { isSingleExecutable } from "@scopebond/hook";
 
 /** Where the signed releases are published. */
@@ -98,17 +98,33 @@ export async function fetchVerifiedInstaller(version: string, o: {
   return { ok: true, path, version };
 }
 
-/** Install it once this agent has exited, then start the agent again through autostart's launcher. A detached helper does it,
- *  because the installer replaces this very file. */
-export function installAfterExit(installer: string, pid: number, launcher: string | null): void {
-  const script = [
+/** The native Scopebond tray the installer puts beside the single executable (`scopebond-tray.exe`), when it is there. It
+ *  starts the agent at sign-in and keeps it running, so the agent leaves the tray to it. */
+export function nativeTrayPath(execPath = process.execPath, single = isSingleExecutable(), exists: (path: string) => boolean = existsSync): string | null {
+  if (!single) return null;
+  const tray = win32.join(win32.dirname(execPath), "scopebond-tray.exe");
+  return exists(tray) ? tray : null;
+}
+
+/** The helper's script: stop the native tray (it would start the agent again, and the installer replaces its file), wait
+ *  for this agent to exit, install, then start the tray again (it starts the agent), or else the agent through autostart's
+ *  launcher. The paths reach it as environment variables, never as code. */
+export function installAfterExitScript(): string {
+  return [
     "$ErrorActionPreference = 'SilentlyContinue'",
+    "if ($env:SB_TRAY) { Get-Process -Name scopebond-tray | Where-Object { $_.Path -eq $env:SB_TRAY } | Stop-Process -Force }",
     "Wait-Process -Id ([int]$env:SB_PID) -Timeout 60",
     "Start-Process -FilePath msiexec.exe -ArgumentList @('/i', ('\"' + $env:SB_MSI + '\"'), '/qn', '/norestart') -Wait",
-    "if ($env:SB_LAUNCHER) { Start-Process -FilePath cmd.exe -ArgumentList @('/d', '/s', '/c', ('\"\"' + $env:SB_LAUNCHER + '\"\"')) -WindowStyle Hidden }",
-  ].join("; ");
-  const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script], {
-    detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env, SB_PID: String(pid), SB_MSI: installer, SB_LAUNCHER: launcher ?? "" },
+    "if ($env:SB_TRAY) { Start-Process -FilePath $env:SB_TRAY } elseif ($env:SB_LAUNCHER) { Start-Process -FilePath cmd.exe -ArgumentList @('/d', '/s', '/c', ('\"\"' + $env:SB_LAUNCHER + '\"\"')) -WindowStyle Hidden }",
+  ].join("\n");
+}
+
+/** Install it once this agent has exited, then start the tray again (or the agent through autostart's launcher). A detached
+ *  helper does it, because the installer replaces this very file. */
+export function installAfterExit(installer: string, pid: number, launcher: string | null, tray: string | null = null): void {
+  const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", installAfterExitScript()], {
+    detached: true, stdio: "ignore", windowsHide: true,
+    env: { ...process.env, SB_PID: String(pid), SB_MSI: installer, SB_LAUNCHER: launcher ?? "", SB_TRAY: tray ?? "" },
   });
   child.on("error", () => { /* the next sign-in starts the agent */ });
   child.unref();

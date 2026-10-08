@@ -30,9 +30,11 @@ Windows).
 
 `.github/workflows/native-release.yml`, run by hand from `main`:
 
-1. **build** (windows-latest, no secrets): the executable and its CycloneDX SBOM (`sbom.mjs`, from the bundle's metafile).
+1. **build** (windows-latest, no secrets): the executable and its CycloneDX SBOM (`sbom.mjs`, from the bundle's metafile),
+   and the native tray (`packages/tray`, `cargo build --release --locked` from its committed `Cargo.lock`).
 2. **sign**, in the protected `signing` environment (an owner approves each run; protected branches only): Azure
-   Artifact Signing through GitHub's OIDC token (no stored secret), every signature timestamped; then `signtool verify
+   Artifact Signing through GitHub's OIDC token (no stored secret), every signature timestamped, for the executable and
+   the tray, then the installer built around both and signed too; then `signtool verify
    /pa`, a check that the publisher is Avouro LLC and that a timestamp is present, `SHA256SUMS`, and a build provenance
    attestation (`gh attestation verify <file> --repo avouro-com/scopebond`).
 3. **sign-macos**: the Apple build (Developer ID, hardened runtime, notarized), in its own `signing-apple` environment;
@@ -59,14 +61,31 @@ stays on 5). The installer:
 Signing in, the hook entries and autostart come from `scopebond-agent.exe setup <workspace-url>` after installing, as with
 npm. CI installs and removes it, per user and for every user (`test/msi.test.mjs`, only with `SCOPEBOND_MSI=1`).
 
+**With the native tray** (`node build-msi.mjs <agent.exe> <tray.exe>`, or `SCOPEBOND_TRAY_EXE`; the release always builds
+it this way), the installer also:
+
+- installs `scopebond-tray.exe` (`packages/tray`) beside the agent;
+- adds a Run value `Scopebond` that starts the tray at sign-in (for this user, or for every user with `ALLUSERS=1`); the
+  tray starts the agent and keeps it running, so `autostart on` keeps that value instead of the launcher's
+  `ScopebondAgent`;
+- starts the tray at the end of a per-user install or upgrade (an install for every user may run as the system account,
+  so there each person's sign-in starts it);
+- closes the tray before it replaces or removes files, without a reboot prompt;
+- points the Start-menu entry at the tray's status panel (`scopebond-tray.exe --status`), keeping its AppUserModelID.
+
+The `tray installer (windows)` job in `.github/workflows/tray.yml` installs it on a throwaway runner, checks that the tray
+starts the agent, ends the agent from outside and checks it is back within 30 seconds, checks a second tray gives way, and
+removes it: nothing left running, no files, no Run value, no Start-menu entry.
+
 ## Updates
 
 A per-user install updates itself when its workspace recommends a newer agent, with the release's installer, after three
 checks: the release manifest (`scopebond-agent-<version>.manifest.json`, each file's SHA-256 and size) is signed with the
 updater key, an Ed25519 key separate from the Authenticode certificate whose public half (`updater-public-key.txt`) is
 built into the program; the downloaded installer's digest and size are the manifest's; and its Authenticode signature is
-valid and names Avouro LLC. Then a detached helper waits for the agent to exit, installs it with `msiexec /qn` and starts
-the agent again through autostart's launcher. If any check fails, nothing is installed and the agent reports that the
+valid and names Avouro LLC. Then a detached helper stops the native tray (it would start the old agent again, and the
+installer replaces its file), waits for the agent to exit, installs it with `msiexec /qn` and starts the tray again, which
+starts the updated agent (without the tray: the agent again, through autostart's launcher). If any check fails, nothing is installed and the agent reports that the
 update could not be verified. An install for every user (Program Files) never updates itself.
 
 The updater key is made once by the owner: `node packages/native/updater-key.mjs` writes the public half here and the
@@ -77,7 +96,7 @@ update themselves to that release.
 ## Release checklist (owner)
 
 1. Actions → *Native release (signed)* → Run workflow on `main`; approve the `signing` environment when asked.
-2. Check the draft release: the exe and the msi, `SHA256SUMS`, the signed manifest and its `.sig`, the SBOM, the three
+2. Check the draft release: the agent exe, the tray exe and the msi, `SHA256SUMS`, the signed manifest and its `.sig`, the SBOM, the three
    winget manifests; `gh attestation verify scopebond-agent-<version>-x64.msi --repo avouro-com/scopebond`.
 3. Submit the exe and the msi to Microsoft's file submission portal (Security Intelligence, as a software developer) so
    Defender and SmartScreen learn them before anyone downloads them; wait for "no malware detected".

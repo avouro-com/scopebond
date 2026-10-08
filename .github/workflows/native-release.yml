@@ -1,7 +1,7 @@
 name: Native release (signed)
 
-# The signed single executable (packages/native), built from this public source:
-#   build      the executable from main, with no secrets (any fork can run this job and gets an unsigned file)
+# The signed single executable (packages/native) and the native tray (packages/tray), built from this public source:
+#   build      the executable and the tray from main, with no secrets (any fork can run this job and gets unsigned files)
 #   sign       Azure Artifact Signing through GitHub's OIDC token, only in the protected `signing` environment
 #              (approval required; protected branches only), then verified, summed, described (SBOM) and attested
 #   sign-macos the Apple build (Developer ID + notarization), designed in and off until its secrets exist
@@ -50,6 +50,21 @@ jobs:
           $exe = "packages/native/build/scopebond-agent.exe"
           & $exe hook help | Select-Object -First 1
           if ($LASTEXITCODE -ne 0) { throw "the executable did not run" }
+      # The native tray (Rust, Tauri 2), from its committed Cargo.lock, with no cache: a release build starts from the
+      # lockfile alone.
+      - name: Rust toolchain (packages/tray/rust-toolchain.toml)
+        working-directory: packages/tray
+        shell: pwsh
+        run: |
+          rustup toolchain install
+          if ($LASTEXITCODE -ne 0) { rustup show }
+          rustc --version
+      - name: Build the tray
+        working-directory: packages/tray
+        run: cargo build --release --locked
+      - name: Put the tray beside the executable
+        shell: pwsh
+        run: Copy-Item packages/tray/target/release/scopebond-tray.exe packages/native/build/scopebond-tray.exe
       - name: SBOM
         run: node packages/native/sbom.mjs
       - id: version
@@ -63,6 +78,7 @@ jobs:
           name: unsigned-windows
           path: |
             packages/native/build/scopebond-agent.exe
+            packages/native/build/scopebond-tray.exe
             packages/native/build/scopebond-agent.cdx.json
             packages/native/build/sea-main.cjs.map
           if-no-files-found: error
@@ -96,7 +112,7 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Sign the executable with Artifact Signing (timestamped)
+      - name: Sign the executable and the tray with Artifact Signing (timestamped)
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
@@ -119,11 +135,11 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
-      # The installer is built around the signed executable, then signed itself.
+      # The installer is built around the signed executable and the signed tray, then signed itself.
       - name: Build the installer (WiX 5)
         shell: pwsh
         run: |
-          node packages/native/build-msi.mjs out/scopebond-agent.exe
+          node packages/native/build-msi.mjs out/scopebond-agent.exe out/scopebond-tray.exe
           New-Item -ItemType Directory -Force msi | Out-Null
           Move-Item packages/native/build/scopebond-agent-*-x64.msi msi/
       - name: Sign the installer with Artifact Signing (timestamped)
@@ -149,13 +165,14 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
-      - name: Put the installer with the other files, and name the executable by its version
+      - name: Put the installer with the other files, and name the executables by the release's version
         shell: pwsh
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           Move-Item msi/*.msi out/
           Move-Item out/scopebond-agent.exe "out/scopebond-agent-$env:VERSION-x64.exe"
+          Move-Item out/scopebond-tray.exe "out/scopebond-tray-$env:VERSION-x64.exe"
       - name: Verify every signature, its timestamp and the publisher
         shell: pwsh
         run: |
@@ -209,6 +226,7 @@ jobs:
         with:
           subject-path: |
             out/scopebond-agent-*-x64.exe
+            out/scopebond-tray-*-x64.exe
             out/scopebond-agent-*-x64.msi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -305,5 +323,5 @@ jobs:
           tag="agent-native-v${VERSION}"
           gh release create "$tag" --repo "$REPO" --target "$SHA" --draft --prerelease \
             --title "Scopebond Agent ${VERSION} for Windows (signed)" \
-            --notes "The Scopebond Agent and hook as one signed file, and its signed installer (per user by default; ALLUSERS=1 for every user). Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})." \
+            --notes "The Scopebond Agent and hook as one signed file, the signed Scopebond tray, and the signed installer with both (per user by default; ALLUSERS=1 for every user; the tray starts at sign-in and keeps the agent running). Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})." \
             out/*

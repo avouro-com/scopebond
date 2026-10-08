@@ -120,6 +120,27 @@ fn autostart_state() -> Autostart {
     }
 }
 
+/// The person's own choice about starting with Windows, kept in the Scopebond folder: an upgrade of the installer puts
+/// the Run value back, and the tray takes it out again when the person had turned it off.
+const TRAY_SETTINGS: &str = "tray-settings.json";
+
+fn start_with_windows_choice(home: &Path) -> Option<bool> {
+    let text = std::fs::read(home.join(TRAY_SETTINGS)).ok()?;
+    serde_json::from_slice::<Value>(&text).ok()?.get("start_with_windows")?.as_bool()
+}
+
+fn set_start_with_windows(home: &Path, on: bool) -> bool {
+    let done = if on {
+        std::env::current_exe()
+            .map(|exe| win::set_user_string(win::RUN_KEY, "Scopebond", &format!("\"{}\"", exe.display())))
+            .unwrap_or(false)
+    } else {
+        win::delete_user_value(win::RUN_KEY, "Scopebond")
+    };
+    let _ = std::fs::write(home.join(TRAY_SETTINGS), format!("{}\n", json!({ "start_with_windows": on })));
+    done
+}
+
 fn menu_item(app: &AppHandle, entry: &Entry) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
     Ok(match entry {
         Entry::Item { id, label, enabled } => Box::new(MenuItem::with_id(app, id.clone(), label, *enabled, None::<&str>)?),
@@ -416,7 +437,19 @@ fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
             log::line("asked to start the agent");
             shared.start_requested.store(true, Ordering::SeqCst);
         }
-        Command::ToggleAutostart => {}
+        Command::ToggleAutostart => {
+            let on = match autostart_state() {
+                Autostart::Managed => return,
+                Autostart::On => false,
+                Autostart::Off => true,
+            };
+            let done = set_start_with_windows(shared.client.home(), on);
+            log::line(&format!("start with Windows: {} ({})", if on { "on" } else { "off" }, if done { "saved" } else { "not saved" }));
+            if !done {
+                shared.set_note("Start with Windows could not be changed".into());
+            }
+            shared.wake();
+        }
         Command::Notifications(n) => {
             thread::spawn(move || {
                 if let Err(e) = s.client.call("POST", "/settings", Some(&json!({ "notifications": n.as_str() })), Duration::from_secs(10)) {
@@ -601,6 +634,10 @@ fn main() {
     let home = scopebond_home().unwrap_or_else(std::env::temp_dir);
     log::init(&home);
     log::line(&format!("Scopebond tray {} starting for {}", env!("CARGO_PKG_VERSION"), home.display()));
+    if start_with_windows_choice(&home) == Some(false) && win::read_string(false, win::RUN_KEY, "Scopebond").is_some() {
+        win::delete_user_value(win::RUN_KEY, "Scopebond");
+        log::line("start with Windows stays off, as chosen");
+    }
     let shared = Arc::new(Shared::new(AgentClient::new(home)));
     let open_at_start = std::env::args().any(|a| a == "--status");
 

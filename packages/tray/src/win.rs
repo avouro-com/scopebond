@@ -7,7 +7,9 @@ use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{CloseHandle, GlobalFree, STILL_ACTIVE};
 use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+use windows_sys::Win32::System::Registry::{
+    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_SZ, RRF_RT_REG_SZ,
+};
 use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST};
 
@@ -78,6 +80,22 @@ pub fn read_string(machine: bool, key: &str, name: &str) -> Option<String> {
         let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
         Some(String::from_utf16_lossy(&buf[..len]))
     }
+}
+
+/// Set a text value for this user. Whether it worked.
+pub fn set_user_string(key: &str, name: &str, value: &str) -> bool {
+    let (key, name, value) = (wide(key), wide(name), wide(value));
+    // SAFETY: zero-terminated strings; the size includes the terminating zero, as REG_SZ requires.
+    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), REG_SZ, value.as_ptr().cast(), (value.len() * 2) as u32) == 0 }
+}
+
+/// Remove a value of this user's. Whether it is gone (also when it was not there).
+pub fn delete_user_value(key: &str, name: &str) -> bool {
+    const ERROR_FILE_NOT_FOUND: u32 = 2;
+    let (key, name) = (wide(key), wide(name));
+    // SAFETY: zero-terminated strings.
+    let result = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr()) };
+    result == 0 || result == ERROR_FILE_NOT_FOUND
 }
 
 /// Whether the process with this id is still running.
