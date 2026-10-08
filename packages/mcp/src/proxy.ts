@@ -83,11 +83,30 @@ export interface McpProxyConfig {
 }
 
 export interface McpProxy {
-  handle(message: JsonRpcMessage): Promise<JsonRpcMessage>;
+  /** Decide and forward one JSON-RPC message. Anything that is not a single JSON-RPC object
+   *  (a batch array, null, a primitive) or whose `method` is not a string is answered with a
+   *  -32600 Invalid Request error and never forwarded. */
+  handle(message: JsonRpcMessage | unknown): Promise<JsonRpcMessage>;
 }
 
-/** Build a proxy handler. Every `tools/call` is decided against policy; anything
- * else is passed through to the upstream unchanged. */
+/** A JSON-RPC -32600 reply for a message the proxy will not forward. */
+function invalidRequest(id: unknown, why: string): JsonRpcMessage {
+  const replyId = typeof id === "string" || typeof id === "number" ? id : null;
+  return { jsonrpc: "2.0", id: replyId, error: { code: -32600, message: `Invalid Request: ${why}` } };
+}
+
+/** Why a message is not a single JSON-RPC object the proxy can decide on, or undefined. Batches
+ *  are rejected rather than split: a call inside one would otherwise skip the policy check. */
+export function invalidMessageReason(message: unknown): string | undefined {
+  if (Array.isArray(message)) return "JSON-RPC batches are not supported; send each message on its own";
+  if (message === null || typeof message !== "object") return "a JSON-RPC message must be an object";
+  if ("method" in message && typeof (message as { method?: unknown }).method !== "string") return "method must be a string";
+  return undefined;
+}
+
+/** Build a proxy handler. A batch or malformed message is rejected (-32600). Every
+ * `tools/call` is decided against policy; any other single message
+ * is passed through to the upstream unchanged. */
 export function createMcpProxy(config: McpProxyConfig): McpProxy {
   const attester: Attester = attesterFromPrivateKeyPem(config.attesterKeyPem);
   // Session history of authorized calls. A forwarded call actually runs, so it
@@ -98,15 +117,25 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
 
   // The live tool list is read from the upstream itself, and again after the recheck interval,
   // so a manifest pinned to one revision is not trusted for a server that has since changed.
+  // A full tool list that differs from the pin is remembered until restart: an upstream that has
+  // ever shown a different list cannot become verified again by answering a later read with the
+  // pinned one. The client's own listing is hashed across every page it fetches, and the proxy's
+  // probes carry random ids, so an upstream cannot tell them apart from client requests by id.
   let verifiedAt = -Infinity;
   let verified = false;
-  let liveHash: string | undefined;
-  let probe = 0;
+  let mismatchSeen = false;
+  const learn = (hash: string): void => {
+    if (hash !== typed?.manifest?.hash) mismatchSeen = true;
+    verified = !mismatchSeen;
+    verifiedAt = nowMs();
+  };
+  // The client's paginated listing in progress: the tools seen so far and the cursor it must ask for next.
+  let clientListing: { tools: unknown[]; next: string; pages: number } | undefined;
   const readToolList = async (): Promise<string | undefined> => {
     const tools: unknown[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 20; page++) {
-      const response = await config.upstream.call({ jsonrpc: "2.0", id: `scopebond-tools-${++probe}`, method: "tools/list", ...(cursor ? { params: { cursor } } : {}) });
+      const response = await config.upstream.call({ jsonrpc: "2.0", id: globalThis.crypto.randomUUID(), method: "tools/list", ...(cursor ? { params: { cursor } } : {}) });
       const result = response?.result as { tools?: unknown; nextCursor?: unknown } | undefined;
       if (!result || !Array.isArray(result.tools)) return undefined;
       tools.push(...result.tools);
@@ -117,28 +146,43 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
   };
   const manifestVerified = async (): Promise<boolean> => {
     if (!typed?.manifest) return false;
+    if (mismatchSeen) return false;
+    // A client listing that is still incomplete has shown pages nobody has checked yet.
+    if (clientListing) return false;
     const recheck = typed.manifestRecheckMs ?? 60_000;
     if (nowMs() - verifiedAt < recheck) return verified;
-    try { liveHash = await readToolList(); } catch { liveHash = undefined; }
-    verified = liveHash !== undefined && liveHash === typed.manifest.hash;
-    verifiedAt = nowMs();
+    let hash: string | undefined;
+    try { hash = await readToolList(); } catch { hash = undefined; }
+    if (hash === undefined) { verified = false; verifiedAt = nowMs(); }
+    else learn(hash);
     return verified;
   };
 
   return {
-    async handle(message: JsonRpcMessage): Promise<JsonRpcMessage> {
-      if (message?.method === "tools/list" && typed?.manifest) {
-        // A client listing tools shows the live revision: learn it from the answer it gets.
+    async handle(raw: JsonRpcMessage | unknown): Promise<JsonRpcMessage> {
+      const invalid = invalidMessageReason(raw);
+      if (invalid) return invalidRequest((raw as { id?: unknown } | null)?.id, invalid);
+      const message = raw as JsonRpcMessage;
+      if (message.method === "tools/list" && typed?.manifest) {
+        // A client listing tools shows the live revision: learn it from every page it gets.
         const response = await config.upstream.call(message);
         const result = response?.result as { tools?: unknown; nextCursor?: unknown } | undefined;
-        if (!message.params?.cursor && result && Array.isArray(result.tools) && !result.nextCursor) {
-          liveHash = manifestHash(result.tools);
-          verified = liveHash === typed.manifest.hash;
-          verifiedAt = nowMs();
+        const cursor = message.params?.cursor;
+        const continues = typeof cursor === "string" && cursor !== "" && clientListing?.next === cursor;
+        if (!result || !Array.isArray(result.tools)) { if (!cursor) clientListing = undefined; return response; }
+        if (cursor && !continues) return response; // a page of a listing the proxy did not see start: no full list to hash
+        const tools = [...(continues ? clientListing!.tools : []), ...result.tools];
+        const pages = (continues ? clientListing!.pages : 0) + 1;
+        if (typeof result.nextCursor === "string" && result.nextCursor !== "" && pages < 100) {
+          clientListing = { tools, next: result.nextCursor, pages };
+        } else {
+          clientListing = undefined;
+          if (typeof result.nextCursor === "string" && result.nextCursor !== "") { verified = false; verifiedAt = nowMs(); }
+          else learn(manifestHash(tools));
         }
         return response;
       }
-      if (message?.method !== "tools/call") return config.upstream.call(message);
+      if (message.method !== "tools/call") return config.upstream.call(message);
 
       // Everything below is decided on, digested and forwarded from one private copy of the
       // request, so what the binding covers is exactly what reaches the upstream.

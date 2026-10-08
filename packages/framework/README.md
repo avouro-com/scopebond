@@ -33,6 +33,8 @@ const result = await generateText({
 ```
 
 A denied call returns a synthetic denial result to the model instead of executing.
+`wrapVercelTools` throws on a tool with no `execute` (a client-side tool), rather
+than pass it through unchecked: keep such tools out of the record you wrap.
 
 ## LangGraph / LangChain
 
@@ -43,6 +45,9 @@ const guard = createToolGuard({ policy, agentKeyPem });
 const guardedSearch = wrapLangGraphTool(searchTool, guard);
 // use guardedSearch anywhere the original tool went (ToolNode, bindTools, …)
 ```
+
+Every way the tool can run is guarded: `invoke`, `call`, `_call`, `func`, `stream`
+and `batch`.
 
 ## Other frameworks
 
