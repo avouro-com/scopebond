@@ -4,6 +4,7 @@ export { startService, repairHookEntries, spawnReplacement, handoverPlan, takeOv
 export type { Handover } from "./service.js";
 export { writeOutputTo, FALLBACK_LOG } from "./log-file.js";
 export type { Service, ServiceOptions, MaintenanceResult } from "./service.js";
+export { appsEntryValues, uninstallScript, writeAppsEntry, removeAppsEntry, npmBeside, UNINSTALL_KEY, UNINSTALL_SCRIPT } from "./apps-entry.js";
 export { startControl, callAgent, readEndpoint, localSocketPath, AGENT_FILE, TOKEN_HEADER } from "./ipc.js";
 export type { AgentEndpoint } from "./ipc.js";
 export {
