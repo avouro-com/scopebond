@@ -50,10 +50,17 @@ const trimDotsSpaces = (seg: string): string => {
   while (end > 0 && (seg[end - 1] === "." || seg[end - 1] === " ")) end--;
   return end === 0 ? seg : seg.slice(0, end);
 };
+// An NTFS stream or index suffix on any part of a path names the same file or folder: `.scopebond::$INDEX_ALLOCATION`
+// is the folder `.scopebond`, `policy.json:x` and `policy.json::$DATA` are streams of `policy.json`. A drive (`C:`) stays.
+const NTFS_SUFFIX = /^([^:]+):(?:[^:]*)(?::\$[A-Za-z_]+)?$/;
+const stripStream = (seg: string, index: number): string => {
+  if (index === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
+  const match = NTFS_SUFFIX.exec(seg);
+  return match ? match[1] : seg;
+};
 const normPath = (s: string): string =>
   s.replace(/\\/g, "/")
-    .replace(/::?\$data$/i, "")
-    .split("/").map((seg) => (seg === "." || seg === ".." ? seg : trimDotsSpaces(seg))).join("/")
+    .split("/").map((seg, i) => (seg === "." || seg === ".." ? seg : trimDotsSpaces(stripStream(seg, i)))).join("/")
     .replace(/\/(?:\.\/)+/g, "/").replace(/\/{2,}/g, "/");
 
 const rel = (value: unknown, cwd?: string): string => {
@@ -216,7 +223,12 @@ const EDITORS = new Set(["vi", "vim", "nvim", "ex", "ed", "nano", "pico", "emacs
 const COPIERS = new Set(["cp", "mv", "rsync", "scp", "install", "ln", "copy-item", "cpi", "copy", "move-item", "mi", "move", "robocopy", "xcopy", "rename-item", "ren"]);
 const MOVERS = new Set(["mv", "move-item", "mi", "move", "rename-item", "ren"]);
 // Programs whose operands are files they WRITE (or whose metadata they change).
-const WRITERS = new Set(["tee", "touch", "truncate", "set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "clear-content", "clc", "chmod", "chown", "chattr", "attrib", "icacls", "set-acl", "shred", "unlink", "sponge"]);
+const WRITERS = new Set(["tee", "touch", "truncate", "set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "clear-content", "clc", "chmod", "chown", "chattr", "attrib", "icacls", "set-acl", "shred", "unlink", "sponge", "tee-object", "expand-archive"]);
+// Deleting changes a file as surely as writing it. A delete of one of the always-protected places (Scopebond's own folder,
+// the coding agents' hook settings, git hooks) is recorded as a write of that path, so the always-on floor stops the coding
+// agent removing Scopebond's files and their evidence. Any other delete stays a plain shell.exec, as before.
+const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri"]);
+const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks)(?:$|[\\/:])/i;
 // Programs that send what they are given elsewhere (network, clipboard, mail): an
 // operand naming a secret location is a read of it.
 const UPLOADERS = new Set([
@@ -259,6 +271,8 @@ const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+
 // file_get_contents) and PowerShell (Get-/Set-Content, Out-File, Invoke-*).
 const FILE_API = /\b(?:open|fopen|readlink|read_file|readfile|read_to_string|readfilesync|writefile|writefilesync|appendfile|appendfilesync|createreadstream|createwritestream|openfile|opensync|copyfile|copyfilesync|rename|renamesync|unlink|unlinksync|popen|spawn|spawnsync|exec|execsync|execfile|execfilesync|system|shell_exec|proc_open|file_get_contents|file_put_contents|urlopen)\s*\(|\b(?:fs|io|os|subprocess|child_process|pathlib|shutil|File|Dir|IO|Pathname|Path|FileUtils)\s*\.\s*\w|\bimport\s+(?:os|subprocess|shutil|pathlib|io)\b|\brequire\s*\(\s*['"`](?:node:)?(?:fs|child_process)|\b(?:Get-Content|Set-Content|Out-File|Add-Content|Import-Csv|Invoke-\w+)\b/i;
 const CODE_SCAN_LIMIT = 20000;
+// .NET file and stream types as PowerShell names them: `[System.IO.File]::…`, `[IO.Directory]::…`, `New-Object IO.StreamWriter`.
+const DOTNET_FILE_API = /\[\s*(?:System\.)?IO\.(?:File|Directory|FileInfo|DirectoryInfo|FileStream|StreamWriter|StreamReader|Path)\s*\]\s*::|New-Object\s+(?:-TypeName\s+)?(?:System\.)?IO\.(?:FileInfo|DirectoryInfo|FileStream|StreamWriter|StreamReader)\b/i;
 
 /** Option arities of the content readers, so an option's value (`grep -C 3`, `rg -g
  *  '!*.key'`, `head -n 1`) is never taken for a file operand. `short`: letters that
@@ -450,7 +464,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       const value = args[i + 1];
       if (value !== undefined && !value.startsWith("-")) {
         if (COPIERS.has(prog) && t === "-t") { write(value); i++; continue; } // cp -t DIR
-        if (WRITERS.has(prog) && /^-(?:path|literalpath|filepath)$/.test(lower)) { write(value); i++; continue; } // Set-Content -Path f
+        if (WRITERS.has(prog) && /^-(?:path|literalpath|filepath|destinationpath)$/.test(lower)) { write(value); i++; continue; } // Set-Content -Path f
         if (WRITE_FLAGS.has(lower)) { write(value); i++; continue; }
         if (flagFiles && READ_FLAGS.has(lower)) { read(value.replace(/^@/, "")); i++; continue; }
         if (value.startsWith("@")) { read(value.slice(1)); i++; continue; }
@@ -497,6 +511,8 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     const starts: string[] = [];
     for (const w of args) { if (/^[-(!]/.test(w) || w === "\\(") break; starts.push(w); }
     if (args.some((w) => /^-(?:exec|execdir|ok|okdir)$/.test(w))) starts.forEach(read);
+    // `find DIR -delete` removes what it finds under DIR: a write of DIR.
+    if (args.includes("-delete")) (starts.length ? starts : ["."]).forEach(write);
     args.forEach((w, k) => { if (/^-(?:fprint0?|fprintf|fls)$/.test(w)) write(args[k + 1]); });
   } else if ((prog === "docker" || prog === "podman" || prog === "kubectl") && operands[0] === "cp") {
     const local = (p: string | undefined) => p !== undefined && (!/^[^/\\]+:/.test(p) || /^[A-Za-z]:[\\/]/.test(p));
@@ -536,6 +552,9 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     sources.forEach(read);
     if (MOVERS.has(prog)) sources.forEach(write);
     if (!hasTarget) write(operands[operands.length - 1]);
+  } else if (DELETERS.has(prog)) {
+    operands.filter((o) => ALWAYS_PROTECTED.test(o)).forEach(write);
+    for (let k = 0; k < args.length - 1; k++) if (/^-(?:path|literalpath)$/i.test(args[k]) && ALWAYS_PROTECTED.test(args[k + 1])) write(args[k + 1]);
   } else if (WRITERS.has(prog)) {
     // A permission/owner spec is not a path: `chmod +x f`, `chmod 0755 f`,
     // `chattr +i f`, `chown root:wheel f`, `attrib +r f` write f, not "+x".
@@ -601,7 +620,11 @@ const isHookCli = (w: string): boolean =>
 const isAgentCli = (w: string): boolean =>
   /^scopebond-agent(?:\.js)?$/.test(canonProgram(w)) || /^@scopebond\/agent(?:@[^/\s]*)?$/i.test(w) || /@scopebond[\\/]agent[\\/]dist[\\/]cli\.js$/i.test(w);
 const isScopebondPackage = (w: string): boolean => /^@scopebond\/(?:hook|agent)(?:@[^/\s]*)?$/i.test(w);
-const mentionsAgent = (w: string): boolean => /scopebond-agent|@scopebond[\\/]agent/i.test(w);
+const mentionsAgent = (w: string): boolean => /scopebond-agent|scopebond-tray|@scopebond[\\/]agent/i.test(w);
+// Agent commands that switch Scopebond off or point this computer elsewhere (the hook's own `uninstall` and `login` likewise).
+const AGENT_SELF_SUBCOMMANDS = new Set(["uninstall", "setup"]);
+// PowerShell's registry writers, for a Run value named for Scopebond.
+const REGISTRY_WRITERS = new Set(["remove-itemproperty", "rp", "set-itemproperty", "sp", "new-itemproperty"]);
 const KILLERS = new Set(["kill", "pkill", "killall", "taskkill", "tskill", "stop-process", "spps", "wmic"]);
 const UNINSTALL: Record<string, Set<string>> = {
   npm: new Set(["uninstall", "unlink", "remove", "rm", "r", "un"]),
@@ -628,11 +651,26 @@ function selfDisable(sc: SimpleCommand): boolean {
     if (isHookCli(all[k]) && rest[0]?.toLowerCase() === "rules" && rest[1] && !RULES_READ_ONLY.has(rest[1].toLowerCase())) return true;
     if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "autostart" && rest[1]?.toLowerCase() !== "on") return true;
     if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "stop") return true;
+    // `uninstall` removes Scopebond (with `--purge`, its keys and records too); `setup` signs this computer in to a workspace.
+    if (isAgentCli(all[k]) && rest[0] && AGENT_SELF_SUBCOMMANDS.has(rest[0].toLowerCase())) return true;
+    // The signed executable is also the hook: `scopebond-agent.exe hook uninstall` is the hook's own command.
+    if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "hook") {
+      const sub = rest[1]?.toLowerCase();
+      if (sub && SELF_SUBCOMMANDS.has(sub)) return true;
+      if (sub === "rules" && rest[2] && !RULES_READ_ONLY.has(rest[2].toLowerCase())) return true;
+    }
   }
   const prog = canonProgram(sc.program);
-  // Stopping the running agent by name (`pkill -f scopebond-agent`, a `wmic … terminate`
-  // on its command line). Its pid is in the home's agent.json, which is already unreadable.
+  // Stopping the running agent or its tray by name (`pkill -f scopebond-agent`, `taskkill /IM scopebond-tray.exe`, a
+  // `wmic … terminate` on its command line). Its pid is in the home's agent.json, which is already unreadable.
   if (KILLERS.has(prog) && sc.argv.some(mentionsAgent) && (prog !== "wmic" || sc.argv.some((a) => /^(?:delete|terminate)$/i.test(a)))) return true;
+  // Removing the signed install (`msiexec /x …scopebond…msi`, `winget uninstall Avouro.Scopebond`) or running the uninstall
+  // that Windows Settings -> Apps runs for an npm install (`uninstall-agent.ps1`).
+  if (prog === "msiexec" && sc.argv.some((a) => /^[-/](?:x|uninstall)$/i.test(a)) && sc.argv.some((a) => /scopebond/i.test(a))) return true;
+  if (prog === "winget" && sc.argv.some((a) => /^(?:uninstall|remove|rm)$/i.test(a)) && sc.argv.some((a) => /scopebond/i.test(a))) return true;
+  if (all.some((a) => /(?:^|[\\/])uninstall-agent\.ps1$/i.test(a))) return true;
+  // Turning off its start with Windows by hand: deleting or changing a Run value named for Scopebond.
+  if (((prog === "reg" && /^(?:delete|add|import)$/i.test(sc.argv[0] ?? "")) || REGISTRY_WRITERS.has(prog)) && sc.argv.some((a) => /scopebond/i.test(a))) return true;
   return uninstallsScopebond(prog, sc.argv);
 }
 
@@ -674,6 +712,15 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
   const { ops: files, unknownTarget } = fileOpsFromShell(sc, dir, cwd);
   // The hook disabling itself is a write to its own policy, which the starter protects.
   if (selfDisable(sc)) files.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+  // PowerShell reaches files through .NET as well as cmdlets (`[IO.File]::WriteAllText('.scopebond\policy.json', …)`,
+  // `New-Object IO.StreamWriter …`). Such a call does not read as a program and its arguments, so the command text is
+  // scanned like inline code: a protected path it names is recorded as a read and a write.
+  if (DOTNET_FILE_API.test(sc.raw)) {
+    const text = sc.raw.slice(0, CODE_SCAN_LIMIT);
+    for (const m of new Set([...(text.match(SCOPEBOND_IN_TEXT) ?? []), ...(text.match(SENSITIVE_IN_CODE) ?? [])])) {
+      files.push(...fileIntent("file.read", m, dir, cwd), ...fileIntent("file.write", m, dir, cwd));
+    }
+  }
   // A bare redirection (`> file`) runs no program: only its file effect is recorded.
   if (!sc.program) return files;
   const exec: Mapped = {
@@ -821,6 +868,15 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
     return pathIntents("file.write", rel(ti.notebook_path ?? ti.file_path, cwd), name);
   if (name === "Read")
     return pathIntents("file.read", rel(ti.file_path, cwd), name);
+  // Grep prints matching lines (with `output_mode: "content"`), so it reads what it searches: the path it names (the
+  // working folder when none), and a folder its file filter names. Searching Scopebond's own folder is then refused
+  // like reading it.
+  if (name === "Grep") {
+    const reads = pathIntents("file.read", rel(ti.path ?? ".", cwd), name);
+    const glob = typeof ti.glob === "string" ? ti.glob : "";
+    if (/\.scopebond/i.test(glob)) reads.push(...pathIntents("file.read", rel(glob.replace(/[*?[{].*$/, "") || glob, cwd), name));
+    return reads;
+  }
   if (name === "WebFetch") {
     const { host, path } = splitUrl(String(ti.url ?? ""));
     return one({ action_type: "net.fetch", params: { host, path, method: "GET" } }, true, name);
