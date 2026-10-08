@@ -1,5 +1,28 @@
 # @scopebond/verify
 
+## 0.6.0
+
+### Minor Changes
+
+- c877e45: Summary records. A signed `scopebond:summary` document (evidence class `summary`) stands in for many routine receipts when
+  a computer sends its evidence: their number, an RFC 9162 root over the receipts it covers, counts by action type, result,
+  program and working folder, and the actions repeated in the window. Every action keeps its own signed receipt; a denied,
+  overridden, approved or timed-out action is never covered.
+
+  - `@scopebond/policy-schema`: `summary.schema.json`, `summarySchema`, `SUMMARY_TYPE`, `SUMMARY_DOMAIN`, `SUMMARY_RESULTS`,
+    `SUMMARY_LIMITS`.
+  - `@scopebond/verify/summary`: `validateSummary`, `verifySummarySignature` (domain-separated, so a summary never passes as
+    a receipt), `verifySummaryCoverage` (count, root, window, routine only, totals), `summaryRoot`, `summarySigningInput`.
+  - `@scopebond/gateway`: `buildSummary` (signs with the receipts' key; at most 500 count lines, the rest folded by action
+    type so the counts always add up), `isNotable` (the default test for what is always sent in full) and `repeatKey`.
+
+### Patch Changes
+
+- Updated dependencies [cb4d4e0]
+- Updated dependencies [e0f2de4]
+- Updated dependencies [c877e45]
+  - @scopebond/policy-schema@0.7.0
+
 ## 0.5.0
 
 ### Minor Changes

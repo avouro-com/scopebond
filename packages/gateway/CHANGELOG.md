@@ -1,5 +1,88 @@
 # @scopebond/gateway
 
+## 0.17.0
+
+### Minor Changes
+
+- cb4d4e0: People may allow blocked actions for a while, or ask an admin. In the Scopebond window a person may choose **Allow once**,
+  **Allow for 15 min**, **Always allow this here…** or **Ask an admin**, as the workspace allows. "For 15 min" and "always"
+  leave a standing _allowance_ for the same action (the same type and parameters, whatever tool call it comes from): it is
+  bound to one rule, expires (30 days by default), and never applies to Scopebond's own protection. A new rule mode, _Block,
+  person may ask_, offers only **Ask an admin**: the action stays blocked and the request goes to the workspace, which answers
+  with an allowance on the next rules check. The agent sends a person's allowances and requests to the workspace once, signed
+  by the computer's enrolled key.
+
+  The receipt of an action an allowance lets through carries `override.method: "allowance"`, with `repeat_of` naming the
+  allowance and `reason_digest` the reason it was made with (receipt schema and `validateOverrideRecord`). The hook reports
+  `x-scopebond-hook-capabilities: allowances` on its rules check, so a workspace sends the new mode and terms only to hooks that
+  understand them.
+
+  Also: the action key that recognises "the same action" leaves out the tool call's group size and position, so an earlier
+  override's repeat window applies to the same command in any call.
+
+  Review fixes before release: the floor check keeps a rule a person may only ask about blocking when another rule on the same
+  action lets a person allow; the agent re-reads its files before writing, so an allowance or request the hook wrote during a
+  send is kept; allowances and requests are signed over `scopebond:allowance/v1` and `scopebond:request/v1` domain lines;
+  "Allow for 15 min" is offered only where the workspace sends the allowance terms; an older agent's "Allow once" on an
+  ask-only rule becomes a request to an admin.
+
+- ce7728c: A small, steady local store. A hook call's memory and time no longer grow with the local history: the replay check is one
+  indexed lookup instead of reading every receipt (a call on a 767 MB log peaked at 69 MB, down from 233 MB, and 504 MB for a
+  three-part shell command; it took 0.26 s instead of 1–1.8 s). The SQLite store keeps each policy once and each receipt once,
+  and keeps nothing for an action that finished without being dispatched; a log from an earlier version is rewritten to this
+  layout and shrinks (767 MB became 93 MB with every receipt kept).
+
+  Receipts a workspace acknowledged are removed 30 days after it did (the workspace can set 7–365 days); a receipt it has not
+  acknowledged is never removed, an anchored log is never pruned, and a computer with no workspace keeps everything. The
+  Scopebond Agent runs this upkeep; a hook-only install runs a short pass once a day and leaves rewriting an older file to a
+  background process. `prune` reports the retention, and `prune --compact` runs the upkeep now.
+
+  Also: `sed -n a,bp f` reads `f`, not a file named after the script; `cat $f` no longer records a read of a file called `$f`;
+  Scopebond's own folder named in an interpreter's arguments (`node -e`, `python script.py ~/.scopebond/…`, `sqlite3`) is
+  treated as a read of it; `rules.json` and `cloud.json` are read once per call; the delivery queue keeps its totals.
+  `@scopebond/gateway` adds `ReceiptStore.authorizationUsed`, `SqliteReceiptStore.maintain`, `SqliteCloudOutbox.markAcknowledged`
+  and `pendingCount`, and re-exports `historyNeed`.
+
+- c877e45: Summary records. A signed `scopebond:summary` document (evidence class `summary`) stands in for many routine receipts when
+  a computer sends its evidence: their number, an RFC 9162 root over the receipts it covers, counts by action type, result,
+  program and working folder, and the actions repeated in the window. Every action keeps its own signed receipt; a denied,
+  overridden, approved or timed-out action is never covered.
+
+  - `@scopebond/policy-schema`: `summary.schema.json`, `summarySchema`, `SUMMARY_TYPE`, `SUMMARY_DOMAIN`, `SUMMARY_RESULTS`,
+    `SUMMARY_LIMITS`.
+  - `@scopebond/verify/summary`: `validateSummary`, `verifySummarySignature` (domain-separated, so a summary never passes as
+    a receipt), `verifySummaryCoverage` (count, root, window, routine only, totals), `summaryRoot`, `summarySigningInput`.
+  - `@scopebond/gateway`: `buildSummary` (signs with the receipts' key; at most 500 count lines, the rest folded by action
+    type so the counts always add up), `isNotable` (the default test for what is always sent in full) and `repeatKey`.
+
+- d4b34d8: Send summaries instead of every routine receipt when the workspace asks for it. The workspace names its evidence detail on
+  each rules check (`x-scopebond-evidence-detail: full | standard`); the hook keeps it beside the local retention. With
+  _standard_, the exporter sends notable receipts in full at once and the routine ones of each closed five-minute window as one
+  signed summary (`POST /v1/summaries`, with the queue's record numbers it stands for beside it, so the workspace's gap check
+  stays exact). Each window is summarised once per queue (a claim in the outbox), so a window's summary covers exactly its
+  routine receipts that were not sent in full; a record that turns up for a window already summarised is sent in full. A
+  workspace without summaries (404, 405) or that refuses one (400, 413, 422) is sent every receipt, as before.
+
+  Also: enqueueing never starts a flush while summaries are on, and a hook call's flush runs only when the call recorded
+  something notable (`flush({ routine: false })`); the agent's cycle and `scopebond-hook flush` send the summaries. New:
+  `CloudSummaryOptions`, `seqRanges`, outbox `claimWindow`/`releaseWindow`; hook `evidenceDetail`, `evidenceDetailFrom`,
+  `summaryOptions`. A 1,000-action session over 20 minutes ships 4 summaries and its 5 pushes.
+
+  Review fixes before release: a window's claim is a lease, so a window another process is sending waits instead of also going
+  in full, and a claim a process abandoned is taken over under the same summary id; records leave the queue only for the
+  summaries the workspace says it has (a summary it refused sends its records in full; a short answer is retried under the
+  same ids); a summary's `notable_count` counts the window's records sent in full, kept in the outbox; notable records go
+  before summaries; a computer without the agent sends summaries from a hook call once routine records have waited 30 minutes.
+
+### Patch Changes
+
+- e343292: Groundwork for a single-file Windows build. The hook's and the agent's commands are now `main(argv)` functions in `cli-main.js` (the `cli.js` programs that agent settings and autostart name are unchanged and call them); every place that starts the hook or the agent again goes through one helper (`hookSelfCommand`, `agentCliPath`); Node's SQLite is taken from Node's built-ins; versions can be set at build time. No change in behaviour for npm installs.
+- Updated dependencies [cb4d4e0]
+- Updated dependencies [e0f2de4]
+- Updated dependencies [c877e45]
+  - @scopebond/policy-schema@0.7.0
+  - @scopebond/verify@0.6.0
+
 ## 0.16.2
 
 ### Patch Changes
