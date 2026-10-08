@@ -64,10 +64,16 @@ Project, You reserve all right, title, and interest in and to Your Contributions
 
 ## How to sign
 
-Signing is automated on your first pull request: the CLA-assistant bot comments
-with a link to this document and asks you to reply, on the PR, with exactly:
+Sign in your pull request's description, either by ticking the template's box
+
+> - [x] I agree to the [CLA](CLA.md).
+
+or by adding this sentence on a line of its own:
 
 > I have read the CLA Document and I hereby sign the CLA
 
-Your GitHub username and the signing commit are recorded. A PR cannot be merged
-until every contributor to it has signed.
+The CLA check reads the description and re-runs when you edit it; the description
+and its edit history record your signature. If your pull request includes commits
+by anyone else, each of them signs the same way in a comment on the pull request,
+and a maintainer confirms it before merging. A PR cannot be merged until every
+contributor to it has signed.

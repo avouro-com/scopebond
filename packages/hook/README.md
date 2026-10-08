@@ -553,7 +553,13 @@ npx -y @scopebond/hook@latest prune --before 90d --yes   # archive, then remove,
 `prune --before` writes the receipts it will remove to a JSONL file beside the database
 first, so they stay verifiable, and it refuses outright once the log has been anchored — a
 receipt's position is its anchor leaf index, so removing one would make an existing anchor
-unverifiable.
+unverifiable. An archive is readable only by your user account and is never removed by Scopebond; `prune` lists the
+archives that exist and their size, and `--no-archive` removes without writing one.
+
+**What stays on this computer, and for how long.** The receipt log keeps every receipt in full, including details the
+workspace's *Standard* evidence detail never sends; the retention above applies to it. The delivery queue keeps a
+record until the workspace acknowledges it. The local observation queue keeps the newest 1,000 refused observations and
+counts the older ones it removes. Archives written by `prune --before` stay until you delete them.
 
 **What is sent to the workspace.** Every receipt, unless the workspace sets its evidence
 detail to *Standard* (it says so on each rules check). Then the notable receipts are sent

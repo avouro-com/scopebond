@@ -3,26 +3,46 @@ name: Issue Triage (agent)
 # Automated first-pass triage of new issues against SCOPE.md: verdict comment +
 # labels; routes scope-expanding issues to a maintainer. Uses whichever LLM key is
 # set (ANTHROPIC_API_KEY or DEEPSEEK_TOKEN); no-ops if neither is set.
+#
+# The LLM keys are read only in the `agent-review` environment's jobs. The script
+# runs from this repository's default branch (the `issues` event never carries code).
 
 on:
   issues:
     types: [opened, reopened]
 
-permissions:
-  contents: read
-  issues: write
+permissions: {}
+
+# One triage per issue at a time; a reopen supersedes a run still in flight.
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
 
 jobs:
   triage:
+    name: triage
     runs-on: ubuntu-latest
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
+    environment:
+      name: agent-review
+      deployment: false
+    permissions:
+      contents: read # check out SCOPE.md and the review script
+      issues: write # post the verdict comment and apply its labels
     steps:
       - id: gate
-        run: echo "enabled=${{ env.ANTHROPIC_API_KEY != '' || env.DEEPSEEK_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY}${DEEPSEEK_TOKEN}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
       - if: steps.gate.outputs.enabled == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - if: steps.gate.outputs.enabled == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 22 }
@@ -31,4 +51,4 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEEPSEEK_TOKEN: ${{ secrets.DEEPSEEK_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}

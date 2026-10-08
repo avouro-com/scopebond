@@ -123,7 +123,7 @@ test("status says the delivery queue is unusable instead of 'nothing waiting' wh
     const report = describeDelivery(dir, { url: "https://cloud.example" });
     assert.match(report.lines.join("\n"), /DELIVERY QUEUE UNUSABLE/);
     assert.doesNotMatch(report.lines.join("\n"), /waiting to send {2}0 record/);
-    assert.match(report.problems.join("\n"), /every action is blocked/);
+    assert.match(report.problems.join("\n"), /actions stay allowed and are recorded on this computer/);
     const { buildStatusJson } = await import("../dist/status-json.js");
     const json = buildStatusJson({ version: "test", activeDir: dir, candidateDirs: [dir], hasPolicy: true, agents: { claude: true, cursor: false, codex: false } });
     assert.notEqual(json.state, "delivering", "an unusable queue is never reported as delivering");
