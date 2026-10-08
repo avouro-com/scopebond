@@ -31,6 +31,9 @@ const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const SUMMARY_EVERY_MS = 5 * 60 * 1000;
 export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
+/** Left in the Scopebond folder when this computer's user stops the agent (`scopebond-agent stop`), and removed when it
+ *  starts: the native tray then leaves it stopped instead of starting it again. */
+export const STOPPED_FILE = "agent-stopped.json";
 /** The person's tray settings (D143: notifications about problems by default, none about blocks). */
 export const TRAY_SETTINGS_FILE = "agent-settings.json";
 export type NotificationSetting = "all" | "problems" | "off";
@@ -210,6 +213,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
   const lock = acquireAgentLock(options.dir);
   if (!lock) throw new Error("a Scopebond Agent is already running for this computer");
+  rmSync(join(options.dir, STOPPED_FILE), { force: true });
   const interval = options.intervalMs ?? INTERVAL_MS;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
@@ -447,6 +451,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // `scopebond-agent stop` and `autostart off`: answer first, then stop, so the caller hears back.
     "POST /stop": () => {
       log("stopping: asked to by this computer's user");
+      try { writeFileSync(join(options.dir, STOPPED_FILE), `${JSON.stringify({ stopped_at: new Date().toISOString(), pid: process.pid })}\n`); } catch { /* the tray may start it again */ }
       setTimeout(() => { void stop().finally(() => options.onStopped?.()); }, 50);
       return { stopping: true };
     },

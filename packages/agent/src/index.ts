@@ -1,6 +1,6 @@
 export { runCycle, computerStatus, expectedHarnesses, missingHookEntries } from "./agent.js";
 export type { CycleOptions, CycleResult } from "./agent.js";
-export { startService, repairHookEntries, spawnReplacement, handoverPlan, takeOver, acquireAgentLock, releaseAgentLock, AGENT_LOCK, AGENT_VERSION, AFTER_PID_ENV, REFRESH_LAUNCHER_ENV, RESTART_EXIT_CODE } from "./service.js";
+export { startService, repairHookEntries, spawnReplacement, handoverPlan, takeOver, acquireAgentLock, releaseAgentLock, AGENT_LOCK, AGENT_VERSION, AFTER_PID_ENV, REFRESH_LAUNCHER_ENV, RESTART_EXIT_CODE, STOPPED_FILE } from "./service.js";
 export type { Handover } from "./service.js";
 export { writeOutputTo, FALLBACK_LOG } from "./log-file.js";
 export type { Service, ServiceOptions, MaintenanceResult } from "./service.js";

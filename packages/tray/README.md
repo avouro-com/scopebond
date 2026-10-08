@@ -48,7 +48,11 @@ program beside it in the install folder) when nothing answers, with no console w
 tray starts it again after 2 s, then 4 s, 8 s … at most 60 s apart, and the wait starts over once the agent has run for
 a while. It never runs two: an agent that is updating itself exits and its replacement starts, so the tray waits for the
 replacement to answer before starting anything, and the agent's lock file refuses a second agent anyway. An agent that
-was stopped on purpose (`scopebond-agent stop`, `autostart off`) stays stopped; the menu offers to start it. A clean
+was stopped on purpose (`scopebond-agent stop`, which leaves `agent-stopped.json` in the Scopebond folder) stays stopped;
+the menu offers to start it. An agent that exited cleanly with no replacement answering within a minute, and that nobody
+asked to stop, is started again with the same waits as after a crash, and the person is told. An agent whose pipe
+accepts connections but that gives no model (or only errors) for half a minute is shown as not answering; half a minute
+later the tray ends it (only the process that runs the agent program beside the tray) and starts it again. A clean
 stop is told apart from a crash by the exit code of the agent the tray started (0), or, for an agent something else
 started, by its endpoint file: a clean stop removes it, a crash leaves it. The tray starts the agent with
 `SCOPEBOND_AGENT_TRAY=off`, so the agent does not draw its PowerShell tray as well. The rules are plain decisions in
