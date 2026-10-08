@@ -42,9 +42,9 @@
     "dist"
   ],
   "dependencies": {
+    "@scopebond/gateway": "workspace:^",
     "@scopebond/policy-schema": "workspace:^",
-    "@scopebond/sdk": "workspace:^",
-    "@scopebond/gateway": "workspace:^"
+    "@scopebond/sdk": "workspace:^"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -55,6 +55,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "@scopebond/fake-cloud": "workspace:*"
+    "@scopebond/fake-cloud": "workspace:*",
+    "fast-check": "^4.10.2"
   }
 }
