@@ -350,6 +350,10 @@ test("the rules check names the delivery queue and the highest number it has giv
     assert.equal(w.calls[0].headers["x-scopebond-queue-id"], queueId);
     assert.equal(w.calls[0].headers["x-scopebond-seq-assigned"], "2");
     assert.equal(w.calls[0].headers["x-scopebond-pending"], "2");
+    // With records waiting, the computer's own clock goes beside their oldest time, so the workspace can compare them.
+    const clock = Number(w.calls[0].headers["x-scopebond-clock"]);
+    assert.ok(Math.abs(clock - Date.now()) < 60_000, "the clock header carries this computer's current time");
+    assert.ok(Number(w.calls[0].headers["x-scopebond-oldest-pending-at"]) <= clock);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
