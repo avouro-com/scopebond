@@ -9,7 +9,7 @@
 // ambiguous Windows short path.
 
 import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
-import { canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
+import { INTERPRETERS, canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -231,6 +231,9 @@ const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "r
 const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks)(?:$|[\\/:])/i;
 // Programs that send what they are given elsewhere (network, clipboard, mail): an
 // operand naming a secret location is a read of it.
+const TREE_COPIERS = new Set(["tar", "bsdtar", "zip", "7z", "7za", "7zr", "rsync", "cp", "scp", "robocopy", "xcopy", "copy-item", "cpi", "ditto", "compress-archive", "cpio", "pax"]);
+/** A home folder, written any way a shell or PowerShell names it, or a folder above every home (`/`, `/home`, `/Users`, C:\Users). */
+const HOME_OR_ABOVE = /^(?:~|\$HOME|\$\{HOME\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%|%HOMEPATH%|\/|\/home(?:\/[^/]+)?|\/Users(?:\/[^/]+)?|\/root|[A-Za-z]:\\Users(?:\\[^\\]+)?|[A-Za-z]:\/Users(?:\/[^/]+)?|[A-Za-z]:\\?)[\\/]?\.?[\\/]?$/i;
 const UPLOADERS = new Set([
   "curl", "wget", "http", "https", "xh", "httpie", "nc", "ncat", "netcat", "socat", "telnet", "ftp", "sftp", "lftp", "smbclient",
   "aws", "gsutil", "gcloud", "az", "rclone", "s3cmd", "gh", "glab", "mail", "mailx", "sendmail", "mutt", "xclip", "xsel",
@@ -257,11 +260,16 @@ function curlFileRef(flag: string, value: string): string | undefined {
 // or staged (`gh gist create .env`, `git add .env`) is a read of that path.
 const SENSITIVE = /(?:^|[/\\])(?:\.scopebond(?:[/\\]|$)|\.env(?:\.[^/\\]*)?$|\.envrc$|\.ssh(?:[/\\]|$)|\.aws(?:[/\\]|$)|\.npmrc$|\.pypirc$|_?\.?netrc$|\.git-credentials$|\.kube(?:[/\\]|$)|\.docker(?:[/\\]|$)|\.azure(?:[/\\]|$)|\.gnupg(?:[/\\]|$)|\.config[/\\](?:gcloud|gh)(?:[/\\]|$)|\.credentials\.json$)|\.(?:key|pem|p12|pfx|jks|keystore)$/i;
 
-const INTERPRETERS = new Set(["node", "deno", "bun", "python", "python3", "py", "ruby", "perl", "php", "osascript", "lua", "tclsh"]);
 // Path literals inside inline code. Each alternative starts at a boundary (not after
 // a word character — so `process.env` is not `.env`) and has no overlapping repeats,
 // keeping the scan linear; input is capped per argument.
 // Scopebond's own folder, and what follows it, wherever it appears in an argument.
+/** Code that builds a path from pieces (`'.scope' + 'bond'`, `".sco" "pebond"`, SQL `'.scope' || 'bond'`) is read with the
+ *  pieces joined, so the scan sees the path the code will use. Linear: one pass of a bounded string. */
+export function foldConcatenation(code: string): string {
+  return code.replace(/(['"`])\s*(?:\+|\|\||\.\.|\.)?\s*\1/g, "");
+}
+const SCOPEBOND_GLOB = /(?<![\w-])\.sc(?:o(?:p(?:e(?:b(?:o(?:n(?:d)?)?)?)?)?)?)?[*?[]/i;
 const SCOPEBOND_IN_TEXT = /(?<![\w-])\.scopebond(?:[\\/][\w.-]*)?(?![\w-])/gi;
 const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
 // A file or process API in the same inline snippet, required in call or member form
@@ -510,6 +518,11 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       const all = [...before, ...(after ?? [])];
       all.slice(0, -1).forEach(read);
       all.forEach(write);
+    } else if (sub === "clean") {
+      // `git clean -fdx [paths]` deletes untracked (and ignored) files under its paths, the working folder when none.
+      const { before, after } = gitPositionals(a, ["-e", "--exclude"]);
+      const paths = [...before, ...(after ?? [])];
+      for (const p of paths.length ? paths : ["."]) { write(p); if (HOME_OR_ABOVE.test(p)) write("~/.scopebond"); }
     } else if (sub === "rm" && !a.includes("--cached")) {
       const { before, after } = gitPositionals(a, ["--pathspec-from-file"]);
       [...before, ...(after ?? [])].forEach(write);
@@ -524,7 +537,10 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     for (const w of args) { if (/^[-(!]/.test(w) || w === "\\(") break; starts.push(w); }
     if (args.some((w) => /^-(?:exec|execdir|ok|okdir)$/.test(w))) starts.forEach(read);
     // `find DIR -delete` removes what it finds under DIR: a write of DIR.
-    if (args.includes("-delete")) (starts.length ? starts : ["."]).forEach(write);
+    // `find DIR -delete` and `find DIR -exec rm {} +` (or `unlink`, `shred`, `rmdir`) remove what they find under DIR: a
+    // write of DIR, and of Scopebond's folder when DIR is a home folder or above it (`find ~ -name 'receipts.db*' -delete`).
+    const deletes = args.includes("-delete") || args.some((w, k) => /^-(?:exec|execdir|ok|okdir)$/.test(w) && /^(?:rm|unlink|shred|rmdir|del|trash)$/.test(canonProgram(args[k + 1] ?? "")));
+    if (deletes) for (const start of starts.length ? starts : ["."]) { write(start); if (HOME_OR_ABOVE.test(start)) write("~/.scopebond"); }
     args.forEach((w, k) => { if (/^-(?:fprint0?|fprintf|fls)$/.test(w)) write(args[k + 1]); });
   } else if ((prog === "docker" || prog === "podman" || prog === "kubectl") && operands[0] === "cp") {
     const local = (p: string | undefined) => p !== undefined && (!/^[^/\\]+:/.test(p) || /^[A-Za-z]:[\\/]/.test(p));
@@ -597,17 +613,28 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     // a file or process API, so a path merely named in a log string is not a finding.
     // Code that assembles a path at run time is beyond a cooperative hook (use a gateway).
     for (const w of args) {
-      const code = w.slice(0, CODE_SCAN_LIMIT);
+      const code = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
       // Scopebond's own folder is read through any API (`DatabaseSync('…/.scopebond/receipts.db')`) or handed to a
       // script as an argument: naming it is enough. The read floor is a classifier, not a sandbox (see the README).
       for (const m of code.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+      // A wildcard that starts like Scopebond's folder (`~/.scope*/receipts.db*`) can only mean it.
+      if (SCOPEBOND_GLOB.test(code)) { read("~/.scopebond"); if (FILE_API.test(code)) write("~/.scopebond"); }
       if (!FILE_API.test(code)) continue;
       for (const m of code.match(SENSITIVE_IN_CODE) ?? []) { read(m); write(m); }
     }
   } else if (prog === "sqlite3" || prog === "sqlite") {
     // Options (`-cmd`, `-init`, `-separator`) take values and SQL can ATTACH any file: the first operand is not enough.
     read(operands[0]);
-    for (const w of args) for (const m of w.slice(0, CODE_SCAN_LIMIT).match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+    for (const w of args) {
+      const sql = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
+      for (const m of sql.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+      // ATTACH or .open of a path the statement computes (a function call, a parameter, a subquery) cannot be judged.
+      for (const m of sql.matchAll(/(?:\battach\s+(?:database\s+)?|^\s*\.open\s+|;\s*\.open\s+)([^\s;]+)/gim)) {
+        const target = m[1];
+        if (/^'[^']*'$|^"[^"]*"$/.test(target)) read(target.slice(1, -1));
+        else unknownTarget = true;
+      }
+    }
   } else if (UPLOADERS.has(prog)) {
     operands.filter(isSensitiveOperand).forEach(read);
   }
@@ -619,6 +646,14 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   const linkTarget = linkTargetOf(prog, args, operands);
   if (linkTarget !== undefined && isPathWord(linkTarget)) {
     ops.push(...fileIntent("file.write", linkTarget, dir, cwd).map((m) => ({ ...m, intent: { ...m.intent, params: { ...m.intent.params, link_target: true } } })));
+  }
+
+  // Copying or archiving a whole home folder (or a folder above it) carries Scopebond's folder along, and the copy can be
+  // renamed and read later: it is a read of that folder (`tar czf h.tgz -C ~ .`, `cp -r ~ /tmp/h`, `rsync -a ~/ x`).
+  if (TREE_COPIERS.has(prog)) {
+    const sources = [...operands];
+    args.forEach((w, k) => { if (/^(?:-C|--directory|-Path|-LiteralPath|-SourcePath)$/i.test(w)) sources.push(args[k + 1] ?? ""); else if (/^--directory=/.test(w)) sources.push(w.slice(12)); });
+    if (sources.some((s) => HOME_OR_ABOVE.test(s))) read("~/.scopebond");
   }
 
   for (const r of sc.redirects) {
@@ -667,8 +702,27 @@ function uninstallsScopebond(prog: string, args: string[]): boolean {
   const subs = UNINSTALL[prog];
   return !!subs && subs.has((words[0] ?? "").toLowerCase()) && args.some((a, i) => isGlobalFlag(a, args[i + 1]));
 }
+// Coding agents a session can start, and the ways to start one without this computer's hooks: a settings override, a
+// config folder of its own, permission checks skipped, or (Codex) a config override that touches hooks or notify.
+const HARNESSES = new Set(["claude", "codex", "cursor-agent", "cursor", "gemini", "opencode", "aider"]);
+const HARNESS_CONFIG_ENV = /(?:^|\s)(?:CLAUDE_CONFIG_DIR|CODEX_HOME|CURSOR_CONFIG_DIR|XDG_CONFIG_HOME)=/;
+function harnessWithoutHooks(sc: SimpleCommand, all: string[]): boolean {
+  const k = all.findIndex((w) => HARNESSES.has(canonProgram(w)));
+  if (k === -1) return false;
+  const args = all.slice(k + 1);
+  if (HARNESS_CONFIG_ENV.test(sc.raw)) return true;
+  if (args.some((a) => /^--settings(?:=|$)|^--dangerously-skip-permissions$|^--dangerously-bypass-approvals-and-sandbox$|^--yolo$/i.test(a))) return true;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const value = /^(?:-c|--config)$/.test(a) ? args[i + 1] : /^--config=/.test(a) ? a.slice(9) : null;
+    if (value && /hook|notify|disable/i.test(value)) return true;
+  }
+  return false;
+}
 function selfDisable(sc: SimpleCommand): boolean {
   const all = [sc.programRaw, ...sc.argv];
+  // Starting a coding agent with its hooks off or redirected runs actions this hook never sees: a switch-off like `autostart off`.
+  if (harnessWithoutHooks(sc, all)) return true;
   for (let k = 0; k < all.length; k++) {
     const rest = all.slice(k + 1).filter((a) => !a.startsWith("-"));
     if (isHookCli(all[k]) && rest[0] && SELF_SUBCOMMANDS.has(rest[0].toLowerCase())) return true;
@@ -903,6 +957,17 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
       let end = 0;
       while (end < glob.length && !"*?[{".includes(glob[end])) end++;
       reads.push(...pathIntents("file.read", rel(glob.slice(0, end) || glob, cwd), name));
+    }
+    return reads;
+  }
+  // Glob lists the files under its path that match its pattern: it reads that folder, like Grep.
+  if (name === "Glob") {
+    const reads = pathIntents("file.read", rel(ti.path ?? ".", cwd), name);
+    const pattern = typeof ti.pattern === "string" ? ti.pattern : "";
+    if (/\.scopebond|cloud\.json/i.test(pattern)) {
+      let end = 0;
+      while (end < pattern.length && !"*?[{".includes(pattern[end])) end++;
+      reads.push(...pathIntents("file.read", rel(pattern.slice(0, end) || pattern, cwd), name));
     }
     return reads;
   }

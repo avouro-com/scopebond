@@ -103,7 +103,7 @@ export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + ".+";
 export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("");
 /** The read protection that is always on, whoever manages the rules: the hook's own folder, which holds this computer's
  *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
-export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + ".+";
+export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
 
 /** Scopebond's own protection, always enforced and never relaxed by a rule set or a workspace: the hook's folder (its keys,
  *  connection and policy) and the coding agents' hook settings can be neither changed nor read by the coding agent, and an
@@ -119,7 +119,7 @@ export function selfProtectionClauses(): Array<Record<string, unknown>> {
     {
       id: "protect-scopebond-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
       param_bounds: { path: { pattern: GUARDRAIL_READ_PATTERN } },
-      description: "Never read Scopebond's own folder, which holds this computer's key and connection (always on; it cannot be relaxed).",
+      description: "Never read Scopebond's own folder, which holds this computer's key and connection, or a copy of the connection file (cloud.json) anywhere (always on; it cannot be relaxed).",
     },
   ];
 }
