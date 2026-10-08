@@ -464,7 +464,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (answer.decision === "ask" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);
       return answer;
     },
-  });
+  }, nativeTray ? { loopback: false } : {}); // beside the native tray nothing uses loopback: its tray and its hook use the pipe
   // Beside the native tray (the signed install), the tray is that program: it started this agent, or starts at sign-in.
   const tray = (options.tray ?? true) && process.env.SCOPEBOND_AGENT_TRAY !== "off" && !nativeTray ? startTray(options.dir) : null;
   if (nativeTray && retireLauncherRunValue()) log("removed the ScopebondAgent sign-in entry: the Scopebond tray starts the agent");
@@ -477,7 +477,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     await control.close();
     releaseAgentLock(lock);
   };
-  log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on 127.0.0.1:${control.endpoint.port})`);
+  log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on ${[control.endpoint.socket, control.endpoint.port ? `127.0.0.1:${control.endpoint.port}` : null].filter(Boolean).join(" and ")})`);
   await cycle();
   schedule();
   if (options.maintenance !== false) {

@@ -63,6 +63,9 @@ stop on purpose, another agent starting, no agent program).
 - The pipe's name is random for every start of the agent and is written only to `agent.json` in the person's own
   Scopebond folder, which other users of the computer cannot read. A program has to know the name to connect.
 - Every request carries the token from the same file; the agent answers 401 without it, compared in constant time.
+- The tray never uses a loopback port, and beside the tray the agent opens none: no other program on the computer can
+  reach it over TCP. (npm installs keep a loopback port for now, for the PowerShell tray and hooks from before the
+  pipe.)
 - The agent is a Node program, and Node cannot set an access list on a named pipe it creates, so **no access list is
   claimed**: the pipe has Windows' default security for its creator. The protection is the secret name and the token,
   both kept in the person's profile. A program already running as the same person can read that file, and so can do
