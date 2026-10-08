@@ -730,7 +730,22 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
   // file effects, so `.scopebond\policy.json` is not lost as `.scopebondpolicy.json`.
   if (dialect === "posix" && src.includes("\\")) {
     const seen = new Set(out.map((m) => `${m.intent.action_type} ${String(m.intent.params.path)}`));
-    for (const m of walk(decomposeShell(src.replace(/\\/g, "/")), true)) {
+    // Turning `\` into `/` can leave a quote unclosed (`"x\""` becomes `"x/""`). cmd reads an unclosed quote to the end
+    // of the line, so it is closed there before the Windows reading gives up on the command; a reference to Scopebond's
+    // own folder in it still counts as writing it, because cmd's own commands (copy, move) are not mapped as writes.
+    const win = src.replace(/\\/g, "/");
+    let reading = decomposeShell(win);
+    if (reading.some((c) => c.opaque)) {
+      const closed = decomposeShell(`${win}"`);
+      if (!closed.some((c) => c.opaque)) {
+        reading = closed;
+        // A command in it that is Scopebond itself (`scopebond off`, `npx @scopebond/hook uninstall`) is a switch-off too.
+        const runsScopebond = (c: SimpleCommand) => NAMES_SCOPEBOND_ITSELF.test(c.programRaw || c.program)
+          || (/^(?:npx|pnpx|bunx|pnpm|yarn)(?:\.cmd|\.exe)?$/i.test(c.program) && c.argv.some((a) => /@scopebond\/|^scopebond(?:-\w+)?$/i.test(a)));
+        if (/\.scopebond\b/i.test(win) || closed.some(runsScopebond)) out.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+      }
+    }
+    for (const m of walk(reading, true)) {
       const key = `${m.intent.action_type} ${String(m.intent.params.path)}`;
       if (!seen.has(key)) { seen.add(key); out.push(m); }
     }

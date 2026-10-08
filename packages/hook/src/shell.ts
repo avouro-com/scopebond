@@ -430,10 +430,45 @@ function findHeredocs(src: string): Heredoc[] {
   let quote: '"' | "'" | null = null;
   let cmdStart = 0;
   let line = 0;
+  // Openers seen on the current line: their bodies start after the next unquoted newline, one after the other, and are
+  // data, so they are skipped as the shell does. Scanning a body as shell would let an apostrophe in it ("it's") open a
+  // quote that hides the next opener.
+  const pending: Heredoc[] = [];
+  /** From the newline at `at`, past each pending body and its terminator line. Returns the index of the last character
+   *  consumed, or `at` when a body has no terminator (then nothing is skipped, as stripHeredocs leaves it too). */
+  const skipBodies = (at: number): number => {
+    let p = at + 1;
+    for (const h of pending) {
+      let found = false;
+      while (p <= src.length) {
+        const end = src.indexOf("\n", p);
+        const text = src.slice(p, end === -1 ? src.length : end).replace(/\r$/, "");
+        p = end === -1 ? src.length + 1 : end + 1;
+        if ((h.dashed ? text.replace(/^\t+/, "") : text) === h.delim) { found = true; break; }
+        if (end === -1) break;
+      }
+      if (!found) return at;
+    }
+    return Math.min(p, src.length) - 1;
+  };
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     const n = src[i + 1];
-    if (c === "\n") { line++; if (!quote) cmdStart = i + 1; continue; }
+    if (c === "\n") {
+      line++;
+      if (!quote) {
+        cmdStart = i + 1;
+        if (pending.length) {
+          const to = skipBodies(i);
+          for (let k = i + 1; k <= to; k++) if (src[k] === "\n") line++;
+          pending.length = 0;
+          i = to;
+          cmdStart = to + 1; // the next command starts after the bodies
+
+        }
+      }
+      continue;
+    }
     if (quote === "'") { if (c === "'") quote = null; continue; }
     if (quote === '"') {
       if (c === "\\" && n !== undefined) { i++; continue; }
@@ -472,7 +507,9 @@ function findHeredocs(src: string): Heredoc[] {
         const cmdText = src.slice(cmdStart, i);
         const { tokens } = stripPrefixes(words(cmdText));
         const prog = tokens.length ? canonProgram(tokens[0]) : "";
-        found.push({ line, delim, dashed, ownerIsShell: SHELLS.has(prog) });
+        const opener = { line, delim, dashed, ownerIsShell: SHELLS.has(prog) };
+        found.push(opener);
+        pending.push(opener);
       }
       i = j - 1;
       continue;
@@ -528,7 +565,9 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
   const fromHeredocs = scripts.flatMap((s) => decomposeShell(s, depth + 1));
 
   const { segments, unbalanced } = splitTopLevel(text);
-  if (unbalanced) return [...opaque(), ...fromHeredocs];
+  // Unreadable: kept as the text without its here-document bodies, which are data (a commit message that says "scopebond"
+  // never counts as naming it); a body fed to a shell is decomposed on its own above.
+  if (unbalanced) return [...opaque(text), ...fromHeredocs];
 
   const out: SimpleCommand[] = [];
   for (const seg of segments) {
