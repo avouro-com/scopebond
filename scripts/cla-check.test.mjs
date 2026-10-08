@@ -37,6 +37,8 @@ test("signedIn: nothing inside an HTML comment counts, and empty bodies do not s
 test("claVerdict: maintainers and dependency bots pass; other authors must sign", () => {
   const pr = (login, author_association, body = "") => ({ pull_request: { user: { login }, author_association, body } });
   assert.equal(claVerdict(pr("avourohq", "OWNER")).ok, true);
+  // A private organization member arrives as CONTRIBUTOR in the event; a named maintainer still passes.
+  assert.equal(claVerdict(pr("avourohq", "CONTRIBUTOR")).ok, true);
   assert.equal(claVerdict(pr("someone", "MEMBER")).ok, true);
   assert.equal(claVerdict(pr("someone", "COLLABORATOR")).ok, true);
   assert.equal(claVerdict(pr("dependabot[bot]", "NONE")).ok, true);

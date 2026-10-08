@@ -19,6 +19,8 @@ import { pathToFileURL } from "node:url";
 export const SIGNING_SENTENCE = "I have read the CLA Document and I hereby sign the CLA";
 
 const EXEMPT_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+// The event reports a private organization member as CONTRIBUTOR, so the maintainers are also named here.
+export const MAINTAINERS = new Set(["avourohq"]);
 const EXEMPT_BOTS = new Set(["dependabot[bot]", "github-actions[bot]"]);
 
 /** True when the description ticks the CLA box ("- [x] I agree to the [CLA](…)") or
@@ -40,6 +42,7 @@ export function claVerdict(event) {
   if (!pr) return { ok: true, reason: "not a pull request" };
   const login = String(pr.user?.login ?? "");
   if (EXEMPT_BOTS.has(login)) return { ok: true, reason: `${login} is a dependency bot` };
+  if (MAINTAINERS.has(login)) return { ok: true, reason: `${login} is a maintainer` };
   if (EXEMPT_ASSOCIATIONS.has(String(pr.author_association ?? ""))) return { ok: true, reason: `${login} is a maintainer (${pr.author_association})` };
   if (signedIn(pr.body)) return { ok: true, reason: `${login} signed in the pull request description` };
   return { ok: false, reason: `${login} has not signed the CLA` };
