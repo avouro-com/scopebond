@@ -16,7 +16,7 @@ silently closed.
 
 ## Getting started
 
-1. Use the [Node version pinned for this repository](.nvmrc) and pnpm 9.12.0
+1. Use the [Node version pinned for this repository](.nvmrc) and pnpm 10.34.6
    (the `packageManager` in `package.json`). Individual packages have their own
    runtime requirements; the hook and Scopebond Agent require Node >=22.13.
 2. `pnpm install` — this also activates the local git hooks
