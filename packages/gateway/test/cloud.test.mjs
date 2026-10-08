@@ -235,3 +235,24 @@ test("batches are gzip-compressed only after the workspace says it reads gzip", 
   await send(make(true), 0);
   assert.deepEqual(seen.splice(0).map((s) => s.encoding), [null, null, null]);
 });
+
+test("flush({ maxMs }) starts no batch once its time is up; the next flush carries on", async () => {
+  const sent = [];
+  const fetch = async (url, init) => {
+    await new Promise((r) => setTimeout(r, 40));
+    sent.push(...JSON.parse(init.body).receipts);
+    return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "{}", headers: new Map() };
+  };
+  // Queued straight into the outbox (as the hook does), so no flush starts on its own.
+  const outbox = createMemoryCloudOutbox({ maxPending: 10_000 });
+  for (let i = 0; i < 100; i++) outbox.enqueue(receipt(`r-${i}`));
+  const exporter = createCloudExporter({ url: "https://ws.example", credential: "sbm_x", outbox, flushMs: 1e9, fetch, batchSize: 10 });
+  try {
+    await exporter.flush({ maxMs: 30 });
+    assert.ok(sent.length >= 10 && sent.length < 100, `sent ${sent.length}`);
+    assert.equal(exporter.pending(), 100 - sent.length);
+    await exporter.flush();
+    assert.equal(sent.length, 100);
+    assert.equal(exporter.pending(), 0);
+  } finally { exporter.stop(); }
+});

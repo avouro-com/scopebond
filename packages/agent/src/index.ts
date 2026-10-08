@@ -4,6 +4,8 @@ export { startService, repairHookEntries, spawnReplacement, handoverPlan, takeOv
 export type { Handover } from "./service.js";
 export { writeOutputTo, FALLBACK_LOG } from "./log-file.js";
 export type { Service, ServiceOptions, MaintenanceResult } from "./service.js";
+export { runUpkeepApart, upkeepCommand, UPKEEP_BUDGET_MS, UPKEEP_TIMEOUT_MS } from "./upkeep.js";
+export type { UpkeepReport, UpkeepApartOptions } from "./upkeep.js";
 export { startControl, callAgent, readEndpoint, localSocketPath, AGENT_FILE, TOKEN_HEADER } from "./ipc.js";
 export type { AgentEndpoint } from "./ipc.js";
 export {
