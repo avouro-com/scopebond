@@ -148,9 +148,23 @@ version shows up as a problem rather than as a hook that silently cannot start.
 | File writes / edits | prevented | **recorded, not prevented** | prevented |
 
 Cursor reports a file edit only *after* it is written (`afterFileEdit`; it has no
-before-edit hook), so an out-of-policy edit there is signed and flagged, not blocked —
-and the message says so rather than claiming otherwise. For edits that must be stopped
-before they land, make `@scopebond/github-action` a required check on pull requests.
+before-edit hook), so an out-of-policy edit there is signed as recorded after the fact
+(`execution.state: "observed_after"`, `executed: true`), not as denied. `log` shows it as
+"recorded, not prevented", it is never counted as a block, and the message says so rather
+than claiming otherwise. For edits that must be stopped before they land, make
+`@scopebond/github-action` a required check on pull requests.
+
+Cursor is told `allow` only when every action of the call was checked and permitted. An
+action a monitored rule finds out of policy (recorded, not blocked) gets no opinion
+(`ask`), so Cursor's own approval still decides, as Claude Code's and Codex's do when the
+hook stays silent.
+
+A hook entry the coding agent cannot start at all (a moved Node, a removed install) lets
+actions run with no check: the agents treat that as a non-blocking error. Any failure the
+hook program itself can still catch answers deny (Claude Code: exit 2). For Codex and
+Cursor, which send nothing between actions, the Scopebond Agent checks their entries on
+each maintenance pass and keeps each outage as a `hook_unresolvable` delivery gap that the
+rules check reports to the workspace; `doctor` reports it on any computer.
 
 Codex has no native file-read event: reads it makes through shell commands are derived
 from the command (`cat .env`) and checked, but a read that never goes through a shell

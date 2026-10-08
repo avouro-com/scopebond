@@ -9,7 +9,8 @@
     "cooperative_allow",
     "executed",
     "failed",
-    "outcome_unknown"
+    "outcome_unknown",
+    "observed_after"
   ],
   "sensitive_intent": {
     "action_type": "http.call",

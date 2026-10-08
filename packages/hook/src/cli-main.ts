@@ -290,6 +290,17 @@ function denyCursor(reason: string): never {
   process.exit(0);
 }
 
+/** A clean evaluated allow: the call was allowed and every action in it was checked and permitted (or allowed by a person).
+ *  An action a monitored rule found out of policy is signed `deny` and still allowed; an unchecked one is `not_evaluated`. */
+function cleanAllow(decision: { decision: string; receipt?: unknown; receipts?: unknown[] }): boolean {
+  if (decision.decision !== "allow") return false;
+  const list = decision.receipts?.length ? decision.receipts : decision.receipt !== undefined ? [decision.receipt] : [];
+  return list.length > 0 && list.every((r) => {
+    const result = (r as { payload?: { realtime_result?: unknown } } | null)?.payload?.realtime_result;
+    return result === "allow" || result === "approved";
+  });
+}
+
 /** Keep the local store small when the Scopebond Agent does not (it keeps the user home while it runs). */
 function keepStore(dir: string): void {
   const home = userHome();
@@ -337,18 +348,22 @@ async function runCursor(): Promise<void> {
     // An `afterFileEdit` violation is real and recorded, but the edit has already
     // landed. Say so rather than letting "blocked" imply it was stopped.
     postHoc = mapped.some((m) => m.postHoc);
-    // Three outcomes, three answers:
+    // The answers:
     //   deny  — out of policy, blocked outright.
-    //   allow — a rule was evaluated and permitted it. Returning "ask" here put a
-    //           confirmation prompt in front of every ordinary command, which is not
-    //           "your agent works as normal"; it also trained people to click through
-    //           prompts, which makes the real denials easier to miss. An evaluated
-    //           allow is a decision, not a silent auto-approval.
-    //   ask   — nothing was evaluated (no rule covers this action), so Cursor's own
-    //           permission flow stays in charge. That is the fail-closed case and it
-    //           keeps its prompt.
-    permission = decision.decision === "deny" ? "deny" : decision.decision === "allow" ? "allow" : "ask";
-    message = decision.reason;
+    //   allow — only a clean evaluated allow: every action of the call was checked and
+    //           permitted. Returning "ask" here put a confirmation prompt in front of
+    //           every ordinary command, which is not "your agent works as normal"; it
+    //           also trained people to click through prompts, which makes the real
+    //           denials easier to miss.
+    //   ask   — anything else: no rule covers the action, or a rule that records rather
+    //           than blocks found it out of policy. Cursor's own approval stays in
+    //           charge, exactly as Claude Code's and Codex's do when the hook stays
+    //           silent. Answering "allow" to a recorded violation would approve it on
+    //           the person's behalf and skip the prompt Cursor would otherwise show.
+    permission = decision.decision === "deny" ? "deny" : cleanAllow(decision) ? "allow" : "ask";
+    message = decision.decision === "allow" && permission === "ask"
+      ? "Scopebond recorded this as out of policy under a rule that records rather than blocks; Cursor's own approval decides."
+      : decision.reason;
   } catch (error) {
     permission = "deny";
     message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`;
@@ -469,6 +484,8 @@ function decisionOf(payload: Record<string, unknown>): string {
   const rr = String(payload.realtime_result ?? "");
   const state = String((payload.execution as Record<string, unknown> | undefined)?.state ?? "");
   if (state === "observed_not_evaluated") return "not_evaluated";
+  // Out of policy, but reported only after it ran: recorded, never a block.
+  if (state === "observed_after") return "recorded, not prevented";
   if (rr === "deny") return state === "cooperative_allow" || state === "executed" ? "monitor" : "deny";
   return "allow";
 }

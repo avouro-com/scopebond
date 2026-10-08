@@ -86,9 +86,14 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   if (!queueError) lines.push(`waiting to send  ${pending} record(s)${age}`);
   if (state.last_error && state.invalid_since === null) lines.push(`last problem     ${state.last_error}`);
   // Gaps are history (the workspace hears of them on the rules check), so they are shown, not counted as a problem.
-  if (gapsTotal > 0) {
-    const reasons = gapReasons(gapsByReason);
-    lines.push(`delivery gaps    ${gapsTotal} record(s) missed normal delivery${reasons ? ` (${reasons})` : ""}; each stays in this computer's log`);
+  // A hook outage is kept in the same gap counts (so the workspace hears of it), but it is not a record that missed delivery.
+  const outages = gapsByReason.hook_unresolvable ?? 0;
+  if (gapsTotal - outages > 0) {
+    const reasons = gapReasons(Object.fromEntries(Object.entries(gapsByReason).filter(([r]) => r !== "hook_unresolvable")));
+    lines.push(`delivery gaps    ${gapsTotal - outages} record(s) missed normal delivery${reasons ? ` (${reasons})` : ""}; each stays in this computer's log`);
+  }
+  if (outages > 0) {
+    lines.push(`hook outages     ${outages} time(s) a Codex or Cursor hook entry could not start: actions then ran with no check and no record`);
   }
   const paused = /HTTP 402 \(agent_paused\)/.test(state.last_error ?? "");
   if (state.invalid_since === null && paused && pending > 0) {
