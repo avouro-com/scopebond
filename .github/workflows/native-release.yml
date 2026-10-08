@@ -1,9 +1,13 @@
 name: Native release (signed)
 
 # The signed single executable (packages/native) and the native tray (packages/tray), built from this public source:
-#   build      the executable and the tray from main, with no secrets (any fork can run this job and gets unsigned files)
-#   sign       Azure Artifact Signing through GitHub's OIDC token, only in the protected `signing` environment
-#              (approval required; protected branches only), then verified, summed, described (SBOM) and attested
+#   build      the executable, the tray and their SBOM from main, with no secrets (any fork can run this job and gets
+#              unsigned files)
+#   sign       Azure Artifact Signing of the executable and the tray through GitHub's OIDC token, only in the protected
+#              `signing` environment (approval required; protected branches only); nothing else runs there
+#   installer  the installer built around the signed programs (WiX), with no secrets and no OIDC token
+#   sign-installer  the installer signed (the `signing` environment again), then every file verified, summed, the
+#              release manifest signed (required) and everything attested
 #   sign-macos the Apple build (Developer ID + notarization), designed in and off until its secrets exist
 #   release    a draft GitHub release with the signed files, for a person to check and publish
 #
@@ -84,6 +88,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Signing the programs: nothing runs here but the download, the Azure sign-in and the signing action. No dependency is
+  # installed and no build tool runs in a job that can ask for the signing token.
   sign:
     name: sign (windows)
     needs: build
@@ -94,15 +100,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      attestations: write
     steps:
-      # The source, for the installer's definition (no dependencies are installed here).
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 22.20.0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: unsigned-windows
@@ -135,13 +133,81 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
-      # The installer is built around the signed executable and the signed tray, then signed itself.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-programs
+          path: out
+          if-no-files-found: error
+          retention-days: 7
+
+  # The installer, built around the signed executable and the signed tray, in a job with no secrets and no OIDC token:
+  # `dotnet tool restore`, the WiX extension and `wix build` are third-party code, and never run where a signing token
+  # can be asked for.
+  installer:
+    name: installer (windows)
+    needs: sign
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.20.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed-programs
+          path: out
+      - name: The programs are signed by Avouro LLC
+        shell: pwsh
+        run: ./packages/native/verify-signed.ps1 -Folder out
       - name: Build the installer (WiX 5)
         shell: pwsh
         run: |
           node packages/native/build-msi.mjs out/scopebond-agent.exe out/scopebond-tray.exe
           New-Item -ItemType Directory -Force msi | Out-Null
           Move-Item packages/native/build/scopebond-agent-*-x64.msi msi/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-installer
+          path: msi
+          if-no-files-found: error
+          retention-days: 7
+
+  # Signing the installer, then everything a release carries: verified, summed, the signed manifest, winget, attested.
+  sign-installer:
+    name: sign installer (windows)
+    needs: [build, installer]
+    if: github.repository == 'avouro-com/scopebond' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    environment: signing
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      # The source, for the release scripts (no dependencies are installed here).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.20.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed-programs
+          path: out
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-installer
+          path: msi
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Sign the installer with Artifact Signing (timestamped)
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
@@ -173,21 +239,10 @@ jobs:
           Move-Item msi/*.msi out/
           Move-Item out/scopebond-agent.exe "out/scopebond-agent-$env:VERSION-x64.exe"
           Move-Item out/scopebond-tray.exe "out/scopebond-tray-$env:VERSION-x64.exe"
+      # signtool verify /pa, a valid signature with a timestamp, and the publisher by the updater's own anchored rule.
       - name: Verify every signature, its timestamp and the publisher
         shell: pwsh
-        run: |
-          $kits = "C:\Program Files (x86)\Windows Kits\10\bin"
-          $signtool = Get-ChildItem $kits -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $signtool) { throw "signtool.exe not found" }
-          foreach ($file in Get-ChildItem out -Include *.exe, *.msi -Recurse) {
-            & $signtool.FullName verify /pa /v $file.FullName
-            if ($LASTEXITCODE -ne 0) { throw "signature check failed: $($file.Name)" }
-            $sig = Get-AuthenticodeSignature $file.FullName
-            if ($sig.Status -ne 'Valid') { throw "$($file.Name): $($sig.Status)" }
-            if ($sig.SignerCertificate.Subject -notmatch 'O=Avouro LLC') { throw "$($file.Name): unexpected publisher $($sig.SignerCertificate.Subject)" }
-            if (-not $sig.TimeStamperCertificate) { throw "$($file.Name): not timestamped" }
-            "$($file.Name): signed by $($sig.SignerCertificate.Subject), timestamped by $($sig.TimeStamperCertificate.Subject)"
-          }
+        run: ./packages/native/verify-signed.ps1 -Folder out -SignTool
       - name: SHA-256 sums
         shell: pwsh
         run: |
@@ -198,7 +253,7 @@ jobs:
           Get-Content SHA256SUMS
           Pop-Location
       # The manifest signed installs trust before updating themselves (the updater key, separate from Authenticode).
-      # Without the secret there is no manifest, and signed installs leave this release to a person to install.
+      # Without the secret the run fails: a release without it is one signed installs would never update to.
       - name: Signed release manifest
         env:
           UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
@@ -302,7 +357,7 @@ jobs:
 
   release:
     name: draft release
-    needs: [build, sign]
+    needs: [build, sign-installer]
     if: inputs.release
     runs-on: ubuntu-latest
     permissions:

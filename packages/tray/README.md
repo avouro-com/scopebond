@@ -29,7 +29,9 @@ PowerShell tray.
 - **Notifications**: one when the state gets worse (for "needs attention", only once it has lasted five minutes, so
   sleep and wake do not flap) and one when it is protected again; none for blocks unless the person chose *All* (then
   one per new block); none at all with *Off*. An agent that has not answered for two minutes while the tray keeps trying
-  counts as a problem; one stopped on purpose does not. *Check now* chosen from the menu says what it found. They carry
+  counts as a problem, and so, at once, does one whose pipe accepts connections but that has given no model for half a
+  minute; one stopped on purpose does not. An agent that stopped without anyone asking and with nothing in its place is
+  told about once when the tray starts it again. *Check now* chosen from the menu says what it found. They carry
   the AppUserModelID `Avouro.Scopebond`, the one the installer's Start-menu entry sets. The rules are plain decisions in
   `src/notify.rs` with unit tests.
 
@@ -44,14 +46,20 @@ nothing. The mapping from model to menu is a pure Rust module (`src/menu.rs`) wi
 **The channel.** The agent listens on a named pipe and writes the pipe's name and a token to `agent.json` in the
 Scopebond home (`%USERPROFILE%\.scopebond`, or `SCOPEBOND_HOME`). The tray reads that file and sends the same HTTP
 requests over the pipe that the agent's other clients (the CLI, the hook's override window) send, with the token in the
-`x-scopebond-agent-token` header.
+`x-scopebond-agent-token` header. Every call has a deadline: the pipe is opened for overlapped I/O, and at the deadline
+the read or write is cancelled and its end awaited before the pipe is closed, so an agent that accepts a connection and
+never answers costs the caller the timeout and leaves no thread or handle behind.
 
 **Supervision.** The installer starts the tray at sign-in; the tray starts the agent (`scopebond-agent.exe run`, the
 program beside it in the install folder) when nothing answers, with no console window. If the agent exits on its own, the
 tray starts it again after 2 s, then 4 s, 8 s … at most 60 s apart, and the wait starts over once the agent has run for
 a while. It never runs two: an agent that is updating itself exits and its replacement starts, so the tray waits for the
 replacement to answer before starting anything, and the agent's lock file refuses a second agent anyway. An agent that
-was stopped on purpose (`scopebond-agent stop`, `autostart off`) stays stopped; the menu offers to start it. A clean
+was stopped on purpose (`scopebond-agent stop`, which leaves `agent-stopped.json` in the Scopebond folder) stays stopped;
+the menu offers to start it. An agent that exited cleanly with no replacement answering within a minute, and that nobody
+asked to stop, is started again with the same waits as after a crash, and the person is told. An agent whose pipe
+accepts connections but that gives no model (or only errors) for half a minute is shown as not answering; half a minute
+later the tray ends it (only the process that runs the agent program beside the tray) and starts it again. A clean
 stop is told apart from a crash by the exit code of the agent the tray started (0), or, for an agent something else
 started, by its endpoint file: a clean stop removes it, a crash leaves it. The tray starts the agent with
 `SCOPEBOND_AGENT_TRAY=off`, so the agent does not draw its PowerShell tray as well. The rules are plain decisions in

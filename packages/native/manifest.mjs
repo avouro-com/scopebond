@@ -27,7 +27,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   const [version, folder] = process.argv.slice(2);
   const key = process.env.UPDATER_SIGNING_KEY;
   if (!version || !folder) { console.error("usage: node manifest.mjs <version> <folder>"); process.exit(1); }
-  if (!key) { console.error("UPDATER_SIGNING_KEY is not set: no manifest, so signed installs will not update to this release by themselves"); process.exit(0); }
+  // A release without a signed manifest is one signed installs never update to: that fails the release, never passes it.
+  if (!key) { console.error("UPDATER_SIGNING_KEY is not set: a release needs its signed manifest (signed installs update only to a release that has one)"); process.exit(1); }
   const text = manifestFor(version, folder);
   const name = join(folder, `scopebond-agent-${version}.manifest.json`);
   writeFileSync(name, text);
