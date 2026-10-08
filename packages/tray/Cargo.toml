@@ -25,6 +25,18 @@ tauri-build = { version = "=2.7.1", features = [] }
 tauri = { version = "=2.12.1", features = ["tray-icon", "custom-protocol"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# A second start (the Start-menu entry) shows this tray's icon and panel instead of a second tray.
+tauri-plugin-single-instance = "=2.5.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 codegen-units = 1

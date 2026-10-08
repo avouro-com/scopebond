@@ -56,7 +56,10 @@ jobs:
           name: cargo-lock
           path: packages/tray/Cargo.lock
           retention-days: 7
-      - name: Unit tests
+      - name: The panel script parses
+        run: node --check ui/panel.js
+      # Unit tests, and the pipe client against a Node server on a named pipe (as the agent serves its channel).
+      - name: Tests
         run: cargo test --locked
       - name: Build (release)
         run: cargo build --release --locked

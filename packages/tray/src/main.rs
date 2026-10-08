@@ -1,21 +1,116 @@
-// The Scopebond tray for Windows: a tray icon and its menu. No console window, ever.
+// The Scopebond tray for Windows: the icon, its menu and the status panel, drawn from the agent's tray model. No console
+// window, ever.
 #![windows_subsystem = "windows"]
 
+use std::panic::AssertUnwindSafe;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use scopebond_tray::agent::{scopebond_home, AgentClient};
 use scopebond_tray::icon::{self, IconState};
 use scopebond_tray::menu::{self, AgentLink, Autostart, Command, Entry, MenuContext};
-use scopebond_tray::model::Notifications;
+use scopebond_tray::model::{Notifications, TrayAction, TrayAnswer};
+use scopebond_tray::panel::{self, Area, PANEL_HEIGHT, PANEL_WIDTH};
+use scopebond_tray::{log, win};
+use serde_json::{json, Value};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, RunEvent, Runtime};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager, PhysicalPosition, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 const TRAY_ID: &str = "scopebond";
+const PANEL: &str = "panel";
+/// How often the tray asks the agent for its model when nothing else asks sooner.
+const REFRESH_EVERY: Duration = Duration::from_secs(30);
+/// How long a result stays on the panel.
+const NOTE_FOR: Duration = Duration::from_secs(120);
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+struct Note {
+    text: String,
+    at: Instant,
+}
+
+/// What was last drawn, so the icon, tooltip and menu change only when they should.
+#[derive(Default)]
+struct Drawn {
+    spec: Vec<Entry>,
+    icon: Option<IconState>,
+    tooltip: String,
+}
+
+struct Shared {
+    client: AgentClient,
+    answer: Mutex<Option<TrayAnswer>>,
+    link: Mutex<AgentLink>,
+    note: Mutex<Option<Note>>,
+    /// The action running now (one at a time), so the panel can say so and not start a second.
+    busy: Mutex<Option<String>>,
+    wake: (Mutex<bool>, Condvar),
+    drawn: Mutex<Drawn>,
+    panel_closed_at: Mutex<Option<Instant>>,
+    /// Where the tray icon is on screen (physical pixels), for placing the panel.
+    anchor: Mutex<Option<(f64, f64)>>,
+}
+
+impl Shared {
+    fn new(client: AgentClient) -> Shared {
+        Shared {
+            client,
+            answer: Mutex::new(None),
+            link: Mutex::new(AgentLink::Starting),
+            note: Mutex::new(None),
+            busy: Mutex::new(None),
+            wake: (Mutex::new(false), Condvar::new()),
+            drawn: Mutex::new(Drawn::default()),
+            panel_closed_at: Mutex::new(None),
+            anchor: Mutex::new(None),
+        }
+    }
+
+    /// Ask the agent again now instead of at the next half minute.
+    fn wake(&self) {
+        *lock(&self.wake.0) = true;
+        self.wake.1.notify_all();
+    }
+
+    fn sleep(&self, at_most: Duration) {
+        let mut woken = lock(&self.wake.0);
+        if !*woken {
+            woken = self.wake.1.wait_timeout(woken, at_most).map(|(g, _)| g).unwrap_or_else(|e| e.into_inner().0);
+        }
+        *woken = false;
+    }
+
+    fn set_note(&self, text: String) {
+        log::line(&format!("note: {text}"));
+        *lock(&self.note) = Some(Note { text, at: Instant::now() });
+    }
+
+    fn snapshot(&self) -> (Option<TrayAnswer>, AgentLink) {
+        (lock(&self.answer).clone(), *lock(&self.link))
+    }
+}
 
 fn icon_image(state: IconState) -> Image<'static> {
     Image::new_owned(icon::render(state, 32), 32, 32)
 }
 
-fn menu_item<R: Runtime>(app: &AppHandle<R>, entry: &Entry) -> tauri::Result<Box<dyn IsMenuItem<R>>> {
+fn autostart_state() -> Autostart {
+    if win::read_string(true, win::RUN_KEY, "Scopebond").is_some() {
+        Autostart::Managed
+    } else if win::read_string(false, win::RUN_KEY, "Scopebond").is_some() {
+        Autostart::On
+    } else {
+        Autostart::Off
+    }
+}
+
+fn menu_item(app: &AppHandle, entry: &Entry) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
     Ok(match entry {
         Entry::Item { id, label, enabled } => Box::new(MenuItem::with_id(app, id.clone(), label, *enabled, None::<&str>)?),
         Entry::Check { id, label, checked, enabled } => {
@@ -32,7 +127,7 @@ fn menu_item<R: Runtime>(app: &AppHandle<R>, entry: &Entry) -> tauri::Result<Box
     })
 }
 
-fn build_menu<R: Runtime>(app: &AppHandle<R>, spec: &[Entry]) -> tauri::Result<Menu<R>> {
+fn build_menu(app: &AppHandle, spec: &[Entry]) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
     for entry in spec {
         menu.append(&*menu_item(app, entry)?)?;
@@ -40,31 +135,372 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, spec: &[Entry]) -> tauri::Result<M
     Ok(menu)
 }
 
-fn on_command<R: Runtime>(app: &AppHandle<R>, command: Command) {
-    if command == Command::HideIcon {
-        if let Some(tray) = app.tray_by_id(TRAY_ID) {
-            let _ = tray.set_visible(false);
+/// Ask the agent for its model and redraw. Only the refresh thread calls this (menus are built on the main thread, which
+/// this waits for, so nothing on the main thread may wait for this).
+fn refresh(app: &AppHandle, shared: &Arc<Shared>) {
+    let answer = shared.client.tray();
+    let link = if answer.is_some() { AgentLink::Answering } else { AgentLink::NotAnswering };
+    *lock(&shared.answer) = answer;
+    *lock(&shared.link) = link;
+    draw(app, shared);
+}
+
+fn draw(app: &AppHandle, shared: &Arc<Shared>) {
+    let (answer, link) = shared.snapshot();
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let ctx = MenuContext {
+        link,
+        autostart: autostart_state(),
+        notifications: answer.as_ref().map(|a| a.settings.notifications).unwrap_or_default(),
+    };
+    let spec = menu::menu_spec(answer.as_ref(), &ctx);
+    let state = match (link, &answer) {
+        (AgentLink::Answering, Some(a)) => a.tray.icon_state(),
+        (AgentLink::Starting, _) | (AgentLink::Answering, None) => IconState::Working,
+        _ => IconState::Problem,
+    };
+    let tooltip = match (link, &answer) {
+        (AgentLink::Answering, Some(a)) if !a.tray.tooltip.is_empty() => a.tray.tooltip.clone(),
+        _ => menu::header(answer.as_ref(), link),
+    };
+    let tooltip: String = tooltip.chars().take(120).collect();
+    let mut drawn = lock(&shared.drawn);
+    if drawn.icon != Some(state) {
+        let _ = tray.set_icon(Some(icon_image(state)));
+        drawn.icon = Some(state);
+    }
+    if drawn.tooltip != tooltip {
+        let _ = tray.set_tooltip(Some(&tooltip));
+        drawn.tooltip = tooltip;
+    }
+    if drawn.spec != spec {
+        match build_menu(app, &spec) {
+            Ok(m) => {
+                let _ = tray.set_menu(Some(m));
+                drawn.spec = spec;
+            }
+            Err(e) => log::line(&format!("could not build the menu: {e}")),
         }
     }
 }
 
+fn timeout_for(action_id: &str) -> Duration {
+    Duration::from_secs(match action_id {
+        "update_now" => 15 * 60,
+        "check_now" => 6 * 60,
+        "send_now" => 3 * 60,
+        "reconnect" => 90,
+        _ => 30,
+    })
+}
+
+/// Call the route of an action the model offers, then say what came of it.
+fn run_action(app: &AppHandle, shared: &Arc<Shared>, action: TrayAction, from_menu: bool) {
+    {
+        let mut busy = lock(&shared.busy);
+        if busy.is_some() {
+            return;
+        }
+        *busy = Some(action.id.clone());
+    }
+    log::line(&format!("running {} ({})", action.id, action.route));
+    let result = shared.client.call("POST", &action.route, Some(&json!({})), timeout_for(&action.id));
+    let failed = result.is_err();
+    let text = match result {
+        Ok(answer) => panel::outcome_text(&action.id, &answer),
+        Err(e) => format!("{} did not finish: {e}", action.label.trim_end_matches('…')),
+    };
+    *lock(&shared.busy) = None;
+    shared.set_note(text);
+    shared.wake();
+    // The sign-in code has to be seen, and so does a failure; otherwise the icon and tooltip say enough.
+    if from_menu && (failed || action.id == "reconnect") {
+        open_panel(app, shared, None);
+    }
+}
+
+fn act_on_block(shared: &Arc<Shared>, action_id: String) {
+    {
+        let mut busy = lock(&shared.busy);
+        if busy.is_some() {
+            return;
+        }
+        *busy = Some(format!("block:{action_id}"));
+    }
+    // The agent shows its Scopebond window; only the person answers it there.
+    let text = match shared.client.call("POST", "/blocked", Some(&json!({ "action_id": action_id })), Duration::from_secs(75)) {
+        Ok(answer) => panel::block_text(&answer),
+        Err(e) => format!("The block could not be acted on: {e}"),
+    };
+    *lock(&shared.busy) = None;
+    shared.set_note(text);
+    shared.wake();
+}
+
+fn copy_diagnostics(shared: &Arc<Shared>) {
+    let text = match shared.client.call("GET", "/status", None, Duration::from_secs(10)) {
+        Ok(status) => {
+            let report = json!({ "tray": env!("CARGO_PKG_VERSION"), "status": status });
+            if win::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default()) {
+                "Diagnostics copied (no keys or credentials)".to_string()
+            } else {
+                "The clipboard could not be used; try again".to_string()
+            }
+        }
+        Err(e) => format!("Diagnostics could not be read: {e}"),
+    };
+    shared.set_note(text);
+}
+
+fn about(shared: &Arc<Shared>) {
+    let status = shared.client.call("GET", "/status", None, Duration::from_secs(10)).unwrap_or(Value::Null);
+    let field = |v: &Value| v.as_str().map(str::to_string).unwrap_or_else(|| "not running".into());
+    let text = format!(
+        "Scopebond\nPublisher: Avouro LLC\n\nTray: {}\nAgent: {}\nHook: {}\nComputer: {}\n\nScopebond folder: {}",
+        env!("CARGO_PKG_VERSION"),
+        field(&status["agent"]["version"]).trim_start_matches("agent/"),
+        field(&status["version"]),
+        field(&status["identity"]["installation_id"]),
+        shared.client.home().display(),
+    );
+    win::message("About Scopebond", &text);
+}
+
+fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
+    let (app2, s) = (app.clone(), shared.clone());
+    match command {
+        Command::OpenStatus => open_panel(app, shared, None),
+        Command::Run(action) => {
+            thread::spawn(move || run_action(&app2, &s, action, true));
+        }
+        Command::StartAgent | Command::ToggleAutostart => {}
+        Command::Notifications(n) => {
+            thread::spawn(move || {
+                if let Err(e) = s.client.call("POST", "/settings", Some(&json!({ "notifications": n.as_str() })), Duration::from_secs(10)) {
+                    s.set_note(format!("The setting could not be saved: {e}"));
+                }
+                s.wake();
+            });
+        }
+        Command::CopyDiagnostics => {
+            thread::spawn(move || copy_diagnostics(&s));
+        }
+        Command::OpenLogs => {
+            let _ = std::process::Command::new("explorer.exe").arg(shared.client.home()).spawn();
+        }
+        Command::About => {
+            thread::spawn(move || about(&s));
+        }
+        Command::HideIcon => {
+            log::line("icon hidden until the tray starts again");
+            if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                let _ = tray.set_visible(false);
+            }
+        }
+    }
+}
+
+/// Open the status panel beside the tray, or bring it forward when it is open.
+fn open_panel(app: &AppHandle, shared: &Arc<Shared>, anchor: Option<(f64, f64)>) {
+    if let Some(window) = app.get_webview_window(PANEL) {
+        let _ = window.set_focus();
+        return;
+    }
+    shared.wake();
+    let (app, shared) = (app.clone(), shared.clone());
+    // Windows are made off the main thread: making a WebView2 window waits for the main thread's message loop.
+    thread::spawn(move || {
+        if let Err(e) = build_panel(&app, &shared, anchor) {
+            log::line(&format!("could not open the status panel: {e}"));
+        }
+    });
+}
+
+fn build_panel(app: &AppHandle, shared: &Arc<Shared>, anchor: Option<(f64, f64)>) -> tauri::Result<()> {
+    let window = WebviewWindowBuilder::new(app, PANEL, WebviewUrl::App("index.html".into()))
+        .title("Scopebond status")
+        .inner_size(PANEL_WIDTH, PANEL_HEIGHT)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .decorations(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible(false)
+        .data_directory(shared.client.home().join("tray").join("webview"))
+        .build()?;
+    let anchor = anchor
+        .or_else(|| *lock(&shared.anchor))
+        .or_else(|| window.cursor_position().ok().map(|p| (p.x, p.y)))
+        .unwrap_or((0.0, 0.0));
+    let monitor = window.monitor_from_point(anchor.0, anchor.1).ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(m) = monitor {
+        let work = m.work_area();
+        let area = Area { x: work.position.x as f64, y: work.position.y as f64, width: work.size.width as f64, height: work.size.height as f64 };
+        let scale = m.scale_factor();
+        let (x, y) = panel::place(anchor, area, (PANEL_WIDTH * scale, PANEL_HEIGHT * scale));
+        window.set_position(PhysicalPosition::new(x, y))?;
+    }
+    window.show()?;
+    window.set_focus()?;
+    let (w, s) = (window.clone(), shared.clone());
+    window.on_window_event(move |event| {
+        // It closes when it loses focus (a click elsewhere, Alt+Tab), and is made again next time.
+        if let WindowEvent::Focused(false) = event {
+            *lock(&s.panel_closed_at) = Some(Instant::now());
+            let _ = w.destroy();
+        }
+    });
+    Ok(())
+}
+
+fn on_tray_event(app: &AppHandle, shared: &Arc<Shared>, event: TrayIconEvent) {
+    if let TrayIconEvent::Click { rect, button, button_state, position, .. } = event {
+        let (x, y, w, h) = match (rect.position, rect.size) {
+            (tauri::Position::Physical(p), tauri::Size::Physical(s)) => (p.x as f64, p.y as f64, s.width as f64, s.height as f64),
+            _ => (position.x, position.y, 0.0, 0.0),
+        };
+        *lock(&shared.anchor) = Some((x + w / 2.0, y + h / 2.0));
+        if button != MouseButton::Left || button_state != MouseButtonState::Up {
+            return;
+        }
+        if let Some(window) = app.get_webview_window(PANEL) {
+            let _ = window.destroy();
+            return;
+        }
+        // The click that took focus from the panel (and so closed it) does not open it again.
+        if lock(&shared.panel_closed_at).map(|t| t.elapsed() < Duration::from_millis(400)).unwrap_or(false) {
+            return;
+        }
+        open_panel(app, shared, Some((position.x, position.y)));
+    }
+}
+
+fn link_name(link: AgentLink) -> &'static str {
+    match link {
+        AgentLink::Answering => "answering",
+        AgentLink::Starting => "starting",
+        AgentLink::NotAnswering => "not_answering",
+        AgentLink::Stopped => "stopped",
+        AgentLink::Missing => "missing",
+    }
+}
+
+// What the panel asks for. It shows the same model the menu does.
+
+#[tauri::command]
+fn panel_state(shared: State<'_, Arc<Shared>>) -> Value {
+    let (answer, link) = shared.snapshot();
+    let note = lock(&shared.note).as_ref().filter(|n| n.at.elapsed() < NOTE_FOR).map(|n| n.text.clone());
+    let headline = match (link, &answer) {
+        (AgentLink::Answering, Some(a)) => a.tray.headline.clone(),
+        _ => menu::header(answer.as_ref(), link).trim_start_matches("Scopebond — ").to_string(),
+    };
+    let state = match (link, &answer) {
+        (AgentLink::Answering, Some(a)) => a.tray.icon_state().as_str(),
+        (AgentLink::Starting, _) => "working",
+        _ => "problem",
+    };
+    json!({
+        "link": link_name(link),
+        "state": state,
+        "stateLabel": panel::state_label(state),
+        "headline": headline,
+        "answer": answer,
+        "note": note,
+        "busy": *lock(&shared.busy),
+        "version": env!("CARGO_PKG_VERSION"),
+    })
+}
+
+#[tauri::command]
+fn panel_action(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> bool {
+    let action = lock(&shared.answer).as_ref().and_then(|a| a.tray.offered_action(&id).cloned());
+    let Some(action) = action else { return false };
+    let s = shared.inner().clone();
+    thread::spawn(move || run_action(&app, &s, action, false));
+    true
+}
+
+#[tauri::command]
+fn panel_block(action_id: String, shared: State<'_, Arc<Shared>>) -> bool {
+    let known = lock(&shared.answer)
+        .as_ref()
+        .map(|a| a.tray.recent_blocks.iter().any(|b| b.can_act && b.action_id.as_deref() == Some(action_id.as_str())))
+        .unwrap_or(false);
+    if !known {
+        return false;
+    }
+    let s = shared.inner().clone();
+    thread::spawn(move || act_on_block(&s, action_id));
+    true
+}
+
+#[tauri::command]
+fn panel_command(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> bool {
+    let command = match id.as_str() {
+        "copy_diagnostics" => Command::CopyDiagnostics,
+        "open_logs" => Command::OpenLogs,
+        "start_agent" => Command::StartAgent,
+        _ => return false,
+    };
+    dispatch(&app, shared.inner(), command);
+    true
+}
+
+#[tauri::command]
+fn panel_close(window: WebviewWindow) {
+    let _ = window.destroy();
+}
+
 fn main() {
+    let home = scopebond_home().unwrap_or_else(std::env::temp_dir);
+    log::init(&home);
+    log::line(&format!("Scopebond tray {} starting for {}", env!("CARGO_PKG_VERSION"), home.display()));
+    let shared = Arc::new(Shared::new(AgentClient::new(home)));
+    let open_at_start = std::env::args().any(|a| a == "--status");
+
     let app = tauri::Builder::default()
-        .setup(|app| {
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Started again (the Start-menu entry, or a second sign-in start): show the icon and the panel in this one.
+            if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                let _ = tray.set_visible(true);
+            }
+            if let Some(shared) = app.try_state::<Arc<Shared>>() {
+                open_panel(app, &shared.inner().clone(), None);
+            }
+        }))
+        .manage(shared.clone())
+        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_command, panel_close])
+        .setup(move |app| {
             let handle = app.handle().clone();
-            let ctx = MenuContext { link: AgentLink::NotAnswering, autostart: Autostart::Off, notifications: Notifications::Problems };
-            let tray_menu = build_menu(&handle, &menu::menu_spec(None, &ctx))?;
+            let (s_menu, s_tray) = (shared.clone(), shared.clone());
+            let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Problems });
             TrayIconBuilder::with_id(TRAY_ID)
-                .icon(icon_image(IconState::Offline))
-                .tooltip("Scopebond")
-                .menu(&tray_menu)
+                .icon(icon_image(IconState::Working))
+                .tooltip("Scopebond — starting")
+                .menu(&build_menu(&handle, &starting)?)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    if let Some(command) = menu::command_for(event.id().as_ref(), None) {
-                        on_command(app, command);
+                .on_menu_event(move |app, event| {
+                    let answer = lock(&s_menu.answer).clone();
+                    if let Some(command) = menu::command_for(event.id().as_ref(), answer.as_ref()) {
+                        dispatch(app, &s_menu, command);
                     }
                 })
+                .on_tray_icon_event(move |tray, event| on_tray_event(tray.app_handle(), &s_tray, event))
                 .build(app)?;
+            *lock(&shared.drawn) = Drawn { spec: starting, icon: Some(IconState::Working), tooltip: "Scopebond — starting".into() };
+
+            let (app_refresh, s_refresh) = (handle.clone(), shared.clone());
+            thread::spawn(move || loop {
+                if std::panic::catch_unwind(AssertUnwindSafe(|| refresh(&app_refresh, &s_refresh))).is_err() {
+                    log::line("the refresh failed; trying again");
+                }
+                s_refresh.sleep(REFRESH_EVERY);
+            });
+            if open_at_start {
+                open_panel(&handle, &shared, None);
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

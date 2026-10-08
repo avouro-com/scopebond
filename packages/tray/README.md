@@ -81,7 +81,7 @@ changes.
 ## Status
 
 - [x] The package, the icon, the model-to-menu mapping and its tests, the CI job.
-- [ ] The pipe client, the menu from the live model, the status panel.
+- [x] The pipe client, the menu from the live model, the status panel.
 - [ ] Supervision of the agent.
 - [ ] The installer ships the signed tray and starts it at sign-in; the updater restarts it.
 - [ ] Notifications.

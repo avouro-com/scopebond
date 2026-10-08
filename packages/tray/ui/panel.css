@@ -1,2 +1,136 @@
-/* The status panel. Filled in with the panel itself. */
-:root { color-scheme: light dark; }
+/* The status panel. The palette is the agent's PowerShell tray's (and src/icon.rs's); light and dark follow Windows. */
+:root {
+  color-scheme: light dark;
+  --sb-navy: #1b3a5c;
+  --sb-slate: #57606a;
+  --sb-cream: #f7f4ee;
+  --sb-grey: #6e7781;
+  --sb-amber: #db9a04;
+  --sb-red: #cf222e;
+  --sb-blue: #0969da;
+  --sb-ink: #1f1a12;
+
+  --bg: var(--sb-cream);
+  --surface: #ffffff;
+  --fg: var(--sb-ink);
+  --muted: #57534a;
+  --border: #d9d3c7;
+  --accent: var(--sb-navy);
+  --accent-fg: var(--sb-cream);
+  --link: #0a5bc4;
+  --focus: var(--sb-blue);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1c2b;
+    --surface: #16273a;
+    --fg: #f2efe8;
+    --muted: #b3bcc6;
+    --border: #2c4157;
+    --accent: var(--sb-cream);
+    --accent-fg: var(--sb-navy);
+    --link: #79b8ff;
+    --focus: #58a6ff;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+#panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 14px 16px 10px;
+  border: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.head { display: flex; align-items: center; gap: 10px; }
+.titles { flex: 1; min-width: 0; }
+h1 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.state { margin: 0; color: var(--muted); font-size: 12px; }
+
+/* The state as shape and colour, like the icon's badge. */
+.badge {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--sb-cream);
+  box-shadow: 0 0 0 1px var(--border);
+  position: relative;
+  background: var(--sb-navy);
+}
+.badge::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 700 12px/18px "Segoe UI", sans-serif;
+  text-align: center;
+  color: #fff;
+}
+.state-protected { background: var(--sb-navy); }
+.state-protected::after { content: "S"; color: var(--sb-cream); }
+.state-working { background: var(--sb-blue); }
+.state-working::after { content: "↻"; }
+.state-offline { background: var(--sb-grey); }
+.state-offline::after { content: "–"; }
+.state-attention { background: var(--sb-amber); }
+.state-attention::after { content: "!"; color: var(--sb-ink); }
+.state-problem { background: var(--sb-red); }
+.state-problem::after { content: "×"; }
+.state-disconnected { background: var(--sb-slate); }
+.state-disconnected::after { content: "/"; }
+
+.status { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); overflow-wrap: anywhere; }
+.status.empty { display: none; }
+.hint { margin: 0; color: var(--muted); }
+
+.rows { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+.rows dt { color: var(--muted); }
+.rows dd { margin: 0; overflow-wrap: anywhere; }
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.6; cursor: default; }
+button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button.primary { width: 100%; padding: 8px 12px; background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+button.link { border: none; background: none; padding: 2px 0; color: var(--link); text-decoration: underline; }
+button.close { border: none; background: none; font-size: 18px; line-height: 1; padding: 2px 6px; color: var(--muted); }
+
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.blocks h2 { margin: 4px 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.blocks ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.blocks li { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.blocks .summary { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; grid-column: 1 / -1; }
+.blocks .when { color: var(--muted); font-size: 12px; }
+.blocks .acted { color: var(--muted); font-size: 12px; }
+
+footer { margin-top: auto; display: flex; gap: 14px; align-items: center; padding-top: 6px; border-top: 1px solid var(--border); }
+footer .version { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (forced-colors: active) { .badge { forced-color-adjust: none; } }
