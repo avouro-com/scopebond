@@ -9,7 +9,7 @@
 // ambiguous Windows short path.
 
 import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
-import { canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
+import { INTERPRETERS, canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -50,10 +50,17 @@ const trimDotsSpaces = (seg: string): string => {
   while (end > 0 && (seg[end - 1] === "." || seg[end - 1] === " ")) end--;
   return end === 0 ? seg : seg.slice(0, end);
 };
+// An NTFS stream or index suffix on any part of a path names the same file or folder: `.scopebond::$INDEX_ALLOCATION`
+// is the folder `.scopebond`, `policy.json:x` and `policy.json::$DATA` are streams of `policy.json`. A drive (`C:`) stays.
+const NTFS_SUFFIX = /^([^:]+):(?:[^:]*)(?::\$[A-Za-z_]+)?$/;
+const stripStream = (seg: string, index: number): string => {
+  if (index === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
+  const match = NTFS_SUFFIX.exec(seg);
+  return match ? match[1] : seg;
+};
 const normPath = (s: string): string =>
   s.replace(/\\/g, "/")
-    .replace(/::?\$data$/i, "")
-    .split("/").map((seg) => (seg === "." || seg === ".." ? seg : trimDotsSpaces(seg))).join("/")
+    .split("/").map((seg, i) => (seg === "." || seg === ".." ? seg : trimDotsSpaces(stripStream(seg, i)))).join("/")
     .replace(/\/(?:\.\/)+/g, "/").replace(/\/{2,}/g, "/");
 
 const rel = (value: unknown, cwd?: string): string => {
@@ -216,9 +223,17 @@ const EDITORS = new Set(["vi", "vim", "nvim", "ex", "ed", "nano", "pico", "emacs
 const COPIERS = new Set(["cp", "mv", "rsync", "scp", "install", "ln", "copy-item", "cpi", "copy", "move-item", "mi", "move", "robocopy", "xcopy", "rename-item", "ren"]);
 const MOVERS = new Set(["mv", "move-item", "mi", "move", "rename-item", "ren"]);
 // Programs whose operands are files they WRITE (or whose metadata they change).
-const WRITERS = new Set(["tee", "touch", "truncate", "set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "clear-content", "clc", "chmod", "chown", "chattr", "attrib", "icacls", "set-acl", "shred", "unlink", "sponge"]);
+const WRITERS = new Set(["tee", "touch", "truncate", "set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "clear-content", "clc", "chmod", "chown", "chattr", "attrib", "icacls", "set-acl", "shred", "unlink", "sponge", "tee-object", "expand-archive"]);
+// Deleting changes a file as surely as writing it. A delete of one of the always-protected places (Scopebond's own folder,
+// the coding agents' hook settings, git hooks) is recorded as a write of that path, so the always-on floor stops the coding
+// agent removing Scopebond's files and their evidence. Any other delete stays a plain shell.exec, as before.
+const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri"]);
+const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks)(?:$|[\\/:])/i;
 // Programs that send what they are given elsewhere (network, clipboard, mail): an
 // operand naming a secret location is a read of it.
+const TREE_COPIERS = new Set(["tar", "bsdtar", "zip", "7z", "7za", "7zr", "rsync", "cp", "scp", "robocopy", "xcopy", "copy-item", "cpi", "ditto", "compress-archive", "cpio", "pax"]);
+/** A home folder, written any way a shell or PowerShell names it, or a folder above every home (`/`, `/home`, `/Users`, C:\Users). */
+const HOME_OR_ABOVE = /^(?:~|\$HOME|\$\{HOME\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%|%HOMEPATH%|\/|\/home(?:\/[^/]+)?|\/Users(?:\/[^/]+)?|\/root|[A-Za-z]:\\Users(?:\\[^\\]+)?|[A-Za-z]:\/Users(?:\/[^/]+)?|[A-Za-z]:\\?)[\\/]?\.?[\\/]?$/i;
 const UPLOADERS = new Set([
   "curl", "wget", "http", "https", "xh", "httpie", "nc", "ncat", "netcat", "socat", "telnet", "ftp", "sftp", "lftp", "smbclient",
   "aws", "gsutil", "gcloud", "az", "rclone", "s3cmd", "gh", "glab", "mail", "mailx", "sendmail", "mutt", "xclip", "xsel",
@@ -245,11 +260,16 @@ function curlFileRef(flag: string, value: string): string | undefined {
 // or staged (`gh gist create .env`, `git add .env`) is a read of that path.
 const SENSITIVE = /(?:^|[/\\])(?:\.scopebond(?:[/\\]|$)|\.env(?:\.[^/\\]*)?$|\.envrc$|\.ssh(?:[/\\]|$)|\.aws(?:[/\\]|$)|\.npmrc$|\.pypirc$|_?\.?netrc$|\.git-credentials$|\.kube(?:[/\\]|$)|\.docker(?:[/\\]|$)|\.azure(?:[/\\]|$)|\.gnupg(?:[/\\]|$)|\.config[/\\](?:gcloud|gh)(?:[/\\]|$)|\.credentials\.json$)|\.(?:key|pem|p12|pfx|jks|keystore)$/i;
 
-const INTERPRETERS = new Set(["node", "deno", "bun", "python", "python3", "py", "ruby", "perl", "php", "osascript", "lua", "tclsh"]);
 // Path literals inside inline code. Each alternative starts at a boundary (not after
 // a word character — so `process.env` is not `.env`) and has no overlapping repeats,
 // keeping the scan linear; input is capped per argument.
 // Scopebond's own folder, and what follows it, wherever it appears in an argument.
+/** Code that builds a path from pieces (`'.scope' + 'bond'`, `".sco" "pebond"`, SQL `'.scope' || 'bond'`) is read with the
+ *  pieces joined, so the scan sees the path the code will use. Linear: one pass of a bounded string. */
+export function foldConcatenation(code: string): string {
+  return code.replace(/(['"`])\s*(?:\+|\|\||\.\.|\.)?\s*\1/g, "");
+}
+const SCOPEBOND_GLOB = /(?<![\w-])\.sc(?:o(?:p(?:e(?:b(?:o(?:n(?:d)?)?)?)?)?)?)?[*?[]/i;
 const SCOPEBOND_IN_TEXT = /(?<![\w-])\.scopebond(?:[\\/][\w.-]*)?(?![\w-])/gi;
 const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
 // A file or process API in the same inline snippet, required in call or member form
@@ -259,6 +279,10 @@ const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+
 // file_get_contents) and PowerShell (Get-/Set-Content, Out-File, Invoke-*).
 const FILE_API = /\b(?:open|fopen|readlink|read_file|readfile|read_to_string|readfilesync|writefile|writefilesync|appendfile|appendfilesync|createreadstream|createwritestream|openfile|opensync|copyfile|copyfilesync|rename|renamesync|unlink|unlinksync|popen|spawn|spawnsync|exec|execsync|execfile|execfilesync|system|shell_exec|proc_open|file_get_contents|file_put_contents|urlopen)\s*\(|\b(?:fs|io|os|subprocess|child_process|pathlib|shutil|File|Dir|IO|Pathname|Path|FileUtils)\s*\.\s*\w|\bimport\s+(?:os|subprocess|shutil|pathlib|io)\b|\brequire\s*\(\s*['"`](?:node:)?(?:fs|child_process)|\b(?:Get-Content|Set-Content|Out-File|Add-Content|Import-Csv|Invoke-\w+)\b/i;
 const CODE_SCAN_LIMIT = 20000;
+// A path that is only known at run time: a variable, a command substitution (the parser's placeholder) or a backtick.
+const COMPUTED_TARGET = /\$|`|__sb_subst/;
+// .NET file and stream types as PowerShell names them: `[System.IO.File]::…`, `[IO.Directory]::…`, `New-Object IO.StreamWriter`.
+const DOTNET_FILE_API = /\[\s*(?:System\.)?IO\.(?:File|Directory|FileInfo|DirectoryInfo|FileStream|StreamWriter|StreamReader|Path)\s*\]\s*::|New-Object\s+(?:-TypeName\s+)?(?:System\.)?IO\.(?:FileInfo|DirectoryInfo|FileStream|StreamWriter|StreamReader)\b/i;
 
 /** Option arities of the content readers, so an option's value (`grep -C 3`, `rg -g
  *  '!*.key'`, `head -n 1`) is never taken for a file operand. `short`: letters that
@@ -394,7 +418,12 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   let unknownTarget = false;
   const prog = canonProgram(sc.program);
   const read = (w: string | undefined) => { if (w !== undefined && isPathWord(w)) ops.push(...fileIntent("file.read", w, dir, cwd)); };
-  const write = (w: string | undefined) => { if (w !== undefined && isPathWord(w)) ops.push(...fileIntent("file.write", w, dir, cwd)); };
+  const write = (w: string | undefined) => {
+    if (w === undefined) return;
+    // A target computed at run time (`> "$P"`, `tee $(…)`) cannot be judged from the text: it is also an unknown write.
+    if (COMPUTED_TARGET.test(w)) unknownTarget = true;
+    if (isPathWord(w)) ops.push(...fileIntent("file.write", w, dir, cwd));
+  };
   const args = sc.argv;
   const spec = OPTIONS.get(prog);
   const flagFiles = READERS.has(prog) || EDITORS.has(prog) || COPIERS.has(prog) || UPLOADERS.has(prog);
@@ -450,7 +479,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       const value = args[i + 1];
       if (value !== undefined && !value.startsWith("-")) {
         if (COPIERS.has(prog) && t === "-t") { write(value); i++; continue; } // cp -t DIR
-        if (WRITERS.has(prog) && /^-(?:path|literalpath|filepath)$/.test(lower)) { write(value); i++; continue; } // Set-Content -Path f
+        if (WRITERS.has(prog) && /^-(?:path|literalpath|filepath|destinationpath)$/.test(lower)) { write(value); i++; continue; } // Set-Content -Path f
         if (WRITE_FLAGS.has(lower)) { write(value); i++; continue; }
         if (flagFiles && READ_FLAGS.has(lower)) { read(value.replace(/^@/, "")); i++; continue; }
         if (value.startsWith("@")) { read(value.slice(1)); i++; continue; }
@@ -469,7 +498,12 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   if (git) {
     const sub = git.sub?.toLowerCase();
     const a = git.args;
-    if (sub === "add") {
+    if (sub === "clone") {
+      // `git clone URL DIR` writes DIR (the repository's name in the working folder when none is given).
+      const { before } = gitPositionals(a, ["-b", "--branch", "-o", "--origin", "-u", "--upload-pack", "--reference", "--separate-git-dir", "--depth", "-c", "--config", "--template", "-j", "--jobs", "--filter"]);
+      if (before[1] !== undefined) write(before[1]);
+      else unknownTarget = true;
+    } else if (sub === "add") {
       // Staging a secret is one commit away from publishing it.
       const { before, after } = gitPositionals(a, ["--pathspec-from-file"]);
       [...before, ...(after ?? [])].filter(isSensitiveOperand).forEach(read);
@@ -484,6 +518,11 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       const all = [...before, ...(after ?? [])];
       all.slice(0, -1).forEach(read);
       all.forEach(write);
+    } else if (sub === "clean") {
+      // `git clean -fdx [paths]` deletes untracked (and ignored) files under its paths, the working folder when none.
+      const { before, after } = gitPositionals(a, ["-e", "--exclude"]);
+      const paths = [...before, ...(after ?? [])];
+      for (const p of paths.length ? paths : ["."]) { write(p); if (HOME_OR_ABOVE.test(p)) write("~/.scopebond"); }
     } else if (sub === "rm" && !a.includes("--cached")) {
       const { before, after } = gitPositionals(a, ["--pathspec-from-file"]);
       [...before, ...(after ?? [])].forEach(write);
@@ -497,11 +536,28 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     const starts: string[] = [];
     for (const w of args) { if (/^[-(!]/.test(w) || w === "\\(") break; starts.push(w); }
     if (args.some((w) => /^-(?:exec|execdir|ok|okdir)$/.test(w))) starts.forEach(read);
+    // `find DIR -delete` removes what it finds under DIR: a write of DIR.
+    // `find DIR -delete` and `find DIR -exec rm {} +` (or `unlink`, `shred`, `rmdir`) remove what they find under DIR: a
+    // write of DIR, and of Scopebond's folder when DIR is a home folder or above it (`find ~ -name 'receipts.db*' -delete`).
+    const deletes = args.includes("-delete") || args.some((w, k) => /^-(?:exec|execdir|ok|okdir)$/.test(w) && /^(?:rm|unlink|shred|rmdir|del|trash)$/.test(canonProgram(args[k + 1] ?? "")));
+    if (deletes) for (const start of starts.length ? starts : ["."]) { write(start); if (HOME_OR_ABOVE.test(start)) write("~/.scopebond"); }
     args.forEach((w, k) => { if (/^-(?:fprint0?|fprintf|fls)$/.test(w)) write(args[k + 1]); });
   } else if ((prog === "docker" || prog === "podman" || prog === "kubectl") && operands[0] === "cp") {
     const local = (p: string | undefined) => p !== undefined && (!/^[^/\\]+:/.test(p) || /^[A-Za-z]:[\\/]/.test(p));
     if (local(operands[1])) read(operands[1]);
     if (local(operands[2])) write(operands[2]);
+  } else if (prog === "certutil" && args.some((w) => /^[-/](?:decode|decodehex|encode|encodehex|urlcache)$/i.test(w))) {
+    // `certutil -decode IN OUT` and `certutil -urlcache -split -f URL OUT` write their last operand.
+    const words = operands.filter((w) => !/^[-/]/.test(w));
+    if (words.length) write(words[words.length - 1]);
+  } else if (prog === "expand" || prog === "bitsadmin") {
+    // `expand SRC DST` and `bitsadmin /transfer JOB URL DST` write their last operand.
+    const words = operands.filter((w) => !/^[-/]/.test(w) || /^\/[^/]+\//.test(w));
+    if (words.length > 1) write(words[words.length - 1]);
+  } else if (prog === "split" || prog === "csplit") {
+    // `split [opts] FILE PREFIX` writes PREFIXaa, PREFIXab…: a write of PREFIX's place.
+    if (operands.length > 1) write(operands[operands.length - 1]);
+    else unknownTarget = true;
   } else if (prog === "patch") {
     // The file a patch changes is named inside the patch; an explicit operand is written.
     unknownTarget = true;
@@ -536,6 +592,9 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     sources.forEach(read);
     if (MOVERS.has(prog)) sources.forEach(write);
     if (!hasTarget) write(operands[operands.length - 1]);
+  } else if (DELETERS.has(prog)) {
+    operands.filter((o) => ALWAYS_PROTECTED.test(o)).forEach(write);
+    for (let k = 0; k < args.length - 1; k++) if (/^-(?:path|literalpath)$/i.test(args[k]) && ALWAYS_PROTECTED.test(args[k + 1])) write(args[k + 1]);
   } else if (WRITERS.has(prog)) {
     // A permission/owner spec is not a path: `chmod +x f`, `chmod 0755 f`,
     // `chattr +i f`, `chown root:wheel f`, `attrib +r f` write f, not "+x".
@@ -554,17 +613,28 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     // a file or process API, so a path merely named in a log string is not a finding.
     // Code that assembles a path at run time is beyond a cooperative hook (use a gateway).
     for (const w of args) {
-      const code = w.slice(0, CODE_SCAN_LIMIT);
+      const code = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
       // Scopebond's own folder is read through any API (`DatabaseSync('…/.scopebond/receipts.db')`) or handed to a
       // script as an argument: naming it is enough. The read floor is a classifier, not a sandbox (see the README).
       for (const m of code.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+      // A wildcard that starts like Scopebond's folder (`~/.scope*/receipts.db*`) can only mean it.
+      if (SCOPEBOND_GLOB.test(code)) { read("~/.scopebond"); if (FILE_API.test(code)) write("~/.scopebond"); }
       if (!FILE_API.test(code)) continue;
       for (const m of code.match(SENSITIVE_IN_CODE) ?? []) { read(m); write(m); }
     }
   } else if (prog === "sqlite3" || prog === "sqlite") {
     // Options (`-cmd`, `-init`, `-separator`) take values and SQL can ATTACH any file: the first operand is not enough.
     read(operands[0]);
-    for (const w of args) for (const m of w.slice(0, CODE_SCAN_LIMIT).match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+    for (const w of args) {
+      const sql = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
+      for (const m of sql.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+      // ATTACH or .open of a path the statement computes (a function call, a parameter, a subquery) cannot be judged.
+      for (const m of sql.matchAll(/(?:\battach\s+(?:database\s+)?|^\s*\.open\s+|;\s*\.open\s+)([^\s;]+)/gim)) {
+        const target = m[1];
+        if (/^'[^']*'$|^"[^"]*"$/.test(target)) read(target.slice(1, -1));
+        else unknownTarget = true;
+      }
+    }
   } else if (UPLOADERS.has(prog)) {
     operands.filter(isSensitiveOperand).forEach(read);
   }
@@ -576,6 +646,14 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   const linkTarget = linkTargetOf(prog, args, operands);
   if (linkTarget !== undefined && isPathWord(linkTarget)) {
     ops.push(...fileIntent("file.write", linkTarget, dir, cwd).map((m) => ({ ...m, intent: { ...m.intent, params: { ...m.intent.params, link_target: true } } })));
+  }
+
+  // Copying or archiving a whole home folder (or a folder above it) carries Scopebond's folder along, and the copy can be
+  // renamed and read later: it is a read of that folder (`tar czf h.tgz -C ~ .`, `cp -r ~ /tmp/h`, `rsync -a ~/ x`).
+  if (TREE_COPIERS.has(prog)) {
+    const sources = [...operands];
+    args.forEach((w, k) => { if (/^(?:-C|--directory|-Path|-LiteralPath|-SourcePath)$/i.test(w)) sources.push(args[k + 1] ?? ""); else if (/^--directory=/.test(w)) sources.push(w.slice(12)); });
+    if (sources.some((s) => HOME_OR_ABOVE.test(s))) read("~/.scopebond");
   }
 
   for (const r of sc.redirects) {
@@ -601,7 +679,11 @@ const isHookCli = (w: string): boolean =>
 const isAgentCli = (w: string): boolean =>
   /^scopebond-agent(?:\.js)?$/.test(canonProgram(w)) || /^@scopebond\/agent(?:@[^/\s]*)?$/i.test(w) || /@scopebond[\\/]agent[\\/]dist[\\/]cli\.js$/i.test(w);
 const isScopebondPackage = (w: string): boolean => /^@scopebond\/(?:hook|agent)(?:@[^/\s]*)?$/i.test(w);
-const mentionsAgent = (w: string): boolean => /scopebond-agent|@scopebond[\\/]agent/i.test(w);
+const mentionsAgent = (w: string): boolean => /scopebond-agent|scopebond-tray|@scopebond[\\/]agent/i.test(w);
+// Agent commands that switch Scopebond off or point this computer elsewhere (the hook's own `uninstall` and `login` likewise).
+const AGENT_SELF_SUBCOMMANDS = new Set(["uninstall", "setup"]);
+// PowerShell's registry writers, for a Run value named for Scopebond.
+const REGISTRY_WRITERS = new Set(["remove-itemproperty", "rp", "set-itemproperty", "sp", "new-itemproperty"]);
 const KILLERS = new Set(["kill", "pkill", "killall", "taskkill", "tskill", "stop-process", "spps", "wmic"]);
 const UNINSTALL: Record<string, Set<string>> = {
   npm: new Set(["uninstall", "unlink", "remove", "rm", "r", "un"]),
@@ -620,19 +702,53 @@ function uninstallsScopebond(prog: string, args: string[]): boolean {
   const subs = UNINSTALL[prog];
   return !!subs && subs.has((words[0] ?? "").toLowerCase()) && args.some((a, i) => isGlobalFlag(a, args[i + 1]));
 }
+// Coding agents a session can start, and the ways to start one without this computer's hooks: a settings override, a
+// config folder of its own, permission checks skipped, or (Codex) a config override that touches hooks or notify.
+const HARNESSES = new Set(["claude", "codex", "cursor-agent", "cursor", "gemini", "opencode", "aider"]);
+const HARNESS_CONFIG_ENV = /(?:^|\s)(?:CLAUDE_CONFIG_DIR|CODEX_HOME|CURSOR_CONFIG_DIR|XDG_CONFIG_HOME)=/;
+function harnessWithoutHooks(sc: SimpleCommand, all: string[]): boolean {
+  const k = all.findIndex((w) => HARNESSES.has(canonProgram(w)));
+  if (k === -1) return false;
+  const args = all.slice(k + 1);
+  if (HARNESS_CONFIG_ENV.test(sc.raw)) return true;
+  if (args.some((a) => /^--settings(?:=|$)|^--dangerously-skip-permissions$|^--dangerously-bypass-approvals-and-sandbox$|^--yolo$/i.test(a))) return true;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const value = /^(?:-c|--config)$/.test(a) ? args[i + 1] : /^--config=/.test(a) ? a.slice(9) : null;
+    if (value && /hook|notify|disable/i.test(value)) return true;
+  }
+  return false;
+}
 function selfDisable(sc: SimpleCommand): boolean {
   const all = [sc.programRaw, ...sc.argv];
+  // Starting a coding agent with its hooks off or redirected runs actions this hook never sees: a switch-off like `autostart off`.
+  if (harnessWithoutHooks(sc, all)) return true;
   for (let k = 0; k < all.length; k++) {
     const rest = all.slice(k + 1).filter((a) => !a.startsWith("-"));
     if (isHookCli(all[k]) && rest[0] && SELF_SUBCOMMANDS.has(rest[0].toLowerCase())) return true;
     if (isHookCli(all[k]) && rest[0]?.toLowerCase() === "rules" && rest[1] && !RULES_READ_ONLY.has(rest[1].toLowerCase())) return true;
     if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "autostart" && rest[1]?.toLowerCase() !== "on") return true;
     if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "stop") return true;
+    // `uninstall` removes Scopebond (with `--purge`, its keys and records too); `setup` signs this computer in to a workspace.
+    if (isAgentCli(all[k]) && rest[0] && AGENT_SELF_SUBCOMMANDS.has(rest[0].toLowerCase())) return true;
+    // The signed executable is also the hook: `scopebond-agent.exe hook uninstall` is the hook's own command.
+    if (isAgentCli(all[k]) && rest[0]?.toLowerCase() === "hook") {
+      const sub = rest[1]?.toLowerCase();
+      if (sub && SELF_SUBCOMMANDS.has(sub)) return true;
+      if (sub === "rules" && rest[2] && !RULES_READ_ONLY.has(rest[2].toLowerCase())) return true;
+    }
   }
   const prog = canonProgram(sc.program);
-  // Stopping the running agent by name (`pkill -f scopebond-agent`, a `wmic … terminate`
-  // on its command line). Its pid is in the home's agent.json, which is already unreadable.
+  // Stopping the running agent or its tray by name (`pkill -f scopebond-agent`, `taskkill /IM scopebond-tray.exe`, a
+  // `wmic … terminate` on its command line). Its pid is in the home's agent.json, which is already unreadable.
   if (KILLERS.has(prog) && sc.argv.some(mentionsAgent) && (prog !== "wmic" || sc.argv.some((a) => /^(?:delete|terminate)$/i.test(a)))) return true;
+  // Removing the signed install (`msiexec /x …scopebond…msi`, `winget uninstall Avouro.Scopebond`) or running the uninstall
+  // that Windows Settings -> Apps runs for an npm install (`uninstall-agent.ps1`).
+  if (prog === "msiexec" && sc.argv.some((a) => /^[-/](?:x|uninstall)$/i.test(a)) && sc.argv.some((a) => /scopebond/i.test(a))) return true;
+  if (prog === "winget" && sc.argv.some((a) => /^(?:uninstall|remove|rm)$/i.test(a)) && sc.argv.some((a) => /scopebond/i.test(a))) return true;
+  if (all.some((a) => /(?:^|[\\/])uninstall-agent\.ps1$/i.test(a))) return true;
+  // Turning off its start with Windows by hand: deleting or changing a Run value named for Scopebond.
+  if (((prog === "reg" && /^(?:delete|add|import)$/i.test(sc.argv[0] ?? "")) || REGISTRY_WRITERS.has(prog)) && sc.argv.some((a) => /scopebond/i.test(a))) return true;
   return uninstallsScopebond(prog, sc.argv);
 }
 
@@ -674,6 +790,15 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
   const { ops: files, unknownTarget } = fileOpsFromShell(sc, dir, cwd);
   // The hook disabling itself is a write to its own policy, which the starter protects.
   if (selfDisable(sc)) files.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+  // PowerShell reaches files through .NET as well as cmdlets (`[IO.File]::WriteAllText('.scopebond\policy.json', …)`,
+  // `New-Object IO.StreamWriter …`). Such a call does not read as a program and its arguments, so the command text is
+  // scanned like inline code: a protected path it names is recorded as a read and a write.
+  if (DOTNET_FILE_API.test(sc.raw)) {
+    const text = sc.raw.slice(0, CODE_SCAN_LIMIT);
+    for (const m of new Set([...(text.match(SCOPEBOND_IN_TEXT) ?? []), ...(text.match(SENSITIVE_IN_CODE) ?? [])])) {
+      files.push(...fileIntent("file.read", m, dir, cwd), ...fileIntent("file.write", m, dir, cwd));
+    }
+  }
   // A bare redirection (`> file`) runs no program: only its file effect is recorded.
   if (!sc.program) return files;
   const exec: Mapped = {
@@ -821,6 +946,31 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
     return pathIntents("file.write", rel(ti.notebook_path ?? ti.file_path, cwd), name);
   if (name === "Read")
     return pathIntents("file.read", rel(ti.file_path, cwd), name);
+  // Grep prints matching lines (with `output_mode: "content"`), so it reads what it searches: the path it names (the
+  // working folder when none), and a folder its file filter names. Searching Scopebond's own folder is then refused
+  // like reading it.
+  if (name === "Grep") {
+    const reads = pathIntents("file.read", rel(ti.path ?? ".", cwd), name);
+    const glob = typeof ti.glob === "string" ? ti.glob : "";
+    if (/\.scopebond/i.test(glob)) {
+      // The fixed part of the filter, up to its first wildcard (a linear scan; no regular expression over the input).
+      let end = 0;
+      while (end < glob.length && !"*?[{".includes(glob[end])) end++;
+      reads.push(...pathIntents("file.read", rel(glob.slice(0, end) || glob, cwd), name));
+    }
+    return reads;
+  }
+  // Glob lists the files under its path that match its pattern: it reads that folder, like Grep.
+  if (name === "Glob") {
+    const reads = pathIntents("file.read", rel(ti.path ?? ".", cwd), name);
+    const pattern = typeof ti.pattern === "string" ? ti.pattern : "";
+    if (/\.scopebond|cloud\.json/i.test(pattern)) {
+      let end = 0;
+      while (end < pattern.length && !"*?[{".includes(pattern[end])) end++;
+      reads.push(...pathIntents("file.read", rel(pattern.slice(0, end) || pattern, cwd), name));
+    }
+    return reads;
+  }
   if (name === "WebFetch") {
     const { host, path } = splitUrl(String(ti.url ?? ""));
     return one({ action_type: "net.fetch", params: { host, path, method: "GET" } }, true, name);

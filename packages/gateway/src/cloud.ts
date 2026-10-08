@@ -115,6 +115,26 @@ export interface CloudExporterOptions {
    *  (the records stay queued). Default 30 seconds. A connection that never answers (a half-open socket after sleep or a
    *  network change) would otherwise hold the flush, and every later one, for good. */
   requestTimeoutMs?: number;
+  /** Sign each batch's record numbers with this computer's enrolled key (`seq_proof` beside `seq`), so a party holding
+   *  only the bearer credential cannot attach numbers to records of its choosing. Needs both the key and the machine
+   *  credential's id; without them the numbers are sent unsigned, as before. */
+  sequenceProof?: CloudSequenceProofOptions;
+}
+
+export interface CloudSequenceProofOptions {
+  /** The key the workspace enrolled for this computer (the one that signs its receipts). */
+  attester: Attester;
+  /** The machine credential's id, as the enrollment answer named it (`credential_id`). */
+  credentialId: string;
+}
+
+/** The domain prefix of a batch's sequence proof; the signed string is this followed by the canonical JSON. */
+export const DELIVERY_SEQUENCE_CONTEXT = "scopebond:delivery-sequence/v1\n";
+
+/** The exact string a batch's `seq_proof.signature` covers: the credential's id, the queue id (or null when the body
+ *  names none), the numbers as sent, and the SHA-256 of each receipt's canonical JSON in body order. */
+export function deliverySequenceMaterial(credentialId: string, queue: string | null, seq: Array<number | null>, receipts: unknown[]): string {
+  return DELIVERY_SEQUENCE_CONTEXT + canonical({ credential_id: credentialId, queue, seq, receipts: receipts.map((r) => sha256(canonical(r))) });
 }
 
 export interface CloudSummaryOptions {
@@ -385,6 +405,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   // Learned from the workspace's answers: only a workspace that says it reads gzip is sent gzip.
   let workspaceReadsGzip = false;
   const gzipMinBytes = Math.max(0, Math.trunc(opts.gzipMinBytes ?? 1024));
+  // Both parts or none: a proof without the credential's id (or the key) could never verify.
+  const proofKey = opts.sequenceProof?.attester && typeof opts.sequenceProof.credentialId === "string" && opts.sequenceProof.credentialId.trim()
+    ? opts.sequenceProof : null;
 
   const fail = (error: unknown, retryAfterMs = 0) => {
     consecutiveFailures += 1;
@@ -553,9 +576,20 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
         // SB289: each record's number travels beside it (the signed receipt is unchanged); a workspace
         // that does not read it ignores it.
         // The queue's id says which numbering the numbers belong to.
-        const json = JSON.stringify(numbered
-          ? { receipts: batch.map((entry) => entry.receipt), seq: batch.map((entry) => entry.seq ?? null), ...(numbered && queue ? { queue } : {}) }
-          : { receipts: batch.map((entry) => entry.receipt) });
+        let body: Record<string, unknown> = { receipts: batch.map((entry) => entry.receipt) };
+        if (numbered) {
+          const receipts = batch.map((entry) => entry.receipt);
+          const seq = batch.map((entry) => entry.seq ?? null);
+          body = { receipts, seq, ...(queue ? { queue } : {}) };
+          // The numbers are signed with the enrolled key over exactly what is sent. A signing failure throws (the batch is
+          // retried): numbers are never sent with a partial proof.
+          if (proofKey) {
+            const signature = await proofKey.attester.sign(deliverySequenceMaterial(proofKey.credentialId, queue ? queue : null, seq, receipts));
+            if (typeof signature !== "string" || !signature) throw new Error("the delivery sequence could not be signed; retrying");
+            body.seq_proof = { kid: proofKey.attester.kid, signature };
+          }
+        }
+        const json = JSON.stringify(body);
         const compress = workspaceReadsGzip && gzipMinBytes > 0 && json.length >= gzipMinBytes && typeof CompressionStream === "function";
         const res = await doFetch(endpoint, {
           method: "POST",
