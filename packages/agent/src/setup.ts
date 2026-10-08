@@ -7,10 +7,9 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { loadConnection, nodeTooOldLines, readDeliveryState, type Harness } from "@scopebond/hook";
+import { join } from "node:path";
+import { hookSelfCommand, loadConnection, nodeTooOldLines, readDeliveryState, type Harness } from "@scopebond/hook";
 import { autostartHealth, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
 import { compareVersions, ownNpm } from "./update.js";
@@ -87,11 +86,6 @@ function globalAgent(): { prefix: string | null; cli: string | null; version: st
   return { prefix: prefix.ok ? prefix.out.trim().split(/\r?\n/).pop() ?? null : null, cli: existsSync(cli) ? cli : null, version };
 }
 
-/** The bundled hook's CLI, which this agent depends on at an exact version. */
-function hookCli(): string {
-  const index = createRequire(import.meta.url).resolve("@scopebond/hook");
-  return join(dirname(index), "cli.js");
-}
 
 export interface SetupOptions { dir: string; origin: string; harness: Harness; relogin: boolean; version: string; me: string }
 
@@ -117,7 +111,8 @@ export async function runSetup(o: SetupOptions): Promise<number> {
     // From the home folder, so a project's own setup in the current folder can never take the sign-in;
     // and a failed sign-in names this setup command, which also installs and starts the agent.
     const again = `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/agent@${o.version} setup ${o.origin}${o.harness === "claude" ? "" : ` --${o.harness}`}`;
-    const r = spawnSync(process.execPath, [hookCli(), "login", o.origin, flag], { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: o.dir, SCOPEBOND_RETRY_COMMAND: again } });
+    const [program, args] = hookSelfCommand(["login", o.origin, flag]);
+    const r = spawnSync(program, args, { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: o.dir, SCOPEBOND_RETRY_COMMAND: again } });
     if (r.status !== 0) { console.error("Setup stopped: the sign-in did not finish. Run the same command again for a new code."); return 1; }
   } else {
     say(`✓ Already connected to ${o.origin} (to sign in again anyway, add --relogin).`);

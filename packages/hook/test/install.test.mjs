@@ -57,6 +57,18 @@ test("resolveConfigDir: with a user install, a project policy governs only once 
   rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true });
 });
 
+test("run from the user's home folder, the user-level home is not an untrusted project setup (SB384)", () => {
+  const profile = tmp();
+  const home = join(profile, ".scopebond");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "policy.json"), "{}");
+  withEnv({ SCOPEBOND_HOOK_DIR: undefined, SCOPEBOND_HOME: home, CLAUDE_PROJECT_DIR: undefined }, () => {
+    assert.equal(untrustedProjectPolicy(profile), null, "<home folder>/.scopebond is the user home itself");
+    if (process.platform === "win32") assert.equal(untrustedProjectPolicy(profile.toUpperCase()), null, "Windows paths compare without case");
+  });
+  rmSync(profile, { recursive: true, force: true });
+});
+
 test("resolveConfigDir: without a user install, a scaffolded project dir is used (per-project installs)", () => {
   const home = tmp(); const project = tmp();
   mkdirSync(join(project, ".scopebond"), { recursive: true });

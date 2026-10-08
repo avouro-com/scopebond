@@ -5,7 +5,11 @@
 
 import { readFileSync } from "node:fs";
 
+/** Set by the single executable's build (esbuild `define`); absent from the npm package. */
+declare const __SCOPEBOND_HOOK_VERSION__: string | undefined;
+
 export function hookVersion(): string {
+  if (typeof __SCOPEBOND_HOOK_VERSION__ === "string") return __SCOPEBOND_HOOK_VERSION__;
   try {
     // dist/version.js → ../package.json is the package root in both the source
     // tree and the published tarball.

@@ -178,6 +178,12 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
       seen.selfChecks.push({ failed, hook_version: typeof body.hook_version === "string" ? body.hook_version : null, agent_version: typeof body.agent_version === "string" ? body.agent_version : null });
       return json(200, { ok: failed.length === 0, signature_verified: true, failed });
     }
+    // The optional summary a workspace gives a computer's tray (names, links, Review count); links stay on this origin.
+    if (path === "/v1/computer/summary" && req.method === "GET") {
+      if (!authed()) return json(401, { error: "unauthorized" });
+      const origin = `http://${req.headers.host ?? "127.0.0.1"}`;
+      return json(200, { workspace_name: "Fake workspace", environment_name: "Test", computer_name: null, computer_url: `${origin}/app/connections/fake`, review_url: `${origin}/app/findings`, open_reviews: 0, stage: "reporting" });
+    }
     if (path === "/v1/client-version" && req.method === "GET") {
       seen.versionPolls += 1;
       return clientVersion ? json(200, clientVersion) : json(404, { error: "not_found" });

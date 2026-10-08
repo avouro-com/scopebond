@@ -17,7 +17,7 @@
 // hook processes cannot allocate the same one. An observation id is unique, so a resend
 // of the same logical record returns the row that exists rather than allocating again.
 
-import { createRequire } from "node:module";
+import { nodeSqlite } from "./self.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { MAX_BATCH_BODY_BYTES, MAX_BATCH_ITEMS, observationHash, type ObservationDraft, type ObservationPayload, type SignedObservation, type EnvelopeContext, buildPayload, signObservation, type ObservationSigner } from "./observation.js";
@@ -102,8 +102,7 @@ export type EnqueueResult =
 
 function open(path: string): SqliteDb {
   mkdirSync(dirname(path), { recursive: true });
-  const require = createRequire(import.meta.url);
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => SqliteDb };
+  const { DatabaseSync } = nodeSqlite<{ DatabaseSync: new (p: string) => SqliteDb }>();
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 15000;");
   whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));

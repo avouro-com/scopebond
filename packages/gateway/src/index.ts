@@ -53,12 +53,12 @@ export { createWebCryptoAttester, generateAttesterJwk } from "./webcrypto.js";
 export type { Ed25519Jwk } from "./webcrypto.js";
 export { KvReceiptStore, loadOrCreateKvAttester, createWorkerGateway } from "./workers.js";
 export type { KvLike } from "./workers.js";
-export { createCloudExporter, createMemoryCloudOutbox, withCloudExporter } from "./cloud.js";
+export { createCloudExporter, createMemoryCloudOutbox, withCloudExporter, seqRanges } from "./cloud.js";
 export { completeCloudEnrollment, CloudEnrollmentError } from "./enrollment.js";
 export type { CloudEnrollmentBundle, CloudEnrollmentResult } from "./enrollment.js";
 export type {
   CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus,
-  CloudOutbox, CloudOutboxEntry, CloudOutboxStatus, MemoryCloudOutboxOptions,
+  CloudOutbox, CloudOutboxEntry, CloudOutboxStatus, MemoryCloudOutboxOptions, CloudSummaryOptions,
 } from "./cloud.js";
 export {
   requestHash, requestParams, checkApproval, validateDispatchApproval, approvalClaims as dispatchApprovalClaims,
@@ -75,3 +75,6 @@ export {
   createCloudDispatchSource, parseDelegationAnswer, CLOUD_CONSUME_PATH, CLOUD_DELEGATIONS_PATH, CLOUD_ACTIVE_APPROVAL_PATH, CLOUD_DISPATCH_SCOPE, CONSUME_REFUSALS, DELEGATION_STATES,
 } from "./dispatch-cloud.js";
 export type { CloudDispatchSource, CloudDelegation, CloudSourceOptions, ConsumeAnswer, ConsumeRefusal, ConsumeRequest, DelegationAnswer, ActiveApprovalQuery, ActiveApprovalAnswer } from "./dispatch-cloud.js";
+export { historyNeed } from "@scopebond/verify";
+export { buildSummary, isNotable, repeatKey } from "./summary.js";
+export type { SummaryOptions, SummaryPayload, SummaryRecord } from "./summary.js";

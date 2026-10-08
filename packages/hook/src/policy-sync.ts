@@ -21,6 +21,8 @@ import { readDeliveryState, recordRulesCredential } from "./delivery-state.js";
 import { queueStatus } from "./delivery-report.js";
 import { refreshIfDue } from "./credential-refresh.js";
 import { recommendedFrom } from "./client-health.js";
+import { retentionDaysFrom } from "./store-upkeep.js";
+import { evidenceDetailFrom } from "./evidence-detail.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
  *  the portal can say "checking in but not delivering" instead of "reporting". Counts and one
@@ -80,6 +82,9 @@ export interface SyncOptions {
   afterPolicyWrite?: (dir: string) => void;
   /** Per-request timeout; defaults to five seconds. */
   timeoutMs?: number;
+  /** A request the workspace carries once on the rules check (`x-scopebond-request`): send now, or run the self-check.
+   *  Only the Scopebond Agent passes this; a hook call ignores the header. */
+  onRequest?: (kind: "flush" | "self_check") => void;
 }
 
 export async function syncPolicy(dir: string, options: SyncOptions): Promise<SyncOutcome> {
@@ -93,7 +98,13 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const meta = readMeta(dir);
   // The workspace's recommended versions ride on every rules check; kept with the rules' state.
   let recommended = meta.recommended ?? null;
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, ...patch, checked_at: now.toISOString() });
+  // So does the local retention the workspace chose (D144).
+  let retention = meta.local_retention_days ?? null;
+  // And the evidence detail: what this computer sends (D144).
+  let detail = meta.evidence_detail ?? null;
+  // A workspace that reads a heartbeat's interval says so; until then heartbeats stay every 60 s.
+  let heartbeatInterval = meta.heartbeat_interval_s ?? null;
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, ...patch, checked_at: now.toISOString() });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
@@ -116,7 +127,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     res = await fetchImpl(`${base}/v1/policy`, {
       // The hook's version tells the workspace which settings this computer understands (for example exact-target
       // exclusions), so it is never sent a document an older hook would refuse.
-      headers: { ...auth, ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
+      // D144: the settings this hook understands beyond its version (the workspace sends allowances, "Block, person may ask"
+      // and the always/requests terms only to a hook that says so).
+      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances", ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -125,6 +138,11 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   }
 
   recommended = recommendedFrom(res.headers) ?? recommended;
+  const asked = res.headers?.get?.("x-scopebond-request")?.trim();
+  if (options.onRequest && (asked === "flush" || asked === "self_check")) { try { options.onRequest(asked); } catch { /* the request is best effort */ } }
+  retention = retentionDaysFrom(res.headers) ?? retention;
+  detail = evidenceDetailFrom(res.headers) ?? detail;
+  heartbeatInterval = heartbeatIntervalFrom(res.headers) ?? heartbeatInterval;
   recordRulesCredential(dir, res.status !== 401, now.getTime());
   // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
   if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
@@ -222,4 +240,12 @@ export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, bud
 
 export function releaseSyncLock(dir: string): void {
   try { rmSync(join(dir, LOCK_FILE), { force: true }); } catch { /* expires on its own */ }
+}
+
+/** The heartbeat interval a workspace allows (`x-scopebond-heartbeat-interval-s`, 60–900), or null when it does not say. */
+export function heartbeatIntervalFrom(headers: { get(name: string): string | null } | undefined): number | null {
+  const raw = headers?.get?.("x-scopebond-heartbeat-interval-s")?.trim() ?? "";
+  if (!/^\d{2,3}$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= 60 && n <= 900 ? n : null;
 }

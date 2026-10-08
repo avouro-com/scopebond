@@ -18,6 +18,9 @@ agent never takes part in a decision. It only keeps everything around the decisi
   the workspace recommends a newer agent, it installs it from npm and restarts itself; when the workspace holds
   updates, it changes nothing. It also moves the Scopebond hook entries in agent settings to the recommended hook
   and repairs any entry that can no longer start. Other tools' hook entries are never touched.
+- **A small local store.** With each update check it keeps the local receipt store small: receipts the workspace
+  acknowledged are removed after the workspace's retention window (30 days unless it sets 7–365), never one it has not
+  acknowledged; a store written by an older hook is rewritten once so it keeps each policy and receipt only once.
 - **Self-check.** Once a day it checks this computer's side (hook entry present and able to start, autostart on,
   nothing stuck in the queue, connection not about to lapse) and sends the result, signed with the key the computer
   enrolled with, so the workspace can show that the whole path works end to end, or what broke.
@@ -25,7 +28,10 @@ agent never takes part in a decision. It only keeps everything around the decisi
   shows its own window (Windows PowerShell with Windows Forms, macOS `osascript`, Linux `zenity`): the rule, the action and a
   reason field. Only the window answers; whatever calls the local channel can open a window but never decide it. One window
   at a time; it closes itself before the hook stops waiting. The reason goes to the workspace once, and waits in the
-  Scopebond home while the computer is offline.
+  Scopebond home while the computer is offline. As the workspace allows, the window offers **Allow once**, **Allow for 15
+  min**, **Always allow this here…** and **Ask an admin** (only the last for a rule set to *Block, person may ask*). The
+  agent sends a person's allowances and requests to the workspace (`POST /v1/allowances`, `POST /v1/requests`), each
+  signed with the key this computer enrolled with, once; a workspace without these calls leaves them on the computer.
 - **Health.** It reports the same machine-readable status as `scopebond status --json` (`scopebond.status.v1`).
 
 ## Use
@@ -84,13 +90,36 @@ opens at sign-in. If the agent stops with an error, the launcher starts it again
 each noted in `agent.log`), as launchd and systemd do on macOS and Linux; a clean stop (`stop`, `autostart off`, an
 update handing over) ends it. `status` says whether autostart is on and working.
 
+The agent writes `agent.log` itself, a line at a time, so an agent handing over to its update and the updated one
+can both write it. When it updates itself, the updated agent starts through the same launcher and waits for the old
+one to exit; under systemd the service restarts it instead. A launcher written by agent 0.4.6 or earlier redirected
+the agent's output into `agent.log`, which kept the updated agent from starting on Windows: an agent under such a
+launcher starts its update directly, and the update rewrites the launcher (until the next sign-in, its log lines go
+to `agent-handover.log`). After `check` updates the agent, it waits for the updated one, starts it if it did not
+start, and says which version runs.
+
 ## Where you see it
 
-On Windows the agent shows a tray icon (from Windows' own PowerShell, nothing extra to install): a green, amber or red
-dot, what it means as its tooltip, and a menu with the one fix (Repair, Send now or Check again). It warns with a balloon
-when it turns amber or red, and closes when the agent stops. Set `SCOPEBOND_AGENT_TRAY=off` for none. On macOS and Linux
-the agent sends a system notification when things get worse, and once more when they recover. `GET /status` carries the
-same `health` (level, headline, fix).
+On Windows the agent shows a tray icon (from Windows' own PowerShell, nothing extra to install): the Scopebond "S" tile
+with a status badge, its shape and colour together — none when protected, a grey dash when the workspace cannot be
+reached (it keeps checking actions; records wait), an amber "!" when something needs attention, a red "×" for a
+problem, a blue arrow while it works (an update), and a slate tile when the computer is not connected to its workspace.
+Records waiting count only the time the computer was awake: a laptop that slept is not "stuck".
+
+Click it (left or right) for the menu: one headline; the rows that have data (Rules, Delivery, Today's actions and
+blocks, Version); the one fix when something is wrong; **Check now**, which always says what it found; **Send records
+now** when records wait; **Update now** when the workspace recommends a newer version; the last few blocks (**Recently blocked**: where the
+workspace lets a person allow a blocked action or ask an admin, clicking one opens the Scopebond window for it, and the
+person can allow it once, for 15 minutes or always, or ask an admin; Scopebond never runs it again by itself); the
+notification setting (All, Problems only — the default —, Off); Help (copy diagnostics without keys or credentials, open
+the Scopebond folder, documentation, About); and Hide icon. There is no "pause" or "quit protection": the hook decides
+every action whether or not the agent runs. A balloon appears when the state gets worse ("needs attention" only after
+five minutes, so sleep and wake do not flap) and once when it is protected again. Set `SCOPEBOND_AGENT_TRAY=off` for no
+icon. On macOS and Linux the agent sends a system notification when things get worse, and once more when they recover.
+
+The tray only draws what the agent computes: `GET /tray` on the local channel returns the model (state, headline, rows,
+fix, actions, recent blocks) and the person's settings; `POST /check`, `/update`, `/flush`, `/repair`, `/settings`
+and `/blocked` (an earlier block, answered only in the Scopebond window) do the work. `GET /status` carries the same `health` (level, headline, fix).
 
 ## Status
 

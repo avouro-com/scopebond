@@ -7,9 +7,10 @@
 // On Windows it runs under `conhost --headless`, so no window opens at sign-in.
 
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, win32 } from "node:path";
+import { isSingleExecutable } from "@scopebond/hook";
 
 export const LABEL = "com.scopebond.agent";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -18,34 +19,58 @@ const RUN_VALUE = "ScopebondAgent";
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const noQuotes = (s: string) => s.replace(/"/g, "");
 
+/** The agent's log, which the agent writes itself (`SCOPEBOND_AGENT_LOG`) when a Windows launcher or a handover starts it. */
+export const AGENT_LOG_ENV = "SCOPEBOND_AGENT_LOG";
+
+/** Written into every Windows launcher this version makes. A launcher without it redirects the agent's output into
+ *  agent.log itself, which keeps a replacement agent from starting (see `spawnReplacement`). */
+export const LAUNCHER_MARK = "rem Scopebond Agent launcher 2:";
+
+/** Whether a launcher's text is this version's (an older one is rewritten once no agent runs under it). */
+export function launcherIsCurrent(text: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform !== "win32" || text.includes(LAUNCHER_MARK);
+}
+
 export function launcherPath(home: string, platform: NodeJS.Platform = process.platform): string {
   return join(home, platform === "win32" ? "agent-launch.cmd" : "agent-launch.sh");
 }
 
+/** The Windows launcher. With `cli` empty, `node` is the single executable: it is started as it is, with no Node to find. */
 export function windowsLauncher(node: string, cli: string, logFile: string): string {
+  const log = `"%~dp0${win32.basename(noQuotes(logFile))}"`;
+  const single = cli === "";
   return [
     "@echo off",
     // cmd.exe reads a batch file in the console code page: switch to UTF-8 first, so a profile folder
     // with non-ASCII letters in the paths below reads as written.
     "chcp 65001 >nul",
-    "rem Scopebond Agent launcher: finds Node and the agent each time, so a Node upgrade never stops it.",
+    `${LAUNCHER_MARK} finds Node and the agent each time, so a Node upgrade never stops it.`,
     "setlocal",
+    // The agent writes its own log. A `>> agent.log` here would hold the file shared for reading only, the old agent's
+    // children inherit that handle, and a replacement started during an update could then never open it: cmd skips the
+    // whole command line when a redirect fails. The log sits beside this launcher; %~dp0 keeps it right whatever the folder is called.
+    `set "${AGENT_LOG_ENV}=%~dp0${win32.basename(noQuotes(logFile))}"`,
     `set "NODE=${noQuotes(node)}"`,
-    `if not exist "%NODE%" set "NODE="`,
-    `if not defined NODE for /f "delims=" %%i in ('where node 2^>nul') do if not defined NODE set "NODE=%%i"`,
-    `set "CLI=${noQuotes(cli)}"`,
-    `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
-    `if not defined NODE exit /b 1`,
+    ...(single ? [`if not exist "%NODE%" exit /b 1`] : [
+      `if not exist "%NODE%" set "NODE="`,
+      `if not defined NODE for /f "delims=" %%i in ('where node 2^>nul') do if not defined NODE set "NODE=%%i"`,
+      `set "CLI=${noQuotes(cli)}"`,
+      `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
+      `if not defined NODE exit /b 1`,
+    ]),
     // Restart on failure, as launchd (KeepAlive) and systemd (Restart=on-failure) do: a crash restarts the agent after
     // 30 seconds, up to 50 times; a clean exit (stop, autostart off, an update handing over) ends the launcher.
     "set /a TRIES=0",
     ":run",
-    // The log sits beside this launcher; %~dp0 keeps it right whatever the folder is called.
-    `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >> "%~dp0${win32.basename(noQuotes(logFile))}" 2>&1`,
+    // (call) sets the error level to 1 first, so a command that never ran counts as a failure, not a clean stop.
+    "(call)",
+    single ? `"%NODE%" run >nul 2>&1` : `"%NODE%" --disable-warning=ExperimentalWarning "%CLI%" run >nul 2>&1`,
     `set "CODE=%ERRORLEVEL%"`,
+    // An update's handover names the agent to wait for; a restart after a crash has nothing to wait for.
+    `set "SCOPEBOND_AGENT_AFTER_PID="`,
     "if %CODE% EQU 0 exit /b 0",
     "set /a TRIES+=1",
-    `echo %DATE% %TIME% the agent stopped with exit code %CODE%; restarting in 30 seconds (attempt %TRIES% of 50) >> "%~dp0${win32.basename(noQuotes(logFile))}"`,
+    `echo %DATE% %TIME% the agent stopped with exit code %CODE%; restarting in 30 seconds (attempt %TRIES% of 50) >> ${log}`,
     "if %TRIES% GEQ 50 exit /b 1",
     // ping waits without a console to read from (timeout.exe refuses to run under a headless console).
     "ping -n 31 127.0.0.1 >nul",
@@ -54,8 +79,13 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
   ].join("\r\n");
 }
 
+/** The macOS/Linux launcher. With `cli` empty, `node` is the single executable, started as it is. */
 export function posixLauncher(node: string, cli: string): string {
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  if (cli === "") return `#!/bin/sh
+# Scopebond Agent launcher: the single executable.
+exec ${q(node)} run
+`;
   return `#!/bin/sh
 # Scopebond Agent launcher: finds Node and the agent each time, so a Node upgrade never stops it.
 NODE=${q(node)}
@@ -123,7 +153,21 @@ export function autostartPaths(home = homedir()) {
   };
 }
 
+/** Rewrite an older Windows launcher as this version's, keeping autostart as it is. Only safe once no cmd.exe runs the old
+ *  one (cmd reads a batch file line by line from where it left off): the handover calls it after the old agent has exited.
+ *  Returns whether it rewrote one. */
+export function refreshLauncher(scopebondHome: string, cli: string, node = process.execPath, platform = process.platform): boolean {
+  const launcher = launcherPath(scopebondHome, platform);
+  let text: string;
+  try { text = readFileSync(launcher, "utf8"); } catch { return false; }
+  if (launcherIsCurrent(text, platform)) return false;
+  writeLauncher(scopebondHome, node, cli, platform);
+  return true;
+}
+
 function writeLauncher(scopebondHome: string, node: string, cli: string, platform: NodeJS.Platform): string {
+  // The single executable is both Node and the agent: the launcher starts it with `run`.
+  if (isSingleExecutable()) { node = process.execPath; cli = ""; }
   mkdirSync(scopebondHome, { recursive: true });
   const launcher = launcherPath(scopebondHome, platform);
   const log = join(scopebondHome, "agent.log");

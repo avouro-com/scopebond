@@ -318,6 +318,19 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   but only in a permission mode where Claude Code really asks; that prompt takes no reason and is
   recorded as *offered*. Scopebond's own protection, rules set to Block and the kill switch are
   never overridable, and the workspace's daily limit holds.
+- **Allowances and "Ask an admin".** In the window a person may also choose **Allow for 15 min**
+  or **Always allow this here…** (when the workspace offers it): the same action — the same type
+  and parameters, whatever tool call it comes from — is then allowed by a standing *allowance*
+  that expires (30 days by default) and that the workspace lists for an admin to confirm or
+  revoke. A rule set to *Block, person may ask* offers only **Ask an admin**: the action stays
+  blocked and the request goes to the workspace; an approved request comes back as an allowance
+  with the next rules check. The receipt of an action an allowance lets through says
+  `method: "allowance"` and names it. An allowance is bound to one rule, never applies to
+  Scopebond's own protection, and stops applying when it expires, is used up (a one-time one) or
+  the workspace revokes it. The hook keeps them, and the last blocks a person may act on, in its
+  own folder (`allowances.json`, `requests.json`, `blocked.json`), which the coding agent cannot
+  change. The hook tells the workspace it understands these settings
+  (`x-scopebond-hook-capabilities: allowances`); a workspace sends them only then.
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left
@@ -514,20 +527,45 @@ Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.
 
 **Where receipts live, and how much room they take.** `.scopebond/receipts.db` in the
-project, roughly 25 KiB per tool call. A tool call's decision does not read that log
-unless the policy has a windowed limit, and then only the window, so a large log does not
-slow the agent down. Nothing is ever deleted automatically — these are your evidence — so
-`status` reports the count and size, and `prune` bounds it when you choose to:
+project, about 3 KiB per action (each receipt is kept once and each policy once). A tool
+call's decision does not read that log unless the policy has a windowed limit, and then
+only the window; the replay check is one indexed lookup. So neither the time nor the
+memory of a call grows with the log: on a 767 MB log written by an older version, a call
+peaked at 69 MB (it was 233 MB, and 504 MB for a three-part shell command).
+
+A computer connected to a workspace removes a receipt only after the workspace
+acknowledged it, once that is 30 days ago (the workspace can set 7–365 days); a receipt
+the workspace has not acknowledged, or refused, is never removed, an anchored log is never
+pruned, and a policy that reads a longer window keeps that window (a window widened later
+counts only the history still kept). With no workspace, nothing is
+removed automatically — these are your evidence. The Scopebond Agent does this upkeep;
+without it, a hook call does a short pass once a day. A log written by an older version
+is rewritten once to the current layout in a separate background process (767 MB became
+93 MB with every receipt kept). `prune` reports the footprint and the retention, and
+bounds it when you choose to:
 
 ```
-npx -y @scopebond/hook@latest prune                      # report the footprint
+npx -y @scopebond/hook@latest prune                      # report the footprint and the retention
+npx -y @scopebond/hook@latest prune --compact            # run the upkeep now and return the free space
 npx -y @scopebond/hook@latest prune --before 90d --yes   # archive, then remove, anything older
 ```
 
-`prune` writes the receipts it will remove to a JSONL file beside the database first, so
-they stay verifiable, and it refuses outright once the log has been anchored — a receipt's
-position is its anchor leaf index, so removing one would make an existing anchor
+`prune --before` writes the receipts it will remove to a JSONL file beside the database
+first, so they stay verifiable, and it refuses outright once the log has been anchored — a
+receipt's position is its anchor leaf index, so removing one would make an existing anchor
 unverifiable.
+
+**What is sent to the workspace.** Every receipt, unless the workspace sets its evidence
+detail to *Standard* (it says so on each rules check). Then the notable receipts are sent
+in full at once — anything not plainly allowed (a block, an override, an approval, an
+action a Monitor rule matched), pushes, MCP calls, web fetches, and writes outside the
+project or to CI, agent or Scopebond settings — and the routine ones leave as one signed
+summary per five minutes (`scopebond:summary`, see `@scopebond/verify/summary`): their
+count, a Merkle root over them, counts by action type, program and folder, and the
+commands repeated. Every receipt stays here for the retention above, and anybody holding
+them can check them against the summary. The Scopebond Agent sends the summaries; without
+it, `flush` (for example at the end of a session) does; a hook call sends only when it
+recorded something notable.
 
 **What a shell command is checked for.** A command line is split into every command it
 runs (`&&`, `;`, pipes, `$( )` and backticks — also inside double quotes — `bash -c`,
@@ -569,8 +607,10 @@ in the workspace first, the workspace raises a critical alert. A workspace that 
 reached never stops the uninstall; the command says it could not tell it.
 
 **Limits.** The hook sees the command text, not what a program does at run time. It
-does not follow a variable whose value it cannot see (`cat $FILE`), a path assembled
-inside a script or interpreter (`python script.py`), aliases and functions defined in
+does not follow a variable whose value it cannot see (`cat $FILE` records no read unless
+the text around the variable could name a protected file), a path assembled inside a
+script or interpreter (`python script.py`; Scopebond's own folder named in an
+interpreter's arguments or inline code is treated as read), aliases and functions defined in
 an earlier call, git aliases from a config file, recursive reads of a parent of a
 protected directory (`grep -r . `, `cp -r ~ /tmp`), or deletion expressed as arguments
 (`find -delete`, `git clean`). Commands whose written files are named only inside their

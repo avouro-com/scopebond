@@ -22,12 +22,12 @@ export { runProofFixtures, deliverProofReceipts, loadProofs, saveProofs, PROOF_F
 export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYPE } from "./budget-load.js";
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
-  inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules,
+  inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules, ruleReport,
   MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument,
 } from "./managed.js";
 export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms } from "./managed.js";
-export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE } from "./override.js";
-export type { OverrideContext, OverrideNote, AgentAnswer } from "./override.js";
+export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked } from "./override.js";
+export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS } from "./policy-sync.js";
 export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";
@@ -36,7 +36,7 @@ export { scaffold, harnessSnippet, installHarness, placeHook } from "./init.js";
 export type { HookPlacement } from "./init.js";
 export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
-  cursorDetected, codexDetected, absoluteHookCommand, isHarnessConfigured, purgeHome,
+  cursorDetected, codexDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
   readHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
   isScopebondHookCommand, harnessEntryMatches,
@@ -81,3 +81,15 @@ export { hookVersion, hookCommand, cliCommand } from "./version.js";
 export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
 export type { HookEntry, HookScope } from "./duplicates.js";
 export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";
+export { readAllowances, writeAllowances, makeAllowance, matchAllowance, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS } from "./allowances.js";
+export type { Allowance, BlockedItem } from "./allowances.js";
+export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requests.js";
+export type { AdminRequest } from "./requests.js";
+export { localActivity } from "./local-activity.js";
+export type { LocalActivity } from "./local-activity.js";
+export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEFAULT_RETENTION_DAYS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./store-upkeep.js";
+export type { UpkeepOptions } from "./store-upkeep.js";
+export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-detail.js";
+export type { EvidenceDetail } from "./evidence-detail.js";
+export { isSingleExecutable, hookCliPath, hookSelfCommand, nodeSqlite } from "./self.js";
+export { requestOverSocket } from "./local-socket.js";

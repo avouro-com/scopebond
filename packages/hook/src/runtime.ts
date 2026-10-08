@@ -271,7 +271,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       if (!exporter) return;
       const before = exporter.status().lastSuccessAt;
       const timeoutMs = config.cloud?.flushTimeoutMs ?? 3000;
-      await flushBounded(exporter, timeoutMs);
+      await flushBounded(exporter, timeoutMs, { routine: false });
       // The process exits after this call; keep what the attempt saw for `status` and `doctor`.
       // An attempt the time limit cut off has an outcome too: the exit abandons the request,
       // and a workspace slower than the limit used to leave only "last tried" moving, with no

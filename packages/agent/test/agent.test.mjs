@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA } from "@scopebond/hook";
+import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readAllowances, readBlocked } from "@scopebond/hook";
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
@@ -135,7 +135,7 @@ test("autostart starts a launcher that finds Node and the agent each time, with 
   assert.match(cmd, /npm\.cmd root -g/, "falls back to the globally installed agent");
   assert.match(cmd, /\r\n/, "Windows line endings");
   // A crash restarts the agent (as launchd and systemd do); a clean exit ends the launcher.
-  assert.match(cmd, /set "CODE=%ERRORLEVEL%"\r\nif %CODE% EQU 0 exit \/b 0/);
+  assert.match(cmd, /\(call\)\r\n"%NODE%" [^\r]* run >nul 2>&1\r\nset "CODE=%ERRORLEVEL%"\r\nset "SCOPEBOND_AGENT_AFTER_PID="\r\nif %CODE% EQU 0 exit \/b 0/, "a command that never ran is a failure; a crash restart waits for nobody");
   assert.match(cmd, /:run[\s\S]*goto run/);
   assert.match(cmd, /if %TRIES% GEQ 50 exit \/b 1/);
   const sh = posixLauncher("/opt/node's/bin/node", "/opt/scopebond/cli.js");
@@ -289,6 +289,30 @@ test("the agent answers an override only from its window, and sends the reason t
     await service.cycleNow();
     assert.deepEqual(ws.reasons, [{ action_id: "action-0000000000001", reason: "Cleaning the build folder" }]);
     assert.equal(pendingReasons(dir), 0);
+  } finally { await service.stop(); ws.close(); }
+});
+
+test("from the tray, an earlier block is allowed or sent to an admin only through the Scopebond window", async () => {
+  const ws = await workspace();
+  const dir = await computerWithQueue(ws.url, 0);
+  const answers = [{ decision: "deny" }, { decision: "allow", reason: "Cleaning the build output before release", os_user: "dev", lasts: "once" }];
+  const shown = [];
+  const service = await startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false,
+    prompter: async (q) => { shown.push(q); return answers.shift() ?? { decision: "unavailable" }; } });
+  try {
+    writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ rules: { "destructive-shell": { mode: "override", override: { reason_min: 10, minutes: 0, daily_limit: 5, harness_prompt: false, requests: true } } } }));
+    const id = "action-blocked-00000001";
+    recordBlocked(dir, { id, at: new Date().toISOString(), rule: "destructive-shell", mode: "override", action_key: "a".repeat(64), summary: "rm -rf build", harness: "claude" });
+    assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: "action-unknown-0000001" }, 10_000)).outcome, "gone");
+    assert.equal(shown.length, 0, "an unknown block opens no window");
+    assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000)).outcome, "declined");
+    const allowed = await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000);
+    assert.deepEqual(allowed, { outcome: "allowed", text: "Allowed. Run it again, or let the coding agent retry." });
+    assert.deepEqual(shown[1].offers, { allow: true, always: false, ask: true });
+    assert.equal(shown[1].summary, "rm -rf build");
+    assert.equal(readAllowances(dir).filter((a) => a.once).length, 1);
+    assert.equal(readBlocked(dir)[0].acted, "allowed");
+    assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000)).outcome, "gone", "offered once");
   } finally { await service.stop(); ws.close(); }
 });
 
@@ -456,7 +480,7 @@ test("the Windows launcher reads as written in a profile folder with non-ASCII l
   const text = windowsLauncher("D:\\Data\\J\u00f6rg\\node.exe", "D:\\Data\\J\u00f6rg\\cli.js", "D:\\Data\\J\u00f6rg\\.sb\\agent.log");
   const lines = text.split("\r\n");
   assert.equal(lines[1], "chcp 65001 >nul", "UTF-8 before any path is read");
-  assert.match(text, /run >> "%~dp0agent\.log" 2>&1/, "the log path does not depend on the folder's name");
+  assert.match(text, /set "SCOPEBOND_AGENT_LOG=%~dp0agent\.log"/, "the log path does not depend on the folder's name");
 });
 
 test("only one agent runs per home: a live holder keeps the lock, a dead one gives it up", async () => {

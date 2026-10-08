@@ -215,8 +215,11 @@ export function resolveConfigDir(payloadCwd: string | undefined): string {
 /** A project policy present but ignored because it is not trusted (for status/doctor). */
 export function untrustedProjectPolicy(payloadCwd: string | undefined): string | null {
   if (process.env.SCOPEBOND_HOOK_DIR || !existsSync(join(userHome(), "policy.json"))) return null;
+  // Run from the user's home folder, `<cwd>/.scopebond` is the user-level home itself, not a project setup (SB384).
+  const fold = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
+  const home = fold(userHome());
   const dirs = [payloadCwd, process.env.CLAUDE_PROJECT_DIR].filter(Boolean).map((d) => join(d as string, ".scopebond"));
-  return dirs.find((d) => existsSync(join(d, "policy.json")) && !isTrustedProject(d)) ?? null;
+  return dirs.find((d) => fold(d) !== home && existsSync(join(d, "policy.json")) && !isTrustedProject(d)) ?? null;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -373,6 +376,12 @@ export function codexDetected(): boolean {
 export function absoluteHookCommand(cliPath: string, harness: Harness): string {
   const quote = (s: string) => (process.platform === "win32" || /\s/.test(s) ? `"${s}"` : s);
   return `${quote(process.execPath)} ${quote(cliPath)} ${harness}`;
+}
+
+/** The command a coding agent's settings run when Scopebond is installed as the single executable: the executable itself,
+ *  quoted, with `hook` and the harness. It needs neither Node nor npm, and the installer keeps its path stable. */
+export function nativeHookCommand(harness: Harness, exe: string = process.execPath): string {
+  return `"${exe}" hook ${harness}`;
 }
 
 export function isHarnessConfigured(file: string): boolean {

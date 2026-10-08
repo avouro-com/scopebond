@@ -2088,6 +2088,12 @@
             },
             "scope_manifest_digest": {
               "$ref": "#/$defs/hex64"
+            },
+            "interval_s": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 900,
+              "description": "How often this computer sends a heartbeat, in seconds. Absent: every 60 s. A service treats three missed intervals as lost visibility."
             }
           }
         },
