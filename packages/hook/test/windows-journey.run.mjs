@@ -146,10 +146,13 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
     assert.equal(created.status, 0, `could not schedule the journey: ${created.stdout}${created.stderr}`);
     assert.equal(run("schtasks", ["/Run", "/TN", "ScopebondJourney"]).status, 0, "could not start the journey task");
     const started = join(shared, "journey.started");
-    const until = Date.now() + 18 * 60_000, startBy = Date.now() + 2 * 60_000;
+    // The user's first logon creates its profile, which took over four minutes on a busy runner: the task shows Running
+    // while it does, so that counts as starting. Only a task still not running after six minutes is taken as refused.
+    const until = Date.now() + 18 * 60_000, startBy = Date.now() + 6 * 60_000;
+    const taskRunning = () => /Status:\s+Running/.test(run("schtasks", ["/Query", "/TN", "ScopebondJourney", "/V", "/FO", "LIST"]).stdout ?? "");
     while (!existsSync(exit) && Date.now() < until) {
       // A task Windows refused to start never writes its first line: say why instead of waiting 18 minutes.
-      if (!existsSync(started) && Date.now() > startBy) break;
+      if (!existsSync(started) && Date.now() > startBy && !taskRunning()) break;
       await new Promise((r) => setTimeout(r, 2_000));
     }
     if (!existsSync(started)) {
