@@ -409,6 +409,50 @@ export class SqliteReceiptStore implements ReceiptStore {
   unresolvedActions(): ActionLifecycleRecord[] {
     return this.lifecycleRows(`a.state IN ${HELD_STATES}`);
   }
+  /** Actions decided but never finished, reserved before `isoBefore`: the process deciding them was stopped (a coding agent's
+   *  hook time limit, a crash) between the reservation and the receipt, so they have no receipt and were never dispatched.
+   *  Read from the lifecycle table, which holds only actions still open or dispatched, so the query stays small. */
+  interruptedActions(isoBefore: string, limit = 50): ActionLifecycleRecord[] {
+    const ids = (this.db.prepare(
+      `SELECT l.action_id FROM authority_lifecycle l JOIN authority_actions a ON a.action_id = l.action_id
+        WHERE l.adapter_id IS NULL AND l.terminal_receipt_json IS NULL AND a.terminal_receipt_id IS NULL
+          AND a.state IN ('reserved','denied')
+          AND COALESCE(a.created_at, json_extract(a.candidate_json, '$.timestamp')) < ?
+        ORDER BY l.rowid LIMIT ?`,
+    ).all(isoBefore, Math.max(1, Math.floor(limit))) as { action_id: string }[]).map((row) => row.action_id);
+    if (!ids.length) return [];
+    return this.lifecycleRows(`a.action_id IN (SELECT value FROM json_each(?))`, JSON.stringify(ids));
+  }
+  /** Close an interrupted action with its receipt, only if it is still open (another process may have closed it first, or the
+   *  process deciding it may have finished after all). Returns whether this call closed it. */
+  settleAction(actionId: string, receipt: SignedReceipt, state: AuthorityFinalState): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const open = this.db.prepare(
+        `SELECT 1 FROM authority_lifecycle l JOIN authority_actions a ON a.action_id = l.action_id
+          WHERE a.action_id = ? AND l.adapter_id IS NULL AND l.terminal_receipt_json IS NULL AND a.terminal_receipt_id IS NULL
+            AND a.state IN ('reserved','denied')`,
+      ).all(actionId);
+      if (!open.length) { this.db.exec("ROLLBACK"); return false; }
+      const receiptId = this.insertReceipt(receipt);
+      this.db.prepare(`UPDATE authority_actions SET state = ?, terminal_receipt_id = ?, candidate_json = '{}' WHERE action_id = ?`).run(state, receiptId, actionId);
+      this.db.prepare(`DELETE FROM authority_lifecycle WHERE action_id = ?`).run(actionId);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  /** The row id of the newest receipt (0 when there is none): receipts written later have larger ids. */
+  lastId(): number {
+    const rows = this.db.prepare(`SELECT COALESCE(MAX(id), 0) AS id FROM receipts`).all() as { id: number }[];
+    return Number(rows[0]?.id ?? 0);
+  }
+  /** How long a statement waits for another process's write lock from now on. */
+  setBusyTimeout(ms: number): void {
+    this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(ms))};`);
+  }
   getStopState(): StopState {
     const rows = this.db.prepare(`SELECT target FROM gateway_stops WHERE stopped = 1 ORDER BY target`).all() as { target: string }[];
     const targets = rows.map((row) => row.target);
@@ -739,6 +783,9 @@ export interface SqliteCloudOutboxOptions {
   maxAgeMs?: number;
   maxGapRecords?: number;
   now?: () => number;
+  /** How long a statement waits for another process's write lock (15 s by default). A per-call process that must stay inside
+   *  a coding agent's hook time limit passes a short one: a write that fails then is the caller's to record and retry. */
+  busyTimeoutMs?: number;
 }
 
 /** Durable, bounded Cloud delivery queue. Rejections and expiry are retained as
@@ -752,7 +799,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
   private readonly now: () => number;
 
   constructor(path: string, options: SqliteCloudOutboxOptions = {}) {
-    this.db = openSqlite(path);
+    this.db = openSqlite(path, undefined, options.busyTimeoutMs);
     // A queue that cannot be set up (a full disk, a read-only file) must not leave its handle open:
     // the next open of the same file in this process would reuse it and stay read-only.
     try {
@@ -782,6 +829,13 @@ export class SqliteCloudOutbox implements CloudOutbox {
         );
         INSERT OR IGNORE INTO cloud_outbox_metadata (singleton, total_gaps)
           SELECT 1, COUNT(*) FROM cloud_delivery_gaps;
+        CREATE TABLE IF NOT EXISTS cloud_gap_reasons (
+          reason TEXT PRIMARY KEY,
+          n INTEGER NOT NULL CHECK (n >= 0)
+        ) WITHOUT ROWID;
+        INSERT OR IGNORE INTO cloud_gap_reasons (reason, n)
+          SELECT reason, COUNT(*) FROM cloud_delivery_gaps
+           WHERE NOT EXISTS (SELECT 1 FROM cloud_gap_reasons) GROUP BY reason;
         CREATE TABLE IF NOT EXISTS cloud_acknowledged (
           event_id TEXT PRIMARY KEY,
           acked_at INTEGER NOT NULL
@@ -1049,6 +1103,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
       "SELECT event_id, reason, created_at FROM cloud_delivery_gaps ORDER BY seq DESC LIMIT 1",
     ).all() as Array<{ event_id: string | null; reason: CloudDeliveryGap["reason"]; created_at: number }>;
     return {
+      gapsByReason: this.gapsByReason(),
       pending: total[0]?.count ?? 0,
       pendingBytes: total[0]?.bytes ?? 0,
       oldestEnqueuedAt: total[0]?.oldest ?? null,
@@ -1077,10 +1132,29 @@ export class SqliteCloudOutbox implements CloudOutbox {
     this.resetTotals();
   }
 
-  /** Delivery gaps by reason, over the retained gap records (for a machine-readable status). */
+  /** Delivery gaps by reason over the queue's lifetime, not only the retained gap rows (for a machine-readable status and the
+   *  rules check). A queue made before these counts starts from the rows it had kept. */
   gapsByReason(): Record<string, number> {
-    const rows = this.db.prepare("SELECT reason, COUNT(*) AS n FROM cloud_delivery_gaps GROUP BY reason").all() as Array<{ reason: string; n: number }>;
+    const rows = this.db.prepare("SELECT reason, n FROM cloud_gap_reasons WHERE n > 0 ORDER BY reason").all() as Array<{ reason: string; n: number }>;
     return Object.fromEntries(rows.map((r) => [r.reason, Number(r.n)]));
+  }
+
+  /** How long a statement waits for another process's write lock from now on. */
+  setBusyTimeout(ms: number): void {
+    this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(ms))};`);
+  }
+
+  /** Which of these action ids this queue already knows: waiting, accepted by the workspace, or set aside as a gap for a
+   *  reason other than a failed queue write. A record it does not know was never queued, and may be queued again. */
+  known(ids: string[]): Set<string> {
+    if (!ids.length) return new Set();
+    const list = JSON.stringify(ids);
+    const rows = this.db.prepare(
+      `SELECT event_id FROM cloud_outbox WHERE event_id IN (SELECT value FROM json_each(?))
+       UNION SELECT event_id FROM cloud_acknowledged WHERE event_id IN (SELECT value FROM json_each(?))
+       UNION SELECT event_id FROM cloud_delivery_gaps WHERE reason <> 'outbox_error' AND event_id IN (SELECT value FROM json_each(?))`,
+    ).all(list, list, list) as Array<{ event_id: string }>;
+    return new Set(rows.map((row) => row.event_id));
   }
 
   /** A gap learned from the workspace (a record refused on its own). */
@@ -1095,6 +1169,9 @@ export class SqliteCloudOutbox implements CloudOutbox {
     this.db.prepare(
       "UPDATE cloud_outbox_metadata SET total_gaps = total_gaps + 1 WHERE singleton = 1",
     ).run();
+    this.db.prepare(
+      "INSERT INTO cloud_gap_reasons (reason, n) VALUES (?, 1) ON CONFLICT (reason) DO UPDATE SET n = n + 1",
+    ).run(reason);
     this.db.prepare(
       `DELETE FROM cloud_delivery_gaps WHERE seq <= (
          SELECT COALESCE(MAX(seq), 0) - ? FROM cloud_delivery_gaps

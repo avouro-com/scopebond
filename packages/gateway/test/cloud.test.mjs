@@ -101,6 +101,7 @@ test("bounded outbox reports conflicts, capacity drops, and expiry as delivery g
     pendingBytes: 0,
     oldestEnqueuedAt: null,
     gaps: 3,
+    gapsByReason: { capacity: 1, expired: 1, id_conflict: 1 },
     retainedGapRecords: 1,
     latestGap: { id: "action:bounded-outbox-0001", reason: "expired", at: now },
   });

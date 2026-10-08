@@ -36,6 +36,9 @@ export interface CloudOutboxStatus {
   queueId?: string;
   /** SB289: the highest number this queue has given a record so far (0 before the first). */
   seqAssigned?: number;
+  /** Gaps by reason over the queue's lifetime (`gaps` is their total), kept apart from the gap rows, which are trimmed to
+   *  the newest ones. A queue made before these counts starts from its retained rows, so the counts may sum below `gaps`. */
+  gapsByReason?: Record<string, number>;
 }
 
 export interface CloudOutbox {
@@ -161,11 +164,13 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
   let nextSeq = 1;
   let queueId: string | undefined;
   let gapCount = 0;
+  const gapsByReason: Record<string, number> = {};
   let latestGap: CloudDeliveryGap | null = null;
 
   const recordGap = (id: string | null, reason: CloudDeliveryGap["reason"]): CloudDeliveryGap => {
     const gap = { id, reason, at: now() };
     gapCount += 1;
+    gapsByReason[reason] = (gapsByReason[reason] ?? 0) + 1;
     latestGap = gap;
     return gap;
   };
@@ -187,6 +192,7 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
       latestGap,
       queueId: (queueId ??= randomQueueId()),
       seqAssigned: nextSeq - 1,
+      gapsByReason: { ...gapsByReason },
     };
   };
 

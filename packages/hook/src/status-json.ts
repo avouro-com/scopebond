@@ -4,10 +4,9 @@
 
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import { loadConnection } from "./cloud.js";
 import { readDeliveryState } from "./delivery-state.js";
-import { LOSSLESS_OUTBOX, OUTBOX_FILE, deliveryStalled, queueStatus } from "./delivery-report.js";
+import { deliveryStalled, queueStatus } from "./delivery-report.js";
 
 export const STATUS_SCHEMA = "scopebond.status.v1";
 
@@ -27,8 +26,12 @@ export interface StatusJson {
     connection_refused_since: number | null;
     pending: number;
     oldest_pending_age_s: number | null;
+    /** Records that missed normal delivery, by reason, over the queue's lifetime (not only its retained gap rows). */
     gaps_by_reason: Record<string, number>;
-    /** The delivery queue could not be opened (a full disk, a read-only file): every action is blocked. */
+    /** Their total over the queue's lifetime. A queue made before the counts by reason may count more here than by reason. */
+    gaps_total: number;
+    /** The delivery queue could not be opened (a full disk, a read-only file). Actions stay allowed and are recorded on this
+     *  computer; each record written meanwhile is queued once the queue can be written again. */
     queue_error: string | null;
   };
   identity: {
@@ -56,14 +59,7 @@ export function buildStatusJson(input: {
   const dir = input.activeDir;
   const connection = loadConnection(dir);
   const state = readDeliveryState(dir);
-  const { pending, oldest, error: queueError } = queueStatus(dir);
-  let gaps: Record<string, number> = {};
-  if (existsSync(join(dir, OUTBOX_FILE))) {
-    try {
-      const outbox = new SqliteCloudOutbox(join(dir, OUTBOX_FILE), LOSSLESS_OUTBOX);
-      try { gaps = typeof outbox.gapsByReason === "function" ? outbox.gapsByReason() : {}; } finally { outbox.close(); }
-    } catch { gaps = {}; }
-  }
+  const { pending, oldest, error: queueError, gapsTotal, gapsByReason } = queueStatus(dir);
   const code = /\(([a-z_]+)\)/.exec(state.last_error ?? "")?.[1] ?? (state.last_status ? `http_${state.last_status}` : null);
   const governing = input.hasPolicy && (input.agents.claude || input.agents.cursor || input.agents.codex);
   // Stuck with a known error for an hour, or stalled: nothing accepted since the oldest waiting
@@ -80,14 +76,16 @@ export function buildStatusJson(input: {
       connected: !!connection,
       last_success_at: state.last_success_at,
       last_attempt_at: state.last_attempt_at,
-      // An unusable queue blocks every action: it is the error that matters, whatever delivery said last.
+      // An unusable queue is the error that matters, whatever delivery said last. It does not block actions: they stay allowed
+      // and are recorded on this computer, and are sent once the queue can be written again.
       last_error: queueError ? `delivery queue unusable: ${queueError}` : state.last_error,
       last_error_code: queueError ? "queue_unusable" : code,
       queue_error: queueError ?? null,
       connection_refused_since: state.invalid_since,
       pending,
       oldest_pending_age_s: oldest !== null ? Math.max(0, Math.round((now - oldest) / 1000)) : null,
-      gaps_by_reason: gaps,
+      gaps_by_reason: gapsByReason,
+      gaps_total: gapsTotal,
     },
     identity: {
       installation_id: connection ? ((connection as { installation_id?: string }).installation_id ?? connection.gateway_id) : null,
