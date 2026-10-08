@@ -103,7 +103,19 @@ function runAction({ repo, baseSha, headSha, changedFiles, apiFiles, event = {},
   };
   // Step 1 (bash). If gh is "absent", strip every PATH entry holding a gh binary.
   let PATH = process.env.PATH ?? process.env.Path ?? "";
-  if (!apiFiles) PATH = PATH.split(delimiter).filter((p) => !/GitHub CLI/i.test(p) && !existsSync(join(p, "gh")) && !existsSync(join(p, "gh.exe"))).join(delimiter);
+  if (!apiFiles) {
+    // Drop every PATH entry that holds a gh binary. Such a directory (e.g. /usr/bin on a Linux
+    // runner) also holds tools step 1 needs, so those are reached through shims instead.
+    const shims = join(t, "shims"); mkdirSync(shims);
+    const hasGh = (p) => /GitHub CLI/i.test(p) || existsSync(join(p, "gh")) || existsSync(join(p, "gh.exe"));
+    const dirs = PATH.split(delimiter);
+    for (const tool of ["git", "grep", "tr", "wc", "cat"]) {
+      if (dirs.some((p) => !hasGh(p) && existsSync(join(p, tool)))) continue;
+      const home = dirs.find((p) => existsSync(join(p, tool)));
+      if (home) writeFileSync(join(shims, tool), `#!/bin/sh\nexec "${fwd(join(home, tool))}" "$@"\n`, { mode: 0o755 });
+    }
+    PATH = [shims, ...dirs.filter((p) => !hasGh(p))].join(delimiter);
+  }
   const s1env = { ...baseEnv, PATH: apiFiles ? `${bin}${delimiter}${PATH}` : PATH,
     REPO: "acme/app", PR_NUMBER: String(ev.pull_request.number ?? ""), BASE_SHA: baseSha, HEAD_SHA: headSha, CHANGED_FILES: String(changedFiles) };
   delete s1env.Path;
@@ -203,6 +215,7 @@ test("with gh absent the fallback diff of a normal PR is exact and a production 
   const { repo, baseSha, headSha } = makeRepo(["src/a.ts", "infra/prod/main.tf"]);
   const r = runAction({ repo, baseSha, headSha, changedFiles: 2, apiFiles: null });
   assert.equal(r.ghCalls, "");
+  assert.match(r.s1.stdout, /2 changed path\(s\) from the git diff/, r.s1.stdout + r.s1.stderr);
   assert.equal(r.status, 1, r.s2.stdout + r.s2.stderr);
   assert.match(r.s2.stdout, /DENY/);
 });

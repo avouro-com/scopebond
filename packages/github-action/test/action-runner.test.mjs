@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,7 +47,8 @@ test("the action never runs npx, expands no inputs inside a run script, and pins
 
 /** Run the check step's script with a stub `npm` that "installs" a fixture CLI into the prefix. */
 function runCheckStep({ version = "", policy = "scopebond.policy.json" } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "sb-action-npm-"));
+  // Long-form path: on Windows the temp dir may be an 8.3 short name that a child process reports in full.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "sb-action-npm-")));
   const ws = join(root, "workspace"); const runnerTemp = join(root, "runner-temp"); const bin = join(root, "bin");
   for (const d of [ws, runnerTemp, bin]) mkdirSync(d);
   // A checked-out workspace that carries its own copy of the package and its own registry.
@@ -81,7 +82,7 @@ function runCheckStep({ version = "", policy = "scopebond.policy.json" } = {}) {
   const npmCalls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   return { r, npmCalls, ws, runnerTemp };
 }
-const norm = (p) => fwd(p).replace(/\/+$/, "").toLowerCase();
+const norm = (p) => fwd(existsSync(p) ? realpathSync.native(p) : p).replace(/\/+$/, "").toLowerCase();
 const same = (a, b) => norm(a) === norm(b);
 
 test("the check step installs the action's own version outside the workspace and runs it from the workspace", () => {
