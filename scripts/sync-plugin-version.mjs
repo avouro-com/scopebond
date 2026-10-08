@@ -7,7 +7,8 @@
 //     plugin manifest version (packages/hook/.claude-plugin/plugin.json) → the hook version;
 //   - README.md `@scopebond/<pkg>@x.y.z` pins → each package's version;
 //   - packages/README.md "published x.y.z" in each package's table row;
-//   - packages/gateway/README.md `@scopebond/gateway@x.y.z` pins.
+//   - packages/gateway/README.md `@scopebond/gateway@x.y.z` pins;
+//   - packages/verify/src/violates.ts VERIFIER_VERSION → the verify version.
 
 import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 
@@ -48,6 +49,9 @@ if (hook) {
 }
 update("README.md", pinScoped);
 update("packages/gateway/README.md", pinScoped);
+// The verifier names its own published version in every verdict (packages/verify/src/violates.ts).
+const verify = versions.verify?.version;
+if (verify) update("packages/verify/src/violates.ts", (t) => t.replace(new RegExp(`(VERIFIER_VERSION = "scopebond-verify@)${VERSION}(")`), `$1${verify}$2`));
 // packages/README.md: the status column of each package's row, `| \`<dir>\` | … (published x.y.z`.
 update("packages/README.md", (text) => text.split("\n").map((line) => {
   const m = /^\| `([a-z-]+)` \|/.exec(line);
