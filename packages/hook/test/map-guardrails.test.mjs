@@ -93,3 +93,20 @@ test("with the default setup, the hook refuses each of these, whatever rules the
     assert.equal(await decide("Grep", { pattern: "TODO", path: "/repo/src" }), "allow");
   } finally { runtime.close(); }
 });
+
+test("other writers of a named file are writes; a target computed at run time is an unknown write", () => {
+  for (const command of [
+    "certutil -decode in.b64 .scopebond/policy.json",
+    "certutil -urlcache -split -f https://example.test/p .scopebond/policy.json",
+    "expand x.cab .scopebond/policy.json",
+    "bitsadmin /transfer job https://example.test/p .scopebond/policy.json",
+    "git clone https://example.test/r.git .scopebond",
+    "split -b 10 f .scopebond/x",
+  ]) assert.ok(writes("Bash", { command }).some((p) => p.startsWith(".scopebond")), command);
+  const unknown = (command) => intents("Bash", { command }).some((m) => m.intent.action_type === "file.write" && m.intent.params.path === "" && m.evaluated === false);
+  assert.ok(unknown("echo x > \"$P\""));
+  assert.ok(unknown("echo x | tee $(echo .scopebond/policy.json)"));
+  assert.ok(unknown("git clone https://example.test/r.git"), "a clone into the repository's own name");
+  assert.ok(!unknown("echo x > out.txt"));
+  assert.deepEqual(writes("Bash", { command: "certutil -hashfile f SHA256" }), []);
+});
