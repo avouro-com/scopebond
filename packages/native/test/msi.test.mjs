@@ -14,15 +14,26 @@ const reg = (key, name) => {
   const r = spawnSync("reg", ["query", key, "/v", name], { encoding: "utf8" });
   return r.status === 0 ? (/REG_\w+\s+(.*)$/m.exec(r.stdout)?.[1] ?? "").trim() : null;
 };
-/** This user's Settings -> Apps entries (HKCU Uninstall subkeys) with the values the list shows. */
+/** The Settings -> Apps entries named Scopebond Agent, with the values the list shows. A per-user MSI is listed from
+ *  Windows Installer's own record (HKLM ...\Installer\UserData\<SID>\Products\<id>\InstallProperties), not an Uninstall
+ *  key; an npm install's entry is HKCU ...\Uninstall\ScopebondAgent. Both are read. */
 const appsEntries = () => {
-  const r = spawnSync("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", "/s"], { encoding: "utf8" });
-  if (r.status !== 0) return [];
-  return r.stdout.split(/\r?\n(?=HKEY_)/).map((block) => {
-    const entry = {};
-    for (const m of block.matchAll(/^\s+(DisplayName|Publisher|UninstallString)\s+REG_\w+\s+(.*)$/gm)) entry[m[1]] = m[2].trim();
-    return entry;
-  });
+  const roots = [
+    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+    "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData",
+  ];
+  const entries = [];
+  for (const root of roots) {
+    const found = spawnSync("reg", ["query", root, "/s", "/f", "Scopebond Agent", "/d", "/e"], { encoding: "utf8" });
+    if (found.status !== 0) continue;
+    for (const key of found.stdout.split(/\r?\n/).filter((line) => /^HKEY_/.test(line))) {
+      const values = spawnSync("reg", ["query", key.trim()], { encoding: "utf8" }).stdout ?? "";
+      const entry = { key: key.trim() };
+      for (const m of values.matchAll(/^\s+(DisplayName|Publisher|UninstallString)\s+REG_\w+\s+(.*)$/gm)) entry[m[1]] = m[2].trim();
+      entries.push(entry);
+    }
+  }
+  return entries;
 };
 const msiexec = (args, log) => {
   const r = spawnSync("msiexec", [...args, "/qn", "/l*v", log], { encoding: "utf8" });
@@ -45,6 +56,8 @@ test("the installer installs per user without an administrator, and removing it 
   // Settings -> Apps lists it once, as Scopebond Agent by Avouro LLC (Windows writes the entry for the installer; the
   // npm install's own entry is not written for a signed install).
   const listed = appsEntries().filter((e) => e.DisplayName === "Scopebond Agent");
+  // Never leave the install behind for the next test, whatever this one finds.
+  if (listed.length !== 1) msiexec(["/x", msi], join(logs, "msi-user-remove-fallback.log"));
   assert.equal(listed.length, 1, JSON.stringify(listed));
   assert.equal(listed[0].Publisher, "Avouro LLC");
   assert.match(listed[0].UninstallString ?? "", /^MsiExec\.exe \/[IX]\{[0-9A-F-]{36}\}$/i);
