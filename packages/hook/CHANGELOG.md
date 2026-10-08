@@ -1,5 +1,11 @@
 # @scopebond/hook
 
+## 0.21.4
+
+### Patch Changes
+
+- b35ae68: Workspace allowed-site patterns escape every regular-expression character in a host name, not only the dots. The document check already admits only letters, digits, hyphens and dots, so no current policy changes; the pattern now stays literal even if that check ever widens.
+
 ## 0.21.3
 
 ### Patch Changes

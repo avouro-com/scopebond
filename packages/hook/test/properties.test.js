@@ -1,5 +1,6 @@
 // Property-based tests (fast-check): invariants that must hold for every input, not only the examples the other suites pick.
 // A failure prints the smallest counterexample fast-check found, and its seed reproduces the run.
+// A .js file (ESM: the package is "type": "module") because the OpenSSF Scorecard fuzzing check reads .js/.ts files, not .mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
