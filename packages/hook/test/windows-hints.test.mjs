@@ -20,7 +20,7 @@ test("Node too old: Windows gets the winget command and how to find a second Nod
   assert.match(win, /where\.exe node/);
   const mac = nodeTooOldLines("20.1.0", "darwin").join("\n");
   assert.doesNotMatch(mac, /winget|where\.exe/);
-  assert.match(mac, /nodejs\.org/);
+  assert.ok(mac.includes("nodejs.org"), mac);
 });
 
 test("a sign-in to repeat is printed exactly, with its flags", () => {

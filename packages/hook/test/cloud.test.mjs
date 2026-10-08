@@ -219,3 +219,16 @@ test("connecting this computer puts the hook in the user-level agent settings, n
     cloud.close();
   }
 });
+
+test("a stored connection is used only with an HTTPS workspace (or localhost), so the credential never travels in clear", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-cloud-url-"));
+  const write = (url) => writeFileSync(connectionPath(dir), JSON.stringify({ url, credential: "sbm_x", organization_id: "org-1" }));
+  for (const url of ["https://cloud.scopebond.com", "http://localhost:8787", "http://127.0.0.1:8787"]) {
+    write(url);
+    assert.equal(loadConnection(dir)?.url, url, url);
+  }
+  for (const url of ["http://cloud.scopebond.com", "ftp://cloud.scopebond.com", "https://user:pass@cloud.scopebond.com", "not a url"]) {
+    write(url);
+    assert.equal(loadConnection(dir), null, url);
+  }
+});
