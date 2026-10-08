@@ -112,8 +112,14 @@ export class FileReceiptStore implements ReceiptStore {
     }
   }
   private append(file: string, line: string): void {
-    const fresh = !existsSync(file);
-    appendFileSync(file, line + "\n", { mode: 0o600 });
+    // Create the log exclusively when it is new ("ax"), else append: the create itself says whether this call made it.
+    let fresh = true;
+    try { appendFileSync(file, line + "\n", { mode: 0o600, flag: "ax" }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      fresh = false;
+      appendFileSync(file, line + "\n", { mode: 0o600, flag: "a" });
+    }
     // A new log holds signed evidence: readable by its owner alone (on Windows the mode is ignored).
     if (fresh) restrictToOwner(file);
   }

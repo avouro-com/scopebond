@@ -6,7 +6,8 @@ import { copyFileSync, mkdirSync, writeFileSync, existsSync, readFileSync } from
 import { dirname, join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
-import { compile, defaultRules, loadRules, saveRules, rulesPath } from "./rules.js";
+import { compile, createRules, defaultRules, loadRules, saveRules, rulesPath } from "./rules.js";
+import { createExclusive } from "./safe-fs.js";
 import {
   readHarnessConfig, projectHarnessFile, localHarnessFile, harnessEntryMatches, backupHarnessConfig,
   gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
@@ -21,7 +22,7 @@ export function scaffold(dir: string, opts: { force?: boolean; enforce?: readonl
   const policyPath = join(dir, "policy.json");
   // Never let the signing keys, the Cloud credential or the local log be committed.
   const gitignorePath = join(dir, ".gitignore");
-  if (!existsSync(gitignorePath)) writeFileSync(gitignorePath, "*\n");
+  createExclusive(gitignorePath, "*\n");
   // Machine signing key (agent) + gateway countersigning key (attester). Reused if present.
   loadOrCreateAttester({ file: keyPath });
   loadOrCreateAttester({ file: attesterPath });
@@ -33,11 +34,11 @@ export function scaffold(dir: string, opts: { force?: boolean; enforce?: readonl
   // the starter policy's exact patterns — `rules.test.mjs` pins that — so writing either
   // form enforces the same thing.
   const rulesFile = rulesPath(dir);
-  if (!existsSync(rulesFile) || opts.force) saveRules(dir, { ...defaultRules(), enforce: [...(opts.enforce ?? [])] });
-  if (!existsSync(policyPath) || opts.force) {
-    const rules = loadRules(dir) ?? defaultRules();
-    writeFileSync(policyPath, JSON.stringify(compile(rules, agent.kid), null, 2) + "\n");
-  }
+  // Without --force each file is written only when absent; the exclusive create is the check.
+  const starterRules = { ...defaultRules(), enforce: [...(opts.enforce ?? [])] };
+  if (opts.force) saveRules(dir, starterRules); else createRules(dir, starterRules);
+  const policyText = (): string => JSON.stringify(compile(loadRules(dir) ?? defaultRules(), agent.kid), null, 2) + "\n";
+  if (opts.force) writeFileSync(policyPath, policyText()); else createExclusive(policyPath, policyText);
   return { agentKid: agent.kid, policyPath, rulesPath: rulesFile };
 }
 
@@ -51,7 +52,8 @@ const GENERATED_IDS = new Set(["protect-scopebond-write", "protect-scopebond-rea
  *  policy a person edited by hand (clauses this hook does not generate). Returns whether anything changed. */
 export function migrateToMonitorDefault(dir: string): boolean {
   const policyPath = join(dir, "policy.json");
-  if (existsSync(join(dir, "managed-rules.json")) || !existsSync(rulesPath(dir)) || !existsSync(policyPath)) return false;
+  if (existsSync(join(dir, "managed-rules.json"))) return false;
+  // No rule set (loadRules gives null) or no policy (the read below fails): nothing to move.
   const rules = loadRules(dir);
   if (!rules || Array.isArray(rules.enforce)) return false;
   try {

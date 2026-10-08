@@ -14,7 +14,7 @@
 //   200  a rules document: checked, installed if newer, confirmed
 //   401  the connection is no longer valid (revoked, expired, removed): go back to this computer's own rules
 
-import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { connectionPath, loadConnection } from "./cloud.js";
 import { readDeliveryState, recordRulesCredential } from "./delivery-state.js";
@@ -225,14 +225,7 @@ export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, bud
     if (!existsSync(connectionPath(dir))) return null;
     const checked = readMeta(dir).checked_at;
     if (checked && now - Date.parse(checked) < SYNC_INTERVAL_MS) return null;
-    const lock = join(dir, LOCK_FILE);
-    if (existsSync(lock)) {
-      if (now - statSync(lock).mtimeMs < LOCK_STALE_MS) return null;
-      rmSync(lock, { force: true });
-    }
-    const fd = openSync(lock, "wx");
-    writeSync(fd, String(process.pid));
-    closeSync(fd);
+    if (!claimSyncLock(join(dir, LOCK_FILE), now)) return null;
     const budget = Number.isFinite(budgetMs) && budgetMs > 0 ? budgetMs : INLINE_BUDGET_MS;
     const work = Promise.resolve()
       .then(() => syncPolicy(dir, { ...makeOptions(), timeoutMs: budget }))
@@ -244,6 +237,26 @@ export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, bud
     if (timer) clearTimeout(timer);
     return outcome;
   } catch { return null; }
+}
+
+/** Take the sync lock. The exclusive create is the check: when the lock is held, its age is read from the open file, and a
+ *  lock older than LOCK_STALE_MS is removed and taken once more. False when another check holds a fresh lock; throws when
+ *  the lock cannot be taken. */
+function claimSyncLock(lock: string, now: number): boolean {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const fd = openSync(lock, "wx");
+      try { writeSync(fd, String(process.pid)); } finally { closeSync(fd); }
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0) throw error;
+    }
+    const held = openSync(lock, "r");
+    let mtimeMs: number;
+    try { mtimeMs = fstatSync(held).mtimeMs; } finally { closeSync(held); }
+    if (now - mtimeMs < LOCK_STALE_MS) return false;
+    rmSync(lock, { force: true });
+  }
 }
 
 export function releaseSyncLock(dir: string): void {
