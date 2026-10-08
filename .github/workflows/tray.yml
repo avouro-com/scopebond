@@ -85,6 +85,56 @@ jobs:
           "| tray at idle | $mb MB working set | $private MB private |" >> $env:GITHUB_STEP_SUMMARY
           Stop-Process -Id $p.Id -Force
           if ($mb -ge 25) { throw "idle working set $mb MB is over 25 MB" }
+      # The status panel as a person sees it, beside a stand-in agent (tests/fake-agent.mjs) on a named pipe: three states,
+      # light and dark, kept as screenshots for review.
+      - name: Status panel screenshots
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $shots = Join-Path $env:RUNNER_TEMP "panel"
+          New-Item -ItemType Directory -Force $shots | Out-Null
+          function Shot($name) {
+            $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object Drawing.Bitmap $b.Width, $b.Height
+            $g = [Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [Drawing.Point]::Empty, $b.Size)
+            $bmp.Save((Join-Path $shots "$name.png"))
+            $g.Dispose(); $bmp.Dispose()
+          }
+          $personalize = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+          if (-not (Test-Path $personalize)) { New-Item $personalize | Out-Null }
+          $runs = @(
+            @{ theme = 1; scenario = "attention"; name = "light-attention" },
+            @{ theme = 0; scenario = "protected"; name = "dark-protected" },
+            @{ theme = 1; scenario = "disconnected"; name = "light-disconnected" }
+          )
+          foreach ($run in $runs) {
+            Set-ItemProperty $personalize AppsUseLightTheme $run.theme -Type DWord
+            $home0 = Join-Path $env:RUNNER_TEMP ("home-" + $run.name)
+            New-Item -ItemType Directory -Force $home0 | Out-Null
+            $env:SCOPEBOND_HOME = $home0
+            $agent = Start-Process node -ArgumentList @("tests/fake-agent.mjs", $home0, $run.scenario) -PassThru -NoNewWindow
+            $until = (Get-Date).AddSeconds(20)
+            while (-not (Test-Path (Join-Path $home0 "agent.json"))) {
+              if ((Get-Date) -gt $until) { throw "the stand-in agent did not start" }
+              Start-Sleep -Milliseconds 200
+            }
+            $tray = Start-Process "target/release/scopebond-tray.exe" -ArgumentList "--status" -PassThru
+            Start-Sleep -Seconds 10
+            Shot $run.name
+            $tray.Refresh()
+            if ($tray.HasExited) { throw "the tray exited with code $($tray.ExitCode)" }
+            Stop-Process -Id $tray.Id -Force
+            Stop-Process -Id $agent.Id -Force
+            "--- $($run.name)"
+            Get-Content (Join-Path $home0 "tray.log")
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: status-panel-screenshots
+          path: ${{ runner.temp }}/panel
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scopebond-tray-unsigned
