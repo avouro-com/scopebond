@@ -9,5 +9,6 @@ pub mod log;
 pub mod menu;
 pub mod model;
 pub mod panel;
+pub mod supervise;
 #[cfg(windows)]
 pub mod win;

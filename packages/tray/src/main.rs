@@ -3,6 +3,9 @@
 #![windows_subsystem = "windows"]
 
 use std::panic::AssertUnwindSafe;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,6 +15,7 @@ use scopebond_tray::icon::{self, IconState};
 use scopebond_tray::menu::{self, AgentLink, Autostart, Command, Entry, MenuContext};
 use scopebond_tray::model::{Notifications, TrayAction, TrayAnswer};
 use scopebond_tray::panel::{self, Area, PANEL_HEIGHT, PANEL_WIDTH};
+use scopebond_tray::supervise::{self, Decision, Observation, Supervisor};
 use scopebond_tray::{log, win};
 use serde_json::{json, Value};
 use tauri::image::Image;
@@ -55,6 +59,10 @@ struct Shared {
     panel_closed_at: Mutex<Option<Instant>>,
     /// Where the tray icon is on screen (physical pixels), for placing the panel.
     anchor: Mutex<Option<(f64, f64)>>,
+    /// What supervision knows when the agent's model is not there (starting, stopped, waiting for a replacement…).
+    supervised: Mutex<AgentLink>,
+    /// The person asked for the agent to be started.
+    start_requested: AtomicBool,
 }
 
 impl Shared {
@@ -69,6 +77,8 @@ impl Shared {
             drawn: Mutex::new(Drawn::default()),
             panel_closed_at: Mutex::new(None),
             anchor: Mutex::new(None),
+            supervised: Mutex::new(AgentLink::Starting),
+            start_requested: AtomicBool::new(false),
         }
     }
 
@@ -135,11 +145,130 @@ fn build_menu(app: &AppHandle, spec: &[Entry]) -> tauri::Result<Menu<tauri::Wry>
     Ok(menu)
 }
 
+fn create_tray(app: &AppHandle, shared: &Arc<Shared>) -> tauri::Result<tauri::tray::TrayIcon> {
+    let (s_menu, s_tray) = (shared.clone(), shared.clone());
+    let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Problems });
+    let tray = TrayIconBuilder::with_id(TRAY_ID)
+        .icon(icon_image(IconState::Working))
+        .tooltip("Scopebond — starting")
+        .menu(&build_menu(app, &starting)?)
+        .show_menu_on_left_click(false)
+        .on_menu_event(move |app, event| {
+            let answer = lock(&s_menu.answer).clone();
+            if let Some(command) = menu::command_for(event.id().as_ref(), answer.as_ref()) {
+                dispatch(app, &s_menu, command);
+            }
+        })
+        .on_tray_icon_event(move |tray, event| on_tray_event(tray.app_handle(), &s_tray, event))
+        .build(app)?;
+    *lock(&shared.drawn) = Drawn { spec: starting, icon: Some(IconState::Working), tooltip: "Scopebond — starting".into() };
+    Ok(tray)
+}
+
+/// The agent program: `scopebond-agent.exe` beside the tray in the install folder.
+fn agent_program() -> Option<PathBuf> {
+    std::env::current_exe().ok().map(|p| p.with_file_name("scopebond-agent.exe"))
+}
+
+/// Start `scopebond-agent.exe run` with no console window. It writes its own log and leaves the tray to this program.
+fn start_agent(program: &Path, home: &Path) -> std::io::Result<Child> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::fs::create_dir_all(home);
+    std::process::Command::new(program)
+        .arg("run")
+        .env("SCOPEBOND_AGENT_TRAY", "off")
+        .env("SCOPEBOND_AGENT_LOG", home.join("agent.log"))
+        .env_remove("SCOPEBOND_AGENT_AFTER_PID")
+        .current_dir(home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+}
+
+/// Another agent is starting: its lock is fresh and its process alive, and it is not the tray's own child.
+fn other_agent_starting(home: &Path, own: Option<u32>) -> bool {
+    let Ok(text) = std::fs::read_to_string(home.join("agent.lock")) else { return false };
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    match supervise::read_lock(&text, now_ms) {
+        Some((pid, true)) => Some(pid) != own && win::process_alive(pid),
+        _ => false,
+    }
+}
+
+/// Keep the agent running (every rule is in supervise.rs). It looks every second while the agent is not answering, and
+/// every three seconds while it is.
+fn supervise_agent(shared: &Arc<Shared>) {
+    let program = agent_program();
+    let home = shared.client.home().to_path_buf();
+    let mut child: Option<Child> = None;
+    let mut sup = Supervisor::new();
+    loop {
+        let step = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            if shared.start_requested.swap(false, Ordering::SeqCst) {
+                sup.start_requested();
+            }
+            let child_state = match child.as_mut().map(|c| c.try_wait()) {
+                None => supervise::Child::None,
+                Some(Ok(None)) => supervise::Child::Running,
+                Some(Ok(Some(status))) => {
+                    log::line(&format!("the agent exited ({status})"));
+                    supervise::Child::Exited(status.code())
+                }
+                Some(Err(_)) => supervise::Child::Exited(None),
+            };
+            if matches!(child_state, supervise::Child::Exited(_)) {
+                child = None;
+            }
+            let own = child.as_ref().map(|c| c.id());
+            let observation = Observation {
+                answering: shared.client.answers(),
+                child: child_state,
+                other_starting: other_agent_starting(&home, own),
+                endpoint_file: shared.client.endpoint().is_some(),
+                agent_present: program.as_ref().is_some_and(|p| p.exists()),
+            };
+            let before = sup.link();
+            let now = Instant::now();
+            if sup.tick(&observation, now) == Decision::Start {
+                if let Some(program) = &program {
+                    match start_agent(program, &home) {
+                        Ok(c) => {
+                            log::line(&format!("started the agent (process {})", c.id()));
+                            child = Some(c);
+                        }
+                        Err(e) => {
+                            log::line(&format!("could not start the agent: {e}"));
+                            sup.start_failed(now);
+                        }
+                    }
+                }
+            }
+            if sup.link() != before || *lock(&shared.supervised) != sup.link() {
+                log::line(&format!("agent: {}", link_name(sup.link())));
+                *lock(&shared.supervised) = sup.link();
+                shared.wake();
+            }
+        }));
+        if step.is_err() {
+            log::line("a supervision step failed; going on");
+        }
+        thread::sleep(if sup.link() == AgentLink::Answering { Duration::from_secs(3) } else { Duration::from_secs(1) });
+    }
+}
+
 /// Ask the agent for its model and redraw. Only the refresh thread calls this (menus are built on the main thread, which
 /// this waits for, so nothing on the main thread may wait for this).
 fn refresh(app: &AppHandle, shared: &Arc<Shared>) {
     let answer = shared.client.tray();
-    let link = if answer.is_some() { AgentLink::Answering } else { AgentLink::NotAnswering };
+    let link = match (&answer, *lock(&shared.supervised)) {
+        (Some(_), _) => AgentLink::Answering,
+        // Its pipe accepts connections but it gave no model yet: still starting.
+        (None, AgentLink::Answering) => AgentLink::Starting,
+        (None, link) => link,
+    };
     *lock(&shared.answer) = answer;
     *lock(&shared.link) = link;
     draw(app, shared);
@@ -147,7 +276,17 @@ fn refresh(app: &AppHandle, shared: &Arc<Shared>) {
 
 fn draw(app: &AppHandle, shared: &Arc<Shared>) {
     let (answer, link) = shared.snapshot();
-    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let tray = match app.tray_by_id(TRAY_ID) {
+        Some(tray) => tray,
+        // At sign-in the taskbar may not be there yet: the icon is added once it is.
+        None => match create_tray(app, shared) {
+            Ok(tray) => tray,
+            Err(e) => {
+                log::line(&format!("the tray icon could not be added yet: {e}"));
+                return;
+            }
+        },
+    };
     let ctx = MenuContext {
         link,
         autostart: autostart_state(),
@@ -156,7 +295,7 @@ fn draw(app: &AppHandle, shared: &Arc<Shared>) {
     let spec = menu::menu_spec(answer.as_ref(), &ctx);
     let state = match (link, &answer) {
         (AgentLink::Answering, Some(a)) => a.tray.icon_state(),
-        (AgentLink::Starting, _) | (AgentLink::Answering, None) => IconState::Working,
+        (AgentLink::Starting | AgentLink::Waiting, _) | (AgentLink::Answering, None) => IconState::Working,
         _ => IconState::Problem,
     };
     let tooltip = match (link, &answer) {
@@ -273,7 +412,11 @@ fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
         Command::Run(action) => {
             thread::spawn(move || run_action(&app2, &s, action, true));
         }
-        Command::StartAgent | Command::ToggleAutostart => {}
+        Command::StartAgent => {
+            log::line("asked to start the agent");
+            shared.start_requested.store(true, Ordering::SeqCst);
+        }
+        Command::ToggleAutostart => {}
         Command::Notifications(n) => {
             thread::spawn(move || {
                 if let Err(e) = s.client.call("POST", "/settings", Some(&json!({ "notifications": n.as_str() })), Duration::from_secs(10)) {
@@ -381,6 +524,7 @@ fn link_name(link: AgentLink) -> &'static str {
         AgentLink::Answering => "answering",
         AgentLink::Starting => "starting",
         AgentLink::NotAnswering => "not_answering",
+        AgentLink::Waiting => "waiting",
         AgentLink::Stopped => "stopped",
         AgentLink::Missing => "missing",
     }
@@ -398,7 +542,7 @@ fn panel_state(shared: State<'_, Arc<Shared>>) -> Value {
     };
     let state = match (link, &answer) {
         (AgentLink::Answering, Some(a)) => a.tray.icon_state().as_str(),
-        (AgentLink::Starting, _) => "working",
+        (AgentLink::Starting | AgentLink::Waiting, _) => "working",
         _ => "problem",
     };
     json!({
@@ -474,23 +618,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_command, panel_close])
         .setup(move |app| {
             let handle = app.handle().clone();
-            let (s_menu, s_tray) = (shared.clone(), shared.clone());
-            let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Problems });
-            TrayIconBuilder::with_id(TRAY_ID)
-                .icon(icon_image(IconState::Working))
-                .tooltip("Scopebond — starting")
-                .menu(&build_menu(&handle, &starting)?)
-                .show_menu_on_left_click(false)
-                .on_menu_event(move |app, event| {
-                    let answer = lock(&s_menu.answer).clone();
-                    if let Some(command) = menu::command_for(event.id().as_ref(), answer.as_ref()) {
-                        dispatch(app, &s_menu, command);
-                    }
-                })
-                .on_tray_icon_event(move |tray, event| on_tray_event(tray.app_handle(), &s_tray, event))
-                .build(app)?;
-            *lock(&shared.drawn) = Drawn { spec: starting, icon: Some(IconState::Working), tooltip: "Scopebond — starting".into() };
-
+            if let Err(e) = create_tray(&handle, &shared) {
+                log::line(&format!("the tray icon could not be added yet: {e}"));
+            }
+            let s_supervise = shared.clone();
+            thread::spawn(move || supervise_agent(&s_supervise));
             let (app_refresh, s_refresh) = (handle.clone(), shared.clone());
             thread::spawn(move || loop {
                 if std::panic::catch_unwind(AssertUnwindSafe(|| refresh(&app_refresh, &s_refresh))).is_err() {

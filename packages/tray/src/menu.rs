@@ -13,6 +13,8 @@ pub enum AgentLink {
     Starting,
     /// Nothing answers and nothing is starting it right now (it will be tried again).
     NotAnswering,
+    /// It exited cleanly a moment ago: an update hands over to its replacement this way, so the tray waits for one.
+    Waiting,
     /// It stopped because someone asked it to (`scopebond-agent stop`, `autostart off`); the tray leaves it stopped.
     Stopped,
     /// There is no agent program beside the tray.
@@ -80,6 +82,7 @@ pub fn header(answer: Option<&TrayAnswer>, link: AgentLink) -> String {
         (AgentLink::Answering, Some(a)) => a.tray.headline.clone(),
         (AgentLink::Answering, None) | (AgentLink::Starting, _) => "Starting the Scopebond Agent…".to_string(),
         (AgentLink::NotAnswering, _) => "The Scopebond Agent is not answering".to_string(),
+        (AgentLink::Waiting, _) => "Waiting for the Scopebond Agent to start again…".to_string(),
         (AgentLink::Stopped, _) => "The Scopebond Agent is stopped".to_string(),
         (AgentLink::Missing, _) => "The Scopebond Agent is not installed beside this tray".to_string(),
     };
@@ -244,7 +247,7 @@ mod tests {
     #[test]
     fn there_is_no_quit_and_no_pause() {
         for fixture in [fixtures::PROTECTED, fixtures::WAITING, fixtures::DISCONNECTED] {
-            for link in [AgentLink::Answering, AgentLink::Starting, AgentLink::NotAnswering, AgentLink::Stopped, AgentLink::Missing] {
+            for link in [AgentLink::Answering, AgentLink::Starting, AgentLink::NotAnswering, AgentLink::Waiting, AgentLink::Stopped, AgentLink::Missing] {
                 for label in labels(&menu_spec(Some(&answer(fixture)), &ctx(link))) {
                     let l = label.to_lowercase();
                     assert!(!l.contains("quit") && !l.contains("exit") && !l.contains("pause"), "{label}");
@@ -308,8 +311,10 @@ mod tests {
         assert_eq!(command_for("start_agent", None), Some(Command::StartAgent));
         let stopped = labels(&menu_spec(None, &ctx(AgentLink::Stopped)));
         assert_eq!(stopped[0], "Scopebond — The Scopebond Agent is stopped");
-        let starting = labels(&menu_spec(None, &ctx(AgentLink::Starting)));
-        assert!(!starting.contains(&"Start the Scopebond Agent".to_string()), "no second start while one is under way");
+        for link in [AgentLink::Starting, AgentLink::Waiting] {
+            let l = labels(&menu_spec(None, &ctx(link)));
+            assert!(!l.contains(&"Start the Scopebond Agent".to_string()), "no second start while one is under way ({link:?})");
+        }
         assert!(matches!(
             &spec.iter().find_map(|e| match e { Entry::Submenu { label, entries } if label == "Notifications" => Some(entries[0].clone()), _ => None }),
             Some(Entry::Check { enabled: false, .. })

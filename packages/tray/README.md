@@ -46,7 +46,12 @@ program beside it in the install folder) when nothing answers, with no console w
 tray starts it again after 2 s, then 4 s, 8 s … at most 60 s apart, and the wait starts over once the agent has run for
 a while. It never runs two: an agent that is updating itself exits and its replacement starts, so the tray waits for the
 replacement to answer before starting anything, and the agent's lock file refuses a second agent anyway. An agent that
-was stopped on purpose (`scopebond-agent stop`, `autostart off`) stays stopped; the menu offers to start it.
+was stopped on purpose (`scopebond-agent stop`, `autostart off`) stays stopped; the menu offers to start it. A clean
+stop is told apart from a crash by the exit code of the agent the tray started (0), or, for an agent something else
+started, by its endpoint file: a clean stop removes it, a crash leaves it. The tray starts the agent with
+`SCOPEBOND_AGENT_TRAY=off`, so the agent does not draw its PowerShell tray as well. The rules are plain decisions in
+`src/supervise.rs`, unit-tested case by case (first start, crash and backoff, reset after five minutes, update handover,
+stop on purpose, another agent starting, no agent program).
 
 ## Threat model of the local channel
 
@@ -82,6 +87,6 @@ changes.
 
 - [x] The package, the icon, the model-to-menu mapping and its tests, the CI job.
 - [x] The pipe client, the menu from the live model, the status panel.
-- [ ] Supervision of the agent.
+- [x] Supervision of the agent.
 - [ ] The installer ships the signed tray and starts it at sign-in; the updater restarts it.
 - [ ] Notifications.
