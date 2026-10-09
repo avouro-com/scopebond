@@ -123,6 +123,9 @@ export function invalidMessageReason(message: unknown): string | undefined {
   if (Array.isArray(message)) return "JSON-RPC batches are not supported; send each message on its own";
   if (message === null || typeof message !== "object") return "a JSON-RPC message must be an object";
   if ("method" in message && typeof (message as { method?: unknown }).method !== "string") return "method must be a string";
+  // A tool call names its tool with a string. Anything else is refused here, never decided under a made-up name and forwarded.
+  const { method, params } = message as { method?: unknown; params?: unknown };
+  if (method === "tools/call" && typeof (params as { name?: unknown } | null | undefined)?.name !== "string") return "tools/call params.name must be a string";
   return undefined;
 }
 
