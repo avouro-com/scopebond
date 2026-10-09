@@ -47,7 +47,7 @@ export function localRetentionDays(dir: string): number | null {
   const historyNeed = (gatewayCore as { historyNeed?: HistoryNeedOf }).historyNeed;
   if (!historyNeed) return null;
   try {
-    const need = historyNeed(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8").replace(/^﻿/, "")));
+    const need = historyNeed(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8").replace(/^\uFEFF/, "")));
     if (need.kind === "all") return null;
     if (need.kind === "window") days = Math.max(days, Math.ceil(need.ms / DAY_MS) + 1);
   } catch { return null; } // no readable policy: keep everything

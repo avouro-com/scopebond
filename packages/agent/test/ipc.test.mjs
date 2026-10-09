@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, statSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { askAgent, requestOverSocket } from "@scopebond/hook";
@@ -58,6 +59,29 @@ test("loopback stays on by default for npm installs, for the PowerShell tray tha
     assert.equal(res.headers.get("content-type"), "application/json; charset=utf-8");
     assert.deepEqual(await res.json(), { ok: true });
   } finally { await control.close(); }
+});
+
+test("a caller that drops the connection mid-body ends that request, not the agent", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-ipc-drop-"));
+  const control = await startControl(dir, "agent/test", { "GET /status": () => ({ ok: true }), "POST /x": () => ({ ok: true }) });
+  const rejections = [];
+  const onRejection = (error) => rejections.push(error);
+  process.on("unhandledRejection", onRejection);
+  try {
+    const { port, token } = readEndpoint(dir);
+    await new Promise((resolve) => {
+      const socket = connect(port, "127.0.0.1", () => {
+        socket.write(`POST /x HTTP/1.1\r\nHost: x\r\n${TOKEN_HEADER}: ${token}\r\ncontent-length: 1000\r\n\r\n{"a":`);
+        setTimeout(() => { socket.destroy(); resolve(); }, 100);
+      });
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepEqual(rejections, [], "the dropped read is handled");
+    assert.deepEqual(await callAgent(dir, "GET", "/status"), { ok: true }, "the agent still answers");
+  } finally {
+    process.off("unhandledRejection", onRejection);
+    await control.close();
+  }
 });
 
 test("beside the native tray there is no loopback port, whatever the environment says", async () => {

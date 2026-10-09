@@ -335,7 +335,7 @@ export async function verifyAnchorRoot(anchor: AnyAnchor, payloads: unknown[]): 
     if (isAnchorV2(anchor)) {
       return payloads.length === anchor.tree_size && (await anchorRoot(anchor.algo, payloads)) === anchor.root;
     }
-    const a = anchor as AnchorV1;
+    const a = anchor;
     return payloads.length === a.count && (await anchorRoot(a.algo, payloads)) === a.merkle_root;
   } catch { return false; }
 }
@@ -360,7 +360,7 @@ export async function verifyAnchorSignature(anchor: AnyAnchor, publicJwk: Ed2551
     const key = await subtle().importKey(
       "jwk", { kty: "OKP", crv: "Ed25519", x: publicJwk.x } as JsonWebKey, { name: "Ed25519" }, false, ["verify"],
     );
-    return await subtle().verify({ name: "Ed25519" }, key, base64ToBytes(anchor.signature.sig) as BufferSource, bytes as BufferSource);
+    return await subtle().verify({ name: "Ed25519" }, key, base64ToBytes(anchor.signature.sig) as BufferSource, bytes);
   } catch { return false; }
 }
 
@@ -389,9 +389,9 @@ export async function verifyAnchorChain(anchors: AnyAnchor[], publicJwk?: Ed2551
     if (h !== a.anchor_hash) return fail("anchor_hash mismatch");
     if (a.prev_anchor_hash !== (prev ? prev.anchor_hash : a.prev_anchor_hash)) return fail("prev_anchor_hash does not link");
     if (i === 0 && prev === null && a.seq === 1 && a.prev_anchor_hash !== null) return fail("first anchor must have prev_anchor_hash null");
-    const size = v2 ? (a as AnchorV2).tree_size : (a as AnchorV1).count;
+    const size = v2 ? (a).tree_size : (a).count;
     if (prev) {
-      const prevSize = isAnchorV2(prev) ? prev.tree_size : (prev as AnchorV1).count;
+      const prevSize = isAnchorV2(prev) ? prev.tree_size : (prev).count;
       if (size < prevSize) return fail("log shrank");
     }
     if (v2 && !(publicJwk && (await verifyAnchorSignature(a, publicJwk)))) return fail("bad or unverifiable v2 signature");

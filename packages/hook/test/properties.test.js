@@ -23,10 +23,12 @@ const hostBound = (allowedHosts) => {
   const policy = compileManaged(defaultRules(), managedDoc(allowedHosts), AGENT_KID);
   const patterns = policy.clauses.map((c) => c.param_bounds?.host?.pattern).filter(Boolean);
   assert.equal(patterns.length, 1, "exactly one clause bounds the host");
+  // eslint-disable-next-line security/detect-non-literal-regexp -- test-only; the compiled host pattern is the thing under test
   return new RegExp(patterns[0]);
 };
 
 // Host names the managed document accepts: lowercase labels of letters, digits and inner hyphens, and a letter-only top level.
+// eslint-disable-next-line security/detect-unsafe-regex -- test-only generator pattern; bounded ({0,10}) and never run on outside input
 const label = fc.stringMatching(/^[a-z0-9]([a-z0-9-]{0,10}[a-z0-9])?$/);
 const host = fc.tuple(fc.array(label, { minLength: 1, maxLength: 3 }), fc.stringMatching(/^[a-z]{2,6}$/)).map(([labels, tld]) => [...labels, tld].join("."));
 const mixCase = (text, flips) => [...text].map((c, i) => (flips[i % flips.length] ? c.toUpperCase() : c)).join("");

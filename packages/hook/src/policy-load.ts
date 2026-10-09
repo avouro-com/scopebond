@@ -36,7 +36,7 @@ export const PREVIOUS_POLICY_FILE = "policy.previous.json";
 
 /** SHA-256 of the domain plus the canonical scope an export was made for. */
 export const policyScopeDigest = (scope: { export_id: string; agent_id: string; environment_id: string }): string =>
-  createHash("sha256").update(POLICY_SCOPE_DOMAIN + canonical({ agent_id: scope.agent_id, environment_id: scope.environment_id, export_id: scope.export_id } as never), "utf8").digest("hex");
+  createHash("sha256").update(POLICY_SCOPE_DOMAIN + canonical({ agent_id: scope.agent_id, environment_id: scope.environment_id, export_id: scope.export_id }), "utf8").digest("hex");
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const OPAQUE = /^[\x21-\x7e]{1,200}$/;

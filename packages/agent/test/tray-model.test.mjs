@@ -105,7 +105,7 @@ test("the tray script takes the home and agent id as data and draws all six stat
   const { trayScript } = await import("../dist/tray.js");
   const script = trayScript("D:/work/x';Remove-Item C:/ -Recurse;'", 42);
   assert.doesNotMatch(script, /Remove-Item C:/);
-  for (const s of ["protected", "working", "offline", "attention", "problem", "disconnected"]) assert.match(script, new RegExp(`'${s}'`));
+  for (const s of ["protected", "working", "offline", "attention", "problem", "disconnected"]) assert.ok(script.includes(`'${s}'`), `draws '${s}'`);
   assert.match(script, /GET' '\/tray'/);
   assert.match(script, /'Problems only'/);
 });

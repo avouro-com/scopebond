@@ -46,9 +46,25 @@ const pathsFile = arg("--paths-file", process.env.SCOPEBOND_PR_PATHS);
 
 if (!eventPath) die("no GitHub event available (set GITHUB_EVENT_PATH or --event)");
 
-let event: Record<string, any>;
+/** The fields of the pull_request event payload this check reads, typed as GitHub documents them. The
+ *  payload is not validated: numbers are checked with `typeof` where they are read. */
+interface PullRequestEvent {
+  repository?: { full_name?: string };
+  sender?: { login?: string };
+  pull_request?: {
+    number?: unknown;
+    base?: { ref?: string; sha?: unknown };
+    head?: { ref?: string; sha?: string };
+    changed_files?: unknown;
+    additions?: unknown;
+    deletions?: unknown;
+    user?: { login?: string };
+  };
+}
+
+let event: PullRequestEvent;
 let policy: unknown;
-try { event = JSON.parse(readFileSync(eventPath as string, "utf8")); }
+try { event = JSON.parse(readFileSync(eventPath, "utf8")); }
 catch (e) { die(`could not read the event payload: ${(e as Error).message}`); }
 const policySource = arg("--policy-source", process.env.SCOPEBOND_POLICY_SOURCE || "base");
 if (policySource !== "base" && policySource !== "workspace") die(`--policy-source must be "base" or "workspace", not "${policySource}"`);
@@ -81,12 +97,13 @@ catch (e) { die(`could not read the policy ${policyPath}: ${(e as Error).message
 
 if (!validatePolicy(policy).valid) die(`policy ${policyPath} is invalid (fail closed)`);
 
-const pr = event!.pull_request ?? {};
+const pr: NonNullable<PullRequestEvent["pull_request"]> = event!.pull_request ?? {};
 const readList = (file: string): string => {
   try { return readFileSync(file, "utf8"); }
   catch (e) { die(`could not read the changed-paths file: ${(e as Error).message}`); }
 };
 // C0 and C1 controls, DEL, and the Unicode line and paragraph separators.
+// eslint-disable-next-line no-control-regex -- matching control characters is the point: a path carrying one is rejected
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 let paths: string[] = [];
 let entries = 0; // changed files listed, counted per entry (a renamed file is one entry with two names)

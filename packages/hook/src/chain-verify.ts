@@ -38,7 +38,7 @@ async function loadAnchor(source: string, fetchImpl: typeof fetch): Promise<unkn
     if (text.length > MAX_ANCHOR_BYTES) throw new Error(`${source}: larger than an anchor list can be`);
     return JSON.parse(text);
   }
-  return JSON.parse(readFileSync(source, "utf8").replace(/^﻿/, ""));
+  return JSON.parse(readFileSync(source, "utf8").replace(/^\uFEFF/, ""));
 }
 
 function readSegments(dir: string): string[] {

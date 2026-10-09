@@ -109,7 +109,7 @@ export function parseDelegationAnswer(body: unknown): DelegationAnswer {
   const covers = (body as Record<string, unknown>).covers as boolean | undefined;
   return {
     ok: true,
-    delegation: { state: state as CloudDelegationState, grants: d.grants === true, effective_entries: entries as string[], effective_scope_digest: d.effective_scope_digest, effective_expires_at: expires as number | null },
+    delegation: { state: state as CloudDelegationState, grants: d.grants === true, effective_entries: entries as string[], effective_scope_digest: d.effective_scope_digest, effective_expires_at: expires },
     ...(covers !== undefined ? { covers } : {}),
   };
 }

@@ -9,6 +9,7 @@ export interface ValidationResult {
 }
 
 const MAX_SAFE = 9007199254740991;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: each lookahead runs once at a fixed position and each optional group is digits closed by its own distinct letter; a test runs it on a 50k-character input
 const DURATION_RE = /^P(?=.+)(?:[0-9]+D)?(?:T(?=.+)(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+S)?)?$/;
 const HHMM_RE = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
 const CLAUSE_MODES = new Set(["enforce", "monitor", "require_approval"]);

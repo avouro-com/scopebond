@@ -32,7 +32,7 @@ export function loadOrCreateDigestKey(dir: string): string {
 /** HMAC-SHA-256 under the digest key, labelled so it is never mistaken for a plain hash. */
 export const keyedDigest = (value: string): string =>
   "hmac-sha256:" + createHmac("sha256", (digestKey ??= randomBytes(32))).update(value).digest("hex");
-export const digest = (value: unknown): string => keyedDigest(canonical(value as never));
+export const digest = (value: unknown): string => keyedDigest(canonical(value));
 
 const MASK = "***";
 // A flag or header value: a quoted string or a run of non-whitespace.
@@ -44,7 +44,9 @@ const VALUE = String.raw`("[^"]*"|'[^']*'|\S+)`;
 // quantifiers), so matching stays linear in the command length.
 const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, MASK],
+  // eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern built from literals (VALUE); no input reaches the source
   [new RegExp(String.raw`(--?(?:password|passwd|pwd|token|secret|api[-_]?key|access[-_]?key|auth|credentials?|key|[a-z]+-key|[a-z]+-secret|[a-z]+-password)[=\s]+)${VALUE}`, "gi"), `$1${MASK}`],
+  // eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern built from literals (VALUE); no input reaches the source
   [new RegExp(String.raw`((?:^|\s)(?:-u|--user)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
   [/(Authorization:\s*(?:Bearer|Basic|Token)\s+)[^\s"']+/gi, `$1${MASK}`],
   [/((?:x-api-key|api-key|x-auth-token|x-access-token|private-token)\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
@@ -54,8 +56,10 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/([?&](?:sig|signature|sas|token|access_token|refresh_token|id_token|key|api_?key|code|password|secret|client_secret)=)[^&\s"'#]+/gi, `$1${MASK}`],
   // Cookies: the header's value runs to the end of the quoted string; curl's -b/--cookie takes one value.
   [/(\bCookie:\s*)[^"'\n]+/gi, `$1${MASK}`],
+  // eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern built from literals (VALUE); no input reaches the source
   [new RegExp(String.raw`((?:^|\s)(?:-b|--cookie)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
   // PowerShell: a plain-text secure string, and an environment assignment with spaces ($env:NAME = "value").
+  // eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern built from literals (VALUE); no input reaches the source
   [new RegExp(String.raw`(ConvertTo-SecureString\s+(?:-String\s+)?)${VALUE}`, "gi"), `$1${MASK}`],
   [/(\bhv[sb]\.)[A-Za-z0-9_-]{20,}/g, `$1${MASK}`],                  // Vault tokens
   [/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, MASK],          // SendGrid keys
@@ -82,13 +86,67 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
 //    Bare `key:` is deliberately excluded so ordinary `key: value` text is untouched.
 const HEAD_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/(^|\s)(-[pu])[^\s=-]\S*/g, `$1$2${MASK}`],
-  // A space-separated `-p <password>` after a program whose -p is a password (it is a port or a parent flag elsewhere),
-  // within the same simple command.
-  [new RegExp(String.raw`(\b(?:sshpass|login|mysql|mysqladmin|mariadb|htpasswd|redis-cli)\b[^|;&\n]*?\s-p\s+)${VALUE}`, "g"), `$1${MASK}`],
-  // `auth` is omitted: `Authorization:` is handled above (with its Bearer/Basic label),
-  // and other auth headers (`X-Auth-Token`) still match on `token`.
-  [/(\b[\w-]*(?:secret|token|api[-_]?key|apikey|password|passwd|credential)[\w-]*\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
 ];
+
+// A space-separated `-p <password>` after a program whose -p is a password (it is a port or a parent flag elsewhere),
+// within the same simple command. Read with a scan rather than one pattern: as
+// `\b(?:sshpass|…)\b[^|;&\n]*?\s-p\s+VALUE` every mention of such a program rescanned the rest of its command, quadratic
+// in a command that names one many times. A mention whose command holds no such flag means no later mention in the same
+// command can have one either, so the scan moves to the command's end.
+const PASSWORD_PROGRAM = /\b(?:sshpass|login|mysql|mysqladmin|mariadb|htpasswd|redis-cli)\b/g;
+const COMMAND_END = /[|;&\n]/g;
+// eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern built from literals (VALUE); no input reaches the source
+const SPACED_PASSWORD = new RegExp(String.raw`\s-p\s+${VALUE}`, "y");
+function scrubSpacedPasswords(text: string): string {
+  let out = "";
+  let last = 0;
+  PASSWORD_PROGRAM.lastIndex = 0;
+  for (let program = PASSWORD_PROGRAM.exec(text); program; program = PASSWORD_PROGRAM.exec(text)) {
+    const from = program.index + program[0].length;
+    COMMAND_END.lastIndex = from;
+    const end = COMMAND_END.exec(text)?.index ?? text.length;
+    let found = false;
+    // The flag's leading blank may be the line end that closes the command.
+    for (let q = from; q <= end && q < text.length; q++) {
+      if (text[q + 1] !== "-" || text[q + 2] !== "p" || !/\s/.test(text[q])) continue;
+      SPACED_PASSWORD.lastIndex = q;
+      const flag = SPACED_PASSWORD.exec(text);
+      if (!flag) continue;
+      const after = q + flag[0].length;
+      out += text.slice(last, after - flag[1].length) + MASK;
+      last = after;
+      PASSWORD_PROGRAM.lastIndex = after;
+      found = true;
+      break;
+    }
+    if (!found) PASSWORD_PROGRAM.lastIndex = Math.max(PASSWORD_PROGRAM.lastIndex, end);
+  }
+  return out + text.slice(last);
+}
+
+// A header whose name looks like a credential (`X-Custom-Secret: …`, `My-Token: …`); its value is masked. `auth` is
+// omitted: `Authorization:` is handled above (with its Bearer/Basic label), and other auth headers (`X-Auth-Token`)
+// still match on `token`. Read one run of name characters at a time: as `\b[\w-]*(?:secret|…)[\w-]*\s*:\s*` a long
+// hyphenated run (`secret-secret-…`) backtracked cubically. The name is the whole run from its first word character
+// (a header value must follow the run directly), so it qualifies when the run holds one of the words anywhere.
+const NAME_RUN = /[\w-]+/g;
+const SECRET_HEADER_WORD = /secret|token|api[-_]?key|apikey|password|passwd|credential/i;
+const HEADER_VALUE = /(\s*:\s*)[^\s"']+/y;
+function scrubSecretHeaders(text: string): string {
+  let out = "";
+  let last = 0;
+  NAME_RUN.lastIndex = 0;
+  for (let run = NAME_RUN.exec(text); run; run = NAME_RUN.exec(text)) {
+    const end = run.index + run[0].length;
+    HEADER_VALUE.lastIndex = end;
+    const value = HEADER_VALUE.exec(text);
+    if (!value || !SECRET_HEADER_WORD.test(run[0])) continue;
+    out += text.slice(last, end) + value[1] + MASK;
+    last = end + value[0].length;
+    NAME_RUN.lastIndex = last;
+  }
+  return out + text.slice(last);
+}
 
 // Generic high-entropy shapes. Applied to free text only (the command head), never to
 // structured parameters a policy matches on: a long path or a commit id is not a secret.
@@ -142,6 +200,7 @@ export function scrubParam(text: string): string {
 export function scrubSecrets(text: string): string {
   let out = scrubParam(text);
   for (const [re, replacement] of HEAD_RULES) out = out.replace(re, replacement);
+  out = scrubSecretHeaders(scrubSpacedPasswords(out));
   for (const [re, replacement] of BLOB_RULES) out = out.replace(re, replacement);
   return out;
 }

@@ -15,17 +15,46 @@ const NAME_WORDS = String.raw`(?:token|secret|passw(?:or)?d|pwd|api[-_]?key|apik
 
 // Each rule states its own replacement. `$1` keeps a non-secret label (a flag, header or parameter name); the secret
 // itself is always dropped whole. Over-scrubbing is safe.
-const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+// A URL query parameter whose name looks like a credential (`?api_token=…`, `&X-Amz-Signature=…`). One regex
+// (`[?&;][\w.-]*NAME[\w.-]*=`) retried the tail of a long name once per credential word inside it (quadratic), so the
+// name is found first and checked on its own. A parameter that is not a credential is stepped over at its "=", so a
+// separator inside its value (`?a=x;token=y`) still starts the next check.
+const QUERY_NAME = /[?&;][\w.-]*=/g;
+const QUERY_VALUE = /[^&#\s"']+/y;
+// eslint-disable-next-line security/detect-non-literal-regexp -- built from the NAME_WORDS constant only
+const CREDENTIAL_NAME = new RegExp(NAME_WORDS, "i");
+
+function scrubQueryParameters(text: string): string {
+  let out = "";
+  let copied = 0;
+  QUERY_NAME.lastIndex = 0;
+  for (let m = QUERY_NAME.exec(text); m; m = QUERY_NAME.exec(text)) {
+    if (!CREDENTIAL_NAME.test(m[0])) continue;
+    QUERY_VALUE.lastIndex = QUERY_NAME.lastIndex;
+    const value = QUERY_VALUE.exec(text);
+    if (!value) continue;
+    out += text.slice(copied, QUERY_NAME.lastIndex) + MASK;
+    copied = QUERY_NAME.lastIndex = QUERY_VALUE.lastIndex;
+  }
+  return out + text.slice(copied);
+}
+
+// Each entry is a [pattern, replacement] pair or a function. The two `new RegExp` sources are built only from the
+// constants above, never from input.
+const SECRET_RULES: ReadonlyArray<readonly [RegExp, string] | ((text: string) => string)> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, MASK],
+  // eslint-disable-next-line security/detect-non-literal-regexp -- built from the VALUE constant only
   [new RegExp(String.raw`(--?(?:password|passwd|pwd|token|secret|api[-_]?key|access[-_]?key|auth|credentials?)[=\s]+)${VALUE}`, "gi"), `$1${MASK}`],
+  // eslint-disable-next-line security/detect-non-literal-regexp -- built from the VALUE constant only
   [new RegExp(String.raw`((?:^|\s)(?:-u|--user)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
   [/(Authorization:\s*(?:Bearer|Basic|Token)\s+)[^\s"']+/gi, `$1${MASK}`],
   [/((?:x-api-key|api-key|x-auth-token|x-access-token|private-token)\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
   [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, `$1${MASK}@`],                     // URL userinfo
-  // A URL query parameter whose name looks like a credential (`?api_token=…`, `&X-Amz-Signature=…`).
-  [new RegExp(String.raw`([?&;][\w.-]*${NAME_WORDS}[\w.-]*=)[^&#\s"']+`, "gi"), `$1${MASK}`],
-  // A password literal in SQL (`PASSWORD 'x'`, `IDENTIFIED BY "x"`, `PASSWORD = 'x'`).
-  [/(\b(?:password|identified\s+by)\s*=?\s*)('[^']*'|"[^"]*")/gi, `$1'${MASK}'`],
+  scrubQueryParameters,
+  // A password literal in SQL (`PASSWORD 'x'`, `IDENTIFIED BY "x"`, `PASSWORD = 'x'`). `\s*(?:=\s*)?`, not `\s*=?\s*`:
+  // two adjacent whitespace runs split a long run of spaces every possible way (quadratic).
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: the inner \s* follows a literal "=", so the two runs cannot trade characters (tested on 50k input)
+  [/(\b(?:password|identified\s+by)\s*(?:=\s*)?)('[^']*'|"[^"]*")/gi, `$1'${MASK}'`],
   [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, MASK],                           // GitHub tokens
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, MASK],                         // GitHub fine-grained tokens
   [/\bglpat-[A-Za-z0-9_-]{20,}/g, MASK],                             // GitLab tokens
@@ -58,6 +87,6 @@ function scrubAssignments(text: string): string {
 /** Scrub credential shapes from one string value. Ordinary text (paths, refs, commit ids, plain URLs) is unchanged. */
 export function scrubSecretText(text: string): string {
   let out = scrubAssignments(text);
-  for (const [re, replacement] of SECRET_RULES) out = out.replace(re, replacement);
+  for (const rule of SECRET_RULES) out = typeof rule === "function" ? rule(out) : out.replace(rule[0], rule[1]);
   return out;
 }

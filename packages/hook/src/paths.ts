@@ -15,6 +15,7 @@
 import { realpathSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import type { Mapped } from "./map.js";
+import { textOf } from "./text.js";
 
 export type RootScope = "inside" | "outside" | "unresolved";
 
@@ -30,7 +31,7 @@ const looksWindows = (p: string): boolean => /^[A-Za-z]:[\\/]/.test(p) || p.star
 
 /** Resolve the physical location of `path` (which may not exist yet). Follows links for
  *  the nearest existing ancestor and re-attaches the not-yet-created remainder. */
-function physical(path: string, api: typeof posix | typeof win32, realpath: (p: string) => string): string | null {
+function physical(path: string, api: typeof posix  , realpath: (p: string) => string): string | null {
   let probe = path;
   const rest: string[] = [];
   for (let guard = 0; guard < 4096; guard++) {
@@ -78,7 +79,7 @@ export function classifyRoot(path: string, options: RootOptions): RootScope {
 export function applyRootScope(mapped: Mapped[], options: RootOptions): Mapped[] {
   return mapped.map((m) => {
     if (m.intent.action_type !== "file.write") return m;
-    const path = String(m.intent.params.path ?? "");
+    const path = textOf(m.intent.params.path);
     // A write whose target the mapper could not name is already not evaluated; keep it.
     if (!m.evaluated) return m;
     return { ...m, intent: { ...m.intent, params: { ...m.intent.params, root_scope: classifyRoot(path, options) } } };

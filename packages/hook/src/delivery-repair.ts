@@ -59,7 +59,7 @@ export function noteQueueMiss(dir: string, after: number, actionId: string | nul
 interface MissLine { after: number; id: string | null; at?: number }
 
 function readLines(file: string): MissLine[] {
-  let text = "";
+  let text: string;
   try { text = readFileSync(file, "utf8"); } catch { return []; }
   return text.split("\n").flatMap((line) => {
     try {
@@ -119,7 +119,7 @@ export function backfillQueue(dir: string, store: RepairableStore, queue: Repair
         const result = queue.enqueue(row.receipt);
         if (result.queued && !result.duplicate) queued++;
       }
-      after = page[page.length - 1]!.id;
+      after = page[page.length - 1].id;
     }
     // Each miss is kept as a gap once, after its receipts are queued (a failure above leaves the noted misses for next time).
     // A line without a time only resumes a backfill.

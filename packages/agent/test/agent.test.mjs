@@ -309,7 +309,7 @@ test("an override request is checked before any window opens, and its text reach
   assert.equal(parseQuestion(question()).rule, "destructive-shell");
   for (const bad of [null, {}, question({ action_id: "short" }), question({ rule: "Not A Rule" }), question({ reason_min: 3 })]) assert.equal(parseQuestion(bad), null);
   assert.equal(parseQuestion(question({ timeout_ms: 999_999 })).timeout_ms, 55_000, "never longer than the hook waits");
-  const script = windowsScript(parseQuestion(question({ summary: "x'; Remove-Item -Recurse C:\ ; '$(evil)" })));
+  const script = windowsScript(parseQuestion(question({ summary: "x'; Remove-Item -Recurse C:\\ ;'$(evil)" })));
   assert.doesNotMatch(script, /Remove-Item|\$\(evil\)/, "the summary is base64, never code");
 });
 

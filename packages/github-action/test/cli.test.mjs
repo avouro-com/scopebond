@@ -146,8 +146,8 @@ test("without a base sha, or when the base has no policy, the check fails closed
 });
 
 test("the check fails closed when the diff step yields no paths for a changed PR", () => {
-  const r = run({}, []); // changed_files is 0 here (paths.length), so craft a mismatch:
-  // rebuild with changed_files > 0 but empty paths
+  // run() sets changed_files to paths.length, so craft the mismatch by hand:
+  // changed_files > 0 but empty paths
   const dir = mkdtempSync(join(tmpdir(), "sb-ghpr-"));
   const event = { repository: { full_name: "acme/app" }, pull_request: { base: { ref: "main" }, head: { ref: "x", sha: "s" }, changed_files: 3, user: { login: "copilot-swe-agent[bot]" } } };
   writeFileSync(join(dir, "event.json"), JSON.stringify(event));

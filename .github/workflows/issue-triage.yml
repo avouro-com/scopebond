@@ -29,6 +29,9 @@ jobs:
       contents: read # check out SCOPE.md and the review script
       issues: write # post the verdict comment and apply its labels
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - id: gate
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
