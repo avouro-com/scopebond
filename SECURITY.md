@@ -8,8 +8,10 @@ workspace connections are security-sensitive, so we take reports seriously.
 
 **Do not open a public issue or pull request for a security vulnerability.**
 
-Report privately via GitHub's **"Report a vulnerability"** (Security → Advisories)
-on this repository, or email **scopebond@avouro.com** with:
+Report privately by email to **security@scopebond.com**, the one address for
+security reports (also published at https://scopebond.com/.well-known/security.txt),
+or via GitHub's **"Report a vulnerability"** (Security → Advisories) on this
+repository, with:
 
 - a description and impact,
 - steps to reproduce or a proof of concept,
@@ -31,7 +33,7 @@ read API are future work, not current product features.
 
 The hosted shared workspace (Scopebond Cloud) is a separate proprietary service,
 not open source and not included in this repository. Report issues affecting it
-to the same address.
+to the same address, security@scopebond.com.
 
 Enforcement boundary: the connectors are cooperative (they govern an agent that
 routes through them); an agent that bypasses the hook or gateway is out of scope for
