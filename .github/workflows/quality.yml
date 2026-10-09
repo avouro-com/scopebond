@@ -54,6 +54,11 @@ jobs:
       - run: pnpm -r build
       - name: eslint (SARIF)
         run: pnpm exec eslint . --format @microsoft/eslint-formatter-sarif --output-file eslint.sarif || true
+      # A disable with its `-- reason` is a decision recorded beside the code; code scanning ignores SARIF
+      # suppressions and would open it as an alert, so suppressed results are left out of the upload.
+      - name: eslint (leave out suppressed results)
+        if: hashFiles('eslint.sarif') != ''
+        run: node scripts/sarif-drop-suppressed.mjs eslint.sarif
       - name: eslint (summary)
         run: |
           {

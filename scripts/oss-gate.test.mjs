@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 const gate = (...args) => spawnSync(process.execPath, ["scripts/oss-gate.mjs", ...args], { encoding: "utf8" });
 
 test("a commit range is one git revision expression: any letters pass, an option or whitespace is refused", () => {
-  const ok = gate("--messages-range", "HEAD~1..HEAD");
+  const ok = gate("--messages-range", "HEAD..HEAD"); // always a valid range, even in a shallow clone
   assert.equal(ok.status, 0, ok.stderr);
   // Branch names with any letters are ranges too (a mangled validator once refused every range containing "s"). The branch
   // need not exist: the validator must let it through to git, which then reports the unknown revision itself.
