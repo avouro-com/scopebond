@@ -237,6 +237,25 @@ npx -y @scopebond/hook@latest connect https://<your-workspace> scopebond-enrollm
 
 In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Every command the hook prints for you to run uses `npx.cmd` on Windows.
 
+### Checking the workspace's evidence chain
+
+Each delivery answer from the workspace carries its evidence chain's head (how many records
+it had admitted and its newest evidence segment, signed by the workspace when it has a
+signing key). The hook keeps them in `chain-heads.json` beside its receipts. The workspace
+also publishes each day's heads in a public, append-only log. To check that what the
+workspace holds still agrees with what it told this computer:
+
+```
+scopebond verify --anchor <file-or-https-url-of-a-published-day>
+scopebond verify --anchor <day.json> --segments <folder of downloaded evidence segments>
+```
+
+`verify` exits non-zero when a chain went back below a head this computer kept, when one
+position names two different segments, or when a kept head's segment is no longer in the
+chain: records were removed, reordered or re-chained after the workspace acknowledged
+them. With `--segments`, every segment's digest, leaves, Merkle root, links and sequence
+numbers are checked, and every record signed with this computer's key is verified.
+
 ### Is it delivering?
 
 `status` shows when this computer last delivered records, how many are waiting to send and the
