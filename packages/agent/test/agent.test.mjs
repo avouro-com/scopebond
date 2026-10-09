@@ -284,6 +284,7 @@ test("the self-check names what is broken locally and sends a signed proof to th
     const result = await runSelfCheck(dir, connection, ["claude"], "0.2.0", { fetchImpl: fake });
     assert.equal(posted.url, "https://workspace.example/v1/self-check");
     assert.equal(posted.body.agent_version, "0.2.0");
+    assert.equal(posted.body.install_kind, "npm", "an npm install says so; the signed installer says per-user or per-machine");
     assert.match(posted.body.day, /^\d{4}-\d{2}-\d{2}$/);
     assert.equal(typeof posted.body.signature, "string");
     assert.ok(selfCheckProof("cred_1", "gw_1", posted.body.day).includes("scopebond:self-check"));
@@ -550,4 +551,17 @@ test("a lock left from before a restart is taken over even when its process id i
   // A lock created a moment ago with no id yet is an agent starting now: this start gives way.
   writeFileSync(join(dir, AGENT_LOCK), "");
   assert.equal(acquireAgentLock(dir), null);
+});
+
+test("setup in the signed executable treats the agent as installed and never asks npm", async () => {
+  const { agentOnThisComputer, setupPlan } = await import("../dist/index.js");
+  let asked = 0;
+  const npm = () => { asked++; return { prefix: null, cli: null, version: null }; };
+  const here = agentOnThisComputer(true, "0.5.3", npm, () => "D:/Apps/Scopebond/scopebond-agent.exe");
+  assert.equal(asked, 0);
+  assert.deepEqual(here, { prefix: null, cli: "D:/Apps/Scopebond/scopebond-agent.exe", version: "0.5.3" });
+  const steps = setupPlan({ connectedTo: null, credentialRefused: false, installedVersion: here.version, autostartOk: false }, "https://ws.example", "0.5.3");
+  assert.deepEqual(steps, ["login", "autostart"], "sign in and autostart, no npm install");
+  assert.deepEqual(agentOnThisComputer(false, "0.5.3", npm), { prefix: null, cli: null, version: null });
+  assert.equal(asked, 1);
 });

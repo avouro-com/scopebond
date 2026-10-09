@@ -21,6 +21,9 @@ import { agentCliPath } from "./self.js";
 import { runSetup } from "./setup.js";
 import { agentVersion } from "./update.js";
 import { writeOutputTo } from "./log-file.js";
+import { removeAppsEntry, writeAppsEntry } from "./apps-entry.js";
+import { installKind } from "./native-update.js";
+import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
 
 let cmd = "help";
@@ -61,6 +64,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const stop = () => { void service.stop().finally(() => process.exit(0)); };
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
+      return;
+    }
+    case "upkeep": {
+      // Internal: the agent runs its local store upkeep through this, in a process of its own.
+      upkeepCommand(dir, rest);
       return;
     }
     case "status": {
@@ -118,6 +126,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // The Scopebond folder (keys, receipts) stays unless --purge.
       console.log(disableAutostart(dir));
       if (await stopRunning()) console.log("Stopped the running Scopebond Agent.");
+      const listed = removeAppsEntry(dir);
+      if (listed) console.log(listed);
       const [program, args] = hookSelfCommand(["uninstall", "--yes", ...(rest.includes("--purge") ? ["--purge"] : [])]);
       const removal = spawnSync(program, args, { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: dir } });
       process.exitCode = removal.status ?? 1;
@@ -133,6 +143,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         return;
       }
       console.log(on ? enableAutostart(dir, agentCliPath()) : disableAutostart(dir));
+      // An npm install is listed in Settings -> Apps from here on (the signed installer has its own entry).
+      if (on && installKind() === "npm") {
+        try { const listed = writeAppsEntry(dir, { version: agentVersion(), cli: agentCliPath() }); if (listed) console.log(listed); }
+        catch (error) { console.error(`Could not list Scopebond in Settings -> Apps: ${(error as Error).message}`); }
+      }
       if (!on) {
         // Off means off: an agent left running would keep going until sign-out, even after an uninstall.
         if (await stopRunning()) console.log("Stopped the running Scopebond Agent.");

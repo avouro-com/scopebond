@@ -9,8 +9,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { hookSelfCommand, loadConnection, nodeTooOldLines, readDeliveryState, type Harness } from "@scopebond/hook";
+import { hookSelfCommand, isSingleExecutable, loadConnection, nodeTooOldLines, readDeliveryState, type Harness } from "@scopebond/hook";
+import { agentCliPath, agentSelfCommand } from "./self.js";
 import { autostartHealth, enableAutostart, startNow } from "./autostart.js";
+import { writeAppsEntry } from "./apps-entry.js";
+import { installKind } from "./native-update.js";
 import { callAgent } from "./ipc.js";
 import { compareVersions, ownNpm } from "./update.js";
 import { repairHookEntries } from "./service.js";
@@ -87,6 +90,12 @@ function globalAgent(): { prefix: string | null; cli: string | null; version: st
 }
 
 
+/** Where the agent setup works with: the signed single executable is already installed (its own version, no npm asked),
+ *  otherwise the copy in npm's global folder, if any. */
+export function agentOnThisComputer(single: boolean, version: string, fromNpm: () => { prefix: string | null; cli: string | null; version: string | null } = globalAgent, self = agentCliPath): { prefix: string | null; cli: string | null; version: string | null } {
+  return single ? { prefix: null, cli: self(), version } : fromNpm();
+}
+
 export interface SetupOptions { dir: string; origin: string; harness: Harness; relogin: boolean; version: string; me: string }
 
 export async function runSetup(o: SetupOptions): Promise<number> {
@@ -95,7 +104,10 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   const connection = loadConnection(o.dir);
   let connectedTo: string | null = null;
   try { connectedTo = connection ? new URL(connection.url).origin : null; } catch { connectedTo = null; }
-  const global = globalAgent();
+  // The signed installer put the agent (one executable with the hook) in place: nothing to install with npm, and no Node
+  // or npm need be on this computer. Autostart then starts this executable itself.
+  const single = isSingleExecutable();
+  const global = agentOnThisComputer(single, o.version);
   const state: SetupState = {
     connectedTo,
     credentialRefused: readDeliveryState(o.dir).invalid_since != null,
@@ -110,7 +122,10 @@ export async function runSetup(o: SetupOptions): Promise<number> {
     const flag = o.harness === "claude" ? "--claude" : `--${o.harness}`;
     // From the home folder, so a project's own setup in the current folder can never take the sign-in;
     // and a failed sign-in names this setup command, which also installs and starts the agent.
-    const again = `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/agent@${o.version} setup ${o.origin}${o.harness === "claude" ? "" : ` --${o.harness}`}`;
+    const harnessFlag = o.harness === "claude" ? "" : ` --${o.harness}`;
+    const again = single
+      ? `"${process.execPath}" setup ${o.origin}${harnessFlag}`
+      : `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/agent@${o.version} setup ${o.origin}${harnessFlag}`;
     const [program, args] = hookSelfCommand(["login", o.origin, flag]);
     const r = spawnSync(program, args, { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: o.dir, SCOPEBOND_RETRY_COMMAND: again } });
     if (r.status !== 0) { console.error("Setup stopped: the sign-in did not finish. Run the same command again for a new code."); return 1; }
@@ -128,7 +143,7 @@ export async function runSetup(o: SetupOptions): Promise<number> {
     if (!installed.ok) { console.error(`Setup stopped: npm could not install the agent.\n${installed.out.slice(-1500)}`); return 1; }
     cli = globalAgent().cli;
     if (!cli) { console.error("Setup stopped: npm reported success but the agent is not in npm's global folder."); return 1; }
-  } else say(`✓ The Scopebond Agent ${global.version} is installed for this user.`);
+  } else say(single ? `✓ The Scopebond Agent ${global.version} is installed (signed installer).` : `✓ The Scopebond Agent ${global.version} is installed for this user.`);
   const bin = global.prefix ? globalBinDir(global.prefix) : null;
   if (bin && !onPath(bin)) {
     say(`Note: npm's global folder ${bin} is not on PATH, so new terminals will not find ${o.me}.`);
@@ -142,6 +157,11 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   if (steps.includes("autostart") && cli) {
     say(enableAutostart(o.dir, cli));
   } else say("✓ The agent already starts with your sign-in.");
+  // Listed in Settings -> Apps, so it can be removed there like any other app (refreshed each run: the version moves).
+  if (cli && process.platform === "win32" && installKind() === "npm") {
+    try { const listed = writeAppsEntry(o.dir, { version: globalAgent().version ?? o.version, cli }); if (listed) say(`✓ ${listed}`); }
+    catch (error) { say(`Note: could not list Scopebond in Settings -> Apps (${(error as Error).message}).`); }
+  }
   if (cli && !await callAgent(o.dir, "GET", "/status", undefined, 2_000)) {
     const up = async (tries: number) => {
       for (let i = 0; i < tries; i++) { if (await callAgent(o.dir, "GET", "/status", undefined, 1_000)) return true; await new Promise((r) => setTimeout(r, 500)); }
@@ -152,13 +172,17 @@ export async function runSetup(o: SetupOptions): Promise<number> {
       if (!(startNow(o.dir, "win32", 0) && await up(12))) { startNow(o.dir, "win32", 1); await up(18); }
     } else {
       // No systemd user session (a container, WSL without systemd): run it detached until the next sign-in.
-      if (!await up(10) && process.platform === "linux") spawn(process.execPath, [cli, "run"], { detached: true, stdio: "ignore", env: { ...process.env, SCOPEBOND_HOME: o.dir } }).unref();
+      if (!await up(10) && process.platform === "linux") {
+        const [program, args] = single ? agentSelfCommand(["run"]) : [process.execPath, [cli, "run"]];
+        spawn(program, args, { detached: true, stdio: "ignore", env: { ...process.env, SCOPEBOND_HOME: o.dir } }).unref();
+      }
       await up(20);
     }
   }
 
   // 4. Status, from the installed agent.
   say("");
-  const status = spawnSync(process.execPath, [cli ?? process.argv[1], "status"], { stdio: "inherit", env: { ...process.env, SCOPEBOND_HOME: o.dir } });
+  const [statusProgram, statusArgs] = single ? agentSelfCommand(["status"]) : [process.execPath, [cli ?? process.argv[1], "status"]];
+  const status = spawnSync(statusProgram, statusArgs, { stdio: "inherit", env: { ...process.env, SCOPEBOND_HOME: o.dir } });
   return status.status === 0 ? 0 : 1;
 }

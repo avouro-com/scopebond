@@ -84,8 +84,10 @@ export interface CloudExporterStatus extends CloudOutboxStatus {
 
 export interface CloudExporter {
   enqueue(r: SignedReceipt): void;
-  /** `routine: false` (a per-call process with summaries on): run only when a notable record was queued since the last flush. */
-  flush(options?: { routine?: boolean }): Promise<void>;
+  /** `routine: false` (a per-call process with summaries on): run only when a notable record was queued since the last flush.
+   *  `maxMs`: start no new batch once this long has passed; what is left waits for the next flush (a long queue never holds up
+   *  the caller's other work). */
+  flush(options?: { routine?: boolean; maxMs?: number }): Promise<void>;
   stop(): void;
   pending(): number;
   status(): CloudExporterStatus;
@@ -153,6 +155,12 @@ export interface CloudSummaryOptions {
 
 /** How many queued records one summarising pass looks at. */
 const SUMMARY_PEEK = 2_000;
+
+/** Let the event loop run between steps of a long flush, so a process that also answers requests (the agent) stays
+ *  responsive while it reads and sends thousands of records. */
+const yieldToLoop = (): Promise<void> => new Promise((resolve) => {
+  if (typeof setImmediate === "function") setImmediate(resolve); else setTimeout(resolve, 0);
+});
 /** A window is summarised this long after it ends, so a record finishing late still lands in it. */
 const SUMMARY_GRACE_MS = 30_000;
 /** Summaries per POST. */
@@ -491,7 +499,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   // A flush asked for while one is sending waits for that one instead of returning at once, so a caller that bounds its wait
   // (a hook call) waits on real work, and can tell when its time ran out.
   let inflight: Promise<void> | null = null;
-  function flush(options: { routine?: boolean } = {}): Promise<void> {
+  function flush(options: { routine?: boolean; maxMs?: number } = {}): Promise<void> {
     if (inflight) return inflight;
     const run = flushOnce(options);
     if (!sending) return run; // nothing was due: it settled at once
@@ -499,7 +507,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     return inflight;
   }
 
-  async function flushOnce(options: { routine?: boolean } = {}): Promise<void> {
+  async function flushOnce(options: { routine?: boolean; maxMs?: number } = {}): Promise<void> {
     if (sending || stopped || (nextAttemptAt !== null && now() < nextAttemptAt)) return;
     // Routine records wait for their summary; a per-call flush with nothing notable to send has nothing to do.
     if (options.routine === false && summarising() && !notableQueued) {
@@ -519,8 +527,13 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     // Routine records of a window this queue already summarised: they go in full.
     const lateThisFlush = new Set<string>();
     const skip = () => (keptThisFlush.size ? keptThisFlush : undefined);
+    const stopAt = options.maxMs !== undefined && Number.isFinite(options.maxMs) ? Date.now() + Math.max(0, options.maxMs) : Infinity;
     try {
-      for (;;) {
+      for (let pass = 0; ; pass++) {
+        if (pass > 0) {
+          if (Date.now() >= stopAt) break;
+          await yieldToLoop();
+        }
         let batch: CloudOutboxEntry[];
         if (summarising()) {
           const windowMs = Math.max(60_000, Math.trunc(opts.summaries!.windowMs ?? 300_000));
@@ -531,6 +544,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
             const part = opts.outbox.peek(100, now(), seenIds.size ? seenIds : undefined);
             for (const e of part) { seen.push(e); seenIds.add(e.id); }
             if (part.length < 100 || seen.length >= SUMMARY_PEEK) break;
+            await yieldToLoop();
           }
           if (!seen.length) break;
           // A window counts as complete only when every record queued until it closed was seen: with more records waiting
