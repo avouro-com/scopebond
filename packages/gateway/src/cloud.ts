@@ -98,6 +98,9 @@ export interface CloudBackoff {
   count: number;
   /** The wait the workspace named (Retry-After, in ms, at most an hour), or null when it named none. */
   retryAfterMs: number | null;
+  /** When the wait was recorded (this computer's clock, ms). A wait never holds more than an hour and five minutes after
+   *  it; one recorded later than now was recorded before the clock went back, cannot be placed on it, and has ended. */
+  recordedAt?: number;
 }
 
 export interface CloudExporter {
@@ -470,12 +473,17 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   let notableQueued = false;
   let stopped = false;
   let consecutiveFailures = 0;
-  // A wait an earlier process recorded holds here too (bounded, whatever the value says).
+  // A wait an earlier process recorded holds here too, bounded whatever the value says: at most an hour and five minutes
+  // after it was recorded (or from now, when that is not known). One recorded later than now has ended: the clock went back
+  // since, so how much of it is left cannot be told, and a clock that jumps never makes a wait longer.
   let backoff: CloudBackoff | null = null;
   if (opts.backoff && Number.isFinite(opts.backoff.until)) {
-    const until = Math.min(Math.trunc(opts.backoff.until), now() + MAX_WAIT_MS + MAX_SPREAD_MS);
+    const t = now();
+    const given = Number(opts.backoff.recordedAt);
+    const recordedAt = Number.isFinite(given) ? Math.min(Math.trunc(given), t) : t;
+    const until = Number.isFinite(given) && given > t ? t : Math.min(Math.trunc(opts.backoff.until), recordedAt + MAX_WAIT_MS + MAX_SPREAD_MS);
     const named = Number(opts.backoff.retryAfterMs);
-    backoff = { until, count: Math.max(0, Math.min(64, Math.trunc(Number(opts.backoff.count) || 0))), retryAfterMs: Number.isFinite(named) && named > 0 ? Math.min(named, MAX_WAIT_MS) : null };
+    backoff = { until, count: Math.max(0, Math.min(64, Math.trunc(Number(opts.backoff.count) || 0))), retryAfterMs: Number.isFinite(named) && named > 0 ? Math.min(named, MAX_WAIT_MS) : null, recordedAt };
   }
   let nextAttemptAt: number | null = backoff && backoff.until > now() ? backoff.until : null;
   let lastSuccessAt: number | null = null;
@@ -505,7 +513,8 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     if (status === 429 || (status === 503 && named > 0)) {
       const count = Math.min(64, (backoff?.count ?? 0) + 1);
       const wait = named || Math.min(MAX_WAIT_MS, UNNAMED_WAIT_MS * 2 ** Math.min(count - 1, 16));
-      backoff = { until: now() + wait + spread(wait), count, retryAfterMs: named || null };
+      const at = now();
+      backoff = { until: at + wait + spread(wait), count, retryAfterMs: named || null, recordedAt: at };
       if (named) next = Math.max(next, backoff.until);
     }
     nextAttemptAt = next;

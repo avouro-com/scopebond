@@ -29,18 +29,37 @@ const listsAddress = (clause: Record<string, unknown>): boolean => Array.isArray
   return entry !== null && (entry.address || entry.loopback);
 });
 
+/** A resolved address as a host to compare: an IPv6 address in brackets and without its zone index. A resolver may answer
+ *  `fe80::1%eth0` (the address fe80::1 on one interface); the denylist names addresses, not interfaces. */
+function resolvedHost(address: string, port: number | null): string {
+  const bare = address.includes(":") ? address.replace(/%[^%]*$/, "") : address;
+  const literal = bare.includes(":") ? `[${bare}]` : bare;
+  return port === null ? literal : `${literal}:${port}`;
+}
+
 /** Refuse a call whose host name resolves to an address an enforced endpoint_denylist clause denies. The policy decided the
- *  name as written; a clause it already applied (and a person may have overridden) is not applied again. */
+ *  name as written; a clause it already applied (and a person may have overridden) is not applied again. Everything here
+ *  happens before any connection, so each refusal is an `ExecutorInputError`: the action is recorded as failed. */
 async function refuseDeniedAddresses(policy: Policy, params: Record<string, unknown>, dest: EndpointDestination, lookup: HostLookup): Promise<void> {
   if (dest.address) return; // an address was decided as itself
   const decided = new Set(endpointDenylistClauses(policy, params).map((c) => c.id));
   const enforced = (c: { id: string; mode?: string }): boolean => c.mode !== "monitor" && !decided.has(c.id);
   if (!(policy.clauses ?? []).some((c) => c.type === "endpoint_denylist" && enforced(c) && listsAddress(c))) return;
-  const addresses = await lookup(dest.host);
-  if (addresses.length === 0) throw new Error(`http.call host ${dest.host} did not resolve`);
+  let addresses: Awaited<ReturnType<HostLookup>>;
+  try {
+    addresses = await lookup(dest.host);
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    const named = typeof code === "string" && /^[A-Z_]{1,32}$/.test(code) ? ` (${code})` : "";
+    throw new ExecutorInputError(`http.call host ${dest.host} did not resolve${named}; nothing was sent`);
+  }
+  if (!Array.isArray(addresses) || addresses.length === 0) throw new ExecutorInputError(`http.call host ${dest.host} did not resolve; nothing was sent`);
   for (const { address } of addresses) {
-    const literal = address.includes(":") ? `[${address}]` : address;
-    const host = dest.port === null ? literal : `${literal}:${dest.port}`;
+    const host = resolvedHost(String(address), dest.port);
+    // An answer that is not an address cannot be compared with the list, so nothing is sent to the name.
+    if (endpointDestination(host) === null) {
+      throw new ExecutorInputError(`http.call host ${dest.host} resolved to an address that cannot be checked (${JSON.stringify(String(address).slice(0, 64))}); nothing was sent`);
+    }
     const denied = endpointDenylistClauses(policy, { ...params, host }).find(enforced);
     if (denied) throw new ExecutorInputError(`http.call host ${dest.host} resolves to ${address}, which endpoint_denylist clause ${denied.id} denies`);
   }

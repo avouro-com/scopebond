@@ -37,6 +37,25 @@ export interface DeliveryState {
   backoff_count?: number;
   /** The wait the workspace named (Retry-After, in ms), or null when it named none. */
   retry_after_ms?: number | null;
+  /** When the wait was recorded (this computer's clock). It never holds more than MAX_RECORDED_WAIT_MS after this. */
+  backoff_at?: number | null;
+}
+
+/** The longest a recorded wait holds after it was recorded: the longest wait the workspace can ask for that is honoured
+ *  (an hour) and its random spread (at most five minutes), as the exporter bounds it. */
+const MAX_RECORDED_WAIT_MS = 65 * 60 * 1000;
+
+const finiteOrNull = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
+
+/** When a recorded wait ends, on a clock that reads `now`: never more than MAX_RECORDED_WAIT_MS after it was recorded, nor
+ *  from now; and at once when it was recorded later than now, because the clock went back since and what is left of it
+ *  cannot be told. A clock that jumps never makes a wait longer. Null when no wait is recorded. */
+function recordedWaitEnds(state: Pick<DeliveryState, "backoff_until" | "backoff_at">, now: number): number | null {
+  const until = finiteOrNull(state.backoff_until);
+  if (until === null) return null;
+  const at = finiteOrNull(state.backoff_at);
+  if (at !== null && at > now) return Math.min(until, now);
+  return Math.min(until, (at ?? now) + MAX_RECORDED_WAIT_MS);
 }
 
 /** How long the agent's last delivery error stands over a hook call's cut-off: longer than its longest wait between tries. */
@@ -68,21 +87,37 @@ export function writeDeliveryState(dir: string, patch: Partial<DeliveryState>): 
 }
 
 /** The wait the workspace last asked for, to hand to the next exporter (a hook call, an agent cycle, `flush`): it sends
- *  nothing before `until`. Null when none is recorded. A wait that has passed is still returned, so its count carries on. */
-export function deliveryBackoff(dir: string): CloudBackoff | null {
+ *  nothing before `until`. Null when none is recorded. A wait that has passed is still returned, so its count carries on.
+ *  `until` is bounded (see `recordedWaitEnds`), and a stored wait beyond the bound is rewritten to it here, so the processes
+ *  that follow do not each measure the bound again from their own start and hold delivery past it. */
+export function deliveryBackoff(dir: string, now: number = Date.now()): CloudBackoff | null {
   const state = readDeliveryState(dir);
-  if (typeof state.backoff_until !== "number" || !Number.isFinite(state.backoff_until)) return null;
+  const until = finiteOrNull(state.backoff_until);
+  const ends = recordedWaitEnds(state, now);
+  if (until === null || ends === null) return null;
+  const stored = finiteOrNull(state.backoff_at);
+  let recordedAt = stored;
+  if (ends !== until) {
+    recordedAt = stored !== null && stored <= now ? stored : now;
+    // Only if no other process has recorded a wait since this one was read.
+    const current = readDeliveryState(dir);
+    if (current.backoff_until === state.backoff_until && (current.backoff_at ?? null) === (state.backoff_at ?? null)) {
+      writeDeliveryState(dir, { backoff_until: ends, backoff_at: recordedAt });
+    }
+  }
   const named = state.retry_after_ms;
   return {
-    until: state.backoff_until,
+    until: ends,
     count: Math.max(0, Math.trunc(Number(state.backoff_count) || 0)),
     retryAfterMs: typeof named === "number" && Number.isFinite(named) && named > 0 ? named : null,
+    ...(recordedAt !== null ? { recordedAt } : {}),
   };
 }
 
 /** The time before which nothing is sent because the workspace asked this computer to wait, or null when no wait is in force. */
-export function waitingUntil(state: Pick<DeliveryState, "backoff_until">, now: number): number | null {
-  return typeof state.backoff_until === "number" && Number.isFinite(state.backoff_until) && state.backoff_until > now ? state.backoff_until : null;
+export function waitingUntil(state: Pick<DeliveryState, "backoff_until" | "backoff_at">, now: number): number | null {
+  const ends = recordedWaitEnds(state, now);
+  return ends !== null && ends > now ? ends : null;
 }
 
 /** The HTTP status in an exporter error ("ingest failed: HTTP 401"), if any. */
@@ -113,7 +148,11 @@ export function recordDeliveryAttempt(dir: string, status: Pick<CloudExporterSta
     patch.last_error_at = at;
     // The wait the workspace asked for holds for the next process too. Only an attempt that failed writes it, and only a
     // delivery clears it: a call that sent nothing never undoes a wait another process recorded.
-    if (status.backoff) Object.assign(patch, { backoff_until: status.backoff.until, backoff_count: status.backoff.count, retry_after_ms: status.backoff.retryAfterMs });
+    if (status.backoff) {
+      const recordedAt = finiteOrNull(status.backoff.recordedAt) ?? at;
+      Object.assign(patch, { backoff_until: Math.min(status.backoff.until, recordedAt + MAX_RECORDED_WAIT_MS), backoff_at: recordedAt,
+        backoff_count: status.backoff.count, retry_after_ms: status.backoff.retryAfterMs });
+    }
     if (code === 401) {
       const current = readDeliveryState(dir);
       patch.invalid_since = current.invalid_since ?? at;
@@ -122,7 +161,7 @@ export function recordDeliveryAttempt(dir: string, status: Pick<CloudExporterSta
   } else if (status.lastSuccessAt !== null && status.lastSuccessAt !== before) {
     // Accepted: the connection works, whatever an earlier run saw.
     Object.assign(patch, { last_success_at: status.lastSuccessAt, last_error: null, last_status: null, invalid_since: null, invalid_source: null, last_error_source: null, last_error_at: null,
-      backoff_until: null, backoff_count: 0, retry_after_ms: null });
+      backoff_until: null, backoff_count: 0, retry_after_ms: null, backoff_at: null });
   } else if (limitMs !== null && status.pending > 0) {
     // A refusal seen earlier is kept: a timeout says nothing about whether the workspace
     // accepts this computer. A timeout is the last problem only when nothing has been delivered for a while (SB385):
