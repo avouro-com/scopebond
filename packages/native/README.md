@@ -87,7 +87,8 @@ removes it: nothing left running, no files, no Run value, no Start-menu entry.
 ## Updates
 
 A per-user install updates itself when its workspace recommends a newer agent, with the release's installer, after three
-checks: the release manifest (`scopebond-agent-<version>.manifest.json`, each file's SHA-256 and size) is signed with the
+checks: the release manifest (`scopebond-agent-<version>.manifest.json`: the commit it was built from, and each file's
+SHA-256 and size) is signed with the
 updater key, an Ed25519 key separate from the Authenticode certificate whose public half (`updater-public-key.txt`) is
 built into the program; the downloaded installer's digest and size are the manifest's; and its Authenticode signature is
 valid and names Avouro LLC. Then a detached helper stops the native tray (it would start the old agent again, and the
