@@ -1,5 +1,14 @@
 # @scopebond/verify
 
+## 0.6.4
+
+### Patch Changes
+
+- 7529bc5: A chain that went back is now reported even when the workspace stamps the lower head at or before a higher one it already handed out. The Cloud exporter hands `onChainHead` this computer's own delivery times (`{ sentAt, receivedAt }`), the chain-heads store keeps them beside each head (`local: { sent_at, received_at }`) and drops anything else the workspace put beside its signed head, and `checkChainHeads` also compares kept heads in the order this computer sent its deliveries, which the workspace cannot choose. `verifyAnchorList`, `verifyChainHeadSignature`, `checkChainHeads` and `verifySegmentChain` never throw on hostile input (a record that is not an object, text that is not well-formed Unicode, a key that is not a key), and `scopebond verify --anchor` reports such a list or segment as a problem instead of crashing.
+- 0929cac: Endpoint allowlists and denylists now compare the destination a request reaches, not the text of its host: another spelling of a listed address (decimal, octal, hex, IPv6, IPv4-mapped IPv6), a port on a host listed without one, or another loopback address for a listed loopback host is denied. The HTTP executor also refuses a name that resolves to a denied address, and records a call it refuses before sending as failed.
+- Updated dependencies [0929cac]
+  - @scopebond/policy-schema@0.7.2
+
 ## 0.6.3
 
 ### Patch Changes

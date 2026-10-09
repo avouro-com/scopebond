@@ -1,5 +1,20 @@
 # @scopebond/github-action
 
+## 0.5.11
+
+### Patch Changes
+
+- 4f79b89: Programs started by name are no longer looked up in the current folder, which Windows otherwise searches before PATH: `git`, `npm` and an MCP upstream named without a folder come from the absolute folders on PATH, and Windows' own tools (`icacls`, `reg`, `powershell`, `cmd`, `conhost`, `explorer`) from the system folder. A `git.exe` or similar placed in a project, or in a pull request's checkout, is no longer run by the hook, the agent, the MCP proxy or the pull request check; a program that cannot be found that way is not started. `@scopebond/gateway/node` exports the lookup as `findProgram`, `programPath` and `windowsSystemProgram`.
+- Updated dependencies [7529bc5]
+- Updated dependencies [da85dd4]
+- Updated dependencies [0929cac]
+- Updated dependencies [aaa031e]
+- Updated dependencies [8d94b55]
+- Updated dependencies [4f79b89]
+  - @scopebond/verify@0.6.4
+  - @scopebond/gateway@0.17.6
+  - @scopebond/policy-schema@0.7.2
+
 ## 0.5.10
 
 ### Patch Changes

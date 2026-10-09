@@ -1,5 +1,22 @@
 # @scopebond/gateway
 
+## 0.17.6
+
+### Patch Changes
+
+- 7529bc5: A chain that went back is now reported even when the workspace stamps the lower head at or before a higher one it already handed out. The Cloud exporter hands `onChainHead` this computer's own delivery times (`{ sentAt, receivedAt }`), the chain-heads store keeps them beside each head (`local: { sent_at, received_at }`) and drops anything else the workspace put beside its signed head, and `checkChainHeads` also compares kept heads in the order this computer sent its deliveries, which the workspace cannot choose. `verifyAnchorList`, `verifyChainHeadSignature`, `checkChainHeads` and `verifySegmentChain` never throw on hostile input (a record that is not an object, text that is not well-formed Unicode, a key that is not a key), and `scopebond verify --anchor` reports such a list or segment as a problem instead of crashing.
+- da85dd4: Delivery no longer stalls behind a record the workspace will never accept, and it honours a workspace that asks a computer to wait. A record over the workspace's size limit (one long URL or one large tool argument) used to be re-sent at the head of every batch and hold every newer record back for good; now large records travel alone, a batch refused for its size is split, and a record refused on its own for its size leaves the queue as an `oversize` gap (shown in `status`, `status --json` and `doctor`, reported to the workspace with the other gaps, and kept in the local log). A refused batch listing records refused for good beside records kept back (a clock ahead, a key not yet enrolled) now settles the first and keeps the second. A 429, or a 503 with Retry-After, is now honoured across hook calls and agent cycles: the wait (at most an hour plus a small random spread; a 429 without Retry-After starts at 30 seconds and doubles) is kept in `delivery.json`, `status` shows the next try, and `status --json` adds `delivery.backoff_until`.
+- 0929cac: Endpoint allowlists and denylists now compare the destination a request reaches, not the text of its host: another spelling of a listed address (decimal, octal, hex, IPv6, IPv4-mapped IPv6), a port on a host listed without one, or another loopback address for a listed loopback host is denied. The HTTP executor also refuses a name that resolves to a denied address, and records a call it refuses before sending as failed.
+- aaa031e: Keys, the Cloud credential, chain heads and the receipt and dispatch databases (with the journal files SQLite keeps beside them) are readable by their owner alone from their first byte, on Windows and POSIX, also in a folder other local users can open; a credential write replaces a file or link at its name instead of writing through it, and processes that create a key at the same moment now agree on one key.
+  
+  Upgrading: the hook's and the agent's folder is made readable by its owner alone on their next run, files an older version left there included. A self-hosted gateway or MCP proxy restricts its existing key files, credential file and databases the next time it opens them.
+- 8d94b55: Remove more typed secrets before a receipt is signed: PowerShell environment variables set with `Set-Item Env:`, `New-Item`, `Set-Content`, `[Environment]::SetEnvironmentVariable` or `setx`; credential-named variables and hashtable entries (`$token = '…'`, `@{ Authorization = 'Bearer …' }`); `ConvertTo-SecureString` strings in any parameter order or piped in; a value piped into `--password-stdin`; and a URL password that contains "@".
+- 4f79b89: Programs started by name are no longer looked up in the current folder, which Windows otherwise searches before PATH: `git`, `npm` and an MCP upstream named without a folder come from the absolute folders on PATH, and Windows' own tools (`icacls`, `reg`, `powershell`, `cmd`, `conhost`, `explorer`) from the system folder. A `git.exe` or similar placed in a project, or in a pull request's checkout, is no longer run by the hook, the agent, the MCP proxy or the pull request check; a program that cannot be found that way is not started. `@scopebond/gateway/node` exports the lookup as `findProgram`, `programPath` and `windowsSystemProgram`.
+- Updated dependencies [7529bc5]
+- Updated dependencies [0929cac]
+  - @scopebond/verify@0.6.4
+  - @scopebond/policy-schema@0.7.2
+
 ## 0.17.5
 
 ### Patch Changes
