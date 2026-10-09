@@ -337,6 +337,9 @@ function resolvedSegments(path: string): string[] {
   }
   return out;
 }
+/** `s` without its leading or trailing path separators, in one linear pass (no regular expression to backtrack on). */
+const trimStart = (s: string): string => { let i = 0; while (i < s.length && (s[i] === "/" || s[i] === "\\")) i++; return s.slice(i); };
+const trimEnd = (s: string): string => { let i = s.length; while (i > 0 && (s[i - 1] === "/" || s[i - 1] === "\\")) i--; return s.slice(0, i); };
 const isRooted = (p: string): boolean => p.startsWith("/") || /^[A-Za-z]:(?:\/|$)/.test(p);
 
 /** Whether `path` (already joined to the folder a `cd` before it moved to) names `place` (relative to the working folder) or a
@@ -344,7 +347,7 @@ const isRooted = (p: string): boolean => p.startsWith("/") || /^[A-Za-z]:(?:\/|$
 function coversPlace(path: string, place: string, cwd: string): boolean {
   if (UNRESOLVED.test(path) || path.startsWith("~")) return false;
   const p = normPath(path);
-  const base = normPath(cwd).replace(/\/+$/, "");
+  const base = trimEnd(normPath(cwd));
   const target = resolvedSegments(isRooted(p) ? p : `${base}/${p}`);
   const at = resolvedSegments(`${base}/${place}`);
   return target.length <= at.length && target.every((s, i) => s === at[i]);
@@ -422,7 +425,7 @@ function removedPlaces(word: string, dir: string, cwd: string | undefined, whole
   const out = new Set<string>();
   for (const alt of expandBraces(word)) {
     let w = alt;
-    if (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
+    if (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(w)) w = trimEnd(dir) + "/" + w;
     const p = normPath(w);
     if (whole && (HOME_OR_ABOVE.test(w) || HOME_OR_ABOVE.test(p))) out.add("~/.scopebond");
     if (whole && coversWorkingFolder(p, cwd)) out.add(".scopebond");
@@ -462,7 +465,7 @@ function cleanedPlaces(paths: string[], gitDir: string | undefined, args: string
     else if (a.startsWith("--exclude=")) excludes.push(a.slice(10));
   }
   const kept = (place: string): boolean => excludes.some((e) => {
-    const pattern = e.replace(/^\/+/, "").replace(/\/+$/, "");
+    const pattern = trimEnd(trimStart(e));
     if (!pattern) return false;
     const m = wordMatcher(pattern);
     const segs = place.split("/");
@@ -476,7 +479,7 @@ function cleanedPlaces(paths: string[], gitDir: string | undefined, args: string
     if (!(paths.length ? paths : ["."]).some((p) => coversPlace(join(p), place, cwd))) continue;
     if (kept(place)) continue;
     let present = false;
-    try { present = existsSync(`${cwd.replace(/[\\/]+$/, "")}/${place}`); } catch { /* unreadable: not counted */ }
+    try { present = existsSync(`${trimEnd(cwd)}/${place}`); } catch { /* unreadable: not counted */ }
     if (present) out.push(place);
   }
   return out;
@@ -888,7 +891,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     const targets = new Set(operands);
     for (let k = 0; k < args.length - 1; k++) if (/^-(?:path|literalpath)$/i.test(args[k])) targets.add(args[k + 1]);
     // Inside a folder a `cd` moved to (`cd .claude && rm -rf *`), an operand is judged where it lands.
-    const landed = (t: string) => (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(t) ? `${dir.replace(/\/+$/, "")}/${t}` : t);
+    const landed = (t: string) => (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(t) ? `${trimEnd(dir)}/${t}` : t);
     for (const t of targets) { if (ALWAYS_PROTECTED.test(landed(t))) write(t); remove(t, true); }
   } else if (WRITERS.has(prog)) {
     // A permission/owner spec is not a path: `chmod +x f`, `chmod 0755 f`,
