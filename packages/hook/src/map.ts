@@ -8,8 +8,8 @@
 // map to a single intent (a one-element array), or one per spelling of an
 // ambiguous Windows short path.
 
-import { maskWords, pipedSecrets } from "@scopebond/gateway";
 import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
+import { maskWords, pipedSecrets } from "./shell-secrets.js";
 import { INTERPRETERS, canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf } from "./text.js";
 

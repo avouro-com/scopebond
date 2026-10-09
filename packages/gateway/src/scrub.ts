@@ -8,7 +8,7 @@
 // policy may match on it. Every pattern is a single pass over simple character classes, so matching stays linear in the
 // value's length. Pure string work: no Node built-ins, so it runs wherever the gateway does. Shell shapes with no label
 // to key on (PowerShell's ways of setting a secret, a value piped into a secret reader, `$token = '…'`) are read by
-// `scrubShellSecrets`, which the hook's command scrubber shares.
+// `scrubShellSecrets` (shell-secrets.ts, the same scanner the hook's command scrubber uses).
 
 import { scrubShellSecrets } from "./shell-secrets.js";
 

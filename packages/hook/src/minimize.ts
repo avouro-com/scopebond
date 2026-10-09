@@ -6,7 +6,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { loadOrCreateHexKey } from "./safe-fs.js";
 import { join } from "node:path";
 import { canonical } from "@scopebond/policy-schema/canonical";
-import { isCredentialName, scrubShellSecrets } from "@scopebond/gateway";
+import { isCredentialName, scrubShellSecrets } from "./shell-secrets.js";
 
 /** A plain SHA-256 content hash, for values that are not secret. */
 export const sha256 = (value: string): string => "sha256:" + createHash("sha256").update(value).digest("hex");
@@ -62,7 +62,7 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   // eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern built from literals (VALUE); no input reaches the source
   [new RegExp(String.raw`((?:^|\s)(?:-b|--cookie)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
   // PowerShell's secret shapes (a plain-text secure string, `$env:NAME = "value"`, `Set-Item Env:…`, `$token = '…'`) are
-  // read by the gateway's `scrubShellSecrets`, in `scrubParam` below.
+  // read by `scrubShellSecrets` (shell-secrets.ts), in `scrubParam` below.
   [/(\bhv[sb]\.)[A-Za-z0-9_-]{20,}/g, `$1${MASK}`],                  // Vault tokens
   [/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, MASK],          // SendGrid keys
   [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, MASK],                           // GitHub tokens

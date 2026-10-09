@@ -6,9 +6,10 @@
 // literal token in this file).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Isolate every home-like location before the hook is loaded (one test runs the hook with the shipped starter policy).
 const SANDBOX = mkdtempSync(join(tmpdir(), "sb-shell-secrets-"));
@@ -152,6 +153,12 @@ test("ordinary values in the same command shapes stay readable", () => {
   assert.equal(scrubSecrets("Set-Item -Path Env:DB_PASSWORD -Value 'x1'"), "Set-Item -Path Env:DB_PASSWORD -Value '***'");
   assert.equal(scrubSecrets("$token = 'x1'"), "$token = '***'");
   assert.equal(scrubSecrets("$p = ConvertTo-SecureString -AsPlainText -Force -String 'x1'"), "$p = ConvertTo-SecureString -AsPlainText -Force -String '***'");
+});
+
+test("the hook's shell secret scanner is the gateway's, so receipts and gateway evidence scrub the same shapes", () => {
+  // Each package ships its own copy so either can be released alone; a change to one must be made to both.
+  const source = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8").replace(/\r\n/g, "\n");
+  assert.equal(source("../src/shell-secrets.ts"), source("../../gateway/src/shell-secrets.ts"));
 });
 
 /** Run `fn` and fail when it takes a second or more. */
