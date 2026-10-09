@@ -1,5 +1,17 @@
 # @scopebond/agent
 
+## 0.6.1
+
+### Patch Changes
+
+- 611d02c: A caller that drops its connection to the agent's local channel mid-request no longer stops the agent, plus lint clean-ups that change nothing else.
+- Updated dependencies [611d02c]
+- Updated dependencies [3805a5a]
+- Updated dependencies [a17f73b]
+  - @scopebond/gateway@0.17.5
+  - @scopebond/hook@0.21.7
+  - @scopebond/sdk@0.1.7
+
 ## 0.6.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # @scopebond/verify
 
+## 0.6.3
+
+### Patch Changes
+
+- a17f73b: `violates()` no longer throws on an action param object that carries its own `toString` key or on a policy whose array-bound `items` pattern is not a valid regular expression (that policy is now rejected as invalid), and the evaluator's clause and bound types are explicit instead of `any`.
+
 ## 0.6.2
 
 ### Patch Changes

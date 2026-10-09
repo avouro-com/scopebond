@@ -1,5 +1,15 @@
 # @scopebond/github-action
 
+## 0.5.10
+
+### Patch Changes
+
+- a17f73b: The pull request event payload is read through an explicit type instead of `any`; behaviour is unchanged.
+- Updated dependencies [611d02c]
+- Updated dependencies [a17f73b]
+  - @scopebond/gateway@0.17.5
+  - @scopebond/verify@0.6.3
+
 ## 0.5.9
 
 ### Patch Changes
