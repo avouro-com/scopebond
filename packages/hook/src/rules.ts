@@ -20,6 +20,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
+import { createExclusive } from "./safe-fs.js";
 
 /** One protected location. `under`/`named`/`dir` are the readable, editable shapes;
  *  `raw` carries the few patterns with bespoke exceptions (`.env` templates are allowed,
@@ -269,6 +270,13 @@ export function saveRules(configDir: string, rules: RuleSet): string {
   forgetCached(file);
   writeFileSync(file, `${JSON.stringify(rules, null, 2)}\n`);
   return file;
+}
+
+/** Write the rule set only when there is none yet (an exclusive create, so it never replaces one). True when written. */
+export function createRules(configDir: string, rules: RuleSet): boolean {
+  const file = rulesPath(configDir);
+  forgetCached(file);
+  return createExclusive(file, `${JSON.stringify(rules, null, 2)}\n`);
 }
 
 /** Whether `path` is inside the location a protected-path rule names. This is the same

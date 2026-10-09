@@ -19,7 +19,7 @@
 // atomic (a temp file in the same directory, then a rename), so an interrupted load leaves the
 // old policy in place. Nothing here touches an agent's settings.
 
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -27,6 +27,7 @@ import { canonical } from "@scopebond/policy-schema/canonical";
 import { scaffold } from "./init.js";
 import { createHookRuntime } from "./runtime.js";
 import { digestPolicy, type PolicyAckInput, type PolicyLoadError } from "./observation.js";
+import { errorCode, readBounded } from "./safe-fs.js";
 
 export const POLICY_SCOPE_DOMAIN = "scopebond:policy-scope/v1\n";
 export const MAX_EXPORT_BYTES = 1024 * 1024;
@@ -128,8 +129,9 @@ function writeAtomic(file: string, text: string): void {
 export function loadPolicyExport(dir: string, file: string, options: { apply: boolean; environmentId?: string }): LoadOutcome {
   let raw: unknown;
   try {
-    if (statSync(file).size > MAX_EXPORT_BYTES) return { state: "rejected", error: "schema_invalid", message: "the export file is larger than 1 MiB" };
-    raw = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    const text = readBounded(file, MAX_EXPORT_BYTES);
+    if (text === null) return { state: "rejected", error: "schema_invalid", message: "the export file is larger than 1 MiB" };
+    raw = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch (error) {
     return { state: "rejected", error: "schema_invalid", message: `the export could not be read as JSON (${(error as Error).name})` };
   }
@@ -143,7 +145,8 @@ export function loadPolicyExport(dir: string, file: string, options: { apply: bo
   mkdirSync(dir, { recursive: true });
   const policyPath = join(dir, "policy.json");
   let previous: string | null = null;
-  if (existsSync(policyPath)) { previous = join(dir, PREVIOUS_POLICY_FILE); copyFileSync(policyPath, previous); }
+  try { copyFileSync(policyPath, join(dir, PREVIOUS_POLICY_FILE)); previous = join(dir, PREVIOUS_POLICY_FILE); }
+  catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
   writeAtomic(policyPath, `${JSON.stringify(facts.policy, null, 2)}\n`);
   writeAtomic(join(dir, LOADED_POLICY_FILE), `${JSON.stringify({
     export_id: facts.exportId, policy_id: facts.policyId, policy_version: facts.policyVersion, policy_digest: facts.policyDigest,
