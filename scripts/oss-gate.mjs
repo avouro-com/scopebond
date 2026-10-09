@@ -23,8 +23,8 @@
  * No external dependencies. Node >= 18.
  */
 
-import { execSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
 // CONFIG — edit ALLOW/DENY here. ALLOW is authoritative: a path must match an
@@ -152,25 +152,31 @@ function globToRegex(glob) {
 const ALLOW_RE = ALLOW.map(globToRegex);
 const DENY_RE = DENY.map((g) => ({ glob: g, re: globToRegex(g) }));
 
-function sh(cmd) {
-  return execSync(cmd, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+/** Run git with arguments, never through a shell: file names and ranges are data, not shell text. */
+function git(...args) {
+  return execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
+/** A revision range from the command line: one git revision expression, never an option. */
+const safeRange = (range) => {
+  if (typeof range !== "string" || !/^[^-s][^s]*$/.test(range)) { console.error(`oss-gate: not a revision range: ${range}`); process.exit(2); }
+  return range;
+};
 
 function listFiles(mode, range) {
   if (mode === "staged") {
-    return sh("git diff --cached --name-only --diff-filter=ACMR -z").split("\0").filter(Boolean);
+    return git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z").split("\0").filter(Boolean);
   }
   if (mode === "range") {
-    return sh(`git diff --name-only --diff-filter=ACMR -z ${range}`).split("\0").filter(Boolean);
+    return git("diff", "--name-only", "--diff-filter=ACMR", "-z", safeRange(range)).split("\0").filter(Boolean);
   }
-  return sh("git ls-files -z").split("\0").filter(Boolean);
+  return git("ls-files", "-z").split("\0").filter(Boolean);
 }
 
 function readContent(mode, path) {
   try {
-    if (mode === "staged") return sh(`git show :"${path}"`);
-    if (existsSync(path)) return readFileSync(path, "utf8");
-    return sh(`git show HEAD:"${path}"`);
+    if (mode === "staged") return git("show", `:${path}`);
+    try { return readFileSync(path, "utf8"); } catch { /* not in the working tree: read it from HEAD */ }
+    return git("show", `HEAD:${path}`);
   } catch { return ""; }
 }
 
@@ -194,7 +200,8 @@ else if (arg !== "--staged") { console.error(`unknown argument: ${arg}`); proces
 
 // Commit-message scan: content checks only (no path allowlist).
 if (mode === "message") {
-  const msg = msgFile && existsSync(msgFile) ? readFileSync(msgFile, "utf8") : "";
+  let msg = "";
+  if (msgFile) { try { msg = readFileSync(msgFile, "utf8"); } catch { /* no message file: nothing to scan */ } }
   const lower = msg.toLowerCase();
   const found = [];
   const t = BLOCKED_TERMS.find((x) => lower.includes(x));
@@ -222,11 +229,11 @@ function scanCommitMessage(msg) {
 }
 if (mode === "messages-range") {
   let shas;
-  try { shas = sh(`git log --format=%H ${range}`).split(/\r?\n/).filter(Boolean); }
+  try { shas = git("log", "--format=%H", safeRange(range)).split(/\r?\n/).filter(Boolean); }
   catch (e) { console.error("oss-gate: could not list commits in range:", e.message); process.exit(2); }
   const bad = [];
   for (const sha of shas) {
-    const found = scanCommitMessage(sh(`git log -1 --format=%B ${sha}`));
+    const found = scanCommitMessage(git("log", "-1", "--format=%B", sha));
     if (found.length) bad.push(`${sha.slice(0, 8)}: ${found.join(", ")}`);
   }
   if (bad.length === 0) { console.log(`✓ oss-gate: ${shas.length} commit message(s) clean in ${range}.`); process.exit(0); }
