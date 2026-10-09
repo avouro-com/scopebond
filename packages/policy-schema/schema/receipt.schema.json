@@ -58,7 +58,7 @@
           "required": ["state", "assertion", "reference", "external_effect"],
           "additionalProperties": false,
           "properties": {
-            "state": { "enum": ["simulated", "observed_not_evaluated", "denied", "allowed_pending", "cooperative_allow", "executed", "failed", "outcome_unknown"] },
+            "state": { "enum": ["simulated", "observed_not_evaluated", "denied", "allowed_pending", "cooperative_allow", "executed", "failed", "outcome_unknown", "observed_after"] },
             "assertion": { "enum": ["none", "gateway_simulation", "adapter_reported_success", "adapter_reported_failure", "adapter_outcome_unknown"] },
             "reference": { "type": ["string", "null"] },
             "external_effect": { "const": "not_independently_verified" }
@@ -198,9 +198,13 @@
           "else": { "not": { "required": ["principal"] } }
         },
         {
-          "if": { "properties": { "execution": { "properties": { "state": { "const": "executed" } } } } },
+          "if": { "properties": { "execution": { "properties": { "state": { "enum": ["executed", "observed_after"] } } } } },
           "then": { "properties": { "executed": { "const": true } } },
           "else": { "properties": { "executed": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "execution": { "properties": { "state": { "const": "observed_after" } } } } },
+          "then": { "properties": { "realtime_result": { "const": "deny" }, "execution": { "properties": { "assertion": { "const": "none" } } } } }
         },
         {
           "if": { "properties": { "execution": { "properties": { "state": { "const": "simulated" } } } } },

@@ -117,6 +117,8 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
     assert.ok(existsSync(connectionPath(dir)), "cloud.json written");
     assert.match(readFileSync(connectionPath(dir), "utf8"), /sbm_test_credential/);
     assert.deepEqual(loadConnection(dir), connection);
+    // This test checks every receipt arrives one by one, so the computer sends full detail.
+    writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ evidence_detail: "full" }));
 
     // evaluate two actions through a connected runtime, then flush.
     const runtime = createHookRuntime({

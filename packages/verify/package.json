@@ -43,6 +43,10 @@
     "./summary": {
       "types": "./dist/summary.d.ts",
       "default": "./dist/summary.js"
+    },
+    "./chain": {
+      "types": "./dist/chain.d.ts",
+      "default": "./dist/chain.js"
     }
   },
   "files": [
