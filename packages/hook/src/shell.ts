@@ -679,13 +679,123 @@ export function canonRef(dst: string): string | undefined {
 }
 
 
-/** A git invocation split into its global `-c` config values, its subcommand and
- *  the subcommand's arguments, or null if the program is not git. Global options
+/** One place command text sets an environment variable. `value` is the word assigned, quotes removed, or null when the
+ *  text sets the variable without showing the value (`export NAME`, `read NAME`, `Set-Item env:NAME …`). */
+export interface EnvAssignment { name: string; value: string | null }
+
+// Commands that set a variable named after them (`export NAME`, `declare -x NAME=v`, fish `set -x NAME v`, csh `setenv NAME v`,
+// Windows `setx NAME v`, `read NAME`, `printf -v NAME`); the ones that take the value as the next word are listed apart.
+const ENV_SETTERS = new Set(["export", "declare", "typeset", "local", "readonly", "read", "printf", "set", "setenv", "setx"]);
+const ENV_SETTERS_WITH_VALUE = new Set(["set", "setenv", "setx"]);
+const ENV_SCAN_WINDOW = 512;
+const ENV_SCAN_LIMIT = 64;
+
+/** The first word of `text`, quotes removed, or null when there is none. Bounded, so a long command is never re-read whole. */
+const firstWord = (text: string): string | null => words(text.slice(0, ENV_SCAN_WINDOW))[0] ?? null;
+
+/** Every place `text` sets a variable whose name `names` matches, in any shell's spelling: `NAME=v`, `export NAME=v`,
+ *  `env NAME=v`, `"NAME=v"`, `${NAME:=v}`, fish `set -x NAME v`, csh `setenv NAME v`, cmd `set NAME=v`, `setx NAME v`,
+ *  `export NAME`, `read NAME`, PowerShell `$env:NAME = v`, `Set-Item env:NAME v` and `SetEnvironmentVariable('NAME', v)`.
+ *  Reading a value (`$NAME`, `${NAME:-x}`, `%NAME%`, `$env:NAME`) and `unset NAME` are not assignments. `names` is a global,
+ *  case-insensitive pattern of the names alone (Windows reads them in any case); a name matches only whole. Linear: each
+ *  match looks at a bounded window around it, and at most `ENV_SCAN_LIMIT` assignments are returned (past that, one with an
+ *  unknown value stands for the rest). */
+export function envAssignments(text: string, names: RegExp): EnvAssignment[] {
+  const out: EnvAssignment[] = [];
+  for (const m of text.matchAll(names)) {
+    const at = m.index;
+    const end = at + m[0].length;
+    if (/\w/.test(text[at - 1] ?? "") || /\w/.test(text[end] ?? "")) continue; // part of a longer name
+    if (out.length >= ENV_SCAN_LIMIT) { out.push({ name: m[0].toUpperCase(), value: null }); break; }
+    const before = text.slice(Math.max(0, at - 80), at);
+    const after = text.slice(end, end + ENV_SCAN_WINDOW);
+    const name = m[0].toUpperCase();
+    const assigned = (eq: RegExpExecArray | null): void => {
+      if (eq) out.push({ name, value: firstWord(after.slice(eq[0].length)) ?? "" });
+    };
+    if (/\$\{?env:$/i.test(before)) { assigned(/^\}?\s*\+?=(?!=)/.exec(after)); continue; } // PowerShell `$env:NAME = v`
+    if (/\$\{$/.test(before)) {                                                          // `${NAME:=v}` assigns; `${NAME:-v}` reads
+      const eq = /^:?=/.exec(after);
+      if (eq) out.push({ name, value: /^:?=([^}]*)\}/.exec(after)?.[1] ?? null });
+      continue;
+    }
+    if (/[$%]$/.test(before)) continue;                                                  // `$NAME`, `%NAME%`: a read
+    if (/(?:^|[^$\w])env:[\\/]?$/i.test(before)) {                                        // PowerShell `Set-Item env:NAME v`
+      out.push({ name, value: words(after).find((w) => !w.startsWith("-")) ?? null });
+      continue;
+    }
+    if (/SetEnvironmentVariable\s*\(\s*['"]$/i.test(before)) {
+      out.push({ name, value: /^['"]\s*,\s*(['"])([^'"]*)\1/.exec(after)?.[2] ?? null });
+      continue;
+    }
+    const eq = /^['"]?\s*\+?=/.exec(after);
+    if (eq) { assigned(eq); continue; }                                                   // NAME=v, "NAME=v", export NAME=v
+    // A command that sets the name it is given: the word before the name, past its options.
+    const prior = before.replace(/['"\s]+$/, "").split(/\s+/);
+    let k = prior.length - 1;
+    while (k > 0 && prior[k].startsWith("-")) k--;
+    const verb = canonProgram((prior[k] ?? "").replace(/^.*[;&|(]/, ""));
+    if (ENV_SETTERS.has(verb)) out.push({ name, value: ENV_SETTERS_WITH_VALUE.has(verb) ? firstWord(after) : null });
+  }
+  return out;
+}
+
+// Git takes configuration from the environment as well as from `-c`: GIT_CONFIG_COUNT with GIT_CONFIG_KEY_<n> and
+// GIT_CONFIG_VALUE_<n>, GIT_CONFIG_PARAMETERS, and the config files GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CONFIG, the home
+// folder's .gitconfig and XDG_CONFIG_HOME's git/config.
+const GIT_ENV_NAMES = /GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d+|GIT_CONFIG_VALUE_\d+|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG|XDG_CONFIG_HOME|HOME/gi;
+
+/** The configuration `text` gives git through the environment, as `key=value` entries like `-c` ones: each literal
+ *  GIT_CONFIG_KEY_<n> and each GIT_CONFIG_PARAMETERS entry. A config file the environment points git at, or a key the text does
+ *  not show (`GIT_CONFIG_KEY_0="$K"`, a count with no keys), is `include.path=…`: configuration the command does not show. */
+export function gitEnvConfigs(text: string): string[] {
+  const configs: string[] = [];
+  let count = false;
+  let keys = 0;
+  for (const { name, value } of envAssignments(text, GIT_ENV_NAMES)) {
+    const shown = value !== null && !/[$`]/.test(value);
+    if (name === "GIT_CONFIG_COUNT") { count = true; continue; }
+    if (name.startsWith("GIT_CONFIG_VALUE_")) continue;
+    if (name.startsWith("GIT_CONFIG_KEY_")) { keys++; configs.push(shown ? `${value}=` : "include.path="); continue; }
+    if (name === "GIT_CONFIG_PARAMETERS") {
+      // `'key=value' …` (or `'key'='value'`, as newer git writes it).
+      const items = shown ? [...value.matchAll(/'([^']*)'/g)].map((x) => x[1]) : [];
+      configs.push(...(items.length ? items : [shown ? value : "include.path="]));
+      continue;
+    }
+    if (shown && /^(?:\/dev\/null|nul)$/i.test(value)) continue; // an empty config file
+    configs.push(`include.path=${shown ? value : ""}`);
+  }
+  if (count && keys === 0) configs.push("include.path=");
+  return configs;
+}
+
+// git's own subcommands. git never lets an alias replace one of these, so configuration the command does not show can only
+// turn a subcommand outside this list into something else (a push).
+const GIT_BUILTINS = new Set([
+  "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bugreport", "bundle", "cat-file", "check-attr",
+  "check-ignore", "check-mailmap", "check-ref-format", "checkout", "checkout-index", "cherry", "cherry-pick", "citool", "clean",
+  "clone", "column", "commit", "commit-graph", "commit-tree", "config", "count-objects", "credential", "describe", "diagnose",
+  "diff", "diff-files", "diff-index", "diff-tree", "difftool", "fast-export", "fast-import", "fetch", "fetch-pack",
+  "filter-branch", "fmt-merge-msg", "for-each-ref", "for-each-repo", "format-patch", "fsck", "gc", "get-tar-commit-id", "grep",
+  "gui", "hash-object", "help", "index-pack", "init", "instaweb", "interpret-trailers", "log", "ls-files", "ls-remote",
+  "ls-tree", "mailinfo", "mailsplit", "maintenance", "merge", "merge-base", "merge-file", "merge-index", "merge-tree",
+  "mergetool", "mktag", "mktree", "multi-pack-index", "mv", "name-rev", "notes", "pack-objects", "pack-refs", "prune",
+  "prune-packed", "pull", "push", "range-diff", "read-tree", "rebase", "reflog", "remote", "repack", "replace", "request-pull",
+  "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", "rm", "send-email", "shortlog", "show", "show-branch",
+  "show-index", "show-ref", "sparse-checkout", "stash", "status", "stripspace", "submodule", "switch", "symbolic-ref", "tag",
+  "unpack-file", "unpack-objects", "update-index", "update-ref", "update-server-info", "var", "verify-commit", "verify-pack",
+  "verify-tag", "version", "whatchanged", "worktree", "write-tree",
+]);
+
+/** A git invocation split into its global `-c` config values (and those its own
+ *  environment prefix gives it, see `gitEnvConfigs`), its subcommand and the
+ *  subcommand's arguments, or null if the program is not git. Global options
  *  that take a value (`-C dir`, `-c k=v`, `--git-dir d` …) are skipped with it. */
 export function gitArgs(cmd: SimpleCommand): { sub?: string; args: string[]; configs: string[] } | null {
   if (canonProgram(cmd.program) !== "git") return null;
   const a = cmd.argv;
-  const configs: string[] = [];
+  const configs: string[] = gitEnvConfigs(cmd.raw);
   let i = 0;
   while (i < a.length) {
     const t = a[i];
@@ -699,10 +809,12 @@ export function gitArgs(cmd: SimpleCommand): { sub?: string; args: string[]; con
 }
 
 /** The ref recorded for a push whose destination cannot be read from the command
- *  line: an alias (`git -c alias.ship=push ship`), a configured push refspec
- *  (`-c remote.origin.push=…`, `-c push.default=matching`) or a lower-level push
- *  (`git send-pack`, `git http-push`, `git subtree push`). It starts with `-`, which
- *  the starter branch guard refuses, so an unreadable push fails closed. */
+ *  line: an alias (`git -c alias.ship=push ship`, or one given through the
+ *  environment), a configured push refspec (`-c remote.origin.push=…`,
+ *  `-c push.default=matching`), configuration the command does not show (a config
+ *  file it points git at) or a lower-level push (`git send-pack`, `git http-push`,
+ *  `git subtree push`). It starts with `-`, which the starter branch guard refuses,
+ *  so an unreadable push fails closed. */
 export const UNKNOWN_REF = "--unknown";
 
 /** Parse a `git … push …` simple command, or null if it is not a push. Handles
@@ -714,14 +826,20 @@ export const UNKNOWN_REF = "--unknown";
  *  `--all`, `--mirror` and `--branches` push every branch: they return the literal
  *  flag as the ref, which the starter policy denies; `--tags` alone pushes only tags
  *  and returns `--tags`, which it allows. `ref`/`force` mirror the first target for
- *  callers that expect a single push. */
-export function parseGitPush(cmd: SimpleCommand): { force: boolean; remote?: string; ref?: string; targets: PushTarget[] } | null {
+ *  callers that expect a single push. `lineConfigs` is configuration the rest of the
+ *  command line gives this command through the environment (an earlier `export`,
+ *  an enclosing `VAR=… sh -c '…'`), read as if given with `-c`. */
+export function parseGitPush(cmd: SimpleCommand, lineConfigs: readonly string[] = []): { force: boolean; remote?: string; ref?: string; targets: PushTarget[] } | null {
   const g = gitArgs(cmd);
   if (!g) return null;
-  const aliased = g.configs.some((c) => /^alias\./i.test(c));
-  const configuredPush = g.configs.some((c) => /^(?:remote\..*\.push(?:url)?|push\.default|remote\.pushdefault)(?:=|$)/i.test(c));
+  const configs = [...g.configs, ...lineConfigs];
+  const aliased = configs.some((c) => /^alias\./i.test(c));
+  // Configuration the command does not show (an included or environment-named config file) may hold an alias or a push refspec.
+  const unshown = configs.some((c) => /^include\.path(?:=|$)/i.test(c) || /^includeif\./i.test(c));
+  const configuredPush = unshown || configs.some((c) => /^(?:remote\..*\.push(?:url)?|push\.default|remote\.pushdefault)(?:=|$)/i.test(c));
+  const mayBeAlias = unshown && g.sub !== undefined && !GIT_BUILTINS.has(g.sub.toLowerCase());
   const lowLevel = g.sub === "send-pack" || g.sub === "http-push" || (g.sub === "subtree" && g.args.includes("push"));
-  if (aliased || lowLevel || (g.sub === "push" && configuredPush)) {
+  if (aliased || mayBeAlias || lowLevel || (g.sub === "push" && configuredPush)) {
     return { force: false, ref: UNKNOWN_REF, targets: [{ ref: UNKNOWN_REF, force: false }] };
   }
   if (g.sub !== "push") return null;
