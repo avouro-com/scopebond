@@ -76,9 +76,39 @@ test("a query credential after another parameter's value is still scrubbed", () 
   assert.equal(scrubSecretText(`PASSWORD = '${pw}'`), "PASSWORD = '***'");
 });
 
+test("PowerShell secret shapes and a URL password holding '@' are scrubbed inside values; ordinary values stay", () => {
+  for (const [value, secret] of [
+    [`Set-Item -Path Env:DB_PASSWORD -Value '${pw}'`, pw],
+    [`Set-Item Env:DB_PASSWORD '${pw}'`, pw],
+    [`[Environment]::SetEnvironmentVariable('API_TOKEN', '${pw}', 'User')`, pw],
+    [`setx DB_PASSWORD ${pw}`, pw],
+    [`$token = '${tok}'`, tok],
+    [`$DbPass = "${pw}"`, pw],
+    [`$env:DB_PASSWORD = "${pw}"`, pw],
+    [`$p = ConvertTo-SecureString -AsPlainText -Force -String '${pw}'`, pw],
+    [`$p = '${pw}' | ConvertTo-SecureString -AsPlainText -Force`, pw],
+    [`$headers = @{ Authorization = 'Bearer ${bearer}' }`, bearer],
+    [`git push https://deploy:p4ss@${userinfo}@git.example.test/o/r.git main`, userinfo],
+  ]) {
+    const out = scrubSecretText(value);
+    assert.ok(!out.includes(secret), `${secret.slice(0, 6)}… left in ${out}`);
+  }
+  assert.equal(scrubSecretText(`https://bot:a@${userinfo}@git.example.test/repo.git`), "https://***@git.example.test/repo.git");
+  assert.equal(scrubSecretText(`https://${tok}@git.example.test/repo.git`), "https://***@git.example.test/repo.git", "a token alone as the user");
+  assert.equal(scrubSecretText("https://api.example.test/find?email=a@example.test"), "https://api.example.test/find?email=a@example.test");
+  assert.equal(scrubSecretText("$name = 'build'; Set-Item Env:PATH 'C:/tools'"), "$name = 'build'; Set-Item Env:PATH 'C:/tools'");
+});
+
 test("scrubbing stays linear on adversarial 50,000-character values", () => {
   const n = 50_000;
   for (const text of [
+    "Set-Item Env:TOKEN ".repeat(n / 19),  // many Env: paths in one command
+    "ConvertTo-SecureString ".repeat(n / 23),
+    "'TOKEN', ".repeat(n / 10),             // many credential names given as arguments
+    "a".repeat(n) + " = 'x'",              // a long name before "="
+    "$token = @' ".repeat(n / 12),          // unclosed here-strings
+    "'x' | ".repeat(n / 6) + "ConvertTo-SecureString",
+    "://" + "a@".repeat(n / 2),            // URL userinfo with many "@"
     "?" + "token".repeat(n / 5),           // a parameter name full of credential words and no "="
     "password" + " ".repeat(n) + "x",     // a long run of spaces after a SQL password keyword
     "identified by" + " ".repeat(n) + "x",
