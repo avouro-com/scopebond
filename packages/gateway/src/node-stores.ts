@@ -2,7 +2,7 @@
 // lives in the core with an in-memory implementation; these are durable local
 // implementations for the Node server. On Cloudflare, D1/KV are the edge ones.)
 
-import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } from "node:fs";
+import { appendFileSync, closeSync, constants as fsConstants, readFileSync, existsSync, mkdirSync, openSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
 import { keepOwnerOnly, placeOwnerOnly, prepareOwnerOnlyDatabase } from "./node-files.js";
@@ -114,11 +114,18 @@ export class FileReceiptStore implements ReceiptStore {
     }
   }
   private append(file: string, line: string): void {
-    // A new log holds signed evidence: it is created exclusively with its first record, readable by its owner alone from
-    // its first byte (the existence check only saves work; the exclusive create is the check). Otherwise the record is
-    // appended.
-    if (!existsSync(file) && placeOwnerOnly(file, line + "\n", true)) return;
-    appendFileSync(file, line + "\n", { mode: 0o600, flag: "a" });
+    // Appended to the log when it exists (opened without create). A new log holds signed evidence: it is created
+    // exclusively with its first record, readable by its owner alone from its first byte; if another process created it
+    // first, the record is appended to that one.
+    const appendTo = (): number => openSync(file, fsConstants.O_WRONLY | fsConstants.O_APPEND);
+    let fd: number;
+    try { fd = appendTo(); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (placeOwnerOnly(file, line + "\n", true)) return;
+      fd = appendTo();
+    }
+    try { appendFileSync(fd, line + "\n"); } finally { closeSync(fd); }
   }
   put(r: SignedReceipt): void {
     const serialized = JSON.stringify(r);
