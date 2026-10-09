@@ -1,5 +1,85 @@
 # @scopebond/agent
 
+## 0.6.0
+
+### Minor Changes
+
+- 0f9e040: The signed Windows install can carry the native Scopebond tray (`scopebond-tray.exe` beside the agent). When it is there, the agent leaves the tray to it (no PowerShell tray), `autostart on` sets the tray's own sign-in entry (`Scopebond`, which starts the agent) instead of the launcher's `ScopebondAgent` and retires the latter, `autostart off` removes it, `status` reports it, and after a self-update the helper stops the tray, installs, and starts the tray again (which starts the updated agent). npm installs are unchanged.
+
+### Patch Changes
+
+- ed31dd1: Scopebond appears in Windows Settings -> Apps for an agent installed with npm. `setup` and `autostart on` write a per-user
+  entry (Scopebond Agent, Avouro LLC, the version; no administrator rights) whose Uninstall runs the agent's own `uninstall`
+  (autostart off, the agent stopped, the hook taken out of the coding agents' settings, the workspace told) and then
+  `npm uninstall -g @scopebond/agent`. `uninstall` removes the entry. The Scopebond folder stays, so installing again is the
+  same computer; `uninstall --purge` deletes it.
+  The Uninstall script is written as UTF-8 with a byte-order mark, so Windows PowerShell 5.1 reads a profile folder with
+  non-ASCII letters (or a typographic apostrophe) correctly, and it says "removed" only when it worked: when the agent was
+  already gone or its own uninstall failed, it says what did not happen and exits 1.
+- aacdb6c: A backlog is no longer hidden after the agent restarts. Waiting used to be counted from the agent's start, so after an
+  update or a crash a four-hour backlog showed "Protected" for fifteen minutes. The agent now keeps the computer's wake time
+  in `agent-awake.json` across its own restarts; after the computer was switched off it counts from the computer's start,
+  and time asleep still never counts. After a long gap without a restart of the computer (the agent was stopped, or the
+  computer slept), a record written during the gap counts from when it was written, and an older record keeps the time it
+  waited before the gap.
+- 4e6ceff: The agent keeps the evidence-chain head each delivery answer carries in the hook's `chain-heads.json`, like the hook, so `scopebond verify --anchor` can check it later.
+- 58fa74d: The agent keeps answering while it works. The local store's upkeep (up to 30 seconds of database work, or a full rewrite
+  of an older file) now runs as `scopebond-agent upkeep` in a process of its own, so the tray, `status` and the workspace's
+  requests are answered meanwhile. One cycle sends for at most a minute and the next cycle starts at once while records
+  remain, so a long queue never holds up the rules check. The gateway's exporter lets the event loop run between batches
+  and takes `flush({ maxMs })`: no new batch starts once that time is up.
+- 688e402: `scopebond-agent.exe setup <workspace-url>` works after the signed Windows installer on a computer without Node or npm:
+  the single executable counts as installed (no `npm install -g`), autostart starts the executable itself, and the status
+  and the retry hint name the executable. The daily self-check also says how the agent was installed (`install_kind`: npm,
+  per-user or per-machine), so a workspace can show it.
+- 6480952: A stop asked for by this computer's user (`scopebond-agent stop`) leaves `agent-stopped.json` in the Scopebond folder,
+  and the next start of the agent removes it. The native Windows tray uses it to tell a stop on purpose (it leaves the
+  agent stopped) from an agent that went away without a replacement (it starts it again).
+- 0b6b433: The agent's own updates are harder to subvert. The npm update (and `setup`'s install) runs `npm install -g` with package
+  scripts off and the public registry pinned (also for the @scopebond scope), without registry or script settings from the
+  environment, and only after the registry's npm provenance for that exact version names this repository's main branch and
+  the tarball it serves. The workspace's version answer is bounded: at most 4 KiB, a known policy, strict `x.y.z` versions
+  no more than one major version ahead; anything else is no answer and nothing changes. Hook entries are always pinned to the
+  hook the agent carries, by its path: a version named by the workspace is no longer followed, the `npx -y …@<version>` form
+  is never written, and existing `npx` entries are re-pinned. After installing, the agent runs the new program and requires
+  it to report the new version, then waits for the new agent to answer before exiting; if either fails it reinstalls the
+  version it was running and does not retry that version for a day. The new `scopebond-agent version` command prints the
+  agent and hook versions. The signed Windows updater can trust several updater keys (key id and last day of use, from
+  `updater-keys.json`), a manifest names the key that signed it, and the helper checks the installer's size, digest and
+  signature again, from a handle that keeps the file unchanged, right before it starts msiexec; Windows' tools are started
+  by their full paths.
+- 1a587dc: The signed Windows install checks an update's installer again right before installing it. The helper that waits for the
+  agent to exit now holds the installer open (no writes or deletes) and checks its size and SHA-256 against the signed
+  manifest and its Authenticode signature against the same publisher rule, before msiexec runs. Any mismatch installs
+  nothing; the reason is recorded in `updates/install-result.json` and logged when the agent starts again.
+  Windows PowerShell is started without an inherited PowerShell 7 module path, so the signature check also works for an
+  agent started from PowerShell 7.
+- 52502c3: The same action gets the same treatment in Claude Code, Codex and Cursor.
+  
+  - Cursor is answered `allow` only for a clean evaluated allow. An action a monitored rule finds out of policy now gets no
+    opinion (`ask`), so Cursor's own approval decides, as Claude Code's and Codex's do when the hook stays silent.
+  - A Cursor edit reported after it was written (`afterFileEdit`) that breaks a blocking rule is signed with the new execution
+    state `observed_after` (`realtime_result: "deny"`, `executed: true`) instead of `denied`. `log` shows it as "recorded, not
+    prevented", the tray and local counts keep it apart from blocks, and it is never counted as one. The gateway takes this as
+    the `observedAfter` action option (nothing is dispatched and no override is asked); the receipt schema, evidence vectors
+    and evidence check accept the new state.
+  - The hook program answers deny on any failure the commands do not catch themselves (a module that cannot load, an uncaught
+    error): Claude Code gets exit 2, Codex and Cursor their deny answer.
+  - The Scopebond Agent checks the Codex and Cursor hook entries on each maintenance pass and keeps each outage (an entry that
+    cannot start) as one `hook_unresolvable` delivery gap, which the rules check reports with the other gaps; `status` lists
+    such outages apart from records that missed delivery.
+- 6838107: Beside the native Scopebond tray (the signed Windows install) the agent no longer listens on 127.0.0.1: its tray and its hook (the same program) reach it over its named pipe. npm installs keep the loopback port for now, because the PowerShell tray and hooks before the pipe use it (`SCOPEBOND_AGENT_LOOPBACK=0` still turns it off). `startControl` takes `{ loopback }`.
+- f4ff598: The agent's delivery follows the hook's new default evidence detail: a computer whose workspace has not named one sends
+  the Standard detail (notable receipts in full, routine ones as signed summaries), and Full only when the workspace or the
+  computer's own saved setting says so.
+- Updated dependencies [58fa74d]
+- Updated dependencies [4e6ceff]
+- Updated dependencies [52502c3]
+- Updated dependencies [4e6ceff]
+- Updated dependencies [f4ff598]
+  - @scopebond/gateway@0.17.4
+  - @scopebond/hook@0.21.6
+
 ## 0.5.6
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/policy-schema",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Open-source Scopebond policy, action, receipt, and observation schemas with shared conformance vectors.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",

@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/hook",
-  "version": "0.21.5",
+  "version": "0.21.6",
   "description": "Free, open-source guardrails for Claude Code, Cursor, and Codex: check supported actions and create signed local decision records. Optional connection to the separate proprietary Scopebond Cloud workspace.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
