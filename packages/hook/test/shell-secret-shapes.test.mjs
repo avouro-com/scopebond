@@ -155,6 +155,35 @@ test("ordinary values in the same command shapes stay readable", () => {
   assert.equal(scrubSecrets("$p = ConvertTo-SecureString -AsPlainText -Force -String 'x1'"), "$p = ConvertTo-SecureString -AsPlainText -Force -String '***'");
 });
 
+test("a quote that closes an earlier string is not a secret's opening quote: the rest of the command stays in the record", () => {
+  const commands = (command) => mapped(command, "Bash").filter((m) => m.intent.action_type === "shell.exec").map((m) => m.intent.params.command);
+  const word = ["pass", "word"].join(""); // built at run time, so the source holds no assignment-shaped literal
+  for (const command of [
+    'git commit -m "token = " --no-verify',
+    `grep -rn "${word} = " src/ && npm test`,
+    'git commit -m "token = " -m "second paragraph"',
+    "grep -n \"'api_key', \" src/settings.py && npm test",
+  ]) {
+    assert.equal(scrubSecrets(command), command, command);
+    assert.equal(scrubParam(command), command, command);
+  }
+  assert.ok(commands('git commit -m "token = " --no-verify').some((c) => c.startsWith('git commit -m "token = " --no-verify')));
+  // A value that opens a quote and never closes it is still masked, as one word.
+  const s = secret();
+  assert.equal(scrubSecrets(`$password = "${s}`), '$password = "***');
+  assert.equal(scrubSecrets(`password = '${s} && npm test`), "password = '*** && npm test");
+  assertGone(`$password = "${s}`, s);
+});
+
+test("a literal piped into a secret reader is masked in the command it was piped from, not in the commands after it", () => {
+  const commands = (command) => mapped(command, "Bash").filter((m) => m.intent.action_type === "shell.exec").map((m) => m.intent.params.command);
+  const recorded = commands("cat token.txt | docker login --password-stdin registry.example.test && rm token.txt");
+  assert.ok(recorded.some((c) => c.startsWith("cat *** ")), JSON.stringify(recorded));
+  assert.ok(recorded.some((c) => c.startsWith("rm token.txt ")), JSON.stringify(recorded));
+  const s = secret();
+  assertGone(`echo ${s} | docker login -u bob --password-stdin reg.example.test && echo done`, s, "Bash");
+});
+
 test("the hook's shell secret scanner is the gateway's, so receipts and gateway evidence scrub the same shapes", () => {
   // Each package ships its own copy so either can be released alone; a change to one must be made to both.
   const source = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8").replace(/\r\n/g, "\n");

@@ -195,29 +195,47 @@ function rebuild(text: string, commands: Command[], chosen: Array<Set<number>>):
   return out + text.slice(copied);
 }
 
+/** A command piped into a program that reads a secret from standard input, and the literals in it that may be the secret. */
+export interface PipedSecret {
+  /** The command's words, each between NULs, so a part of it is found as a substring. */
+  words: string;
+  /** The literals, each as written and without its quotes. */
+  hide: ReadonlySet<string>;
+}
+const SEPARATOR = "\u0000";
+const joinWords = (words: readonly string[]): string => SEPARATOR + words.join(SEPARATOR) + SEPARATOR;
+
 /** Literals a command pipes into a program that reads a secret from standard input (`'pw' | ConvertTo-SecureString
- *  -AsPlainText`, `echo pw | docker login --password-stdin`), each as written and without its quotes. The literal sits
- *  in the simple command before the pipe, which does not show it is a secret on its own: a caller that records each
- *  simple command apart masks these words in every one of them (see `maskWords`). */
-export function pipedSecrets(text: string): Set<string> {
-  const found = new Set<string>();
+ *  -AsPlainText`, `echo pw | docker login --password-stdin`), with the command they sit in. The literal is in the simple
+ *  command before the pipe, which does not show it is a secret on its own: a caller that records each simple command apart
+ *  masks these words in that command, or in a part of it it records apart (a group's inside), see `maskWords`. */
+export function pipedSecrets(text: string): PipedSecret[] {
+  const found: PipedSecret[] = [];
   const commands = splitCommands(text);
   commands.forEach((command, c) => {
     if (!command.piped || !commands[c + 1] || !readsSecret(commands[c + 1])) return;
+    const hide = new Set<string>();
     for (const k of pipedWords(command)) {
-      found.add(command.words[k]);
+      hide.add(command.words[k]);
       const bare = unquote(command.words[k]);
-      if (bare) found.add(bare);
+      if (bare) hide.add(bare);
     }
+    if (hide.size) found.push({ words: joinWords(command.words), hide });
   });
   return found;
 }
 
-/** `text` with every word in `words` masked. */
-export function maskWords(text: string, words: ReadonlySet<string>): string {
-  if (!words.size) return text;
+/** `text` with the piped literals masked in each command of it that is a piped command, or a run of its words. Another
+ *  command that happens to use the same word (`… && rm token.txt`) keeps it. */
+export function maskWords(text: string, piped: readonly PipedSecret[]): string {
+  if (!piped.length) return text;
   const commands = splitCommands(text);
-  return rebuild(text, commands, commands.map((command) => new Set(command.words.flatMap((word, k) => (words.has(word) ? [k] : [])))));
+  return rebuild(text, commands, commands.map((command) => {
+    const own = joinWords(command.words);
+    const hide = new Set<number>();
+    for (const p of piped) if (p.words.includes(own)) command.words.forEach((word, k) => { if (p.hide.has(word)) hide.add(k); });
+    return hide;
+  }));
 }
 
 function scrubCommands(text: string): string {
@@ -227,6 +245,29 @@ function scrubCommands(text: string): string {
     if (command.piped && commands[c + 1] && readsSecret(commands[c + 1])) for (const k of pipedWords(command)) chosen[c].add(k);
   });
   return chosen.some((s) => s.size) ? rebuild(text, commands, chosen) : text;
+}
+
+// ---- quoted values ------------------------------------------------------------------------------------------------------
+
+// After a quote, a character that ends a word: the quote closed a string rather than opened a value.
+const ENDS_WORD = /[\s;&|)}\],]/;
+const WORD_CHARACTER = /\w/;
+const QUOTED_WORD_REST = /[^\s;,)}|&]*/y;
+
+/** The value that starts with the quote at `at`: where it ends and whether its closing quote is there. A value is the quoted
+ *  string when its closing quote ends the word (`'x'`, `"a b"`, `'x')`); with no closing quote, or one a letter follows (the
+ *  quote that opens a later string: `-m "token = " -m "x"`), only the rest of the word the quote starts is the value. Null
+ *  when the quote opens nothing: a blank, a separator or the end of the text follows it, so it closed an earlier string
+ *  (`grep "password = " src/`), and no value follows. Only the secret is masked, never the rest of the command. */
+function quotedValue(text: string, at: number): { end: number; closed: boolean } | null {
+  const q = text[at];
+  const next = text[at + 1];
+  if (next === undefined || ENDS_WORD.test(next)) return null;
+  const close = text.indexOf(q, at + 1);
+  if (close >= 0 && !WORD_CHARACTER.test(text[close + 1] ?? "")) return { end: close + 1, closed: true };
+  QUOTED_WORD_REST.lastIndex = at + 1;
+  QUOTED_WORD_REST.exec(text);
+  return QUOTED_WORD_REST.lastIndex > at + 1 ? { end: QUOTED_WORD_REST.lastIndex, closed: false } : null;
 }
 
 // ---- 'NAME', value -----------------------------------------------------------------------------------------------------
@@ -253,8 +294,9 @@ function scrubNamedArguments(text: string): string {
     const at = skipBlanks(text, comma + 1);
     let end: number;
     if (isQuote(text[at])) {
-      const valueClose = text.indexOf(text[at], at + 1);
-      end = valueClose < 0 ? text.length : valueClose + 1;
+      const value = quotedValue(text, at);
+      if (!value) continue;
+      end = value.end;
     } else {
       BARE_ARGUMENT.lastIndex = at;
       if (!BARE_ARGUMENT.exec(text)) continue;
@@ -272,17 +314,25 @@ function scrubNamedArguments(text: string): string {
 // A name, then an optional closing quote (`'X-Api-Key' = …`) and "=" with optional blanks. Read one name run at a time.
 const NAME_RUN = /[\w:.-]+/g;
 const BARE_VALUE = /[^\s;,)}|&]+/y;
-const ENTRY_VALUE = /[^;}&#\n]+/y;
+const ENTRY_VALUE = /[^;}&|#\n]+/y;
 
 /** A credential-named assignment written with blanks around "=" or a quoted value: a PowerShell variable (`$token =
  *  '…'`, `$env:DB_PASSWORD = "…"`), a hashtable entry (`@{ Authorization = 'Bearer …' }`), a keyword argument
  *  (`password="a b"`), an INI line (`password = hunter2`); and a hashtable entry read without its quotes
- *  (`@{Authorization=Bearer x}`), to the entry's end. `NAME=value` otherwise is left to the callers' word rule. */
+ *  (`@{Authorization=Bearer x}`), to the entry's end. `NAME=value` otherwise is left to the callers' word rule, which
+ *  masks the value alone: after a `;` outside a hashtable (`cd x;API_KEY=abc ./deploy.sh`) the program that follows stays. */
 function scrubSpacedAssignments(text: string): string {
   let out = "";
   let copied = 0;
+  // How many hashtables (`@{`) are open where the scan has read to, so a `;` is read as an entry's start only inside one.
+  let tables = 0;
+  let read = 0;
   NAME_RUN.lastIndex = 0;
   for (let run = NAME_RUN.exec(text); run; run = NAME_RUN.exec(text)) {
+    for (; read < run.index; read++) {
+      if (text[read] === "{") { if (tables > 0 || text[read - 1] === "@") tables++; }
+      else if (text[read] === "}" && tables > 0) tables--;
+    }
     let after = run.index + run[0].length;
     if (isQuote(text[after])) after++;
     const equals = skipBlanks(text, after);
@@ -291,15 +341,16 @@ function scrubSpacedAssignments(text: string): string {
     const first = text[at];
     if (first === undefined || first === "=" || first === ">" || first === "~" || first === "$") continue; // ==, =>, =~, a variable
     const spaced = equals > after || at > equals + 1;
-    const entry = !spaced && (text[run.index - 1] === "{" || text[run.index - 1] === ";");
+    const entry = !spaced && (text[run.index - 1] === "{" || (text[run.index - 1] === ";" && tables > 0));
     // The name is checked before the value is read, so a value is only ever read to be masked and skipped.
     if ((!spaced && !entry && !isQuote(first) && first !== "@") || !isCredentialName(run[0])) continue;
     let end: number;
     let replacement: string;
     if (isQuote(first)) {
-      const close = text.indexOf(first, at + 1);
-      end = close < 0 ? text.length : close + 1;
-      replacement = close < 0 ? first + MASK : first + MASK + first;
+      const value = quotedValue(text, at);
+      if (!value) continue;
+      end = value.end;
+      replacement = value.closed ? first + MASK + first : first + MASK;
     } else if (first === "@" && isQuote(text[at + 1])) {
       const close = text.indexOf(text[at + 1] + "@", at + 2); // a here-string
       end = close < 0 ? text.length : close + 2;
