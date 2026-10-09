@@ -15,7 +15,7 @@ import { RULES_FILE, loadRules } from "./rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
-import { recordDeliveryAttempt } from "./delivery-state.js";
+import { deliveryBackoff, recordDeliveryAttempt } from "./delivery-state.js";
 import { isRepairableStore, noteQueueMiss, repairDelivery } from "./delivery-repair.js";
 import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
@@ -262,6 +262,8 @@ export function createHookRuntime(config: RuntimeConfig) {
       const attached = attachExporter(config.dbPath + ".cloud-outbox.db", config.cloud.connection, baseStore, config.cloud.fetch, {
         busyTimeoutMs: config.queueBusyTimeoutMs ?? HOT_PATH_QUEUE_BUSY_MS,
         onGap: (gap) => { if (gap.reason === "outbox_error") noteQueueMiss(dir, after, gap.id, gap.at); },
+        // A wait the workspace asked for (429, or 503 with Retry-After) that an earlier call recorded holds for this call too.
+        backoff: deliveryBackoff(dir),
       });
       store = attached.store;
       exporter = attached.exporter;

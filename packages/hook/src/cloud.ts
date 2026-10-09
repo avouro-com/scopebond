@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,
-  type Attester, type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
+  type Attester, type CloudBackoff, type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
   type CloudSequenceProofOptions, type ReceiptStore,
 } from "@scopebond/gateway";
 import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, loadOrCreateAttester } from "@scopebond/gateway/node";
@@ -146,7 +146,7 @@ export function sequenceProofFor(
 
 export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
-  options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void } = {},
+  options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void; backoff?: CloudBackoff | null } = {},
 ): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
   // Lossless (SB275): no cap and no expiry. A record leaves the queue only when the workspace
   // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
@@ -159,8 +159,10 @@ export function attachExporter(
   const summaries = summaryOptions(dirname(outboxDbPath));
   const sequenceProof = sequenceProofFor(connection, summaries?.attester);
   // The chain head each delivery answer carries is kept beside the receipts (chain-heads.json), for `verify --anchor`.
+  // `backoff`: a wait the workspace asked for that an earlier call recorded (delivery.json); nothing is sent before it.
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl,
     summaries, ...(sequenceProof ? { sequenceProof } : {}), ...(options.onGap ? { onGap: options.onGap } : {}),
+    ...(options.backoff ? { backoff: options.backoff } : {}),
     onChainHead: chainHeadRecorder(join(dirname(outboxDbPath), CHAIN_HEADS_FILE)) });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }

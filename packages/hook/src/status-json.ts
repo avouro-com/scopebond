@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { loadConnection } from "./cloud.js";
-import { readDeliveryState } from "./delivery-state.js";
+import { readDeliveryState, waitingUntil } from "./delivery-state.js";
 import { deliveryStalled, queueStatus } from "./delivery-report.js";
 
 export const STATUS_SCHEMA = "scopebond.status.v1";
@@ -30,6 +30,9 @@ export interface StatusJson {
     gaps_by_reason: Record<string, number>;
     /** Their total over the queue's lifetime. A queue made before the counts by reason may count more here than by reason. */
     gaps_total: number;
+    /** The workspace asked this computer to wait (HTTP 429, or 503 with Retry-After): nothing is sent before this time (ms
+     *  since epoch). Null when no wait is in force. */
+    backoff_until: number | null;
     /** The delivery queue could not be opened (a full disk, a read-only file). Actions stay allowed and are recorded on this
      *  computer; each record written meanwhile is queued once the queue can be written again. */
     queue_error: string | null;
@@ -86,6 +89,7 @@ export function buildStatusJson(input: {
       oldest_pending_age_s: oldest !== null ? Math.max(0, Math.round((now - oldest) / 1000)) : null,
       gaps_by_reason: gapsByReason,
       gaps_total: gapsTotal,
+      backoff_until: waitingUntil(state, now),
     },
     identity: {
       installation_id: connection ? ((connection as { installation_id?: string }).installation_id ?? connection.gateway_id) : null,

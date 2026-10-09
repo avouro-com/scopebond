@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import type { HookConnection } from "./cloud.js";
-import { ago, readDeliveryState, type DeliveryState } from "./delivery-state.js";
+import { ago, readDeliveryState, waitingUntil, type DeliveryState } from "./delivery-state.js";
 import { cliCommand } from "./version.js";
 
 export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
@@ -85,6 +85,11 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   const age = oldest !== null ? `, oldest from ${ago(oldest, now)}` : "";
   if (!queueError) lines.push(`waiting to send  ${pending} record(s)${age}`);
   if (state.last_error && state.invalid_since === null) lines.push(`last problem     ${state.last_error}`);
+  // The workspace asked this computer to wait (429, or 503 with Retry-After): nothing is sent before then, `flush` included.
+  const waiting = waitingUntil(state, now);
+  if (waiting !== null && pending > 0 && state.invalid_since === null) {
+    lines.push(`next try         after ${new Date(waiting).toISOString()}: the workspace asked this computer to wait; records stay queued and send then`);
+  }
   // Gaps are history (the workspace hears of them on the rules check), so they are shown, not counted as a problem.
   // A hook outage is kept in the same gap counts (so the workspace hears of it), but it is not a record that missed delivery.
   const outages = gapsByReason.hook_unresolvable ?? 0;
@@ -105,8 +110,13 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
     const why = state.last_error ?? "no attempt recorded an error, so the cause is unknown";
     const flush = cliCommand("flush");
     lines.unshift(`NOT DELIVERING: ${since}, and ${pending} record(s) wait, the oldest from ${ago(oldest, now)}.`);
-    lines.push(`next step        run ${flush}: it sends the queue with no time limit and prints what the workspace answers`);
-    problems.push(`${pending} record(s) are not reaching the workspace: ${since} (${why}); they stay queued — run ${flush} to send them now and see the answer`);
+    if (waiting !== null) {
+      // Sending again now changes nothing: the workspace asked to wait, and every delivery path waits for it.
+      problems.push(`${pending} record(s) are not reaching the workspace: ${since} (${why}); they stay queued and send after ${new Date(waiting).toISOString()}, when the wait the workspace asked for ends`);
+    } else {
+      lines.push(`next step        run ${flush}: it sends the queue with no time limit and prints what the workspace answers`);
+      problems.push(`${pending} record(s) are not reaching the workspace: ${since} (${why}); they stay queued — run ${flush} to send them now and see the answer`);
+    }
   }
   return { lines, problems, fix };
 }
