@@ -1,5 +1,13 @@
 # @scopebond/gateway
 
+## 0.17.5
+
+### Patch Changes
+
+- 611d02c: Value scrubbing stays linear on long adversarial text, scope entries accept only dotted action types, and lint clean-ups that change nothing else.
+- Updated dependencies [a17f73b]
+  - @scopebond/verify@0.6.3
+
 ## 0.17.4
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @scopebond/sdk
 
+## 0.1.7
+
+### Patch Changes
+
+- a17f73b: When the gateway answers without JSON, the error `submit()` throws now carries the parse error as its `cause`.
+
 ## 0.1.6
 
 ### Patch Changes
