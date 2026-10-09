@@ -7,7 +7,7 @@ export type {
   ActionRequest, ActionResult, ObservationResult, OverrideHandler, ActionOptions,
 } from "./app.js";
 export { createHttpExecutor, createSupportRefundExecutor } from "./executors.js";
-export type { HttpExecutorOptions, SupportRefundExecutorOptions } from "./executors.js";
+export type { HostLookup, HttpExecutorOptions, SupportRefundExecutorOptions } from "./executors.js";
 export { evaluate } from "./engine.js";
 export type { Decision } from "./engine.js";
 export {

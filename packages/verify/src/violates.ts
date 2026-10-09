@@ -242,8 +242,9 @@ function globMatch(glob: string, s: string): boolean {
   return new RegExp("^" + re + "$").test(s);
 }
 
-/** An HTTP host as a policy compares it: lowercase, without one trailing dot. Null when it is not a bare host name or address
- *  with an optional port (userinfo, a path, a backslash or spaces), which no list can safely match. */
+/** An HTTP host as text: lowercase, without one trailing dot. Null when it is not a bare host name or address
+ *  with an optional port (userinfo, a path, a backslash or spaces), which no list can safely match. Endpoint clauses
+ *  compare `endpointDestination` instead, which also gives every spelling of one address the same form. */
 export function bareHost(host: unknown): string | null {
   if (typeof host !== "string") return null;
   const h = host.trim().toLowerCase().replace(/\.$/, "");
@@ -252,6 +253,97 @@ export function bareHost(host: unknown): string | null {
   if (/^\[[0-9a-f:.]+\](?::\d{1,5})?$/.test(h)) return h;
   // eslint-disable-next-line security/detect-unsafe-regex -- linear: each repeated label must end in "." which the label class excludes, so there is one way to split; input is at most 260 characters
   return /^(?:[a-z0-9_-]+\.)*[a-z0-9_-]+(?::\d{1,5})?$/.test(h) ? h : null;
+}
+
+/** The destination an HTTP host names, as endpoint clauses compare it. */
+export interface EndpointDestination {
+  /** A lowercase name without a trailing dot, a dotted-quad IPv4 address, or a bracketed, compressed IPv6 address. An IPv4
+   *  address written another way (decimal, octal, hex, shortened, or IPv4-mapped IPv6) is its dotted quad. */
+  host: string;
+  /** The port the host was given with, or null when it has none (the scheme's default port). */
+  port: number | null;
+  /** Whether `host` is an IP address rather than a name. */
+  address: boolean;
+  /** Whether the host is this machine: `localhost` or a name under it, 127.0.0.0/8, ::1, or an unspecified address
+   *  (0.0.0.0/8, ::), which a connection reaches as loopback. */
+  loopback: boolean;
+}
+
+// The eight 16-bit pieces of an IPv6 address in the compressed form the URL parser writes, or null.
+function ipv6Pieces(text: string): number[] | null {
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const pieces = (part: string): number[] => (part === "" ? [] : part.split(":").map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN)));
+  const head = pieces(halves[0]);
+  const tail = halves.length === 2 ? pieces(halves[1]) : [];
+  const zeros = 8 - head.length - tail.length;
+  if ([...head, ...tail].some(Number.isNaN) || zeros < 0 || (halves.length === 1 && zeros !== 0)) return null;
+  return [...head, ...new Array<number>(zeros).fill(0), ...tail];
+}
+
+/** The destination an HTTP host (a name or address with an optional port) reaches, as an HTTP client parses it: the
+ *  host is read by the WHATWG URL host parser that `fetch` uses, so case, one trailing dot, and the decimal, octal, hex
+ *  and shortened forms of an IPv4 address give the same host, and an IPv4-mapped IPv6 address is its IPv4 address.
+ *  Null when the host is not a bare name or address with an optional port, which no list can safely match. */
+export function endpointDestination(value: unknown): EndpointDestination | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim().toLowerCase();
+  if (!text || text.length > 260) return null;
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear (no nested repetition) and run only on the at most 260 characters checked above
+  const parts = /^(\[[0-9a-f:.]+\])(?::(\d{1,5}))?$/.exec(text)
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: each repeated label must end in "." which the label class excludes, so there is one way to split; input is at most 260 characters
+    ?? /^((?:[a-z0-9_-]+\.)*[a-z0-9_-]+)\.?(?::(\d{1,5}))?$/.exec(text);
+  if (!parts) return null;
+  const port = parts[2] === undefined ? null : Number(parts[2]);
+  if (port !== null && port > 65535) return null;
+  let host: string;
+  try { host = new URL(`http://${parts[1]}/`).hostname; } catch { return null; }
+  if (host.startsWith("[")) {
+    const p = ipv6Pieces(host.slice(1, -1));
+    if (!p) return null;
+    const mapped = p.slice(0, 5).every((x) => x === 0) && p[5] === 0xffff;
+    if (!mapped) return { host, port, address: true, loopback: p.slice(0, 7).every((x) => x === 0) && (p[7] === 0 || p[7] === 1) };
+    host = `${p[6] >> 8}.${p[6] & 255}.${p[7] >> 8}.${p[7] & 255}`;
+  }
+  const v4 = /^(\d{1,3})\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.exec(host);
+  if (v4) return { host, port, address: true, loopback: v4[1] === "127" || v4[1] === "0" };
+  return { host, port, address: false, loopback: host === "localhost" || host.endsWith(".localhost") };
+}
+
+/** Whether an endpoint_allowlist entry names this destination: the same host and the same port (or neither has one). */
+function allowlistEntryNames(entry: string, dest: EndpointDestination): boolean {
+  const e = endpointDestination(entry);
+  return e !== null && e.host === dest.host && e.port === dest.port;
+}
+
+/** Whether an endpoint_denylist entry covers this destination: the same host, where a loopback name or address stands for
+ *  every loopback destination, and the entry's port when it names one. A destination without a port may use the default
+ *  HTTP or HTTPS port, so an entry for port 80 or 443 covers it. */
+function denylistEntryCovers(entry: string, dest: EndpointDestination): boolean {
+  const e = endpointDestination(entry);
+  if (e === null || (e.loopback ? !dest.loopback : e.host !== dest.host)) return false;
+  return e.port === null || e.port === dest.port || (dest.port === null && (e.port === 80 || e.port === 443));
+}
+
+/** Why an endpoint_denylist clause denies an HTTP call to `host`, or null when it does not. A host or path that cannot
+ *  be compared safely is denied: it may name a denied host another way. */
+function denylistDenial(clause: EvalClause, host: unknown, rawPath: unknown, method: unknown): string | null {
+  const dest = endpointDestination(host);
+  const path = rawPath ?? "/";
+  if (dest === null || typeof path !== "string" || !path.startsWith("/")) return `HTTP ${shown(host)}${shown(rawPath ?? "")} is not a plain host and path`;
+  if (!clause.hosts.some((h: string) => denylistEntryCovers(h, dest))) return null;
+  const pathHit = !clause.paths || clause.paths.length === 0 || clause.paths.some((g: string) => globMatch(g, path));
+  const methodHit = !clause.methods || clause.methods.length === 0 || listHas(clause.methods, method);
+  return pathHit && methodHit ? `HTTP ${shown(host)}${shown(rawPath ?? "")} is denied` : null;
+}
+
+/** The endpoint_denylist clauses of a policy that deny an HTTP call to `host` (a name or address, with an optional port)
+ *  with this path and method, by the same rule as `violates()`. An executor that resolves a name uses it to check each
+ *  address the name resolves to before it sends anything. The policy is one `validatePolicy()` accepts. */
+export function endpointDenylistClauses(policy: Policy, call: { host?: unknown; path?: unknown; method?: unknown }): Clause[] {
+  if (call.host == null) return [];
+  return ((policy.clauses ?? []) as EvalClause[]).filter((clause) => clause.type === "endpoint_denylist" && Array.isArray(clause.hosts)
+    && denylistDenial(clause, call.host, call.path, call.method) !== null);
 }
 
 function inputsHash(policy: Policy, receipts: Receipt[], claimed: Receipt, at: string | undefined): string {
@@ -490,11 +582,12 @@ export function violates(
 
     else if (t === "endpoint_allowlist") {
       if (p.host != null) {
-        // The host is compared as an HTTP client resolves it (case, a trailing dot); one that is not a bare host, or a path
-        // that does not start with "/", could be read as another host and is never allowed.
-        const host = bareHost(p.host);
+        // The host is compared as the destination an HTTP client reaches (case, a trailing dot, the spellings of one
+        // address); one that is not a bare host, or a path that does not start with "/", could be read as another host
+        // and is never allowed. An entry allows exactly its host and port.
+        const dest = endpointDestination(p.host);
         const path = p.path ?? "/";
-        const hostOk = host !== null && clause.hosts.some((h: string) => bareHost(h) === host);
+        const hostOk = dest !== null && clause.hosts.some((h: string) => allowlistEntryNames(h, dest));
         const pathOk = typeof path === "string" && path.startsWith("/")
           && (!clause.paths || clause.paths.length === 0 || clause.paths.some((g: string) => globMatch(g, path)));
         const methodOk = !clause.methods || clause.methods.length === 0 || listHas(clause.methods, p.method);
@@ -504,15 +597,11 @@ export function violates(
 
     else if (t === "endpoint_denylist") {
       if (p.host != null) {
-        const host = bareHost(p.host);
-        const path = p.path ?? "/";
-        // A host or path that cannot be compared safely is treated as denied: it may name a denied host another way.
-        if (host === null || typeof path !== "string" || !path.startsWith("/")) { record(clause, `HTTP ${shown(p.host)}${shown(p.path ?? "")} is not a plain host and path`); continue; }
-        if (clause.hosts.some((h: string) => bareHost(h) === host)) {
-          const pathHit = !clause.paths || clause.paths.length === 0 || clause.paths.some((g: string) => globMatch(g, path));
-          const methodHit = !clause.methods || clause.methods.length === 0 || listHas(clause.methods, p.method);
-          if (pathHit && methodHit) { record(clause, `HTTP ${shown(p.host)}${shown(p.path ?? "")} is denied`); continue; }
-        }
+        // Compared as the destination an HTTP client reaches, ignoring the port unless the entry names one; a listed
+        // loopback name or address denies every loopback destination. A host or path that cannot be compared safely is
+        // denied: it may name a denied host another way.
+        const denial = denylistDenial(clause, p.host, p.path, p.method);
+        if (denial !== null) { record(clause, denial); continue; }
       }
     }
 
