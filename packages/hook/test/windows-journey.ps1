@@ -14,9 +14,11 @@
     3. One action through the hook command Claude Code would run; one record delivered.
     4. npm.cmd install -g the agent; scopebond-agent.cmd autostart on: the Run key and launcher,
        the agent running, its self-check passing, status saying so.
-    5. scopebond-agent.cmd autostart off and npm.cmd uninstall -g: nothing left behind.
+    5. scopebond-agent.cmd autostart off and npm.cmd uninstall -g: nothing left behind; the Apps
+       entry autostart on wrote removes itself.
     6. npx.cmd -y @scopebond/agent setup <workspace> as a new person, twice: the second run
-       changes nothing; then autostart off and uninstall leave nothing running.
+       changes nothing and lists Scopebond in Settings -> Apps; its Uninstall there leaves nothing
+       running, listed or hooked, and keeps the Scopebond folder.
     7. Edge cases: status from the project folder and the home agree; a profile path with a space
        and non-ASCII letters; HOME pointing into OneDrive; Node 22.12 first on PATH is refused
        before anything changes, with the one fix.
@@ -92,6 +94,10 @@ function Find-PlainCommands([string] $Text) {
   $found = @()
   foreach ($m in [regex]::Matches($Text, $PlainCommand)) { $found += $m.Value.Trim() }
   return $found
+}
+
+function Get-AppsEntry {
+  return Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ScopebondAgent' -ErrorAction SilentlyContinue
 }
 
 function Get-RunValue {
@@ -375,6 +381,16 @@ try {
       if ($alive) { Stop-Process -Id $agentPid -Force -ErrorAction SilentlyContinue }
       Assert (-not $alive) "the agent (pid $agentPid) is still running after autostart off and uninstall"
     }
+    Check 'an Apps entry left by npm uninstall -g alone removes itself from Settings -> Apps, and says the agent was gone' {
+      $apps = Get-AppsEntry
+      Assert ($null -ne $apps) 'autostart on did not list Scopebond in Settings -> Apps'
+      $env:SCOPEBOND_NO_PAUSE = '1'
+      try { $un = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d', '/s', '/c', "`"$($apps.QuietUninstallString)`"") -Wait -PassThru -WindowStyle Hidden }
+      finally { Remove-Item Env:SCOPEBOND_NO_PAUSE -ErrorAction SilentlyContinue }
+      # The agent's own uninstall could not run (npm removed it first): not reported as a clean removal.
+      Assert ($un.ExitCode -eq 1) "the Apps entry's uninstall exited $($un.ExitCode), not 1, with the agent already gone"
+      Assert ($null -eq (Get-AppsEntry)) 'Scopebond is still listed in Settings -> Apps'
+    }
   }
 
   # 6. One command to start, as a new person: setup signs in, installs, turns autostart on and
@@ -399,6 +415,10 @@ try {
         Assert ($run -like "*$setupHome*") "the Run value does not start this person's launcher: $run"
         Assert ($first.Out -match 'Scopebond Agent: running') "status did not say running:`n$($first.Out)"
         Assert (@((Get-CloudState).approved_codes).Count -eq $approvedBefore + 1) 'setup did not sign in exactly once'
+        $apps = Get-AppsEntry
+        Assert ($null -ne $apps) "setup did not list Scopebond in Settings -> Apps:`n$($first.Out)"
+        Assert ($apps.DisplayName -eq 'Scopebond Agent' -and $apps.Publisher -eq 'Avouro LLC') "the Apps entry reads '$($apps.DisplayName)' by '$($apps.Publisher)'"
+        Assert ($apps.UninstallString -like "*$setupHome*uninstall-agent.ps1*") "the Apps entry does not run this person's uninstall script: $($apps.UninstallString)"
       }
       Check 'setup a second time changes nothing: no new sign-in, no second hook entry' {
         $second = Invoke-Published 'npx.cmd' @('-y', $AgentPackage, 'setup', $cloud)
@@ -408,21 +428,31 @@ try {
         $entries = @(((Get-Content (Join-Path $setupProfile '.claude\settings.json') -Raw | ConvertFrom-Json).hooks.PreToolUse | ForEach-Object { $_.hooks } | Where-Object { $_.command -match 'scopebond|hook' }))
         Assert ($entries.Count -eq 1) "$($entries.Count) Scopebond hook entries after two runs"
       }
-      Check 'after setup: autostart off and uninstall leave nothing running' {
+      Check 'after setup: Uninstall from Settings -> Apps leaves nothing running, listed or hooked' {
         $agentJson = Join-Path $setupHome 'agent.json'
         $setupPid = $null
         try { $setupPid = (Get-Content $agentJson -Raw | ConvertFrom-Json).pid } catch { }
         $agentCmd = Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue
         if (-not $agentCmd) { $env:PATH = (((& npm.cmd prefix -g) 2>$null | Select-Object -First 1).Trim()) + ";$env:PATH" }
-        $off = Invoke-Published 'scopebond-agent.cmd' @('autostart', 'off')
-        Assert ($off.Code -eq 0) "autostart off exited $($off.Code): $($off.Out)"
-        $un = Invoke-Published 'npm.cmd' @('uninstall', '-g', '@scopebond/agent')
-        Assert ($un.Code -eq 0) "uninstall exited $($un.Code)"
+        # What Windows runs when the person clicks Uninstall: the entry's own command line.
+        $apps = Get-AppsEntry
+        Assert ($null -ne $apps) 'no Apps entry to uninstall from'
+        $un = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d', '/s', '/c', "`"$($apps.QuietUninstallString)`"") -Wait -PassThru -WindowStyle Hidden
+        Assert ($un.ExitCode -eq 0) "the Apps entry's uninstall exited $($un.ExitCode)"
         Start-Sleep -Seconds 2
         $alive = $setupPid -and (Get-Process -Id $setupPid -ErrorAction SilentlyContinue)
         if ($alive) { Stop-Process -Id $setupPid -Force -ErrorAction SilentlyContinue }
         Assert (-not $alive) "the agent (pid $setupPid) is still running"
         Assert ($null -eq (Get-RunValue)) 'the Run value is still there'
+        Assert ($null -eq (Get-AppsEntry)) 'Scopebond is still listed in Settings -> Apps'
+        $settingsFile = Join-Path $setupProfile '.claude\settings.json'
+        if (Test-Path $settingsFile) {
+          $hooks = @(((Get-Content $settingsFile -Raw | ConvertFrom-Json).hooks.PreToolUse | ForEach-Object { $_.hooks } | Where-Object { $_.command -match 'scopebond' }))
+          Assert ($hooks.Count -eq 0) "$($hooks.Count) Scopebond hook entries are left in the Claude Code settings"
+        }
+        $global = ((& npm.cmd ls -g --depth=0 2>$null) -join "`n")
+        Assert (-not ($global -match '@scopebond/agent')) "npm still lists the agent:`n$global"
+        Assert (Test-Path (Join-Path $setupHome 'cloud.json')) 'the Scopebond folder went too (only --purge removes it)'
       }
     } finally {
       Remove-Item Env:SCOPEBOND_AGENT_INSTALL_SPEC -ErrorAction SilentlyContinue
@@ -449,8 +479,9 @@ try {
       Invoke-IsolatedJourney -ProfileDir (Join-Path $work "Users\$person") -Name 'unicode home'
     }
     if (-not $SkipAgent) {
-      Check "the agent starts with autostart in a profile folder with non-ASCII letters ($person)" {
+      Check "the agent starts with autostart in a profile folder with non-ASCII letters ($person), and Uninstall in Settings -> Apps removes it" {
         $saved = Save-Env
+        $agentPid2 = $null
         try {
           $profileDir = Join-Path $work "Users\$person"
           Set-Profile $profileDir
@@ -468,10 +499,29 @@ try {
           $log = Join-Path $home2 'agent.log'
           Assert $running "the agent did not start in $profileDir`n$($on.Out)`nlog exists: $(Test-Path $log)"
           Assert (Test-Path $log) "the launcher wrote no log beside itself in $home2"
-          $off = Invoke-Published 'scopebond-agent.cmd' @('autostart', 'off')
-          Assert ($off.Code -eq 0) "autostart off exited $($off.Code)"
+          # Uninstall from Settings -> Apps in this profile: Windows PowerShell 5.1 must read the script's non-ASCII paths.
+          $apps = Get-AppsEntry
+          Assert ($null -ne $apps) "autostart on did not list Scopebond in Settings -> Apps in $profileDir"
+          Assert ($apps.UninstallString -like "*$home2*uninstall-agent.ps1*") "the Apps entry does not run this profile's script: $($apps.UninstallString)"
+          try { $agentPid2 = (Get-Content (Join-Path $home2 'agent.json') -Raw | ConvertFrom-Json).pid } catch { }
+          $env:SCOPEBOND_NO_PAUSE = '1'
+          $un = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d', '/s', '/c', "`"$($apps.QuietUninstallString)`"") -Wait -PassThru -WindowStyle Hidden
+          Assert ($un.ExitCode -eq 0) "the Apps entry's uninstall exited $($un.ExitCode) in a profile folder with non-ASCII letters"
+          Start-Sleep -Seconds 2
+          $alive = $agentPid2 -and (Get-Process -Id $agentPid2 -ErrorAction SilentlyContinue)
+          Assert (-not $alive) "the agent (pid $agentPid2) is still running after Uninstall from Settings -> Apps"
+          Assert ($null -eq (Get-RunValue)) 'the Run value is still there'
+          Assert ($null -eq (Get-AppsEntry)) 'Scopebond is still listed in Settings -> Apps'
+          $global = ((& npm.cmd ls -g --depth=0 2>$null) -join "`n")
+          Assert (-not ($global -match '@scopebond/agent')) "npm still lists the agent:`n$global"
+        } finally {
+          Remove-Item Env:SCOPEBOND_NO_PAUSE -ErrorAction SilentlyContinue
+          if ($agentPid2) { Stop-Process -Id $agentPid2 -Force -ErrorAction SilentlyContinue }
+          if (Get-Command 'scopebond-agent.cmd' -ErrorAction SilentlyContinue) { Invoke-Published 'scopebond-agent.cmd' @('autostart', 'off') | Out-Null }
           Invoke-Published 'npm.cmd' @('uninstall', '-g', '@scopebond/agent') | Out-Null
-        } finally { Restore-Env $saved }
+          Remove-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ScopebondAgent' -Recurse -Force -ErrorAction SilentlyContinue
+          Restore-Env $saved
+        }
       }
     }
     Check 'HOME pointing into OneDrive: everything stays in the Windows profile (USERPROFILE)' {

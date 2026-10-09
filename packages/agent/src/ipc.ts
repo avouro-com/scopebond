@@ -1,7 +1,8 @@
 // The agent's local control channel: HTTP with a random token, over a named pipe on Windows (a random name) or a Unix
-// socket in a folder only this user can open, and for one more release also on 127.0.0.1 at a random port (the PowerShell
-// tray uses it; SCOPEBOND_AGENT_LOOPBACK=0 turns it off). The pipe or socket, the port, the token and the process id are
-// written to agent.json in the Scopebond home, which is how the CLI, the hook's override window and the tray find it.
+// socket in a folder only this user can open. npm installs also listen on 127.0.0.1 at a random port, because the
+// PowerShell tray and hooks before the pipe use it (SCOPEBOND_AGENT_LOOPBACK=0 turns it off); the signed install with the
+// native tray does not (its tray and its hook use the pipe). The pipe or socket, the port, the token and the process id
+// are written to agent.json in the Scopebond home, which is how the CLI, the hook's override window and the tray find it.
 // A loopback port can be reached by any program on the computer; the pipe's name and the socket's folder cannot be found
 // or opened by another user. Every request must carry the token either way.
 
@@ -37,8 +38,10 @@ export function readEndpoint(dir: string): AgentEndpoint | null {
   try { return JSON.parse(readFileSync(file, "utf8")) as AgentEndpoint; } catch { return null; }
 }
 
-/** Start the control server. `routes` maps "METHOD /path" to a handler. */
-export async function startControl(dir: string, version: string, routes: Record<string, Handler>): Promise<{ server: Server; endpoint: AgentEndpoint; close(): Promise<void> }> {
+/** Start the control server. `routes` maps "METHOD /path" to a handler. `loopback`: also listen on 127.0.0.1 (default:
+ *  unless SCOPEBOND_AGENT_LOOPBACK=0); it is used anyway when the pipe or socket could not be made, or nothing could reach
+ *  the agent. */
+export async function startControl(dir: string, version: string, routes: Record<string, Handler>, options: { loopback?: boolean } = {}): Promise<{ server: Server; endpoint: AgentEndpoint; close(): Promise<void> }> {
   const token = randomBytes(24).toString("base64url");
   const expected = Buffer.from(token);
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
@@ -67,8 +70,9 @@ export async function startControl(dir: string, version: string, routes: Record<
     await new Promise<void>((resolve, reject) => { local.once("error", reject); local.listen(socketPath, () => resolve()); });
     if (process.platform !== "win32") chmodSync(socketPath, 0o600);
   } catch { socket = null; }
-  // Loopback for one more release (the PowerShell tray), unless turned off; always when the pipe could not be made.
-  const loopback = process.env.SCOPEBOND_AGENT_LOOPBACK !== "0" || socket === null;
+  // Loopback where something still needs it (the PowerShell tray, older hooks), unless turned off; always when the pipe
+  // could not be made.
+  const loopback = (options.loopback ?? process.env.SCOPEBOND_AGENT_LOOPBACK !== "0") || socket === null;
   const server = createServer(listener);
   if (loopback) await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => resolve()); });
   const address = loopback ? server.address() : null;

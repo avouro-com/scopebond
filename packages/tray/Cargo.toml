@@ -1,0 +1,49 @@
+[package]
+name = "scopebond-tray"
+version = "0.1.0"
+description = "The Scopebond tray for Windows: the icon, menu and status panel for the Scopebond Agent"
+authors = ["Avouro LLC"]
+license = "Apache-2.0"
+repository = "https://github.com/avouro-com/scopebond"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[lib]
+name = "scopebond_tray"
+path = "src/lib.rs"
+
+[[bin]]
+name = "scopebond-tray"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.1", features = [] }
+
+[dependencies]
+# custom-protocol: the panel is served from the files built into the program, never from a development server.
+tauri = { version = "=2.12.1", features = ["tray-icon", "custom-protocol"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# A second start (the Start-menu entry) shows this tray's icon and panel instead of a second tray.
+tauri-plugin-single-instance = "=2.5.2"
+
+[target.'cfg(windows)'.dependencies]
+# Windows notifications under the installer's AppUserModelID.
+tauri-winrt-notification = "=0.8.1"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_DataExchange",
+  "Win32_System_IO",
+  "Win32_System_Memory",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

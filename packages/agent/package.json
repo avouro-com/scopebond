@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/agent",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Free, open-source Scopebond Agent companion: deliver queued records, maintain rules and connections, and report computer health to the separate proprietary Scopebond Cloud workspace.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",

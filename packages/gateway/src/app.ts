@@ -115,7 +115,13 @@ export class ExecutorInputError extends Error {
 /** Asked once when policy denies an action (never for the kill switch or the dispatch boundary): return the override record when
  *  a person allows it, or null to keep the denial. The caller is responsible for who may answer; the gateway only records it. */
 export type OverrideHandler = (ctx: { verdict: Verdict; action_id: string; intent: Intent; intent_hash: string }) => Promise<OverrideRecord | null>;
-export interface ActionOptions { override?: OverrideHandler }
+export interface ActionOptions {
+  override?: OverrideHandler;
+  /** The action already happened before it was reported (an agent that tells the hook about an edit only once it is
+   *  written). Nothing is dispatched and no override is asked; a policy denial is signed as `observed_after`
+   *  (`executed: true`): a violation recorded, not prevented. */
+  observedAfter?: boolean;
+}
 
 export interface Gateway {
   app: Hono;
@@ -233,7 +239,11 @@ export function createGateway(config: GatewayConfig): Gateway {
     // Check-only (M0): never dispatch; an allowed action is a cooperative allow.
     // The flag defaults to the gateway's configured mode and can be forced per
     // call by `check()`, but is never implicitly turned on.
-    const checkOnly = opts?.checkOnly ?? (config.mode === "check_only");
+    const observedAfter = opts?.observedAfter === true;
+    // An action that already happened is never dispatched: allowed, it is a cooperative allow like a check-only one.
+    const checkOnly = (opts?.checkOnly ?? (config.mode === "check_only")) || observedAfter;
+    // What a denial is signed as: prevented, or (for an action reported after it ran) recorded after the fact.
+    const deniedState: ExecutionState = observedAfter ? "observed_after" : "denied";
     assertValidIntent(req.intent);
     const ts = now();
     const ih = intentHash(req.intent);
@@ -279,7 +289,8 @@ export function createGateway(config: GatewayConfig): Gateway {
     ) => ({
       ...receiptContext,
       realtime_result: realtimeResult,
-      executed: executionState === "executed",
+      // An action recorded after it already ran did happen, so it counts as executed.
+      executed: executionState === "executed" || executionState === "observed_after",
       execution_ref: executionRef,
       execution: {
         state: executionState,
@@ -317,9 +328,9 @@ export function createGateway(config: GatewayConfig): Gateway {
         if (attempt.duplicate) return await duplicateActionResult(actionId);
       }
       const receipt = await buildReceipt({
-        ...receiptFields("deny", "denied", "none", null),
+        ...receiptFields("deny", deniedState, "none", null),
       }, attester);
-      if (store.finalizeAction && store.reserveAction) await store.finalizeAction(actionId, receipt, "denied");
+      if (store.finalizeAction && store.reserveAction) await store.finalizeAction(actionId, receipt, deniedState);
       else await store.put(receipt);
       return { allowed: false, reason: "kill switch active (fail closed)", receipt };
     }
@@ -346,7 +357,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     // A person may override a policy denial (warn mode). Asked only for a policy verdict, never while the kill switch is on;
     // the overridden action still goes through the dispatch boundary below, and a later denial drops the override.
     let override: OverrideRecord | null = null;
-    if (!d.allow && d.realtime_result === "deny" && opts?.override && !(await isStopped(req.intent.signer))) {
+    if (!d.allow && d.realtime_result === "deny" && opts?.override && !observedAfter && !(await isStopped(req.intent.signer))) {
       override = await opts.override({ verdict: d.verdict, action_id: actionId, intent: req.intent, intent_hash: ih });
       if (override) d = { ...d, allow: true, realtime_result: "approved", clause_mode: "enforce" };
     }
@@ -373,7 +384,7 @@ export function createGateway(config: GatewayConfig): Gateway {
 
     let ref: string | null = null;
     let output: unknown;
-    let executionState: ExecutionState = "denied";
+    let executionState: ExecutionState = deniedState;
     let assertion: "none" | "gateway_simulation" | "adapter_reported_success" | "adapter_reported_failure" | "adapter_outcome_unknown" = "none";
     const outboundDisabled = config.outboundExecution === false && executor.mode === "dispatch";
     const stoppedBeforeDispatch = d.allow && (outboundDisabled || await isStopped(req.intent.signer));
@@ -442,7 +453,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     if (!existing?.terminal_receipt) throw new DuplicateActionError();
     const executionState = existing.terminal_receipt.payload.execution.state;
     return {
-      allowed: executionState !== "denied",
+      allowed: executionState !== "denied" && executionState !== "observed_after",
       reason: executionState === "outcome_unknown"
         ? "existing action outcome remains unknown"
         : "existing result returned for duplicate action id",

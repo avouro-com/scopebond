@@ -170,6 +170,36 @@ counts add up to `receipt_count`; each repeat lies in the window and repeats at 
 window, that none is a deny, override, approval or timeout, and that the totals per
 action type and result match. Also: `summaryRoot`, `summaryOrder`, `summarySigningInput`.
 
+## Evidence-chain heads and anchors (`@scopebond/verify/chain`)
+
+A Scopebond workspace keeps one evidence chain per environment: a sequence number for
+every record it admits, and evidence segments (compressed canonical JSON, each with a
+Merkle root over its records' leaves) that name the digest of the segment before them.
+Every delivery answer carries the chain's head: the newest sequence number and the newest
+segment's digest and last sequence number, under an opaque `anchor_id` (a salted hash,
+never a workspace name or id). The computer keeps these heads, and each day's newest head
+per chain is published as a signed list in a public, append-only log. Heads held outside
+the workspace are what make a deleted, truncated or re-chained segment visible: the
+segment files alone can be rewritten into a chain that verifies.
+
+```js
+import { verifyAnchorList, checkChainHeads, verifySegmentChain } from "@scopebond/verify/chain";
+
+await verifyAnchorList(list);                       // shape, key id, list and head signatures
+checkChainHeads(keptHeads, list.heads);             // no chain goes back; one position, one segment
+await verifySegmentChain(segmentTexts, keptHeads, { publicKey: computerKey }); // links, gaps, leaves, roots
+```
+
+A head is signed with Ed25519 over `"scopebond:chain-head/v1\n"` followed by the RFC 8785
+canonical head; a list over `"scopebond:chain-anchors/v1\n"` followed by the canonical
+list without `signed` and `signature`. The list publishes its key; the key id is `seg_`
+plus the first 16 hex of SHA-256 over the base64 SPKI, so a changed key shows. A list or
+head marked `signed: false` was published without a key: it can still be compared, but
+does not show who published it. With `publicKey`, `verifySegmentChain` checks the
+signature of every record and summary that names that key and counts the others (an
+environment's other computers sign with their own keys). Also: `verifyChainHeadSignature`,
+`isSignedChainHead`, `segmentKeyId`.
+
 ## Examples
 
 Runnable end to end against a real gateway (asserted in CI by `pnpm run test:examples`):

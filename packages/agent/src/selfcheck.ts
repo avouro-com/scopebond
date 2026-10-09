@@ -13,6 +13,7 @@ import {
   type Harness, type HookConnection,
 } from "@scopebond/hook";
 import { autostartHealth } from "./autostart.js";
+import { installKind } from "./native-update.js";
 
 export interface SelfCheckItem { id: string; ok: boolean; detail?: string }
 
@@ -56,7 +57,9 @@ export async function runSelfCheck(
     const res = await (options.fetchImpl ?? fetch)(new URL("/v1/self-check", connection.url).toString(), {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
       headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
-      body: JSON.stringify({ signature, day, checks, hook_version: hookVersion(), agent_version: agentVersion }),
+      // install_kind: how this agent was installed (npm, per-user or per-machine signed installer), so the workspace can say
+      // how the computer updates and is removed. A workspace that does not read it ignores it.
+      body: JSON.stringify({ signature, day, checks, hook_version: hookVersion(), agent_version: agentVersion, install_kind: installKind() }),
     });
     // A workspace that does not offer the self-check yet answers 404: the computer's own checks still count; the signed
     // workspace part is simply not available there.

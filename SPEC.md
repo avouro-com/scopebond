@@ -67,7 +67,7 @@ pin the exact bytes for nested key order, number formatting and Unicode.
 | `policy_hash` / `policy_ref` / `policy_version` | The registered policy's digest, id and version the decision was made against. |
 | `verifier_version` | The `violates()` verifier version that produced the verdict. |
 | `realtime_result` | The decision: `allow`, `deny`, `approved`, `timeout`, or `not_evaluated`. |
-| `executed` | Whether the gateway itself executed the action (see execution states). |
+| `executed` | Whether the action ran: the gateway executed it, or it was recorded after it already ran (see execution states). |
 | `execution` | `{ state, assertion, reference, external_effect }` — see below. |
 | `redaction` | `{ profile: "scopebond:minimized-intent/v1", paths }` — which fields were minimized before signing. Receipts carry no file contents, prompts or secrets. |
 | `authorization` | The identity mode: `authenticated`, `insecure_development`, `boundary`, or `pep`. |
@@ -89,6 +89,7 @@ pin the exact bytes for nested key order, number formatting and Unicode.
 | `executed` | The gateway executed the action (`executed: true`). |
 | `failed` | Execution was attempted and failed. |
 | `outcome_unknown` | An ambiguous result (e.g. an adapter timeout); never assumed successful. |
+| `observed_after` | A violation recorded after the action already ran (an agent that reports an edit only once it is written): `realtime_result: deny`, `executed: true`, `assertion: none`. Recorded, not prevented; never counted as a block. |
 
 ### Evidence classes and authorization modes
 

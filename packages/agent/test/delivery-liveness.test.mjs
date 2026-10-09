@@ -73,6 +73,8 @@ function computer(url) {
     expires_at: new Date(Date.now() + 80 * 86_400_000).toISOString(),
   };
   writeFileSync(join(dir, "cloud.json"), JSON.stringify(connection));
+  // These tests watch individual records leave, so the computer sends every receipt in full (not the standard summaries).
+  writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ evidence_detail: "full" }));
   return { dir, connection };
 }
 

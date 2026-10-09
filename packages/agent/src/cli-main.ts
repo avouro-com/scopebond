@@ -10,10 +10,11 @@
 //   scopebond-agent autostart on|off    start with this user's sign-in, or stop doing so (off also stops it now)
 //   scopebond-agent stop                stop the running agent (autostart still starts it at the next sign-in)
 //   scopebond-agent uninstall [--purge] autostart off, stop, the hook's uninstall (tells the workspace); what the installer runs
+//   scopebond-agent version             this program's version and the hook it carries (an update checks the new one starts)
 
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { hookSelfCommand, isEphemeralPath, userHome } from "@scopebond/hook";
+import { hookSelfCommand, hookVersion, isEphemeralPath, userHome } from "@scopebond/hook";
 import { computerStatus } from "./agent.js";
 import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
@@ -21,6 +22,9 @@ import { agentCliPath } from "./self.js";
 import { runSetup } from "./setup.js";
 import { agentVersion } from "./update.js";
 import { writeOutputTo } from "./log-file.js";
+import { removeAppsEntry, writeAppsEntry } from "./apps-entry.js";
+import { installKind } from "./native-update.js";
+import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
 
 let cmd = "help";
@@ -63,6 +67,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       process.on("SIGTERM", stop);
       return;
     }
+    case "upkeep": {
+      // Internal: the agent runs its local store upkeep through this, in a process of its own.
+      upkeepCommand(dir, rest);
+      return;
+    }
+    case "version":
+    case "--version":
+      console.log(`agent/${agentVersion()} hook/${hookVersion()}`);
+      return;
     case "status": {
       const live = await callAgent(dir, "GET", "/status") as (ReturnType<typeof computerStatus> & { agent?: AgentReport | null }) | null;
       const status = { ...(live ?? { ...computerStatus(dir), agent: null }), autostart: autostartHealth(dir) };
@@ -118,6 +131,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // The Scopebond folder (keys, receipts) stays unless --purge.
       console.log(disableAutostart(dir));
       if (await stopRunning()) console.log("Stopped the running Scopebond Agent.");
+      const listed = removeAppsEntry(dir);
+      if (listed) console.log(listed);
       const [program, args] = hookSelfCommand(["uninstall", "--yes", ...(rest.includes("--purge") ? ["--purge"] : [])]);
       const removal = spawnSync(program, args, { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: dir } });
       process.exitCode = removal.status ?? 1;
@@ -133,6 +148,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         return;
       }
       console.log(on ? enableAutostart(dir, agentCliPath()) : disableAutostart(dir));
+      // An npm install is listed in Settings -> Apps from here on (the signed installer has its own entry).
+      if (on && installKind() === "npm") {
+        try { const listed = writeAppsEntry(dir, { version: agentVersion(), cli: agentCliPath() }); if (listed) console.log(listed); }
+        catch (error) { console.error(`Could not list Scopebond in Settings -> Apps: ${(error as Error).message}`); }
+      }
       if (!on) {
         // Off means off: an agent left running would keep going until sign-out, even after an uninstall.
         if (await stopRunning()) console.log("Stopped the running Scopebond Agent.");

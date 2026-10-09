@@ -48,7 +48,7 @@ test("the agent answers over its pipe or socket, with the token, also with loopb
   assert.equal(await callAgent(dir, "GET", "/status", undefined, 1_000), null, "nothing answers once it stopped");
 });
 
-test("loopback stays on by default for one release, for the tray that still uses it", async () => {
+test("loopback stays on by default for npm installs, for the PowerShell tray that still uses it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-ipc-loop-"));
   const control = await startControl(dir, "agent/test", { "GET /status": () => ({ ok: true }) });
   try {
@@ -81,5 +81,21 @@ test("a caller that drops the connection mid-body ends that request, not the age
   } finally {
     process.off("unhandledRejection", onRejection);
     await control.close();
+  }
+});
+
+test("beside the native tray there is no loopback port, whatever the environment says", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-ipc-tray-"));
+  const saved = process.env.SCOPEBOND_AGENT_LOOPBACK;
+  delete process.env.SCOPEBOND_AGENT_LOOPBACK;
+  const control = await startControl(dir, "agent/test", { "GET /status": () => ({ ok: true }) }, { loopback: false });
+  try {
+    const endpoint = readEndpoint(dir);
+    assert.equal(endpoint.port, 0, "nothing listens on 127.0.0.1");
+    assert.ok(endpoint.socket, "the pipe or socket is the one way in");
+    assert.deepEqual(await callAgent(dir, "GET", "/status"), { ok: true });
+  } finally {
+    await control.close();
+    if (saved !== undefined) process.env.SCOPEBOND_AGENT_LOOPBACK = saved;
   }
 });

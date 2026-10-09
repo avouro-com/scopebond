@@ -7,7 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createCloudExporter } from "@scopebond/gateway";
-import { SqliteCloudOutbox } from "@scopebond/gateway/node";
+import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import {
   LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, hookVersion, ingestUrl,
@@ -22,9 +22,14 @@ export interface CycleOptions {
   now?: () => number;
   /** Per-request timeout for the workspace's rules check, in milliseconds. */
   timeoutMs?: number;
+  /** How long one cycle sends before it moves on to the rules check (default one minute); the rest is sent next cycle. */
+  deliveryMs?: number;
   /** Per-request timeout for each delivery request, its answer included (default 30 s). */
   deliveryTimeoutMs?: number;
 }
+
+/** One cycle sends for at most this long, so a long queue never holds up the rules check and the credential renewal. */
+export const CYCLE_DELIVERY_MS = 60_000;
 
 export interface CycleResult {
   at: number;
@@ -36,6 +41,8 @@ export interface CycleResult {
   missingHookEntries: Harness[];
   /** A request from the workspace's computer page, carried on this cycle's rules check. */
   requested: "flush" | "self_check" | null;
+  /** Records still waiting because this cycle's sending time ran out (not because the workspace refused them). */
+  more: boolean;
 }
 
 /** The agents on this computer whose user-level settings should hold the Scopebond hook. */
@@ -51,7 +58,7 @@ export function missingHookEntries(harnesses: Harness[] = expectedHarnesses()): 
 export async function runCycle(options: CycleOptions): Promise<CycleResult> {
   const now = options.now ?? Date.now;
   const dir = options.dir;
-  const result: CycleResult = { at: now(), connected: false, delivered: 0, pending: 0, deliveryError: null, rules: "skipped", missingHookEntries: [], requested: null };
+  const result: CycleResult = { at: now(), connected: false, delivered: 0, pending: 0, deliveryError: null, rules: "skipped", missingHookEntries: [], requested: null, more: false };
   try { result.missingHookEntries = missingHookEntries(); } catch { /* reported as none */ }
   const connection = loadConnection(dir);
   if (!connection) return result;
@@ -71,11 +78,16 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
       url: ingestUrl(connection), credential: connection.credential, outbox,
       flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries, requestTimeoutMs: options.deliveryTimeoutMs ?? 30_000,
       ...(sequenceProof ? { sequenceProof } : {}),
+      // The chain head each answer carries is kept beside the hook's receipts (chain-heads.json).
+      onChainHead: chainHeadRecorder(join(dir, CHAIN_HEADS_FILE)),
     });
     try {
       const lastSuccess = exporter.status().lastSuccessAt;
-      await exporter.flush();
+      const started = Date.now();
+      const deliveryMs = options.deliveryMs ?? CYCLE_DELIVERY_MS;
+      await exporter.flush({ maxMs: deliveryMs });
       const status = exporter.status();
+      result.more = status.pending > 0 && status.lastError === null && Date.now() - started >= deliveryMs;
       recordDeliveryAttempt(dir, status, now(), lastSuccess);
       result.pending = status.pending;
       result.delivered = Math.max(0, before - status.pending);

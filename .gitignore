@@ -49,3 +49,8 @@ tmp/
 **/receipts.db
 packages/**/.claude/
 *.tgz
+
+# The native tray (packages/tray): Cargo's build folder, and what build.rs and Tauri's build step write
+packages/tray/target/
+packages/tray/dist/
+packages/tray/gen/

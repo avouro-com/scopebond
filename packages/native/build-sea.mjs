@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { keyId } from "./manifest.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "build");
@@ -18,6 +19,26 @@ const windows = process.platform === "win32";
 const exe = join(out, windows ? "scopebond-agent.exe" : "scopebond-agent");
 const version = (pkg) => JSON.parse(readFileSync(join(here, "..", pkg, "package.json"), "utf8")).version;
 export const FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
+
+/** The updater keys, as the JSON text the agent reads: updater-keys.json ([{ kid, key, not_after }]) when it exists, else
+ *  the one key in updater-public-key.txt with no last day; `undefined` when there is neither. */
+export function updaterKeysDefine(folder = here) {
+  const list = join(folder, "updater-keys.json");
+  const single = join(folder, "updater-public-key.txt");
+  let keys = null;
+  if (existsSync(list)) keys = JSON.parse(readFileSync(list, "utf8"));
+  else if (existsSync(single)) {
+    const key = readFileSync(single, "utf8").trim();
+    keys = [{ kid: keyId(key), key, not_after: null }];
+  }
+  if (!Array.isArray(keys) || !keys.length) return "undefined";
+  for (const k of keys) {
+    if (typeof k?.key !== "string" || !k.key) throw new Error("updater-keys.json: every entry needs a key");
+    if (k.kid !== undefined && k.kid !== keyId(k.key)) throw new Error(`updater-keys.json: kid ${k.kid} is not the id of its key (${keyId(k.key)})`);
+    if (k.not_after != null && Number.isNaN(Date.parse(k.not_after))) throw new Error(`updater-keys.json: not_after ${k.not_after} is not a date`);
+  }
+  return JSON.stringify(JSON.stringify(keys.map((k) => ({ kid: keyId(k.key), key: k.key, not_after: k.not_after ?? null }))));
+}
 
 export async function bundle() {
   rmSync(out, { recursive: true, force: true });
@@ -32,8 +53,9 @@ export async function bundle() {
       "import.meta.url": "__sbUrl",
       __SCOPEBOND_HOOK_VERSION__: JSON.stringify(version("hook")),
       __SCOPEBOND_AGENT_VERSION__: JSON.stringify(version("agent")),
-      // The updater key's public half (updater-public-key.txt), when there is one; without it the build never updates itself.
-      __SCOPEBOND_UPDATER_KEY__: existsSync(join(here, "updater-public-key.txt")) ? JSON.stringify(readFileSync(join(here, "updater-public-key.txt"), "utf8").trim()) : "undefined",
+      // The updater keys this build trusts (updater-keys.json, or the single updater-public-key.txt), when there are any;
+      // without them the build never updates itself.
+      __SCOPEBOND_UPDATER_KEYS__: updaterKeysDefine(),
     },
     banner: { js: 'var __sbUrl = require("node:url").pathToFileURL(process.execPath).href;' },
     minify: false, keepNames: true, sourcemap: "external", metafile: true, logLevel: "silent",
