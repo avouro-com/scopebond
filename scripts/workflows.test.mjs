@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const workflowsDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows");
-const NPM_SECRET = /secrets\.NPM_TOKEN\w*/;
+const NPM_SECRET = /secrets\.(?:NPM_TOKEN\w*|\w*_NPM_TOKEN)\b/;
 const AUTOMATION_SECRET = /secrets\.PERSONAL_ACCESS_TOKEN/;
 
 const indentOf = (line) => line.length - line.trimStart().length;
@@ -72,6 +72,12 @@ function section(text, key) {
   return out.join("\n");
 }
 
+/** The trigger names under the top-level `on:` key. */
+function onTriggers(top) {
+  return Object.fromEntries(section(top, "on").split("\n").filter((line) => indentOf(line) === 2)
+    .map((line) => [line.trim().replace(/:.*$/, ""), true]));
+}
+
 const isCheckout = (step) => /uses:\s*actions\/checkout@/.test(step);
 const workflowNames = () => readdirSync(workflowsDir).filter((name) => /\.ya?ml$/.test(name));
 
@@ -104,8 +110,17 @@ test("publishing runs only for the merged Version packages pull request with no 
   const release = readWorkflow("release.yml");
   const publishJob = release.jobs.find((job) => job.steps.some((step) => NPM_SECRET.test(step)));
   const condition = publishJob.header.match(/^ {4}if: (.*)$/m)?.[1] ?? "";
-  assert.match(condition, /hasChangesets == 'false'/, "release.yml: no publish while changesets are pending");
-  assert.match(condition, /versionMerge == 'true'/, "release.yml: publish only for the Version packages merge");
+  // select-mode answers "publish" only when no changesets are pending and some version is missing from npm.
+  assert.match(condition, /needs\.version\.outputs\.mode == 'publish' && /, "release.yml: no publish while changesets are pending");
+  // A push publishes only as the Version packages merge; the one other way in is a maintainer's manual run on main.
+  const merge = condition.replace(/^.*?&& /, "");
+  assert.equal(merge, "(needs.check.outputs.versionMerge == 'true' || github.event_name == 'workflow_dispatch')",
+    "release.yml: publish only for the Version packages merge (or a manual re-run)");
+  assert.deepEqual(Object.keys(onTriggers(release.top)).sort(), ["push", "workflow_dispatch"], "release.yml: no other trigger reaches publish");
+  const pack = release.jobs.find((job) => job.steps.some((step) => /changesets\/action\/pack@/.test(step)));
+  assert.ok(pack, "release.yml: a job packs the planned packages");
+  assert.equal(pack.header.match(/^ {4}if: (.*)$/m)?.[1], condition, "release.yml: packing runs under the same condition");
+  assert.ok(publishJob.header.includes("- pack") || /needs: \[[^\]]*\bpack\b/.test(publishJob.header), "release.yml: publish takes the packed tarballs");
   const versionJob = release.jobs.find((job) => job.steps.some((step) => /versionMerge=/.test(step)));
   assert.ok(versionJob, "release.yml: a step works out whether this push is the Version packages merge");
   const check = versionJob.steps.find((step) => /versionMerge=/.test(step));
@@ -119,6 +134,22 @@ test("publishing runs only for the merged Version packages pull request with no 
       assert.doesNotMatch(step, NPM_SECRET, "release.yml: the version step has no npm token");
     }
   }
+});
+
+test("npm trusted publishing: only the publish job can ask for an OIDC token, with an npm that supports it", () => {
+  const release = readWorkflow("release.yml");
+  const publishJob = release.jobs.find((job) => job.steps.some((step) => NPM_SECRET.test(step)));
+  for (const job of release.jobs) {
+    if (job === publishJob) assert.match(job.header, /id-token: write/, "release.yml: the publish job can use OIDC");
+    else assert.doesNotMatch(job.header, /id-token: write/, `release.yml ${job.name}: no OIDC token outside the publish job`);
+  }
+  assert.match(publishJob.header, /name: npm-publish/, "release.yml: the trusted publisher's environment");
+  const npm = publishJob.steps.join("\n").match(/npm install -g [^\n]*npm@(\d+)\.(\d+)\.(\d+)/);
+  assert.ok(npm, "release.yml: the publish job pins its npm version");
+  const [major, minor, patch] = npm.slice(1).map(Number);
+  assert.ok(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))), "trusted publishing needs npm 11.5.1 or later");
+  const build = release.jobs.filter((job) => job.steps.some((step) => /-r build/.test(step)));
+  for (const job of build) assert.doesNotMatch(job.header + job.steps.join("\n"), /secrets\.|^ {4}environment:/m, `release.yml ${job.name}: the build has no secrets`);
 });
 
 test("release installs run no dependency scripts and restore no shared cache", () => {
