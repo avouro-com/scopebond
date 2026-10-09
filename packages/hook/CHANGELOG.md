@@ -1,5 +1,15 @@
 # @scopebond/hook
 
+## 0.21.5
+
+### Patch Changes
+
+- 0225f33: The digest key and the observation binding key are now created exclusively with owner-only permissions, and a damaged one is replaced atomically, so a file or link placed at the path beforehand never receives the key; config and export files are read without a separate existence check.
+- faacb85: A heartbeat is queued only while its session is still active, checked in the same database transaction as the write, so a session ended by another hook process at that moment no longer gets a heartbeat after its stop.
+- 9ed82ed: A stored Cloud connection is used only when its workspace address is HTTPS (or localhost), the same rule `login` applies, so the machine credential is never sent in clear even if `cloud.json` was edited by hand.
+- Updated dependencies [0225f33]
+  - @scopebond/gateway@0.17.3
+
 ## 0.21.4
 
 ### Patch Changes
