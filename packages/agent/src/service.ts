@@ -143,11 +143,10 @@ export function handoverPlan(o: {
   const launcher = launcherPath(o.dir, o.platform);
   const env = { ...o.env, [AFTER_PID_ENV]: String(o.pid), [AGENT_LOG_ENV]: join(o.dir, "agent.log") };
   if (o.launcherText !== null && launcherIsCurrent(o.launcherText, o.platform)) {
-    if (o.platform === "win32") {
-      const [command, args] = startCommands(launcher, o.platform)[1];
-      return { kind: "spawn", command, args, env, verbatim: true };
-    }
-    return { kind: "spawn", command: "/bin/sh", args: [launcher], env, verbatim: false };
+    if (o.platform !== "win32") return { kind: "spawn", command: "/bin/sh", args: [launcher], env, verbatim: false };
+    let start: [string, string[]] | undefined;
+    try { start = startCommands(launcher, o.platform)[1]; } catch { /* a launcher path cmd.exe would misread: start directly */ }
+    if (start) return { kind: "spawn", command: start[0], args: start[1], env, verbatim: true };
   }
   return {
     kind: "spawn", command: o.execPath, args: o.singleExecutable ? ["run"] : ["--disable-warning=ExperimentalWarning", o.cli, "run"], verbatim: false,

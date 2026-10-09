@@ -279,7 +279,9 @@ folder's own setup takes precedence over your sign-in without being connected.
 the hook in your user settings and a project's, twice in one file, or an enabled Claude Code plugin
 beside a settings entry. Every action would then be signed and sent twice. `dedupe` keeps the
 user-level entry (`--keep project` or `--keep plugin` to keep another) and removes the rest,
-leaving other tools' hooks alone; the Scopebond Agent's daily self-check reports the same.
+leaving other tools' hooks alone; the Scopebond Agent's daily self-check reports the same. It never leaves none:
+`--keep plugin` with no enabled Scopebond plugin changes nothing and says so. A settings file it edits is backed up
+first (`settings.json.scopebond-backup`, as the installer does) and replaced whole.
 
 The connection renews itself: in the last 30 days of its 90-day credential the hook renews it during its rules check, proving it still holds the key it enrolled with. With each rules check it also tells the workspace how many records wait to send (counts and one error line, never a record), so the portal can show a computer that checks in but is not delivering.
 

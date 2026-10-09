@@ -31,9 +31,16 @@ export function readRequests(dir: string): AdminRequest[] {
   } catch { return []; }
 }
 
+/** How many sent requests the file keeps for the tray. Unsent ones are never dropped to make room: each one was asked for
+ *  by a person, the window told them it went to an admin, and only one per rule and action is kept. */
+const SENT_KEPT = 200;
+
 export function writeRequests(dir: string, items: AdminRequest[], now = Date.now()): void {
-  // Sent ones are kept a week for the tray, unsent ones until they are sent.
-  const kept = items.filter((r) => !r.sent_at || now - Date.parse(r.sent_at) < 7 * 24 * 60 * 60 * 1000).slice(-200);
+  // Sent ones are kept a week for the tray (the newest SENT_KEPT of them), unsent ones until they are sent.
+  const recent = items.filter((r) => !r.sent_at || now - Date.parse(r.sent_at) < 7 * 24 * 60 * 60 * 1000);
+  const sent = recent.filter((r) => r.sent_at);
+  const dropped = new Set(sent.slice(0, Math.max(0, sent.length - SENT_KEPT)));
+  const kept = recent.filter((r) => !dropped.has(r));
   writeAtomic(join(dir, REQUESTS_FILE), `${JSON.stringify({ items: kept }, null, 1)}\n`);
 }
 
