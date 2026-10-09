@@ -5,7 +5,7 @@
 // absolute folders only. The current folder, and a relative PATH entry (which means the same), are never searched; a
 // program not found there is not started.
 
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, lstatSync, statSync } from "node:fs";
 import { posix, win32 } from "node:path";
 
 /** Windows tools that ship in the system folder. */
@@ -44,12 +44,24 @@ export interface FindProgramOptions {
   platform?: NodeJS.Platform;
 }
 
+/** Errors Node gives when it cannot follow a Windows reparse point it does not know how to open. */
+const UNFOLLOWABLE = new Set(["EACCES", "EPERM", "EINVAL", "UNKNOWN"]);
+
 function runnable(file: string, platform: NodeJS.Platform): boolean {
   try {
     if (!statSync(file).isFile()) return false;
     if (platform !== "win32") accessSync(file, constants.X_OK);
     return true;
-  } catch { return false; }
+  } catch (error) {
+    // An App Execution Alias (Store Python, winget, wt in the per-user WindowsApps folder) is a reparse point Node cannot
+    // follow, so it cannot be stat'ed; the shell starts it all the same, and so does a spawn of its full path. It counts when
+    // the entry itself is there and is not a folder: a link that points nowhere (ENOENT) still does not.
+    if (platform !== "win32" || !UNFOLLOWABLE.has((error as NodeJS.ErrnoException).code ?? "")) return false;
+    try {
+      const entry = lstatSync(file);
+      return entry.isSymbolicLink() && !entry.isDirectory();
+    } catch { return false; }
+  }
 }
 
 const found = new Map<string, string>();

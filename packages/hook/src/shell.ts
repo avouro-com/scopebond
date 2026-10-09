@@ -280,8 +280,13 @@ function stripPrefixes(input: string[]): { tokens: string[]; wrappers: Wrapper[]
     if (isAssignment(t)) { assigns.push(t); i++; continue; }
     if (KEYWORDS.has(t)) { i++; continue; }
     // `for x in …` / `select x in …`: the header runs nothing (its substitutions were
-    // already extracted); the body follows `do`.
-    if (t === "for" || t === "select") return { tokens: [], wrappers, assigns };
+    // already extracted); the body follows `do`. It sets x to each word in turn, so it
+    // reads as an assignment of each of them.
+    if (t === "for" || t === "select") {
+      const name = tokens[i + 1];
+      const each = name !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && tokens[i + 2] === "in" ? tokens.slice(i + 3).map((v) => `${name}=${v}`) : [];
+      return { tokens: [], wrappers, assigns: [...assigns, ...each] };
+    }
     // `case WORD in PATTERN) cmd`: skip to the command after the pattern.
     if (t === "case") {
       const at = tokens.indexOf("in", i + 1);

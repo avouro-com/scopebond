@@ -2,7 +2,7 @@
 // spawn by bare name looks there first, and the current folder of a hook or a check is a project anyone can write to.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { findProgram, programPath, isBareProgramName, windowsSystemProgram } from "../dist/node.js";
@@ -61,6 +61,28 @@ test("Windows: PATH is read whatever its case, quoted entries are unquoted, and 
     assert.equal(findProgram("sbtool", { env: { Path: `"${root}"` } }), join(root, "sbtool.com"), "no extension: .com, then .exe");
     assert.equal(findProgram("sbtool.cmd", { env: { Path: root } }), join(root, "sbtool.cmd"), "a name with an extension is tried as it is");
     assert.equal(findProgram("sbtool", { env: { Path: `C:relative;${root}` } }), join(root, "sbtool.com"), "a drive-relative entry is skipped");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Windows: an App Execution Alias on PATH (Store Python, winget, wt) is found, as the shell finds it", { skip: !windows && "Windows-only aliases" }, (t) => {
+  // The aliases in the per-user WindowsApps folder are reparse points Node cannot stat; a spawn by name starts them.
+  const apps = join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps");
+  let aliases = [];
+  try { aliases = readdirSync(apps).filter((f) => /\.exe$/i.test(f) && lstatSync(join(apps, f)).isSymbolicLink()); } catch { /* no such folder */ }
+  if (!aliases.length) { t.skip("no App Execution Alias on this computer"); return; }
+  const root = mkdtempSync(join(tmpdir(), "sb-find-program-"));
+  try {
+    for (const file of aliases.slice(0, 5)) {
+      const name = file.replace(/\.exe$/i, "");
+      const path = `${join(root, "missing")};${apps}`;
+      assert.equal(findProgram(name, { env: { PATH: path } })?.toLowerCase(), join(apps, file).toLowerCase(), file);
+      assert.equal(programPath(file, { env: { PATH: path } }).toLowerCase(), join(apps, file).toLowerCase(), file);
+    }
+    // An ordinary program earlier on PATH still comes first, and a folder named like the program is still skipped.
+    const name = aliases[0].replace(/\.exe$/i, "");
+    mkdirSync(join(root, "a", `${name}.exe`), { recursive: true });
+    const first = program(join(root, "b"), name);
+    assert.equal(findProgram(name, { env: { PATH: [join(root, "a"), join(root, "b"), apps].join(";") } }), first);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -5,7 +5,7 @@
 // there is owner-only from its first byte, the journal files SQLite creates beside a database included. Best effort: a
 // failure is reported to the caller, never thrown, because the hook and the gateway must still start (they warn instead).
 
-import { closeSync, existsSync, fchmodSync, fstatSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { windowsSystemProgram } from "./node-programs.js";
 import { randomBytes } from "node:crypto";
@@ -87,11 +87,89 @@ export function isPrivateDir(dir: string): boolean {
   try { return (statSync(dir).mode & 0o077) === 0; } catch { return false; }
 }
 
-/** Windows: whether the access of the files in `dir` is already decided by the folder (private, or tried within the last
- *  day and not possible), so they are not restricted one by one, an icacls run each, every time they are opened. On POSIX
- *  that costs a chmod, so every file stays 0600 whatever its folder: never decided by the folder. */
+/** Windows: whether the access of the files in `dir` is already decided by the folder (a folder `ensurePrivateDir` made
+ *  private), so they are not restricted one by one, an icacls run each. A folder that could not be made private decides
+ *  nothing: its files are restricted one by one (see `restrictOnce`). On POSIX that costs a chmod, so every file stays 0600
+ *  whatever its folder: never decided by the folder. */
 export function folderDecides(dir: string): boolean {
-  return onWindows() && markerState(dir) !== null;
+  return onWindows() && markerState(dir) === "private";
+}
+
+/** How the files in `dir` are kept owner-only, for `status` and `doctor`: "private" (the folder passes owner-only access on
+ *  to them), "per-file" (the folder's own access could not be changed, so each file is restricted on its own), or null (not
+ *  tried yet, or not a folder of Scopebond's own). */
+export function ownerOnlyState(dir: string): "private" | "per-file" | null {
+  if (!onWindows()) {
+    try { return (statSync(dir).mode & 0o077) === 0 ? "private" : "per-file"; } catch { return null; }
+  }
+  try {
+    const [id, state] = readFileSync(join(dir, PRIVATE_DIR_MARKER), "utf8").trim().split(/\s+/);
+    if (!id || id !== folderId(dir)) return null;
+    return state === "private" ? "private" : state === "failed" ? "per-file" : null;
+  } catch { return null; }
+}
+
+// Windows: the files this user has restricted one by one outside a private folder, so each is restricted once (and checked
+// again after a day) rather than every time it is opened: an icacls run costs tens of milliseconds, and a gateway or MCP proxy
+// opens several such files on every start. A file is known by its volume, id and creation time, so a replaced or copied file
+// is restricted again. The list is kept in this user's local application data, which other users cannot change.
+const RECHECK_AFTER_MS = RETRY_AFTER_MS;
+const RECORD_LIMIT = 1024;
+let restricted: Map<string, number> | null = null;
+
+function recordFile(): string | null {
+  const base = process.env.LOCALAPPDATA ?? "";
+  return /^[A-Za-z]:[\\/]/.test(base) ? join(base, "Scopebond", "owner-only-files.json") : null;
+}
+function readRecord(file: string): Map<string, number> {
+  const out = new Map<string, number>();
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    for (const [key, at] of Object.entries(parsed)) if (typeof at === "number") out.set(key, at);
+  } catch { /* none yet, or unreadable: start again */ }
+  return out;
+}
+const fileKey = (file: string): string | null => {
+  try { const s = statSync(file, { bigint: true }); return `${s.dev}:${s.ino}:${s.birthtimeNs}`; } catch { return null; }
+};
+
+function restrictedRecently(file: string): boolean {
+  const record = recordFile();
+  if (!record) return false;
+  restricted ??= readRecord(record);
+  const key = fileKey(file);
+  const at = key === null ? undefined : restricted.get(key);
+  return at !== undefined && Date.now() - at < RECHECK_AFTER_MS && at <= Date.now();
+}
+
+/** Windows: note that `file` was just restricted, in this process and in the record other processes read. */
+export function noteRestricted(file: string): void {
+  const record = recordFile();
+  const key = onWindows() && record ? fileKey(file) : null;
+  if (!record || key === null) return;
+  restricted ??= readRecord(record);
+  restricted.set(key, Date.now());
+  // Merged with what other processes noted meanwhile, newest kept, and written through a new file renamed into place.
+  const merged = readRecord(record);
+  for (const [k, at] of restricted) if ((merged.get(k) ?? 0) < at) merged.set(k, at);
+  const kept = [...merged].filter(([, at]) => Date.now() - at < RECHECK_AFTER_MS).sort((a, b) => b[1] - a[1]).slice(0, RECORD_LIMIT);
+  restricted = new Map(kept);
+  const temp = `${record}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    mkdirSync(dirname(record), { recursive: true });
+    writeFileSync(temp, JSON.stringify(Object.fromEntries(kept)), { flag: "wx" });
+    renameSync(temp, record);
+  } catch { try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ } }
+}
+
+/** Restrict `file` to its owner unless that was done within the last day (Windows; on POSIX it is a cheap chmod, always
+ *  done). Returns null when done (or nothing to do), else why it could not be. */
+export function restrictOnce(file: string): string | null {
+  if (!onWindows()) return restrictToOwner(file);
+  if (restrictedRecently(file)) return null;
+  const failure = restrictToOwner(file);
+  if (!failure) noteRestricted(file);
+  return failure;
 }
 
 /** Make `dir`, one of Scopebond's own folders, readable by its owner alone, together with everything already in it (keys,
@@ -128,6 +206,9 @@ export function ensurePrivateDir(dir: string): string | null {
   try {
     writeFileSync(temp, `${id} ${failure ? "failed" : "private"}\n`, { mode: 0o600, flag: "wx" });
     renameSync(temp, marker);
+    // In a folder that stays open to others, the marker gets an access list of its own, so no one else can rewrite it to say
+    // "private" and stop the files here from being restricted one by one.
+    if (failure) grantOwnerOnly(marker, false, 10_000);
   } catch { try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ } }
   return failure;
 }
