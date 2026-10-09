@@ -39,6 +39,9 @@ async function computerWithQueue(url, n) {
     expires_at: new Date(Date.now() + 80 * 86_400_000).toISOString(),
   };
   writeFileSync(join(dir, "cloud.json"), JSON.stringify(connection));
+  // These tests measure sending records in full; with the standard detail (the default) routine records wait for their
+  // five-minute summary window instead.
+  writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ evidence_detail: "full" }));
   const rt = createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"),
     dbPath: join(dir, "receipts.db"), cloud: { connection, fetch: async () => new Response("{}", { status: 503 }) },
