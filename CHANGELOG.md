@@ -2,14 +2,13 @@
 
 All notable changes to the open-source Scopebond packages are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-this project will adopt [Semantic Versioning](https://semver.org/) at its first
-tagged release.
+each package follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
 Per-package versions and notes are managed with changesets; this section is a
-human summary. The published set is policy-schema 0.4.1, verify 0.4.0, gateway
-0.7.0, sdk 0.1.2, hook 0.6.0, github-action 0.4.0 and mcp and framework at 0.3.2.
+human summary. The current published versions are in the package table of
+[README.md](README.md) and in [packages/README.md](packages/README.md).
 Per-release detail lives in each package's own `CHANGELOG.md`; past security
 advisories are summarized in [SECURITY.md](SECURITY.md).
 
