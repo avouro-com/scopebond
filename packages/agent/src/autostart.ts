@@ -242,7 +242,7 @@ export function disableAutostart(scopebondHome: string, platform = process.platf
 /** Whether autostart is on and its launcher can start the agent now. */
 export function autostartHealth(scopebondHome: string, platform = process.platform): { on: boolean; ok: boolean; detail: string } {
   const paths = autostartPaths();
-  let on = false;
+  let on: boolean;
   if (platform === "win32") {
     try { execFileSync("reg", ["query", RUN_KEY, "/v", RUN_VALUE], { stdio: "ignore" }); on = true; } catch { on = false; }
   } else on = existsSync(platform === "darwin" ? paths.macPlist : paths.linuxUnit);

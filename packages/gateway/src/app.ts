@@ -16,7 +16,7 @@ import {
 } from "./receipts.js";
 import type {
   Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
-  AuthorityFinalState, ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord,
+  ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord,
 } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleProof } from "./anchor.js";
@@ -169,7 +169,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     return state.killed;
   }
 
-  async function setStopped(target: "global" | string, stopped: boolean): Promise<void> {
+  async function setStopped(target: string, stopped: boolean): Promise<void> {
     if (store.setStopped) await store.setStopped(target, stopped);
     if (target === "global") state.killed = stopped;
   }

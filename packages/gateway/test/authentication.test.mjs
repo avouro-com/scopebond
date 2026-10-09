@@ -50,7 +50,7 @@ function signApproval(approver, intent, policyRef, overrides = {}) {
 }
 
 function secureGateway(selectedPolicy = policy, records, extra = {}) {
-  const keys = new StaticPrincipalKeyRegistry(records.map(({ privateKey: _private, ...record }) => ({ ...record, status: "active" })));
+  const keys = new StaticPrincipalKeyRegistry(records.map((r) => { const record = { ...r, status: "active" }; delete record.privateKey; return record; }));
   return createGateway({ policy: selectedPolicy, now: () => AT, authentication: { keys }, ...extra });
 }
 

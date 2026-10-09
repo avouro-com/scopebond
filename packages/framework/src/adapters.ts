@@ -67,7 +67,8 @@ export function wrapOpenAITools<T extends FunctionTool>(tools: T[], guard: ToolG
 // —— Vercel AI SDK ——
 // A `tools` record: { [name]: { description?, parameters?/inputSchema?, execute } }.
 export interface VercelTool {
-  execute?: (args: Record<string, unknown>, options?: unknown) => Promise<unknown> | unknown;
+  /** Returns the result, or a promise of it. */
+  execute?: (args: Record<string, unknown>, options?: unknown) => unknown;
   [key: string]: unknown;
 }
 
@@ -102,7 +103,8 @@ export function wrapVercelTools<T extends Record<string, VercelTool>>(tools: T, 
 // A tool with `name` and `invoke(input)` (DynamicStructuredTool and friends).
 export interface LangChainTool {
   name: string;
-  invoke: (input: unknown, config?: unknown) => Promise<unknown> | unknown;
+  /** Returns the result, or a promise of it. */
+  invoke: (input: unknown, config?: unknown) => unknown;
   [key: string]: unknown;
 }
 
@@ -140,7 +142,7 @@ export function wrapLangGraphTool<T extends LangChainTool>(tool: T, guard: ToolG
     wrappers.set("stream", async (input: unknown, ...rest: unknown[]) => {
       const d = await decide(input);
       if (!d.denied) return stream(input, ...rest);
-      return (async function* () { yield d.value; })();
+      return (async function* () { yield await d.value; })(); // the same as `yield d.value`: an async generator awaits what it yields
     });
   }
   const batch = original("batch");

@@ -19,21 +19,17 @@ process.env.SCOPEBOND_AGENT_TRAY = "off";
 const { loadOrCreateAttester } = await import("@scopebond/gateway/node");
 const { createSigner } = await import("@scopebond/sdk");
 const { scaffold, createHookRuntime, mapClaudeToolUse, syncPolicy, policyBuilds, hookVersion, readDeliveryState } = await import("@scopebond/hook");
-const { runCycle, startService, callAgent, localChecks, repairHookEntries, computerStatus } = await import("../dist/index.js");
-const { healthOf } = await import("../dist/health.js");
+const { runCycle, startService, callAgent, repairHookEntries } = await import("../dist/index.js");
 // The isolated home has Claude Code with the Scopebond hook entry, so status reads "governing" as on a real laptop.
 mkdirSync(join(HOME, ".claude"), { recursive: true });
 writeFileSync(join(HOME, ".claude", "settings.json"), "{}");
 repairHookEntries(["claude"]);
 
-const out = () => {};
-
 /** A workspace that answers everything except ingest/summaries, which `hang` decides; records every rules-check header. */
 function workspace() {
   const policyCalls = [];
   const server = http.createServer((req, res) => {
-    let raw = "";
-    req.on("data", (c) => { raw += c; });
+    req.resume(); // the bodies are not read; draining them lets "end" fire
     req.on("end", () => {
       if (req.url === "/v1/ingest") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); return; }
       if (req.url === "/v1/policy") { policyCalls.push({ at: Date.now(), lastError: req.headers["x-scopebond-last-error"] ?? null, pending: req.headers["x-scopebond-pending"] ?? null }); res.writeHead(204); res.end(); return; }

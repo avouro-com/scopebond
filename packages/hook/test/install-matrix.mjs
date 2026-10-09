@@ -74,6 +74,7 @@ check("the scopebond bin is installed and runnable", () => {
   const r = sb([]);
   assert.match(r.out, /usage: scopebond-hook <command>/i, `no usage line: ${r.out}`);
   for (const command of ["init", "status", "doctor", "log", "verify", "test"]) {
+    // eslint-disable-next-line security/detect-non-literal-regexp -- test-only; `command` is one of the plain words listed above
     assert.match(r.out, new RegExp(`\\n\\s+${command}\\s{2,}\\S`), `help does not list \`${command}\`: ${r.out}`);
   }
 });

@@ -7,7 +7,7 @@ test("names the workspace, where its data is and who approved, from what the wor
   assert.equal(approvalSummary({ workspace: { name: "Acme", region: "eu" }, approved_by: "dana@acme.example" }), 'Approved into workspace "Acme" (data in the EU) by dana@acme.example.');
   assert.equal(approvalSummary({ workspace: { name: "Acme", region: "us" } }), 'Approved into workspace "Acme" (data in the US).');
   assert.equal(approvalSummary({ enrollment: {} }), null, "an older workspace says nothing: nothing is invented");
-  assert.equal(approvalSummary({ workspace: { name: "Ac\u001b[2Jme‮" } }), 'Approved into workspace "Ac [2Jme".', "no terminal control or direction characters");
+  assert.equal(approvalSummary({ workspace: { name: "Ac\u001b[2Jme\u202E" } }), 'Approved into workspace "Ac [2Jme".', "no terminal control or direction characters");
 });
 
 test("a busy workspace's Retry-After is honoured within bounds", () => {

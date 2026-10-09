@@ -101,7 +101,7 @@ export class DispatchStore {
     if (!row) return null;
     const revoked = this.db.prepare("SELECT 1 AS x FROM revocations WHERE delegation_id = ?").get(id) !== undefined;
     return {
-      delegation_id: String(row.delegation_id), parent_id: row.parent_id === null ? null : String(row.parent_id), actor: String(row.actor),
+      delegation_id: String(row.delegation_id), parent_id: typeof row.parent_id === "string" ? row.parent_id : null, actor: String(row.actor),
       scope: JSON.parse(String(row.scope_json)), scope_digest: String(row.scope_digest),
       issued_at: new Date(Number(row.issued_at)).toISOString(), expires_at: new Date(Number(row.expires_at)).toISOString(), revoked,
     };
@@ -348,9 +348,8 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
               observations.push({ ...base, count: 0, state, repeated: false });
               return hard ? deny(reason, detail, observations) : null;
             };
-            let refusal: DispatchDecision | null = null;
             if (policy.authority_scope === "shared_gateway" && !config.sharedGatewayConfigured) {
-              refusal = refuse("budget_capability_unsupported", `budget ${policy.budget_id} needs a shared in-path gateway; independent hooks cannot enforce a limit shared across installations`, "unenforceable");
+              const refusal = refuse("budget_capability_unsupported", `budget ${policy.budget_id} needs a shared in-path gateway; independent hooks cannot enforce a limit shared across installations`, "unenforceable");
               if (refusal) return { commit: false, value: refusal };
               continue;
             }
@@ -359,7 +358,7 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
               : !budgetAcknowledged(policy) ? ["budget_unacknowledged", `the budget policy has no acknowledgement of digest ${budgetDigest(policy).slice(0, 12)}`]
               : rolledBack ? ["clock_rollback", "the system clock is behind a time this counter already saw"] : null;
             if (problem) {
-              refusal = refuse(problem[0], problem[1], "unenforceable");
+              const refusal = refuse(problem[0], problem[1], "unenforceable");
               if (refusal) return { commit: false, value: refusal };
               continue;
             }
@@ -442,7 +441,7 @@ async function checkWorkspaceDelegation(
   const held = new Set(resolved.effective_entries);
   for (const [n, i] of intents.entries()) {
     // Entries are over the opaque target id the workspace also receives, never the raw path or ref.
-    let covered = false;
+    let covered: boolean;
     if (n === 0 && covers !== undefined) covered = covers;
     else { try { const wanted = actionScopeEntries(i.action_type, cloud.targetId(i.target)); covered = held.has(wanted.exact) || held.has(wanted.anyTarget); } catch { covered = false; } }
     if (!covered) return { reason: "delegation_out_of_scope", detail: `the session delegation ${sessionId} does not cover ${i.action_type} on this target` };

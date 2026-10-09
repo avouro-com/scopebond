@@ -76,7 +76,8 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
 
   const server = http.createServer((req, res) => {
     let raw = "";
-    req.on("data", (c: Buffer) => { raw += c; });
+    req.setEncoding("utf8"); // decodes a character split across chunks whole
+    req.on("data", (c: string) => { raw += c; });
     req.on("end", () => {
       const json = (status: number, value?: unknown, headers: Record<string, string> = {}) => {
         res.writeHead(status, { "content-type": "application/json", ...headers });
@@ -124,7 +125,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
       });
     }
     if (path === "/v1/device/token" && req.method === "POST") {
-      const entry = codes.get(String(body.device_code ?? ""));
+      const entry = codes.get(typeof body.device_code === "string" ? body.device_code : "");
       if (!entry || entry.consumed) return json(400, { error: "expired_token" });
       if (!entry.approved && autoApprove && entry.polled) { entry.approved = true; seen.approved.push(entry.user_code); }
       entry.polled = true;
@@ -141,7 +142,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
       });
     }
     if (path === "/v1/enroll" && req.method === "POST") {
-      const known = [...codes.values()].some((c) => c.enrollment_token && c.enrollment_token === body.enrollment_token) || String(body.enrollment_token ?? "").startsWith("sbe_fake");
+      const known = [...codes.values()].some((c) => c.enrollment_token && c.enrollment_token === body.enrollment_token) || (typeof body.enrollment_token === "string" && body.enrollment_token.startsWith("sbe_fake"));
       if (!known || typeof body.public_key_pem !== "string") return json(400, { error: "invalid_enrollment" });
       const credential = "sbm_" + randomBytes(16).toString("hex");
       credentials.add(credential);

@@ -362,6 +362,9 @@ test("scope entries: a closed kind vocabulary, exact and any-target action entri
   assert.equal(actionScopeEntry("git.push", "repo-1"), scopeEntryDigest("action", "git.push\u0000repo-1"));
   assert.throws(() => scopeEntryDigest("secret", "x"));
   assert.throws(() => actionScopeEntry("Git Push", "x"));
+  assert.equal(actionScopeEntry("a.b_2.c", null), scopeEntryDigest("action", "a.b_2.c\u0000*"));
+  // Segments are separated by a literal ".", nothing else.
+  for (const bad of ["git push", "git-push", "git\u0000push", "git/push", "a.b.c.d"]) assert.throws(() => actionScopeEntry(bad, "x"), /action_type/, bad);
   assert.throws(() => actionScopeEntry("git.push", "*"), /target/);
   assert.throws(() => actionScopeEntry("git.push", "a\u0000b"));
   assert.throws(() => actionScopeEntry("git.push", ""));

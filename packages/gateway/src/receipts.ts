@@ -234,7 +234,7 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string, prin
       authorization_valid: null, agent_signature_valid: null, approval_signature_valid: null, fully_valid: false,
     };
   }
-  let signature_valid = false;
+  let signature_valid: boolean;
   let key_binding_valid = false;
   try {
     const key = createPublicKey(publicKeyPem);
@@ -659,7 +659,8 @@ export interface ReceiptStore {
   unresolvedActions?(): ActionLifecycleRecord[] | Promise<ActionLifecycleRecord[]>;
   /** Durable emergency state. `agents` contains signer key ids. */
   getStopState?(): StopState | Promise<StopState>;
-  setStopped?(target: "global" | string, stopped: boolean): void | Promise<void>;
+  /** `target` is "global" or a signer key id. */
+  setStopped?(target: string, stopped: boolean): void | Promise<void>;
 }
 
 export interface StopState { global: boolean; agents: string[]; }
@@ -770,7 +771,7 @@ export class MemoryReceiptStore implements ReceiptStore {
       .map(([actionId, record]) => lifecycleRecord(actionId, record));
   }
   getStopState(): StopState { return { global: this.stops.has("global"), agents: [...this.stops].filter((key) => key !== "global") }; }
-  setStopped(target: "global" | string, stopped: boolean): void {
+  setStopped(target: string, stopped: boolean): void {
     if (stopped) this.stops.add(target); else this.stops.delete(target);
   }
   putAnchor(a: Anchor): void { this.anchorLog.push(a); }

@@ -10,6 +10,10 @@ import { join } from "node:path";
 import { starterPolicy } from "../dist/index.js";
 import { ENFORCE } from "./enforce-all.mjs";
 
+/** A compiled clause's pattern as the policy engine runs it: the pattern is the thing under test. */
+// eslint-disable-next-line security/detect-non-literal-regexp -- test-only; the source is a pattern the rules compiler produced
+const policyPattern = (source) => new RegExp(source);
+
 const boundsOf = (policy) => Object.fromEntries(
   (policy.clauses ?? [])
     .filter((c) => c.param_bounds)
@@ -59,18 +63,18 @@ test("a description lists what it actually covers, so an edit cannot make it lie
 test("removing a program from the list stops it being denied", () => {
   const rules = defaultRules();
   const before = compile(rules, "k").clauses.find((c) => c.id === "safe-shell").param_bounds.program.pattern;
-  assert.equal(new RegExp(before).test("dd"), false, "dd is denied by default");
+  assert.equal(policyPattern(before).test("dd"), false, "dd is denied by default");
   rules.destructive_programs = rules.destructive_programs.filter((p) => p !== "dd");
   const after = compile(rules, "k").clauses.find((c) => c.id === "safe-shell").param_bounds.program.pattern;
-  assert.equal(new RegExp(after).test("dd"), true, "dd is allowed once removed");
-  assert.equal(new RegExp(after).test("rm"), false, "the rest of the list still applies");
+  assert.equal(policyPattern(after).test("dd"), true, "dd is allowed once removed");
+  assert.equal(policyPattern(after).test("rm"), false, "the rest of the list still applies");
 });
 
 test("adding a protected branch denies it, in any case", () => {
   const rules = defaultRules();
   rules.protected_branches.push("production");
   const pattern = compile(rules, "k").clauses.find((c) => c.id === "protect-branches").param_bounds.ref.pattern;
-  const re = new RegExp(pattern);
+  const re = policyPattern(pattern);
   assert.equal(re.test("production"), false);
   assert.equal(re.test("PRODUCTION"), false, "case-insensitive, like the shipped rules");
   assert.equal(re.test("feature/x"), true, "an ordinary branch is still allowed");
@@ -79,7 +83,7 @@ test("adding a protected branch denies it, in any case", () => {
 
 test("a release/* prefix rule matches the prefix, not just the bare name", () => {
   const pattern = compile({ ...defaultRules(), ...ENFORCE }, "k").clauses.find((c) => c.id === "protect-branches").param_bounds.ref.pattern;
-  const re = new RegExp(pattern);
+  const re = policyPattern(pattern);
   assert.equal(re.test("release/1.2"), false);
   assert.equal(re.test("releases/1.2"), true, "only the release/ prefix is protected");
   assert.equal(re.test("--tags"), true, "a tags-only push stays allowed");
@@ -90,7 +94,7 @@ test("adding a protected path denies writes to it and inside it", () => {
   const rules = defaultRules();
   rules.protected_write.push(pathRuleFor("infra/"));
   const pattern = compile(rules, "k").clauses.find((c) => c.id === "protect-write").param_bounds.path.pattern;
-  const re = new RegExp(pattern);
+  const re = policyPattern(pattern);
   assert.equal(re.test("infra/main.tf"), false);
   assert.equal(re.test("infra"), false, "the directory itself too");
   assert.equal(re.test("src/app.ts"), true, "ordinary work is untouched");
@@ -112,7 +116,7 @@ test("a user-typed path is literal: every metacharacter is escaped", () => {
   const protectedBy = (input) => {
     const pattern = compile({ ...defaultRules(), protected_write: [pathRuleFor(input)] }, "k")
       .clauses.find((c) => c.id === "protect-write").param_bounds.path.pattern;
-    return (candidate) => new RegExp(pattern).test(candidate) === false;
+    return (candidate) => policyPattern(pattern).test(candidate) === false;
   };
 
   let blocks = protectedBy("weird+name.txt");

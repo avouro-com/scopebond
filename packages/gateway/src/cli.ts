@@ -34,6 +34,7 @@ function fail(msg: string): never { console.error(msg); process.exit(1); }
 function parseDurationMs(s: string): number {
   const t = s.trim().toLowerCase();
   if (t === "" || t === "0" || t === "off" || t === "false") return 0;
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: the optional group starts with a literal ".", so the digit runs cannot overlap
   const m = t.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/);
   if (!m) return 0;
   const mult: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
@@ -66,7 +67,8 @@ function resolveAuthentication(): GatewayAuthentication {
   if (!Array.isArray(source) || source.length === 0) fail("principal key registry must be a non-empty JSON array");
   const records: PrincipalKeyRecord[] = source.map((item, index) => {
     const row = item as Record<string, unknown>;
-    const publicKeyPem = String(row.public_key_pem ?? row.publicKeyPem ?? "");
+    const pem = row.public_key_pem ?? row.publicKeyPem;
+    const publicKeyPem = typeof pem === "string" ? pem : "";
     const purposes = row.purposes as PrincipalPurpose[];
     if (!publicKeyPem || !Array.isArray(purposes) || purposes.some((purpose) => purpose !== "agent" && purpose !== "approver")) {
       fail(`invalid principal key record at index ${index}`);
