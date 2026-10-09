@@ -93,6 +93,14 @@ claim-time verification over the full receipt set is unaffected.
 `endpoint_denylist`, `address_allowlist` / `address_denylist`,
 `contract_allowlist`, `action_allowlist` (param bounds), `key_policy`.
 
+Endpoint clauses compare `endpointDestination(host)`: the host as the WHATWG URL
+parser (and so `fetch`) reads it, with every spelling of an address in one form and an
+IPv4-mapped IPv6 address as its IPv4 address. An allowlist entry allows exactly its host
+and port. A denylist entry without a port covers every port, and a loopback name or
+address covers every loopback destination. `endpointDenylistClauses(policy, call)`
+applies the denylist rule alone, for an executor that checks the addresses a name
+resolves to.
+
 ### Intent shape conventions
 
 Finalized alongside the gateway/SDK; used by the clause logic and the vectors:

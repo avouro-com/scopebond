@@ -284,6 +284,27 @@ store still holds: retention keeps at least the window of the current policy, so
 a windowed limit beyond the retention, the first decisions under it see less history than the
 window names.
 
+### HTTP executor and endpoint lists
+
+`createHttpExecutor()` sends an allowed `http.call` to the destination the policy
+checked, and nowhere else. Endpoint clauses compare that destination, not the text
+of the host: case, a trailing dot, and the decimal, octal, hex, shortened and
+IPv4-mapped IPv6 spellings of an address all name the same host. An
+`endpoint_allowlist` entry allows exactly its host and port. An `endpoint_denylist`
+entry without a port denies its host on every port, and a loopback name or address
+(`localhost`, `127.0.0.1`, `::1`) denies every loopback destination.
+
+A name in a denylist is compared as a name. To keep agents off an internal service
+or the cloud metadata endpoint, list its address (`169.254.169.254`): before it sends
+anything, the executor resolves the requested name and refuses the call if an
+address it resolves to is denied (inject `lookup` to replace the system resolver).
+The executor resolves the name again when it connects, so a DNS server that answers
+differently between the two lookups (DNS rebinding) is not stopped here. A denylist
+is best effort: prefer an `endpoint_allowlist`, and constrain egress at the network.
+
+A call the executor refuses before sending is recorded as `failed`, not as an
+unknown outcome.
+
 ### Constrained support refund adapter
 
 `createSupportRefundExecutor` is the first narrow dispatch integration. It accepts
