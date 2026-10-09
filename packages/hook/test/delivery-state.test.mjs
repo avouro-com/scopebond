@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readDeliveryState, recordDeliveryAttempt, recordRulesCredential, httpStatusOf } from "../dist/delivery-state.js";
@@ -9,6 +9,8 @@ import { cliCommand } from "../dist/version.js";
 import { writeHarnessConfig } from "../dist/index.js";
 
 const fresh = () => mkdtempSync(join(tmpdir(), "sb-delivery-"));
+// The modification time read through an open descriptor (no stat of the path between reads of it).
+const mtimeOf = (file) => { const fd = openSync(file, "r"); try { return fstatSync(fd).mtimeMs; } finally { closeSync(fd); } };
 const url = "https://cloud.example.com";
 
 test("a refused credential (401) marks the connection invalid until a delivery succeeds again", () => {
@@ -82,11 +84,11 @@ test("a settings file that already holds the hook is left byte-for-byte untouche
   // Reformat by hand: identical meaning, different bytes. A no-op write must not normalize it.
   const custom = JSON.stringify(JSON.parse(content));
   writeFileSync(file, custom);
-  const before = statSync(file).mtimeMs;
+  const before = mtimeOf(file);
   const backups = readdirSync(dir).length;
   writeHarnessConfig(file, "claude", "npx -y @scopebond/hook@0.12.0 claude");
   assert.equal(readFileSync(file, "utf8"), custom);
-  assert.equal(statSync(file).mtimeMs, before);
+  assert.equal(mtimeOf(file), before);
   assert.equal(readdirSync(dir).length, backups, "no backup for a no-op");
   // A real change is still written.
   writeHarnessConfig(file, "claude", "npx -y @scopebond/hook@0.13.0 claude");

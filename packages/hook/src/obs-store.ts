@@ -99,7 +99,7 @@ export interface CallRow {
 
 export type EnqueueResult =
   | { queued: true; duplicate: boolean; sequence: number; observation_id: string }
-  | { queued: false; reason: "unsupported" | "blocked" | "capacity" | "oversize" | "generation_mismatch"; detail?: string };
+  | { queued: false; reason: "unsupported" | "blocked" | "capacity" | "oversize" | "generation_mismatch" | "session_ended"; detail?: string };
 
 function open(path: string): SqliteDb {
   mkdirSync(dirname(path), { recursive: true });
@@ -204,11 +204,14 @@ export class ObservationStore {
    * `observationId` makes the call idempotent: an id already stored (pending or already
    * sent) returns without consuming a sequence.
    */
-  enqueue(draft: ObservationDraft, context: EnvelopeContext, signer: ObservationSigner): EnqueueResult {
+  enqueue(draft: ObservationDraft, context: EnvelopeContext, signer: ObservationSigner, options: { whileSessionActive?: string } = {}): EnqueueResult {
     return this.tx((): EnqueueResult => {
       const state = this.state();
       const at = this.now();
       if (!state || state.generation !== context.generation) return { queued: false, reason: "generation_mismatch" };
+      // A heartbeat is queued only while its session is active, checked in this same transaction: a session ended by another
+      // process between the heartbeat's own check and this write gets no heartbeat after its stop.
+      if (options.whileSessionActive !== undefined && this.session(options.whileSessionActive)?.state !== "active") return { queued: false, reason: "session_ended" };
       if (draft.observationId) {
         const existing = this.db.prepare("SELECT sequence FROM pending WHERE observation_id = ?").get(draft.observationId) as { sequence: number } | undefined;
         if (existing) return { queued: true, duplicate: true, sequence: existing.sequence, observation_id: draft.observationId };

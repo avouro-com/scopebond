@@ -17,5 +17,32 @@
   });
 }
 
-const { main } = await import("./cli-main.js");
-await main(process.argv.slice(2));
+// Fail closed outside the commands too. Claude Code, Codex and Cursor all treat a hook that crashes (a module that cannot
+// load, an uncaught error, a non-zero exit other than Claude Code's 2) as a non-blocking error and run the action with no
+// check. Every failure the commands do not answer themselves is answered here with each agent's own "deny".
+function failClosed(error: unknown): never {
+  const reason = `Scopebond hook failed closed: ${(error as Error | null)?.message ?? String(error)}. Repair: reinstall the Scopebond hook, then run its doctor command.`;
+  const command = process.argv[2];
+  try {
+    if (command === "claude" || command === "codex") {
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }) + "\n");
+      if (command === "claude") process.stderr.write(`${reason}\n`);
+      process.exit(command === "claude" ? 2 : 0);
+    }
+    if (command === "cursor") {
+      process.stdout.write(JSON.stringify({ permission: "deny", agentMessage: reason }) + "\n");
+      process.exit(0);
+    }
+    process.stderr.write(`${reason}\n`);
+  } catch { /* nothing left to report with */ }
+  process.exit(command === "claude" ? 2 : 1);
+}
+process.on("uncaughtException", failClosed);
+process.on("unhandledRejection", failClosed);
+
+try {
+  const { main } = await import("./cli-main.js");
+  await main(process.argv.slice(2));
+} catch (error) {
+  failClosed(error);
+}

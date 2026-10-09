@@ -117,6 +117,8 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
     assert.ok(existsSync(connectionPath(dir)), "cloud.json written");
     assert.match(readFileSync(connectionPath(dir), "utf8"), /sbm_test_credential/);
     assert.deepEqual(loadConnection(dir), connection);
+    // This test checks every receipt arrives one by one, so the computer sends full detail.
+    writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ evidence_detail: "full" }));
 
     // evaluate two actions through a connected runtime, then flush.
     const runtime = createHookRuntime({
@@ -217,5 +219,18 @@ test("connecting this computer puts the hook in the user-level agent settings, n
     assert.ok(existsSync(join(sbHome, "cloud.json")), "the connection belongs to this computer");
   } finally {
     cloud.close();
+  }
+});
+
+test("a stored connection is used only with an HTTPS workspace (or localhost), so the credential never travels in clear", () => {
+  // A fresh folder per case: the connection file is cached by modification time, which can repeat within a quick loop.
+  const stored = (url) => {
+    const dir = mkdtempSync(join(tmpdir(), "sb-hook-cloud-url-"));
+    writeFileSync(connectionPath(dir), JSON.stringify({ url, credential: "sbm_x", organization_id: "org-1" }));
+    return loadConnection(dir);
+  };
+  for (const url of ["https://cloud.scopebond.com", "http://localhost:8787", "http://127.0.0.1:8787"]) assert.equal(stored(url)?.url, url, url);
+  for (const url of ["http://cloud.scopebond.com", "ftp://cloud.scopebond.com", "https://user:pass@cloud.scopebond.com", "not a url"]) {
+    assert.equal(stored(url), null, url);
   }
 });

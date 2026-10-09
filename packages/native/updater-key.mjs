@@ -5,16 +5,22 @@
 //   node updater-key.mjs [private-key-file]
 
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const privateFile = resolve(process.argv[2] ?? "scopebond-updater-key.pem");
 const publicFile = join(here, "updater-public-key.txt");
-if (existsSync(privateFile)) { console.error(`${privateFile} exists already; nothing changed`); process.exit(1); }
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-writeFileSync(privateFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+// Exclusive create: never write the private key into a file (or through a link) that someone else made first.
+try {
+  writeFileSync(privateFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600, flag: "wx" });
+} catch (error) {
+  if (error?.code !== "EEXIST") throw error;
+  console.error(`${privateFile} exists already; nothing changed`);
+  process.exit(1);
+}
 writeFileSync(publicFile, `${publicKey.export({ type: "spki", format: "der" }).toString("base64")}\n`);
 console.log(`Public key: ${publicFile} (commit it).`);
 console.log(`Private key: ${privateFile}. Store it as the signing environment's secret, then keep it offline and delete this copy:`);

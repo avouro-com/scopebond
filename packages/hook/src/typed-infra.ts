@@ -17,7 +17,7 @@
 //                schema has no "unknown" verb).
 
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { canonProgram, decomposeShell, type SimpleCommand } from "./shell.js";
 import { classifySql, type SqlClass } from "./sql-classify.js";
@@ -42,12 +42,24 @@ const MAX_FILE = 20 * 1024 * 1024;
 const MAX_TREE_FILES = 5000;
 const MAX_TREE_BYTES = 100 * 1024 * 1024;
 
+/** A regular file's bytes when it is at most `max` bytes, else null. The file is opened once and the type and size are
+ *  checked on that descriptor, so what passed the check is what is read. Non-blocking open (where the platform has it):
+ *  a named pipe is refused by the check instead of waiting for a writer. */
+function readRegularFile(path: string, max: number): Buffer | null {
+  const fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > max) return null;
+    return readFileSync(fd);
+  } finally { closeSync(fd); }
+}
+
 export const systemFiles: FileProbe = {
   readText(path, max) {
-    try { const st = statSync(path); if (!st.isFile() || st.size > max) return null; return readFileSync(path, "utf8"); } catch { return null; }
+    try { return readRegularFile(path, max)?.toString("utf8") ?? null; } catch { return null; }
   },
   sha256File(path) {
-    try { const st = statSync(path); if (!st.isFile() || st.size > MAX_FILE) return null; return createHash("sha256").update(readFileSync(path)).digest("hex"); } catch { return null; }
+    try { const bytes = readRegularFile(path, MAX_FILE); return bytes === null ? null : createHash("sha256").update(bytes).digest("hex"); } catch { return null; }
   },
   sha256Dir(path) {
     try {

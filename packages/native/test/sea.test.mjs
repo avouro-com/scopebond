@@ -37,10 +37,10 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
   const init = spawnSync(exe, ["hook", "init", "--claude", "--yes"], { cwd: project, env, encoding: "utf8" });
   assert.equal(init.status, 0, init.stderr);
   const event = (tool, input) => JSON.stringify({ hook_event_name: "PreToolUse", session_id: "sea", tool_name: tool, tool_input: input, cwd: project });
-  const decide = (viaExe, input) => {
+  const decide = (viaExe, input, runEnv = env) => {
     const [program, args] = viaExe ? [exe, ["hook", "claude"]] : [process.execPath, [hookCli, "claude"]];
     const started = performance.now();
-    const run = spawnSync(program, args, { input, env, cwd: project, encoding: "utf8" });
+    const run = spawnSync(program, args, { input, env: runEnv, cwd: project, encoding: "utf8" });
     return { ms: performance.now() - started, status: run.status, decision: run.stdout ? JSON.parse(run.stdout).hookSpecificOutput?.permissionDecision ?? null : null, stderr: run.stderr };
   };
   const cases = [
@@ -59,9 +59,12 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
   assert.match(log.stdout, /receipt\(s\)/, "receipts are written to the store");
   // Warm starts: the first runs pay for the operating system's first look at a new file. Measured on the project's own
   // setup, the same way on every run (a user-level install below adds a second home the hook also looks at).
-  const times = [];
-  for (let i = 0; i < 22; i++) times.push(decide(true, event("Read", { file_path: "README.md" })).ms);
-  const median = times.slice(2).sort((x, y) => x - y)[10];
+  const warmMedian = (runEnv) => {
+    const times = [];
+    for (let i = 0; i < 22; i++) times.push(decide(true, event("Read", { file_path: "README.md" }), runEnv).ms);
+    return times.slice(2).sort((x, y) => x - y)[10];
+  };
+  const median = warmMedian(env);
   console.log(`single executable: median warm hook call ${median.toFixed(0)} ms`);
   assert.ok(median < CEILING_MS, `median ${median.toFixed(0)} ms`);
   // Installed for the user, the coding agent's settings name the executable itself: no Node, npm or npx.
@@ -71,4 +74,11 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
   assert.ok(settings.includes(JSON.stringify(`"${exe}" hook claude`).slice(1, -1)), settings);
   const doctor = spawnSync(exe, ["hook", "doctor"], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
   assert.doesNotMatch(doctor.stdout, /cannot start|could not start/i, doctor.stdout);
+  // With the user-level install beside the project's own setup (the hook finds the project's folder itself, no pinned
+  // folder), a call costs what it cost before: the second home adds no work per call. Once (2026-10-07) a run measured
+  // 284 ms here against 156 ms; the npm hook measures the same in both setups (289 and 293 ms on a laptop).
+  const besideUser = warmMedian({ ...env, SCOPEBOND_HOOK_DIR: "" });
+  console.log(`single executable beside a user-level install: median warm hook call ${besideUser.toFixed(0)} ms`);
+  assert.ok(besideUser < CEILING_MS, `median beside a user-level install ${besideUser.toFixed(0)} ms`);
+  assert.ok(besideUser <= median * 1.2 + 25, `beside a user-level install ${besideUser.toFixed(0)} ms against ${median.toFixed(0)} ms`);
 });

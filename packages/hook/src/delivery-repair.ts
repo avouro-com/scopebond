@@ -10,8 +10,9 @@
 //    installs, the next flush (a hook call or the Scopebond Agent) closes it with a signed receipt that says the outcome is
 //    unknown, and queues it like any other.
 
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync } from "node:fs";
+import { appendFileSync, closeSync, constants as fsConstants, existsSync, fstatSync, futimesSync, openSync, readFileSync, renameSync, unlinkSync, utimesSync } from "node:fs";
 import { join } from "node:path";
+import { errorCode, readIfPresent } from "./safe-fs.js";
 import { SqliteReceiptStore } from "@scopebond/gateway/node";
 import { attesterFromPrivateKeyPem, buildReceipt, type ActionLifecycleRecord, type Attester, type AuthorityFinalState, type SignedReceipt } from "@scopebond/gateway";
 
@@ -74,14 +75,22 @@ function claim(dir: string, now: number): string | null {
   const main = join(dir, BACKFILL_FILE);
   const work = join(dir, WORK_FILE);
   try {
-    if (existsSync(work)) {
-      if (now - statSync(work).mtimeMs < WORK_STALE_MS) return null;
-      // A process stopped while backfilling: take its work over, with anything noted since.
-      if (existsSync(main)) { appendFileSync(work, readFileSync(main, "utf8")); unlinkSync(main); }
-    } else {
-      if (!existsSync(main)) return null;
-      renameSync(main, work);
+    // Open an existing work file (never create one): its age and the take-over below use this one descriptor.
+    let fd: number | undefined;
+    try { fd = openSync(work, fsConstants.O_RDWR | fsConstants.O_APPEND); }
+    catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
+    if (fd !== undefined) {
+      try {
+        if (now - fstatSync(fd).mtimeMs < WORK_STALE_MS) return null;
+        // A process stopped while backfilling: take its work over, with anything noted since.
+        const noted = readIfPresent(main);
+        if (noted !== undefined) { appendFileSync(fd, noted); unlinkSync(main); }
+        futimesSync(fd, new Date(now), new Date(now));
+      } finally { closeSync(fd); }
+      return work;
     }
+    try { renameSync(main, work); }
+    catch (error) { if (errorCode(error) === "ENOENT") return null; throw error; }
     utimesSync(work, new Date(now), new Date(now));
     return work;
   } catch { return null; }

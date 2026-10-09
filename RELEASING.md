@@ -15,6 +15,22 @@ merging a version PR is a publication decision, not just a documentation update.
    When changesets remain, it opens or updates **Version packages**, which bumps
    versions and writes package changelogs. `pnpm version:packages` also synchronizes
    plugin versions and README release references.
+   The repository does not let the workflow's own token create pull requests, so without the `PERSONAL_ACCESS_TOKEN` secret the workflow only
+   pushes the `changeset-release/main` branch and its log ends with
+   "GitHub Actions is not permitted to create or approve pull requests". Open the
+   PR from that branch with one command:
+
+   ```bash
+   gh pr create --repo avouro-com/scopebond --base main --head changeset-release/main --title "Version packages" --body "Versions and changelogs from the pending changesets."
+   ```
+
+   Its install and Windows journey checks install the packages from npm, so they
+   fail with `ETARGET` until the new gateway version is published. Before
+   merging, read those logs and confirm `ETARGET` for the new version is the only
+   failure; any other failure blocks the release. Either of two settings makes the
+   workflow open the PR itself: the `PERSONAL_ACCESS_TOKEN` secret (a token that
+   may open pull requests here), or Settings → Actions → General → "Allow GitHub
+   Actions to create and approve pull requests".
 3. Review the version PR, checks, and package scope. Obtain maintainer approval
    before merging. With the version changes committed and changesets consumed,
    the workflow's `version` job finds the package versions missing from npm, the

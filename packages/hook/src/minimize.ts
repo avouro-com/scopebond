@@ -3,7 +3,7 @@
 // removed before anything is written or signed (SB09).
 
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { loadOrCreateHexKey } from "./safe-fs.js";
 import { join } from "node:path";
 import { canonical } from "@scopebond/policy-schema/canonical";
 
@@ -26,14 +26,7 @@ export function useDigestKey(key: string | null): void {
 
 /** The per-machine digest key in a config dir, created on first use. */
 export function loadOrCreateDigestKey(dir: string): string {
-  const file = join(dir, "digest.key");
-  if (existsSync(file)) {
-    const key = readFileSync(file, "utf8").trim();
-    if (/^[0-9a-f]{64}$/.test(key)) return key;
-  }
-  const key = randomBytes(32).toString("hex");
-  writeFileSync(file, key + "\n", { mode: 0o600 });
-  return key;
+  return loadOrCreateHexKey(join(dir, "digest.key"));
 }
 
 /** HMAC-SHA-256 under the digest key, labelled so it is never mistaken for a plain hash. */

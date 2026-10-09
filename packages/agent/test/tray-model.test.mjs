@@ -121,8 +121,70 @@ test("a workspace at its monthly limit is said plainly, not 'sending'; another r
   assert.equal(refused.rows.find((r) => r.label === "Delivery")?.value, "4 waiting · last try refused (HTTP 413)");
 });
 
+test("after a restart of the agent alone, waiting counts from the saved wake time, so a backlog is attention at once", async () => {
+  const { awakeSinceAtStart } = await import("../dist/index.js");
+  const H = 60 * MIN;
+  const gap = 5 * MIN;
+  const boot = NOW - 48 * H;
+  const uptimeMs = NOW - boot;
+  // The agent restarted 30 s after its last cycle; the computer has been awake for four hours.
+  const since = awakeSinceAtStart({ saved: { awake_since: NOW - 4 * H, last_cycle_at: NOW - 30_000 }, now: NOW, uptimeMs, allowedGapMs: gap });
+  assert.equal(since, NOW - 4 * H);
+  const model = trayModel(input(status({ pending: 42, oldest_pending_age_s: 4 * 3600 }), { awakeSince: since }));
+  assert.equal(model.state, "attention");
+  // Restarted soon after a cycle, with a saved wake time from before the computer last started: from its start.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 30_000 }, now: NOW, uptimeMs: 2 * H, allowedGapMs: gap }), NOW - 2 * H);
+  // The computer was switched off and started 10 minutes ago: awake since it started, never since before.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 20 * H }, now: NOW, uptimeMs: 10 * MIN, allowedGapMs: gap }), NOW - 10 * MIN);
+  // A long gap with no restart of the computer (asleep, or the agent stopped): from now, as before; sleep never counts.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 3 * H }, now: NOW, uptimeMs, allowedGapMs: gap }), NOW);
+  // Nothing saved, or a saved time from the future (a clock that moved back): from now.
+  assert.equal(awakeSinceAtStart({ saved: null, now: NOW, uptimeMs, allowedGapMs: gap }), NOW);
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - H, last_cycle_at: NOW + H }, now: NOW, uptimeMs, allowedGapMs: gap }), NOW);
+});
+
+test("after a long gap without a restart of the computer, the waiting records decide where waiting counts from", async () => {
+  const { awakeSinceAtStart } = await import("../dist/index.js");
+  const H = 60 * MIN;
+  const gap = 5 * MIN;
+  const uptimeMs = 48 * H;
+  const saved = { awake_since: NOW - 30 * H, last_cycle_at: NOW - 3 * H };
+  // A record written two hours ago, after the last cycle: the hook ran while the agent did not, so the computer was awake.
+  // Waiting counts from the record at once, not 15 minutes from now.
+  const written = awakeSinceAtStart({ saved, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: NOW - 2 * H });
+  assert.equal(written, NOW - 2 * H);
+  const backlog = trayModel(input(status({ pending: 12, oldest_pending_age_s: 2 * 3600 }), { awakeSince: written }));
+  assert.equal(backlog.state, "attention");
+  // ...never from before the computer's start.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 3 * H }, now: NOW, uptimeMs: 2.5 * H, allowedGapMs: gap, oldestPendingAt: NOW - 2.75 * H }), NOW - 2.5 * H);
+  // A record already waiting at the last cycle: the 40 minutes it waited while the agent ran still count, the three-hour
+  // gap (perhaps asleep, perhaps shut down with Fast Startup) does not.
+  const older = awakeSinceAtStart({ saved, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: NOW - 3 * H - 40 * MIN });
+  assert.equal(older, NOW - 40 * MIN);
+  const carried = trayModel(input(status({ pending: 3, oldest_pending_age_s: (3 * 3600) + 40 * 60 }), { awakeSince: older }));
+  assert.equal(carried.state, "attention");
+  // Only five minutes before the gap: not yet attention, and the gap still never counts.
+  const brief = awakeSinceAtStart({ saved, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: NOW - 3 * H - 5 * MIN });
+  assert.equal(brief, NOW - 5 * MIN);
+  assert.notEqual(trayModel(input(status({ pending: 3, oldest_pending_age_s: (3 * 3600) + 5 * 60 }), { awakeSince: brief })).state, "attention");
+  // The time before the gap is bounded by the saved wake time: a record older than the last wake counts from the wake.
+  assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 3 * H - 10 * MIN, last_cycle_at: NOW - 3 * H }, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: NOW - 20 * H }), NOW - 10 * MIN);
+  // Nothing waiting, or a record time from the future: from now.
+  assert.equal(awakeSinceAtStart({ saved, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: null }), NOW);
+  assert.equal(awakeSinceAtStart({ saved, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: NOW + MIN }), NOW);
+  // After the computer was switched off, the record counts from the computer's start.
+  const rebooted = awakeSinceAtStart({ saved, now: NOW, uptimeMs: 30 * MIN, allowedGapMs: gap, oldestPendingAt: NOW - 5 * H });
+  assert.equal(rebooted, NOW - 30 * MIN);
+  assert.equal(trayModel(input(status({ pending: 3, oldest_pending_age_s: 5 * 3600 }), { awakeSince: rebooted })).state, "attention");
+});
+
 test("an agent the workspace's plan paused says so, with Open workspace as the fix, not Send records now", () => {
   const m = trayModel(input(status({ pending: 12, oldest_pending_age_s: 3 * 60 * 60, last_error: "ingest failed: HTTP 402 (agent_paused)" }), { awakeSince: NOW - 3 * 60 * MIN }));
   assert.match(m.headline, /^Paused by your workspace's plan: 12 records waiting$/);
   assert.equal(m.fix.id, "open_workspace");
+});
+
+test("today: an edit recorded after it ran is shown apart from blocks, never added to them", () => {
+  const m = trayModel(input(status(), { today: { actions: 10, blocked: 2, recorded_after: 1, allowed_by_person: 0 } }));
+  assert.equal(m.rows.find((r) => r.label === "Today").value, "10 actions · 2 blocked · 1 recorded, not prevented");
 });

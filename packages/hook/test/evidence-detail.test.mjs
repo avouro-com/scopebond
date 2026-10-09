@@ -1,4 +1,4 @@
-// Evidence detail (D144): the workspace names it on every rules check; until it does, every receipt is sent. An action one
+// Evidence detail: the workspace names it on every rules check; until it does, the standard detail is sent. An action one
 // of this computer's Monitor rules matches is always sent in full.
 import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
@@ -34,10 +34,10 @@ test("the header names the level; minimal is standard here; anything else is ign
   assert.equal(evidenceDetailFrom(headers(null)), null);
 });
 
-test("the rules check keeps the workspace's level; until it says, every receipt is sent", async () => {
+test("the rules check keeps the workspace's level; until it says, the standard detail is sent", async () => {
   const { dir, agentKid } = connected();
   try {
-    assert.equal(evidenceDetail(dir), "full");
+    assert.equal(evidenceDetail(dir), "standard");
     await syncPolicy(dir, { agentKid, hookVersion: "0.22.0", policyBuilds, fetchImpl: workspace("standard") });
     assert.equal(evidenceDetail(dir), "standard");
     await syncPolicy(dir, { agentKid, hookVersion: "0.22.0", policyBuilds, fetchImpl: workspace(null) });
