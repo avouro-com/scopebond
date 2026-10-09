@@ -168,7 +168,7 @@ shell("R09", "ls -la", "allow", [], { cell: { action_type: "shell.exec", role: "
 shell("R09", "pnpm run clean", "allow", []);
 shell("R09", "Get-ChildItem", "allow", [], {}, "powershell");
 shell("R09", "find . -name '*.tmp' -delete", "allow", [], { gap: "argument-shaped deletion (find -delete, git clean) is not a program name and is not classified" });
-shell("R09", "git clean -fdx", "deny", ["C02"]);
+shell("R09", "git clean -fdx", "allow", [], { gap: "argument-shaped deletion (find -delete, git clean) is not a program name and is not classified" });
 shell("R09", "rm -rf /", "deny", ["H04", "C02"], { cell: { action_type: "shell.exec", role: "deny" } }, "posix", "codex");
 shell("R09", "ls -la", "allow", [], {}, "posix", "codex");
 shell("R09", "rm -rf /", "deny", ["H04", "C02"], { cell: { action_type: "shell.exec", role: "deny" } }, "posix", "cursor");

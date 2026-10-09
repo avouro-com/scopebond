@@ -32,6 +32,11 @@ export interface SimpleCommand {
   raw: string;
   /** True when parsing was not confident; the caller must fail closed. */
   opaque: boolean;
+  /** The `NAME=value` words in force for this command, quotes removed: its own prefix (`X=1 cmd`, `env X=1 cmd`) after
+   *  those of the commands it is nested in (`X=1 sh -c 'cmd'`). */
+  assigns?: string[];
+  /** A segment of assignments alone (`X=1; …`): it runs nothing and sets shell variables for the commands after it. */
+  assignOnly?: boolean;
 }
 
 /** The canonical program name used for every decision: basename, lower-cased, with
@@ -265,21 +270,22 @@ const words = (s: string): string[] => tokenize(s).filter((t) => !t.op).map((t) 
  *  `env`, `time`, `xargs`, `timeout`, `strace` …, each with its own option arity) so
  *  the program is the real one about to run. `env -S "…"` splits its string into the
  *  command. Returns the remaining words and the wrappers passed on the way. */
-function stripPrefixes(input: string[]): { tokens: string[]; wrappers: Wrapper[] } {
+function stripPrefixes(input: string[]): { tokens: string[]; wrappers: Wrapper[]; assigns: string[] } {
   let tokens = input;
   const wrappers: Wrapper[] = [];
+  const assigns: string[] = [];
   let i = 0;
   for (let guard = 0; i < tokens.length && guard < 1000; guard++) {
     const t = tokens[i];
-    if (isAssignment(t)) { i++; continue; }
+    if (isAssignment(t)) { assigns.push(t); i++; continue; }
     if (KEYWORDS.has(t)) { i++; continue; }
     // `for x in …` / `select x in …`: the header runs nothing (its substitutions were
     // already extracted); the body follows `do`.
-    if (t === "for" || t === "select") return { tokens: [], wrappers };
+    if (t === "for" || t === "select") return { tokens: [], wrappers, assigns };
     // `case WORD in PATTERN) cmd`: skip to the command after the pattern.
     if (t === "case") {
       const at = tokens.indexOf("in", i + 1);
-      if (at < 0) return { tokens: [], wrappers };
+      if (at < 0) return { tokens: [], wrappers, assigns };
       i = at + 1;
       continue;
     }
@@ -328,7 +334,7 @@ function stripPrefixes(input: string[]): { tokens: string[]; wrappers: Wrapper[]
     if (split !== undefined) { tokens = [...words(split), ...tokens.slice(i)]; i = 0; continue; }
     if (spec.lead && i < tokens.length && spec.lead.test(tokens[i])) i++;
   }
-  return { tokens: tokens.slice(i), wrappers };
+  return { tokens: tokens.slice(i), wrappers, assigns };
 }
 
 /** A program word whose name is only known at run time: a variable (`$r`), an
@@ -569,15 +575,16 @@ function stripHeredocs(src: string): { text: string; scripts: string[]; code: Ar
 }
 
 /** Decompose a command line into the simple commands it will run. Recurses into
- *  `-c` scripts and command substitutions up to a bounded depth. */
-export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
+ *  `-c` scripts and command substitutions up to a bounded depth. `inherited` is the
+ *  assignments an enclosing command puts in force for this script (`X=1 sh -c '…'`). */
+export function decomposeShell(command: string, depth = 0, inherited: readonly string[] = []): SimpleCommand[] {
   const src = command.trim();
   if (!src) return [];
   const opaque = (raw = src): SimpleCommand[] => [{ program: "", programRaw: "", argv: [], redirects: [], raw, opaque: true }];
   if (depth > MAX_DEPTH) return opaque();
 
   const { text, scripts, code } = stripHeredocs(src);
-  const fromHeredocs = scripts.flatMap((s) => decomposeShell(s, depth + 1));
+  const fromHeredocs = scripts.flatMap((s) => decomposeShell(s, depth + 1, inherited));
   // An interpreter's here-document is its code: recorded as that interpreter run with the code inline.
   for (const c of code) fromHeredocs.push({ program: c.program, programRaw: c.program, argv: ["-e", c.body], redirects: [], raw: `${c.program} <<heredoc`, opaque: false });
 
@@ -589,17 +596,20 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
   const out: SimpleCommand[] = [];
   for (const seg of segments) {
     const { outer, inner } = extractSubstitutions(seg);
-    for (const sub of inner) out.push(...decomposeShell(sub, depth + 1));
+    for (const sub of inner) out.push(...decomposeShell(sub, depth + 1, inherited));
 
     const split = splitRedirects(tokenize(outer));
-    const { tokens, wrappers } = stripPrefixes(split.words);
+    const { tokens, wrappers, assigns: own } = stripPrefixes(split.words);
+    const assigns = [...inherited, ...own];
     const redirects = split.redirects;
     // Each wrapper is recorded as a command of its own (`sudo` is a program a policy
     // may deny), carrying any file its options name (`time -o f`, `xargs -a f`).
-    for (const w of wrappers) out.push({ program: basename(w.raw), programRaw: w.raw, argv: [], redirects: w.redirects, raw: seg, opaque: false });
+    for (const w of wrappers) out.push({ program: basename(w.raw), programRaw: w.raw, argv: [], redirects: w.redirects, raw: seg, opaque: false, assigns: [...inherited] });
     if (tokens.length === 0) {
       // A bare redirection (`> file`) still writes its target.
-      if (redirects.length) out.push({ program: "", programRaw: "", argv: [], redirects, raw: seg, opaque: false });
+      if (redirects.length) out.push({ program: "", programRaw: "", argv: [], redirects, raw: seg, opaque: false, assigns });
+      // Assignments alone set variables for the commands after them in the same script.
+      else if (own.length) out.push({ program: "", programRaw: "", argv: [], redirects: [], raw: seg, opaque: false, assigns, assignOnly: true });
       continue; // pure substitution/subshell — inner already handled
     }
     // A program named by a variable, an ANSI-C string or a substitution is only known
@@ -607,10 +617,10 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
     if (isDynamicProgram(tokens[0])) { out.push(...opaque(seg)); continue; }
     const program = basename(tokens[0]);
     const argv = tokens.slice(1);
-    out.push({ program, programRaw: tokens[0], argv, redirects, raw: seg, opaque: false });
+    out.push({ program, programRaw: tokens[0], argv, redirects, raw: seg, opaque: false, assigns });
 
     const canon = canonProgram(program);
-    const nested = (script: string | null | undefined) => { if (script) out.push(...decomposeShell(script, depth + 1)); };
+    const nested = (script: string | null | undefined) => { if (script) out.push(...decomposeShell(script, depth + 1, assigns)); };
     if (SHELLS.has(canon)) {
       const script = shellScriptArg(argv);
       nested(script);
@@ -644,17 +654,18 @@ export function decomposeShell(command: string, depth = 0): SimpleCommand[] {
       nested(parallelCommand(argv));
     } else if (canon === "cmd") {
       const script = cmdScriptArg(argv);
-      if (script) out.push(...decomposeShell(script, depth + 1));
+      nested(script);
     } else if (POWERSHELLS.has(canon)) {
       const script = powershellScriptArg(argv);
       if (script === null) out.push(...opaque(seg));
-      else if (script) out.push(...decomposeShell(script, depth + 1));
+      else nested(script);
     } else if (canon === "find") {
-      for (const script of findExecCommands(argv)) out.push(...decomposeShell(script, depth + 1));
+      for (const script of findExecCommands(argv)) nested(script);
     }
   }
   out.push(...fromHeredocs);
-  return out.length ? out : opaque();
+  // A command of assignments alone runs nothing a rule could judge: as before, it is read as one that could not be.
+  return out.some((c) => !c.assignOnly) ? out : [...out, ...opaque()];
 }
 
 /** One pushed destination: the branch it updates and whether that update is forced. */
@@ -679,99 +690,39 @@ export function canonRef(dst: string): string | undefined {
 }
 
 
-/** One place command text sets an environment variable. `value` is the word assigned, quotes removed, or null when the
- *  text sets the variable without showing the value (`export NAME`, `read NAME`, `Set-Item env:NAME …`). */
-export interface EnvAssignment { name: string; value: string | null }
-
-// Commands that set a variable named after them (`export NAME`, `declare -x NAME=v`, fish `set -x NAME v`, csh `setenv NAME v`,
-// Windows `setx NAME v`, `read NAME`, `printf -v NAME`); the ones that take the value as the next word are listed apart.
-const ENV_SETTERS = new Set(["export", "declare", "typeset", "local", "readonly", "read", "printf", "set", "setenv", "setx"]);
-const ENV_SETTERS_WITH_VALUE = new Set(["set", "setenv", "setx"]);
-const ENV_SCAN_WINDOW = 512;
-const ENV_SCAN_LIMIT = 64;
-
-/** The first word of `text`, quotes removed, or null when there is none. Bounded, so a long command is never re-read whole. */
-const firstWord = (text: string): string | null => words(text.slice(0, ENV_SCAN_WINDOW))[0] ?? null;
-
-/** Every place `text` sets a variable whose name `names` matches, in any shell's spelling: `NAME=v`, `export NAME=v`,
- *  `env NAME=v`, `"NAME=v"`, `${NAME:=v}`, fish `set -x NAME v`, csh `setenv NAME v`, cmd `set NAME=v`, `setx NAME v`,
- *  `export NAME`, `read NAME`, PowerShell `$env:NAME = v`, `Set-Item env:NAME v` and `SetEnvironmentVariable('NAME', v)`.
- *  Reading a value (`$NAME`, `${NAME:-x}`, `%NAME%`, `$env:NAME`) and `unset NAME` are not assignments. `names` is a global,
- *  case-insensitive pattern of the names alone (Windows reads them in any case); a name matches only whole. Linear: each
- *  match looks at a bounded window around it, and at most `ENV_SCAN_LIMIT` assignments are returned (past that, one with an
- *  unknown value stands for the rest). */
-export function envAssignments(text: string, names: RegExp): EnvAssignment[] {
-  const out: EnvAssignment[] = [];
-  for (const m of text.matchAll(names)) {
-    const at = m.index;
-    const end = at + m[0].length;
-    if (/\w/.test(text[at - 1] ?? "") || /\w/.test(text[end] ?? "")) continue; // part of a longer name
-    if (out.length >= ENV_SCAN_LIMIT) { out.push({ name: m[0].toUpperCase(), value: null }); break; }
-    const before = text.slice(Math.max(0, at - 80), at);
-    const after = text.slice(end, end + ENV_SCAN_WINDOW);
-    const name = m[0].toUpperCase();
-    const assigned = (eq: RegExpExecArray | null): void => {
-      if (eq) out.push({ name, value: firstWord(after.slice(eq[0].length)) ?? "" });
-    };
-    if (/\$\{?env:$/i.test(before)) { assigned(/^\}?\s*\+?=(?!=)/.exec(after)); continue; } // PowerShell `$env:NAME = v`
-    if (/\$\{$/.test(before)) {                                                          // `${NAME:=v}` assigns; `${NAME:-v}` reads
-      const eq = /^:?=/.exec(after);
-      if (eq) out.push({ name, value: /^:?=([^}]*)\}/.exec(after)?.[1] ?? null });
-      continue;
-    }
-    if (/[$%]$/.test(before)) continue;                                                  // `$NAME`, `%NAME%`: a read
-    if (/(?:^|[^$\w])env:[\\/]?$/i.test(before)) {                                        // PowerShell `Set-Item env:NAME v`
-      out.push({ name, value: words(after).find((w) => !w.startsWith("-")) ?? null });
-      continue;
-    }
-    if (/SetEnvironmentVariable\s*\(\s*['"]$/i.test(before)) {
-      out.push({ name, value: /^['"]\s*,\s*(['"])([^'"]*)\1/.exec(after)?.[2] ?? null });
-      continue;
-    }
-    const eq = /^['"]?\s*\+?=/.exec(after);
-    if (eq) { assigned(eq); continue; }                                                   // NAME=v, "NAME=v", export NAME=v
-    // A command that sets the name it is given: the word before the name, past its options.
-    const prior = before.replace(/['"\s]+$/, "").split(/\s+/);
-    let k = prior.length - 1;
-    while (k > 0 && prior[k].startsWith("-")) k--;
-    const verb = canonProgram((prior[k] ?? "").replace(/^.*[;&|(]/, ""));
-    if (ENV_SETTERS.has(verb)) out.push({ name, value: ENV_SETTERS_WITH_VALUE.has(verb) ? firstWord(after) : null });
+/** The `NAME=value` words given, as a map from the name (upper-cased: Windows reads names in any case) to the value. */
+export function assignmentsOf(words: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const w of words) {
+    const eq = w.indexOf("=");
+    if (eq > 0) out.set(w.slice(0, eq).toUpperCase(), w.slice(eq + 1));
   }
   return out;
 }
 
-// Git takes configuration from the environment as well as from `-c`: GIT_CONFIG_COUNT with GIT_CONFIG_KEY_<n> and
-// GIT_CONFIG_VALUE_<n>, GIT_CONFIG_PARAMETERS, and the config files GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CONFIG, the home
-// folder's .gitconfig and XDG_CONFIG_HOME's git/config.
-const GIT_ENV_NAMES = /GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d+|GIT_CONFIG_VALUE_\d+|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG|XDG_CONFIG_HOME|HOME/gi;
-
-/** The configuration `text` gives git through the environment, as `key=value` entries like `-c` ones: each literal
- *  GIT_CONFIG_KEY_<n> and each GIT_CONFIG_PARAMETERS entry. A config file the environment points git at, or a key the text does
- *  not show (`GIT_CONFIG_KEY_0="$K"`, a count with no keys), is `include.path=…`: configuration the command does not show. */
-export function gitEnvConfigs(text: string): string[] {
+/** The configuration git takes from the environment `env` (names upper-cased; a null value is one the command sets without
+ *  showing), as `key=value` entries like `-c` ones: GIT_CONFIG_COUNT with GIT_CONFIG_KEY_<n>, and GIT_CONFIG_PARAMETERS. A key
+ *  the command does not show (`GIT_CONFIG_KEY_0="$K"`, a count with no key) is `include.path=`: configuration that may hold
+ *  anything. The config files the environment can name (HOME, XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL) are not read: they are the
+ *  person's own configuration, which the hook never sees either way. */
+export function gitEnvConfigs(env: ReadonlyMap<string, string | null>): string[] {
   const configs: string[] = [];
-  let count = false;
+  const shown = (v: string | null | undefined): v is string => typeof v === "string" && !/[$`]/.test(v);
   let keys = 0;
-  for (const { name, value } of envAssignments(text, GIT_ENV_NAMES)) {
-    const shown = value !== null && !/[$`]/.test(value);
-    if (name === "GIT_CONFIG_COUNT") { count = true; continue; }
-    if (name.startsWith("GIT_CONFIG_VALUE_")) continue;
-    if (name.startsWith("GIT_CONFIG_KEY_")) { keys++; configs.push(shown ? `${value}=` : "include.path="); continue; }
-    if (name === "GIT_CONFIG_PARAMETERS") {
+  for (const [name, value] of env) {
+    if (/^GIT_CONFIG_KEY_\d+$/.test(name)) { keys++; configs.push(shown(value) ? `${value}=` : "include.path="); }
+    else if (name === "GIT_CONFIG_PARAMETERS") {
       // `'key=value' …` (or `'key'='value'`, as newer git writes it).
-      const items = shown ? [...value.matchAll(/'([^']*)'/g)].map((x) => x[1]) : [];
-      configs.push(...(items.length ? items : [shown ? value : "include.path="]));
-      continue;
+      const items = shown(value) ? [...value.matchAll(/'([^']*)'/g)].map((x) => x[1]) : [];
+      configs.push(...(items.length ? items : [shown(value) ? value : "include.path="]));
     }
-    if (shown && /^(?:\/dev\/null|nul)$/i.test(value)) continue; // an empty config file
-    configs.push(`include.path=${shown ? value : ""}`);
   }
-  if (count && keys === 0) configs.push("include.path=");
+  if (env.has("GIT_CONFIG_COUNT") && keys === 0) configs.push("include.path=");
   return configs;
 }
 
-// git's own subcommands. git never lets an alias replace one of these, so configuration the command does not show can only
-// turn a subcommand outside this list into something else (a push).
+// git's own subcommands. git never lets an alias replace one of these, so an alias (shown or not) can only turn a subcommand
+// outside this list into something else (a push).
 const GIT_BUILTINS = new Set([
   "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bugreport", "bundle", "cat-file", "check-attr",
   "check-ignore", "check-mailmap", "check-ref-format", "checkout", "checkout-index", "cherry", "cherry-pick", "citool", "clean",
@@ -787,25 +738,31 @@ const GIT_BUILTINS = new Set([
   "unpack-file", "unpack-objects", "update-index", "update-ref", "update-server-info", "var", "verify-commit", "verify-pack",
   "verify-tag", "version", "whatchanged", "worktree", "write-tree",
 ]);
+// Well-known git extensions that move objects or branches of their own and never stand for a push of a ref: configuration the
+// command does not show does not make them one.
+const GIT_EXTENSIONS = new Set(["lfs", "flow"]);
 
 /** A git invocation split into its global `-c` config values (and those its own
- *  environment prefix gives it, see `gitEnvConfigs`), its subcommand and the
- *  subcommand's arguments, or null if the program is not git. Global options
- *  that take a value (`-C dir`, `-c k=v`, `--git-dir d` …) are skipped with it. */
-export function gitArgs(cmd: SimpleCommand): { sub?: string; args: string[]; configs: string[] } | null {
+ *  environment prefix gives it, see `gitEnvConfigs`), its subcommand, the
+ *  subcommand's arguments and the folder `-C` points it at, or null if the program
+ *  is not git. Global options that take a value (`-C dir`, `-c k=v`, `--git-dir d` …)
+ *  are skipped with it. */
+export function gitArgs(cmd: SimpleCommand): { sub?: string; args: string[]; configs: string[]; dir?: string } | null {
   if (canonProgram(cmd.program) !== "git") return null;
   const a = cmd.argv;
-  const configs: string[] = gitEnvConfigs(cmd.raw);
+  const configs: string[] = gitEnvConfigs(assignmentsOf(cmd.assigns ?? []));
+  let dir: string | undefined;
   let i = 0;
   while (i < a.length) {
     const t = a[i];
     if (t === "-c" || t === "--config-env") { configs.push(a[i + 1] ?? ""); i += 2; continue; }
     if (t.startsWith("--config-env=")) { configs.push(t.slice("--config-env=".length)); i++; continue; }
-    if (t === "-C" || t === "--git-dir" || t === "--work-tree" || t === "--namespace" || t === "--super-prefix") { i += 2; continue; }
+    if (t === "-C") { const d = a[i + 1] ?? ""; dir = dir === undefined || /^(?:[\\/]|[A-Za-z]:)/.test(d) ? d : `${dir}/${d}`; i += 2; continue; }
+    if (t === "--git-dir" || t === "--work-tree" || t === "--namespace" || t === "--super-prefix") { i += 2; continue; }
     if (t.startsWith("-")) { i++; continue; }
     break;
   }
-  return { sub: a[i], args: a.slice(i + 1), configs };
+  return { sub: a[i], args: a.slice(i + 1), configs, ...(dir !== undefined ? { dir } : {}) };
 }
 
 /** The ref recorded for a push whose destination cannot be read from the command
@@ -833,15 +790,17 @@ export function parseGitPush(cmd: SimpleCommand, lineConfigs: readonly string[] 
   const g = gitArgs(cmd);
   if (!g) return null;
   const configs = [...g.configs, ...lineConfigs];
-  const aliased = configs.some((c) => /^alias\./i.test(c));
-  // Configuration the command does not show (an included or environment-named config file) may hold an alias or a push refspec.
+  const sub = g.sub?.toLowerCase();
+  // An alias can stand for a push only under a name that is not one of git's own subcommands (git ignores the others).
+  const aliasable = sub !== undefined && !GIT_BUILTINS.has(sub);
+  const aliased = aliasable && configs.some((c) => /^alias\./i.test(c));
+  // Configuration the command does not show (an included file, an environment key it computes) may hold an alias or a push refspec.
   const unshown = configs.some((c) => /^include\.path(?:=|$)/i.test(c) || /^includeif\./i.test(c));
   const configuredPush = unshown || configs.some((c) => /^(?:remote\..*\.push(?:url)?|push\.default|remote\.pushdefault)(?:=|$)/i.test(c));
-  const mayBeAlias = unshown && g.sub !== undefined && !GIT_BUILTINS.has(g.sub.toLowerCase());
+  const mayBeAlias = unshown && aliasable && !GIT_EXTENSIONS.has(sub);
   const lowLevel = g.sub === "send-pack" || g.sub === "http-push" || (g.sub === "subtree" && g.args.includes("push"));
-  if (aliased || mayBeAlias || lowLevel || (g.sub === "push" && configuredPush)) {
-    return { force: false, ref: UNKNOWN_REF, targets: [{ ref: UNKNOWN_REF, force: false }] };
-  }
+  const unknown = { force: false, ref: UNKNOWN_REF, targets: [{ ref: UNKNOWN_REF, force: false }] };
+  if (aliased || mayBeAlias || lowLevel) return unknown;
   if (g.sub !== "push") return null;
   const rest = g.args;
   let force = false;
@@ -871,6 +830,9 @@ export function parseGitPush(cmd: SimpleCommand, lineConfigs: readonly string[] 
   // reading of `git push --repo origin HEAD:main` is covered.
   const remote = repo ?? positional[0];
   const specs = repo !== undefined ? positional : positional.slice(1);
+  // A configured push refspec or push.default decides the destination only when the command names none: a refspec on the
+  // command line (`git push origin feature`) is what git pushes, whatever the configuration says.
+  if (configuredPush && specs.length === 0 && !everything && !tags) return unknown;
   const targets: PushTarget[] = [];
   // `--all`/`--mirror`/`--branches` reach every branch, so they hit any protected ref;
   // `--mirror` also prunes and force-updates. The pseudo-ref keeps the starter policy's
