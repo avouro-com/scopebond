@@ -3,12 +3,13 @@
 // because nobody signed it in again. The workspace keeps the old credential valid for a day, so
 // an answer lost on the way back is harmless: the next check tries again.
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { connectionPath, type HookConnection } from "./cloud.js";
 import { forgetCached } from "./config-cache.js";
+import { replaceFile } from "./safe-fs.js";
 
 export const REFRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -47,10 +48,8 @@ export async function refreshIfDue(
     const current = JSON.parse(readFileSync(path, "utf8")) as HookConnection;
     if (current.credential !== connection.credential) return "unchanged";
     const next: HookConnection = { ...current, credential: body.credential, credential_id: body.id, expires_at: body.expires_at };
-    const temp = `${path}.${process.pid}.tmp`;
-    writeFileSync(temp, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
     forgetCached(path);
-    renameSync(temp, path);
+    replaceFile(path, JSON.stringify(next, null, 2) + "\n");
     return "renewed";
   } catch {
     return "unavailable";

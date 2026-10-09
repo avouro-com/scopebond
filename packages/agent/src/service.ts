@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { hostname, uptime } from "node:os";
 import { join } from "node:path";
 import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
 import { fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind, nativeTrayPath, takeInstallResult } from "./native-update.js";
@@ -256,6 +257,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
   const lock = acquireAgentLock(options.dir);
   if (!lock) throw new Error("a Scopebond Agent is already running for this computer");
+  // Everything the agent and the hook keep in the folder: readable by this user alone (made so once, on the first start).
+  const unprotected = ensurePrivateDir(options.dir);
+  if (unprotected) log(`the folder ${options.dir} could not be made readable by this user alone: ${unprotected}`);
   rmSync(join(options.dir, STOPPED_FILE), { force: true });
   // What the install helper of a signed update recorded before this start (installAfterExit).
   const installed = takeInstallResult(options.dir);

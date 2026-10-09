@@ -8,9 +8,10 @@
 // before it (a lower sequence number, or another segment at the same position: that is the evidence), and at most
 // MAX_HEADS_PER_CHAIN heads. Writes replace the file atomically; a write that fails is ignored (delivery never depends on it).
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { isSignedChainHead, type SignedChainHead } from "@scopebond/verify/chain";
+import { placeOwnerOnly } from "./node-files.js";
 
 export const CHAIN_HEADS_FILE = "chain-heads.json";
 export const MAX_HEADS_PER_CHAIN = 1_000;
@@ -63,9 +64,8 @@ export function recordChainHead(file: string, head: SignedChainHead): void {
     const after = mergeChainHead(before, head);
     if (after === before) return;
     mkdirSync(dirname(file), { recursive: true });
-    const temporary = `${file}.${process.pid}.tmp`;
-    writeFileSync(temporary, JSON.stringify(after, null, 1) + "\n", { mode: 0o600 });
-    renameSync(temporary, file);
+    // A new file, owner-only from its first byte, renamed over the old one (a link at the name is replaced, never followed).
+    placeOwnerOnly(file, JSON.stringify(after, null, 1) + "\n", false);
   } catch { /* the next answer carries a newer head */ }
 }
 

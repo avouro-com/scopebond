@@ -4,12 +4,12 @@
 // The proxy is long-running, so the exporter's own flush timer delivers; a durable
 // outbox next to the key survives restarts.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   completeCloudEnrollment, createCloudExporter, LOSSLESS_CLOUD_OUTBOX,
   type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
 } from "@scopebond/gateway";
-import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { SqliteCloudOutbox, keepOwnerOnly, loadOrCreateAttester, placeOwnerOnly } from "@scopebond/gateway/node";
 
 export interface McpConnection extends CloudEnrollmentResult {
   url: string;
@@ -20,6 +20,8 @@ export const connectionFileFor = (keyPath: string): string => keyPath + ".cloud.
 export function loadMcpConnection(keyPath: string): McpConnection | null {
   const path = connectionFileFor(keyPath);
   if (!existsSync(path)) return null;
+  // A credential file an older version wrote under its folder's ACL is restricted to its owner.
+  keepOwnerOnly(path);
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<McpConnection>;
     if (typeof parsed.url === "string" && typeof parsed.credential === "string") return parsed as McpConnection;
@@ -35,7 +37,8 @@ export async function connectCloud(
   const { attester } = loadOrCreateAttester({ file: keyPath });
   const result = await completeCloudEnrollment({ url, bundle, attester, fetch: fetchImpl });
   const connection: McpConnection = { url, ...result };
-  writeFileSync(connectionFileFor(keyPath), JSON.stringify(connection, null, 2) + "\n", { mode: 0o600 });
+  // A new file, owner-only from its first byte, renamed into place: a file or link already there is replaced, not written through.
+  placeOwnerOnly(connectionFileFor(keyPath), JSON.stringify(connection, null, 2) + "\n", false);
   return connection;
 }
 
