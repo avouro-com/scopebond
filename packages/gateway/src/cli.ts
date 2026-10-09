@@ -11,18 +11,21 @@
 //   scopebond-gateway enroll <cloud-url> <enrollment.json>
 //                                               prove key possession and print config
 //
-// Env: SCOPEBOND_POLICY, PORT (8787),
+// Env: SCOPEBOND_POLICY, HOST (127.0.0.1), PORT (8787),
 //      SCOPEBOND_KEY_FILE (default ./scopebond-attester.key) or SCOPEBOND_ATTESTER_KEY (PKCS8 PEM),
 //      SCOPEBOND_DB (default ./scopebond.db) — set SCOPEBOND_RECEIPTS_FILE to force JSONL,
 //      SCOPEBOND_MODE (enforce | check_only; same as --check-only),
+//      SCOPEBOND_POLICY_WATCH (1 | poll | 0) + SCOPEBOND_POLICY_POLL (5s) for reloading the policy and key registry,
 //      SCOPEBOND_CLOUD_URL + SCOPEBOND_CLOUD_CREDENTIAL for durable hosted export.
 
 import { serve } from "@hono/node-server";
 import { closeSync, openSync, readFileSync, unlinkSync, writeFileSync, watch } from "node:fs";
+import type { FSWatcher } from "node:fs";
+import { dirname, resolve as resolvePath } from "node:path";
 import { createPublicKey, randomBytes } from "node:crypto";
 import { createGateway, createCloudExporter, withCloudExporter, StaticPrincipalKeyRegistry, deriveKid, completeCloudEnrollment } from "./index.js";
 import type { CloudExporter } from "./index.js";
-import type { GatewayAuthentication, PrincipalKeyRecord, PrincipalPurpose } from "./index.js";
+import type { GatewayAuthentication, PrincipalKeyRecord, PrincipalKeyRegistry, PrincipalPurpose } from "./index.js";
 import { attesterFromPrivateKeyPem, verifyReceipt } from "./receipts.js";
 import type { Attester } from "./receipts.js";
 import { loadOrCreateAttester } from "./node-keys.js";
@@ -54,37 +57,90 @@ function resolveAttester(): { attester: Attester; source: string } {
   return { attester, source: `${file}${created ? " (generated)" : ""}` };
 }
 
-function resolveAuthentication(): GatewayAuthentication {
-  if (process.env.SCOPEBOND_UNSAFE_ALLOW_UNSIGNED === "1") {
-    console.warn("WARNING: unsigned development mode is enabled; do not use this setting in production");
-    return { mode: "insecure-development" };
-  }
-  const file = process.env.SCOPEBOND_PRINCIPAL_KEYS_FILE;
-  if (!file) fail("SCOPEBOND_PRINCIPAL_KEYS_FILE is required (or set SCOPEBOND_UNSAFE_ALLOW_UNSIGNED=1 for local simulation only)");
+/** The key registry in `text` (SCOPEBOND_PRINCIPAL_KEYS_FILE), or an Error saying what is wrong with it. */
+function parseRegistry(text: string): StaticPrincipalKeyRegistry {
   let source: unknown;
-  try { source = JSON.parse(readFileSync(file, "utf8")); }
-  catch (error) { fail(`could not read principal key registry: ${(error as Error).message}`); }
-  if (!Array.isArray(source) || source.length === 0) fail("principal key registry must be a non-empty JSON array");
+  try { source = JSON.parse(text); }
+  catch (error) { throw new Error(`could not read principal key registry: ${(error as Error).message}`, { cause: error }); }
+  if (!Array.isArray(source) || source.length === 0) throw new Error("principal key registry must be a non-empty JSON array");
   const records: PrincipalKeyRecord[] = source.map((item, index) => {
-    const row = item as Record<string, unknown>;
+    const row = (item ?? {}) as Record<string, unknown>;
     const pem = row.public_key_pem ?? row.publicKeyPem;
     const publicKeyPem = typeof pem === "string" ? pem : "";
     const purposes = row.purposes as PrincipalPurpose[];
     if (!publicKeyPem || !Array.isArray(purposes) || purposes.some((purpose) => purpose !== "agent" && purpose !== "approver")) {
-      fail(`invalid principal key record at index ${index}`);
+      throw new Error(`invalid principal key record at index ${index}`);
     }
     let kid: string;
     try {
       const raw = createPublicKey(publicKeyPem).export({ format: "jwk" }) as Record<string, unknown>;
       kid = deriveKid({ crv: raw.crv, kty: raw.kty, x: raw.x });
-    } catch { fail(`principal key record ${index} is not an Ed25519 public key`); }
+    } catch { throw new Error(`principal key record ${index} is not an Ed25519 public key`); }
     return {
       kid, publicKeyPem, purposes, status: row.status === "revoked" ? "revoked" : "active",
       ...(typeof row.not_before === "string" ? { notBefore: row.not_before } : {}),
       ...(typeof row.not_after === "string" ? { notAfter: row.not_after } : {}),
     };
   });
-  return { keys: new StaticPrincipalKeyRegistry(records) };
+  return new StaticPrincipalKeyRegistry(records);
+}
+
+/** A key registry whose contents can be replaced while the gateway runs (a revoked key takes effect without a restart). */
+class ReloadableRegistry implements PrincipalKeyRegistry {
+  constructor(public current: StaticPrincipalKeyRegistry) {}
+  resolve(kid: string, purpose: PrincipalPurpose): PrincipalKeyRecord | null { return this.current.resolve(kid, purpose); }
+}
+
+function resolveAuthentication(): { authentication: GatewayAuthentication; registry?: { file: string; text: string; keys: ReloadableRegistry } } {
+  if (process.env.SCOPEBOND_UNSAFE_ALLOW_UNSIGNED === "1") {
+    console.warn("WARNING: unsigned development mode is enabled; do not use this setting in production");
+    return { authentication: { mode: "insecure-development" } };
+  }
+  const file = process.env.SCOPEBOND_PRINCIPAL_KEYS_FILE;
+  if (!file) fail("SCOPEBOND_PRINCIPAL_KEYS_FILE is required (or set SCOPEBOND_UNSAFE_ALLOW_UNSIGNED=1 for local simulation only)");
+  let keys: ReloadableRegistry;
+  let text: string;
+  try { text = readFileSync(file, "utf8"); keys = new ReloadableRegistry(parseRegistry(text)); }
+  catch (error) { fail((error as Error).message); }
+  return { authentication: { keys }, registry: { file, text, keys } };
+}
+
+/** Re-read a file the gateway was started from whenever it changes, and hand its new text to `apply`. The directory is
+ *  watched rather than the file: an editor save, a config tool or a Kubernetes ConfigMap update replaces the file by
+ *  rename, and a watch on the file itself would keep following the old, deleted one. A periodic re-read (`pollMs`)
+ *  catches what a watch misses (network filesystems, a replaced directory). Text that did not change is not applied
+ *  again; text that fails to apply is reported once and the current state stays in force. */
+function followFile(
+  path: string, current: string, label: string, mode: "watch" | "poll", pollMs: number, apply: (text: string) => string,
+): void {
+  let last = current;
+  let debounce: ReturnType<typeof setTimeout> | undefined;
+  let watcher: FSWatcher | undefined;
+  const check = (): void => {
+    let text: string;
+    try { text = readFileSync(path, "utf8"); }
+    catch { return; } // mid-replace, or briefly missing: the next event or check reads it
+    if (text === last) return;
+    last = text;
+    try { console.log(`  ${label} reloaded (${apply(text)})`); }
+    catch (e) { console.error(`  ${label} reload failed, keeping current: ${(e as Error).message}`); }
+  };
+  // A check runs shortly after the first event, not after the events stop: the directory may also hold the receipt
+  // database, whose writes would otherwise keep pushing the check back for as long as traffic lasts.
+  const schedule = (): void => { debounce ??= setTimeout(() => { debounce = undefined; check(); }, 150); };
+  const arm = (): void => {
+    if (mode !== "watch" || watcher) return;
+    try {
+      // Any change in the directory may be the file (a ConfigMap swaps a "..data" link beside it): the content decides.
+      watcher = watch(dirname(resolvePath(path)), { persistent: false }, schedule);
+      watcher.on("error", () => { watcher?.close(); watcher = undefined; }); // re-armed by the next periodic check
+    } catch { watcher = undefined; } // fs.watch unsupported here: the periodic check still runs
+  };
+  arm();
+  if (pollMs > 0) {
+    const timer = setInterval(() => { arm(); check(); }, pollMs);
+    timer.unref?.();
+  }
 }
 
 /** Resolve the enforcement mode from `--check-only` or SCOPEBOND_MODE. Default enforce. */
@@ -98,7 +154,8 @@ function resolveMode(): "enforce" | "check_only" {
 
 function cmdServe(policyPath: string | undefined): void {
   if (!policyPath) fail("usage: scopebond-gateway <policy.json>   (or set SCOPEBOND_POLICY)");
-  const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  const policyText = readFileSync(policyPath, "utf8");
+  const policy = JSON.parse(policyText);
   const { attester, source } = resolveAttester();
   const receiptsFile = process.env.SCOPEBOND_RECEIPTS_FILE;
   const { store: baseStore, kind, path } = openReceiptStore(
@@ -135,7 +192,7 @@ function cmdServe(policyPath: string | undefined): void {
     store = withCloudExporter(baseStore, exporter);
   }
 
-  const authentication = resolveAuthentication();
+  const { authentication, registry } = resolveAuthentication();
   const controlToken = process.env.SCOPEBOND_CONTROL_TOKEN;
   const mode = resolveMode();
   const gateway = createGateway({
@@ -143,9 +200,14 @@ function cmdServe(policyPath: string | undefined): void {
     ...(controlToken ? { control: { bearerToken: controlToken } } : {}),
   });
   const port = Number(process.env.PORT ?? 8787);
-  serve({ fetch: gateway.app.fetch, port });
+  // Loopback unless the operator says otherwise: on every interface, anyone on the network reaches the public routes.
+  const host = (process.env.HOST ?? "").trim() || "127.0.0.1";
+  serve({ fetch: gateway.app.fetch, port, hostname: host });
 
-  console.log(`scopebond-gateway listening on :${port}`);
+  console.log(`scopebond-gateway listening on http://${host.includes(":") ? `[${host}]` : host}:${port}`);
+  if (!isLoopback(host)) {
+    console.log("  network   reachable beyond this machine: serve it behind TLS and access control (a reverse proxy)");
+  }
   console.log(`  policy    ${policyPath} (hash ${gateway.policyHash.slice(0, 12)}…)`);
   console.log(`  mode      ${mode === "check_only" ? "check-only (cooperative — allowed actions are not dispatched)" : "enforce"}`);
   console.log(`  attester  ${attester.kid}  [${source}]`);
@@ -165,24 +227,24 @@ function cmdServe(policyPath: string | undefined): void {
     process.on("SIGTERM", shutdown);
   }
 
-  // Hot-reload: watch the policy file and swap it in without a restart. Fail safe —
-  // a malformed file keeps the current policy. Disable with SCOPEBOND_POLICY_WATCH=0.
-  if ((process.env.SCOPEBOND_POLICY_WATCH ?? "1") !== "0") {
-    try {
-      let debounce: ReturnType<typeof setTimeout> | undefined;
-      watch(policyPath, () => {
-        clearTimeout(debounce);
-        debounce = setTimeout(() => {
-          try {
-            gateway.setPolicy(JSON.parse(readFileSync(policyPath, "utf8")));
-            console.log(`  policy reloaded (hash ${gateway.policyHash.slice(0, 12)}…)`);
-          } catch (e) {
-            console.error(`  policy reload failed, keeping current: ${(e as Error).message}`);
-          }
-        }, 150);
+  // Hot-reload: follow the policy file (and the key registry, so a revoked key takes effect) and swap it in without a
+  // restart. Fail safe — a malformed file keeps the current one. SCOPEBOND_POLICY_WATCH=0 disables it; =poll only
+  // re-reads periodically (SCOPEBOND_POLICY_POLL, default 5s; 0 turns the periodic re-read off).
+  const watchMode = (process.env.SCOPEBOND_POLICY_WATCH ?? "1").trim().toLowerCase();
+  if (watchMode !== "0") {
+    const follow = watchMode === "poll" ? "poll" : "watch";
+    const pollMs = parseDurationMs(process.env.SCOPEBOND_POLICY_POLL ?? "5s");
+    followFile(policyPath, policyText, "policy", follow, pollMs, (text) => {
+      gateway.setPolicy(JSON.parse(text));
+      return `hash ${gateway.policyHash.slice(0, 12)}…`;
+    });
+    if (registry) {
+      followFile(registry.file, registry.text, "principal keys", follow, pollMs, (text) => {
+        registry.keys.current = parseRegistry(text);
+        return registry.file;
       });
-      console.log(`  hot-reload watching ${policyPath}`);
-    } catch { /* fs.watch unsupported here — skip */ }
+    }
+    console.log(`  hot-reload ${follow === "watch" ? "watching" : "re-reading"} ${policyPath}${registry ? ` and ${registry.file}` : ""}${pollMs > 0 ? ` (checked every ${process.env.SCOPEBOND_POLICY_POLL ?? "5s"})` : ""}`);
   }
 
   // Daily anchoring: periodically Merkle-anchor the receipt log (tamper-evidence).
@@ -197,6 +259,11 @@ function cmdServe(policyPath: string | undefined): void {
     timer.unref?.();
     console.log(`  anchoring every ${process.env.SCOPEBOND_ANCHOR_INTERVAL ?? "24h"}`);
   }
+}
+
+function isLoopback(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
 }
 
 async function cmdVerify(args: string[]): Promise<void> {

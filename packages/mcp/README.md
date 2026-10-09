@@ -54,6 +54,9 @@ otherwise run without a decision.
 Windowed clauses (`rate_limit`, `sequence`, a windowed `spend_limit`) hold for
 calls that arrive together: a call policy allows takes its place in the window
 as it is decided, so with a limit of 2 and ten parallel calls, two are forwarded.
+The proxy keeps only the calls its policy can read: none for a policy without
+windowed clauses, and the calls inside the longest window otherwise, so a
+long-running proxy does not slow down or grow with every call it has made.
 
 **Upstream environment.** The upstream server starts with a minimal environment
 (`PATH`, `HOME`/`USERPROFILE`, the temp and system directories, locale), not the

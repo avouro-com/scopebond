@@ -65,11 +65,15 @@ test("KV attester persists across a restart; KV receipts are durable", async () 
   assert.equal((await gw2.store.list()).length, 3);
 });
 
-test("KvReceiptStore caps stored receipts", async () => {
+test("KvReceiptStore keeps every receipt, in order, across full pages", async () => {
   const kv = fakeKv();
-  const store = new KvReceiptStore(kv, "receipts", 3);
-  for (let i = 0; i < 5; i++) await store.put({ payload: { intent: { n: i } }, signature: { alg: "Ed25519", sig: "x" } });
+  const store = new KvReceiptStore(kv, "receipts", 3); // the old cap argument no longer drops anything
+  for (let i = 0; i < 250; i++) await store.put({ payload: { intent: { n: i } }, signature: { alg: "Ed25519", sig: `x${i}` } });
   const all = await store.list();
-  assert.equal(all.length, 3);
-  assert.equal(all[0].payload.intent.n, 2); // oldest two dropped
+  assert.equal(all.length, 250);
+  assert.deepEqual(all.map((r) => r.payload.intent.n), Array.from({ length: 250 }, (_, i) => i));
+  assert.equal(await store.count(), 250);
+  // A second store on the same namespace (a later request, a restarted isolate) reads the same log.
+  const reopened = new KvReceiptStore({ get: kv.get, put: kv.put });
+  assert.deepEqual((await reopened.list()).map((r) => r.payload.intent.n), all.map((r) => r.payload.intent.n));
 });

@@ -175,7 +175,7 @@ test("global stop survives SQLite restart and only an authenticated resume clear
     assert.equal(executions, 0);
     assert.equal((await second.app.request("/v1/resume", { method: "POST" })).status, 401);
     assert.equal((await second.handleAction({ intent })).allowed, false);
-    const resumed = await second.app.request("/v1/resume", { method: "POST", headers: { authorization: `Bearer ${CONTROL_TOKEN}` } });
+    const resumed = await second.app.request("/v1/resume", { method: "POST", headers: { authorization: `Bearer ${CONTROL_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ target: "global" }) });
     assert.equal(resumed.status, 200);
     assert.equal((await second.handleAction({ intent })).allowed, true);
     assert.equal(executions, 1);

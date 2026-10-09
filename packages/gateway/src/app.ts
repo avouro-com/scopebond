@@ -636,21 +636,22 @@ export function createGateway(config: GatewayConfig): Gateway {
       attester: attester.kid, receipts: (await store.list()).length,
     });
   });
+  // A kill that cannot say which agent it means stops everything: the safe reading of an unclear emergency request.
   app.post("/v1/kill", async (c) => {
     const denied = requireControl(c); if (denied) return denied;
-    const body = await optionalJson(c);
-    const target = typeof body?.agent === "string" ? body.agent : "global";
-    if (target !== "global" && !/^key:[0-9a-f]{16}$/.test(target)) return c.json({ error: "invalid agent key id" }, 400);
+    const parsed = stopTarget(await optionalJson(c));
+    const target = "target" in parsed ? parsed.target : "global";
+    if ("error" in parsed && parsed.invalidAgent) return c.json({ error: parsed.error }, 400);
     await setStopped(target, true);
     return c.json({ killed: true, target });
   });
+  // A resume must name what it lifts. Reading an unclear one as "global" would let a typo lift every stop at once.
   app.post("/v1/resume", async (c) => {
     const denied = requireControl(c); if (denied) return denied;
-    const body = await optionalJson(c);
-    const target = typeof body?.agent === "string" ? body.agent : "global";
-    if (target !== "global" && !/^key:[0-9a-f]{16}$/.test(target)) return c.json({ error: "invalid agent key id" }, 400);
-    await setStopped(target, false);
-    return c.json({ killed: false, target });
+    const parsed = stopTarget(await optionalJson(c));
+    if ("error" in parsed) return c.json({ error: parsed.error }, 400);
+    await setStopped(parsed.target, false);
+    return c.json({ killed: false, target: parsed.target });
   });
   app.get("/v1/receipts", async (c) => {
     const denied = requireControl(c); if (denied) return denied;
@@ -696,17 +697,33 @@ export function createGateway(config: GatewayConfig): Gateway {
   // inclusion itself — the client verifies (verifyInclusionProof +
   // verifyAnchorSignature from @scopebond/verify/anchor). Leaf positions are the
   // receipts' append-order sequence in the log.
-  // A receipt's v2 leaf hash, computed once: the proof routes are public and would otherwise re-hash the whole log on
-  // every request. Keyed by the receipt's signature, which is unique to it.
-  const leafCache = new Map<string, string>();
-  const leafOf = async (r: SignedReceipt): Promise<string> => {
-    const key = typeof r.signature === "object" && r.signature ? JSON.stringify(r.signature) : null;
-    const hit = key ? leafCache.get(key) : undefined;
-    if (hit) return hit;
-    const leaf = await receiptLeafHash(r.payload);
-    if (key) leafCache.set(key, leaf);
-    return leaf;
+  // The v2 leaf hashes of the anchored part of the log, in log order, each computed once. A store never changes, removes or
+  // reorders a receipt it has listed (`ReceiptStore.list`), so the public proof routes answer from these instead of reading
+  // and hashing the whole log for every anonymous caller. Anchoring itself still reads the log and checks it against the
+  // previous anchor, so a store whose history was rewritten is still caught there.
+  const anchored = { leaves: [] as string[], index: new Map<string, number>() };
+  let extending: Promise<void> | null = null;
+  const extendAnchored = async (size: number): Promise<void> => {
+    const receipts = await store.list();
+    const end = Math.min(size, receipts.length);
+    for (let i = anchored.leaves.length; i < end; i++) {
+      const leaf = await receiptLeafHash(receipts[i].payload);
+      if (!anchored.index.has(leaf)) anchored.index.set(leaf, i);
+      anchored.leaves.push(leaf);
+    }
   };
+  /** The first `size` leaves, or null when the log holds fewer receipts than that. */
+  const anchoredLeaves = async (size: number): Promise<string[] | null> => {
+    while (anchored.leaves.length < size) {
+      const before = anchored.leaves.length;
+      extending ??= extendAnchored(size).finally(() => { extending = null; });
+      await extending;
+      if (anchored.leaves.length === before) return null;
+    }
+    return anchored.leaves.slice(0, size);
+  };
+  // Consistency proofs between two anchors never change; there are few anchors, so a small cache answers repeats.
+  const consistencyCache = new Map<string, Awaited<ReturnType<typeof consistencyProof>>>();
 
   app.get("/v1/anchors/proof", async (c) => {
     // Whether an action happened is not public: a lookup by its intent hash needs the control token; anyone may look a
@@ -715,15 +732,15 @@ export function createGateway(config: GatewayConfig): Gateway {
     const target = await findAnchor(c.req.query("anchor_seq"));
     if (!target) return c.json({ error: "anchor not found — POST /v1/anchor first" }, 404);
     const size = isAnchorV2(target) ? target.tree_size : target.count;
-    const receipts = ((await store.list())).slice(0, size);
     const wantLeaf = c.req.query("leaf");
     const wantIntent = c.req.query("intent_hash");
     if (isAnchorV2(target)) {
-      const leaves = await Promise.all(receipts.map(leafOf));
+      const leaves = await anchoredLeaves(size);
+      if (!leaves) return c.json({ error: "receipt log is shorter than the anchor" }, 409);
       let index = -1;
-      if (wantLeaf) index = leaves.indexOf(wantLeaf);
-      else if (wantIntent) index = receipts.findIndex((r) => r.payload.intent_hash === wantIntent);
-      if (index < 0) return c.json({ error: "receipt not covered by this anchor" }, 404);
+      if (wantLeaf) index = anchored.index.get(wantLeaf) ?? -1;
+      else if (wantIntent) index = (await store.list()).slice(0, size).findIndex((r) => r.payload.intent_hash === wantIntent);
+      if (index < 0 || index >= size) return c.json({ error: "receipt not covered by this anchor" }, 404);
       const proof = await inclusionProof(leaves, index);
       return c.json({
         algo: target.algo, anchor_seq: target.seq, root: target.root, leaf_hash: leaves[index],
@@ -731,6 +748,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       });
     }
     // Legacy v1 anchor: the v1 sibling list; verify with verifyProof (unsigned, see SPEC.md).
+    const receipts = (await store.list()).slice(0, size);
     const leaves = receipts.map((r) => sha256(canonical(r.payload)));
     let index = -1;
     if (wantLeaf) index = leaves.indexOf(wantLeaf);
@@ -750,10 +768,15 @@ export function createGateway(config: GatewayConfig): Gateway {
     if (!first || !second) return c.json({ error: "anchor not found" }, 404);
     if (!isAnchorV2(first) || !isAnchorV2(second)) return c.json({ error: "consistency proofs require v2 anchors" }, 400);
     if (first.tree_size > second.tree_size) return c.json({ error: "from must not be larger than to" }, 400);
-    const receipts = ((await store.list())).slice(0, second.tree_size);
-    if (receipts.length < second.tree_size) return c.json({ error: "receipt log is shorter than the anchor" }, 409);
-    const leaves = await Promise.all(receipts.map(leafOf));
-    const proof = await consistencyProof(leaves, first.tree_size);
+    const key = `${first.anchor_hash}:${second.anchor_hash}`;
+    let proof = consistencyCache.get(key);
+    if (!proof) {
+      const leaves = await anchoredLeaves(second.tree_size);
+      if (!leaves) return c.json({ error: "receipt log is shorter than the anchor" }, 409);
+      proof = await consistencyProof(leaves, first.tree_size);
+      if (consistencyCache.size >= 256) consistencyCache.delete(consistencyCache.keys().next().value as string);
+      consistencyCache.set(key, proof);
+    }
     return c.json({ ...proof, first_root: first.root, second_root: second.root, first, second });
   });
 
@@ -804,6 +827,23 @@ export function createGateway(config: GatewayConfig): Gateway {
     handleAction: (req: ActionRequest, options?: ActionOptions) => handleAction(req, options), check: (req: ActionRequest) => handleAction(req, { checkOnly: true }),
     observeAction, setPolicy, anchor, unresolvedActions, reconcileAction,
   };
+}
+
+const AGENT_KEY_ID = /^key:[0-9a-f]{16}$/;
+
+/** The stop a kill or resume body names: `{ "target": "global" }`, `{ "agent": "key:…" }` or `{ "target": "key:…" }`.
+ *  Anything else (no body, a body that does not parse, an unknown or misspelled key, a value that is not a string) names
+ *  nothing; `invalidAgent` marks a body that names an agent by a malformed key id. */
+function stopTarget(body: Record<string, unknown> | null): { target: string } | { error: string; invalidAgent?: true } {
+  const expected = 'name the stop: {"target":"global"} or {"agent":"key:<16 hex>"}';
+  if (!body) return { error: `request body must be a JSON object; ${expected}` };
+  const keys = Object.keys(body);
+  if (keys.length !== 1 || (keys[0] !== "agent" && keys[0] !== "target")) return { error: expected };
+  const value = body[keys[0]];
+  if (typeof value !== "string") return { error: expected };
+  if (value === "global") return { target: "global" };
+  if (!AGENT_KEY_ID.test(value)) return { error: "invalid agent key id", invalidAgent: true };
+  return { target: value };
 }
 
 async function optionalJson(c: Context): Promise<Record<string, unknown> | null> {

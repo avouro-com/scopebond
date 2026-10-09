@@ -49,8 +49,8 @@ A signed `allowed_pending` lifecycle record is persisted before external I/O. Re
 dispatching and outcome-unknown actions remain charged conservatively across SQLite restarts. A
 policy reload cannot change the snapshot named by an in-flight action. Global-scope
 limits fail closed unless `gatewaysComplete: true` declares that the configured
-coordinator owns the complete gateway set. Stores without atomic reservations
-(including the JSONL and KV implementations) reject dispatch executors explicitly;
+coordinator owns the complete gateway set. Stores without a pre-dispatch lifecycle record
+(the JSONL and KV implementations) reject dispatch executors explicitly;
 they remain suitable for simulation and passive observation.
 
 ## Quickstart
@@ -77,6 +77,15 @@ Routes: `POST /v1/evaluate`, `POST /v1/observe`, `POST /mcp` (MCP ingress), `POS
 `POST /v1/anchor`, `GET /v1/anchors` · `/v1/anchors/latest` · `/v1/anchors/proof`,
 `GET /healthz`.
 
+The gateway listens on `127.0.0.1` unless `HOST` says otherwise, and prints the address it is bound to. To
+serve other machines (a container, a shared host), set `HOST=0.0.0.0` (or `::`) and put TLS and access control
+in front of it, such as a reverse proxy.
+
+The kill switch takes the control token. `POST /v1/kill` with `{"agent":"key:<16 hex>"}` stops one agent
+(a malformed key id is refused); any other body, or none, stops everything. `POST /v1/resume` lifts exactly the stop it names, `{"target":"global"}`
+or `{"agent":"key:<16 hex>"}`, and refuses (400) a body that names nothing: an empty or unparseable body, an
+unknown or misspelled key, or a value that is not a string never lifts the global stop.
+
 On first run the gateway generates and persists an Ed25519 attester key
 (`./scopebond-attester.key`) and a durable SQLite receipt store
 (`./scopebond.db`), so **receipts stay verifiable and survive restarts**. Both, and
@@ -88,6 +97,7 @@ do not close the alpha findings described above. Configure:
 
 | Env | Default | Purpose |
 |---|---|---|
+| `HOST` | `127.0.0.1` | listen address (`0.0.0.0` or `::` for every interface, behind TLS and access control) |
 | `PORT` | `8787` | listen port |
 | `SCOPEBOND_KEY_FILE` | `./scopebond-attester.key` | attester private key (PKCS8 PEM) |
 | `SCOPEBOND_ATTESTER_KEY` | — | attester key inline (PEM), e.g. from a secret store |
@@ -97,7 +107,8 @@ do not close the alpha findings described above. Configure:
 | `SCOPEBOND_CONTROL_TOKEN` | — | bearer token (minimum 24 characters) enabling receipt/lifecycle reads, reconciliation and kill/resume routes |
 | `SCOPEBOND_UNSAFE_ALLOW_UNSIGNED` | — | set to `1` only for local simulation; receipts are marked `insecure_development` |
 | `SCOPEBOND_ANCHOR_INTERVAL` | `24h` | anchor cadence (`24h`, `1h`, `30m`; `0`/`off` disables) |
-| `SCOPEBOND_POLICY_WATCH` | `1` | hot-reload the policy file on change (`0` disables) |
+| `SCOPEBOND_POLICY_WATCH` | `1` | hot-reload the policy file and the key registry on change; `poll` only re-reads them periodically; `0` disables |
+| `SCOPEBOND_POLICY_POLL` | `5s` | how often the watched files are also re-read (`0` turns the periodic re-read off) |
 | `SCOPEBOND_CLOUD_URL` | — | mirror receipts to a hosted control plane (e.g. `https://cloud.scopebond.com`) |
 | `SCOPEBOND_CLOUD_CREDENTIAL` | — | scoped machine credential (`sbm_…`) returned once by Cloud gateway enrollment |
 | `SCOPEBOND_CLOUD_FLUSH_MS` | `15000` | Cloud export flush interval |
@@ -187,10 +198,13 @@ first new anchor chains to the last of them. See SPEC.md "Anchors".
 ## Policy hot-reload
 
 Edit `policy.json` while the gateway runs and it swaps the policy in without a
-restart (recomputing the policy hash), **fail safe** — a malformed file is rejected
-and the current policy stays in force. `POST`ing a policy over HTTP is deliberately
-**not** supported (that would let anyone weaken enforcement); policy changes come
-from the watched file or the authenticated hosted control plane.
+restart (recomputing the policy hash and logging it), **fail safe** — a malformed file is rejected
+and the current policy stays in force. The directory is watched rather than the file, so a file
+replaced by rename (an editor save, a configuration tool, a Kubernetes ConfigMap update) keeps
+being followed, and the file is also re-read every `SCOPEBOND_POLICY_POLL` in case a change was
+missed. The key registry (`SCOPEBOND_PRINCIPAL_KEYS_FILE`) is followed the same way, so a key marked
+`"status": "revoked"` is refused without a restart. `POST`ing a policy over HTTP is deliberately **not** supported
+(that would let anyone weaken enforcement); the watched file is the only source of policy changes.
 
 ## Prove it — verify a receipt
 
@@ -305,8 +319,15 @@ The executor resolves the name again when it connects, so a DNS server that answ
 differently between the two lookups (DNS rebinding) is not stopped here. A denylist
 is best effort: prefer an `endpoint_allowlist`, and constrain egress at the network.
 
-A call the executor refuses before sending is recorded as `failed`, not as an
-unknown outcome.
+A call that cannot be sent as written (a path that names another host, a header with a line break, a
+connection or framing header such as `Transfer-Encoding` or `Content-Length`, a method fetch does not
+send, a body on a `GET`) is refused as bad input (`400`) before it is reserved, so it is not charged
+against any limit. A name refused after resolving to a denied address is recorded as `failed`, not as
+an unknown outcome.
+
+The executor reads at most `maxResponseBytes` of a response (default 1 MiB; it only keeps a digest)
+and stops a call after `timeoutMs` (default 30 s). A longer response is recorded as executed with an
+`over-limit` reference; a call that runs out of time may have been sent, so its outcome is recorded as unknown.
 
 ### Constrained support refund adapter
 
@@ -319,7 +340,8 @@ body. Redirects are disabled and the durable action ID becomes the upstream
 response without issuing the refund again. An unavailable or inconclusive lookup
 keeps `outcome_unknown` and its conservative authority hold.
 Successful calls return only bounded `status`, `refund_id`, and `duplicate` fields;
-the receipt retains a digest of the complete response.
+the receipt retains a digest of the complete response. A response is read only up to
+`maxResponseBytes` (default 64 KiB) and a call is stopped after `timeoutMs` (default 30 s).
 
 ```ts
 import { createSupportRefundExecutor } from "@scopebond/gateway";
@@ -344,6 +366,19 @@ Dispatch executors may implement a read-only `query({ actionId })` method return
 ambiguous dispatch exception and exposes unresolved records only through the control
 API. Set `outboundExecution: false` when opening a restored store: new dispatch and
 reconciliation network calls stay disabled until an operator has reviewed the state.
+
+### Cloudflare Workers (KV)
+
+`createWorkerGateway({ policy, kv, authentication })` runs the gateway in a Worker with a persistent
+attester key and a receipt log in a KV namespace (`KvReceiptStore`). The log is written in pages that
+are never rewritten once full, so receipts are not dropped and anchors keep matching it. Writes, and the
+single-use consumption of request and approval IDs, run one at a time for every store on the same
+namespace in an isolate, so concurrent requests neither lose receipts nor accept one authorization twice.
+KV itself has no atomic update and is eventually consistent between locations, so these guarantees hold
+for one writer: create the gateway once per isolate and, when more than one instance may serve requests,
+back `kv` with a Durable Object's storage
+(`{ get: async (k) => (await storage.get(k)) ?? null, put: (k, v) => storage.put(k, v) }`).
+A log written by an earlier release (one JSON array) is read as the start of the log and carried over.
 
 ## `[PLANNED]`
 
