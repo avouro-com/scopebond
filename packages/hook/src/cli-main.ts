@@ -1149,7 +1149,9 @@ async function runFlush(): Promise<void> {
   // Unbounded, so its outcome is a real one: `status` and `doctor` show it like any other.
   if (status) recordDeliveryAttempt(dir, status, Date.now(), before, null, "hook");
   runtime.exporter?.stop();
-  console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
+  // A wait the workspace asked for (429, or 503 with Retry-After) holds here too: say when the next try is.
+  const wait = status?.pending && status.backoff && status.backoff.until > Date.now() && !status.lastError ? status.backoff.until : null;
+  console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}${wait ? ` (the workspace asked this computer to wait; next try after ${new Date(wait).toISOString()})` : ""}`);
   // Let pending HTTP handles close normally (forced exit can abort on Windows).
   process.exitCode = status && status.pending > 0 ? 1 : 0;
 }
