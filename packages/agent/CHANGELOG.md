@@ -1,5 +1,12 @@
 # @scopebond/agent
 
+## 0.6.3
+
+### Patch Changes
+
+- Updated dependencies [cbfe241]
+  - @scopebond/hook@0.21.9
+
 ## 0.6.2
 
 ### Patch Changes
