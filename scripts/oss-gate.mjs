@@ -159,7 +159,7 @@ function git(...args) {
 }
 /** A revision range from the command line: one git revision expression, never an option. */
 const safeRange = (range) => {
-  if (typeof range !== "string" || !/^[^-s][^s]*$/.test(range)) { console.error(`oss-gate: not a revision range: ${range}`); process.exit(2); }
+  if (typeof range !== "string" || !/^[^-\s]\S*$/.test(range)) { console.error(`oss-gate: not a revision range: ${range}`); process.exit(2); }
   return range;
 };
 
