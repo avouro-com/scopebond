@@ -1,5 +1,15 @@
 # @scopebond/framework
 
+## 0.3.14
+
+### Patch Changes
+
+- 611d02c: Lint clean-ups in the tool adapters that change no behaviour.
+- Updated dependencies [611d02c]
+- Updated dependencies [a17f73b]
+  - @scopebond/gateway@0.17.5
+  - @scopebond/sdk@0.1.7
+
 ## 0.3.13
 
 ### Patch Changes

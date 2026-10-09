@@ -1,5 +1,15 @@
 # @scopebond/hook
 
+## 0.21.7
+
+### Patch Changes
+
+- 3805a5a: Reading a command, a package spec or a `wrangler.toml` now takes time in proportion to its length: a crafted one (a word of many wildcards, a long hyphenated header name, thousands of blank lines) could hold a hook check for seconds or, in the worst cases, far past the agent's time limit.
+- Updated dependencies [611d02c]
+- Updated dependencies [a17f73b]
+  - @scopebond/gateway@0.17.5
+  - @scopebond/sdk@0.1.7
+
 ## 0.21.6
 
 ### Patch Changes

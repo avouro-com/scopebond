@@ -1,5 +1,15 @@
 # @scopebond/mcp
 
+## 2.0.10
+
+### Patch Changes
+
+- a17f73b: A `tools/call` whose tool name is an object with its own `toString` key is decided instead of failing with an error, a failed reply write can no longer surface as an unhandled rejection in the stdio proxy, and `mapMcpToolCall` returns precisely typed params.
+- Updated dependencies [611d02c]
+- Updated dependencies [a17f73b]
+  - @scopebond/gateway@0.17.5
+  - @scopebond/verify@0.6.3
+
 ## 2.0.9
 
 ### Patch Changes

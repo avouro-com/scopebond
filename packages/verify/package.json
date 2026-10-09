@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/verify",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Open-source deterministic policy evaluation and evidence verification for Scopebond action records, with portable conformance vectors.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
