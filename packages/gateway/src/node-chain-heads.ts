@@ -45,7 +45,7 @@ export function mergeChainHead(state: ChainHeadsState, head: SignedChainHead): C
 export function readChainHeads(file: string): ChainHeadsState {
   try {
     if (!existsSync(file)) return empty();
-    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Partial<ChainHeadsState>;
+    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as Partial<ChainHeadsState>;
     if (parsed?.version !== 1 || typeof parsed.chains !== "object" || parsed.chains === null) return empty();
     const chains: Record<string, SignedChainHead[]> = {};
     for (const [id, list] of Object.entries(parsed.chains)) if (Array.isArray(list)) chains[id] = list.filter(isSignedChainHead);

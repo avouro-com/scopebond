@@ -151,7 +151,7 @@ test("deleting a middle segment and re-chaining the rest (re-signed or not) cont
   assert.equal((await verifySegmentChain([a.text, rechained.text], [])).ok, true, "the files alone verify");
   const check = await verifySegmentChain([a.text, rechained.text], kept);
   assert.equal(check.ok, false);
-  assert.match(check.problems.join("\n"), new RegExp(`segment ${c.digest.slice(0, 12)} is not among the segments given`));
+  assert.ok(check.problems.join("\n").includes(`segment ${c.digest.slice(0, 12)} is not among the segments given`), check.problems.join("\n"));
 });
 
 test("a changed record, a broken link or a gap in the sequence is reported", async () => {
