@@ -632,9 +632,10 @@ treated as that file. Every destination of a `git push` is checked in the common
 spellings (`refs/heads/main`, `HEAD:main`, a second refspec, `--repo`, `--all`,
 `--mirror`); a push whose destination is not on the command line (a git alias, a
 configured push refspec, `send-pack`) is denied, and a tags-only push is allowed. An alias
-or refspec given through git's environment (`GIT_CONFIG_COUNT` with `GIT_CONFIG_KEY_<n>`,
-`GIT_CONFIG_PARAMETERS`, or a config file named by `GIT_CONFIG_GLOBAL`, `HOME` and the like)
-counts the same as one given with `-c`, wherever in the command it is set. The
+or refspec given through git's environment (`GIT_CONFIG_COUNT` with `GIT_CONFIG_KEY_<n>`, or
+`GIT_CONFIG_PARAMETERS`) on the git command, an enclosing command or an earlier `export` counts
+the same as one given with `-c`; a push that names its destination is judged by that
+destination. The
 agent running the hook's own `init`, `install`, `trust`, `uninstall`, `connect` or
 `login` is denied, and those commands also refuse a non-interactive terminal unless
 `--yes` is passed. So is the agent switching off the Scopebond Agent: `scopebond-agent
@@ -644,10 +645,13 @@ uninstall -g`, `pnpm rm -g`, `yarn global remove`, `bun remove -g`). `scopebond-
 status`, `flush`, `check`, `repair` and `autostart on` stay allowed. So is starting a coding
 agent without this computer's hooks (its settings overridden, its permission checks skipped,
 or its config folder moved with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_CONFIG_DIR`,
-`XDG_CONFIG_HOME` or the home folder set anywhere in the same command: an earlier `export`, an
-enclosing `sh -c`, a PowerShell `$env:` assignment), and removing or renaming a folder that
-holds what this protects: an agent's settings folder (`.claude`, `.cursor`, `.codex`), a `.git`
-folder, the working folder or a folder above it, or a home folder. A person can still
+`XDG_CONFIG_HOME` or the home folder set on the agent's command, an enclosing `sh -c`, or an
+earlier `export`, `set` or PowerShell `$env:` in the same command; an agent's name in a message
+or an argument starts nothing), and removing or renaming a folder that holds what this protects:
+the project's or the home folder's own `.claude`, `.cursor`, `.codex` or `.scopebond`, the
+project's `.git`, or a folder above them. The same names elsewhere (a test fixture, a vendored
+library's `.git`) and a `git clean -x` that cannot reach the project's `.scopebond` or personal
+hook settings stay allowed. A person can still
 run any of these from their own terminal, which the hook never sees. These denials, and the
 denial of any edit to Scopebond's own folder, hold whatever the rules say: they are not rules
 that can be set to record. A command that names Scopebond but cannot be read (an alias, a
@@ -665,9 +669,10 @@ script or interpreter (`python script.py`; Scopebond's own folder named in an
 interpreter's arguments or inline code is treated as read), aliases, functions and variables
 defined in an earlier call (where the agent's shell persists between calls), git aliases from
 the user's own config files, recursive reads of a parent of a protected directory
-(`grep -r . `, `cp -r ~ /tmp`), or deletion expressed as arguments (`find -delete`,
-`git clean`) other than of a protected folder by name or, with `git clean -x`, of the working
-folder. Commands whose written files are named only inside their
+(`grep -r . `, `cp -r ~ /tmp`), a folder named through a variable (`rm -rf $DIR`), or
+deletion expressed as arguments (`find -delete`, `git clean`) other than of a protected folder
+by name or, with `git clean -x`, of a project that holds a `.scopebond`. Commands whose written
+files are named only inside their
 input — `patch`, `git apply`, `git am`, `tar x`, `unzip`, `7z x`, `cpio -i` — are
 recorded with an unevaluated write: allowed in normal mode, denied in strict mode.
 Reading any `*.pem` file is denied, including a public certificate, because a PEM file
