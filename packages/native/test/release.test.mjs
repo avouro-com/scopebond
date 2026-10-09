@@ -63,12 +63,13 @@ test("a release without the updater key fails instead of passing without a manif
   writeFileSync(join(folder, "scopebond-agent-1.2.3-x64.msi"), "msi");
   const env = { ...process.env };
   delete env.UPDATER_SIGNING_KEY;
-  const missing = spawnSync(process.execPath, [join(native, "manifest.mjs"), "1.2.3", folder], { encoding: "utf8", env });
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  const missing = spawnSync(process.execPath, [join(native, "manifest.mjs"), "1.2.3", folder, commit], { encoding: "utf8", env });
   assert.equal(missing.status, 1, missing.stderr);
   assert.match(missing.stderr, /UPDATER_SIGNING_KEY is not set/);
   assert.equal(existsSync(join(folder, "scopebond-agent-1.2.3.manifest.json")), false);
   const { privateKey } = generateKeyPairSync("ed25519");
-  const signed = spawnSync(process.execPath, [join(native, "manifest.mjs"), "1.2.3", folder], {
+  const signed = spawnSync(process.execPath, [join(native, "manifest.mjs"), "1.2.3", folder, commit], {
     encoding: "utf8", env: { ...env, UPDATER_SIGNING_KEY: privateKey.export({ type: "pkcs8", format: "pem" }) },
   });
   assert.equal(signed.status, 0, signed.stderr);

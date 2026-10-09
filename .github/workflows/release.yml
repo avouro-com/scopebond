@@ -1,10 +1,17 @@
 name: Release
 
-# Versioning and publish-on-merge. On push to main with pending changesets, this
-# opens/updates a "Version packages" PR that bumps versions and writes changelogs.
-# Merging that PR is the publish decision: with no changesets left, the step below
-# runs `pnpm release`, which builds and publishes the bumped packages to npm with
-# provenance (NPM_TOKEN_SCOPEBOND secret). See RELEASING.md.
+# Versioning and publish-on-merge. On push to main with pending changesets, the
+# `version` job opens/updates a "Version packages" pull request (branch
+# changeset-release/main) that bumps versions and writes changelogs. Merging that
+# pull request is the publish decision: the `publish` job runs only when the pushed
+# commit is that pull request's merge and no changesets are left. Any other push
+# to main (including a bare `version` edit) publishes nothing. See RELEASING.md.
+#
+# Credentials stay with the step that needs them: the automation token only in the
+# step that opens the Version pull request, the npm token only in the publish step.
+# Every job that reads a secret is bound to an environment. Installs run no
+# dependency scripts and restore no shared cache, and checkouts keep no token in
+# the git config.
 
 on:
   push:
@@ -18,50 +25,110 @@ concurrency:
 
 jobs:
   version:
-    name: version or publish
+    name: version pull request
     runs-on: ubuntu-latest
-    # The automation and npm tokens are read only in this environment's jobs
-    # (deployment: false — this job versions and publishes; it deploys nothing).
+    # The automation token is read only in this environment's jobs
+    # (deployment: false — this job opens a pull request; it deploys nothing).
     environment:
       name: npm
       deployment: false
     permissions:
       contents: write # push the changeset-release/main branch with the version bumps
       pull-requests: write # open and update the "Version packages" pull request
-      id-token: write # npm provenance: the registry records which workflow run built each package
+    outputs:
+      hasChangesets: ${{ steps.changesets.outputs.has-changesets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Not kept in .git/config: changesets/action commits the version branch and
-          # creates tags and releases through the GitHub API with its github-token input.
+          # Not kept in .git/config: changesets/action commits the version branch
+          # through the GitHub API with its github-token input.
           persist-credentials: false
-          # The repository currently disallows Actions' default token from
-          # creating pull requests. Reuse the existing company automation PAT
-          # when configured, while retaining github.token for forks/dev copies.
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # No dependency cache: a release job starts from the lockfile alone.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22.20.0
-          cache: pnpm
-          # Writes an .npmrc for the npm registry that reads NODE_AUTH_TOKEN (set below).
-          registry-url: "https://registry.npmjs.org"
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Configure company commit identity
         run: |
           git config user.name "avourohq"
           git config user.email "founder@avouro.com"
-      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+      # Opens/updates the Version pull request only; it has no publish script.
+      - id: changesets
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
+          # The repository currently disallows Actions' default token from
+          # creating pull requests. Reuse the existing company automation PAT
+          # when configured, while retaining github.token for forks/dev copies.
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
           version-script: pnpm version:packages
           commit-message: "chore: version packages"
           pr-title: "Version packages"
-          # Publish-on-merge: with pending changesets this opens/updates the Version
-          # PR; once that PR is merged (no changesets left) it runs `pnpm release`,
-          # which builds and `changeset publish`es the bumped packages to npm.
-          publish-script: pnpm release
+
+  check:
+    name: is this the Version packages merge
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read the pull requests associated with this commit
+      pull-requests: read # read the pull requests associated with this commit
+    outputs:
+      versionMerge: ${{ steps.merge.outputs.versionMerge }}
+    steps:
+      # True only when this exact commit is the merge of a pull request from this
+      # repository's changeset-release/main branch into main.
+      - id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          count=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '[.[] | select(.merged_at != null and .merge_commit_sha == $ENV.SHA and .base.ref == "main" and .head.ref == "changeset-release/main" and .head.repo.full_name == $ENV.REPO)] | length')
+          if [ "$count" = "1" ]; then
+            echo "versionMerge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "versionMerge=false" >> "$GITHUB_OUTPUT"
+            echo "Not the merge of the Version packages pull request: nothing is published."
+          fi
+
+  publish:
+    name: publish to npm
+    needs: [version, check]
+    if: needs.version.outputs.hasChangesets == 'false' && needs.check.outputs.versionMerge == 'true'
+    runs-on: ubuntu-latest
+    # The npm token is read only in this environment's jobs.
+    environment: npm-publish
+    permissions:
+      contents: write # push the release tags and create the GitHub releases
+      id-token: write # npm provenance: the registry records which workflow run built each package
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # No dependency cache: a release job starts from the lockfile alone.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.20.0
+          # Writes an .npmrc for the npm registry that reads NODE_AUTH_TOKEN, which is
+          # set only on the publish step below.
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build every package (no credentials)
+        run: pnpm -r build
+      - name: Configure company commit identity (release tags)
+        run: |
+          git config user.name "avourohq"
+          git config user.email "founder@avouro.com"
+      # The one step with the npm token: `changeset publish` of the packages built
+      # above (no package scripts run here), then the release tags and GitHub releases.
+      - name: Publish to npm
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          github-token: ${{ github.token }}
+          publish-script: pnpm exec changeset publish
         env:
           # Read by the .npmrc that setup-node wrote (changesets/action v2 writes none).
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
           NPM_CONFIG_PROVENANCE: "true"
+          npm_config_ignore_scripts: "true"
