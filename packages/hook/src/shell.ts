@@ -395,7 +395,8 @@ function powershellScriptArg(argv: string[]): string | null | undefined {
       const b64 = argv[i + 1];
       if (!b64 || !/^[A-Za-z0-9+/=]+$/.test(b64)) return null;
       const text = Buffer.from(b64, "base64").toString("utf16le");
-      return /[\u0000-\u0008�]/.test(text) ? null : text;
+      // eslint-disable-next-line no-control-regex -- deliberate: decoded text holding NUL..BS or U+FFFD is binary, not a script
+      return /[\u0000-\u0008\uFFFD]/.test(text) ? null : text;
     }
   }
   return undefined;

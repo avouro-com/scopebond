@@ -289,6 +289,7 @@ export interface DispatchedAction {
 
 export const REFERENCE_SET_VERSION = "hook-1";
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: one unbounded quantifier (its overlap with the last character costs one step back), and the lookahead bounds the input to 253 characters
 export const HOSTNAME = /^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/;
 const PROGRAM_DESTRUCTIVE = new Set([
   "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "shred", "truncate", "unlink", "wipe", "srm",

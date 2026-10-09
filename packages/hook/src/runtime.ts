@@ -10,7 +10,7 @@ import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node"
 import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
-import { explainDeny, type ExplainIntent } from "./explain.js";
+import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
@@ -284,7 +284,7 @@ export function createHookRuntime(config: RuntimeConfig) {
   // gateway's own per-intent hook only reports what the runtime already decided for this call.
   const boundary = openDispatchGuard(dirname(config.policyPath));
   let boundaryVerdict: DispatchDecision | null = null;
-  const gatewayGuard: DispatchGuard = { authorize: async () => boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] } };
+  const gatewayGuard: DispatchGuard = { authorize: () => Promise.resolve(boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] }) };
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only", dispatchGuard: gatewayGuard });
   const made = config.override?.(agent.kid) ?? null;
   // Once a person has been asked, most of the hook's time limit is gone: the receipt that follows waits less for the local
@@ -338,7 +338,7 @@ export function createHookRuntime(config: RuntimeConfig) {
      *  busy session was writing tens of megabytes of pure overhead into the user's project.
      *  Always safe to call, and every exit path should. */
     close(): void {
-      try { baseStore.close?.(); } catch { /* the decision is already recorded */ }
+      try { void Promise.resolve(baseStore.close?.()).catch(() => undefined); } catch { /* the decision is already recorded */ }
       try { outbox?.close(); } catch { /* best effort */ }
       try { boundary?.close(); } catch { /* best effort */ }
     },

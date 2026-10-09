@@ -289,11 +289,11 @@ export function readHarnessConfig(file: string): Record<string, unknown> {
 function readHarnessConfigIfPresent(file: string): Record<string, unknown> | undefined {
   const raw = readIfPresent(file);
   if (raw === undefined) return undefined;
-  const text = raw.replace(/^﻿/, "");
+  const text = raw.replace(/^\uFEFF/, "");
   if (!text.trim()) return {};
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch (error) {
-    throw new Error(`${file} is not valid JSON (${(error as Error).message}); fix or move it, then run this again — it was left unchanged`);
+    throw new Error(`${file} is not valid JSON (${(error as Error).message}); fix or move it, then run this again — it was left unchanged`, { cause: error });
   }
   if (!isRecord(parsed)) throw new Error(`${file} is not a JSON object; fix or move it, then run this again — it was left unchanged`);
   return parsed;

@@ -10,6 +10,7 @@
 
 import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { INTERPRETERS, canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
+import { textOf } from "./text.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -52,6 +53,7 @@ const trimDotsSpaces = (seg: string): string => {
 };
 // An NTFS stream or index suffix on any part of a path names the same file or folder: `.scopebond::$INDEX_ALLOCATION`
 // is the folder `.scopebond`, `policy.json:x` and `policy.json::$DATA` are streams of `policy.json`. A drive (`C:`) stays.
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and a colon separates every repeated part
 const NTFS_SUFFIX = /^([^:]+):(?:[^:]*)(?::\$[A-Za-z_]+)?$/;
 const stripStream = (seg: string, index: number): string => {
   if (index === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
@@ -64,7 +66,7 @@ const normPath = (s: string): string =>
     .replace(/\/(?:\.\/)+/g, "/").replace(/\/{2,}/g, "/");
 
 const rel = (value: unknown, cwd?: string): string => {
-  const s = normPath(String(value ?? ""));
+  const s = normPath(textOf(value));
   const c = cwd ? normPath(cwd) : undefined;
   if (c && s.toLowerCase().startsWith(c.toLowerCase() + "/")) return s.slice(c.length + 1);
   if (c && s.toLowerCase() === c.toLowerCase()) return ".";
@@ -76,6 +78,7 @@ const rel = (value: unknown, cwd?: string): string => {
 // protected name is expanded to every protected name it could stand for, and the
 // path is checked in each spelling. Only the names below are expanded; any other
 // short name is left as written.
+// eslint-disable-next-line security/detect-unsafe-regex -- bounded: every repeat has a small fixed maximum
 const SHORT_SEGMENT = /^([^.~\s/]{1,6})~\d{1,6}(?:\.([^.\s/]{1,3}))?$/;
 const SHORT_TARGETS = [
   ".scopebond", ".claude", ".cursor", ".codex", ".github", ".git", ".husky", ".circleci", ".gitlab-ci.yml", ".gitlab-ci.yaml",
@@ -137,30 +140,72 @@ const PROTECTED_SAMPLES = [
 const UNRESOLVED = /[*?[\]{}$`]/;
 const EXPANSION = /\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$[A-Za-z0-9_]+|[*?[\]{}]/g;
 
-/** Convert a shell word with globs/variables/braces into an anchored matcher. Glob
- *  metacharacters stay within one path segment; a variable or substitution may span
- *  segments. Like the shell, a segment wildcard does not match a leading dot. Linear:
- *  no nested quantifiers are generated. */
-function wordMatcher(word: string): RegExp {
-  let re = "";
+/** One step of a word matcher: a literal character, one character of a segment (`?`, `[…]`), any run within a segment
+ *  (`*`, `{…}`), any text across segments (`$VAR`, `$(…)`, `` `…` ``), or "the next character is not a dot". */
+type WordStep = { kind: "char"; c: string } | { kind: "one" } | { kind: "run" } | { kind: "any" } | { kind: "noDot" };
+/** A character as a case-insensitive match compares it (the regular-expression `i` rule, without `u`). */
+const caseless = (c: string): string => {
+  const upper = c.toUpperCase();
+  return upper.length !== 1 || (c.charCodeAt(0) >= 128 && upper.charCodeAt(0) < 128) ? c : upper;
+};
+const LINE_END = new Set(["\n", "\r", "\u2028", "\u2029"]);
+
+/** Convert a shell word with globs/variables/braces into an anchored, case-insensitive matcher. Glob metacharacters
+ *  stay within one path segment; a variable or substitution may span segments. Like the shell, a segment wildcard does
+ *  not match a leading dot. The match walks the word once over the set of positions reached in the candidate, so its
+ *  cost is the word's length times the candidate's, however many wildcards the word holds: as a regular expression,
+ *  adjacent wildcards (`cat **********x`) backtracked exponentially. */
+function wordMatcher(word: string): { test(candidate: string): boolean } {
+  const steps: WordStep[] = [];
   let segStart = true;
   for (let i = 0; i < word.length; i++) {
     const c = word[i];
-    const leadingDot = segStart ? "(?!\\.)" : "";
-    if (c === "*") re += leadingDot + "[^/]*";
-    else if (c === "?") re += leadingDot + "[^/]";
-    else if (c === "[") { const end = word.indexOf("]", i + 1); re += leadingDot + "[^/]"; if (end > i) i = end; }
-    else if (c === "{") { const end = word.indexOf("}", i + 1); re += "[^/]*"; if (end > i) i = end; }
+    if (segStart && (c === "*" || c === "?" || c === "[")) steps.push({ kind: "noDot" });
+    if (c === "*") steps.push({ kind: "run" });
+    else if (c === "?") steps.push({ kind: "one" });
+    else if (c === "[") { const end = word.indexOf("]", i + 1); steps.push({ kind: "one" }); if (end > i) i = end; }
+    else if (c === "{") { const end = word.indexOf("}", i + 1); steps.push({ kind: "run" }); if (end > i) i = end; }
     else if (c === "$" || c === "`") {
       // $VAR, ${VAR…}, $(…) or `…`: any text, possibly several segments.
       if (word[i + 1] === "{" || word[i + 1] === "(") { const close = word[i + 1] === "{" ? "}" : ")"; const end = word.indexOf(close, i + 2); if (end > i) i = end; }
       else if (c === "`") { const end = word.indexOf("`", i + 1); if (end > i) i = end; }
       else while (i + 1 < word.length && /[A-Za-z0-9_]/.test(word[i + 1])) i++;
-      re += ".*";
-    } else re += c.replace(/[.+^()|\\]/g, "\\$&");
+      steps.push({ kind: "any" });
+    } else steps.push({ kind: "char", c: caseless(c) });
     segStart = c === "/";
   }
-  return new RegExp("^(?:" + re + ")$", "i");
+  return {
+    test(candidate: string): boolean {
+      const n = candidate.length;
+      // at[p]: the steps so far can match exactly candidate[0, p).
+      let at = new Array<boolean>(n + 1).fill(false);
+      at[0] = true;
+      for (const step of steps) {
+        const next = new Array<boolean>(n + 1).fill(false);
+        let any = false;
+        if (step.kind === "noDot") {
+          for (let p = 0; p <= n; p++) if (at[p] && candidate[p] !== ".") { next[p] = true; any = true; }
+        } else if (step.kind === "char" || step.kind === "one") {
+          for (let p = 0; p < n; p++) {
+            if (!at[p]) continue;
+            if (step.kind === "char" ? caseless(candidate[p]) === step.c : candidate[p] !== "/") { next[p + 1] = true; any = true; }
+          }
+        } else {
+          // A run within a segment stops before "/"; text across segments stops before a line end (as `.` does).
+          const stops = step.kind === "run" ? (ch: string) => ch === "/" : (ch: string) => LINE_END.has(ch);
+          let open = false;
+          for (let p = 0; p <= n; p++) {
+            if (at[p]) open = true;
+            if (open) { next[p] = true; any = true; }
+            if (p < n && stops(candidate[p])) open = false;
+          }
+        }
+        if (!any) return false;
+        at = next;
+      }
+      return at[n];
+    },
+  };
 }
 
 // The protected sample an unresolvable operand could name, if any. The operand's
@@ -175,7 +220,7 @@ function protectedCandidate(word: string): string | undefined {
   // could name the hook's own files (fail closed) rather than scan it.
   if (word.length > MAX_WORD) return PROTECTED_SAMPLES[0];
   const segs = word.split("/");
-  const cache = new Map<number, RegExp | null>();
+  const cache = new Map<number, ReturnType<typeof wordMatcher> | null>();
   for (const sample of PROTECTED_SAMPLES) {
     const n = sample.split("/").length;
     if (segs.length < n) continue;
@@ -233,6 +278,7 @@ const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.
 // operand naming a secret location is a read of it.
 const TREE_COPIERS = new Set(["tar", "bsdtar", "zip", "7z", "7za", "7zr", "rsync", "cp", "scp", "robocopy", "xcopy", "copy-item", "cpi", "ditto", "compress-archive", "cpio", "pax"]);
 /** A home folder, written any way a shell or PowerShell names it, or a folder above every home (`/`, `/home`, `/Users`, C:\Users). */
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, one unbounded segment per alternative, then a fixed-length tail
 const HOME_OR_ABOVE = /^(?:~|\$HOME|\$\{HOME\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%|%HOMEPATH%|\/|\/home(?:\/[^/]+)?|\/Users(?:\/[^/]+)?|\/root|[A-Za-z]:\\Users(?:\\[^\\]+)?|[A-Za-z]:\/Users(?:\/[^/]+)?|[A-Za-z]:\\?)[\\/]?\.?[\\/]?$/i;
 const UPLOADERS = new Set([
   "curl", "wget", "http", "https", "xh", "httpie", "nc", "ncat", "netcat", "socat", "telnet", "ftp", "sftp", "lftp", "smbclient",
@@ -258,6 +304,7 @@ function curlFileRef(flag: string, value: string): string | undefined {
 }
 // Names an uploader's operand, or `git add`'s, is checked against: a secret path sent
 // or staged (`gh gist create .env`, `git add .env`) is a read of that path.
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: each alternative starts at a separator and its one repeat stops at the next separator
 const SENSITIVE = /(?:^|[/\\])(?:\.scopebond(?:[/\\]|$)|\.env(?:\.[^/\\]*)?$|\.envrc$|\.ssh(?:[/\\]|$)|\.aws(?:[/\\]|$)|\.npmrc$|\.pypirc$|_?\.?netrc$|\.git-credentials$|\.kube(?:[/\\]|$)|\.docker(?:[/\\]|$)|\.azure(?:[/\\]|$)|\.gnupg(?:[/\\]|$)|\.config[/\\](?:gcloud|gh)(?:[/\\]|$)|\.credentials\.json$)|\.(?:key|pem|p12|pfx|jks|keystore)$/i;
 
 // Path literals inside inline code. Each alternative starts at a boundary (not after
@@ -269,8 +316,11 @@ const SENSITIVE = /(?:^|[/\\])(?:\.scopebond(?:[/\\]|$)|\.env(?:\.[^/\\]*)?$|\.e
 export function foldConcatenation(code: string): string {
   return code.replace(/(['"`])\s*(?:\+|\|\||\.\.|\.)?\s*\1/g, "");
 }
+// eslint-disable-next-line security/detect-unsafe-regex -- bounded: the nested optionals spell at most `.scopebond`
 const SCOPEBOND_GLOB = /(?<![\w-])\.sc(?:o(?:p(?:e(?:b(?:o(?:n(?:d)?)?)?)?)?)?)?[*?[]/i;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: a fixed prefix, then one repeat whose greedy end is always a character the lookahead accepts
 const SCOPEBOND_IN_TEXT = /(?<![\w-])\.scopebond(?:[\\/][\w.-]*)?(?![\w-])/gi;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: each alternative is a fixed prefix and one repeat, and the lookbehinds keep a run from being re-entered part-way
 const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
 // A file or process API in the same inline snippet, required in call or member form
 // (not a bare English word — "your .env file" must not read like `File`). Without one,
@@ -279,9 +329,14 @@ const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+
 // file_get_contents) and PowerShell (Get-/Set-Content, Out-File, Invoke-*).
 const FILE_API = /\b(?:open|fopen|readlink|read_file|readfile|read_to_string|readfilesync|writefile|writefilesync|appendfile|appendfilesync|createreadstream|createwritestream|openfile|opensync|copyfile|copyfilesync|rename|renamesync|unlink|unlinksync|popen|spawn|spawnsync|exec|execsync|execfile|execfilesync|system|shell_exec|proc_open|file_get_contents|file_put_contents|urlopen)\s*\(|\b(?:fs|io|os|subprocess|child_process|pathlib|shutil|File|Dir|IO|Pathname|Path|FileUtils)\s*\.\s*\w|\bimport\s+(?:os|subprocess|shutil|pathlib|io)\b|\brequire\s*\(\s*['"`](?:node:)?(?:fs|child_process)|\b(?:Get-Content|Set-Content|Out-File|Add-Content|Import-Csv|Invoke-\w+)\b/i;
 const CODE_SCAN_LIMIT = 20000;
+// The file an sqlite3 argument ATTACHes or `.open`s. A `.open` starts a line after blanks other than line ends: written
+// as `^\s*` (which also crosses line ends) every line start rescanned the blank lines after it, quadratic in their number.
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: every repeat is followed by a character it cannot match (linear-time.test.mjs times it on arguments of 20,000 blank lines)
+const SQLITE_TARGET = /(?:\battach\s+(?:database\s+)?|^[^\S\n\r\u2028\u2029]*\.open\s+|;\s*\.open\s+)([^\s;]+)/gim;
 // A path that is only known at run time: a variable, a command substitution (the parser's placeholder) or a backtick.
 const COMPUTED_TARGET = /\$|`|__sb_subst/;
 // .NET file and stream types as PowerShell names them: `[System.IO.File]::…`, `[IO.Directory]::…`, `New-Object IO.StreamWriter`.
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: each blank-run sits between fixed words
 const DOTNET_FILE_API = /\[\s*(?:System\.)?IO\.(?:File|Directory|FileInfo|DirectoryInfo|FileStream|StreamWriter|StreamReader|Path)\s*\]\s*::|New-Object\s+(?:-TypeName\s+)?(?:System\.)?IO\.(?:FileInfo|DirectoryInfo|FileStream|StreamWriter|StreamReader)\b/i;
 
 /** Option arities of the content readers, so an option's value (`grep -C 3`, `rg -g
@@ -335,6 +390,7 @@ function valuedOption(spec: OptionSpec | undefined, t: string): { name: string; 
 
 // `git config` keys whose value runs a program, redirects a push or reroutes a remote:
 // setting one is a write to the protected git config.
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and each alternative has one `.+`/`.*` before a fixed suffix
 const DANGEROUS_GIT_KEY = /^(?:core\.(?:hookspath|fsmonitor|sshcommand|pager|editor|askpass|gitproxy)|alias\..+|include\.path|includeif\..+|remote\..+\.(?:push|pushurl|url|receivepack|uploadpack)|url\..+\.(?:insteadof|pushinsteadof)|push\.default|remote\.pushdefault|credential\..*helper|filter\..+\.(?:clean|smudge|process)|diff\..+\.(?:textconv|command)|merge\..+\.driver|sequence\.editor|gpg\.(?:.+\.)?program)$/i;
 
 /** The file a `git config …` invocation writes, or undefined when it only reads (or
@@ -529,6 +585,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     } else if (sub === "config") write(gitConfigWrite(a));
     else if (sub === "show" || sub === "cat-file") {
       // `git show REV:path` prints that file's content from history.
+      // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and `[^:]*` stops at the colon that must follow it
       for (const w of a) { const m = /^(?:[^-:][^:]*)?:(?:\d:)?(.+)$/.exec(w); if (m && !/^[a-z][a-z0-9+.-]*:\/\//i.test(w)) read(m[1]); }
     } else if (sub === "apply" || sub === "am") unknownTarget = true;
   } else if (prog === "find") {
@@ -587,6 +644,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     operands.forEach(read);
     operands.forEach(write);
   } else if (COPIERS.has(prog) && operands.length) {
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, a single `.*` at the end
     const hasTarget = args.some((a) => /^(?:-t|--target-directory(?:=.*)?|-destination)$/i.test(a) || /^--target-directory=/.test(a));
     const sources = hasTarget ? operands : operands.slice(0, -1);
     sources.forEach(read);
@@ -629,7 +687,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       const sql = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
       for (const m of sql.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
       // ATTACH or .open of a path the statement computes (a function call, a parameter, a subquery) cannot be judged.
-      for (const m of sql.matchAll(/(?:\battach\s+(?:database\s+)?|^\s*\.open\s+|;\s*\.open\s+)([^\s;]+)/gim)) {
+      for (const m of sql.matchAll(SQLITE_TARGET)) {
         const target = m[1];
         if (/^'[^']*'$|^"[^"]*"$/.test(target)) read(target.slice(1, -1));
         else unknownTarget = true;
@@ -672,12 +730,15 @@ const SELF_SUBCOMMANDS = new Set(["uninstall", "trust", "init", "install", "conn
 // `rules` shows the limits (allowed); with a change (`rules monitor safe-shell`, `rules allow rm`) it relaxes them.
 const RULES_READ_ONLY = new Set(["show"]);
 const isHookCli = (w: string): boolean =>
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored package and path names, one repeat each, followed by the end
   /^scopebond(?:-hook)?(?:\.js)?$/.test(canonProgram(w)) || /^@scopebond\/hook(?:@[^/\s]*)?$/i.test(w) || /@scopebond[\\/]hook[\\/]dist[\\/]cli\.js$/i.test(w);
 // The Scopebond Agent delivers records, keeps versions current and shows the warn-mode
 // override window; the coding agent must not switch it off. `status`, `flush`, `check`,
 // `repair`, `run` and `autostart on` stay allowed: they only keep it working.
 const isAgentCli = (w: string): boolean =>
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored package and path names, one repeat each, followed by the end
   /^scopebond-agent(?:\.js)?$/.test(canonProgram(w)) || /^@scopebond\/agent(?:@[^/\s]*)?$/i.test(w) || /@scopebond[\\/]agent[\\/]dist[\\/]cli\.js$/i.test(w);
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, one repeat followed by the end
 const isScopebondPackage = (w: string): boolean => /^@scopebond\/(?:hook|agent)(?:@[^/\s]*)?$/i.test(w);
 const mentionsAgent = (w: string): boolean => /scopebond-agent|scopebond-tray|@scopebond[\\/]agent/i.test(w);
 // Agent commands that switch Scopebond off or point this computer elsewhere (the hook's own `uninstall` and `login` likewise).
@@ -724,6 +785,8 @@ function selfDisable(sc: SimpleCommand): boolean {
   // Starting a coding agent with its hooks off or redirected runs actions this hook never sees: a switch-off like `autostart off`.
   if (harnessWithoutHooks(sc, all)) return true;
   for (let k = 0; k < all.length; k++) {
+    // Only a word that runs Scopebond's own CLI needs the words after it (collecting them for every word was quadratic).
+    if (!isHookCli(all[k]) && !isAgentCli(all[k])) continue;
     const rest = all.slice(k + 1).filter((a) => !a.startsWith("-"));
     if (isHookCli(all[k]) && rest[0] && SELF_SUBCOMMANDS.has(rest[0].toLowerCase())) return true;
     if (isHookCli(all[k]) && rest[0]?.toLowerCase() === "rules" && rest[1] && !RULES_READ_ONLY.has(rest[1].toLowerCase())) return true;
@@ -866,6 +929,7 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
         reading = closed;
         // A command in it that is Scopebond itself (`scopebond off`, `npx @scopebond/hook uninstall`) is a switch-off too.
         const runsScopebond = (c: SimpleCommand) => NAMES_SCOPEBOND_ITSELF.test(c.programRaw || c.program)
+          // eslint-disable-next-line security/detect-unsafe-regex -- bounded: fixed words with optional fixed suffixes
           || (/^(?:npx|pnpx|bunx|pnpm|yarn)(?:\.cmd|\.exe)?$/i.test(c.program) && c.argv.some((a) => /@scopebond\/|^scopebond(?:-\w+)?$/i.test(a)));
         if (/\.scopebond\b/i.test(win) || closed.some(runsScopebond)) out.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
       }
@@ -929,17 +993,17 @@ export function fillPushBranch(mapped: Mapped[], branch: string | null | undefin
 
 /** Map a Claude Code PreToolUse payload to the normalized actions it represents. */
 export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
-  const name = String(input?.tool_name ?? "");
+  const name = textOf(input?.tool_name);
   const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
-  const cwd = input?.cwd ? String(input.cwd) : undefined;
+  const cwd = input?.cwd ? textOf(input.cwd) : undefined;
   // Every shell-executing tool decomposes the same way. Claude Code exposes Bash;
   // some hosts/agents expose PowerShell or a generic Shell tool — mapping only Bash
   // let a PowerShell command (e.g. `Remove-Item -Recurse -Force .`) fall through to
   // an un-evaluated tool.<name> and be allowed.
   if (name === "Bash" || name === "Shell")
-    return mapShell(String(ti.command ?? ""), cwd);
+    return mapShell(textOf(ti.command), cwd);
   if (name === "PowerShell")
-    return mapShell(String(ti.command ?? ""), cwd, "powershell");
+    return mapShell(textOf(ti.command), cwd, "powershell");
   if (name === "Write" || name === "Edit" || name === "MultiEdit")
     return pathIntents("file.write", rel(ti.file_path, cwd), name);
   if (name === "NotebookEdit")
@@ -972,7 +1036,7 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
     return reads;
   }
   if (name === "WebFetch") {
-    const { host, path } = splitUrl(String(ti.url ?? ""));
+    const { host, path } = splitUrl(textOf(ti.url));
     return one({ action_type: "net.fetch", params: { host, path, method: "GET" } }, true, name);
   }
   const mcp = parseMcpName(name);
@@ -984,15 +1048,15 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
  *  calls as `Bash`, file patches as `apply_patch`, and MCP calls by their native
  *  `mcp__server__tool` name. Other local tools remain visible but unevaluated. */
 export function mapCodexToolUse(input: Record<string, unknown>): Mapped[] {
-  const name = String(input?.tool_name ?? "");
+  const name = textOf(input?.tool_name);
   const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
-  const cwd = input?.cwd ? String(input.cwd) : undefined;
+  const cwd = input?.cwd ? textOf(input.cwd) : undefined;
   if (name === "PowerShell")
-    return mapShell(String(ti.command ?? ti.cmd ?? ""), cwd, "powershell");
+    return mapShell(textOf(ti.command ?? ti.cmd), cwd, "powershell");
   if (name === "Bash" || name === "Shell" || name === "exec_command" || name === "unified_exec")
-    return mapShell(String(ti.command ?? ti.cmd ?? ""), cwd);
+    return mapShell(textOf(ti.command ?? ti.cmd), cwd);
   if (name === "apply_patch" || name === "Edit" || name === "Write")
-    return mapApplyPatch(String(ti.command ?? ti.patch ?? ""), cwd);
+    return mapApplyPatch(textOf(ti.command ?? ti.patch), cwd);
   const mcp = parseMcpName(name);
   if (mcp) return one({ action_type: "mcp.tool.call", params: { server: mcp.server, tool: mcp.tool, args_digest: digest(ti) } }, true, name);
   return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
@@ -1001,10 +1065,10 @@ export function mapCodexToolUse(input: Record<string, unknown>): Mapped[] {
 /** Map a Cursor hook event to the normalized actions it represents. */
 export function mapCursorEvent(event: string, payload: Record<string, unknown>): Mapped[] {
   const p = payload ?? {};
-  const cwd = p.cwd ? String(p.cwd) : undefined;
+  const cwd = p.cwd ? textOf(p.cwd) : undefined;
   switch (event) {
     case "beforeShellExecution":
-      return mapShell(String(p.command ?? ""), cwd);
+      return mapShell(textOf(p.command), cwd);
     case "beforeReadFile":
       return pathIntents("file.read", rel(p.path ?? p.file_path, cwd), event);
     case "afterFileEdit":
@@ -1013,8 +1077,8 @@ export function mapCursorEvent(event: string, payload: Record<string, unknown>):
       // it just cannot be called prevention.
       return pathIntents("file.write", rel(p.path ?? p.file_path, cwd), event).map((m) => ({ ...m, postHoc: true }));
     case "beforeMCPExecution": {
-      const server = String(p.server ?? p.server_name ?? "");
-      const tool = String(p.tool ?? p.tool_name ?? "");
+      const server = textOf(p.server ?? p.server_name);
+      const tool = textOf(p.tool ?? p.tool_name);
       return one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(p.args ?? p.arguments ?? {}) } }, true, event);
     }
     default:
