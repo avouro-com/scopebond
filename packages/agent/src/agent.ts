@@ -79,7 +79,7 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
     const sequenceProof = sequenceProofFor(connection, summaries?.attester);
     // A wait the workspace asked for (429, or 503 with Retry-After), recorded by a hook call or an earlier cycle, holds here
     // too: this cycle's exporter is new, so without it the wait would last only until the next cycle.
-    const backoff = deliveryBackoff(dir);
+    const backoff = deliveryBackoff(dir, now());
     const exporter = createCloudExporter({
       url: ingestUrl(connection), credential: connection.credential, outbox,
       flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries, requestTimeoutMs: options.deliveryTimeoutMs ?? 30_000,

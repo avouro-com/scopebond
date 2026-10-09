@@ -59,7 +59,7 @@ test("heads kept without times are marked held by the time the store next writes
       assert.ok(held >= before && held <= after, `held by the write: ${h.local.received_at}`);
       assert.equal(h.local.sent_at, undefined);
     }
-    assert.deepEqual(kept[2].local, { sent_at: iso(before - 500), received_at: iso(before - 100) });
+    assert.deepEqual(kept[2].local, { sent_at: iso(before - 500), received_at: iso(before - 100), clock: kept[0].local.clock });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

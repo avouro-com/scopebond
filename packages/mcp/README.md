@@ -166,4 +166,10 @@ import { createMcpProxy, mapMcpToolCall } from "@scopebond/mcp";
 `{ handle(message) }`; inject `upstream` to test the decision path without a real
 server.
 
+The session history the windowed clauses count is bounded: at most 10,000 calls and
+8 MiB (`historyLimit: { maxCalls, maxBytes }`), dropping the oldest. While a dropped
+call may still be inside a window, calls are refused with that reason rather than
+decided on a history that lost it, so the bound never lets through more than the
+policy allows.
+
 Experimental alpha; controlled test use only.
