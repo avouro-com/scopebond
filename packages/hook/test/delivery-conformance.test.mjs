@@ -16,6 +16,9 @@ import { ENFORCE } from "./enforce-all.mjs";
 
 const DAY = 86_400_000;
 
+/** These scenarios count records one by one, so each computer sends every receipt in full (not the standard summaries). */
+const fullDetail = (dir) => writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ evidence_detail: "full" }));
+
 /** A workspace whose answer to /v1/ingest the scenario sets. */
 function workspace() {
   const received = [];
@@ -55,6 +58,7 @@ function computer(url, { flushTimeoutMs = 5_000 } = {}) {
     scopes: ["receipt:ingest"], expires_at: new Date(Date.now() + 80 * DAY).toISOString(),
   };
   writeFileSync(join(dir, "cloud.json"), JSON.stringify(connection));
+  fullDetail(dir);
   const runtime = (limitMs = flushTimeoutMs) => createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"),
     dbPath: join(dir, "receipts.db"), cloud: { connection, flushTimeoutMs: limitMs },
@@ -257,6 +261,7 @@ async function actAs(dir, url, credential, n) {
     scopes: ["receipt:ingest"], expires_at: new Date(Date.now() + 80 * DAY).toISOString(),
   };
   writeFileSync(join(dir, "cloud.json"), JSON.stringify(connection));
+  fullDetail(dir);
   const rt = createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"),
     dbPath: join(dir, "receipts.db"), cloud: { connection, flushTimeoutMs: 5_000 },

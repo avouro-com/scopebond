@@ -51,6 +51,8 @@ async function computerWithQueue(url, n) {
     expires_at: new Date(Date.now() + 80 * 86_400_000).toISOString(),
   };
   writeFileSync(join(dir, "cloud.json"), JSON.stringify(connection));
+  // These tests count records one by one, so the computer sends every receipt in full (not the standard summaries).
+  writeFileSync(join(dir, "managed-meta.json"), JSON.stringify({ evidence_detail: "full" }));
   // The hook records n actions while the workspace is down, so they wait in the queue.
   const rt = createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"),

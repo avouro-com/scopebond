@@ -2,7 +2,8 @@
 // ones in full and the routine ones as one signed summary per five minutes (`buildSummary` in the gateway). Every action keeps
 // its own signed receipt here either way, for the retention the workspace set, and the summary's root lets anybody check the
 // receipts against it. The workspace names the level on every rules check (`x-scopebond-evidence-detail`); until it does,
-// this computer sends every receipt, as before.
+// or when the saved value is anything other than "full", this computer sends the standard detail. Full detail is sent only
+// when the workspace (or this computer's own saved setting) says "full".
 //
 // Notable, by the gateway's default: anything not plainly allowed (a block, an override, an approval, a timeout, and an action
 // a Monitor rule matched, which is recorded as out of policy and allowed), pushes, MCP calls, fetches, writes outside the
@@ -24,7 +25,7 @@ export function evidenceDetailFrom(headers: { get(name: string): string | null }
 }
 
 export function evidenceDetail(dir: string): EvidenceDetail {
-  return readMeta(dir).evidence_detail === "standard" ? "standard" : "full";
+  return readMeta(dir).evidence_detail === "full" ? "full" : "standard";
 }
 
 /** The exporter's summary settings for this computer, or undefined when it has no receipt key yet (never makes one). */
