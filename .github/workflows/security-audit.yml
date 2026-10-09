@@ -7,9 +7,10 @@ name: Security audit
 # additive, and everything in it also runs on the private repository, where
 # GitHub's own scanning is a paid add-on.
 #
-# Cost: one job per tool so a failure names itself, but every job is short and
-# only `workflows` and `secrets` run on a pull request. The heavier `deps` and
-# `sast` legs run on the weekly schedule and on demand.
+# Cost: one job per tool so a failure names itself. Every job runs on each pull
+# request as well as weekly and on demand: Actions minutes are free on a public
+# repository, and a new advisory or SAST finding is cheapest to refuse before
+# it merges.
 #
 # Tool versions are pinned; actions are pinned to a commit SHA (never a tag),
 # which is the control this workflow also enforces on everyone else.
@@ -51,6 +52,9 @@ jobs:
       contents: read
       security-events: write # upload SARIF to code scanning (free on public repos)
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # the high-severity gate below diffs base..head to find changed workflows
@@ -156,6 +160,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -193,10 +200,12 @@ jobs:
   # ---------------------------------------------------------------------------
   deps:
     name: deps (osv-scanner + SBOM)
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -240,13 +249,15 @@ jobs:
   # ---------------------------------------------------------------------------
   sast:
     name: sast (semgrep)
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read # read the source being scanned
       security-events: write # upload SARIF to code scanning
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
