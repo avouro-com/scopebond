@@ -10,7 +10,7 @@
 
 import { existsSync } from "node:fs";
 import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
-import { maskWords, pipedSecrets } from "./shell-secrets.js";
+import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "./shell-secrets.js";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf } from "./text.js";
 
@@ -1115,6 +1115,132 @@ function scanCall(commands: SimpleCommand[]): { switchOff: boolean; gitConfigs: 
   return { switchOff, gitConfigs };
 }
 
+// ---- shell variables -----------------------------------------------------------------------------------------------------
+// A variable an earlier command of the call sets stands for its value: `x=.claude; rm -rf $x` removes `.claude`. Each command
+// is read once more with the values its words' variables may hold in place, and what those readings add to its file effects
+// (and a switch-off they show) is recorded beside what the command shows as written. Readings only add: a value that names an
+// ordinary folder adds nothing a rule refuses.
+
+/** What a variable may hold: every value an earlier command of the call gave it (an assignment that may not run, `a || x=…`,
+ *  counts as well), the latest few. `secret` when its name says it holds a credential: its values are used only where they
+ *  name a place the always-on protection guards, so a password never becomes a recorded path. */
+interface Variable { values: string[]; secret: boolean }
+type Variables = Map<string, Variable>;
+/** The places the always-on protection guards by name, wherever they sit: what a credential's value may add. */
+const GUARDED = new RegExp(`${ALWAYS_PROTECTED.source}|(?:^|[\\\\/])cloud\\.json$`, "i"); // eslint-disable-line security/detect-non-literal-regexp -- built from constant patterns only
+const VALUES_PER_VARIABLE = 8;
+const SPELLINGS_PER_WORD = 32;
+const OTHER_FOLDERS = 4;
+const FOLDER_LENGTH = 1024;
+/** A word's use of a variable: `$x`, `${x}`, `${x:-default}` (also `-`, `:=`, `=`), PowerShell `$env:x`, `${env:x}` and
+ *  scoped `$script:x`, cmd `%x%`. Linear: every alternative starts at a fixed character and each run stops at one it cannot
+ *  match. */
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: each alternative opens with `$` or `%`, and the runs stop at characters they exclude
+const VARIABLE_USE = /\$\{(?:env:)?([A-Za-z_]\w*)(?:(:?[-=])([^}$]*))?\}|\$(?:env:|script:|global:|local:|private:)?([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/gi;
+/** A PowerShell variable assignment (`$x = '.claude'`, `[string]$x = …`); it reads as a command named by a variable. */
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and each run is followed by a character it cannot match
+const POWERSHELL_ASSIGNMENT = /^\s*(?:\[[\w.]+\]\s*)?\$(?:script:|global:|local:|private:)?([A-Za-z_]\w*)\s*=(?!=)/i;
+
+/** The text the spellings of one word may add up to: past it the word is read only as written. */
+const SPELLING_BUDGET = 1 << 16;
+const VALUE_LENGTH = 4096;
+type Lookup = (name: string) => Variable | undefined;
+interface Spelling { text: string; secret: boolean }
+
+/** Each spelling `word` has with the values its variables may hold in place (at most SPELLINGS_PER_WORD), or null when it uses
+ *  no variable with a known value or a default (or its spellings would run past SPELLING_BUDGET). A variable with no known
+ *  value is left as written. */
+function spellingsOf(word: string, lookup: Lookup): Spelling[] | null {
+  if (!word.includes("$") && !word.includes("%")) return null;
+  let spellings: Spelling[] = [{ text: "", secret: false }];
+  let copied = 0;
+  let changed = false;
+  let budget = SPELLING_BUDGET;
+  VARIABLE_USE.lastIndex = 0;
+  for (let m = VARIABLE_USE.exec(word); m; m = VARIABLE_USE.exec(word)) {
+    const variable = lookup((m[1] ?? m[4] ?? m[5]).toUpperCase());
+    const choices: Spelling[] = (variable?.values ?? []).map((text) => ({ text, secret: variable?.secret ?? false }));
+    if (m[2] !== undefined) choices.push({ text: m[3], secret: false });
+    const before = word.slice(copied, m.index);
+    const written = m[0];
+    copied = m.index + written.length;
+    const next: Spelling[] = [];
+    if (choices.length) changed = true;
+    for (const s of spellings) {
+      for (const c of choices.length ? choices : [{ text: written, secret: false }]) {
+        if (next.length >= SPELLINGS_PER_WORD) break;
+        const text = s.text + before + c.text;
+        if ((budget -= text.length) < 0) return null;
+        next.push({ text, secret: s.secret || c.secret });
+      }
+    }
+    spellings = next;
+  }
+  if (!changed) return null;
+  const rest = word.slice(copied);
+  const seen = new Set<string>();
+  const out: Spelling[] = [];
+  for (const s of spellings) if (!seen.has(s.text + rest)) { seen.add(s.text + rest); out.push({ text: s.text + rest, secret: s.secret }); }
+  return out;
+}
+
+/** The variables `sc` sets for the commands after it, each with the value given (null when not shown): those `variablesSet`
+ *  reads, every word of a `for` loop, and a PowerShell variable (`$x = …`). */
+function shellVariablesSet(sc: SimpleCommand): VariableSet[] {
+  if (sc.assignOnly) return (sc.assigns ?? []).map((w) => ({ name: w.slice(0, w.indexOf("=")).toUpperCase(), value: w.slice(w.indexOf("=") + 1) }));
+  const ps = POWERSHELL_ENV_ASSIGNMENT.test(sc.raw) ? null : POWERSHELL_ASSIGNMENT.exec(sc.raw);
+  if (ps) return [{ name: ps[1].toUpperCase(), value: powershellValue(sc.raw.slice(ps[0].length)) }];
+  return variablesSet(sc);
+}
+
+/** Remember in `vars` that `name` may now hold `value`, read with the values `lookup` knows in place. A value of several words
+ *  also stands for each word, as an unquoted use splits it. */
+function remember(vars: Variables, lookup: Lookup, name: string, value: string | null): void {
+  if (value === null || !name || value.length > VALUE_LENGTH) return;
+  const known = vars.get(name);
+  const variable: Variable = known ?? { values: [], secret: isCredentialName(name) };
+  for (const v of spellingsOf(value, lookup) ?? [{ text: value, secret: false }]) {
+    if (v.text.length > VALUE_LENGTH) continue;
+    variable.secret ||= v.secret;
+    for (const text of [v.text, ...(/\s/.test(v.text) ? v.text.split(/\s+/).filter(Boolean) : [])]) {
+      const at = variable.values.indexOf(text);
+      if (at >= 0) variable.values.splice(at, 1);
+      variable.values.push(text);
+    }
+  }
+  variable.values.splice(0, Math.max(0, variable.values.length - VALUES_PER_VARIABLE));
+  if (!known) vars.set(name, variable);
+}
+
+/** The variables in force for `sc`: those earlier commands set, and over them its own prefix and those of the commands it is
+ *  nested in (`x=… sh -c 'rm -rf $x'`). */
+function scopeOf(vars: Variables, sc: SimpleCommand): Lookup {
+  const outer: Lookup = (name) => vars.get(name);
+  if (!sc.assigns?.length) return outer;
+  const own: Variables = new Map();
+  const lookup: Lookup = (name) => own.get(name) ?? vars.get(name);
+  for (const w of sc.assigns) remember(own, outer, w.slice(0, w.indexOf("=")).toUpperCase(), w.slice(w.indexOf("=") + 1));
+  return lookup;
+}
+
+/** `sc` once more for each value its words' variables may hold (the n-th spelling of every word together), or none when no
+ *  word uses a variable with a known value. `secret` when a credential-named variable's value is in it. */
+function readingsWithValues(sc: SimpleCommand, lookup: Lookup): Array<{ sc: SimpleCommand; secret: boolean }> {
+  if (sc.opaque) return [];
+  const argv = sc.argv.map((w) => spellingsOf(w, lookup));
+  const targets = sc.redirects.map((r) => spellingsOf(r.target, lookup));
+  const count = [...argv, ...targets].reduce((most, s) => Math.max(most, s?.length ?? 0), 0);
+  const pick = (s: Spelling[] | null, i: number): Spelling | undefined => (s ? s[Math.min(i, s.length - 1)] : undefined);
+  const out: Array<{ sc: SimpleCommand; secret: boolean }> = [];
+  for (let i = 0; i < count; i++) {
+    let secret = false;
+    const word = (w: string, s: Spelling[] | null): string => { const p = pick(s, i); if (!p) return w; secret ||= p.secret; return p.text; };
+    const reading: SimpleCommand = { ...sc, argv: sc.argv.map((w, k) => word(w, argv[k])), redirects: sc.redirects.map((r, k) => ({ ...r, target: word(r.target, targets[k]) })) };
+    out.push({ sc: reading, secret });
+  }
+  return out;
+}
+
 /** A command that does not parse (an unclosed quote), read again with its quote closed, each way that then parses. */
 function closedReadings(raw: string): SimpleCommand[][] {
   const out: SimpleCommand[][] = [];
@@ -1182,12 +1308,12 @@ function selfDisable(sc: SimpleCommand): boolean {
  *  would otherwise read as switching Scopebond off. */
 const NAMES_SCOPEBOND_ITSELF = /\.scopebond\b|@scopebond\/|\bscopebond-(?:hook|agent|mcp|gateway)\b|(?:^|[\s"'`;&|(])scopebond(?:\.cmd|\.exe)?(?=$|[\s"'`;&|)])/i;
 
-const NOTHING_HIDDEN: ReadonlySet<string> = new Set();
+const NOTHING_HIDDEN: readonly PipedSecret[] = [];
 
-function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: ReadonlySet<string> = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = []): Mapped[] {
+function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: readonly PipedSecret[] = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = []): Mapped[] {
   // Words the whole command shows to be secret (a literal piped into a secret reader) are masked in this part's recorded
   // text too. Only the text: the program and paths a policy judges are never changed by what another part says.
-  const redact = (raw: string): string => redactCommand(hidden.size ? maskWords(raw, hidden) : raw);
+  const redact = (raw: string): string => redactCommand(hidden.length ? maskWords(raw, hidden) : raw);
   if (sc.opaque) {
     const opaque: Mapped[] = [{
       intent: { action_type: "shell.exec", params: { command: redact(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
@@ -1265,18 +1391,62 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
   // Variables the call sets, in order: git configuration an earlier `export GIT_CONFIG_PARAMETERS=…` gives a later git command
   // (as `-c` would), and a coding agent started with its config folder moved.
   const scan = scanCall(commands);
+  const isFile = (m: Mapped) => m.intent.action_type.startsWith("file.");
+  const key = (m: Mapped) => `${m.intent.action_type} ${String(m.intent.params.path)}`;
+  const into = (base: string, target: string | undefined): string => {
+    if (target === undefined || target === "~") return "";
+    if (/^(?:[\\/]|~[\\/]|[A-Za-z]:)/.test(target)) return normPath(target);
+    return normPath((base ? base + "/" : "") + target);
+  };
   const walk = (list: SimpleCommand[], filesOnly: boolean): Mapped[] => {
     let dir = "";
+    // Other folders a `cd` to a variable may have led to (`x=.claude; cd $x`), and whether a credential's value led there.
+    let elsewhere: Array<{ dir: string; secret: boolean }> = [];
+    const vars: Variables = new Map();
     const out: Mapped[] = [];
     for (const sc of list) {
       const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc));
-      out.push(...(filesOnly ? mapped.filter((m) => m.intent.action_type.startsWith("file.")) : mapped));
+      const kept = filesOnly ? mapped.filter(isFile) : mapped;
+      out.push(...kept);
+      // The command read with the values its variables may hold, and in each other folder it may run in: the file effects and
+      // the switch-off those readings add. A credential's value adds only a place the always-on protection guards.
+      const lookup = scopeOf(vars, sc);
+      const valued = readingsWithValues(sc, lookup);
+      const readings = [
+        ...valued.map((r) => ({ ...r, dir })),
+        ...elsewhere.flatMap((e) => [{ sc, secret: false }, ...valued].map((r) => ({ sc: r.sc, secret: r.secret || e.secret, dir: e.dir }))),
+      ];
+      if (readings.length) {
+        const seen = new Set(kept.filter(isFile).map(key));
+        for (const r of readings) {
+          const added = fileOpsFromShell(r.sc, r.dir, cwd).ops;
+          if (selfDisable(r.sc)) added.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+          for (const m of added) {
+            if (seen.has(key(m)) || (r.secret && !GUARDED.test(String(m.intent.params.path)))) continue;
+            seen.add(key(m));
+            out.push(m);
+          }
+        }
+      }
       if (!sc.opaque && CD.has(canonProgram(sc.program))) {
         const target = sc.argv.find((a) => !a.startsWith("-"));
-        if (target === undefined || target === "~") dir = "";
-        else if (/^(?:[\\/]|~[\\/]|[A-Za-z]:)/.test(target)) dir = normPath(target);
-        else dir = normPath((dir ? dir + "/" : "") + target);
+        const next = into(dir, target);
+        const spellings = target === undefined ? [] : spellingsOf(target, lookup) ?? [];
+        const others = new Map<string, boolean>();
+        // Only a folder a path could still name is followed (a longer one is a hostile command, not a project's folder).
+        const sources = spellings.length ? [{ dir, secret: false }, ...elsewhere] : elsewhere;
+        for (const from of sources) {
+          if (from.dir.length > FOLDER_LENGTH) continue;
+          for (const t of [{ text: target, secret: false }, ...spellings]) {
+            if (others.size >= OTHER_FOLDERS) break;
+            const to = into(from.dir, t.text);
+            if (to !== next && to.length <= FOLDER_LENGTH) others.set(to, (others.get(to) ?? true) && (from.secret || t.secret));
+          }
+        }
+        dir = next;
+        elsewhere = [...others].map(([d, secret]) => ({ dir: d, secret }));
       }
+      for (const { name, value } of shellVariablesSet(sc)) remember(vars, lookup, name, value);
     }
     return out;
   };

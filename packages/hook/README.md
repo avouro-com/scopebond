@@ -662,14 +662,17 @@ anything is removed. Unless an owner or admin disconnected the computer or allow
 in the workspace first, the workspace raises a critical alert. A workspace that cannot be
 reached never stops the uninstall; the command says it could not tell it.
 
-**Limits.** The hook sees the command text, not what a program does at run time. It
-does not follow a variable whose value it cannot see (`cat $FILE` records no read unless
+**Limits.** The hook sees the command text, not what a program does at run time. A
+variable set earlier in the same command (`x=.claude; rm -rf $x`, `export`, a `for` loop, cmd
+`set`, PowerShell `$x =` or `$env:x =`, or an enclosing command's prefix) is read with each
+value it may hold. It does not follow a variable whose value it cannot see (`cat $FILE` records no read unless
 the text around the variable could name a protected file), a path assembled inside a
 script or interpreter (`python script.py`; Scopebond's own folder named in an
 interpreter's arguments or inline code is treated as read), aliases, functions and variables
 defined in an earlier call (where the agent's shell persists between calls), git aliases from
 the user's own config files, recursive reads of a parent of a protected directory
-(`grep -r . `, `cp -r ~ /tmp`), a folder named through a variable (`rm -rf $DIR`), or
+(`grep -r . `, `cp -r ~ /tmp`), a folder named through a variable set outside the command
+(`rm -rf $DIR`), or
 deletion expressed as arguments (`find -delete`, `git clean`) other than of a protected folder
 by name or, with `git clean -x`, of a project that holds a `.scopebond`. Commands whose written
 files are named only inside their
