@@ -316,7 +316,7 @@ async function runCursor(): Promise<void> {
   try {
     const cwd = input?.cwd ? String(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
-    const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
+    const permissionMode = typeof input.permission_mode === "string" ? input.permission_mode : null;
     const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
     // An edit Cursor reports after saving it cannot be overridden: it already happened.
     const overridable = !mapped.some((m) => m.postHoc);

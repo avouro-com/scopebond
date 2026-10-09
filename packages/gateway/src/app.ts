@@ -355,7 +355,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     // switch and before any executor, and it answers with everything it spent or nothing at all.
     let guardDenied: string | null = null;
     if (d.allow && config.dispatchGuard && !(await isStopped(req.intent.signer))) {
-      const group = (req.intent.params as Record<string, unknown> | undefined)?.action_group;
+      const group = (req.intent.params)?.action_group;
       let verdict;
       try {
         verdict = await config.dispatchGuard.authorize({
@@ -418,7 +418,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       ...receiptFields(finalResult, executionState, assertion, ref),
       ...(override && finalResult === "approved" ? { override } : {}),
     }, attester);
-    const finalState = executionState as AuthorityFinalState;
+    const finalState = executionState;
     if (store.finalizeAction && store.reserveAction) await store.finalizeAction(actionId, receipt, finalState);
     else await store.put(receipt);
 
@@ -568,7 +568,7 @@ export function createGateway(config: GatewayConfig): Gateway {
   // Ed25519-signed by the attester. Before signing, the log is checked against
   // the previous anchor so a rewritten or reordered prefix is never re-anchored.
   async function anchor(): Promise<AnchorV2> {
-    const receipts = (await store.list()) as SignedReceipt[];
+    const receipts = (await store.list());
     const payloads = receipts.map((r) => r.payload);
     const leaves = await Promise.all(payloads.map(receiptLeafHash));
     const prior = (await store.anchors?.()) ?? [];
@@ -698,7 +698,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     const target = await findAnchor(c.req.query("anchor_seq"));
     if (!target) return c.json({ error: "anchor not found — POST /v1/anchor first" }, 404);
     const size = isAnchorV2(target) ? target.tree_size : target.count;
-    const receipts = ((await store.list()) as SignedReceipt[]).slice(0, size);
+    const receipts = ((await store.list())).slice(0, size);
     const wantLeaf = c.req.query("leaf");
     const wantIntent = c.req.query("intent_hash");
     if (isAnchorV2(target)) {
@@ -733,7 +733,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     if (!first || !second) return c.json({ error: "anchor not found" }, 404);
     if (!isAnchorV2(first) || !isAnchorV2(second)) return c.json({ error: "consistency proofs require v2 anchors" }, 400);
     if (first.tree_size > second.tree_size) return c.json({ error: "from must not be larger than to" }, 400);
-    const receipts = ((await store.list()) as SignedReceipt[]).slice(0, second.tree_size);
+    const receipts = ((await store.list())).slice(0, second.tree_size);
     if (receipts.length < second.tree_size) return c.json({ error: "receipt log is shorter than the anchor" }, 409);
     const leaves = await Promise.all(receipts.map(leafOf));
     const proof = await consistencyProof(leaves, first.tree_size);

@@ -30,7 +30,7 @@ const looksWindows = (p: string): boolean => /^[A-Za-z]:[\\/]/.test(p) || p.star
 
 /** Resolve the physical location of `path` (which may not exist yet). Follows links for
  *  the nearest existing ancestor and re-attaches the not-yet-created remainder. */
-function physical(path: string, api: typeof posix | typeof win32, realpath: (p: string) => string): string | null {
+function physical(path: string, api: typeof posix  , realpath: (p: string) => string): string | null {
   let probe = path;
   const rest: string[] = [];
   for (let guard = 0; guard < 4096; guard++) {

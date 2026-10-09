@@ -473,7 +473,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       // Only what the workspace says it has leaves the queue: a summary it refused on its own sends its records in full; a
       // count that does not add up is a failure, retried under the same summary ids.
       const answer = await (typeof res.json === "function" ? res.json().catch(() => null) : Promise.resolve(null)) as { accepted?: unknown; duplicates?: unknown; rejected?: Array<{ index?: unknown }> } | null;
-      const refusedAt = new Set((Array.isArray(answer?.rejected) ? answer!.rejected : []).map((r) => Number(r?.index)).filter((n) => Number.isInteger(n)));
+      const refusedAt = new Set((Array.isArray(answer?.rejected) ? answer.rejected : []).map((r) => Number(r?.index)).filter((n) => Number.isInteger(n)));
       const held = Number(answer?.accepted ?? NaN) + Number(answer?.duplicates ?? 0);
       if (!Number.isFinite(held) || held + refusedAt.size < part.length) {
         release(i);

@@ -45,7 +45,7 @@ export function requestBinderFromHex(hex: string): RequestBinder {
   const mac = (text: string): string => createHmac("sha256", key).update(text, "utf8").digest("hex");
   return {
     generation: `bk_${createHash("sha256").update(KEY_GENERATION_DOMAIN).update(key).digest("hex").slice(0, 16)}`,
-    requestDigest: (request) => mac(REQUEST_BINDING_DOMAIN + canonical(request as never)),
+    requestDigest: (request) => mac(REQUEST_BINDING_DOMAIN + canonical(request)),
     resourceId: (kind, value) => `sbr_${mac(`${RESOURCE_ID_DOMAIN}${kind}\0${value}`).slice(0, 32)}`,
   };
 }
@@ -103,7 +103,7 @@ export function manifestHash(tools: unknown[]): string {
     .filter((t): t is Record<string, unknown> => !!t && typeof t === "object")
     .map((t) => ({ name: t.name ?? null, description: t.description ?? null, inputSchema: t.inputSchema ?? null, annotations: t.annotations ?? null }))
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  return `sha256:${createHash("sha256").update(canonical(norm as never)).digest("hex")}`;
+  return `sha256:${createHash("sha256").update(canonical(norm)).digest("hex")}`;
 }
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/;
@@ -121,7 +121,7 @@ function valuesAt(args: unknown, path: string): string[] | undefined {
   const scalar = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : undefined);
   if (Array.isArray(node)) {
     const values = node.map(scalar);
-    return node.length > 0 && values.every((v) => v !== undefined) ? (values as string[]) : undefined;
+    return node.length > 0 && values.every((v) => v !== undefined) ? (values) : undefined;
   }
   const one = scalar(node);
   return one === undefined ? undefined : [one];
@@ -190,7 +190,7 @@ export function describeToolCall(
 
 /** `scopebond:source-receipt/v1\n` + canonical signed receipt, SHA-256: the hash that links an observation to its receipt. */
 export const sourceReceiptHash = (receipt: unknown): string =>
-  createHash("sha256").update(SOURCE_RECEIPT_DOMAIN + canonical(receipt as never), "utf8").digest("hex");
+  createHash("sha256").update(SOURCE_RECEIPT_DOMAIN + canonical(receipt), "utf8").digest("hex");
 
 export const intentDraft = (operation: Record<string, unknown>, at: number, receipt: unknown): ObservationDraft => ({
   kind: "tool_intent", occurredAt: at, ...linkOf(receipt), data: { event: "requested", operation, request_digest: operation.request_digest, ...linkData(receipt) },

@@ -367,7 +367,7 @@ export function createHookRuntime(config: RuntimeConfig) {
         decision: "deny",
         reason: explainDeny({
           policy, clauseId, detail: result.reason,
-          intent: signed.intent as ExplainIntent, policyPath: config.policyPath,
+          intent: signed.intent, policyPath: config.policyPath,
           postHoc: mapped.postHoc,
           // Point at the editable surface when there is one. `policy.json` is compiled
           // from `rules.json`, so telling someone to hand-edit it invites a change the
@@ -397,7 +397,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       for (const m of list) {
         const d = await this.evaluateOne(m);
         if (d.receipt !== undefined) receipts.push(d.receipt);
-        dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params as Record<string, unknown> }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
+        dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
         if (d.decision === "deny") return { ...d, receipts, dispatched };            // any deny denies the call
         if (d.decision === "allow" && !allow) allow = d;
         if (d.decision === "ask" && !ask) ask = d;
@@ -409,7 +409,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       if (boundary) {
         // Immediately before permitted dispatch: approvals are consumed and the budget slot is reserved
         // atomically, once for the whole parent action, or nothing is spent and the call is denied.
-        const group = String(list[0]!.intent.params[ACTION_GROUP_PARAM]);
+        const group = String(list[0].intent.params[ACTION_GROUP_PARAM]);
         const delegation = process.env[DELEGATION_ENV] ?? "";
         const verdict = await boundary.authorize({
           actor: agent.kid, action_group: group, policy_digest: gateway.policyHash,
@@ -420,7 +420,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           // Record the refusal as its own denied receipt, then deny the call.
           boundaryVerdict = verdict;
           try {
-            const last = list[list.length - 1]!;
+            const last = list[list.length - 1];
             const signed = agent.sign(last.intent);
             const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
             if (result.receipt !== undefined) receipts.push(result.receipt);

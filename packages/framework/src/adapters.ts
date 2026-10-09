@@ -25,7 +25,7 @@ export function guardExecute<A extends Record<string, unknown>>(
   opts: WrapOptions = {},
 ): (args: A, ...rest: unknown[]) => Promise<unknown> {
   return async (args: A, ...rest: unknown[]) => {
-    const decision = await guard.check(name, (args ?? {}) as Record<string, unknown>);
+    const decision = await guard.check(name, (args ?? {}));
     if (!decision.allowed) return deniedResult(opts, name, decision.reason, args);
     return execute(args, ...rest);
   };

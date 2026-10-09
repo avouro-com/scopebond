@@ -784,7 +784,7 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
       if (t.ref !== undefined) params.ref = scrubParam(t.ref);
       if (t.del) params.delete = true;
       if (t.all) params.all = true;
-      return { intent: { action_type: "git.push", params }, evaluated: true, source: "shell" } as Mapped;
+      return { intent: { action_type: "git.push", params }, evaluated: true, source: "shell" };
     });
   }
   const { ops: files, unknownTarget } = fileOpsFromShell(sc, dir, cwd);

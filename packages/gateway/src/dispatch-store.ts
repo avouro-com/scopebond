@@ -288,7 +288,7 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
       let approvalFailure: { reason: DispatchReason; detail: string } | null = null;
       if (needsApproval) {
         for (let i = 0; i < req.intents.length; i++) {
-          const intent = req.intents[i]!;
+          const intent = req.intents[i];
           if (!requires(intent.action_type)) continue;
           const subject = { actor: req.actor, action_type: intent.action_type, target: intent.target, policy_digest: req.policy_digest, request_hash: requestHash(intent.request) };
           let lastReject: string | null = null;
@@ -382,7 +382,7 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
           const dry = db.transaction<DispatchDecision>(() => ({ commit: false, value: decide().value }));
           if (!dry.allow) return dry;
           for (const [i, approvalId] of cloudChosen) {
-            const intent = req.intents[i]!;
+            const intent = req.intents[i];
             const answer = await config.cloud.consume({
               approval_id: approvalId, request_hash: requestHash(intent.request), action_type: intent.action_type, policy_digest: req.policy_digest,
               target_id: config.cloud.targetId(intent.target), client_time: new Date(nowFn()).toISOString(),

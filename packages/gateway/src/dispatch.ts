@@ -29,7 +29,7 @@ export function requestParams(params: Record<string, unknown> | undefined): Reco
 /** SHA-256 over a domain string plus the canonical actual request that will be dispatched.
  *  Whatever the caller passes must be the exact object it then forwards. */
 export function requestHash(request: unknown): string {
-  return sha256(REQUEST_HASH_DOMAIN + canonical(request as never));
+  return sha256(REQUEST_HASH_DOMAIN + canonical(request));
 }
 
 // ── Approvals (R19) ───────────────────────────────────────────────────────────
@@ -150,7 +150,7 @@ export interface Delegation {
 }
 
 export const scopeDigest = (scope: DelegatedScope): string =>
-  sha256("scopebond:delegated-scope/v1\n" + canonical({ action_types: [...scope.action_types].sort(), targets: scope.targets ? [...scope.targets].sort() : null } as never));
+  sha256("scopebond:delegated-scope/v1\n" + canonical({ action_types: [...scope.action_types].sort(), targets: scope.targets ? [...scope.targets].sort() : null }));
 
 const covers = (parent: string, child: string): boolean =>
   parent === child || (parent.endsWith("*") && child.startsWith(parent.slice(0, -1)));
@@ -204,7 +204,7 @@ export const SCOPE_ENTRY_DOMAIN = "scopebond:scope-entry/v1\u0000";
 
 /** SHA-256 of the domain plus the canonical (RFC 8785) sorted, de-duplicated entry list. */
 export const delegationScopeDigest = (entries: readonly string[]): string =>
-  sha256(DELEGATION_SCOPE_DOMAIN + canonical([...new Set(entries)].sort() as never));
+  sha256(DELEGATION_SCOPE_DOMAIN + canonical([...new Set(entries)].sort()));
 
 /** The closed vocabulary of scope entry kinds. `privilege`: `resource_scope NUL permission`. `action`: an ordinary dispatched action, see `actionScopeEntry`. */
 export const SCOPE_ENTRY_KINDS = ["action", "privilege"] as const;
@@ -262,7 +262,7 @@ export interface ActionBudgetPolicy {
 /** The digest an acknowledgement must echo: everything but the acknowledgement itself. */
 export function budgetDigest(p: ActionBudgetPolicy): string {
   const { acknowledgement: _ack, ...rest } = p;
-  return sha256("scopebond:action-budget/v1\n" + canonical(rest as never));
+  return sha256("scopebond:action-budget/v1\n" + canonical(rest));
 }
 
 export function validateBudgetPolicy(p: unknown): p is ActionBudgetPolicy {

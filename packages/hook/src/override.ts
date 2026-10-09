@@ -84,7 +84,7 @@ export function actionKey(intent: { action_type?: string; params?: Record<string
   // The group fields name the tool call an action came from (its id, size and place in it), so they are left out.
   const { action_group: _group, action_group_size: _size, action_group_seq: _seq, ...params } = intent.params ?? {};
   const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
-    : v && typeof v === "object" ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
+    : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
   return digestOf(JSON.stringify({ action_type: intent.action_type ?? "", params: sorted(params) }));
 }
 
@@ -149,7 +149,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
   const now = ctx.now ?? Date.now;
   let last: OverrideNote | null = null;
   const handler: OverrideHandler = async ({ verdict, action_id, intent, intent_hash }) => {
-    const key = actionKey(intent as never);
+    const key = actionKey(intent);
     const rule = RULE_OF_CLAUSE[verdict.clause_id ?? ""];
     const setting = rule ? doc.rules[rule] : undefined;
     if (!rule || !personMayAct(setting) || !setting?.override) return null;
@@ -158,7 +158,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     // Would the action still be denied with every overridable rule only recorded? Then a Block rule or Scopebond's own
     // protection denies it too, and no one may override that.
     const floor = compileManaged(loadRules(ctx.dir) ?? defaultRules(), floorDocument(doc, rule), ctx.agentKid);
-    const atFloor = evaluate(floor as never, [], { intent, intent_hash }, new Date(now()).toISOString(), { cooperative: true });
+    const atFloor = evaluate(floor, [], { intent, intent_hash }, new Date(now()).toISOString(), { cooperative: true });
     if (!atFloor.allow) { last = { rule, title, outcome: "not_overridable" }; return null; }
 
     const t = now();
@@ -173,16 +173,16 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
       return { version: 1, rule, method: "allowance", state: "allowed", repeat_of: standing.id, reason_digest: standing.reason_digest,
         reason_length: standing.reason_length, os_user_digest: osDigest, decided_at: new Date(t).toISOString() };
     }
-    const summary = actionSummary(intent as never);
-    const blocked = () => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting!.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness }, t);
+    const summary = actionSummary(intent);
+    const blocked = () => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness }, t);
     // A workspace that sends the D144 terms knows allowances; an older one gets "Allow once" only (its receipts could not
     // carry an allowance's use).
     const knowsAllowances = terms.always !== undefined || terms.requests !== undefined;
     const offers = {
-      allow: setting!.mode === "override",
-      always: setting!.mode === "override" && terms.always !== undefined && terms.always !== "off",
-      ask: setting!.mode === "ask" || terms.requests === true,
-      fifteen: setting!.mode === "override" && knowsAllowances,
+      allow: setting.mode === "override",
+      always: setting.mode === "override" && terms.always !== undefined && terms.always !== "off",
+      ask: setting.mode === "ask" || terms.requests === true,
+      fifteen: setting.mode === "override" && knowsAllowances,
     };
     const state = readState(ctx.dir);
     const dayStart = t - (t % DAY_MS);
@@ -197,7 +197,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     if (offers.allow && state.entries.filter((e) => e.rule === rule && e.at >= dayStart).length >= terms.daily_limit) { last = { rule, title, outcome: "limit" }; blocked(); return null; }
 
     let answer = await (ctx.ask ?? askAgent)(ctx.home, {
-      action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting!.mode, offers,
+      action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting.mode, offers,
       lasts: terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only", timeout_ms: ctx.waitMs ?? 45_000,
     }, (ctx.waitMs ?? 45_000) + 2_000);
     // Ask an admin: the action stays blocked; the request waits for the agent to send it.

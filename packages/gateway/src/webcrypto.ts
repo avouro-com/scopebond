@@ -32,7 +32,7 @@ export async function createWebCryptoAttester(privateJwk: Ed25519Jwk, kid?: stri
 
 /** Generate a new Ed25519 attester key as an exportable private JWK (with `x` + `d`). */
 export async function generateAttesterJwk(): Promise<Ed25519Jwk> {
-  const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair;
+  const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]));
   return (await crypto.subtle.exportKey("jwk", pair.privateKey)) as unknown as Ed25519Jwk;
 }
 

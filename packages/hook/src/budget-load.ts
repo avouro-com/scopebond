@@ -111,7 +111,7 @@ export function inspectBudgetExport(raw: unknown, context: { environmentId?: str
   return {
     ok: true,
     facts: {
-      agentKid: agentKid as string | null, exportId, budgetId, budgetVersion: budgetVersion as number, policyDigest: exp.policy_digest, scopeDigest: exp.scope_digest, agentId, environmentId, validUntil,
+      agentKid: agentKid, exportId, budgetId, budgetVersion: budgetVersion as number, policyDigest: exp.policy_digest, scopeDigest: exp.scope_digest, agentId, environmentId, validUntil,
       policy: policy as unknown as BudgetExportFacts["policy"],
     },
   };

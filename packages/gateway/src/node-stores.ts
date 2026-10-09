@@ -751,7 +751,7 @@ function rowToLifecycle(row: LifecycleRow, policyText: (stored: string) => strin
     const stored = JSON.parse(row.reservation_json) as AuthorityReservation & Record<string, unknown>;
     if (stored[SLIM_RESERVATION]) {
       const { [SLIM_RESERVATION]: _slim, ...rest } = stored;
-      reservation = { ...(rest as Partial<AuthorityReservation>), ...fromAction() } as AuthorityReservation;
+      reservation = { ...(rest as Partial<AuthorityReservation>), ...fromAction() };
     } else reservation = stored;
   }
   const terminal = row.terminal_receipt_json ? JSON.parse(row.terminal_receipt_json) as SignedReceipt : null;

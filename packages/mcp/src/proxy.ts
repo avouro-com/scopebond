@@ -23,7 +23,7 @@ export interface JsonRpcMessage {
   error?: unknown;
 }
 
-const digest = (value: unknown): string => "sha256:" + createHash("sha256").update(canonical(value as never)).digest("hex");
+const digest = (value: unknown): string => "sha256:" + createHash("sha256").update(canonical(value)).digest("hex");
 
 const ARGS_DIGEST_DOMAIN = "scopebond:mcp-args-digest/v1\n";
 
@@ -33,7 +33,7 @@ const ARGS_DIGEST_DOMAIN = "scopebond:mcp-args-digest/v1\n";
 export function keyedArgsDigest(keyHex: string): (args: unknown) => string {
   if (!/^[0-9a-f]{64}$/i.test(keyHex)) throw new TypeError("the argument digest key must be 64 hex characters");
   const key = Buffer.from(keyHex, "hex");
-  return (args) => "hmac-sha256:" + createHmac("sha256", key).update(ARGS_DIGEST_DOMAIN + canonical(args as never), "utf8").digest("hex");
+  return (args) => "hmac-sha256:" + createHmac("sha256", key).update(ARGS_DIGEST_DOMAIN + canonical(args), "utf8").digest("hex");
 }
 
 // Without a configured key: a random key for this process (safe; digests then compare only within the process).
@@ -212,7 +212,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       const intent = mapMcpToolCall(config.server, dispatched.params, argsDigest);
       const timestamp = config.now?.() ?? new Date().toISOString();
       const claimed = { intent, executed: true, timestamp, intent_hash: digest(intent).slice(7) };
-      const verdict = violates(config.policy as never, history as never, claimed as never, { at: timestamp });
+      const verdict = violates(config.policy as never, history as never, claimed, { at: timestamp });
 
       // The adapter's own decision: unknown tools, revisions and unbound resources.
       const description = typed ? describeToolCall(typed, config.server, dispatched, await manifestVerified()) : undefined;
@@ -251,7 +251,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       const startedAt = nowMs();
       const plainOperation = description?.operation ?? null;
       const operation = plainOperation && config.dispatch?.binder
-        ? config.dispatch.binder.bindDispatched(plainOperation as Record<string, unknown>, { action_type: "mcp.tool.call", target: guardTarget, request: guardRequest }) : plainOperation;
+        ? config.dispatch.binder.bindDispatched(plainOperation, { action_type: "mcp.tool.call", target: guardTarget, request: guardRequest }) : plainOperation;
       if (typed?.sink && operation) { try { typed.sink.emit(intentDraft(operation, startedAt, receipt)); } catch { /* observations are best effort */ } }
 
       if (decision === "deny") {

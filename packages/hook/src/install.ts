@@ -323,13 +323,13 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
   if (harness === "cursor") {
     config.version = config.version ?? 1;
     for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
-      const list = Array.isArray((hooks as Record<string, unknown>)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
+      const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
       const at = list.findIndex(entryMatches);
       const entry = { command: command.replace(/\bclaude$/, "cursor") };
       if (at >= 0) list[at] = entry; else list.push(entry);
     }
   } else {
-    const list = Array.isArray((hooks as Record<string, unknown>).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
+    const list = Array.isArray((hooks).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
     const at = list.findIndex(entryMatches);
     // Codex matchers are regular expressions; omitting the matcher means every tool.
     // A literal "*" is not a valid regular expression and causes Codex to skip the group.
@@ -455,7 +455,7 @@ export function wireLifecycleHooks(file: string, command: string): string {
   mkdirSync(dirname(file), { recursive: true });
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   for (const event of LIFECYCLE_EVENTS) {
-    const list = Array.isArray((hooks as Record<string, unknown>)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
+    const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
     const at = list.findIndex(entryMatches);
     const entry = event.startsWith("Session")
       ? { hooks: [{ type: "command", command }] }
@@ -476,11 +476,11 @@ export function unwireLifecycleHooks(file: string): number {
   if (!hooks) return 0;
   let removed = 0;
   for (const event of LIFECYCLE_EVENTS) {
-    const value = (hooks as Record<string, unknown>)[event];
+    const value = (hooks)[event];
     if (!Array.isArray(value)) continue;
     const kept = value.filter((e) => !entryMatches(e));
     removed += value.length - kept.length;
-    if (kept.length) (hooks as Record<string, unknown[]>)[event] = kept; else delete (hooks as Record<string, unknown>)[event];
+    if (kept.length) (hooks as Record<string, unknown[]>)[event] = kept; else delete (hooks)[event];
   }
   if (removed > 0) writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return removed;

@@ -23,7 +23,7 @@ export function writeOutputTo(file: string): void {
       const done = typeof encoding === "function" ? encoding : callback;
       if (typeof done === "function") queueMicrotask(() => (done as () => void)());
       return true;
-    }) as typeof stream.write;
+    });
   }
   // Node prints a fatal error straight to the console, which is nul here: note it in the log, then exit as Node would,
   // so the launcher restarts the agent.

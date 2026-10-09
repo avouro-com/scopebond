@@ -119,7 +119,7 @@ export function backfillQueue(dir: string, store: RepairableStore, queue: Repair
         const result = queue.enqueue(row.receipt);
         if (result.queued && !result.duplicate) queued++;
       }
-      after = page[page.length - 1]!.id;
+      after = page[page.length - 1].id;
     }
     // Each miss is kept as a gap once, after its receipts are queued (a failure above leaves the noted misses for next time).
     // A line without a time only resumes a backfill.

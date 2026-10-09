@@ -309,7 +309,7 @@ export function violates(
   const record = (clause: AnyClause, explanation: string): void => {
     found.push({
       verdict: verdict(true, clause.id, explanation, hash),
-      mode: (clause.type === "require_approval" ? "require_approval" : (clause.mode ?? "enforce")) as Mode,
+      mode: (clause.type === "require_approval" ? "require_approval" : (clause.mode ?? "enforce")),
       order: order++,
     });
   };

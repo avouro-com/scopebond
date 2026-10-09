@@ -92,7 +92,7 @@ export const observationHash = (payload: ObservationPayload): string =>
 
 /** SHA-256 of `scopebond:source-receipt/v1\n` + canonical full signed receipt envelope. */
 export const sourceReceiptHash = (receipt: unknown): string =>
-  createHash("sha256").update(SOURCE_RECEIPT_DOMAIN + canonical(receipt as never), "utf8").digest("hex");
+  createHash("sha256").update(SOURCE_RECEIPT_DOMAIN + canonical(receipt), "utf8").digest("hex");
 
 /** Sign a payload into its wire wrapper. Throws on a payload the server would refuse
  *  outright: the wrong kind, or larger than one observation may be. */
@@ -100,7 +100,7 @@ export function signObservation(payload: ObservationPayload, signer: Observation
   assertAgentKind(payload.kind);
   const wrapper: SignedObservation = {
     payload,
-    signature: { alg: "Ed25519", kid: signer.kid, value: signer.sign(OBSERVATION_DOMAIN + canonical(payload as never)) },
+    signature: { alg: "Ed25519", kid: signer.kid, value: signer.sign(OBSERVATION_DOMAIN + canonical(payload)) },
   };
   if (Buffer.byteLength(JSON.stringify(wrapper), "utf8") > MAX_OBSERVATION_BYTES) {
     throw new RangeError(`observation exceeds ${MAX_OBSERVATION_BYTES} bytes`);
@@ -141,7 +141,7 @@ export function bindingKeyFromHex(hex: string): BindingKey {
   const mac = (text: string): string => createHmac("sha256", key).update(text, "utf8").digest("hex");
   return {
     generation: `bk_${createHash("sha256").update(KEY_GENERATION_DOMAIN).update(key).digest("hex").slice(0, 16)}`,
-    requestDigest: (request) => mac(REQUEST_BINDING_DOMAIN + canonical(request as never)),
+    requestDigest: (request) => mac(REQUEST_BINDING_DOMAIN + canonical(request)),
     resourceId: (kind, value) => `sbr_${mac(`${RESOURCE_ID_DOMAIN}${kind}\0${value}`).slice(0, 32)}`,
     sessionId: (id) => `sbs_${mac(SESSION_ID_DOMAIN + id).slice(0, 32)}`,
   };
@@ -252,7 +252,7 @@ export const policyAckData = (input: PolicyAckInput) => compact({
 });
 
 /** SHA-256 hex of a policy's canonical JSON. */
-export const digestPolicy = (policy: unknown): string => createHash("sha256").update(canonical(policy as never), "utf8").digest("hex");
+export const digestPolicy = (policy: unknown): string => createHash("sha256").update(canonical(policy), "utf8").digest("hex");
 
 export interface CapabilityProofInput {
   adapterVersion: string;
@@ -299,7 +299,7 @@ const PROGRAM_DESTRUCTIVE = new Set([
 const plain = (value: string): boolean => SAFE_NAME.test(value) && scrubParam(value) === value;
 
 const stringParam = (params: Record<string, unknown>, key: string): string | undefined =>
-  typeof params[key] === "string" ? (params[key] as string) : undefined;
+  typeof params[key] === "string" ? (params[key]) : undefined;
 
 const CREDENTIAL_DIRS = new Set([".ssh", ".aws", ".gnupg", ".kube", ".docker"]);
 const CREDENTIAL_FILES = new Set([".npmrc", ".pypirc", ".netrc", ".git-credentials"]);

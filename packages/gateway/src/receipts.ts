@@ -253,7 +253,7 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string, prin
   const legacy = payload.evidence_version == null;
   const supported_version = legacy || payload.evidence_version === EVIDENCE_VERSION;
   const envelopeValid = hasOnlyKeys(receipt as unknown as Record<string, unknown>, ["payload", "signature"]) &&
-    isRecord(receipt.signature) && hasOnlyKeys(receipt.signature as unknown as Record<string, unknown>, ["alg", "sig"]);
+    isRecord(receipt.signature) && hasOnlyKeys(receipt.signature, ["alg", "sig"]);
   const contract_valid = envelopeValid && (legacy ? validateLegacyPayload(payload) : validateEvidencePayload(payload));
   const intent_hash_valid = legacy
     ? payload.intent_hash === intentHash(payload.intent)
@@ -278,7 +278,7 @@ export function verifyReceipt(receipt: SignedReceipt, publicKeyPem: string, prin
     key_binding_valid,
     legacy,
     external_effect_verified: false,
-    evidence_class: classifyEvidenceClass(payload as ReceiptPayload),
+    evidence_class: classifyEvidenceClass(payload),
     authorization_valid: authorization?.authorization_valid ?? null,
     agent_signature_valid: authorization?.agent_signature_valid ?? null,
     approval_signature_valid: authorization?.approval_signature_valid ?? null,
@@ -439,7 +439,7 @@ export async function buildBoundaryReceipt(input: BoundaryReceiptInput, attester
   const minimized = minimizeIntentForEvidence(input.intent);
   const authorizedHash = intentHash(input.intent);
   const evidenceHash = intentHash(minimized.intent);
-  const policyHash = sha256(canonical(input.policy as unknown as Record<string, unknown>));
+  const policyHash = sha256(canonical(input.policy));
   const policyVersion = typeof (input.policy as { version?: unknown }).version === "number" ? (input.policy as { version: number }).version : 1;
   const policyId = typeof (input.policy as { policy_id?: unknown }).policy_id === "string" ? (input.policy as { policy_id: string }).policy_id : null;
   const state: ExecutionState =
@@ -498,7 +498,7 @@ export async function buildPepReceipt(input: PepReceiptInput, attester: Attester
   const minimized = minimizeIntentForEvidence(input.intent);
   const authorizedHash = intentHash(input.intent);
   const evidenceHash = intentHash(minimized.intent);
-  const policyHash = sha256(canonical(input.policy as unknown as Record<string, unknown>));
+  const policyHash = sha256(canonical(input.policy));
   const policyVersion = typeof (input.policy as { version?: unknown }).version === "number" ? (input.policy as { version: number }).version : 1;
   const policyId = typeof (input.policy as { policy_id?: unknown }).policy_id === "string" ? (input.policy as { policy_id: string }).policy_id : null;
   const state: ExecutionState =

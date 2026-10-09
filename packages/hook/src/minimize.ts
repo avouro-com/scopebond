@@ -32,7 +32,7 @@ export function loadOrCreateDigestKey(dir: string): string {
 /** HMAC-SHA-256 under the digest key, labelled so it is never mistaken for a plain hash. */
 export const keyedDigest = (value: string): string =>
   "hmac-sha256:" + createHmac("sha256", (digestKey ??= randomBytes(32))).update(value).digest("hex");
-export const digest = (value: unknown): string => keyedDigest(canonical(value as never));
+export const digest = (value: unknown): string => keyedDigest(canonical(value));
 
 const MASK = "***";
 // A flag or header value: a quoted string or a run of non-whitespace.

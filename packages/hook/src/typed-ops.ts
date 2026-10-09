@@ -278,7 +278,7 @@ export function parseGh(sc: SimpleCommand): GithubRequest | null {
  *  MCP server publishes; a different server keeps its plain MCP operation. */
 export function parseGithubMcp(server: string, tool: string, input: Record<string, unknown>): GithubRequest | null {
   if (server !== "github") return null;
-  const str = (k: string): string | undefined => (typeof input[k] === "string" && input[k] !== "" ? (input[k] as string) : undefined);
+  const str = (k: string): string | undefined => (typeof input[k] === "string" && input[k] !== "" ? (input[k]) : undefined);
   const owner = str("owner");
   const repo = str("repo");
   const number = typeof input.pullNumber === "number" ? String(input.pullNumber) : str("pullNumber");

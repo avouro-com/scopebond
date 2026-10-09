@@ -67,8 +67,8 @@ export function buildActionEvidence(input: EvidenceInput): ActionEvidence {
     repository: ctx.repo, event: ctx.event, commit: ctx.headSha, commit_exact: GIT_ID.test(ctx.headSha), base_ref: ctx.base,
     ...(typeof input.prNumber === "number" && Number.isInteger(input.prNumber) && input.prNumber > 0 ? { pull_request: { number: input.prNumber } } : {}),
     artifacts: {
-      policy_digest: sha256(canonical(input.policy as never)),
-      ...(input.receipt === undefined ? {} : { receipt_hash: sha256(SOURCE_RECEIPT_DOMAIN + canonical(input.receipt as never)) }),
+      policy_digest: sha256(canonical(input.policy)),
+      ...(input.receipt === undefined ? {} : { receipt_hash: sha256(SOURCE_RECEIPT_DOMAIN + canonical(input.receipt)) }),
     },
     check: { name: CHECK_NAME, result: checkResult(decision.decision), decision: decision.decision, rule_ids: [...decision.ruleIds] },
     run,

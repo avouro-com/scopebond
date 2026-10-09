@@ -34,7 +34,7 @@ export function localChecks(dir: string, connection: HookConnection, harnesses: 
   const { pending, oldest } = queueStatus(dir);
   const state = readDeliveryState(dir);
   const stuck = pending > 0 && oldest !== null && now - oldest > 60 * 60 * 1000;
-  checks.push({ id: "queue", ok: !stuck, ...(stuck ? { detail: `${pending} record(s) waiting since ${new Date(oldest!).toISOString()}${state.last_error ? ` (${state.last_error.slice(0, 120)})` : ""}` } : {}) });
+  checks.push({ id: "queue", ok: !stuck, ...(stuck ? { detail: `${pending} record(s) waiting since ${new Date(oldest).toISOString()}${state.last_error ? ` (${state.last_error.slice(0, 120)})` : ""}` } : {}) });
   const expires = Date.parse(connection.expires_at ?? "");
   const lapsing = Number.isFinite(expires) && expires - now < 7 * 24 * 60 * 60 * 1000;
   checks.push({ id: "credential", ok: !lapsing, ...(lapsing ? { detail: `the connection expires ${new Date(expires).toISOString()} and was not renewed` } : {}) });

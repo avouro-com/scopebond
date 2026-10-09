@@ -48,7 +48,7 @@ if (!eventPath) die("no GitHub event available (set GITHUB_EVENT_PATH or --event
 
 let event: Record<string, any>;
 let policy: unknown;
-try { event = JSON.parse(readFileSync(eventPath as string, "utf8")); }
+try { event = JSON.parse(readFileSync(eventPath, "utf8")); }
 catch (e) { die(`could not read the event payload: ${(e as Error).message}`); }
 const policySource = arg("--policy-source", process.env.SCOPEBOND_POLICY_SOURCE || "base");
 if (policySource !== "base" && policySource !== "workspace") die(`--policy-source must be "base" or "workspace", not "${policySource}"`);
