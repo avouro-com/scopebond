@@ -241,7 +241,9 @@ In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy
 
 Each delivery answer from the workspace carries its evidence chain's head (how many records
 it had admitted and its newest evidence segment, signed by the workspace when it has a
-signing key). The hook keeps them in `chain-heads.json` beside its receipts. The workspace
+signing key). The hook keeps them in `chain-heads.json` beside its receipts, each with this
+computer's own times for the delivery it answered (when it was sent, and when the answer
+arrived), which the workspace cannot choose. The workspace
 also publishes each day's heads in a public, append-only log. To check that what the
 workspace holds still agrees with what it told this computer:
 
@@ -250,10 +252,12 @@ scopebond verify --anchor <file-or-https-url-of-a-published-day>
 scopebond verify --anchor <day.json> --segments <folder of downloaded evidence segments>
 ```
 
-`verify` exits non-zero when a chain went back below a head this computer kept, when one
-position names two different segments, or when a kept head's segment is no longer in the
-chain: records were removed, reordered or re-chained after the workspace acknowledged
-them. With `--segments`, every segment's digest, leaves, Merkle root, links and sequence
+`verify` exits non-zero when a chain went back below a head this computer kept (judged by
+the order this computer sent its deliveries as well as by the times the workspace put on
+its heads), when one position names two different segments, or when a kept head's segment
+is no longer in the chain: records were removed, reordered or re-chained after the
+workspace acknowledged them. A list or segment that cannot be checked is reported, not
+crashed on. With `--segments`, every segment's digest, leaves, Merkle root, links and sequence
 numbers are checked, and every record signed with this computer's key is verified.
 
 ### Is it delivering?
