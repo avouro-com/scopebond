@@ -102,7 +102,7 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   const say = (line: string) => console.log(line);
   if (!nodeSupported()) { for (const line of nodeTooOldLines(process.versions.node)) console.error(line); return 1; }
   const connection = loadConnection(o.dir);
-  let connectedTo: string | null = null;
+  let connectedTo: string | null;
   try { connectedTo = connection ? new URL(connection.url).origin : null; } catch { connectedTo = null; }
   // The signed installer put the agent (one executable with the hook) in place: nothing to install with npm, and no Node
   // or npm need be on this computer. Autostart then starts this executable itself.

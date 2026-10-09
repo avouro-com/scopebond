@@ -121,7 +121,7 @@ const SECRET_PATTERNS = [
   { name: "GitHub token", re: /\bgh[posru]_[0-9A-Za-z]{36,}\b/ },
   { name: "Slack token", re: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/ },
   { name: "Stripe secret key", re: /\bsk_(?:live|test)_[0-9A-Za-z]{16,}\b/ },
-  { name: "Google API key", re: /\bAIza[0-9A-Za-z_\-]{35}\b/ },
+  { name: "Google API key", re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
   { name: "generic assigned secret",
     re: /\b(?:api[_-]?key|secret|access[_-]?token|auth[_-]?token|password|passwd|client[_-]?secret|private[_-]?key)\b\s*[:=]\s*['"][^'"\n]{12,}['"]/i },
 ];
@@ -147,6 +147,7 @@ function globToRegex(glob) {
       re += c;
     }
   }
+  // eslint-disable-next-line security/detect-non-literal-regexp -- built from this script's own ALLOW/DENY globs with every regex metacharacter escaped above
   return new RegExp("^" + re + "$");
 }
 const ALLOW_RE = ALLOW.map(globToRegex);
@@ -158,7 +159,7 @@ function git(...args) {
 }
 /** A revision range from the command line: one git revision expression, never an option. */
 const safeRange = (range) => {
-  if (typeof range !== "string" || !/^[^-s][^s]*$/.test(range)) { console.error(`oss-gate: not a revision range: ${range}`); process.exit(2); }
+  if (typeof range !== "string" || !/^[^-\s]\S*$/.test(range)) { console.error(`oss-gate: not a revision range: ${range}`); process.exit(2); }
   return range;
 };
 

@@ -9,6 +9,7 @@ function validate(schema, value, root = observationSchema) {
   }
   if ("const" in schema && value !== schema.const) return false;
   if (schema.enum && !schema.enum.includes(value)) return false;
+  // eslint-disable-next-line security/detect-non-literal-regexp -- test-only; the pattern comes from the published observation schema in this repository
   if (schema.type === "string" && (typeof value !== "string" || value.length < (schema.minLength ?? 0) || value.length > (schema.maxLength ?? Infinity) || (schema.pattern && !new RegExp(schema.pattern).test(value)))) return false;
   if (schema.type === "integer" && (!Number.isInteger(value) || value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity))) return false;
   if (schema.type === "boolean" && typeof value !== "boolean") return false;

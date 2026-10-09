@@ -63,7 +63,7 @@ export function buildLegacyStore(config, megabytes, { days = 3, now = Date.now()
   seedDb.close();
   if (!seeds.length) throw new Error("no seed receipts were recorded");
   const policyText = readFileSync(join(config, "policy.json"), "utf8");
-  const policy = JSON.stringify(JSON.parse(policyText.replace(/^﻿/, "")));
+  const policy = JSON.stringify(JSON.parse(policyText.replace(/^\uFEFF/, "")));
   for (const suffix of ["", "-wal", "-shm"]) rmSync(dbPath + suffix, { force: true });
   rmSync(join(config, "store-upkeep.json"), { force: true }); // a fresh file has had no upkeep
 
@@ -90,7 +90,8 @@ export function buildLegacyStore(config, megabytes, { days = 3, now = Date.now()
     const receipt = JSON.stringify(seed);
     const candidate = JSON.stringify({ intent: p.intent, action_id: id, intent_hash: p.intent_hash, executed: false, realtime_result: "allow", timestamp: at });
     const policyRef = JSON.stringify(p.policy_ref ?? { id: null, version: 1, digest: p.policy_hash });
-    const { realtime_result, executed, override, execution, execution_ref, ...context } = p;
+    const context = { ...p };
+    for (const outcome of ["realtime_result", "executed", "override", "execution", "execution_ref"]) delete context[outcome];
     const reservation = JSON.stringify({
       action_id: id, candidate: JSON.parse(candidate), policy_ref: JSON.parse(policyRef), policy_snapshot: policy,
       authorization_ids: { request_id: id }, receipt_context: context,

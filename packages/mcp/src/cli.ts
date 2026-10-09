@@ -72,7 +72,7 @@ function die(message: string): never { process.stderr.write(`scopebond-mcp: ${me
 if (process.argv[2] === "init") {
   const server = arg("--server", process.env.SCOPEBOND_MCP_SERVER);
   if (!server) die("usage: scopebond-mcp init --server <upstream-server-id>");
-  const { keyFile, policyFile } = scaffold(server as string, { force: process.argv.includes("--force") });
+  const { keyFile, policyFile } = scaffold(server, { force: process.argv.includes("--force") });
   console.log(`Scopebond MCP proxy enrolled for server "${server}":`);
   console.log(`  key      ${keyFile}`);
   console.log(`  policy   ${policyFile} (starter — edit the tool bounds)`);
@@ -217,7 +217,7 @@ if (typedPath) {
     } catch (e) { process.stderr.write(`scopebond-mcp: the hook package is not available for observations (${(e as Error).message})\n`); }
   }
   if (!binder) binder = requestBinderFromHex(localBindingKey());
-  typed = { ...(raw as object), mode: raw.mode, binder, ...(sink ? { sink } : {}) } as TypedAdapterConfig;
+  typed = { ...(raw as object), mode: raw.mode, binder, ...(sink ? { sink } : {}) };
 }
 
 // The dispatch boundary is opt-in. A directory that is named but cannot be read is a setup error: it says what may be spent.
@@ -249,7 +249,7 @@ let argsDigestKey: string;
 try { argsDigestKey = argsDigestKeyHex(); } catch (e) { die(`could not read or create the local key ${keyPath}.binding: ${(e as Error).message}`); }
 
 const proxy = createMcpProxy({
-  policy, principal: { subject: `client:${principal}`, issuer: "scopebond:mcp-proxy" }, server: server as string,
+  policy, principal: { subject: `client:${principal}`, issuer: "scopebond:mcp-proxy" }, server: server,
   attesterKeyPem, argsDigestKey, upstream, ...(dispatch ? { dispatch } : {}), ...(typed ? { typed, adapterVersion: "scopebond-mcp" } : {}),
   onReceipt: (r: SignedReceipt) => {
     if (receiptsPath) { try { appendFileSync(receiptsPath, JSON.stringify(r) + "\n"); } catch { /* best effort */ } }
@@ -258,7 +258,14 @@ const proxy = createMcpProxy({
 });
 
 const reply = (m: unknown): void => { process.stdout.write(JSON.stringify(m) + "\n"); };
-readLines(process.stdin, MAX_LINE_BYTES, async (line) => {
+// Lines are decided concurrently, as they arrive. Every failure while deciding one is answered inside
+// `handleLine`; the `.catch` only keeps anything left over (a failed reply write) from becoming an
+// unhandled rejection, which would end the proxy.
+readLines(process.stdin, MAX_LINE_BYTES, (line) => {
+  handleLine(line).catch((e: unknown) => { process.stderr.write(`scopebond-mcp: ${e instanceof Error ? e.message : String(e)}\n`); });
+}, () => reply({ jsonrpc: "2.0", id: null, error: { code: -32600, message: `Invalid Request: message over ${MAX_LINE_BYTES} bytes` } }));
+
+async function handleLine(line: string): Promise<void> {
   if (!line.trim()) return;
   let parsed: unknown;
   try { parsed = JSON.parse(line); } catch { return; }
@@ -274,5 +281,5 @@ readLines(process.stdin, MAX_LINE_BYTES, async (line) => {
     // Fail closed: a proxy error becomes a JSON-RPC error, never a silent forward.
     if (expectsReply) reply({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `scopebond-mcp failed closed: ${(e as Error).message}` } });
   }
-}, () => reply({ jsonrpc: "2.0", id: null, error: { code: -32600, message: `Invalid Request: message over ${MAX_LINE_BYTES} bytes` } }));
+}
 }

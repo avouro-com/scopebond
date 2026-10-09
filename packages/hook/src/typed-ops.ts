@@ -147,8 +147,8 @@ export function normalizeRemote(url: string): { host: string; path: string } | n
     const path = slash > 0 ? rest.slice(slash + 1) : "";
     if (host && path) return { host: host.toLowerCase(), path: strip(path) };
   }
-  let m: RegExpExecArray | null;
-  m = /^(?:[^@/\s]+@)?([^/:\s]+):(?!\/\/)([^\s]+)$/.exec(text);
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and the optional user part cannot cross an @, so each quantifier backs off at most once over the input
+  const m = /^(?:[^@/\s]+@)?([^/:\s]+):(?!\/\/)([^\s]+)$/.exec(text);
   if (m && !/^[A-Za-z]$/.test(m[1])) return { host: m[1].toLowerCase(), path: strip(m[2]) };
   // A local path: a drive-letter or POSIX path, absolute or relative.
   const local = strip(text.replace(/^file:\/\/\/?/i, ""));
@@ -236,6 +236,7 @@ export interface GithubRequest {
   target?: string;
 }
 
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored segments that cannot cross `/`, and one trailing `.*`
 const PR_URL = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:[/?#].*)?$/;
 
 /** A `gh` command reduced to what it asks for. Only the four typed verbs; anything else,
@@ -278,7 +279,7 @@ export function parseGh(sc: SimpleCommand): GithubRequest | null {
  *  MCP server publishes; a different server keeps its plain MCP operation. */
 export function parseGithubMcp(server: string, tool: string, input: Record<string, unknown>): GithubRequest | null {
   if (server !== "github") return null;
-  const str = (k: string): string | undefined => (typeof input[k] === "string" && input[k] !== "" ? (input[k] as string) : undefined);
+  const str = (k: string): string | undefined => (typeof input[k] === "string" && input[k] !== "" ? (input[k]) : undefined);
   const owner = str("owner");
   const repo = str("repo");
   const number = typeof input.pullNumber === "number" ? String(input.pullNumber) : str("pullNumber");
@@ -331,7 +332,9 @@ export function githubOperation(req: GithubRequest, ctx: TypedContext, request: 
 // ---- package managers -----------------------------------------------------------------------------------------
 
 type Manager = "npm" | "pnpm" | "yarn" | "pip" | "uv";
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; at most four numeric parts, then one repeat
 const EXACT_VERSION = /^\d+(?:\.\d+){0,3}(?:[-+.][0-9A-Za-z.+-]+)?$/;
+// eslint-disable-next-line security/detect-unsafe-regex -- bounded: at most 253 characters
 const HOST = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
 
 const JS_VALUED = ["--registry", "--prefix", "--workspace", "--tag", "--cache", "--userconfig", "--loglevel", "-F", "--filter", "-C", "--dir", "--cwd", "--reporter", "--fetch-timeout", "--store-dir", "--network-concurrency"];
@@ -358,11 +361,20 @@ function jsPackage(spec: string): { name: string; version?: string; host?: strin
     return { name: clip(`git:${kind.toLowerCase()}.${kind.toLowerCase() === "bitbucket" ? "org" : "com"}/${path.replace(/#.*$/, "")}`) };
   }
   if (/^(?:\.{1,2}[\\/]|\/|~|[A-Za-z]:[\\/])/.test(spec)) return { name: clip(`local:${spec.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "project"}`) };
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; `/` and `#` separate the repeats
   if (/^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(spec) && !spec.startsWith("@")) return { name: clip(`git:github.com/${spec.replace(/#.*$/, "")}`) };
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the name repeat cannot cross the `@` that starts the version
   const m = /^((?:@[A-Za-z0-9._~-]+\/)?[A-Za-z0-9._~-]+)(?:@(.+))?$/.exec(spec);
   if (!m) return null;
   return { name: m[1], ...(m[2] && EXACT_VERSION.test(m[2]) ? { version: m[2] } : {}) };
 }
+
+/** A pip requirement: name, optional extras, optional `==`/`===` version, optional `;`/`@`/comparison tail. Groups: 1 the
+ *  name, 2 the operator, 3 or 4 the version. Linear: the blanks before the operator are matched once (not by two adjacent
+ *  `\s*`), and the version is taken whole (3) unless the tail starts at a `!` inside it (4, only possible when no line
+ *  end follows) — the single pattern this replaces backtracked over both, quadratic in a long spec. */
+// eslint-disable-next-line security/detect-unsafe-regex -- linear by construction (see above); linear-time.test.mjs times it on a 50,000-character spec
+const PIP_SPEC = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\[[^\]]*\])?\s*(?:(===?)\s*(?:([0-9A-Za-z.+!*-]+)(?![0-9A-Za-z.+!*-])(?:\s*[;<>!~,@].*)?|([0-9A-Za-z.+!*-](?=[^\n\r\u2028\u2029]*$)[0-9A-Za-z.+!*-]*)!.*)|(?:[;<>!~,@].*)?)$/;
 
 function pyPackage(spec: string): { name: string; version?: string; host?: string } | null {
   if (spec === "." || spec === ".." || /^(?:\.{1,2}[\\/]|\/|~|[A-Za-z]:[\\/])/.test(spec)) return { name: clip(`local:${spec === "." || spec === ".." ? "project" : spec.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "project"}`) };
@@ -370,10 +382,11 @@ function pyPackage(spec: string): { name: string; version?: string; host?: strin
     const n = normalizeRemote(spec.replace(/^git\+/i, ""));
     return n ? { name: clip(`url:${n.host}/${n.path}`), host: n.host } : null;
   }
-  const m = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\[[^\]]*\])?\s*(?:(===?)\s*([0-9A-Za-z.+!*-]+))?(?:\s*[;<>!~,@].*)?$/.exec(spec);
+  const m = PIP_SPEC.exec(spec);
   if (!m) return null;
   const name = m[1].toLowerCase().replace(/[._]+/g, "-");
-  return { name, ...(m[2] && m[3] && !m[3].includes("*") ? { version: m[3] } : {}) };
+  const version = m[3] ?? m[4];
+  return { name, ...(m[2] && version && !version.includes("*") ? { version } : {}) };
 }
 
 function readPackageManager(cwd: string, manager: string): string | undefined {
@@ -382,7 +395,10 @@ function readPackageManager(cwd: string, manager: string): string | undefined {
     if (!existsSync(file)) return undefined;
     const field = (JSON.parse(readFileSync(file, "utf8")) as { packageManager?: unknown }).packageManager;
     if (typeof field !== "string") return undefined;
-    const m = /^([a-z]+)@(\d[0-9A-Za-z.+-]*?)(?:\+.*)?$/.exec(field);
+    // The version runs to the first `+` (build metadata), which it cannot contain: a lazy run that could also take `+`
+    // retried the tail at every `+`, quadratic in a long field.
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: the version cannot contain `+`, which starts the tail
+    const m = /^([a-z]+)@(\d[0-9A-Za-z.-]*)(?:\+.*)?$/.exec(field);
     return m && m[1] === manager ? m[2] : undefined;
   } catch { return undefined; }
 }

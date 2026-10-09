@@ -38,7 +38,7 @@ function readJsonl<T>(file: string): T[] {
     try { items.push(JSON.parse(t) as T); }
     catch (error) {
       const isLast = lines.slice(i + 1).every((rest) => !rest.trim());
-      if (!isLast || text.endsWith("\n")) throw new Error(`${file}: corrupt record on line ${i + 1}: ${(error as Error).message}`);
+      if (!isLast || text.endsWith("\n")) throw new Error(`${file}: corrupt record on line ${i + 1}: ${(error as Error).message}`, { cause: error });
       torn = true;
     }
   }
@@ -138,7 +138,7 @@ export class FileReceiptStore implements ReceiptStore {
   putAnchor(a: Anchor): void { this.append(this.anchorFile, JSON.stringify(a)); this.anchorLog.push(a); }
   anchors(): Anchor[] { return this.anchorLog.slice(); }
   getStopState(): StopState { return { global: this.stops.has("global"), agents: [...this.stops].filter((key) => key !== "global") }; }
-  setStopped(target: "global" | string, stopped: boolean): void {
+  setStopped(target: string, stopped: boolean): void {
     this.append(this.stopFile, JSON.stringify({ target, stopped }));
     if (stopped) this.stops.add(target); else this.stops.delete(target);
   }
@@ -360,7 +360,8 @@ export class SqliteReceiptStore implements ReceiptStore {
       }
       const realtimeResult = "realtime_result" in decision ? decision.realtime_result as RealtimeResult : null;
       // The candidate, policy reference and policy are already in `authority_actions`; the lifecycle row keeps the rest.
-      const { candidate: _candidate, policy_ref: _ref, policy_snapshot: _snapshot, ...rest } = reservation;
+      const rest: Partial<AuthorityReservation> = { ...reservation };
+      delete rest.candidate; delete rest.policy_ref; delete rest.policy_snapshot;
       this.db.prepare(
         `INSERT INTO authority_lifecycle (action_id,reservation_json,realtime_result) VALUES (?,?,?)`,
       ).run(reservation.action_id, JSON.stringify({ ...rest, [SLIM_RESERVATION]: 1 }), realtimeResult);
@@ -471,7 +472,7 @@ export class SqliteReceiptStore implements ReceiptStore {
     const targets = rows.map((row) => row.target);
     return { global: targets.includes("global"), agents: targets.filter((target) => target !== "global") };
   }
-  setStopped(target: "global" | string, stopped: boolean): void {
+  setStopped(target: string, stopped: boolean): void {
     this.db.prepare(
       `INSERT INTO gateway_stops (target, stopped) VALUES (?, ?) ON CONFLICT(target) DO UPDATE SET stopped = excluded.stopped`,
     ).run(target, stopped ? 1 : 0);
@@ -750,8 +751,9 @@ function rowToLifecycle(row: LifecycleRow, policyText: (stored: string) => strin
   else {
     const stored = JSON.parse(row.reservation_json) as AuthorityReservation & Record<string, unknown>;
     if (stored[SLIM_RESERVATION]) {
-      const { [SLIM_RESERVATION]: _slim, ...rest } = stored;
-      reservation = { ...(rest as Partial<AuthorityReservation>), ...fromAction() } as AuthorityReservation;
+      const rest: Record<string, unknown> = { ...stored };
+      delete rest[SLIM_RESERVATION];
+      reservation = { ...(rest as Partial<AuthorityReservation>), ...fromAction() };
     } else reservation = stored;
   }
   const terminal = row.terminal_receipt_json ? JSON.parse(row.terminal_receipt_json) as SignedReceipt : null;

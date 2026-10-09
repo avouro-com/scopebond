@@ -182,12 +182,12 @@ export function installHarness(
   if (harness === "cursor") {
     config.version = config.version ?? 1;
     for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
-      const list = Array.isArray((hooks as Record<string, unknown>)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
+      const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
       const existing = list.findIndex(entryMatches);
       if (existing >= 0) list[existing] = { command: cursorCmd }; else list.push({ command: cursorCmd });
     }
   } else {
-    const list = Array.isArray((hooks as Record<string, unknown>).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
+    const list = Array.isArray((hooks).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
     const existing = list.findIndex(entryMatches);
     // Codex matchers are regular expressions. No matcher means all supported tools.
     const entry = harness === "codex"

@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TYPED_ACTION_TYPES, bindingKeyFromHex, buildOperation, deriveTypedOperations, normalizeRemote, mapClaudeToolUse, redactCommand, useDigestKey, gitPushOperation } from "../dist/index.js";
+import { bindingKeyFromHex, buildOperation, deriveTypedOperations, normalizeRemote, mapClaudeToolUse, redactCommand, useDigestKey, gitPushOperation } from "../dist/index.js";
 import { validObservation } from "./observation-schema.mjs";
 
 const KEY = bindingKeyFromHex("11".repeat(32));

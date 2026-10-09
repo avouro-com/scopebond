@@ -24,7 +24,7 @@ export function recommendedFrom(headers: { get(name: string): string | null } | 
 export function olderVersion(have: string | null | undefined, want: string | null | undefined): boolean {
   if (!have || !want || !VERSION.test(have) || !VERSION.test(want)) return false;
   const a = have.split(".").map(Number), b = want.split(".").map(Number);
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i]! < b[i]!;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
   return false;
 }
 

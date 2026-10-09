@@ -29,7 +29,8 @@ export function localSocketPath(dir: string, platform: NodeJS.Platform = process
   return join(mkdtempSync(join(tmpdir(), "scopebond-")), "agent.sock");
 }
 
-export type Handler = (body: unknown) => Promise<unknown> | unknown;
+/** Returns the answer, or a promise of it. */
+export type Handler = (body: unknown) => unknown;
 
 export function readEndpoint(dir: string): AgentEndpoint | null {
   const file = join(dir, AGENT_FILE);
@@ -54,9 +55,11 @@ export async function startControl(dir: string, version: string, routes: Record<
     try { send(200, await handler(raw ? JSON.parse(raw) : null)); }
     catch (error) { send(500, { error: (error as Error).message.slice(0, 200) }); }
   };
+  // A caller that drops the connection mid-body rejects the read; that ends the request, never the agent.
+  const listener = (req: IncomingMessage, res: ServerResponse) => { handle(req, res).catch(() => { res.destroy(); }); };
   // The pipe or socket first. A Unix socket's folder is created for this user only, and the socket itself is too.
   const socketPath = localSocketPath(dir);
-  const local = createServer(handle);
+  const local = createServer(listener);
   let socket: string | null = socketPath;
   try {
     if (process.platform !== "win32") {
@@ -70,7 +73,7 @@ export async function startControl(dir: string, version: string, routes: Record<
   // Loopback where something still needs it (the PowerShell tray, older hooks), unless turned off; always when the pipe
   // could not be made.
   const loopback = (options.loopback ?? process.env.SCOPEBOND_AGENT_LOOPBACK !== "0") || socket === null;
-  const server = createServer(handle);
+  const server = createServer(listener);
   if (loopback) await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => resolve()); });
   const address = loopback ? server.address() : null;
   const port = typeof address === "object" && address ? address.port : 0;
@@ -94,7 +97,7 @@ export async function startControl(dir: string, version: string, routes: Record<
 }
 
 /** Call a running agent, over its pipe or socket when it has one. Returns null when no agent answers. */
-export async function callAgent(dir: string, method: "GET" | "POST", path: string, body?: unknown, timeoutMs = 5_000): Promise<unknown | null> {
+export async function callAgent(dir: string, method: "GET" | "POST", path: string, body?: unknown, timeoutMs = 5_000): Promise<unknown> {
   const endpoint = readEndpoint(dir);
   if (!endpoint) return null;
   if (typeof endpoint.socket === "string" && endpoint.socket) {

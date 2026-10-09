@@ -220,7 +220,7 @@ test("doctor flags a working pinned command in a file git shares", { skip: !hasG
   // A pinned command that starts fine here — the resolve check alone passes it.
   const pinned = `"${process.execPath}" "${cli}" claude`;
   writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: pinned }] }] } }));
-  let status = 0; let out = "";
+  let status = 0; let out;
   try { out = execFileSync(process.execPath, [cli, "doctor"], { encoding: "utf8", cwd: project, env }); } catch (error) { status = error.status; out = String(error.stdout ?? ""); }
   assert.equal(status, 1, "doctor fails");
   assert.match(out, /names a path on this machine and git shares that file/);
@@ -371,7 +371,7 @@ test("init, trust and uninstall refuse a non-interactive stdin without --yes (th
     // Assert the actionable content, not the prose: the refusal has to tell the reader
     // how to proceed deliberately, which is the `--yes` flag.
     assert.match(stderr, /--yes/, `${args[0]} must point at --yes`);
-    assert.match(stderr, new RegExp(`scopebond ${args[0]}`), `${args[0]} must name itself`);
+    assert.ok(stderr.includes(`scopebond ${args[0]}`), `${args[0]} must name itself`);
   }
   assert.ok(!existsSync(join(dir, "policy.json")), "a refused init writes nothing");
 });

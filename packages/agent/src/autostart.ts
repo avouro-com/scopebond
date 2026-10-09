@@ -291,7 +291,7 @@ export function autostartHealth(scopebondHome: string, platform = process.platfo
       : { on, ok: false, detail: "the Scopebond tray does not start with sign-in (turn on Start with Windows in its menu, or run: scopebond-agent.exe autostart on)" };
   }
   const paths = autostartPaths();
-  let on = false;
+  let on: boolean;
   if (platform === "win32") {
     try { execFileSync("reg", ["query", RUN_KEY, "/v", RUN_VALUE], { stdio: "ignore" }); on = true; } catch { on = false; }
   } else on = existsSync(platform === "darwin" ? paths.macPlist : paths.linuxUnit);

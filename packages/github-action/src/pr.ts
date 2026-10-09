@@ -88,7 +88,7 @@ export function evaluatePullRequest(ctx: PullRequestContext, policy: unknown, op
   const intent = mapPullRequest(ctx, opts);
   const timestamp = opts.now?.() ?? new Date().toISOString();
   const claimed = { intent, executed: true, timestamp, intent_hash: outcomeRef };
-  const verdict = violates(policy as never, [], claimed as never, { at: timestamp });
+  const verdict = violates(policy as never, [], claimed, { at: timestamp });
   const attribution = { kind: "asserted" as const, actor: ctx.actor };
   if (verdict.violated) {
     return {

@@ -13,7 +13,7 @@ export function approvalSummary(answer: Record<string, unknown>): string | null 
 }
 
 /** Printable text only: a workspace name is chosen by its owner and reaches this terminal. */
-const clean = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/g, " ").trim().slice(0, 120);
+const clean = (text: string): string => text.replace(/[\p{Cc}\u202A-\u202E\u2066-\u2069]/gu, " ").trim().slice(0, 120);
 
 /** Seconds to wait before polling again after the workspace answered 429 or 503: its Retry-After, bounded. */
 export function retryAfterSeconds(value: string | null | undefined, fallback = 10): number {

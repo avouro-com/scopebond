@@ -15,7 +15,8 @@ const policy = {
 // Re-sign a mutated payload with the same attester so its signature stays valid;
 // only the evidence-class machinery is under test.
 const resign = (attester, payload) => {
-  const { type, ...rest } = payload;
+  const rest = { ...payload };
+  delete rest.type;
   return buildReceipt(rest, attester);
 };
 

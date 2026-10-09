@@ -230,14 +230,6 @@ test("the enrollment answer supplies the installation id as gateway_id; a genera
 
 // ---- (4) POST /v1/observations answers ---------------------------------------------------------------
 
-function seeded(count) {
-  const store = new ObservationStore(join(mkdtempSync(join(tmpdir(), "sb-obs-c-")), "observations.db"));
-  store.bindGeneration(1);
-  const { attester } = loadOrCreateAttester({ file: join(mkdtempSync(join(tmpdir(), "sb-obs-k-")), "k.key") });
-  const signer = { kid: "key:contract-0001", sign: (text) => attester.sign(text) };
-  return { store, signer, count };
-}
-
 // These open the emitter in this process, so they start no real heartbeat helper: one would add
 // heartbeats to the outbox under test. Servers close in t.after, so a failed assertion cannot
 // leave one listening and keep the test file from exiting.
@@ -258,7 +250,7 @@ test("results are read as the workspace writes them: a null observation id on a 
   assert.equal(emitter.store.terminal()[0].code, "schema_invalid");
   assert.equal(emitter.store.pendingSummary().count, 1, "only the deferred item remains");
   // A null id is never accepted as a durable acknowledgement.
-  const again = await startServer((items) => ({ status: 200, body: { version: "1.0", results: [{ index: 0, observation_id: null, status: "accepted", code: "accepted", retryable: false }] } }));
+  const again = await startServer(() => ({ status: 200, body: { version: "1.0", results: [{ index: 0, observation_id: null, status: "accepted", code: "accepted", retryable: false }] } }));
   t.after(() => again.close());
   const later = await uploadPending(emitter.store, { url: again.url, credential: "sbm_x", now: () => Date.now() + 3_600_000 });
   assert.equal(later.acknowledged, 0);

@@ -55,7 +55,7 @@ export type ObservationKind = (typeof OBSERVATION_KINDS)[number];
 
 /** The exact string whose UTF-8 bytes an observation signature (and observation_hash) covers. */
 export const observationSigningInput = (payload: Record<string, unknown>): string =>
-  OBSERVATION_DOMAIN + canonical(payload as never);
+  OBSERVATION_DOMAIN + canonical(payload);
 
 export const VOCABULARY_VERSION = "1.0";
 export const EVIDENCE_VERSION = "1.0";

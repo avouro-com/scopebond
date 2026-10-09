@@ -132,6 +132,7 @@ function common(ctx: InfraContext, request: unknown, environment_class: string):
 
 // ---- network -------------------------------------------------------------------------------------------
 
+// eslint-disable-next-line security/detect-unsafe-regex -- bounded: at most 253 characters
 const HOST_OK = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/;
 
 /** A URL reduced to scheme, IDNA-lowercase host and effective port. Null for anything else
@@ -139,7 +140,7 @@ const HOST_OK = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/;
  *  plain hostname). A scheme-less operand reads as `http`, as curl does. */
 export function parseDestination(raw: string, assumeHttp: boolean): { scheme: "http" | "https"; host: string; port: number } | null {
   let text = raw.trim();
-  if (text === "" || /[$`{}\[\]*\s]/.test(text.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i, ""))) return null;
+  if (text === "" || /[$`{}[\]*\s]/.test(text.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i, ""))) return null;
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
     if (!assumeHttp || text.startsWith("//") || text.startsWith("/")) return null;
     text = `http://${text}`;
@@ -228,6 +229,7 @@ function parseCurl(argv: string[]): FetchRequest | null {
     }
     urls.push(t);
   }
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the host repeat backs off only to each dot, and the IPv4 form is bounded
   const candidates = urls.filter((u) => /^[a-z][a-z0-9+.-]*:\/\//i.test(u) || /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d+)?(?:[/?#]|$)/.test(u) || /^(?:localhost|\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:[/?#]|$)/i.test(u));
   if (candidates.length !== 1 || candidates.length !== urls.length) return null;
   const effective = method && method !== "" ? method : head ? "HEAD" : get ? "GET" : upload ? "PUT" : body ? "POST" : "GET";
@@ -266,6 +268,7 @@ function parseWget(argv: string[]): FetchRequest | null {
     }
     urls.push(t);
   }
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the host repeat backs off only to each dot
   const candidates = urls.filter((u) => /^[a-z][a-z0-9+.-]*:\/\//i.test(u) || /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d+)?(?:[/?#]|$)/.test(u));
   if (candidates.length !== 1 || candidates.length !== urls.length) return null;
   return { url: candidates[0], method: method ?? (spider ? "HEAD" : "GET"), hasBody: body };
@@ -281,6 +284,7 @@ function parsePowerShell(argv: string[]): FetchRequest | null {
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored letters, then an optional colon and the rest
     const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(t);
     if (!m) { positional.push(t); continue; }
     const name = m[1].toLowerCase();
@@ -308,9 +312,13 @@ function fetchFromCommand(sc: SimpleCommand, dialect: "posix" | "powershell"): F
 
 // ---- wrangler ----------------------------------------------------------------------------------------------
 
+/** Blanks at the start of a line, not crossing a line end (a regular-expression source). */
+const LINE_BLANKS = String.raw`[^\S\n\r\u2028\u2029]*`;
+
 /** The argument list of a `wrangler` invocation, through the usual launchers. */
 function wranglerArgv(sc: SimpleCommand): string[] | null {
   const program = canonProgram(sc.program);
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, a fixed word then one repeat
   const isWrangler = (t: string | undefined): boolean => t !== undefined && /^wrangler(?:@[^\s]+)?$/i.test(t);
   if (program === "wrangler") return sc.argv;
   let rest: string[];
@@ -351,15 +359,19 @@ function readWranglerConfig(cwd: string, files: FileProbe, configFlag: string | 
     if (text === null) continue;
     try {
       if (/\.toml$/i.test(file)) {
-        const top = text.split(/^\s*\[/m)[0];
-        const pick = (src: string, k: string): string | undefined => new RegExp(`^\\s*${k}\\s*=\\s*"([^"\\n]+)"`, "m").exec(src)?.[1];
+        // A line's leading blanks are matched without crossing a line end: `^\s*` with the m flag rescanned every blank
+        // line after each line start, quadratic in a config file of blank lines.
+        const top = text.split(/^[^\S\n\r\u2028\u2029]*\[/m)[0];
+        // eslint-disable-next-line security/detect-non-literal-regexp -- k is one of this function's literal keys (name, account_id)
+        const pick = (src: string, k: string): string | undefined => new RegExp(`^${LINE_BLANKS}${k}\\s*=\\s*"([^"\\n]+)"`, "m").exec(src)?.[1];
         const base = pick(top, "name");
         let name = base;
         if (env) {
-          const section = new RegExp(`^\\s*\\[env\\.${env.replace(/[^A-Za-z0-9_-]/g, "")}\\]([\\s\\S]*?)(?=^\\s*\\[|$(?![\\s\\S]))`, "m").exec(text)?.[1];
+          // eslint-disable-next-line security/detect-non-literal-regexp -- the environment name is reduced to [A-Za-z0-9_-] first, so it adds no syntax
+          const section = new RegExp(`^${LINE_BLANKS}\\[env\\.${env.replace(/[^A-Za-z0-9_-]/g, "")}\\]([\\s\\S]*?)(?=^${LINE_BLANKS}\\[|$(?![\\s\\S]))`, "m").exec(text)?.[1];
           name = (section && pick(section, "name")) ?? (base ? `${base}-${env}` : undefined);
         }
-        const dir = /^\s*migrations_dir\s*=\s*"([^"\n]+)"/m.exec(text)?.[1];
+        const dir = /^[^\S\n\r\u2028\u2029]*migrations_dir\s*=\s*"([^"\n]+)"/m.exec(text)?.[1];
         return { name, account_id: pick(top, "account_id"), migrationsDir: dir };
       }
       const json = JSON.parse(stripJsonc(text)) as { name?: unknown; account_id?: unknown; env?: Record<string, { name?: unknown }>; d1_databases?: Array<{ migrations_dir?: unknown }> };
@@ -384,6 +396,7 @@ const envClassOf = (env: string | undefined): string => {
 
 /** A `KEY=value` assignment for `name` written before the program in the raw command. */
 function inlineAssignment(raw: string, name: string): string | undefined {
+  // eslint-disable-next-line security/detect-non-literal-regexp -- name is one of the callers' literal variable names (CLOUDFLARE_ACCOUNT_ID, PGHOST, PGSERVICE)
   const m = new RegExp(`(?:^|\\s)${name}=(?:"([^"]*)"|'([^']*)'|([^\\s"']+))`).exec(raw);
   return m ? (m[1] ?? m[2] ?? m[3]) : undefined;
 }
@@ -404,9 +417,9 @@ function parseWrangler(sc: SimpleCommand, ctx: ReadContext): Wrangler | null {
   return { area: pos[0], sub: pos[1] ?? "", pos, s, env, cfg, accountId };
 }
 
-const CF_KINDS = { worker: "worker", pages_project: "pages_project", pages_deployment: "pages_deployment", d1_database: "d1_database", r2_bucket: "r2_bucket", r2_object: "r2_object" } as const;
+type CfKind = "worker" | "pages_project" | "pages_deployment" | "d1_database" | "r2_bucket" | "r2_object";
 
-function cloudflareOp(w: Wrangler, ctx: InfraContext, request: unknown, kind: keyof typeof CF_KINDS, verb: string, name: string | undefined, extra: Operation = {}, environmentClass?: string): Operation {
+function cloudflareOp(w: Wrangler, ctx: InfraContext, request: unknown, kind: CfKind, verb: string, name: string | undefined, extra: Operation = {}, environmentClass?: string): Operation {
   const bound = name !== undefined && name !== "";
   return {
     type: "cloudflare_resource", resource_id: ctx.key.resourceId(`cf:${kind}`, bound ? name : `\0${UNBOUND}`), ...common(ctx, request, environmentClass ?? envClassOf(w.env)),
@@ -489,6 +502,7 @@ function psqlHost(sc: SimpleCommand): string | undefined {
     if (t === "-h" || t === "--host") return argv[i + 1] ?? "";
     if (t.startsWith("--host=")) return t.slice(7);
     if (/^-h./.test(t)) return t.slice(2);
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the optional user part cannot cross `@` or `/`, and the host repeat ends the match
     const uri = /^postgres(?:ql)?:\/\/(?:[^@/]*@)?([^:/?]+)/i.exec(t);
     if (uri) return uri[1];
     const kv = /(?:^|\s)host=([^\s]+)/.exec(t);
@@ -542,6 +556,7 @@ function psqlFacts(sc: SimpleCommand, ctx: ReadContext): DatabaseFacts | null {
   if (target && /^postgres(?:ql)?:\/\//i.test(target)) {
     try { const u = new URL(target); host ??= u.hostname; port ??= u.port; db = decodeURIComponent(u.pathname.replace(/^\//, "")); } catch { return null; }
   } else if (target && /(?:^|\s)(?:host|dbname|port|service)=/.test(target)) {
+    // eslint-disable-next-line security/detect-non-literal-regexp -- k is one of the literal libpq keys (host, port, dbname, service)
     const kv = (k: string): string | undefined => new RegExp(`(?:^|\\s)${k}=([^\\s]+)`).exec(target)?.[1];
     host ??= kv("host"); port ??= kv("port"); db = kv("dbname");
     if (host === undefined && kv("service")) host = "pg-service";
@@ -656,7 +671,7 @@ export function databaseGuardActions(command: string, dialect: "posix" | "powers
   const out: DatabaseGuardAction[] = [];
   for (const sc of decomposeShell(src)) {
     if (sc.opaque) continue;
-    let facts: DatabaseFacts | null = null;
+    let facts: DatabaseFacts | null;
     try { facts = databaseFacts(sc, ctx); } catch { facts = null; }
     if (facts) { if (facts.scope !== "local") out.push({ provider: facts.provider, verb: facts.verb, scope: facts.scope, risk: facts.risk }); continue; }
     // A wrangler d1 command whose SQL could not be read is not silently allowed on a remote database.

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveConfigDir, writeHarnessConfig, removeHarnessConfig, isHarnessConfigured,
-  absoluteHookCommand, userHome, trustProjectPolicy, untrustedProjectPolicy,
+  absoluteHookCommand, trustProjectPolicy, untrustedProjectPolicy,
 } from "../dist/index.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -24,7 +24,7 @@ test("an agent settings file saved with a UTF-8 byte-order mark is read and kept
   const file = join(tmp(), "settings.json");
   writeFileSync(file, "﻿" + JSON.stringify({ theme: "dark" }));
   writeHarnessConfig(file, "claude", "npx -y @scopebond/hook@0.16.0 claude");
-  const saved = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+  const saved = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
   assert.equal(saved.theme, "dark", "the person's settings are kept");
   assert.equal(isHarnessConfigured(file), true);
 });

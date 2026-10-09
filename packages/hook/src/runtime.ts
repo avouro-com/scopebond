@@ -10,7 +10,7 @@ import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node"
 import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
-import { explainDeny, type ExplainIntent } from "./explain.js";
+import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
@@ -284,7 +284,7 @@ export function createHookRuntime(config: RuntimeConfig) {
   // gateway's own per-intent hook only reports what the runtime already decided for this call.
   const boundary = openDispatchGuard(dirname(config.policyPath));
   let boundaryVerdict: DispatchDecision | null = null;
-  const gatewayGuard: DispatchGuard = { authorize: async () => boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] } };
+  const gatewayGuard: DispatchGuard = { authorize: () => Promise.resolve(boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] }) };
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only", dispatchGuard: gatewayGuard });
   const made = config.override?.(agent.kid) ?? null;
   // Once a person has been asked, most of the hook's time limit is gone: the receipt that follows waits less for the local
@@ -338,7 +338,7 @@ export function createHookRuntime(config: RuntimeConfig) {
      *  busy session was writing tens of megabytes of pure overhead into the user's project.
      *  Always safe to call, and every exit path should. */
     close(): void {
-      try { baseStore.close?.(); } catch { /* the decision is already recorded */ }
+      try { void Promise.resolve(baseStore.close?.()).catch(() => undefined); } catch { /* the decision is already recorded */ }
       try { outbox?.close(); } catch { /* best effort */ }
       try { boundary?.close(); } catch { /* best effort */ }
     },
@@ -370,7 +370,7 @@ export function createHookRuntime(config: RuntimeConfig) {
         decision: "deny",
         reason: explainDeny({
           policy, clauseId, detail: result.reason,
-          intent: signed.intent as ExplainIntent, policyPath: config.policyPath,
+          intent: signed.intent, policyPath: config.policyPath,
           postHoc: mapped.postHoc,
           // Point at the editable surface when there is one. `policy.json` is compiled
           // from `rules.json`, so telling someone to hand-edit it invites a change the
@@ -400,7 +400,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       for (const m of list) {
         const d = await this.evaluateOne(m);
         if (d.receipt !== undefined) receipts.push(d.receipt);
-        dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params as Record<string, unknown> }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
+        dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
         if (d.decision === "deny") return { ...d, receipts, dispatched };            // any deny denies the call
         if (d.decision === "allow" && !allow) allow = d;
         if (d.decision === "ask" && !ask) ask = d;
@@ -412,7 +412,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       if (boundary) {
         // Immediately before permitted dispatch: approvals are consumed and the budget slot is reserved
         // atomically, once for the whole parent action, or nothing is spent and the call is denied.
-        const group = String(list[0]!.intent.params[ACTION_GROUP_PARAM]);
+        const group = String(list[0].intent.params[ACTION_GROUP_PARAM]);
         const delegation = process.env[DELEGATION_ENV] ?? "";
         const verdict = await boundary.authorize({
           actor: agent.kid, action_group: group, policy_digest: gateway.policyHash,
@@ -423,7 +423,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           // Record the refusal as its own denied receipt, then deny the call.
           boundaryVerdict = verdict;
           try {
-            const last = list[list.length - 1]!;
+            const last = list[list.length - 1];
             const signed = agent.sign(last.intent);
             const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
             if (result.receipt !== undefined) receipts.push(result.receipt);

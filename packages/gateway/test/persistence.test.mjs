@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createGateway, verifyReceipt, attesterFromPrivateKeyPem } from "../dist/index.js";
-import { loadOrCreateAttester, FileReceiptStore, SqliteReceiptStore, openReceiptStore } from "../dist/node.js";
+import { loadOrCreateAttester, FileReceiptStore, openReceiptStore } from "../dist/node.js";
 
 const policy = {
   vocabulary_version: "1.0", policy_id: "t", version: 1,

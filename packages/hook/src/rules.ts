@@ -16,7 +16,7 @@
 // `rules.test.mjs` asserts that against `starterPolicy()`, so a change here cannot
 // quietly alter what is enforced.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
@@ -285,6 +285,7 @@ export function createRules(configDir: string, rules: RuleSet): boolean {
  *  kind of location it was. */
 export function pathRuleMatches(rule: PathRule, path: string): boolean {
   if (path === "") return false;
+  // eslint-disable-next-line security/detect-non-literal-regexp -- the rule's own policy pattern, exactly as the compiled policy evaluates it: a typed path is escaped by escapeRegex, a raw pattern is the rule file's own
   return !new RegExp(`^${pathPattern(rule)}.+`).test(path);
 }
 

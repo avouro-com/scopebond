@@ -84,7 +84,7 @@ function parseResults(body: unknown, sent: PendingRow[]): { results: Map<number,
     // deferred; that answer is bound to the item by its index. A durable acknowledgement
     // always names the item.
     if (r.observation_id === null) { if (r.status !== "rejected" && r.status !== "deferred") continue; }
-    else if (typeof r.observation_id !== "string" || r.observation_id !== sent[r.index as number]!.observation_id) continue;
+    else if (typeof r.observation_id !== "string" || r.observation_id !== sent[r.index as number].observation_id) continue;
     if (!results.has(r.index as number)) results.set(r.index as number, r as ItemResult);
   }
   const retryAfterSeconds = typeof b.retry_after_seconds === "number" && Number.isFinite(b.retry_after_seconds) && b.retry_after_seconds >= 0 ? b.retry_after_seconds : undefined;
@@ -147,7 +147,7 @@ export async function uploadPending(store: ObservationStore, options: UploadOpti
       return { ...outcome, result: "unsupported", detail: "batch version not accepted" };
     }
     if (response.status === 413) {
-      if (batch.length === 1) { store.reject([{ observation_id: batch[0]!.observation_id, code: "oversize" }]); outcome.rejected += 1; continue; }
+      if (batch.length === 1) { store.reject([{ observation_id: batch[0].observation_id, code: "oversize" }]); outcome.rejected += 1; continue; }
       store.release(batch.map((r) => r.observation_id));
       store.setBatchLimit(Math.floor(batch.length / 2));
       continue;
