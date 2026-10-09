@@ -84,7 +84,7 @@ test("Windows PowerShell runs the script from a non-ASCII folder: removed only w
   const fakeCli = `require("node:fs").writeFileSync(${JSON.stringify(agentRan)}, process.argv.slice(2).join(" "));\nprocess.exit(Number(process.env.FAKE_AGENT_EXIT || 0));\n`;
   writeFileSync(npm, "@echo off\r\necho %*> \"%~dp0npm-ran.txt\"\r\nexit /b 0\r\n");
   const run = (agentExit) => {
-    for (const f of [agentRan, npmRan]) if (existsSync(f)) writeFileSync(f, "");
+    for (const f of [agentRan, npmRan]) rmSync(f, { force: true });
     const script = writeUninstallScript(home, { node: process.execPath, cli, npm, key: "HKCU\\Software\\ScopebondTest\\NoSuchEntry" });
     const r = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], {
       encoding: "utf8", env: { ...process.env, SCOPEBOND_NO_PAUSE: "1", FAKE_AGENT_EXIT: String(agentExit) }, timeout: 120_000,
