@@ -13,7 +13,7 @@ import { loadOrCreateHexKey, readBoundedIfPresent } from "./node-files.js";
 import { createCloudDispatchSource, CLOUD_DISPATCH_SCOPE, type CloudDispatchSource } from "./dispatch-cloud.js";
 import { createDispatchGuard, DISPATCH_DB } from "./dispatch-store.js";
 import { StaticPrincipalKeyRegistry } from "./auth.js";
-import { dispatchApprovalBinding, requestHash, validateBudgetPolicy, type ActionBudgetPolicy, type DispatchGuard } from "./dispatch.js";
+import { APPROVAL_MAX_LIFETIME_MS, dispatchApprovalBinding, requestHash, validateBudgetPolicy, type ActionBudgetPolicy, type DispatchGuard } from "./dispatch.js";
 
 export const DISPATCH_FILE = "dispatch.json";
 export const APPROVAL_INBOX = "approvals";
@@ -44,6 +44,11 @@ export function readDispatchFile(dir: string): DispatchFile | null {
   const f = raw as DispatchFile;
   for (const b of f.budgets ?? []) if (!validateBudgetPolicy(b)) throw new Error(`${DISPATCH_FILE} holds an invalid budget policy`);
   if (f.require_approval !== undefined && (!Array.isArray(f.require_approval) || f.require_approval.some((t) => typeof t !== "string"))) throw new Error(`${DISPATCH_FILE}: require_approval must be a list of action types`);
+  // It may only shorten the five-minute maximum. "5m" or a list would otherwise become no limit at all.
+  const life = f.approval_max_lifetime_seconds;
+  if (life !== undefined && (!Number.isSafeInteger(life) || life < 1 || life * 1000 > APPROVAL_MAX_LIFETIME_MS)) {
+    throw new Error(`${DISPATCH_FILE}: approval_max_lifetime_seconds must be a whole number of seconds from 1 to ${APPROVAL_MAX_LIFETIME_MS / 1000}`);
+  }
   return f;
 }
 
@@ -93,7 +98,7 @@ export function openDispatchGuard(dir: string, options: { delegated?: boolean; c
     keys: new StaticPrincipalKeyRegistry(records),
     requireApproval: file?.require_approval,
     approvals: () => readApprovalInbox(dir),
-    approvalMaxLifetimeMs: file?.approval_max_lifetime_seconds ? file.approval_max_lifetime_seconds * 1000 : undefined,
+    approvalMaxLifetimeMs: file?.approval_max_lifetime_seconds !== undefined ? file.approval_max_lifetime_seconds * 1000 : undefined,
     // Re-read each call, so a withdrawn or replaced policy takes effect on the next action.
     budgets: () => readDispatchFile(dir)?.budgets ?? [],
     sharedGatewayConfigured: false,

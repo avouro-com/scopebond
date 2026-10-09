@@ -58,9 +58,10 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string] | ((text: string) =>
   [/(:\/\/)[^\s/?#]*@/g, `$1${MASK}@`],
   scrubQueryParameters,
   // A password literal in SQL (`PASSWORD 'x'`, `IDENTIFIED BY "x"`, `PASSWORD = 'x'`). `\s*(?:=\s*)?`, not `\s*=?\s*`:
-  // two adjacent whitespace runs split a long run of spaces every possible way (quadratic).
+  // two adjacent whitespace runs split a long run of spaces every possible way (quadratic). A quote that a blank or a separator
+  // follows opens no literal: it closes an earlier string (`grep "password " src/ && echo "x"`), and the text after it stays.
   // eslint-disable-next-line security/detect-unsafe-regex -- linear: the inner \s* follows a literal "=", so the two runs cannot trade characters (tested on 50k input)
-  [/(\b(?:password|identified\s+by)\s*(?:=\s*)?)('[^']*'|"[^"]*")/gi, `$1'${MASK}'`],
+  [/(\b(?:password|identified\s+by)\s*(?:=\s*)?)('(?![\s;&|)])[^']*'|"(?![\s;&|)])[^"]*")/gi, `$1'${MASK}'`],
   [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, MASK],                           // GitHub tokens
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, MASK],                         // GitHub fine-grained tokens
   [/\bglpat-[A-Za-z0-9_-]{20,}/g, MASK],                             // GitLab tokens

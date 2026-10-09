@@ -18,6 +18,7 @@ import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { checkChains } from "./chain-verify.js";
 import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
+import * as gatewayNode from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
@@ -1172,7 +1173,7 @@ async function runPolicy(args: string[]): Promise<void> {
   }
   const apply = args.includes("--yes");
   const connection = loadConnection(dir);
-  const outcome = loadPolicyExport(dir, file, { apply, environmentId: connection?.environment_id });
+  const outcome = loadPolicyExport(dir, file, { apply, environmentId: connection?.environment_id, afterPolicyWrite: repinAfterWrite(dir) });
   let ack: Parameters<ObservationEmitter["policyAck"]>[0] | undefined;
   if (outcome.state === "rejected") {
     console.error(`refused: ${outcome.message} (${outcome.error})`);
@@ -1193,13 +1194,19 @@ async function runPolicy(args: string[]): Promise<void> {
   await sendPolicyAck(dir, ack);
 }
 
-/** What a rules check needs for this config directory. A project policy governs only once trusted, so it is re-pinned after a
- *  write, exactly when `rules apply` would. */
-function syncOptionsFor(dir: string): SyncOptions {
+/** A project policy governs only once trusted, so a write that replaces a trusted project's policy re-pins it, exactly when
+ *  `rules apply` would; anything else (the user's own policy, a project not trusted) is never trusted by a write. Decided
+ *  before the write, from the policy as it is now. */
+function repinAfterWrite(dir: string): ((dir: string) => void) | undefined {
   const home = userHome();
   const repin = dir !== home && existsSync(join(home, "policy.json")) && isTrustedProject(dir);
+  return repin ? (d) => { trustProjectPolicy(d); } : undefined;
+}
+
+/** What a rules check needs for this config directory. */
+function syncOptionsFor(dir: string): SyncOptions {
   const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
-  return { agentKid, hookVersion: hookVersion(), policyBuilds, afterPolicyWrite: repin ? (d) => { trustProjectPolicy(d); } : undefined };
+  return { agentKid, hookVersion: hookVersion(), policyBuilds, afterPolicyWrite: repinAfterWrite(dir) };
 }
 
 /** `policy sync`: bring this computer's rules in line with its workspace now (the hook also checks every five minutes). */
@@ -1437,6 +1444,17 @@ function describeStore(dbPath: string): string {
   return count === null ? human : `${count} receipt(s), ${human}`;
 }
 
+/** What `status` and `doctor` say when the folder that holds the keys and records could not be made readable by this user
+ *  alone (its own access list could not be changed): each file in it is then restricted on its own. Null when it was. */
+function fileAccessLine(dir: string): string | null {
+  // On POSIX every key and record file is created 0600 whatever its folder: nothing to say. Read through the namespace: with
+  // an older gateway installed beside this hook the function is not there, and nothing is said.
+  const ownerOnlyState = (gatewayNode as Partial<typeof gatewayNode>).ownerOnlyState;
+  return process.platform === "win32" && typeof ownerOnlyState === "function" && ownerOnlyState(dir) === "per-file"
+    ? `${dir} could not be made readable by you alone (its own access could not be changed); its key and record files are restricted one by one`
+    : null;
+}
+
 function runStatus(args: string[] = []): void {
   if (args.includes("--json")) {
     const cwd = process.cwd();
@@ -1498,6 +1516,8 @@ function runStatus(args: string[] = []): void {
   console.log(`  observations     ${observationLines[0]}`);
   for (const line of observationLines.slice(1)) console.log(`                   ${line}`);
   console.log(`  local receipts   ${existsSync(dbPath) ? `${dbPath} (${describeStore(dbPath)})` : "none yet"}`);
+  const fileAccess = fileAccessLine(resolveConfigDir(process.cwd()));
+  if (fileAccess) console.log(`  file access      ${fileAccess}`);
   for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
     for (const file of [scopes.project, scopes.local, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
   }
@@ -1527,7 +1547,13 @@ function runDedupe(args: string[]): void {
   const dupes = duplicateHooks(harness, process.cwd());
   if (!dupes) { console.log(`${harnessName(harness)} runs the Scopebond hook once per action; nothing to change.`); return; }
   const result = dedupeHooks(harness, keep, process.cwd());
-  if (result.kept) console.log(`Kept: ${describeEntry(result.kept)}`);
+  if (!result.kept) {
+    // Removing the settings entries would leave the agent with no Scopebond hook at all.
+    console.error(`No enabled Scopebond plugin was found for ${harnessName(harness)}, so nothing was changed: removing the settings entries would leave no Scopebond hook. Keep a settings entry instead with ${cliCommand("dedupe")}.`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Kept: ${describeEntry(result.kept)}`);
   for (const e of result.removed) console.log(`Removed: ${describeEntry(e)}`);
   for (const e of result.plugins) console.log(`Still running from ${describeEntry(e)}: turn that plugin off in Claude Code (/plugin), or keep it instead with ${cliCommand("dedupe --keep plugin")}`);
   for (const e of result.shared) console.log(`Left alone: ${describeEntry(e)} is shared with the team through git; actions in this project are recorded twice until the team removes that entry.`);
@@ -1614,6 +1640,8 @@ async function runDoctor(): Promise<void> {
   const active = resolveConfigDir(process.cwd());
   const hasPolicy = existsSync(join(active, "policy.json"));
   console.log(`  active config    ${active} ${hasPolicy ? "ok" : `no policy (run \`${cliCommand("init")}\` here, or \`${cliCommand("install")}\` once for your user)`}`);
+  const fileAccess = fileAccessLine(active);
+  if (fileAccess) console.log(`  file access      ${fileAccess}`);
   if (!hasPolicy) problems.push("no policy found in the active config dir");
   const ignored = untrustedProjectPolicy(process.cwd());
   const shadowed = shadowedUserConnection(active);

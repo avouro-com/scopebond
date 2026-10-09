@@ -11,6 +11,12 @@ import { createGateway, createHttpExecutor, StaticPrincipalKeyRegistry } from ".
 import { loadOrCreateAttester, openReceiptStore } from "../dist/node.js";
 import { createSigner } from "@scopebond/sdk";
 
+// An action the executor refuses as unsendable is thrown as ExecutorInputError (HTTP 400) before policy or dispatch.
+async function attempt(gw, signed) {
+  try { return await gw.handleAction(signed); }
+  catch (error) { if (error?.name === "ExecutorInputError") return { allowed: false, reason: error.message }; throw error; }
+}
+
 function setup(policy) {
   const agent = createSigner();
   const keys = new StaticPrincipalKeyRegistry([{ kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" }]);
@@ -27,7 +33,7 @@ const allowOnly = { vocabulary_version: "1.0", policy_id: "egress", version: 1, 
 test("an allowed http.call never leaves the allowlisted host, whatever its path", async () => {
   const { agent, gw, calls } = setup(allowOnly);
   for (const path of ["@evil.example/steal", ".evil.example/steal", ":443@evil.example/x", "//evil.example/x"]) {
-    const r = await gw.handleAction(agent.sign({ action_type: "http.call", params: { host: "api.ok.example", path, method: "POST" } }));
+    const r = await attempt(gw, agent.sign({ action_type: "http.call", params: { host: "api.ok.example", path, method: "POST" } }));
     assert.ok(!r.allowed || calls.every((c) => c.host === "api.ok.example"), `${path}: ${JSON.stringify(r.reason)}`);
   }
   assert.ok(calls.every((c) => c.host === "api.ok.example"), JSON.stringify(calls));
@@ -42,7 +48,7 @@ test("endpoint_denylist is not bypassed by case, a trailing dot or userinfo", as
   ] };
   const { agent, gw, calls } = setup(policy);
   for (const host of ["metadata.internal", "METADATA.internal", "metadata.internal.", "x@metadata.internal"]) {
-    const r = await gw.handleAction(agent.sign({ action_type: "http.call", params: { host, path: "/", method: "GET" } }));
+    const r = await attempt(gw, agent.sign({ action_type: "http.call", params: { host, path: "/", method: "GET" } }));
     assert.equal(r.allowed, false, host);
   }
   assert.equal(calls.length, 0);

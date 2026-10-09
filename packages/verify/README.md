@@ -212,7 +212,10 @@ clock for when the delivery it answered was sent and by when it was held (the ho
 agent keep these). `checkChainHeads` then also reports a kept head that answered a
 delivery sent after a higher kept head was held, whatever either says about its issue
 time; deliveries in flight together may be answered out of order and are not compared.
-Times on published heads are ignored. The checks never throw on hostile input: a list,
+These times are compared on one clock only: `local.clock` names the computer whose clock
+took them, so heads two computers keep in one shared folder are not ordered by each
+other's clocks, and a head held before its own delivery was sent (timed across a clock
+step back) does not order anything by its sent time. Times on published heads are ignored. The checks never throw on hostile input: a list,
 head or segment that cannot be checked is reported as a problem.
 
 With `publicKey`, `verifySegmentChain` checks the

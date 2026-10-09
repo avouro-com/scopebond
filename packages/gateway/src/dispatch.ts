@@ -104,7 +104,9 @@ export async function checkApproval(
   options: { maxLifetimeMs?: number; maxSkewMs?: number } = {},
 ): Promise<{ ok: true; approval: DispatchApproval } | { ok: false; reason: ApprovalRejection }> {
   if (!validateDispatchApproval(approval)) return { ok: false, reason: "malformed" };
-  const maxLife = Math.min(options.maxLifetimeMs ?? APPROVAL_MAX_LIFETIME_MS, APPROVAL_MAX_LIFETIME_MS);
+  // A lifetime setting that is not a number keeps the maximum: Math.min with NaN would be NaN, and nothing exceeds NaN.
+  const configured = options.maxLifetimeMs;
+  const maxLife = typeof configured !== "number" || Number.isNaN(configured) ? APPROVAL_MAX_LIFETIME_MS : Math.min(configured, APPROVAL_MAX_LIFETIME_MS);
   const skew = options.maxSkewMs ?? APPROVAL_MAX_SKEW_MS;
   const issued = Date.parse(approval.issued_at);
   const expires = Date.parse(approval.expires_at);

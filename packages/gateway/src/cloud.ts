@@ -98,6 +98,9 @@ export interface CloudBackoff {
   count: number;
   /** The wait the workspace named (Retry-After, in ms, at most an hour), or null when it named none. */
   retryAfterMs: number | null;
+  /** When the wait was recorded (this computer's clock, ms). A wait never holds more than an hour and five minutes after
+   *  it; one recorded later than now was recorded before the clock went back, cannot be placed on it, and has ended. */
+  recordedAt?: number;
 }
 
 export interface CloudExporter {
@@ -357,14 +360,19 @@ export function randomQueueId(): string {
 
 /** "ingest failed: HTTP 401" plus, when the workspace named one, its refusal code and the one
  *  thing to do ("ingest failed: HTTP 401 (credential_refused): Sign it in again ..."). The prefix
- *  never changes, so anything that reads the status from it keeps working. Bounded and never throws. */
+ *  never changes, so anything that reads the status from it keeps working. A monthly-limit refusal
+ *  ("quota") that names the limit a plan change would give (`plan_lifts_to`) ends with
+ *  "[plan_lifts_to=<n>]", so the tray says what a plan change lifts only when the workspace said so.
+ *  Bounded and never throws. */
 function refusalMessage(status: number, text: string): string {
   const base = "ingest failed: HTTP " + status;
   try {
-    const body = JSON.parse(text) as { code?: unknown; remediation?: unknown };
+    const body = JSON.parse(text) as { code?: unknown; remediation?: unknown; plan_lifts_to?: unknown };
     const code = typeof body.code === "string" && /^[a-z_]{1,40}$/.test(body.code) ? body.code : null;
     const remediation = typeof body.remediation === "string" ? body.remediation.replace(/[^\x20-\x7e]/g, " ").slice(0, 240) : null;
-    return code ? `${base} (${code})${remediation ? ": " + remediation : ""}` : base;
+    const lifts = body.plan_lifts_to;
+    const liftsTo = code === "quota" && typeof lifts === "number" && Number.isSafeInteger(lifts) && lifts > 0 ? lifts : null;
+    return code ? `${base} (${code})${remediation ? ": " + remediation : ""}${liftsTo !== null ? ` [plan_lifts_to=${liftsTo}]` : ""}` : base;
   } catch {
     return base;
   }
@@ -448,8 +456,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   if (!opts.credential.trim()) throw new TypeError("Cloud machine credential is required");
   const rawFetch = opts.fetch ?? fetch;
   const requestTimeoutMs = Math.max(1, Math.trunc(opts.requestTimeoutMs ?? 30_000));
-  // The signal also ends a body that trickles: reading the answer fails once it fires.
-  const doFetch: typeof fetch = (input, init) => rawFetch(input, { ...init, signal: AbortSignal.timeout(requestTimeoutMs) });
+  // The signal also ends a body that trickles: reading the answer fails once it fires. A redirect is never followed (as for
+  // every other call to the workspace): it fails the delivery, which is retried, so records are never sent on elsewhere.
+  const doFetch: typeof fetch = (input, init) => rawFetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(requestTimeoutMs) });
   const now = opts.now ?? Date.now;
   const batchSize = Math.max(1, Math.min(100, Math.trunc(opts.batchSize ?? 100)));
   const flushMs = Math.max(100, Math.trunc(opts.flushMs ?? 15_000));
@@ -470,12 +479,17 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   let notableQueued = false;
   let stopped = false;
   let consecutiveFailures = 0;
-  // A wait an earlier process recorded holds here too (bounded, whatever the value says).
+  // A wait an earlier process recorded holds here too, bounded whatever the value says: at most an hour and five minutes
+  // after it was recorded (or from now, when that is not known). One recorded later than now has ended: the clock went back
+  // since, so how much of it is left cannot be told, and a clock that jumps never makes a wait longer.
   let backoff: CloudBackoff | null = null;
   if (opts.backoff && Number.isFinite(opts.backoff.until)) {
-    const until = Math.min(Math.trunc(opts.backoff.until), now() + MAX_WAIT_MS + MAX_SPREAD_MS);
+    const t = now();
+    const given = Number(opts.backoff.recordedAt);
+    const recordedAt = Number.isFinite(given) ? Math.min(Math.trunc(given), t) : t;
+    const until = Number.isFinite(given) && given > t ? t : Math.min(Math.trunc(opts.backoff.until), recordedAt + MAX_WAIT_MS + MAX_SPREAD_MS);
     const named = Number(opts.backoff.retryAfterMs);
-    backoff = { until, count: Math.max(0, Math.min(64, Math.trunc(Number(opts.backoff.count) || 0))), retryAfterMs: Number.isFinite(named) && named > 0 ? Math.min(named, MAX_WAIT_MS) : null };
+    backoff = { until, count: Math.max(0, Math.min(64, Math.trunc(Number(opts.backoff.count) || 0))), retryAfterMs: Number.isFinite(named) && named > 0 ? Math.min(named, MAX_WAIT_MS) : null, recordedAt };
   }
   let nextAttemptAt: number | null = backoff && backoff.until > now() ? backoff.until : null;
   let lastSuccessAt: number | null = null;
@@ -505,7 +519,8 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     if (status === 429 || (status === 503 && named > 0)) {
       const count = Math.min(64, (backoff?.count ?? 0) + 1);
       const wait = named || Math.min(MAX_WAIT_MS, UNNAMED_WAIT_MS * 2 ** Math.min(count - 1, 16));
-      backoff = { until: now() + wait + spread(wait), count, retryAfterMs: named || null };
+      const at = now();
+      backoff = { until: at + wait + spread(wait), count, retryAfterMs: named || null, recordedAt: at };
       if (named) next = Math.max(next, backoff.until);
     }
     nextAttemptAt = next;

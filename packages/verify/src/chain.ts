@@ -49,8 +49,10 @@ export interface AnchorKey { alg: "Ed25519"; kid: string; public_key_spki: strin
 
 /** This computer's own clock around a head it kept (ISO 8601), never the workspace's: `sent_at`, when the delivery whose
  *  answer carried the head was sent (the workspace issued the head after it); `received_at`, a time by which this computer
- *  held the head. A head kept before these were recorded has neither, or only `received_at`. */
-export interface HeadTiming { sent_at?: string; received_at?: string }
+ *  held the head. A head kept before these were recorded has neither, or only `received_at`. `clock` names the computer
+ *  whose clock took them (the same for every head one computer keeps): a folder two computers share holds both, and one
+ *  computer's times do not order the other's. A head kept without it is compared with every clock, as before. */
+export interface HeadTiming { sent_at?: string; received_at?: string; clock?: string }
 /** A head as this computer keeps it: the workspace's signed head and, beside it, this computer's times. */
 export type KeptChainHead = SignedChainHead & { local?: HeadTiming };
 
@@ -196,13 +198,20 @@ export interface HeadsCheck {
   matched: number;
 }
 
-type Sourced = { head: ChainHead; from: "kept" | "published"; sentAt: number; heldBy: number };
+type Sourced = { head: ChainHead; from: "kept" | "published"; sentAt: number; heldBy: number; clock: string | null };
 
 /** One of this computer's own times kept beside a head, in ms; NaN when there is none (or it is not a time). */
-const localTime = (h: KeptChainHead, field: keyof HeadTiming): number => {
+const localTime = (h: KeptChainHead, field: "sent_at" | "received_at"): number => {
   const local = (h as { local?: unknown }).local;
   const value = isObj(local) ? local[field] : undefined;
   return typeof value === "string" ? Date.parse(value) : NaN;
+};
+
+/** The clock a kept head's times were taken on, or null when the head does not name one. */
+const localClock = (h: KeptChainHead): string | null => {
+  const local = (h as { local?: unknown }).local;
+  const value = isObj(local) ? local.clock : undefined;
+  return typeof value === "string" && value.length > 0 && value.length <= 64 ? value : null;
 };
 
 /** Do the heads agree? A chain's sequence number never goes back, and one sequence number never ends two different
@@ -210,7 +219,9 @@ const localTime = (h: KeptChainHead, field: keyof HeadTiming): number => {
  *  are merged per chain. "Never goes back" is checked two ways, and either one failing is reported:
  *   - in this computer's own order, which the workspace cannot choose: a kept head that answered a delivery sent after
  *     another kept head was held was issued after it, so its sequence number is not lower (deliveries in flight together
- *     may be answered out of order, and are not compared);
+ *     may be answered out of order, and are not compared). Times are compared on one clock only: heads that name two
+ *     different clocks are not compared, and a head held before its delivery was sent was timed across a clock step back,
+ *     so its sent time orders nothing;
  *   - in issue order (`issued_at`), which also covers published heads and heads kept without times.
  *  Only published heads of chains the kept heads name are compared; times a published head carries are ignored. Never
  *  throws. */
@@ -224,13 +235,13 @@ function compareHeads(kept: readonly KeptChainHead[], published: readonly Signed
   const chains = new Map<string, Sourced[]>();
   for (const h of kept) {
     if (!isSignedChainHead(h)) { problems.push("a kept head is malformed"); continue; }
-    chains.set(h.head.anchor_id, [...(chains.get(h.head.anchor_id) ?? []), { head: h.head, from: "kept", sentAt: localTime(h, "sent_at"), heldBy: localTime(h, "received_at") }]);
+    chains.set(h.head.anchor_id, [...(chains.get(h.head.anchor_id) ?? []), { head: h.head, from: "kept", sentAt: localTime(h, "sent_at"), heldBy: localTime(h, "received_at"), clock: localClock(h) }]);
   }
   let matched = 0;
   for (const h of published) {
     if (!isSignedChainHead(h) || !chains.has(h.head.anchor_id)) continue;
     matched += 1;
-    chains.get(h.head.anchor_id)!.push({ head: h.head, from: "published", sentAt: NaN, heldBy: NaN });
+    chains.get(h.head.anchor_id)!.push({ head: h.head, from: "published", sentAt: NaN, heldBy: NaN, clock: null });
   }
   for (const [id, list] of chains) {
     const reported = new Set<Sourced>();
@@ -242,12 +253,14 @@ function compareHeads(kept: readonly KeptChainHead[], published: readonly Signed
         problems.push(`chain ${short(id)} went back: sequence ${a.head.ingest_seq} (${a.from}, ${a.head.issued_at}) then ${b.head.ingest_seq} (${b.from}, ${b.head.issued_at})`);
       }
     }
-    // This computer's order: the highest head already held when each later delivery was sent.
+    // This computer's order: the highest head already held when each later delivery was sent, on the same clock. A head held
+    // before its own delivery was sent was timed across a clock step back: its sent time is on a clock that has gone back.
     for (const b of list) {
-      if (b.from !== "kept" || !Number.isFinite(b.sentAt) || reported.has(b)) continue;
+      if (b.from !== "kept" || !Number.isFinite(b.sentAt) || reported.has(b) || b.heldBy < b.sentAt) continue;
       let before: Sourced | null = null;
       for (const a of list) {
         if (a.from !== "kept" || !Number.isFinite(a.heldBy) || a.heldBy > b.sentAt || a.head.ingest_seq <= b.head.ingest_seq) continue;
+        if (a.clock !== null && b.clock !== null && a.clock !== b.clock) continue;
         if (!before || a.head.ingest_seq > before.head.ingest_seq) before = a;
       }
       if (before) {

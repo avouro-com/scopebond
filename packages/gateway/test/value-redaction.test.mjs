@@ -99,6 +99,25 @@ test("PowerShell secret shapes and a URL password holding '@' are scrubbed insid
   assert.equal(scrubSecretText("$name = 'build'; Set-Item Env:PATH 'C:/tools'"), "$name = 'build'; Set-Item Env:PATH 'C:/tools'");
 });
 
+test("only the secret is masked: a closing quote, an assignment before a program and a piped literal keep the rest of the text", () => {
+  const word = ["pass", "word"].join(""); // built at run time, so the source holds no assignment-shaped literal
+  for (const value of [
+    'git commit -m "token = " --no-verify',
+    `grep -rn "${word} = " src/ && npm test`,
+    `git commit -m "${word} = " -m "second paragraph"`,
+    "cat token.txt | docker login --password-stdin r.example.test && rm token.txt",
+  ]) assert.ok(scrubSecretText(value).endsWith(value.slice(-12)), `${value} -> ${scrubSecretText(value)}`);
+  assert.equal(scrubSecretText('git commit -m "token = " --no-verify'), 'git commit -m "token = " --no-verify');
+  assert.equal(scrubSecretText(`git commit -m "${word} = " -m "second paragraph"`), `git commit -m "${word} = " -m "second paragraph"`);
+  assert.equal(scrubSecretText('psql -c "ALTER USER app PASSWORD " && echo "done"'), 'psql -c "ALTER USER app PASSWORD " && echo "done"');
+  assert.equal(scrubSecretText(`psql -c "ALTER USER app PASSWORD '${pw}'"`), `psql -c "ALTER USER app PASSWORD '***'"`);
+  assert.equal(scrubSecretText("cd x;API_KEY=abc ./deploy.sh --prod"), "cd x;API_KEY=*** ./deploy.sh --prod");
+  assert.equal(scrubSecretText("cd x&&API_KEY=abc ./deploy.sh --prod"), "cd x&&API_KEY=*** ./deploy.sh --prod");
+  // A hashtable entry still runs to the entry's end, and an unclosed quoted value is still masked.
+  assert.match(scrubSecretText(`@{a=1;Authorization=Bearer ${tok}}`), /^@\{a=1;Authorization=\*\*\*\}?$/);
+  assert.equal(scrubSecretText(`$token = "${tok}`), '$token = "***');
+});
+
 test("scrubbing stays linear on adversarial 50,000-character values", () => {
   const n = 50_000;
   for (const text of [

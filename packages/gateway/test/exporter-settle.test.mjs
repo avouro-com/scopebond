@@ -101,7 +101,7 @@ test("a workspace asking to wait (429 with Retry-After) is not asked again soone
   // Never sooner than asked; a random spread of at most a fifth of the wait keeps computers from coming back together.
   const next = ex.status().nextAttemptAt;
   assert.ok(next >= t + 120_000 && next <= t + 120_000 + 24_000, `next attempt ${next - t} ms after the refusal`);
-  assert.deepEqual(ex.status().backoff, { until: next, count: 1, retryAfterMs: 120_000 });
+  assert.deepEqual(ex.status().backoff, { until: next, count: 1, retryAfterMs: 120_000, recordedAt: t });
 });
 
 test("after the conflicting record is found, the rest of the queue goes in batches again", async () => {

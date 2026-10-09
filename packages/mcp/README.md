@@ -54,6 +54,9 @@ otherwise run without a decision.
 Windowed clauses (`rate_limit`, `sequence`, a windowed `spend_limit`) hold for
 calls that arrive together: a call policy allows takes its place in the window
 as it is decided, so with a limit of 2 and ten parallel calls, two are forwarded.
+The proxy keeps only the calls its policy can read: none for a policy without
+windowed clauses, and the calls inside the longest window otherwise, so a
+long-running proxy does not slow down or grow with every call it has made.
 
 **Upstream environment.** The upstream server starts with a minimal environment
 (`PATH`, `HOME`/`USERPROFILE`, the temp and system directories, locale), not the
@@ -105,6 +108,10 @@ bind before anything reaches the upstream:
 }
 ```
 
+- The file is checked when the proxy starts, and one of any other shape is refused: `approvedResources` is an object
+  of string lists (a value is approved only when it is one of them, exactly), each tool's `operation_class` is
+  `read_only` or `mutation`, `resources` is a list of `{ "arg", "kind" }`, and `requireResourceBinding` is a boolean.
+  `typedConfigProblem(config)` runs the same check in the library.
 - `manifest.hash` pins the server's tool list (`manifestHash(tools)`). The proxy reads the live list (from the
   client's own `tools/list`, hashed across every page the client fetches, or by asking the upstream) and treats
   the manifest as valid only while it still hashes to the pin; a changed server is `unverified` and every tool
@@ -158,5 +165,11 @@ import { createMcpProxy, mapMcpToolCall } from "@scopebond/mcp";
 `createMcpProxy({ policy, principal, server, attesterKeyPem, upstream })` returns
 `{ handle(message) }`; inject `upstream` to test the decision path without a real
 server.
+
+The session history the windowed clauses count is bounded: at most 10,000 calls and
+8 MiB (`historyLimit: { maxCalls, maxBytes }`), dropping the oldest. While a dropped
+call may still be inside a window, calls are refused with that reason rather than
+decided on a history that lost it, so the bound never lets through more than the
+policy allows.
 
 Experimental alpha; controlled test use only.

@@ -6,7 +6,7 @@
 import { closeSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { folderDecides, isPrivateDir, restrictFolderToOwner, restrictToOwner } from "./node-permissions.js";
+import { folderDecides, isPrivateDir, noteRestricted, restrictFolderToOwner, restrictOnce, restrictToOwner } from "./node-permissions.js";
 
 const code = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | null)?.code;
 const random = (): string => randomBytes(6).toString("hex");
@@ -96,20 +96,23 @@ export function placeOwnerOnly(file: string, text: string, exclusive: boolean): 
     try { rmSync(temp, { force: true }); } catch { /* removed with its folder, or never made */ }
     if (stage) { try { rmdirSync(stage); } catch { /* left behind empty */ } }
   }
-  // Outside a private folder the file gets an explicit ACL of its own, so it does not depend on the staging folder's.
+  // Outside a private folder the file gets an explicit ACL of its own, so it does not depend on the staging folder's. Noted, so
+  // opening it later does not restrict it again.
   if (shared) {
     const failure = restrictToOwner(file);
     if (failure) process.emitWarning(`could not restrict ${file} to this user: ${failure}`);
+    else noteRestricted(file);
   }
   return true;
 }
 
 /** An existing key or evidence file, which an older version may have made under its folder's ACL (on POSIX, readable by
  *  others), restricted to its owner when it is opened. Skipped where the folder decides (a private folder), so the hook,
- *  which opens these on every tool call, does not pay for it. */
+ *  which opens these on every tool call, does not pay for it. In a folder that could not be made private, and in any other
+ *  folder, each file is restricted on its own: once, and again after a day, not on every open. */
 export function keepOwnerOnly(file: string): void {
   if (folderDecides(dirname(file))) return;
-  const failure = restrictToOwner(file);
+  const failure = restrictOnce(file);
   if (failure) process.emitWarning(`could not restrict ${file} to this user: ${failure}`);
 }
 

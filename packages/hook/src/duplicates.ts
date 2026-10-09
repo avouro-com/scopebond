@@ -5,10 +5,11 @@
 // Only the decision event counts (PreToolUse; Cursor's beforeShellExecution): the observation
 // hooks that ride beside it are expected.
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import { gitShareState, harnessEntryMatches, localHarnessFile, projectHarnessFile, readHarnessConfig, userHarnessFile, type Harness } from "./install.js";
+import { backupHarnessConfig, gitShareState, harnessEntryMatches, localHarnessFile, projectHarnessFile, readHarnessConfig, userHarnessFile, type Harness } from "./install.js";
 
 export type HookScope = "user" | "project" | "local" | "plugin";
 export interface HookEntry { scope: HookScope; file: string; command: string }
@@ -106,13 +107,30 @@ function withoutScopebond(entry: unknown): unknown {
   return rest.length ? { ...record, hooks: rest } : null;
 }
 
+/** Replace a settings file whole: the edited text goes to a temp file in the same folder (with the file's own permissions),
+ *  which is then renamed over it, so an interrupted write never leaves the person's settings half-written. A settings file
+ *  that is a link (a dotfiles folder) is replaced where it points, so the link stays. */
+function replaceSettings(file: string, text: string): void {
+  let target = file;
+  try { target = realpathSync(file); } catch { /* not there: written as named */ }
+  let mode = 0o600;
+  try { mode = statSync(target).mode & 0o777; } catch { /* a new file: owner only */ }
+  const temp = `${target}.${randomBytes(6).toString("hex")}.tmp`;
+  try { writeFileSync(temp, text, { mode }); renameSync(temp, target); }
+  catch (error) { try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ } throw error; }
+}
+
 /** Keep one Scopebond decision entry: the first of the chosen scope (user by default). Entries in
  *  other settings files are removed with their observation hooks; a second entry in the kept
  *  file is dropped. Plugins cannot be edited from here: keep "plugin" to remove every settings
- *  entry instead, or turn the plugin off in Claude Code (/plugin). Other tools' hooks are kept. */
+ *  entry instead, or turn the plugin off in Claude Code (/plugin). Other tools' hooks are kept.
+ *  Nothing is changed when nothing would be kept (`kept` null: "plugin" asked for and no enabled Scopebond plugin found),
+ *  so dedupe never leaves the agent without a Scopebond hook. A file it changes is backed up first
+ *  (`<file>.scopebond-backup`, as the installer does) and replaced whole. */
 export function dedupeHooks(harness: Harness, keep: HookScope = "user", cwd: string = process.cwd(), home = homedir()): { kept: HookEntry | null; removed: HookEntry[]; plugins: HookEntry[]; shared: HookEntry[] } {
   const entries = hookEntries(harness, cwd, home);
   const kept = entries.find((e) => e.scope === keep) ?? (keep === "plugin" ? null : entries.find((e) => e.scope !== "plugin") ?? null);
+  if (!kept) return { kept: null, removed: [], plugins: [], shared: [] };
   const removed: HookEntry[] = [];
   const plugins = entries.filter((e) => e.scope === "plugin" && e !== kept);
   const files = [...new Set(entries.filter((e) => e.scope !== "plugin").map((e) => e.file))];
@@ -121,11 +139,11 @@ export function dedupeHooks(harness: Harness, keep: HookScope = "user", cwd: str
   const shared: HookEntry[] = [];
   for (const file of files) {
     // The kept file is edited only when it is not the team's, or when the person chose to keep the project's.
-    if (gitShareState(file) === "tracked" && (!kept || file !== kept.file || keep !== "project")) { shared.push(...entries.filter((e) => e.file === file)); continue; }
+    if (gitShareState(file) === "tracked" && (file !== kept.file || keep !== "project")) { shared.push(...entries.filter((e) => e.file === file)); continue; }
     const config = readHarnessConfig(file);
     const before = JSON.stringify(config);
     const hooks = isRecord(config.hooks) ? config.hooks : {};
-    if (kept && file === kept.file && keep !== "plugin") {
+    if (file === kept.file && keep !== "plugin") {
       // The kept file: only a second decision entry goes.
       const list = hooks[decisionEvent(harness)];
       if (Array.isArray(list)) {
@@ -143,7 +161,10 @@ export function dedupeHooks(harness: Harness, keep: HookScope = "user", cwd: str
       removed.push(...entries.filter((e) => e.file === file));
     }
     // A file with nothing to change is left exactly as it is.
-    if (JSON.stringify(config) !== before) writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+    if (JSON.stringify(config) !== before) {
+      backupHarnessConfig(file);
+      replaceSettings(file, JSON.stringify(config, null, 2) + "\n");
+    }
   }
   return { kept, removed, plugins: keep === "plugin" ? [] : plugins, shared };
 }
