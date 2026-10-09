@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, linkSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -109,5 +110,30 @@ test("a folder an older version set up is made readable by this user alone on th
     runtime?.close();
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
     rmSync(template, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("a hook folder whose own access cannot be changed: each file is still readable by this user alone, and status says so", { skip: !windows && "Windows access lists" }, async () => {
+  // The user may create, change and delete files there but not change the folder's own access list (OWNER RIGHTS limits the
+  // owner to Modify), as for a folder an installer or an administrator made; other users may change it too.
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-no-dac-"));
+  execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${self}:(OI)(CI)M`, "*S-1-5-11:(OI)(CI)M", "*S-1-5-18:(OI)(CI)F", "*S-1-3-4:M"], { stdio: "ignore" });
+  let runtime;
+  try {
+    scaffold(dir);
+    loadOrCreateBindingKey(dir);
+    runtime = createHookRuntime(paths(dir));
+    await runtime.evaluate(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git status" } }), { groupKey: "call-1" });
+    // Every key, the binding key, the receipt log and its journal files, and the folder's marker (the rules and the ignore file
+    // hold no secret).
+    const files = walk(dir).filter((f) => !/[\\/](?:policy\.json|rules\.json|\.gitignore)$/.test(f));
+    assert.ok(files.some((f) => f.endsWith("receipts.db")) && files.some((f) => f.endsWith("attester.key")) && files.some((f) => f.endsWith(".owner-only")));
+    assert.deepEqual(files.map((file) => ({ file, others: others(file) })).filter((r) => r.others.length), []);
+    const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+    const status = execFileSync(process.execPath, [cli, "status"], { encoding: "utf8", cwd: tmpdir(), env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+    assert.match(status, /file access\s+.*restricted one by one/);
+  } finally {
+    runtime?.close();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
 });

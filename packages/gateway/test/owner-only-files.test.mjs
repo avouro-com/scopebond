@@ -14,9 +14,11 @@ import { Worker } from "node:worker_threads";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { createGateway } from "../dist/index.js";
-import { DispatchStore, FileReceiptStore, loadOrCreateAttester, loadOrCreateHexKey, openReceiptStore, recordChainHead } from "../dist/node.js";
+import { DispatchStore, FileReceiptStore, ensurePrivateDir, keepOwnerOnly, loadOrCreateAttester, loadOrCreateHexKey, openReceiptStore, ownerOnlyState, recordChainHead } from "../dist/node.js";
 
 const windows = process.platform === "win32";
+// The record of files restricted one by one goes to this run's own folder, not this computer's.
+process.env.LOCALAPPDATA = mkdtempSync(join(tmpdir(), "sb-owner-only-appdata-"));
 const self = (process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : String(process.env.USERNAME)).toLowerCase();
 
 /** The principals other than this user and SYSTEM that may open `path` (Windows), or whether group/others have any access. */
@@ -178,4 +180,63 @@ process.stdout.write(JSON.stringify(out));`);
     }
     assert.deepEqual(disagreements, [], "every round converged on one key");
   } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+test("a folder whose own access cannot be changed: every file in it is still restricted on its own", { skip: !windows && "Windows access lists" }, () => {
+  // The user may create, change and delete files in the folder but not change the folder's own access list (OWNER RIGHTS
+  // limits the owner there to Modify), as for a folder an installer or an administrator made; other users may change it too.
+  const dir = mkdtempSync(join(tmpdir(), "sb-no-dac-"));
+  try {
+    execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${self}:(OI)(CI)M`, "*S-1-5-11:(OI)(CI)M", "*S-1-5-18:(OI)(CI)F", "*S-1-3-4:M"], { stdio: "ignore" });
+    assert.notEqual(ensurePrivateDir(dir), null, "the folder cannot be made private");
+    assert.equal(ownerOnlyState(dir), "per-file", "status and doctor can say so");
+    loadOrCreateAttester({ file: join(dir, "attester.key") });
+    loadOrCreateHexKey(join(dir, "binding.key"));
+    writeFileSync(join(dir, "cloud.json"), "{}\n"); // a credential an older version left
+    keepOwnerOnly(join(dir, "cloud.json"));
+    const { store } = openReceiptStore({ db: join(dir, "receipts.db") });
+    const dispatch = new DispatchStore(join(dir, "dispatch.db"));
+    try {
+      const files = ["attester.key", "binding.key", "cloud.json", "receipts.db", "receipts.db-wal", "receipts.db-shm", "dispatch.db", "dispatch.db-wal", "dispatch.db-shm"];
+      const open = files.filter((f) => existsSync(join(dir, f))).map((f) => ({ file: f, others: others(join(dir, f)) })).filter((r) => r.others.length);
+      assert.ok(existsSync(join(dir, "receipts.db")) && existsSync(join(dir, "dispatch.db")));
+      assert.deepEqual(open, [], "every file is readable by its owner alone");
+    } finally { store.close?.(); dispatch.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+test("outside a private folder a file is restricted once, not every time a process opens it", { skip: !windows && "icacls is Windows-only (POSIX restricts with a chmod)" }, () => {
+  const dir = sharedFolder("sb-restrict-once-");
+  const work = mkdtempSync(join(tmpdir(), "sb-restrict-once-work-"));
+  try {
+    // One start of a process that opens a key, a binding key and a credential: how many icacls runs it made.
+    const script = join(work, "start.mjs");
+    writeFileSync(script, `import { createRequire, syncBuiltinESMExports } from "node:module";
+const cp = createRequire(import.meta.url)("node:child_process");
+const original = cp.execFileSync;
+let runs = 0;
+cp.execFileSync = function (file, ...rest) { if (/icacls/i.test(String(file))) runs++; return original.call(this, file, ...rest); };
+syncBuiltinESMExports();
+const { keepOwnerOnly, loadOrCreateAttester, loadOrCreateHexKey } = await import(${JSON.stringify(new URL("../dist/node.js", import.meta.url).href)});
+const dir = process.argv[2];
+loadOrCreateAttester({ file: dir + "/attester.key" });
+loadOrCreateHexKey(dir + "/binding.key");
+keepOwnerOnly(dir + "/cloud.json");
+process.stdout.write(String(runs));`);
+    writeFileSync(join(dir, "cloud.json"), "{}\n"); // a credential an older version left
+    const env = { ...process.env, LOCALAPPDATA: join(work, "appdata") };
+    const start = () => Number(execFileSync(process.execPath, [script, dir], { encoding: "utf8", env }));
+    assert.ok(start() > 0, "the first start restricts the files");
+    assert.equal(start(), 0, "a later start finds them restricted");
+    assert.equal(start(), 0);
+    assert.deepEqual(["attester.key", "binding.key", "cloud.json"].map((f) => others(join(dir, f))).flat(), [], "and they are owner-only");
+    // A file replaced by another is a new file: it is restricted again.
+    rmSync(join(dir, "cloud.json"));
+    writeFileSync(join(dir, "cloud.json"), "{}\n");
+    assert.equal(start(), 1);
+    assert.deepEqual(others(join(dir, "cloud.json")), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+    rmSync(work, { recursive: true, force: true, maxRetries: 5 });
+  }
 });

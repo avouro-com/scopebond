@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { checkChains } from "./chain-verify.js";
-import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
+import { openReceiptStore, loadOrCreateAttester, ownerOnlyState, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
@@ -1437,6 +1437,15 @@ function describeStore(dbPath: string): string {
   return count === null ? human : `${count} receipt(s), ${human}`;
 }
 
+/** What `status` and `doctor` say when the folder that holds the keys and records could not be made readable by this user
+ *  alone (its own access list could not be changed): each file in it is then restricted on its own. Null when it was. */
+function fileAccessLine(dir: string): string | null {
+  // On POSIX every key and record file is created 0600 whatever its folder: nothing to say.
+  return process.platform === "win32" && ownerOnlyState(dir) === "per-file"
+    ? `${dir} could not be made readable by you alone (its own access could not be changed); its key and record files are restricted one by one`
+    : null;
+}
+
 function runStatus(args: string[] = []): void {
   if (args.includes("--json")) {
     const cwd = process.cwd();
@@ -1498,6 +1507,8 @@ function runStatus(args: string[] = []): void {
   console.log(`  observations     ${observationLines[0]}`);
   for (const line of observationLines.slice(1)) console.log(`                   ${line}`);
   console.log(`  local receipts   ${existsSync(dbPath) ? `${dbPath} (${describeStore(dbPath)})` : "none yet"}`);
+  const fileAccess = fileAccessLine(resolveConfigDir(process.cwd()));
+  if (fileAccess) console.log(`  file access      ${fileAccess}`);
   for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
     for (const file of [scopes.project, scopes.local, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
   }
@@ -1614,6 +1625,8 @@ async function runDoctor(): Promise<void> {
   const active = resolveConfigDir(process.cwd());
   const hasPolicy = existsSync(join(active, "policy.json"));
   console.log(`  active config    ${active} ${hasPolicy ? "ok" : `no policy (run \`${cliCommand("init")}\` here, or \`${cliCommand("install")}\` once for your user)`}`);
+  const fileAccess = fileAccessLine(active);
+  if (fileAccess) console.log(`  file access      ${fileAccess}`);
   if (!hasPolicy) problems.push("no policy found in the active config dir");
   const ignored = untrustedProjectPolicy(process.cwd());
   const shadowed = shadowedUserConnection(active);
