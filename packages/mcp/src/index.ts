@@ -7,5 +7,5 @@ export type { McpProxy, McpProxyConfig, McpUpstream, JsonRpcMessage } from "./pr
 export { starterMcpPolicy } from "./init.js";
 export { connectCloud, loadMcpConnection, openExporter, connectionFileFor } from "./cloud.js";
 export type { McpConnection } from "./cloud.js";
-export { requestBinderFromHex, describeToolCall, manifestHash, intentDraft, outcomeDraft, sourceReceiptHash, REQUEST_BINDING_DOMAIN } from "./typed.js";
+export { requestBinderFromHex, describeToolCall, typedConfigProblem, manifestHash, intentDraft, outcomeDraft, sourceReceiptHash, REQUEST_BINDING_DOMAIN } from "./typed.js";
 export type { RequestBinder, ObservationSink, ObservationDraft, PinnedManifest, PinnedTool, TypedAdapterConfig, TypedDescription, OperationClass, ExitCategory } from "./typed.js";

@@ -45,7 +45,7 @@ import { spawn } from "node:child_process";
 import type { SignedReceipt, CloudExporter } from "@scopebond/gateway";
 import { createMcpProxy, invalidMessageReason } from "./proxy.js";
 import { readLines, upstreamEnv, MAX_LINE_BYTES } from "./stdio.js";
-import { requestBinderFromHex, type ObservationSink, type RequestBinder, type TypedAdapterConfig } from "./typed.js";
+import { requestBinderFromHex, typedConfigProblem, type ObservationSink, type RequestBinder, type TypedAdapterConfig } from "./typed.js";
 import { loadOrCreateHexKey } from "./key-file.js";
 import { join, resolve } from "node:path";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
@@ -114,6 +114,18 @@ let policy: unknown;
 let attesterKeyPem: string;
 try { policy = JSON.parse(readFileSync(policyPath as string, "utf8")); } catch (e) { die(`could not read policy ${policyPath}: ${(e as Error).message}`); }
 try { attesterKeyPem = readFileSync(keyPath as string, "utf8"); } catch (e) { die(`could not read signing key ${keyPath}: ${(e as Error).message}`); }
+
+// The typed adapter's config is checked before the upstream starts: a value of the wrong shape (an approved-resources entry
+// written as one string, say) is refused, never read loosely.
+const typedPath = arg("--typed", process.env.SCOPEBOND_MCP_TYPED);
+let typedRaw: Record<string, unknown> | undefined;
+if (typedPath) {
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(typedPath, "utf8")); } catch (e) { die(`could not read the typed config ${typedPath}: ${(e as Error).message}`); }
+  const problem = typedConfigProblem(raw);
+  if (problem) die(`the typed config ${typedPath} is not valid: ${problem}`);
+  typedRaw = raw as Record<string, unknown>;
+}
 
 // When connected to a workspace, mirror the PEP-authorized receipts to the portal
 // through a durable outbox. The proxy is long-running, so the exporter's own timer
@@ -206,13 +218,10 @@ const upstream: McpUpstream = {
 function localBindingKey(): string {
   return loadOrCreateHexKey(`${keyPath}.binding`);
 }
-const typedPath = arg("--typed", process.env.SCOPEBOND_MCP_TYPED);
 let typed: TypedAdapterConfig | undefined;
 let observations: { flush(): Promise<unknown>; close(): void } | undefined;
-if (typedPath) {
-  let raw: Record<string, unknown>;
-  try { raw = JSON.parse(readFileSync(typedPath, "utf8")); } catch (e) { die(`could not read the typed config ${typedPath}: ${(e as Error).message}`); }
-  if (raw.mode !== "monitor" && raw.mode !== "enforce") die('the typed config needs "mode": "monitor" or "enforce"');
+if (typedRaw) {
+  const raw = typedRaw;
   let binder: RequestBinder | undefined;
   let sink: ObservationSink | undefined;
   const hookDir = arg("--observations-dir", process.env.SCOPEBOND_HOOK_DIR);
@@ -225,7 +234,15 @@ if (typedPath) {
     } catch (e) { process.stderr.write(`scopebond-mcp: the hook package is not available for observations (${(e as Error).message})\n`); }
   }
   if (!binder) binder = requestBinderFromHex(localBindingKey());
-  typed = { ...(raw as object), mode: raw.mode, binder, ...(sink ? { sink } : {}) };
+  // Only the checked fields, never the rest of the file.
+  typed = {
+    mode: raw.mode as TypedAdapterConfig["mode"], binder, ...(sink ? { sink } : {}),
+    ...(raw.manifest !== undefined ? { manifest: raw.manifest as TypedAdapterConfig["manifest"] } : {}),
+    ...(raw.requireResourceBinding !== undefined ? { requireResourceBinding: raw.requireResourceBinding as boolean } : {}),
+    ...(raw.approvedResources !== undefined ? { approvedResources: raw.approvedResources as Record<string, string[]> } : {}),
+    ...(raw.manifestRecheckMs !== undefined ? { manifestRecheckMs: raw.manifestRecheckMs as number } : {}),
+    ...(raw.referenceSetVersion !== undefined ? { referenceSetVersion: raw.referenceSetVersion as string } : {}),
+  };
 }
 
 // The dispatch boundary is opt-in. A directory that is named but cannot be read is a setup error: it says what may be spent.

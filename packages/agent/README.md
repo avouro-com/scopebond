@@ -88,7 +88,10 @@ runs (the paths recorded at setup first, then the ones on the system), so a Node
 leaves autostart pointing at nothing. On Windows the Run entry starts it under `conhost --headless`, so no window
 opens at sign-in. If the agent stops with an error, the launcher starts it again after 30 seconds (up to 50 times,
 each noted in `agent.log`), as launchd and systemd do on macOS and Linux; a clean stop (`stop`, `autostart off`, an
-update handing over) ends it. `status` says whether autostart is on and working.
+update handing over) ends it. `status` says whether autostart is on and working: the entry must start this home's
+launcher, so one left pointing at another home's launcher is reported and `setup` rewrites it. On Windows a Scopebond
+home whose path has a `%` in it is refused (Windows would read it as a variable); set `SCOPEBOND_HOME` to a folder
+without one.
 
 The agent writes `agent.log` itself, a line at a time, so an agent handing over to its update and the updated one
 can both write it. When it updates itself, the updated agent starts through the same launcher and waits for the old

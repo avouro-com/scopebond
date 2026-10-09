@@ -119,6 +119,41 @@ export function jsonString(v: unknown): string {
   }
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
+
+/**
+ * What is wrong with a typed adapter config read from JSON, in plain words, or null when it has the documented shape:
+ * `mode` "monitor" or "enforce"; optional `requireResourceBinding` (boolean), `approvedResources` (an object of string
+ * lists), `manifest` ({ hash: string, tools: { <name>: { operation_class: "read_only" | "mutation", resources?: [{ arg, kind }] } } }),
+ * `manifestRecheckMs` (a whole number of milliseconds, 0 or more) and `referenceSetVersion` (string). A config that fails
+ * this is refused, never read loosely: a value of the wrong type could change what an allowlist means.
+ */
+export function typedConfigProblem(raw: unknown): string | null {
+  if (!isPlainObject(raw)) return "the typed config must be a JSON object";
+  if (raw.mode !== "monitor" && raw.mode !== "enforce") return '"mode" must be "monitor" or "enforce"';
+  if (raw.requireResourceBinding !== undefined && typeof raw.requireResourceBinding !== "boolean") return '"requireResourceBinding" must be true or false';
+  if (raw.approvedResources !== undefined) {
+    if (!isPlainObject(raw.approvedResources)) return '"approvedResources" must be an object of lists, for example { "repository": ["owner/name"] }';
+    for (const [kind, list] of Object.entries(raw.approvedResources)) {
+      if (!isStringList(list)) return `"approvedResources"."${kind}" must be a list of strings, for example ["owner/name"]`;
+    }
+  }
+  if (raw.manifest !== undefined) {
+    const manifest = raw.manifest;
+    if (!isPlainObject(manifest) || typeof manifest.hash !== "string" || !isPlainObject(manifest.tools)) return '"manifest" must be { "hash": "sha256:…", "tools": { … } }';
+    for (const [name, tool] of Object.entries(manifest.tools)) {
+      if (!isPlainObject(tool) || (tool.operation_class !== "read_only" && tool.operation_class !== "mutation")) return `"manifest"."tools"."${name}"."operation_class" must be "read_only" or "mutation"`;
+      if (tool.resources !== undefined && !(Array.isArray(tool.resources) && tool.resources.every((r) => isPlainObject(r) && typeof r.arg === "string" && r.arg !== "" && typeof r.kind === "string" && r.kind !== ""))) {
+        return `"manifest"."tools"."${name}"."resources" must be a list of { "arg": "…", "kind": "…" }`;
+      }
+    }
+  }
+  if (raw.manifestRecheckMs !== undefined && !(typeof raw.manifestRecheckMs === "number" && Number.isSafeInteger(raw.manifestRecheckMs) && raw.manifestRecheckMs >= 0)) return '"manifestRecheckMs" must be a whole number of milliseconds, 0 or more';
+  if (raw.referenceSetVersion !== undefined && typeof raw.referenceSetVersion !== "string") return '"referenceSetVersion" must be a string';
+  return null;
+}
+
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/;
 export const UNVERIFIED = "unverified";
 export const MAX_RESOURCES = 100;
@@ -185,8 +220,15 @@ export function describeToolCall(
     if (resourceSpecific && declared.length === 0) reasons.push("the tool is a mutation and its manifest names no resource to bind");
     else if (resourceSpecific && !resourcesBound) reasons.push("a resource the manifest names could not be read from the dispatched arguments");
     else if (resourceSpecific) {
-      const approved = config.approvedResources ?? {};
-      if (bound.some((b) => !(approved[b.kind] ?? []).includes(b.value))) reasons.push("a bound resource is not in the approved set for its kind");
+      // Exact membership in a list of strings: an entry of any other shape (one string, written without brackets) approves
+      // nothing, never every substring of itself.
+      const approved: unknown = config.approvedResources ?? {};
+      const listFor = (kind: string): unknown => (isPlainObject(approved) && Object.hasOwn(approved, kind) ? approved[kind] : undefined);
+      const isApproved = (kind: string, value: string): boolean => {
+        const list = listFor(kind);
+        return Array.isArray(list) && list.some((v) => typeof v === "string" && v === value);
+      };
+      if (bound.some((b) => !isApproved(b.kind, b.value))) reasons.push("a bound resource is not in the approved set for its kind");
     }
   }
 

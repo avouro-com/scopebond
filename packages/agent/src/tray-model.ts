@@ -74,6 +74,14 @@ export function overQuota(error: string | null | undefined): boolean {
   return !!error && /HTTP 429 \(quota\)/.test(error);
 }
 
+/** The monthly limit a plan change would give, when the workspace's limit refusal named one (the delivery error then ends
+ *  with "[plan_lifts_to=<n>]"); null when it named none, so nothing promises that a plan change lifts the limit. */
+function planLiftsTo(error: string | null | undefined): number | null {
+  const m = error && overQuota(error) ? / \[plan_lifts_to=(\d{1,15})\]$/.exec(error) : null;
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 /** The workspace's plan keeps fewer agents active than it has, and this one is paused (HTTP 402 agent_paused). */
 export function planPaused(error: string | null | undefined): boolean {
   return !!error && /HTTP 402 \(agent_paused\)/.test(error);
@@ -137,9 +145,13 @@ export function trayModel(input: TrayInput): TrayModel {
     state = "disconnected"; headline = "Not connected to your workspace: using this computer's own rules";
     if (input.canReconnect) fix = ACTIONS.reconnect; else hint = health.hint;
   } else if (pending > 0 && overQuota(d.last_error) && health.fix?.route !== "/repair") {
-    // Not "sending": the workspace refuses them until its limit allows. Nothing is lost; say so, and where it is changed.
+    // Not "sending": the workspace refuses them until its limit allows. Nothing is lost; say so. A plan change is named only
+    // when the workspace said one lifts the limit, with the limit it gives: on some plans none does.
     state = "attention"; headline = `Workspace limit reached: ${pending} record${pending === 1 ? "" : "s"} waiting`;
-    hint = "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows; a workspace owner can change the plan.";
+    const liftsTo = planLiftsTo(d.last_error);
+    hint = liftsTo !== null
+      ? `Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows, or sooner if a workspace owner moves to a plan that allows ${liftsTo.toLocaleString("en-US")} records a month.`
+      : "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows.";
     fix = ACTIONS.open_workspace;
   } else if (pending > 0 && planPaused(d.last_error) && health.fix?.route !== "/repair") {
     // Not a delivery problem to retry: the plan paused this agent. Sending again changes nothing; an owner decides.

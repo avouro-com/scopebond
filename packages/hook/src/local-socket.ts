@@ -1,6 +1,7 @@
-// Talking to the Scopebond Agent over its local channel: a named pipe on Windows, a Unix socket elsewhere. Only this
-// computer's processes can reach either; the pipe's name is random and kept in the agent's file in the user's own
-// Scopebond folder, and the Unix socket sits in a folder only the user can open. The agent's token is still sent.
+// Talking to the Scopebond Agent over its local channel: a named pipe on Windows, a Unix socket elsewhere. The Unix socket
+// sits in a folder only the user can open. The pipe's name is random and kept in the agent's file in the user's own
+// Scopebond folder, but Windows lets other accounts list pipe names and open the pipe for reading, so what protects each
+// request is the agent's token, which is always sent.
 
 import { request } from "node:http";
 

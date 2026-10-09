@@ -108,6 +108,10 @@ bind before anything reaches the upstream:
 }
 ```
 
+- The file is checked when the proxy starts, and one of any other shape is refused: `approvedResources` is an object
+  of string lists (a value is approved only when it is one of them, exactly), each tool's `operation_class` is
+  `read_only` or `mutation`, `resources` is a list of `{ "arg", "kind" }`, and `requireResourceBinding` is a boolean.
+  `typedConfigProblem(config)` runs the same check in the library.
 - `manifest.hash` pins the server's tool list (`manifestHash(tools)`). The proxy reads the live list (from the
   client's own `tools/list`, hashed across every page the client fetches, or by asking the upstream) and treats
   the manifest as valid only while it still hashes to the pin; a changed server is `unverified` and every tool

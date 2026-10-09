@@ -357,14 +357,19 @@ export function randomQueueId(): string {
 
 /** "ingest failed: HTTP 401" plus, when the workspace named one, its refusal code and the one
  *  thing to do ("ingest failed: HTTP 401 (credential_refused): Sign it in again ..."). The prefix
- *  never changes, so anything that reads the status from it keeps working. Bounded and never throws. */
+ *  never changes, so anything that reads the status from it keeps working. A monthly-limit refusal
+ *  ("quota") that names the limit a plan change would give (`plan_lifts_to`) ends with
+ *  "[plan_lifts_to=<n>]", so the tray says what a plan change lifts only when the workspace said so.
+ *  Bounded and never throws. */
 function refusalMessage(status: number, text: string): string {
   const base = "ingest failed: HTTP " + status;
   try {
-    const body = JSON.parse(text) as { code?: unknown; remediation?: unknown };
+    const body = JSON.parse(text) as { code?: unknown; remediation?: unknown; plan_lifts_to?: unknown };
     const code = typeof body.code === "string" && /^[a-z_]{1,40}$/.test(body.code) ? body.code : null;
     const remediation = typeof body.remediation === "string" ? body.remediation.replace(/[^\x20-\x7e]/g, " ").slice(0, 240) : null;
-    return code ? `${base} (${code})${remediation ? ": " + remediation : ""}` : base;
+    const lifts = body.plan_lifts_to;
+    const liftsTo = code === "quota" && typeof lifts === "number" && Number.isSafeInteger(lifts) && lifts > 0 ? lifts : null;
+    return code ? `${base} (${code})${remediation ? ": " + remediation : ""}${liftsTo !== null ? ` [plan_lifts_to=${liftsTo}]` : ""}` : base;
   } catch {
     return base;
   }
@@ -448,8 +453,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   if (!opts.credential.trim()) throw new TypeError("Cloud machine credential is required");
   const rawFetch = opts.fetch ?? fetch;
   const requestTimeoutMs = Math.max(1, Math.trunc(opts.requestTimeoutMs ?? 30_000));
-  // The signal also ends a body that trickles: reading the answer fails once it fires.
-  const doFetch: typeof fetch = (input, init) => rawFetch(input, { ...init, signal: AbortSignal.timeout(requestTimeoutMs) });
+  // The signal also ends a body that trickles: reading the answer fails once it fires. A redirect is never followed (as for
+  // every other call to the workspace): it fails the delivery, which is retried, so records are never sent on elsewhere.
+  const doFetch: typeof fetch = (input, init) => rawFetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(requestTimeoutMs) });
   const now = opts.now ?? Date.now;
   const batchSize = Math.max(1, Math.min(100, Math.trunc(opts.batchSize ?? 100)));
   const flushMs = Math.max(100, Math.trunc(opts.flushMs ?? 15_000));

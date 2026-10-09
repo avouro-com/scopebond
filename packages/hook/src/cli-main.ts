@@ -1172,7 +1172,7 @@ async function runPolicy(args: string[]): Promise<void> {
   }
   const apply = args.includes("--yes");
   const connection = loadConnection(dir);
-  const outcome = loadPolicyExport(dir, file, { apply, environmentId: connection?.environment_id });
+  const outcome = loadPolicyExport(dir, file, { apply, environmentId: connection?.environment_id, afterPolicyWrite: repinAfterWrite(dir) });
   let ack: Parameters<ObservationEmitter["policyAck"]>[0] | undefined;
   if (outcome.state === "rejected") {
     console.error(`refused: ${outcome.message} (${outcome.error})`);
@@ -1193,13 +1193,19 @@ async function runPolicy(args: string[]): Promise<void> {
   await sendPolicyAck(dir, ack);
 }
 
-/** What a rules check needs for this config directory. A project policy governs only once trusted, so it is re-pinned after a
- *  write, exactly when `rules apply` would. */
-function syncOptionsFor(dir: string): SyncOptions {
+/** A project policy governs only once trusted, so a write that replaces a trusted project's policy re-pins it, exactly when
+ *  `rules apply` would; anything else (the user's own policy, a project not trusted) is never trusted by a write. Decided
+ *  before the write, from the policy as it is now. */
+function repinAfterWrite(dir: string): ((dir: string) => void) | undefined {
   const home = userHome();
   const repin = dir !== home && existsSync(join(home, "policy.json")) && isTrustedProject(dir);
+  return repin ? (d) => { trustProjectPolicy(d); } : undefined;
+}
+
+/** What a rules check needs for this config directory. */
+function syncOptionsFor(dir: string): SyncOptions {
   const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
-  return { agentKid, hookVersion: hookVersion(), policyBuilds, afterPolicyWrite: repin ? (d) => { trustProjectPolicy(d); } : undefined };
+  return { agentKid, hookVersion: hookVersion(), policyBuilds, afterPolicyWrite: repinAfterWrite(dir) };
 }
 
 /** `policy sync`: bring this computer's rules in line with its workspace now (the hook also checks every five minutes). */
@@ -1527,7 +1533,13 @@ function runDedupe(args: string[]): void {
   const dupes = duplicateHooks(harness, process.cwd());
   if (!dupes) { console.log(`${harnessName(harness)} runs the Scopebond hook once per action; nothing to change.`); return; }
   const result = dedupeHooks(harness, keep, process.cwd());
-  if (result.kept) console.log(`Kept: ${describeEntry(result.kept)}`);
+  if (!result.kept) {
+    // Removing the settings entries would leave the agent with no Scopebond hook at all.
+    console.error(`No enabled Scopebond plugin was found for ${harnessName(harness)}, so nothing was changed: removing the settings entries would leave no Scopebond hook. Keep a settings entry instead with ${cliCommand("dedupe")}.`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Kept: ${describeEntry(result.kept)}`);
   for (const e of result.removed) console.log(`Removed: ${describeEntry(e)}`);
   for (const e of result.plugins) console.log(`Still running from ${describeEntry(e)}: turn that plugin off in Claude Code (/plugin), or keep it instead with ${cliCommand("dedupe --keep plugin")}`);
   for (const e of result.shared) console.log(`Left alone: ${describeEntry(e)} is shared with the team through git; actions in this project are recorded twice until the team removes that entry.`);

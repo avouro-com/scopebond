@@ -125,8 +125,10 @@ function writeAtomic(file: string, text: string): void {
   catch (error) { try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ } throw error; }
 }
 
-/** Read an export file, check it, and (with `apply`) install it as the active policy in `dir`. */
-export function loadPolicyExport(dir: string, file: string, options: { apply: boolean; environmentId?: string }): LoadOutcome {
+/** Read an export file, check it, and (with `apply`) install it as the active policy in `dir`. `afterPolicyWrite` runs once
+ *  the new policy.json is in place: the CLI re-pins a trusted project's policy there (as `policy sync` does), so the policy
+ *  reported and acknowledged as loaded is the one that governs. */
+export function loadPolicyExport(dir: string, file: string, options: { apply: boolean; environmentId?: string; afterPolicyWrite?: (dir: string) => void }): LoadOutcome {
   let raw: unknown;
   try {
     const text = readBounded(file, MAX_EXPORT_BYTES);
@@ -148,6 +150,7 @@ export function loadPolicyExport(dir: string, file: string, options: { apply: bo
   try { copyFileSync(policyPath, join(dir, PREVIOUS_POLICY_FILE)); previous = join(dir, PREVIOUS_POLICY_FILE); }
   catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
   writeAtomic(policyPath, `${JSON.stringify(facts.policy, null, 2)}\n`);
+  options.afterPolicyWrite?.(dir);
   writeAtomic(join(dir, LOADED_POLICY_FILE), `${JSON.stringify({
     export_id: facts.exportId, policy_id: facts.policyId, policy_version: facts.policyVersion, policy_digest: facts.policyDigest,
     scope_digest: facts.scopeDigest, environment_id: facts.environmentId, agent_id: facts.agentId, loaded_at: new Date().toISOString(),

@@ -19,6 +19,8 @@ const RUN_VALUE = "ScopebondAgent";
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const noQuotes = (s: string) => s.replace(/"/g, "");
+/** A literal value in a batch file: cmd reads `%NAME%` (and a lone `%`) in a batch line as a variable, `%%` as one `%`. */
+const batchLiteral = (s: string) => noQuotes(s).replace(/%/g, "%%");
 
 /** The agent's log, which the agent writes itself (`SCOPEBOND_AGENT_LOG`) when a Windows launcher or a handover starts it. */
 export const AGENT_LOG_ENV = "SCOPEBOND_AGENT_LOG";
@@ -51,11 +53,11 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
     // children inherit that handle, and a replacement started during an update could then never open it: cmd skips the
     // whole command line when a redirect fails. The log sits beside this launcher; %~dp0 keeps it right whatever the folder is called.
     `set "${AGENT_LOG_ENV}=%~dp0${win32.basename(noQuotes(logFile))}"`,
-    `set "NODE=${noQuotes(node)}"`,
+    `set "NODE=${batchLiteral(node)}"`,
     ...(single ? [`if not exist "%NODE%" exit /b 1`] : [
       `if not exist "%NODE%" set "NODE="`,
       `if not defined NODE for /f "delims=" %%i in ('where node 2^>nul') do if not defined NODE set "NODE=%%i"`,
-      `set "CLI=${noQuotes(cli)}"`,
+      `set "CLI=${batchLiteral(cli)}"`,
       `if not exist "%CLI%" for /f "delims=" %%i in ('npm.cmd root -g 2^>nul') do set "CLI=%%i\\@scopebond\\agent\\dist\\cli.js"`,
       `if not defined NODE exit /b 1`,
     ]),
@@ -105,10 +107,23 @@ exec "$NODE" --disable-warning=ExperimentalWarning "$CLI" run
 `;
 }
 
+/** Why cmd.exe cannot be given this launcher path on its command line, or null. cmd expands `%NAME%` even inside quotes
+ *  (and a command line has no escape for `%`), so a path with a `%` could start a different path. */
+function cmdPathProblem(launcher: string): string | null {
+  return launcher.includes("%")
+    ? `the Scopebond folder ${win32.dirname(launcher)} has a % in its path, which Windows would read as a variable when it starts the agent; set SCOPEBOND_HOME to a folder without % and run this again`
+    : null;
+}
+
 /** The Run value: the launcher under a headless console host, so nothing appears on screen. */
 /** `cmd /s /c ""<launcher>""`: cmd drops only the outer quotes and runs the quoted path as it is, so a
- *  profile folder with a space and a `(`, `)` or `&` ("John (Work)") still starts the launcher. */
-const cmdRun = (launcher: string) => `/d /s /c ""${noQuotes(launcher)}""`;
+ *  profile folder with a space and a `(`, `)` or `&` ("John (Work)") still starts the launcher. A path with a `%` is
+ *  refused (see `cmdPathProblem`). */
+const cmdRun = (launcher: string) => {
+  const problem = cmdPathProblem(launcher);
+  if (problem) throw new Error(problem);
+  return `/d /s /c ""${noQuotes(launcher)}""`;
+};
 
 export function windowsRunCommand(launcher: string): string {
   return `conhost.exe --headless cmd.exe ${cmdRun(launcher)}`;
@@ -131,8 +146,19 @@ export function macLaunchAgent(launcher: string, logFile: string): string {
 `;
 }
 
+/** A quoted ExecStart argument: `"` and `\` escaped, and systemd's own expansions written literally (`%%` for a `%`
+ *  specifier, `$$` for a `$` variable), so a home path with `%h` or `$HOME` in it is started as written. */
+const systemdQuoted = (s: string) => `"${s.replace(/(["\\])/g, "\\$1").replace(/%/g, "%%").replace(/\$/g, "$$$$")}"`;
+
+/** The path a unit's `ExecStart=/bin/sh "<path>"` starts, read back as `systemdQuoted` wrote it; null when it has another form. */
+function systemdUnquoted(unit: string): string | null {
+  const m = /^ExecStart=\/bin\/sh "((?:[^"\\]|\\.)*)"[ \t]*$/m.exec(unit);
+  if (!m) return null;
+  return m[1].replace(/\\(.)|%%|\$\$/g, (all, escaped: string | undefined) => escaped ?? all[0]);
+}
+
 export function linuxUserUnit(launcher: string): string {
-  const q = (s: string) => `"${s.replace(/(["\\])/g, "\\$1")}"`;
+  const q = systemdQuoted;
   return `[Unit]
 Description=Scopebond Agent (delivers this computer's records to its Scopebond workspace)
 After=network-online.target
@@ -222,7 +248,8 @@ export function startNow(scopebondHome: string, platform = process.platform, att
     } catch { return false; }
   }
   const launcher = launcherPath(scopebondHome, platform);
-  const command = startCommands(launcher, platform)[attempt];
+  let command: [string, string[]] | undefined;
+  try { command = startCommands(launcher, platform)[attempt]; } catch { return false; } // a path cmd.exe would misread
   if (!command || !existsSync(launcher)) return false;
   try {
     const child = spawn(command[0], command[1], { detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true });
@@ -240,10 +267,13 @@ export function enableAutostart(scopebondHome: string, cli: string, node = proce
     if (!reg(["add", RUN_KEY, "/v", TRAY_RUN_VALUE, "/t", "REG_SZ", "/d", `"${noQuotes(tray)}"`, "/f"])) throw new Error(`could not add ${TRAY_RUN_VALUE} to ${RUN_KEY}`);
     return `added ${TRAY_RUN_VALUE} to ${RUN_KEY}: the Scopebond tray starts with your sign-in and keeps the agent running`;
   }
+  // Refused before anything is written: a Run value for this launcher would start a different path.
+  const problem = platform === "win32" ? cmdPathProblem(launcherPath(scopebondHome, platform)) : null;
+  if (problem) throw new Error(`autostart was not turned on: ${problem}`);
   const launcher = writeLauncher(scopebondHome, node, cli, platform);
   const paths = autostartPaths();
   if (platform === "win32") {
-    execFileSync(windowsTool("reg"), ["add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ", "/d", windowsRunCommand(launcher), "/f"], { stdio: "ignore" });
+    if (!reg(["add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ", "/d", windowsRunCommand(launcher), "/f"])) throw new Error(`could not add ${RUN_VALUE} to ${RUN_KEY}`);
     return `added ${RUN_VALUE} to ${RUN_KEY} (launcher ${launcher})`;
   }
   if (platform === "darwin") {
@@ -284,8 +314,46 @@ export function disableAutostart(scopebondHome: string, platform = process.platf
   return `removed ${paths.linuxUnit}`;
 }
 
-/** Whether autostart is on and its launcher can start the agent now. */
-export function autostartHealth(scopebondHome: string, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg): { on: boolean; ok: boolean; detail: string } {
+/** Reads the launcher's Run value: its data, or null when there is none. Tests pass their own. */
+export type RunValueReader = () => string | null;
+const readRunValue: RunValueReader = () => {
+  let out: string;
+  try { out = execFileSync(windowsTool("reg"), ["query", RUN_KEY, "/v", RUN_VALUE], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }); }
+  catch { return null; }
+  // "    ScopebondAgent    REG_SZ    conhost.exe --headless cmd.exe ..."; a value of another form still counts as there.
+  const line = out.split(/\r?\n/).find((l) => l.trim().startsWith(`${RUN_VALUE} `));
+  return /^\s*\S+\s+REG_(?:EXPAND_)?SZ\s+(.*?)\s*$/.exec(line ?? "")?.[1] ?? "";
+};
+
+/** The launcher an autostart entry starts, read back from it; null when it names none this version would write. */
+function entryTarget(platform: NodeJS.Platform, readRun: RunValueReader): string | null {
+  if (platform === "win32") {
+    // The launcher is the last quoted path of the command (this version's `""<launcher>""`, and the `"<launcher>"` older ones wrote).
+    const quoted = [...(readRun() ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    return quoted.at(-1) ?? null;
+  }
+  const paths = autostartPaths();
+  let text: string;
+  try { text = readFileSync(platform === "darwin" ? paths.macPlist : paths.linuxUnit, "utf8"); } catch { return null; }
+  if (platform === "darwin") {
+    const m = /<key>ProgramArguments<\/key>\s*<array>\s*<string>[^<]*<\/string>\s*<string>([^<]*)<\/string>/.exec(text);
+    return m ? m[1].replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") : null;
+  }
+  return systemdUnquoted(text);
+}
+
+/** Whether an entry's launcher is this home's. Windows paths compare without regard to case or slash direction, and
+ *  reg.exe prints the value in the console's code page, so letters outside ASCII (which can come back garbled, never as
+ *  other ASCII letters) compare as one wildcard run on both sides. */
+function sameLauncher(target: string, launcher: string, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32") return target === launcher;
+  const shape = (p: string) => p.replace(/\//g, "\\").toLowerCase().replace(/(?:[^\x20-\x7e]|\?)+/g, "*");
+  return shape(target) === shape(launcher);
+}
+
+/** Whether autostart is on, starts this home's launcher, and that launcher can start the agent now. An entry that starts
+ *  another launcher (another home's, say, left by a test run or a second home since deleted) is not this agent starting. */
+export function autostartHealth(scopebondHome: string, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg, readRun: RunValueReader = readRunValue): { on: boolean; ok: boolean; detail: string } {
   if (tray) {
     const on = reg(["query", RUN_KEY, "/v", TRAY_RUN_VALUE]) || trayForEveryone(reg);
     return on
@@ -293,13 +361,21 @@ export function autostartHealth(scopebondHome: string, platform = process.platfo
       : { on, ok: false, detail: "the Scopebond tray does not start with sign-in (turn on Start with Windows in its menu, or run: scopebond-agent.exe autostart on)" };
   }
   const paths = autostartPaths();
+  // The Run value is read once: whether it is there, and what it starts.
+  let runValue: string | null = null;
   let on: boolean;
   if (platform === "win32") {
-    try { execFileSync(windowsTool("reg"), ["query", RUN_KEY, "/v", RUN_VALUE], { stdio: "ignore" }); on = true; } catch { on = false; }
+    runValue = readRun();
+    on = runValue !== null;
   } else on = existsSync(platform === "darwin" ? paths.macPlist : paths.linuxUnit);
   // The fix as the person types it: PowerShell blocks the plain scopebond-agent script shim.
   const fix = `${platform === "win32" ? "scopebond-agent.cmd" : "scopebond-agent"} autostart on`;
   if (!on) return { on, ok: false, detail: `the agent does not start with sign-in (run: ${fix})` };
-  if (!existsSync(launcherPath(scopebondHome, platform))) return { on, ok: false, detail: `the autostart launcher is missing (run: ${fix})` };
+  const launcher = launcherPath(scopebondHome, platform);
+  const target = entryTarget(platform, () => runValue);
+  if (target === null || !sameLauncher(target, launcher, platform)) {
+    return { on, ok: false, detail: `autostart starts another launcher (${target ?? "not this agent's"}), not ${launcher} (run: ${fix})` };
+  }
+  if (!existsSync(launcher)) return { on, ok: false, detail: `the autostart launcher is missing (run: ${fix})` };
   return { on, ok: true, detail: "starts with sign-in" };
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const read = (path) => readFileSync(path, "utf8");
 const json = (path) => JSON.parse(read(path));
@@ -35,15 +35,39 @@ if (!gatewayReadme.includes(enrollment)) {
   failures.push(`packages/gateway/README.md must use ${enrollment}`);
 }
 
-// The Claude Code plugin runs the hook through a pinned npx command; it must pin the
-// version this repository ships (scripts/sync-plugin-version.mjs keeps it in step).
+// The Claude Code plugin is served from this repository (the marketplace entry points at packages/hook), so its hooks
+// file reaches plugin users on their next plugin update with no npm publish and no Version packages pull request. It
+// must therefore be exactly the one command this repository ships: the hook, pinned to the version released here
+// (scripts/sync-plugin-version.mjs keeps the pin in step). Anything else in it, a second hook included, fails.
 const hookVersion = json("packages/hook/package.json").version;
-const pluginHooks = read("packages/hook/hooks/hooks.json");
-for (const pin of pluginHooks.match(/@scopebond\/hook@[0-9A-Za-z.+-]+/g) ?? []) {
-  if (pin !== `@scopebond/hook@${hookVersion}`) failures.push(`packages/hook/hooks/hooks.json pins ${pin}; expected @scopebond/hook@${hookVersion} (run node scripts/sync-plugin-version.mjs)`);
+const pluginHooksFile = "packages/hook/hooks/hooks.json";
+const expectedPluginHooks = {
+  hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `npx -y @scopebond/hook@${hookVersion} claude` }] }] },
+};
+let pluginHooks;
+try { pluginHooks = json(pluginHooksFile); } catch (error) { failures.push(`${pluginHooksFile} is not valid JSON (${error.message})`); }
+if (pluginHooks !== undefined && JSON.stringify(pluginHooks) !== JSON.stringify(expectedPluginHooks)) {
+  const pins = JSON.stringify(pluginHooks).match(/@scopebond\/hook@[0-9A-Za-z.+-]+/g) ?? [];
+  const stale = pins.find((pin) => pin !== `@scopebond/hook@${hookVersion}`);
+  failures.push(stale
+    ? `${pluginHooksFile} pins ${stale}; expected @scopebond/hook@${hookVersion} (run node scripts/sync-plugin-version.mjs)`
+    : `${pluginHooksFile} must be exactly ${JSON.stringify(expectedPluginHooks)}: the plugin runs only the pinned hook`);
 }
-const pluginVersion = json("packages/hook/.claude-plugin/plugin.json").version;
-if (pluginVersion !== hookVersion) failures.push(`packages/hook/.claude-plugin/plugin.json version ${pluginVersion}; expected ${hookVersion} (run node scripts/sync-plugin-version.mjs)`);
+const pluginManifest = json("packages/hook/.claude-plugin/plugin.json");
+if (pluginManifest.version !== hookVersion) failures.push(`packages/hook/.claude-plugin/plugin.json version ${pluginManifest.version}; expected ${hookVersion} (run node scripts/sync-plugin-version.mjs)`);
+if (pluginManifest.hooks !== "./hooks/hooks.json") failures.push(`packages/hook/.claude-plugin/plugin.json must name "./hooks/hooks.json" as its hooks, not ${JSON.stringify(pluginManifest.hooks)}`);
+// Claude Code also loads these from a plugin's folder without the manifest naming them; the plugin ships only the hook.
+for (const key of ["commands", "agents", "skills", "mcpServers", "lspServers"]) {
+  if (pluginManifest[key] !== undefined) failures.push(`packages/hook/.claude-plugin/plugin.json must not add ${key}: the plugin ships only the hook`);
+}
+for (const path of ["commands", "agents", "skills", ".mcp.json", ".lsp.json"]) {
+  if (existsSync(`packages/hook/${path}`)) failures.push(`packages/hook/${path} would ship with the Claude Code plugin; the plugin ships only the hook`);
+}
+const marketplace = json(".claude-plugin/marketplace.json");
+const listed = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
+if (listed.length !== 1 || listed[0]?.source !== "./packages/hook") {
+  failures.push(`.claude-plugin/marketplace.json must list exactly one plugin, with source "./packages/hook" (found ${JSON.stringify(listed.map((p) => p?.source))})`);
+}
 
 const staleClaims = [
   [rootReadme, "README.md", /reviewed but unpublished|Published versions remain/i],
