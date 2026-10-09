@@ -5,6 +5,7 @@
 
 import { chmodSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { windowsSystemProgram } from "./node-programs.js";
 
 /** Restrict `file` to its owner. Returns null when done (or nothing to do), else why it could not be. */
 export function restrictToOwner(file: string): string | null {
@@ -15,7 +16,8 @@ export function restrictToOwner(file: string): string | null {
       if (!user) return "the current Windows user is unknown";
       const account = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${user}` : user;
       // *S-1-5-18 is SYSTEM, named by its well-known SID so the command works in any Windows language.
-      execFileSync("icacls", [file, "/inheritance:r", "/grant:r", `${account}:F`, "*S-1-5-18:F"], { stdio: "ignore", windowsHide: true, timeout: 10_000 });
+      // By full path: a bare name would be looked for in the current folder first, which is the project.
+      execFileSync(windowsSystemProgram("icacls"), [file, "/inheritance:r", "/grant:r", `${account}:F`, "*S-1-5-18:F"], { stdio: "ignore", windowsHide: true, timeout: 10_000 });
     } else {
       chmodSync(file, 0o600);
     }

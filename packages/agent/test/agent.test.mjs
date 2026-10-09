@@ -495,11 +495,11 @@ test("setup without a workspace URL says what it needs, in the form this system 
 });
 
 test("autostart on starts the agent now with a hidden cmd.exe when the headless console does not start", async () => {
-  const { startCommands } = await import("../dist/index.js");
+  const { startCommands, windowsTool } = await import("../dist/index.js");
   const launcher = String.raw`D:\home\agent-launch.cmd`;
   assert.deepEqual(startCommands(launcher, "win32"), [
-    ["conhost.exe", ["--headless", "cmd.exe", `/d /s /c ""${launcher}""`]],
-    ["cmd.exe", [`/d /s /c ""${launcher}""`]],
+    [windowsTool("conhost"), ["--headless", windowsTool("cmd"), `/d /s /c ""${launcher}""`]],
+    [windowsTool("cmd"), [`/d /s /c ""${launcher}""`]],
   ]);
   assert.deepEqual(startCommands("/opt/sb/agent-launch.sh", "linux"), [], "launchd and systemd start it themselves");
 });

@@ -3,6 +3,7 @@
 // opens only links on the workspace this computer is connected to, never a URL from anywhere else.
 
 import { spawn } from "node:child_process";
+import { windowsSystemProgram } from "@scopebond/gateway/node";
 import type { HookConnection } from "@scopebond/hook";
 
 export interface ComputerSummary {
@@ -45,6 +46,6 @@ export function sameOrigin(url: string, workspace: string): boolean {
 
 /** Open a checked URL in the default browser. */
 export function openInBrowser(url: string): void {
-  const [command, args] = process.platform === "win32" ? ["explorer.exe", [url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
+  const [command, args] = process.platform === "win32" ? [windowsSystemProgram("explorer"), [url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
   try { const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true }); child.on("error", () => {}); child.unref(); } catch { /* no browser */ }
 }

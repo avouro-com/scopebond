@@ -13,6 +13,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";
 import { isSingleExecutable } from "@scopebond/hook";
+import { windowsSystemProgram, type WindowsSystemProgram } from "@scopebond/gateway/node";
 
 /** Where the signed releases are published. */
 export const RELEASE_BASE = "https://github.com/avouro-com/scopebond/releases/download";
@@ -102,11 +103,10 @@ export function powershellEnv(extra: Record<string, string>, base: NodeJS.Proces
   return { ...env, ...extra };
 }
 
-/** A Windows tool by its full path under the system folder, never by a name looked up on PATH. */
-export function windowsTool(name: "powershell" | "msiexec" | "cmd"): string {
-  const root = process.env.SystemRoot || process.env.windir || "C:\\Windows";
-  if (name === "powershell") return win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  return win32.join(root, "System32", `${name}.exe`);
+/** A Windows tool by its full path under the system folder, never by a name looked up on PATH or in the current folder
+ *  (a spawn by bare name on Windows looks in the current folder first, and the agent is often run from a project). */
+export function windowsTool(name: WindowsSystemProgram): string {
+  return windowsSystemProgram(name);
 }
 
 /** The Authenticode check: Windows' own verdict on the file, and the signer's subject. */

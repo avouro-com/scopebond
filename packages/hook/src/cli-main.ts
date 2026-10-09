@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { checkChains } from "./chain-verify.js";
-import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
@@ -66,10 +66,11 @@ import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofRece
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
  *  the runtime fills it in before evaluating; on failure the ref stays absent and
- *  the starter policy fails closed. */
+ *  the starter policy fails closed. git is started by its full path from PATH, never
+ *  from `cwd`, which is the project and could hold a git.exe of its own. */
 function currentBranch(cwd: string): string | null {
   try {
-    return execFileSync("git", ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+    return execFileSync(programPath("git"), ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], {
       encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     }).trim() || null;
   } catch { return null; }
@@ -1601,7 +1602,7 @@ async function runDoctor(): Promise<void> {
     // Windows PowerShell finds its own modules only without PowerShell 7's PSModulePath, which a doctor run from
     // pwsh would pass on; and its errors are not this computer's problem to print.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath"));
-    try { policy = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
+    try { policy = execFileSync(windowsSystemProgram("powershell"), ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
     const advice = policy ? executionPolicyAdvice(policy) : null;
     if (advice) console.log(`  powershell       ${advice}`);
   }
