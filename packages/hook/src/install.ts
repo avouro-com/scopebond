@@ -11,7 +11,8 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { readIfPresent } from "./safe-fs.js";
+import { programPath } from "@scopebond/gateway/node";
+import { readIfPresent, replaceFile } from "./safe-fs.js";
 
 export type Harness = "claude" | "cursor" | "codex";
 
@@ -97,7 +98,8 @@ export function gitShareState(file: string): GitShare {
   const git = (args: string[]): number => {
     try {
       mkdirSync(cwd, { recursive: true });
-      execFileSync("git", args, { cwd, stdio: "ignore", timeout: 5000 });
+      // By full path from PATH: by bare name Windows would look in `cwd`, a project folder, first.
+      execFileSync(programPath("git"), args, { cwd, stdio: "ignore", timeout: 5000 });
       return 0;
     } catch (error) {
       const status = (error as { status?: number | null }).status;
@@ -120,8 +122,8 @@ export function excludeFromGit(file: string): boolean {
     // tree (`--show-prefix`), not from comparing file-system paths: the same directory
     // can be spelled two ways (a Windows 8.3 short name, a symlinked temp dir), and a
     // path computed across the two spellings excludes the wrong file.
-    const prefix = execFileSync("git", ["rev-parse", "--show-prefix"], { cwd, encoding: "utf8", timeout: 5000 }).trim();
-    const exclude = resolve(cwd, execFileSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd, encoding: "utf8", timeout: 5000 }).trim());
+    const prefix = execFileSync(programPath("git"), ["rev-parse", "--show-prefix"], { cwd, encoding: "utf8", timeout: 5000 }).trim();
+    const exclude = resolve(cwd, execFileSync(programPath("git"), ["rev-parse", "--git-path", "info/exclude"], { cwd, encoding: "utf8", timeout: 5000 }).trim());
     const entry = "/" + prefix + basename(file);
     const existing = readIfPresent(exclude) ?? "";
     if (!existing.split(/\r?\n/).includes(entry)) {
@@ -182,7 +184,7 @@ export function trustProjectPolicy(dir: string): string {
   const trusted = readTrusted();
   trusted[trustKey(dir)] = digest;
   mkdirSync(userHome(), { recursive: true });
-  writeFileSync(trustedProjectsFile(), JSON.stringify(trusted, null, 2) + "\n");
+  replaceFile(trustedProjectsFile(), JSON.stringify(trusted, null, 2) + "\n");
   return digest;
 }
 
@@ -289,11 +291,11 @@ export function readHarnessConfig(file: string): Record<string, unknown> {
 function readHarnessConfigIfPresent(file: string): Record<string, unknown> | undefined {
   const raw = readIfPresent(file);
   if (raw === undefined) return undefined;
-  const text = raw.replace(/^﻿/, "");
+  const text = raw.replace(/^\uFEFF/, "");
   if (!text.trim()) return {};
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch (error) {
-    throw new Error(`${file} is not valid JSON (${(error as Error).message}); fix or move it, then run this again — it was left unchanged`);
+    throw new Error(`${file} is not valid JSON (${(error as Error).message}); fix or move it, then run this again — it was left unchanged`, { cause: error });
   }
   if (!isRecord(parsed)) throw new Error(`${file} is not a JSON object; fix or move it, then run this again — it was left unchanged`);
   return parsed;
@@ -323,13 +325,13 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
   if (harness === "cursor") {
     config.version = config.version ?? 1;
     for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
-      const list = Array.isArray((hooks as Record<string, unknown>)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
+      const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
       const at = list.findIndex(entryMatches);
       const entry = { command: command.replace(/\bclaude$/, "cursor") };
       if (at >= 0) list[at] = entry; else list.push(entry);
     }
   } else {
-    const list = Array.isArray((hooks as Record<string, unknown>).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
+    const list = Array.isArray((hooks).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
     const at = list.findIndex(entryMatches);
     // Codex matchers are regular expressions; omitting the matcher means every tool.
     // A literal "*" is not a valid regular expression and causes Codex to skip the group.
@@ -455,7 +457,7 @@ export function wireLifecycleHooks(file: string, command: string): string {
   mkdirSync(dirname(file), { recursive: true });
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   for (const event of LIFECYCLE_EVENTS) {
-    const list = Array.isArray((hooks as Record<string, unknown>)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
+    const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
     const at = list.findIndex(entryMatches);
     const entry = event.startsWith("Session")
       ? { hooks: [{ type: "command", command }] }
@@ -476,11 +478,11 @@ export function unwireLifecycleHooks(file: string): number {
   if (!hooks) return 0;
   let removed = 0;
   for (const event of LIFECYCLE_EVENTS) {
-    const value = (hooks as Record<string, unknown>)[event];
+    const value = (hooks)[event];
     if (!Array.isArray(value)) continue;
     const kept = value.filter((e) => !entryMatches(e));
     removed += value.length - kept.length;
-    if (kept.length) (hooks as Record<string, unknown[]>)[event] = kept; else delete (hooks as Record<string, unknown>)[event];
+    if (kept.length) (hooks as Record<string, unknown[]>)[event] = kept; else delete (hooks)[event];
   }
   if (removed > 0) writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return removed;

@@ -78,8 +78,11 @@ Routes: `POST /v1/evaluate`, `POST /v1/observe`, `POST /mcp` (MCP ingress), `POS
 `GET /healthz`.
 
 On first run the gateway generates and persists an Ed25519 attester key
-(`./scopebond-attester.key`, mode 0600) and a durable SQLite receipt store
-(`./scopebond.db`), so **receipts stay verifiable and survive restarts**. It also
+(`./scopebond-attester.key`) and a durable SQLite receipt store
+(`./scopebond.db`), so **receipts stay verifiable and survive restarts**. Both, and
+the database's journal files, are readable by their owner alone (mode 0600; on
+Windows an ACL for the current user and SYSTEM), from their first byte; files an
+older version made are restricted when the gateway next opens them. It also
 **anchors** the receipt log and **hot-reloads** the policy (below). These mechanisms
 do not close the alpha findings described above. Configure:
 
@@ -134,8 +137,7 @@ evidence in a separate SQLite outbox. Exact action-ID retries are free, successf
 batches are acknowledged by ID and content hash, and failures use bounded exponential
 backoff. Queue count, bytes and age are bounded; overflow, conflicting IDs and expiry
 produce explicit delivery-gap events instead of silent deletion. Cloud availability
-never changes the local enforcement decision. The current hosted service is not ready
-for customer enrollment; use the local/staging acceptance flow until its gates close.
+never changes the local enforcement decision.
 Hosted export uses `node:sqlite` and therefore requires Node 22 or newer. Receipts from
 before durable action IDs are retained locally and recorded as `missing_action_id`
 delivery gaps rather than uploaded under an invented identity.
@@ -284,6 +286,27 @@ skew (the defaults are seven days against five minutes). And a policy can only c
 store still holds: retention keeps at least the window of the current policy, so if you later widen
 a windowed limit beyond the retention, the first decisions under it see less history than the
 window names.
+
+### HTTP executor and endpoint lists
+
+`createHttpExecutor()` sends an allowed `http.call` to the destination the policy
+checked, and nowhere else. Endpoint clauses compare that destination, not the text
+of the host: case, a trailing dot, and the decimal, octal, hex, shortened and
+IPv4-mapped IPv6 spellings of an address all name the same host. An
+`endpoint_allowlist` entry allows exactly its host and port. An `endpoint_denylist`
+entry without a port denies its host on every port, and a loopback name or address
+(`localhost`, `127.0.0.1`, `::1`) denies every loopback destination.
+
+A name in a denylist is compared as a name. To keep agents off an internal service
+or the cloud metadata endpoint, list its address (`169.254.169.254`): before it sends
+anything, the executor resolves the requested name and refuses the call if an
+address it resolves to is denied (inject `lookup` to replace the system resolver).
+The executor resolves the name again when it connects, so a DNS server that answers
+differently between the two lookups (DNS rebinding) is not stopped here. A denylist
+is best effort: prefer an `endpoint_allowlist`, and constrain egress at the network.
+
+A call the executor refuses before sending is recorded as `failed`, not as an
+unknown outcome.
 
 ### Constrained support refund adapter
 

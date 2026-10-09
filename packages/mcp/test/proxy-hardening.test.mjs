@@ -98,6 +98,11 @@ test("createMcpProxy.handle rejects an array, a non-object and a non-string meth
   for (const bad of [null, "tools/call", 7]) assert.equal((await proxy.handle(bad)).error.code, -32600);
   const odd = await proxy.handle({ jsonrpc: "2.0", id: 9, method: ["tools/call"], params: { name: "delete_file", arguments: {} } });
   assert.equal(odd.error.code, -32600);
+  // A tool call whose name is not a string is refused, never decided under a made-up name and forwarded.
+  for (const name of [undefined, null, 7, ["read_file"], { toString: 1 }]) {
+    const reply = await proxy.handle({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name, arguments: {} } });
+    assert.equal(reply.error?.code, -32600, JSON.stringify(name));
+  }
   assert.equal(odd.id, 9);
   assert.equal(seen.length, 0, "nothing was forwarded");
   // A well-formed non-call message is still passed through.

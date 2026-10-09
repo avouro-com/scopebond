@@ -30,6 +30,7 @@ export function signedIn(body) {
   const text = String(body ?? "").replace(/<!--[\s\S]*?(?:-->|$)/g, "");
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim().replace(/^>\s*/, "");
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: each repeated part stops at a character the next part requires, and it runs on one trimmed line of the description at a time
     if (/^[-*]\s+\[[xX]\]\s+I agree to the \[?CLA\]?(?:\([^)]*\))?\.?$/.test(line)) return true;
     if (line.replace(/\.$/, "") === SIGNING_SENTENCE) return true;
   }

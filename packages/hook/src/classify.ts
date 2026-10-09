@@ -5,7 +5,7 @@
 // I05 shell inventory; H01 protected push, H02 credential read, H03 CI write,
 // H04 destructive shell, H05 root-escape mutation; C01 protected history rewrite,
 // C02 guardrail modification. `compile()` decides enforcement from the rule set;
-// `classifyIntent()` names what an intent is. `test/parity.test.mjs` asserts that an
+// `classifyIntent()` names what an intent is. `test/vectors.test.mjs` asserts that an
 // intent is classified high/critical exactly when the compiled policy denies it.
 //
 // Unknown is not clean: an intent whose destination, program or path could not be

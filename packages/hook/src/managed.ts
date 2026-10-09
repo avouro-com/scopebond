@@ -22,7 +22,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
-import { GUARDRAIL_LOOKAHEADS, GUARDRAIL_READ_PATTERN, GUARDRAIL_WRITE_PATTERN, ci } from "./runtime.js";
+import { GUARDRAIL_LOOKAHEADS, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES } from "./rules.js";
 import type { Recommended } from "./client-health.js";
 
@@ -41,6 +41,7 @@ const LIST_OF: Partial<Record<ManagedRuleId, ListKey>> = {
 const LIST_PATTERN: Record<ListKey, RegExp> = {
   protected_branches: /^[A-Za-z0-9._/*-]{1,100}$/,
   destructive_programs: /^[a-z0-9][a-z0-9._-]{0,63}$/,
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: each label ends at its own dot (not in the label classes), and the lookahead bounds the input to 253 characters
   allowed_hosts: /^(?=.{1,253}$)(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
 };
 /** The exact targets a rule may skip, and the one list each rule accepts. */
@@ -49,6 +50,7 @@ const EXCLUSIONS_OF: Partial<Record<ManagedRuleId, ExclusionKey>> = {
 };
 const EXCLUSION_PATTERN: Record<ExclusionKey, RegExp> = {
   // A relative path with forward slashes: no empty, "." or ".." segment, optionally ending in /** for a folder.
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, each lookahead is one pass with a single unbounded quantifier, and the body is bounded to 200 characters
   excluded_paths: /^(?!\/)(?!.*\/\/)(?!(?:.*\/)?\.{1,2}(?:\/|$))[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]{0,199}?(?:\/\*\*)?$/,
   // One exact branch name; it starts with a letter or digit, so it can never be a push flag such as --all.
   excluded_branches: /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/,
@@ -94,7 +96,10 @@ export const RULE_OF_CLAUSE: Readonly<Record<string, ManagedRuleId>> = {
 export function floorDocument(doc: ManagedDocument, decided?: string): ManagedDocument {
   const rules = Object.fromEntries(Object.entries(doc.rules).map(([id, rule]) => {
     if (!(rule?.mode === "override" || (id === decided && personMayAct(rule)))) return [id, rule];
-    const { override: _terms, excluded_paths: _p, excluded_branches: _b, ...rest } = rule;
+    const rest = { ...rule };
+    delete rest.override;
+    delete rest.excluded_paths;
+    delete rest.excluded_branches;
     return [id, { ...rest, mode: "monitor" }];
   })) as ManagedDocument["rules"];
   return { ...doc, rules };
@@ -135,7 +140,7 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
     || typeof rulesDigest !== "string" || !HEX64.test(rulesDigest) || !isObject(rules)) {
     return bad("the rules document is incomplete or malformed");
   }
-  if (installationId !== context.installationId || exportId !== `rev-${revision}-${installationId}`) {
+  if (installationId !== context.installationId || exportId !== `rev-${revision as number}-${installationId}`) {
     return { ok: false, reason: "wrong_computer", message: "these rules were issued for a different computer" };
   }
   const keys = Object.keys(rules);

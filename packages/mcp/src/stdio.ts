@@ -61,7 +61,7 @@ export function upstreamEnv(parent: NodeJS.ProcessEnv, passes: string[], platfor
     const name = eq < 0 ? pass : pass.slice(0, eq);
     if (!/^[A-Za-z_][A-Za-z0-9_().-]*$/.test(name)) throw new Error(`--env ${JSON.stringify(pass)}: not a variable name`);
     if (eq >= 0) env[name] = pass.slice(eq + 1);
-    else if (parent[name] !== undefined) env[name] = parent[name] as string;
+    else if (parent[name] !== undefined) env[name] = parent[name];
   }
   return env;
 }

@@ -28,6 +28,17 @@ test("args_digest is keyed: not a plain hash, stable under one key, different un
   assert.notEqual(a.slice(-64), plain.slice(-64));
 });
 
+test("the tool name reads as String() did, and a name object with its own toString key no longer throws", () => {
+  const tool = (name) => mapMcpToolCall("fs", { name }).params.tool;
+  assert.equal(tool("read_file"), "read_file");
+  assert.equal(tool(undefined), "");
+  assert.equal(tool(null), "");
+  assert.equal(tool(7), "7");
+  assert.equal(tool(["a", null]), "a,");
+  assert.equal(tool({ a: 1 }), "[object Object]");
+  assert.equal(tool(JSON.parse('{"toString":1}')), "[object Object]");
+});
+
 test("the proxy's receipts carry the digest under its configured key", async () => {
   const receipts = [];
   const key = "33".repeat(32);

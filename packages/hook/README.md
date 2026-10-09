@@ -241,7 +241,9 @@ In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy
 
 Each delivery answer from the workspace carries its evidence chain's head (how many records
 it had admitted and its newest evidence segment, signed by the workspace when it has a
-signing key). The hook keeps them in `chain-heads.json` beside its receipts. The workspace
+signing key). The hook keeps them in `chain-heads.json` beside its receipts, each with this
+computer's own times for the delivery it answered (when it was sent, and when the answer
+arrived), which the workspace cannot choose. The workspace
 also publishes each day's heads in a public, append-only log. To check that what the
 workspace holds still agrees with what it told this computer:
 
@@ -250,10 +252,12 @@ scopebond verify --anchor <file-or-https-url-of-a-published-day>
 scopebond verify --anchor <day.json> --segments <folder of downloaded evidence segments>
 ```
 
-`verify` exits non-zero when a chain went back below a head this computer kept, when one
-position names two different segments, or when a kept head's segment is no longer in the
-chain: records were removed, reordered or re-chained after the workspace acknowledged
-them. With `--segments`, every segment's digest, leaves, Merkle root, links and sequence
+`verify` exits non-zero when a chain went back below a head this computer kept (judged by
+the order this computer sent its deliveries as well as by the times the workspace put on
+its heads), when one position names two different segments, or when a kept head's segment
+is no longer in the chain: records were removed, reordered or re-chained after the
+workspace acknowledged them. A list or segment that cannot be checked is reported, not
+crashed on. With `--segments`, every segment's digest, leaves, Merkle root, links and sequence
 numbers are checked, and every record signed with this computer's key is verified.
 
 ### Is it delivering?
@@ -627,14 +631,27 @@ protected file or directory (`.scope*/agent.key`, `.*/*`, `$HOME/.ssh/id_rsa`) i
 treated as that file. Every destination of a `git push` is checked in the common
 spellings (`refs/heads/main`, `HEAD:main`, a second refspec, `--repo`, `--all`,
 `--mirror`); a push whose destination is not on the command line (a git alias, a
-configured push refspec, `send-pack`) is denied, and a tags-only push is allowed. The
+configured push refspec, `send-pack`) is denied, and a tags-only push is allowed. An alias
+or refspec given through git's environment (`GIT_CONFIG_COUNT` with `GIT_CONFIG_KEY_<n>`, or
+`GIT_CONFIG_PARAMETERS`) on the git command, an enclosing command or an earlier `export` counts
+the same as one given with `-c`; a push that names its destination is judged by that
+destination. The
 agent running the hook's own `init`, `install`, `trust`, `uninstall`, `connect` or
 `login` is denied, and those commands also refuse a non-interactive terminal unless
 `--yes` is passed. So is the agent switching off the Scopebond Agent: `scopebond-agent
 autostart off`, stopping it by name (`pkill -f scopebond-agent`, `taskkill`, `wmic …
 terminate`), or a global uninstall of `@scopebond/agent` or `@scopebond/hook` (`npm
 uninstall -g`, `pnpm rm -g`, `yarn global remove`, `bun remove -g`). `scopebond-agent
-status`, `flush`, `check`, `repair` and `autostart on` stay allowed. A person can still
+status`, `flush`, `check`, `repair` and `autostart on` stay allowed. So is starting a coding
+agent without this computer's hooks (its settings overridden, its permission checks skipped,
+or its config folder moved with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CURSOR_CONFIG_DIR`,
+`XDG_CONFIG_HOME` or the home folder set on the agent's command, an enclosing `sh -c`, or an
+earlier `export`, `set` or PowerShell `$env:` in the same command; an agent's name in a message
+or an argument starts nothing), and removing or renaming a folder that holds what this protects:
+the project's or the home folder's own `.claude`, `.cursor`, `.codex` or `.scopebond`, the
+project's `.git`, or a folder above them. The same names elsewhere (a test fixture, a vendored
+library's `.git`) and a `git clean -x` that cannot reach the project's `.scopebond` or personal
+hook settings stay allowed. A person can still
 run any of these from their own terminal, which the hook never sees. These denials, and the
 denial of any edit to Scopebond's own folder, hold whatever the rules say: they are not rules
 that can be set to record. A command that names Scopebond but cannot be read (an alias, a
@@ -649,10 +666,13 @@ reached never stops the uninstall; the command says it could not tell it.
 does not follow a variable whose value it cannot see (`cat $FILE` records no read unless
 the text around the variable could name a protected file), a path assembled inside a
 script or interpreter (`python script.py`; Scopebond's own folder named in an
-interpreter's arguments or inline code is treated as read), aliases and functions defined in
-an earlier call, git aliases from a config file, recursive reads of a parent of a
-protected directory (`grep -r . `, `cp -r ~ /tmp`), or deletion expressed as arguments
-(`find -delete`, `git clean`). Commands whose written files are named only inside their
+interpreter's arguments or inline code is treated as read), aliases, functions and variables
+defined in an earlier call (where the agent's shell persists between calls), git aliases from
+the user's own config files, recursive reads of a parent of a protected directory
+(`grep -r . `, `cp -r ~ /tmp`), a folder named through a variable (`rm -rf $DIR`), or
+deletion expressed as arguments (`find -delete`, `git clean`) other than of a protected folder
+by name or, with `git clean -x`, of a project that holds a `.scopebond`. Commands whose written
+files are named only inside their
 input — `patch`, `git apply`, `git am`, `tar x`, `unzip`, `7z x`, `cpio -i` — are
 recorded with an unevaluated write: allowed in normal mode, denied in strict mode.
 Reading any `*.pem` file is denied, including a public certificate, because a PEM file

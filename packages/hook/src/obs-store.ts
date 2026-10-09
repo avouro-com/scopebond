@@ -19,6 +19,7 @@
 // of the same logical record returns the row that exists rather than allocating again.
 
 import { nodeSqlite } from "./self.js";
+import { textOf } from "./text.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { MAX_BATCH_BODY_BYTES, MAX_BATCH_ITEMS, observationHash, type ObservationDraft, type ObservationPayload, type SignedObservation, type EnvelopeContext, buildPayload, signObservation, type ObservationSigner } from "./observation.js";
@@ -335,7 +336,7 @@ export class ObservationStore {
 
   terminal(limit = 50): TerminalRow[] {
     return (this.db.prepare("SELECT * FROM terminal ORDER BY id DESC LIMIT ?").all(limit) as Array<Record<string, unknown>>)
-      .map((r) => ({ ...(r as unknown as TerminalRow), wrapper: r.wrapper ? (JSON.parse(String(r.wrapper)) as SignedObservation) : null }));
+      .map((r) => ({ ...(r as unknown as TerminalRow), wrapper: r.wrapper ? (JSON.parse(textOf(r.wrapper)) as SignedObservation) : null }));
   }
 
   terminalCounts(): Record<string, number> {

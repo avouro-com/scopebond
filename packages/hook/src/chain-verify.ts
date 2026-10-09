@@ -38,7 +38,7 @@ async function loadAnchor(source: string, fetchImpl: typeof fetch): Promise<unkn
     if (text.length > MAX_ANCHOR_BYTES) throw new Error(`${source}: larger than an anchor list can be`);
     return JSON.parse(text);
   }
-  return JSON.parse(readFileSync(source, "utf8").replace(/^﻿/, ""));
+  return JSON.parse(readFileSync(source, "utf8").replace(/^\uFEFF/, ""));
 }
 
 function readSegments(dir: string): string[] {
@@ -66,38 +66,46 @@ export async function checkChains(options: ChainCheckOptions): Promise<ChainChec
     let list: unknown;
     try { list = await loadAnchor(source, options.fetchImpl ?? fetch); }
     catch (error) { problems.push(`anchor ${source}: ${(error as Error).message}`); continue; }
-    const check = await verifyAnchorList(list);
-    const day = (list as Partial<AnchorList>)?.date ?? "?";
-    for (const p of check.problems) problems.push(`anchor ${day}: ${p}`);
-    if (!check.valid && !Array.isArray((list as Partial<AnchorList>)?.heads)) continue;
-    const heads = ((list as AnchorList).heads ?? []).filter((h) => chains.has(h?.head?.anchor_id));
-    lines.push(`Anchor ${day}: ${check.signed ? `signed by ${check.kid}` : "unsigned (it shows what was published, not who published it)"}; ${check.heads} chain(s), ${heads.length} of them this computer's.`);
-    published.push(...heads);
-    // The heads this computer kept must verify under the same published key.
-    const key = (list as AnchorList).key;
-    if (check.signed && key) {
-      for (const h of kept) {
-        if (!h.signed || h.signature?.kid !== key.kid) continue;
-        if (!(await verifyChainHeadSignature(h, key))) problems.push(`chain ${h.head.anchor_id.slice(0, 12)}: the head kept from ${h.head.issued_at} does not verify under ${key.kid}`);
+    // The list comes from the workspace being checked: anything about it that cannot be checked is a problem, never a crash.
+    try {
+      const check = await verifyAnchorList(list);
+      const date = (list as Partial<AnchorList>)?.date;
+      const day = typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "?";
+      for (const p of check.problems) problems.push(`anchor ${day}: ${p}`);
+      if (!check.valid && !Array.isArray((list as Partial<AnchorList>)?.heads)) continue;
+      const heads = ((list as AnchorList).heads ?? []).filter((h) => chains.has(h?.head?.anchor_id));
+      lines.push(`Anchor ${day}: ${check.signed ? `signed by ${check.kid ?? "a key it does not publish"}` : "unsigned (it shows what was published, not who published it)"}; ${check.heads} chain(s), ${heads.length} of them this computer's.`);
+      published.push(...heads);
+      // The heads this computer kept must verify under the same published key (one the list check found well formed).
+      const key = (list as AnchorList).key;
+      if (check.signed && check.kid && key) {
+        for (const h of kept) {
+          if (!h.signed || h.signature?.kid !== check.kid) continue;
+          if (!(await verifyChainHeadSignature(h, key))) problems.push(`chain ${h.head.anchor_id.slice(0, 12)}: the head kept from ${h.head.issued_at} does not verify under ${check.kid}`);
+        }
       }
-    }
+    } catch (error) { problems.push(`anchor ${source}: it could not be checked (${(error as Error)?.message ?? String(error)})`); }
   }
 
   if (kept.length) {
-    const heads = checkChainHeads(kept, published);
-    problems.push(...heads.problems);
-    if (heads.ok) lines.push(`Chain heads agree${options.anchors.length ? ` (${heads.matched} published head(s) compared)` : ""}: no chain went back and no position names two segments.`);
+    try {
+      const heads = checkChainHeads(kept, published);
+      problems.push(...heads.problems);
+      if (heads.ok) lines.push(`Chain heads agree${options.anchors.length ? ` (${heads.matched} published head(s) compared)` : ""}: no chain went back and no position names two segments.`);
+    } catch (error) { problems.push(`the chain heads could not be compared (${(error as Error)?.message ?? String(error)})`); }
   }
 
   if (options.segmentsDir) {
     let texts: string[] = [];
     try { texts = readSegments(options.segmentsDir); } catch (error) { problems.push(`segments ${options.segmentsDir}: ${(error as Error).message}`); }
-    const segments = await verifySegmentChain(texts, kept, options.publicKeyPem ? { publicKey: options.publicKeyPem } : {});
-    problems.push(...segments.problems);
-    if (segments.ok) {
-      const covered = Object.values(segments.covered);
-      lines.push(`${segments.segments} segment(s), ${segments.records} record(s) check${options.publicKeyPem ? ", each signed by this computer's key" : ""}${covered.length ? `; every kept head's segment is in its chain (through sequence ${Math.max(...covered)})` : ""}.`);
-    }
+    try {
+      const segments = await verifySegmentChain(texts, kept, options.publicKeyPem ? { publicKey: options.publicKeyPem } : {});
+      problems.push(...segments.problems);
+      if (segments.ok) {
+        const covered = Object.values(segments.covered);
+        lines.push(`${segments.segments} segment(s), ${segments.records} record(s) check${options.publicKeyPem ? ", each signed by this computer's key" : ""}${covered.length ? `; every kept head's segment is in its chain (through sequence ${Math.max(...covered)})` : ""}.`);
+      }
+    } catch (error) { problems.push(`segments ${options.segmentsDir}: they could not be checked (${(error as Error)?.message ?? String(error)})`); }
   }
   return { ok: problems.length === 0, lines, problems };
 }

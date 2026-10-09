@@ -46,7 +46,14 @@ outage delays them instead of dropping them. A record the queue could not keep i
 recorded there and reported on stderr.
 
 A JSON-RPC batch (an array of messages on one line) is rejected with a `-32600`
-error and never forwarded, so every call is decided on its own.
+error and never forwarded, so every call is decided on its own. So is a method
+that spells `tools/call` or `tools/list` another way (`Tools/Call`,
+`tools/call `), which an upstream that matches method names loosely could
+otherwise run without a decision.
+
+Windowed clauses (`rate_limit`, `sequence`, a windowed `spend_limit`) hold for
+calls that arrive together: a call policy allows takes its place in the window
+as it is decided, so with a limit of 2 and ten parallel calls, two are forwarded.
 
 **Upstream environment.** The upstream server starts with a minimal environment
 (`PATH`, `HOME`/`USERPROFILE`, the temp and system directories, locale), not the

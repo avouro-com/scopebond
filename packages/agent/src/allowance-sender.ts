@@ -35,7 +35,7 @@ export async function sendAllowancesAndRequests(dir: string, connection: Pick<Ho
   const allowanceOutcomes = new Map<string, "sent" | "refused">();
   for (const a of readAllowances(dir)) {
     if (a.created_by !== "person" || a.sent_at) continue;
-    const { sent_at: _sent, uses: _uses, ...record } = a;
+    const record = without(a, "sent_at", "uses");
     const outcome = await post("/v1/allowances", record, ALLOWANCE_DOMAIN);
     if (outcome !== "later") allowanceOutcomes.set(a.id, outcome);
   }
@@ -44,7 +44,7 @@ export async function sendAllowancesAndRequests(dir: string, connection: Pick<Ho
     writeAllowances(dir, readAllowances(dir).map((a) => {
       const outcome = allowanceOutcomes.get(a.id);
       if (!outcome || a.sent_at) return a;
-      if (outcome === "sent") { sent.allowances += 1; const { reason: _text, ...rest } = a; return { ...rest, sent_at: at }; } // the workspace keeps the text
+      if (outcome === "sent") { sent.allowances += 1; return { ...without(a, "reason"), sent_at: at }; } // the workspace keeps the text
       return { ...a, sent_at: at };
     }), now);
   }
@@ -52,7 +52,7 @@ export async function sendAllowancesAndRequests(dir: string, connection: Pick<Ho
   const requestOutcomes = new Map<string, "sent" | "refused">();
   for (const r of readRequests(dir)) {
     if (r.sent_at) continue;
-    const { sent_at: _sent, ...record } = r;
+    const record = without(r, "sent_at");
     const outcome = await post("/v1/requests", record, REQUEST_DOMAIN);
     if (outcome !== "later") requestOutcomes.set(r.id, outcome);
   }
@@ -65,4 +65,11 @@ export async function sendAllowancesAndRequests(dir: string, connection: Pick<Ho
     }), now);
   }
   return sent;
+}
+
+/** A copy of `value` without the named fields. */
+function without<T extends object, K extends keyof T>(value: T, ...keys: K[]): Omit<T, K> {
+  const copy = { ...value };
+  for (const key of keys) delete copy[key];
+  return copy;
 }

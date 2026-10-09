@@ -64,7 +64,12 @@ test("the hook keeps the chain head of each delivery answer beside its receipts"
       await store.put({ payload: { action_ref: { action_id: "action:chain-head-hook-1" } }, signature: { alg: "Ed25519", sig: "fixture" } });
       await exporter.flush();
     } finally { exporter.stop(); }
-    assert.deepEqual(readChainHeads(join(dir, CHAIN_HEADS_FILE)).chains[ANCHOR], [answer]);
+    const [kept, ...more] = readChainHeads(join(dir, CHAIN_HEADS_FILE)).chains[ANCHOR];
+    assert.deepEqual(more, []);
+    const { local, ...signed } = kept;
+    assert.deepEqual(signed, answer);
+    // Beside it, this computer's own times: when the delivery left and when its answer arrived.
+    assert.ok(Date.parse(local.sent_at) <= Date.parse(local.received_at), JSON.stringify(local));
   } finally { done(); }
 });
 
@@ -84,7 +89,7 @@ test("kept heads that agree with a published day and with the segments pass", as
     const report = await checkChains({ dir, anchors: [anchorFile], segmentsDir: segments });
     assert.deepEqual(report.problems, []);
     assert.equal(report.ok, true);
-    assert.match(report.lines.join("\n"), new RegExp(`Anchor 2026-10-07: signed by ${key.kid}; 1 chain\\(s\\), 1 of them this computer's`));
+    assert.ok(report.lines.join("\n").includes(`Anchor 2026-10-07: signed by ${key.kid}; 1 chain(s), 1 of them this computer's`), report.lines.join("\n"));
     assert.match(report.lines.join("\n"), /every kept head's segment is in its chain \(through sequence 6\)/);
     // An https address is fetched; a plain http one elsewhere is refused.
     const fetched = await checkChains({ dir, anchors: ["https://anchors.example/2026/10/07.json"], fetchImpl: async () => new Response(JSON.stringify(list(key, "2026-10-07", []))) });

@@ -31,7 +31,8 @@ enrolling key's id, as the workspace does; deliveries with any other credential 
 ## As a process
 
 ```bash
-npx -y @scopebond/fake-cloud --url-file cloud-url.txt --auto-approve --fault ingest=500x2
+pnpm -r build
+node packages/fake-cloud/dist/cli.js --url-file cloud-url.txt --auto-approve --fault ingest=500x2
 ```
 
 `--fault` takes `<route>=<status>[xN]`, `<route>=slow:<ms>` or `<route>=drop`. In Windows

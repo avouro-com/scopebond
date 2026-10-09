@@ -4,6 +4,7 @@
 // Prompt both run. Human output only; never on the per-action hook path.
 
 import { cliCommand } from "./version.js";
+import { textOf } from "./text.js";
 
 const isWin = (platform: NodeJS.Platform) => platform === "win32";
 
@@ -57,7 +58,7 @@ export function explainPowerShellError(text: string): string | null {
 /** Why the workspace could not be reached, in one line, with what to do: a company network that
  *  inspects secure connections, a proxy Node does not use by default, or the address. */
 export function unreachableHint(error: unknown, env: NodeJS.ProcessEnv = process.env): string {
-  const cause = String((error as { cause?: { code?: unknown } } | null)?.cause?.code ?? "");
+  const cause = textOf((error as { cause?: { code?: unknown } } | null)?.cause?.code);
   if (/CERT|SELF_SIGNED|UNABLE_TO_VERIFY|UNABLE_TO_GET_ISSUER/i.test(cause)) {
     return `(${cause}) A company network may inspect secure connections with its own certificate: set NODE_EXTRA_CA_CERTS to that certificate's file and run the command again.`;
   }

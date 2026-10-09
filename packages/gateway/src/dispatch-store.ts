@@ -18,6 +18,7 @@ function nodeSqlite(): unknown {
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { PrincipalKeyRegistry } from "./auth.js";
+import { prepareOwnerOnlyDatabase } from "./node-files.js";
 import { whileBusy } from "./node-stores.js";
 import type { CloudDelegation, CloudDispatchSource, ConsumeAnswer } from "./dispatch-cloud.js";
 import {
@@ -37,6 +38,8 @@ export const CLOCK_TOLERANCE_MS = 2_000;
 function open(path: string): Db {
   mkdirSync(dirname(path), { recursive: true });
   const { DatabaseSync } = nodeSqlite() as { DatabaseSync: new (p: string) => Db };
+  // The approvals spent and the budget counters: readable and writable by their owner alone, journal files included.
+  prepareOwnerOnlyDatabase(path);
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 15000;");
   whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));
@@ -101,7 +104,7 @@ export class DispatchStore {
     if (!row) return null;
     const revoked = this.db.prepare("SELECT 1 AS x FROM revocations WHERE delegation_id = ?").get(id) !== undefined;
     return {
-      delegation_id: String(row.delegation_id), parent_id: row.parent_id === null ? null : String(row.parent_id), actor: String(row.actor),
+      delegation_id: String(row.delegation_id), parent_id: typeof row.parent_id === "string" ? row.parent_id : null, actor: String(row.actor),
       scope: JSON.parse(String(row.scope_json)), scope_digest: String(row.scope_digest),
       issued_at: new Date(Number(row.issued_at)).toISOString(), expires_at: new Date(Number(row.expires_at)).toISOString(), revoked,
     };
@@ -288,7 +291,7 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
       let approvalFailure: { reason: DispatchReason; detail: string } | null = null;
       if (needsApproval) {
         for (let i = 0; i < req.intents.length; i++) {
-          const intent = req.intents[i]!;
+          const intent = req.intents[i];
           if (!requires(intent.action_type)) continue;
           const subject = { actor: req.actor, action_type: intent.action_type, target: intent.target, policy_digest: req.policy_digest, request_hash: requestHash(intent.request) };
           let lastReject: string | null = null;
@@ -348,9 +351,8 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
               observations.push({ ...base, count: 0, state, repeated: false });
               return hard ? deny(reason, detail, observations) : null;
             };
-            let refusal: DispatchDecision | null = null;
             if (policy.authority_scope === "shared_gateway" && !config.sharedGatewayConfigured) {
-              refusal = refuse("budget_capability_unsupported", `budget ${policy.budget_id} needs a shared in-path gateway; independent hooks cannot enforce a limit shared across installations`, "unenforceable");
+              const refusal = refuse("budget_capability_unsupported", `budget ${policy.budget_id} needs a shared in-path gateway; independent hooks cannot enforce a limit shared across installations`, "unenforceable");
               if (refusal) return { commit: false, value: refusal };
               continue;
             }
@@ -359,7 +361,7 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
               : !budgetAcknowledged(policy) ? ["budget_unacknowledged", `the budget policy has no acknowledgement of digest ${budgetDigest(policy).slice(0, 12)}`]
               : rolledBack ? ["clock_rollback", "the system clock is behind a time this counter already saw"] : null;
             if (problem) {
-              refusal = refuse(problem[0], problem[1], "unenforceable");
+              const refusal = refuse(problem[0], problem[1], "unenforceable");
               if (refusal) return { commit: false, value: refusal };
               continue;
             }
@@ -382,7 +384,7 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
           const dry = db.transaction<DispatchDecision>(() => ({ commit: false, value: decide().value }));
           if (!dry.allow) return dry;
           for (const [i, approvalId] of cloudChosen) {
-            const intent = req.intents[i]!;
+            const intent = req.intents[i];
             const answer = await config.cloud.consume({
               approval_id: approvalId, request_hash: requestHash(intent.request), action_type: intent.action_type, policy_digest: req.policy_digest,
               target_id: config.cloud.targetId(intent.target), client_time: new Date(nowFn()).toISOString(),
@@ -442,7 +444,7 @@ async function checkWorkspaceDelegation(
   const held = new Set(resolved.effective_entries);
   for (const [n, i] of intents.entries()) {
     // Entries are over the opaque target id the workspace also receives, never the raw path or ref.
-    let covered = false;
+    let covered: boolean;
     if (n === 0 && covers !== undefined) covered = covers;
     else { try { const wanted = actionScopeEntries(i.action_type, cloud.targetId(i.target)); covered = held.has(wanted.exact) || held.has(wanted.anyTarget); } catch { covered = false; } }
     if (!covered) return { reason: "delegation_out_of_scope", detail: `the session delegation ${sessionId} does not cover ${i.action_type} on this target` };

@@ -10,18 +10,20 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync, readdirSync } from "node:fs";
 import { hookCliPath, isSingleExecutable } from "./self.js";
+import { textOf } from "./text.js";
 import { join, resolve } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { checkChains } from "./chain-verify.js";
-import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
+import { replaceFile } from "./safe-fs.js";
 import { scaffold, harnessSnippet, placeHook, migrateToMonitorDefault, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
@@ -37,12 +39,12 @@ import {
 } from "./install.js";
 import {
   openObservations, describeObservations, observationStatus, stopReasonFromClaude, exitFromClaudeFailure,
-  HEARTBEAT_INTERVAL_MS, heartbeatIntervalMs, OBSERVATIONS_SCOPE, type ObservationEmitter,
+  heartbeatIntervalMs, OBSERVATIONS_SCOPE, type ObservationEmitter,
 } from "./obs-emitter.js";
 import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
 import { loadOrCreateBindingKey } from "./observation.js";
 import { uploadPending } from "./obs-upload.js";
-import { connectCloud, ingestUrl, loadConnection, connectionPath, reportUninstall } from "./cloud.js";
+import { connectCloud, ingestUrl, loadConnection, reportUninstall } from "./cloud.js";
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { compileManaged, isManaged, readMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
@@ -65,10 +67,11 @@ import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofRece
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
  *  the runtime fills it in before evaluating; on failure the ref stays absent and
- *  the starter policy fails closed. */
+ *  the starter policy fails closed. git is started by its full path from PATH, never
+ *  from `cwd`, which is the project and could hold a git.exe of its own. */
 function currentBranch(cwd: string): string | null {
   try {
-    return execFileSync("git", ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+    return execFileSync(programPath("git"), ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], {
       encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     }).trim() || null;
   } catch { return null; }
@@ -187,7 +190,7 @@ function recordObservations(dir: string, cwd: string, input: Record<string, unkn
 /** The remote-database actions of a shell call, only when the rule set opts in (`protect_remote_database`).
  *  They are extra evaluated intents read from the raw command, so the deny happens before it runs. */
 function databaseGuard(dir: string, cwd: string, input: Record<string, unknown>): Mapped[] {
-  let enabled = false;
+  let enabled: boolean;
   try { enabled = loadRules(dir)?.protect_remote_database === true; } catch { return []; }
   if (!enabled) return [];
   const request = callRequestOf(input);
@@ -218,7 +221,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
   try { input = JSON.parse(raw ?? readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
   try {
-    const cwd = input?.cwd ? String(input.cwd) : process.cwd();
+    const cwd = input?.cwd ? textOf(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
     const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
     // Rules written before monitor became the default move to it once (never fails the call).
@@ -254,7 +257,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
  *  events. They only feed observations; they never print a decision and always exit 0. */
 async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never> {
   try {
-    const cwd = input.cwd ? String(input.cwd) : process.cwd();
+    const cwd = input.cwd ? textOf(input.cwd) : process.cwd();
     const { emitter } = openObservations(resolveConfigDir(cwd), { adapterVersion: hookVersion() });
     const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
     if (emitter) {
@@ -320,15 +323,15 @@ async function runCursor(): Promise<void> {
     denyCursor("Scopebond: hook received a payload that is not a JSON object");
   }
   const input = parsed as Record<string, unknown>;
-  const event = String(input.hook_event_name ?? input.event ?? process.argv[3] ?? "");
-  let permission: "allow" | "deny" | "ask" = "deny";
-  let message = "Scopebond hook failed closed";
+  const event = textOf(input.hook_event_name ?? input.event ?? process.argv[3]);
+  let permission: "allow" | "deny" | "ask";
+  let message: string;
   let postHoc = false;
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
   try {
-    const cwd = input?.cwd ? String(input.cwd) : process.cwd();
+    const cwd = input?.cwd ? textOf(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
-    const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
+    const permissionMode = typeof input.permission_mode === "string" ? input.permission_mode : null;
     const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
     // An edit Cursor reports after saving it cannot be overridden: it already happened.
     const overridable = !mapped.some((m) => m.postHoc);
@@ -482,8 +485,8 @@ function runInit(args: string[]): void {
 }
 
 function decisionOf(payload: Record<string, unknown>): string {
-  const rr = String(payload.realtime_result ?? "");
-  const state = String((payload.execution as Record<string, unknown> | undefined)?.state ?? "");
+  const rr = textOf(payload.realtime_result);
+  const state = textOf((payload.execution as Record<string, unknown> | undefined)?.state);
   if (state === "observed_not_evaluated") return "not_evaluated";
   // Out of policy, but reported only after it ran: recorded, never a block.
   if (state === "observed_after") return "recorded, not prevented";
@@ -527,7 +530,7 @@ async function runLog(args: string[]): Promise<void> {
       const p = r.payload as unknown as Record<string, unknown>;
       if (denyOnly && decisionOf(p) !== "deny") return false;
       if (since) {
-        const at = Date.parse(String(p.timestamp ?? ""));
+        const at = Date.parse(textOf(p.timestamp));
         if (!Number.isFinite(at) || at < since) return false;
       }
       return true;
@@ -539,14 +542,14 @@ async function runLog(args: string[]): Promise<void> {
     }
     for (const r of shown) {
       const p = r.payload as unknown as Record<string, unknown>;
-      console.log(`${String(p.timestamp ?? "")}  ${decisionOf(p).padEnd(13)}  ${describeIntent(p)}`);
+      console.log(`${textOf(p.timestamp)}  ${decisionOf(p).padEnd(13)}  ${describeIntent(p)}`);
     }
     const filters = [denyOnly ? "denied" : "", since ? `since ${new Date(since).toISOString()}` : ""].filter(Boolean).join(", ");
     const scope = filters ? ` matching ${filters}` : "";
     const capped = (denyOnly || since) && scanned.length >= budget && total > budget;
     console.log(`\n${shown.length}${scope} of ${total} receipt(s)${capped ? ` — searched the most recent ${budget}` : ""}. Verify them: ${cliCommand("verify")}`);
   } finally {
-    try { store.close?.(); } catch { /* read-only */ }
+    try { await store.close?.(); } catch { /* read-only */ }
   }
 }
 
@@ -676,7 +679,7 @@ async function runRules(args: string[]): Promise<void> {
         rules.local_overrides = { ...(rules.local_overrides ?? {}), [id]: verb };
         const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
         saveRules(dir, rules);
-        writeFileSync(join(dir, "policy.json"), `${JSON.stringify(compileManaged(rules, doc, agentKid), null, 2)}\n`);
+        replaceFile(join(dir, "policy.json"), `${JSON.stringify(compileManaged(rules, doc, agentKid), null, 2)}\n`);
         console.log(`✓ ${verb === "enforce" ? `${id} now blocks on this computer` : `${id} now records on this computer, without blocking`} (your workspace allows changes on computers)`);
         await reportRules(dir);
         process.exit(0);
@@ -706,7 +709,7 @@ async function runRules(args: string[]): Promise<void> {
   const policyPath = join(dir, "policy.json");
   const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
   saveRules(dir, rules);
-  writeFileSync(policyPath, `${JSON.stringify(compile(rules, agentKid), null, 2)}\n`);
+  replaceFile(policyPath, `${JSON.stringify(compile(rules, agentKid), null, 2)}\n`);
   console.log(`✓ ${changed}`);
   console.log(`  rules          ${rulesPath(dir)}`);
   console.log(`  policy         ${policyPath} (recompiled)`);
@@ -749,7 +752,7 @@ async function runPrune(args: string[]): Promise<void> {
     const lock = join(dir, "store-compact.lock");
     try { writeFileSync(lock, String(process.pid), { flag: "wx" }); }
     catch {
-      let fresh = true;
+      let fresh: boolean;
       try { fresh = Date.now() - statSync(lock).mtimeMs < 15 * 60_000; } catch { fresh = false; }
       if (fresh) {
         if (!quiet) console.error("another compaction of this store is running; try again in a few minutes.");
@@ -758,8 +761,8 @@ async function runPrune(args: string[]): Promise<void> {
       writeFileSync(lock, String(process.pid)); // a stale lock from a process that died
     }
     const before = describeStore(dbPath);
-    let report: ReturnType<typeof runStoreUpkeep> = null;
-    let migrated = 0;
+    let report: ReturnType<typeof runStoreUpkeep>;
+    let migrated: number;
     try {
       report = runStoreUpkeep(dir, { budgetMs: 10 * 60_000, allowFullVacuum: true });
       migrated = report?.migrated ?? 0;
@@ -836,12 +839,12 @@ async function runPrune(args: string[]): Promise<void> {
     }
     const { removed } = sqlite.removeBefore(iso);
     console.log(`removed          ${removed} receipt(s)`);
-    store.close?.();
+    await store.close?.();
     console.log(`store now        ${describeStore(dbPath)}`);
     if (archived) console.log(`\nThe archive is a plain JSONL of signed receipts — still verifiable, still yours. It stays until you delete it.`);
     process.exit(0);
   } catch (error) {
-    try { store.close?.(); } catch { /* closing after a failure */ }
+    try { await store.close?.(); } catch { /* closing after a failure */ }
     console.error(`prune refused: ${(error as Error).message}`);
     process.exit(1);
   }
@@ -868,8 +871,8 @@ async function runVerify(args: string[] = []): Promise<void> {
   const anchors: string[] = [];
   let segmentsDir: string | undefined;
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--anchor" && args[i + 1]) anchors.push(args[++i]!);
-    else if (args[i] === "--segments" && args[i + 1]) segmentsDir = resolve(args[++i]!);
+    if (args[i] === "--anchor" && args[i + 1]) anchors.push(args[++i]);
+    else if (args[i] === "--segments" && args[i + 1]) segmentsDir = resolve(args[++i]);
     else { console.error(`unknown option for verify: ${args[i]}. Use: ${cliCommand("verify [--anchor <file-or-url>] [--segments <dir>]")}`); process.exit(2); }
   }
   const chainCheck = anchors.length > 0 || segmentsDir !== undefined;
@@ -884,7 +887,7 @@ async function runVerify(args: string[] = []): Promise<void> {
   // It just should not look hung while doing so: at ~2.6 s per 20,000 receipts a long
   // history is a visible wait, so report progress on a TTY.
   const all = await Promise.resolve(store.list());
-  try { store.close?.(); } catch { /* read-only */ }
+  try { await store.close?.(); } catch { /* read-only */ }
   const progress = process.stdout.isTTY && all.length >= 2000;
   let ok = 0;
   const bad: string[] = [];
@@ -893,7 +896,7 @@ async function runVerify(args: string[] = []): Promise<void> {
     if (result.valid) ok += 1;
     else {
       const failed = Object.entries(result).filter(([k, v]) => k.endsWith("_valid") && v === false).map(([k]) => k);
-      bad.push(`${String((r.payload as unknown as Record<string, unknown>).timestamp ?? "")}: ${failed.join(", ") || "invalid"}`);
+      bad.push(`${textOf((r.payload as unknown as Record<string, unknown>).timestamp)}: ${failed.join(", ") || "invalid"}`);
     }
     if (progress && (index + 1) % 1000 === 0) process.stderr.write(`\rverifying ${index + 1}/${all.length}…`);
   }
@@ -1147,7 +1150,9 @@ async function runFlush(): Promise<void> {
   // Unbounded, so its outcome is a real one: `status` and `doctor` show it like any other.
   if (status) recordDeliveryAttempt(dir, status, Date.now(), before, null, "hook");
   runtime.exporter?.stop();
-  console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
+  // A wait the workspace asked for (429, or 503 with Retry-After) holds here too: say when the next try is.
+  const wait = status?.pending && status.backoff && status.backoff.until > Date.now() && !status.lastError ? status.backoff.until : null;
+  console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}${wait ? ` (the workspace asked this computer to wait; next try after ${new Date(wait).toISOString()})` : ""}`);
   // Let pending HTTP handles close normally (forced exit can abort on Windows).
   process.exitCode = status && status.pending > 0 ? 1 : 0;
 }
@@ -1424,10 +1429,10 @@ function describeStore(dbPath: string): string {
   const bytes = (file: string): number => { try { return statSync(file).size; } catch { return 0; } };
   const total = bytes(dbPath) + bytes(`${dbPath}-wal`) + bytes(`${dbPath}-shm`);
   const human = total >= 1024 * 1024 ? `${(total / 1024 / 1024).toFixed(1)} MiB` : `${Math.max(1, Math.round(total / 1024))} KiB`;
-  let count: number | null = null;
+  let count: number | null;
   try {
     const { store } = openReceiptStore({ db: dbPath });
-    try { count = store.count ? Number(store.count()) : null; } finally { store.close?.(); }
+    try { count = store.count ? Number(store.count()) : null; } finally { void Promise.resolve(store.close?.()).catch(() => undefined); }
   } catch { count = null; }
   return count === null ? human : `${count} receipt(s), ${human}`;
 }
@@ -1600,7 +1605,7 @@ async function runDoctor(): Promise<void> {
     // Windows PowerShell finds its own modules only without PowerShell 7's PSModulePath, which a doctor run from
     // pwsh would pass on; and its errors are not this computer's problem to print.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath"));
-    try { policy = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
+    try { policy = execFileSync(windowsSystemProgram("powershell"), ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
     const advice = policy ? executionPolicyAdvice(policy) : null;
     if (advice) console.log(`  powershell       ${advice}`);
   }
@@ -1661,7 +1666,7 @@ async function runDoctor(): Promise<void> {
   if (!connection) {
     console.log(`  cloud            not connected (local only) — receipts stay on this machine`);
   } else {
-    let reachable = "unknown";
+    let reachable: string;
     try {
       const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET" });
       reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
@@ -1669,7 +1674,7 @@ async function runDoctor(): Promise<void> {
     console.log(`  cloud            ${connection.url} — ${reachable}`);
     // SB273: an authenticated check. Reaching the workspace says nothing about whether it
     // still accepts this computer; the rules endpoint answers 401 when it does not.
-    let accepted = "unknown";
+    let accepted: string;
     let recommended = readMeta(active).recommended ?? null;
     try {
       const res = await fetch(new URL("/v1/policy", connection.url).toString(), {
@@ -1794,8 +1799,8 @@ async function runLogin(args: string[]): Promise<void> {
     console.error(`${origin} did not start a login (HTTP ${start.status}). Check the workspace URL, or use ${cliCommand("connect <workspace-url> <enrollment>")}.`);
     process.exit(1);
   }
-  const userCode = String(start.json.user_code ?? "");
-  const verify = String(start.json.verification_uri_complete ?? start.json.verification_uri ?? origin);
+  const userCode = textOf(start.json.user_code);
+  const verify = textOf(start.json.verification_uri_complete ?? start.json.verification_uri ?? origin);
   let intervalMs = Math.max(1, Number(start.json.interval ?? 5)) * 1000;
   const deadline = Date.now() + Math.max(60, Number(start.json.expires_in ?? 600)) * 1000;
   console.log(`To connect this computer, open:\n\n  ${verify}\n\nand check that it shows the code  ${userCode}\n`);
@@ -1831,7 +1836,7 @@ async function runLogin(args: string[]): Promise<void> {
     if (error === "slow_down") { intervalMs += 5_000; continue; }
     if (error === "access_denied") { console.error(`The request was denied in the workspace. Nothing was connected. To ask again: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`); process.exit(1); }
     if (error === "expired_token") break;
-    console.error(`login failed (${String(error ?? `HTTP ${polled.status}`)}). For a new code, run: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`);
+    console.error(`login failed (${textOf(error ?? `HTTP ${polled.status}`)}). For a new code, run: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`);
     process.exit(1);
   }
   console.error(`The code expired before it was approved. For a new one, run: ${retryCommand(loginAgainCommand(origin, loginFlags(args)))}`);

@@ -7,10 +7,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createCloudExporter } from "@scopebond/gateway";
-import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder } from "@scopebond/gateway/node";
+import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, ensurePrivateDir } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import {
-  LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, hookVersion, ingestUrl,
+  LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, deliveryBackoff, hookVersion, ingestUrl,
   isHarnessConfigured, loadConnection, policyBuilds, recordDeliveryAttempt, repairDeliveryAt, sequenceProofFor, summaryOptions, syncPolicy, userHarnessFile,
   type Harness, type StatusJson, type SyncOutcome,
 } from "@scopebond/hook";
@@ -58,6 +58,9 @@ export function missingHookEntries(harnesses: Harness[] = expectedHarnesses()): 
 export async function runCycle(options: CycleOptions): Promise<CycleResult> {
   const now = options.now ?? Date.now;
   const dir = options.dir;
+  // The credential, the keys, the delivery queue and the chain heads: readable by this user alone, those an older version
+  // left included. Done once per folder; afterwards a small check.
+  ensurePrivateDir(dir);
   const result: CycleResult = { at: now(), connected: false, delivered: 0, pending: 0, deliveryError: null, rules: "skipped", missingHookEntries: [], requested: null, more: false };
   try { result.missingHookEntries = missingHookEntries(); } catch { /* reported as none */ }
   const connection = loadConnection(dir);
@@ -74,10 +77,13 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
     // The record numbers are signed with the same enrolled key that signs the receipts and summaries.
     const summaries = summaryOptions(dir);
     const sequenceProof = sequenceProofFor(connection, summaries?.attester);
+    // A wait the workspace asked for (429, or 503 with Retry-After), recorded by a hook call or an earlier cycle, holds here
+    // too: this cycle's exporter is new, so without it the wait would last only until the next cycle.
+    const backoff = deliveryBackoff(dir);
     const exporter = createCloudExporter({
       url: ingestUrl(connection), credential: connection.credential, outbox,
       flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries, requestTimeoutMs: options.deliveryTimeoutMs ?? 30_000,
-      ...(sequenceProof ? { sequenceProof } : {}),
+      ...(sequenceProof ? { sequenceProof } : {}), ...(backoff ? { backoff } : {}),
       // The chain head each answer carries is kept beside the hook's receipts (chain-heads.json).
       onChainHead: chainHeadRecorder(join(dir, CHAIN_HEADS_FILE)),
     });

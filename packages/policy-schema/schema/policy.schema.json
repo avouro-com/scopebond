@@ -144,6 +144,7 @@
     },
     "endpoint_allowlist": {
       "type": "object", "additionalProperties": false,
+      "description": "Allows only the listed destinations. Each host is a name or IP address with an optional port, compared as the destination an HTTP client reaches (case, a trailing dot and the decimal, octal, hex, shortened and IPv4-mapped IPv6 spellings of an address do not matter). An entry allows exactly its host and port; one without a port allows the default port only. The preferred control for agent egress.",
       "required": ["id", "type", "hosts"],
       "properties": {
         "id": {}, "mode": {}, "description": {},
@@ -155,6 +156,7 @@
     },
     "endpoint_denylist": {
       "type": "object", "additionalProperties": false,
+      "description": "Denies the listed destinations, compared as for endpoint_allowlist. An entry without a port denies its host on every port; a loopback name or address (localhost, 127.0.0.0/8, ::1, 0.0.0.0) denies every loopback destination. A name is compared as a name: list an internal service's address to deny it under any name (a dispatching HTTP executor also checks the address a name resolves to). Best effort: prefer endpoint_allowlist for egress control.",
       "required": ["id", "type", "hosts"],
       "properties": {
         "id": {}, "mode": {}, "description": {},

@@ -4,6 +4,7 @@
 // data (base64 for PowerShell, arguments for osascript and zenity), never spliced into code.
 
 import { spawn } from "node:child_process";
+import { windowsSystemProgram } from "@scopebond/gateway/node";
 import { userInfo } from "node:os";
 
 export interface OverrideQuestion {
@@ -23,6 +24,7 @@ export interface OverrideAnswer { decision: "allow" | "deny" | "unavailable" | "
 export type Prompter = (question: OverrideQuestion) => Promise<OverrideAnswer>;
 
 const ID = /^[A-Za-z0-9._:-]{16,200}$/;
+// eslint-disable-next-line no-control-regex -- deliberately replaces control characters in text shown in the window
 const clip = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max) : "");
 
 /** Check a request from the local channel. Anything malformed is refused before a window opens. */
@@ -124,7 +126,7 @@ $out = @{ decision = $script:answer; lasts = $script:lasts; reason = $(if ($scri
 
 async function promptWindows(q: OverrideQuestion): Promise<OverrideAnswer> {
   const encoded = Buffer.from(windowsScript(q), "utf16le").toString("base64");
-  const { code, stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-EncodedCommand", encoded], q.timeout_ms);
+  const { code, stdout } = await run(windowsSystemProgram("powershell"), ["-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-EncodedCommand", encoded], q.timeout_ms);
   if (code !== 0) return { decision: "unavailable" };
   try {
     const parsed = JSON.parse(stdout.trim()) as { decision?: string; reason?: string; lasts?: string };

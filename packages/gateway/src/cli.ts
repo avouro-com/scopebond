@@ -34,6 +34,7 @@ function fail(msg: string): never { console.error(msg); process.exit(1); }
 function parseDurationMs(s: string): number {
   const t = s.trim().toLowerCase();
   if (t === "" || t === "0" || t === "off" || t === "false") return 0;
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: the optional group starts with a literal ".", so the digit runs cannot overlap
   const m = t.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/);
   if (!m) return 0;
   const mult: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
@@ -61,12 +62,13 @@ function resolveAuthentication(): GatewayAuthentication {
   const file = process.env.SCOPEBOND_PRINCIPAL_KEYS_FILE;
   if (!file) fail("SCOPEBOND_PRINCIPAL_KEYS_FILE is required (or set SCOPEBOND_UNSAFE_ALLOW_UNSIGNED=1 for local simulation only)");
   let source: unknown;
-  try { source = JSON.parse(readFileSync(file as string, "utf8")); }
+  try { source = JSON.parse(readFileSync(file, "utf8")); }
   catch (error) { fail(`could not read principal key registry: ${(error as Error).message}`); }
   if (!Array.isArray(source) || source.length === 0) fail("principal key registry must be a non-empty JSON array");
   const records: PrincipalKeyRecord[] = source.map((item, index) => {
     const row = item as Record<string, unknown>;
-    const publicKeyPem = String(row.public_key_pem ?? row.publicKeyPem ?? "");
+    const pem = row.public_key_pem ?? row.publicKeyPem;
+    const publicKeyPem = typeof pem === "string" ? pem : "";
     const purposes = row.purposes as PrincipalPurpose[];
     if (!publicKeyPem || !Array.isArray(purposes) || purposes.some((purpose) => purpose !== "agent" && purpose !== "approver")) {
       fail(`invalid principal key record at index ${index}`);
@@ -96,7 +98,7 @@ function resolveMode(): "enforce" | "check_only" {
 
 function cmdServe(policyPath: string | undefined): void {
   if (!policyPath) fail("usage: scopebond-gateway <policy.json>   (or set SCOPEBOND_POLICY)");
-  const policy = JSON.parse(readFileSync(policyPath as string, "utf8"));
+  const policy = JSON.parse(readFileSync(policyPath, "utf8"));
   const { attester, source } = resolveAttester();
   const receiptsFile = process.env.SCOPEBOND_RECEIPTS_FILE;
   const { store: baseStore, kind, path } = openReceiptStore(
@@ -156,9 +158,9 @@ function cmdServe(policyPath: string | undefined): void {
     console.log(`  cloud     exporting receipts to ${cloudUrl} (${exporter.pending()} pending)`);
     // Backfill existing receipts once (Cloud dedupes on ingest, so it's idempotent).
     if ((process.env.SCOPEBOND_CLOUD_BACKFILL ?? "1") !== "0") {
-      Promise.resolve(baseStore.list()).then((all) => { for (const r of all) exporter!.enqueue(r); }).catch(() => {});
+      Promise.resolve(baseStore.list()).then((all) => { for (const r of all) exporter.enqueue(r); }).catch(() => {});
     }
-    const shutdown = () => { void exporter!.flush().finally(() => { exporter!.stop(); process.exit(0); }); };
+    const shutdown = () => { void exporter.flush().finally(() => { exporter.stop(); process.exit(0); }); };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
   }
@@ -168,11 +170,11 @@ function cmdServe(policyPath: string | undefined): void {
   if ((process.env.SCOPEBOND_POLICY_WATCH ?? "1") !== "0") {
     try {
       let debounce: ReturnType<typeof setTimeout> | undefined;
-      watch(policyPath as string, () => {
+      watch(policyPath, () => {
         clearTimeout(debounce);
         debounce = setTimeout(() => {
           try {
-            gateway.setPolicy(JSON.parse(readFileSync(policyPath as string, "utf8")));
+            gateway.setPolicy(JSON.parse(readFileSync(policyPath, "utf8")));
             console.log(`  policy reloaded (hash ${gateway.policyHash.slice(0, 12)}…)`);
           } catch (e) {
             console.error(`  policy reload failed, keeping current: ${(e as Error).message}`);
@@ -200,7 +202,7 @@ function cmdServe(policyPath: string | undefined): void {
 async function cmdVerify(args: string[]): Promise<void> {
   const receiptPath = args[0];
   if (!receiptPath) fail("usage: scopebond-gateway verify <receipt.json> [--key <pubkey.pem>] [--url <gateway-url>]");
-  const parsed = JSON.parse(readFileSync(receiptPath as string, "utf8"));
+  const parsed = JSON.parse(readFileSync(receiptPath, "utf8"));
   // Accept a bare SignedReceipt, or an /v1/evaluate response ({ receipt }).
   const receipt = parsed?.payload ? parsed : parsed?.receipt;
   if (!receipt?.payload) fail("input is not a scopebond:receipt (no .payload, and no .receipt wrapper)");
@@ -213,7 +215,7 @@ async function cmdVerify(args: string[]): Promise<void> {
   }
   if (!pem) fail("no attester public key — pass --key <pubkey.pem> or --url <gateway-url>");
 
-  const v = verifyReceipt(receipt, pem as string);
+  const v = verifyReceipt(receipt, pem);
   console.log(`signature_valid   ${v.signature_valid}`);
   console.log(`contract_valid    ${v.contract_valid}`);
   console.log(`key_binding_valid ${v.key_binding_valid}`);
@@ -231,7 +233,7 @@ function cmdKeygen(args: string[]): void {
   console.log(`${created ? "generated" : "exists"}: ${file}`);
   console.log(`kid: ${attester.kid}`);
   const pubOut = flag(args, "--out");
-  if (pubOut) { writeFileSync(pubOut as string, attester.publicKeyPem); console.log(`public key -> ${pubOut}`); }
+  if (pubOut) { writeFileSync(pubOut, attester.publicKeyPem); console.log(`public key -> ${pubOut}`); }
   else console.log(attester.publicKeyPem.trim());
 }
 

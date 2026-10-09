@@ -4,17 +4,18 @@
 // durable exporter (D40 — no new transport). The machine credential and the complete
 // receipt log stay local-first; export is best-effort and never blocks a tool call.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,
-  type Attester, type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
+  type Attester, type CloudBackoff, type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
   type CloudSequenceProofOptions, type ReceiptStore,
 } from "@scopebond/gateway";
-import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, ensurePrivateDir, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX } from "./delivery-report.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { summaryOptions } from "./evidence-detail.js";
+import { replaceFile } from "./safe-fs.js";
 
 /** The persisted connection between this machine and a Cloud workspace. Holds the
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
@@ -78,6 +79,8 @@ export function loadConnection(dir: string): HookConnection | null {
 export async function connectCloud(
   dir: string, url: string, bundle: CloudEnrollmentBundle, fetchImpl?: typeof fetch,
 ): Promise<HookConnection & { rotatedFrom?: string; setAside?: number }> {
+  // The credential, the keys and everything else in the folder: readable by this user alone.
+  ensurePrivateDir(dir);
   let { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
   const { attester: agent } = loadOrCreateAttester({ file: join(dir, "agent.key") });
   let rotatedFrom: string | undefined;
@@ -95,7 +98,8 @@ export async function connectCloud(
   const ingest = safeIngestOrigin(offered);
   const connection: HookConnection = { url, ...enrolled, ...(ingest ? { ingest_url: ingest } : {}) };
   forgetCached(connectionPath(dir));
-  writeFileSync(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n", { mode: 0o600 });
+  // A new file renamed into place: a file or link already at cloud.json is replaced, never written through.
+  replaceFile(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n");
   let setAside = 0;
   const outboxPath = join(dir, "receipts.db.cloud-outbox.db");
   if (existsSync(outboxPath)) {
@@ -146,7 +150,7 @@ export function sequenceProofFor(
 
 export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
-  options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void } = {},
+  options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void; backoff?: CloudBackoff | null } = {},
 ): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
   // Lossless (SB275): no cap and no expiry. A record leaves the queue only when the workspace
   // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
@@ -159,8 +163,10 @@ export function attachExporter(
   const summaries = summaryOptions(dirname(outboxDbPath));
   const sequenceProof = sequenceProofFor(connection, summaries?.attester);
   // The chain head each delivery answer carries is kept beside the receipts (chain-heads.json), for `verify --anchor`.
+  // `backoff`: a wait the workspace asked for that an earlier call recorded (delivery.json); nothing is sent before it.
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl,
     summaries, ...(sequenceProof ? { sequenceProof } : {}), ...(options.onGap ? { onGap: options.onGap } : {}),
+    ...(options.backoff ? { backoff: options.backoff } : {}),
     onChainHead: chainHeadRecorder(join(dirname(outboxDbPath), CHAIN_HEADS_FILE)) });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }

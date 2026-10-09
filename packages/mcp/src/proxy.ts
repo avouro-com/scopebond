@@ -12,7 +12,7 @@ import { requestHash } from "@scopebond/gateway";
 import type { SignedReceipt, Attester, DispatchGuard, DispatchDecision } from "@scopebond/gateway";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { describeToolCall, intentDraft, manifestHash, outcomeDraft, type ExitCategory, type TypedAdapterConfig } from "./typed.js";
+import { describeToolCall, intentDraft, jsonString, manifestHash, outcomeDraft, type ExitCategory, type TypedAdapterConfig } from "./typed.js";
 
 export interface JsonRpcMessage {
   jsonrpc?: string;
@@ -23,7 +23,7 @@ export interface JsonRpcMessage {
   error?: unknown;
 }
 
-const digest = (value: unknown): string => "sha256:" + createHash("sha256").update(canonical(value as never)).digest("hex");
+const digest = (value: unknown): string => "sha256:" + createHash("sha256").update(canonical(value)).digest("hex");
 
 const ARGS_DIGEST_DOMAIN = "scopebond:mcp-args-digest/v1\n";
 
@@ -33,7 +33,7 @@ const ARGS_DIGEST_DOMAIN = "scopebond:mcp-args-digest/v1\n";
 export function keyedArgsDigest(keyHex: string): (args: unknown) => string {
   if (!/^[0-9a-f]{64}$/i.test(keyHex)) throw new TypeError("the argument digest key must be 64 hex characters");
   const key = Buffer.from(keyHex, "hex");
-  return (args) => "hmac-sha256:" + createHmac("sha256", key).update(ARGS_DIGEST_DOMAIN + canonical(args as never), "utf8").digest("hex");
+  return (args) => "hmac-sha256:" + createHmac("sha256", key).update(ARGS_DIGEST_DOMAIN + canonical(args), "utf8").digest("hex");
 }
 
 // Without a configured key: a random key for this process (safe; digests then compare only within the process).
@@ -45,10 +45,11 @@ const defaultArgsDigest = (args: unknown): string =>
  * digested (keyed), never stored. */
 export function mapMcpToolCall(
   server: string, params: Record<string, unknown> | undefined, argsDigest: (args: unknown) => string = defaultArgsDigest,
-): { action_type: string; params: Record<string, unknown> } {
+): { action_type: string; params: { server: string; tool: string; args_digest: string } } {
   return {
     action_type: "mcp.tool.call",
-    params: { server, tool: String(params?.name ?? ""), args_digest: argsDigest(params?.arguments ?? {}) },
+    // The same text String() gave, but a name like {"toString": 1} no longer throws out of the proxy.
+    params: { server, tool: jsonString(params?.name ?? ""), args_digest: argsDigest(params?.arguments ?? {}) },
   };
 }
 
@@ -65,6 +66,8 @@ export interface CountableCall {
   executed: boolean;
   timestamp: string;
   intent_hash: string;
+  /** Tells two calls apart that have the same intent and timestamp (two identical calls in one millisecond are two calls). */
+  action_id?: string;
 }
 
 export interface McpProxyConfig {
@@ -107,7 +110,7 @@ export interface McpProxy {
   /** Decide and forward one JSON-RPC message. Anything that is not a single JSON-RPC object
    *  (a batch array, null, a primitive) or whose `method` is not a string is answered with a
    *  -32600 Invalid Request error and never forwarded. */
-  handle(message: JsonRpcMessage | unknown): Promise<JsonRpcMessage>;
+  handle(message: unknown): Promise<JsonRpcMessage>;
 }
 
 /** A JSON-RPC -32600 reply for a message the proxy will not forward. */
@@ -116,12 +119,28 @@ function invalidRequest(id: unknown, why: string): JsonRpcMessage {
   return { jsonrpc: "2.0", id: replyId, error: { code: -32600, message: `Invalid Request: ${why}` } };
 }
 
+/** The methods the proxy decides (`tools/call`) or reads (`tools/list`, for the manifest pin). */
+const GOVERNED_METHODS = ["tools/call", "tools/list"] as const;
+// A method name with case, width, spacing, invisible characters and punctuation taken away: what an upstream that
+// matches method names loosely could still read as the same method.
+const methodSkeleton = (method: string): string => method.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
+const GOVERNED_SKELETONS = new Map<string, string>(GOVERNED_METHODS.map((m) => [methodSkeleton(m), m]));
+
 /** Why a message is not a single JSON-RPC object the proxy can decide on, or undefined. Batches
  *  are rejected rather than split: a call inside one would otherwise skip the policy check. */
 export function invalidMessageReason(message: unknown): string | undefined {
   if (Array.isArray(message)) return "JSON-RPC batches are not supported; send each message on its own";
   if (message === null || typeof message !== "object") return "a JSON-RPC message must be an object";
   if ("method" in message && typeof (message as { method?: unknown }).method !== "string") return "method must be a string";
+  const { method, params } = message as { method?: unknown; params?: unknown };
+  // Only the exact method is decided. Another spelling of it ("Tools/Call", "tools/call ") would be passed through
+  // undecided, and an upstream that matches method names loosely would run it, so it is refused instead.
+  if (typeof method === "string") {
+    const governed = GOVERNED_SKELETONS.get(methodSkeleton(method));
+    if (governed !== undefined && governed !== method) return `method is another spelling of "${governed}"; send the exact method name`;
+  }
+  // A tool call names its tool with a string. Anything else is refused here, never decided under a made-up name and forwarded.
+  if (method === "tools/call" && typeof (params as { name?: unknown } | null | undefined)?.name !== "string") return "tools/call params.name must be a string";
   return undefined;
 }
 
@@ -131,7 +150,8 @@ export function invalidMessageReason(message: unknown): string | undefined {
 export function createMcpProxy(config: McpProxyConfig): McpProxy {
   const attester: Attester = attesterFromPrivateKeyPem(config.attesterKeyPem);
   // Session history of authorized calls. A forwarded call actually runs, so it
-  // counts as executed for windowed clauses (rate_limit, sequence, spend_limit).
+  // counts as executed for windowed clauses (rate_limit, sequence, spend_limit); a call
+  // still being decided after policy allowed it is held here too, until it is forwarded or refused.
   const history: CountableCall[] = [...(config.history ?? [])];
   const typed = config.typed;
   const nowMs = (): number => (config.now ? Date.parse(config.now()) : Date.now());
@@ -147,6 +167,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
   let verified = false;
   let mismatchSeen = false;
   const learn = (hash: string): void => {
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- a tool-list hash compared with the pinned manifest hash, both public; not a secret
     if (hash !== typed?.manifest?.hash) mismatchSeen = true;
     verified = !mismatchSeen;
     verifiedAt = nowMs();
@@ -175,13 +196,14 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
     if (nowMs() - verifiedAt < recheck) return verified;
     let hash: string | undefined;
     try { hash = await readToolList(); } catch { hash = undefined; }
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- checks whether a tool list was read at all; no secret is compared
     if (hash === undefined) { verified = false; verifiedAt = nowMs(); }
     else learn(hash);
     return verified;
   };
 
   return {
-    async handle(raw: JsonRpcMessage | unknown): Promise<JsonRpcMessage> {
+    async handle(raw: unknown): Promise<JsonRpcMessage> {
       const invalid = invalidMessageReason(raw);
       if (invalid) return invalidRequest((raw as { id?: unknown } | null)?.id, invalid);
       const message = raw as JsonRpcMessage;
@@ -211,72 +233,85 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       const dispatched = JSON.parse(JSON.stringify(message)) as JsonRpcMessage;
       const intent = mapMcpToolCall(config.server, dispatched.params, argsDigest);
       const timestamp = config.now?.() ?? new Date().toISOString();
-      const claimed = { intent, executed: true, timestamp, intent_hash: digest(intent).slice(7) };
+      // Its own id, so two identical calls stamped in the same millisecond count as two.
+      const claimed: CountableCall = { intent, executed: true, timestamp, intent_hash: digest(intent).slice(7), action_id: globalThis.crypto.randomUUID() };
       const verdict = violates(config.policy as never, history as never, claimed as never, { at: timestamp });
-
-      // The adapter's own decision: unknown tools, revisions and unbound resources.
-      const description = typed ? describeToolCall(typed, config.server, dispatched, await manifestVerified()) : undefined;
-      const adapterDeny = typed?.mode === "enforce" && description !== undefined && !description.allow;
-      let decision: "allow" | "deny" = verdict.violated || adapterDeny ? "deny" : "allow";
-
-      // The boundary, for a call policy has allowed. The exact request forwarded below is what an approval is bound to.
-      let boundary: DispatchDecision | undefined;
-      const guardTarget = `${config.server}/${String(intent.params.tool)}`;
-      const guardRequest = { server: config.server, method: "tools/call", params: dispatched.params ?? {} };
-      if (decision === "allow" && config.dispatch) {
-        const target = guardTarget;
-        const request = guardRequest;
-        // One transport request keeps one group, so a retry of it is not a second dispatch; a new invocation is.
-        const group = `mcp:${requestHash({ id: dispatched.id ?? null, request, session: config.dispatch.delegationId ?? null })}`;
-        try {
-          boundary = await config.dispatch.guard.authorize({
-            actor: config.principal.subject, action_group: dispatched.id === undefined || dispatched.id === null ? `mcp:${globalThis.crypto.randomUUID()}` : group,
-            policy_digest: digest(config.policy).slice(7), intents: [{ action_type: "mcp.tool.call", target, request }],
-            ...(config.dispatch.delegationId ? { delegation_id: config.dispatch.delegationId } : {}),
-          });
-        } catch (error) {
-          boundary = { allow: false, reason: "counter_unavailable", detail: (error as Error).message, consumed_approvals: [], budgets: [] };
-        }
-        if (!boundary.allow) decision = "deny";
-      }
-
-      const receipt = await buildPepReceipt(
-        { intent, policy: config.policy as never, principal: config.principal, realtimeResult: decision, now: config.now },
-        attester,
-      );
-      await config.onReceipt?.(receipt);
-
-      // The intent is recorded before dispatch, whatever the decision. Emission can never
-      // change the decision or fail the call.
-      const startedAt = nowMs();
-      const plainOperation = description?.operation ?? null;
-      const operation = plainOperation && config.dispatch?.binder
-        ? config.dispatch.binder.bindDispatched(plainOperation as Record<string, unknown>, { action_type: "mcp.tool.call", target: guardTarget, request: guardRequest }) : plainOperation;
-      if (typed?.sink && operation) { try { typed.sink.emit(intentDraft(operation, startedAt, receipt)); } catch { /* observations are best effort */ } }
-
-      if (decision === "deny") {
-        const why = verdict.violated ? (verdict.explanation || "out of policy")
-          : boundary && !boundary.allow ? `dispatch boundary: ${boundary.reason}${boundary.detail ? ` (${boundary.detail})` : ""}`
-          : `the typed adapter could not bind it (${description!.reasons.join("; ")})`;
-        return {
-          jsonrpc: "2.0",
-          id: message.id ?? null,
-          error: { code: -32000, message: `Scopebond policy denied ${intent.params.tool}: ${why}` },
-        };
-      }
-      // Authorized and about to be forwarded: record it so it counts toward the window.
-      history.push(claimed);
-      let exit: ExitCategory = "unknown";
+      // A call policy allows takes its place in the window in the same step as its verdict, before anything below awaits,
+      // so calls decided while it is still in flight (concurrent or pipelined requests) count it. A call that is then not
+      // forwarded gives its place back.
+      const held = !verdict.violated;
+      if (held) history.push(claimed);
+      let forwarded = false;
       try {
-        const response = await config.upstream.call(dispatched);
-        const result = response?.result as { isError?: unknown } | undefined;
-        exit = response?.error !== undefined || result?.isError === true ? "error" : "ok";
-        return response;
-      } catch (error) {
-        exit = "error";
-        throw error;
+        // The adapter's own decision: unknown tools, revisions and unbound resources.
+        const description = typed ? describeToolCall(typed, config.server, dispatched, await manifestVerified()) : undefined;
+        const adapterDeny = typed?.mode === "enforce" && description !== undefined && !description.allow;
+        let decision: "allow" | "deny" = verdict.violated || adapterDeny ? "deny" : "allow";
+
+        // The boundary, for a call policy has allowed. The exact request forwarded below is what an approval is bound to.
+        let boundary: DispatchDecision | undefined;
+        const guardTarget = `${config.server}/${intent.params.tool}`;
+        const guardRequest = { server: config.server, method: "tools/call", params: dispatched.params ?? {} };
+        if (decision === "allow" && config.dispatch) {
+          const target = guardTarget;
+          const request = guardRequest;
+          // One transport request keeps one group, so a retry of it is not a second dispatch; a new invocation is.
+          const group = `mcp:${requestHash({ id: dispatched.id ?? null, request, session: config.dispatch.delegationId ?? null })}`;
+          try {
+            boundary = await config.dispatch.guard.authorize({
+              actor: config.principal.subject, action_group: dispatched.id === undefined || dispatched.id === null ? `mcp:${globalThis.crypto.randomUUID()}` : group,
+              policy_digest: digest(config.policy).slice(7), intents: [{ action_type: "mcp.tool.call", target, request }],
+              ...(config.dispatch.delegationId ? { delegation_id: config.dispatch.delegationId } : {}),
+            });
+          } catch (error) {
+            boundary = { allow: false, reason: "counter_unavailable", detail: (error as Error).message, consumed_approvals: [], budgets: [] };
+          }
+          if (!boundary.allow) decision = "deny";
+        }
+
+        const receipt = await buildPepReceipt(
+          { intent, policy: config.policy as never, principal: config.principal, realtimeResult: decision, now: config.now },
+          attester,
+        );
+        await config.onReceipt?.(receipt);
+
+        // The intent is recorded before dispatch, whatever the decision. Emission can never
+        // change the decision or fail the call.
+        const startedAt = nowMs();
+        const plainOperation = description?.operation ?? null;
+        const operation = plainOperation && config.dispatch?.binder
+          ? config.dispatch.binder.bindDispatched(plainOperation, { action_type: "mcp.tool.call", target: guardTarget, request: guardRequest }) : plainOperation;
+        if (typed?.sink && operation) { try { typed.sink.emit(intentDraft(operation, startedAt, receipt)); } catch { /* observations are best effort */ } }
+
+        if (decision === "deny") {
+          const why = verdict.violated ? (verdict.explanation || "out of policy")
+            : boundary && !boundary.allow ? `dispatch boundary: ${boundary.reason}${boundary.detail ? ` (${boundary.detail})` : ""}`
+            : `the typed adapter could not bind it (${description!.reasons.join("; ")})`;
+          return {
+            jsonrpc: "2.0",
+            id: message.id ?? null,
+            error: { code: -32000, message: `Scopebond policy denied ${intent.params.tool}: ${why}` },
+          };
+        }
+        // Authorized and forwarded: it keeps its place in the window, whatever the upstream answers.
+        forwarded = true;
+        let exit: ExitCategory = "unknown";
+        try {
+          const response = await config.upstream.call(dispatched);
+          const result = response?.result as { isError?: unknown } | undefined;
+          exit = response?.error !== undefined || result?.isError === true ? "error" : "ok";
+          return response;
+        } catch (error) {
+          exit = "error";
+          throw error;
+        } finally {
+          if (typed?.sink && operation) { try { typed.sink.emit(outcomeDraft(operation, exit, config.adapterVersion ?? "unknown", nowMs(), startedAt, receipt)); } catch { /* best effort */ } }
+        }
       } finally {
-        if (typed?.sink && operation) { try { typed.sink.emit(outcomeDraft(operation, exit, config.adapterVersion ?? "unknown", nowMs(), startedAt, receipt)); } catch { /* best effort */ } }
+        if (held && !forwarded) {
+          const at = history.lastIndexOf(claimed);
+          if (at >= 0) history.splice(at, 1);
+        }
       }
     },
   };

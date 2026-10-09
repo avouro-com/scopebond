@@ -39,6 +39,8 @@
     "test:package": "node scripts/package-smoke.mjs",
     "test:examples": "node scripts/examples-smoke.mjs",
     "test:scripts": "node --test scripts/*.test.mjs",
+    "lint": "eslint .",
+    "knip": "knip",
     "gate": "node scripts/oss-gate.mjs --tree && node scripts/check-release-state.mjs",
     "gate:staged": "node scripts/oss-gate.mjs --staged",
     "check:release-state": "node scripts/check-release-state.mjs",
@@ -49,8 +51,39 @@
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@changesets/cli": "^3.0.3",
+    "@eslint/js": "^10.0.1",
+    "@microsoft/eslint-formatter-sarif": "^3.1.0",
     "@types/node": "^22.20.4",
-    "typescript": "^5.6.0"
+    "eslint": "^10.11.0",
+    "eslint-plugin-security": "^4.2.0",
+    "globals": "^17.13.0",
+    "knip": "^6.39.0",
+    "publint": "^0.3.25",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.71.0"
+  },
+  "knip": {
+    "$schema": "https://unpkg.com/knip@6/schema.json",
+    "workspaces": {
+      ".": {},
+      "packages/*": {},
+      "examples": {
+        "entry": [
+          "*.mjs"
+        ]
+      }
+    },
+    "ignoreDependencies": [
+      "@arethetypeswrong/cli",
+      "@microsoft/eslint-formatter-sarif",
+      "publint"
+    ],
+    "ignoreBinaries": [
+      "reg",
+      "icacls",
+      "msiexec"
+    ]
   }
 }

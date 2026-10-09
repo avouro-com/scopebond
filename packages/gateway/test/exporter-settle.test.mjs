@@ -98,7 +98,10 @@ test("a workspace asking to wait (429 with Retry-After) is not asked again soone
   ex.enqueue(receipt("action:wait-0001"));
   await ex.flush();
   ex.stop();
-  assert.equal(ex.status().nextAttemptAt, t + 120_000);
+  // Never sooner than asked; a random spread of at most a fifth of the wait keeps computers from coming back together.
+  const next = ex.status().nextAttemptAt;
+  assert.ok(next >= t + 120_000 && next <= t + 120_000 + 24_000, `next attempt ${next - t} ms after the refusal`);
+  assert.deepEqual(ex.status().backoff, { until: next, count: 1, retryAfterMs: 120_000 });
 });
 
 test("after the conflicting record is found, the rest of the queue goes in batches again", async () => {
@@ -122,7 +125,7 @@ test("records signed with a key the connection did not enroll are retried, never
   assert.equal(ex.status().pending, 1);
 });
 
-test("Retry-After as an HTTP date is measured against the exporter's clock, at most an hour", async () => {
+test("Retry-After as an HTTP date is measured against the exporter's clock, at most an hour (plus at most five minutes of spread)", async () => {
   let t = Date.parse("2026-10-05T10:00:00Z");
   for (const [header, wait] of [[new Date(t + 90_000).toUTCString(), 90_000], ["99999", 3_600_000]]) {
     const outbox = createMemoryCloudOutbox({ now: () => t });
@@ -133,7 +136,8 @@ test("Retry-After as an HTTP date is measured against the exporter's clock, at m
     ex.enqueue(receipt(`action:date-${wait}`));
     await ex.flush();
     ex.stop();
-    assert.equal(ex.status().nextAttemptAt, t + wait);
+    const next = ex.status().nextAttemptAt;
+    assert.ok(next >= t + wait && next <= t + wait + Math.min(wait / 5, 300_000), `next attempt ${next - t} ms after the refusal`);
   }
 });
 

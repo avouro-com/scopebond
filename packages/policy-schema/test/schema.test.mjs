@@ -68,7 +68,8 @@ test("canonical serialization matches the shared vectors", () => {
     assert.equal(canonical(vector.value), vector.canonical, vector.name);
   }
   assert.throws(() => canonical({ missing: undefined }), /undefined/);
-  assert.throws(() => canonical([, 1]), /sparse/);
+  const holey = []; holey[1] = 1; // a sparse array: index 0 is a hole
+  assert.throws(() => canonical(holey), /sparse/);
   assert.throws(() => canonical({ invalid: Number.NaN }), /non-finite/);
   // RFC 8785 canonicalizes valid Unicode; a lone surrogate is malformed and must be
   // refused, not silently escaped into a signable string (N-034).

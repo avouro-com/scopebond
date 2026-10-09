@@ -24,7 +24,7 @@ function run({ paths, sha = HEAD, login = "copilot-swe-agent[bot]", env = {} }) 
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policy));
   writeFileSync(join(dir, "paths.txt"), paths.join("\n"));
   const out = join(dir, "evidence.json");
-  let status = 0; let stdout = "";
+  let status = 0; let stdout;
   try {
     stdout = execFileSync(process.execPath, [cli, "--event", join(dir, "event.json"), "--policy", join(dir, "policy.json"), "--paths-file", join(dir, "paths.txt"), "--policy-source", "workspace", "--evidence-out", out], {
       encoding: "utf8", env: { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_OUTPUT: "", GITHUB_EVENT_PATH: "", GITHUB_RUN_ID: "555", GITHUB_RUN_ATTEMPT: "2", GITHUB_WORKFLOW: "policy", GITHUB_SHA: "f".repeat(40), RUNNER_ENVIRONMENT: "github-hosted", ...env },

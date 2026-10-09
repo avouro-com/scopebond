@@ -26,7 +26,7 @@ const VARIANTS = {
     opt: { destination_approval_ref: ID, redirect_binding: ID, source_classified_id: ID },
     refine: (o) => {
       const host = String(o.host);
-      if (host !== host.toLowerCase() || /[^a-z0-9.\-]/.test(host) || host.startsWith(".") || host.endsWith(".") || host.includes("..")) return "host";
+      if (host !== host.toLowerCase() || /[^a-z0-9.-]/.test(host) || host.startsWith(".") || host.endsWith(".") || host.includes("..")) return "host";
       if (o.net_operation === "read" && !["GET", "HEAD", "OPTIONS"].includes(o.method)) return "read method";
       if (o.net_operation === "upload" && !["POST", "PUT", "PATCH"].includes(o.method)) return "upload method";
       return null;
@@ -62,7 +62,8 @@ export function operationProblem(op) {
   if (!op || typeof op !== "object") return "not an object";
   const variant = VARIANTS[op.type];
   if (!variant) return `unknown type ${op.type}`;
-  const { type, ...rest } = op;
+  const rest = { ...op };
+  delete rest.type;
   const shape = { ...COMMON, ...variant.req };
   // Optional on every variant: the hash the dispatch guard consumes an approval with.
   if ("approval_request_hash" in rest && !HEX64(rest.approval_request_hash)) return "field approval_request_hash invalid";

@@ -1,5 +1,34 @@
 # @scopebond/mcp
 
+## 2.0.11
+
+### Patch Changes
+
+- 786cc61: Rate limits, sequence gaps and spend windows now hold for tool calls that arrive together (parallel or pipelined requests), and identical calls in the same millisecond count separately. A method that spells `tools/call` or `tools/list` another way is refused instead of passed through.
+- aaa031e: Keys, the Cloud credential, chain heads and the receipt and dispatch databases (with the journal files SQLite keeps beside them) are readable by their owner alone from their first byte, on Windows and POSIX, also in a folder other local users can open; a credential write replaces a file or link at its name instead of writing through it, and processes that create a key at the same moment now agree on one key.
+  
+  Upgrading: the hook's and the agent's folder is made readable by its owner alone on their next run, files an older version left there included. A self-hosted gateway or MCP proxy restricts its existing key files, credential file and databases the next time it opens them.
+- 4f79b89: Programs started by name are no longer looked up in the current folder, which Windows otherwise searches before PATH: `git`, `npm` and an MCP upstream named without a folder come from the absolute folders on PATH, and Windows' own tools (`icacls`, `reg`, `powershell`, `cmd`, `conhost`, `explorer`) from the system folder. A `git.exe` or similar placed in a project, or in a pull request's checkout, is no longer run by the hook, the agent, the MCP proxy or the pull request check; a program that cannot be found that way is not started. `@scopebond/gateway/node` exports the lookup as `findProgram`, `programPath` and `windowsSystemProgram`.
+- Updated dependencies [7529bc5]
+- Updated dependencies [da85dd4]
+- Updated dependencies [0929cac]
+- Updated dependencies [aaa031e]
+- Updated dependencies [8d94b55]
+- Updated dependencies [4f79b89]
+  - @scopebond/verify@0.6.4
+  - @scopebond/gateway@0.17.6
+  - @scopebond/policy-schema@0.7.2
+
+## 2.0.10
+
+### Patch Changes
+
+- a17f73b: A `tools/call` whose tool name is an object with its own `toString` key is decided instead of failing with an error, a failed reply write can no longer surface as an unhandled rejection in the stdio proxy, and `mapMcpToolCall` returns precisely typed params.
+- Updated dependencies [611d02c]
+- Updated dependencies [a17f73b]
+  - @scopebond/gateway@0.17.5
+  - @scopebond/verify@0.6.3
+
 ## 2.0.9
 
 ### Patch Changes

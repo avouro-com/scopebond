@@ -14,6 +14,7 @@ import {
   absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isScopebondHookCommand, isSingleExecutable,
   nativeHookCommand, userHarnessFile, writeHarnessConfig, type Harness, type HookConnection,
 } from "@scopebond/hook";
+import { findProgram, windowsSystemProgram } from "@scopebond/gateway/node";
 import { agentCliPath } from "./self.js";
 
 /** x.y.z with no leading zeros, no tags, and each part of a sane size. */
@@ -130,6 +131,16 @@ export function ownNpm(): [string, string[]] | null {
   return existsSync(cli) ? [process.execPath, [cli]] : null;
 }
 
+/** npm on PATH, for a Node without its own: by its full path from PATH's absolute folders, never the current folder (which
+ *  a spawn by bare name searches first on Windows). On Windows it is a .cmd, which starts only through a shell: the
+ *  system folder's cmd.exe, with the path and each argument quoted. Null when there is none. */
+export function npmOnPath(args: string[], env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): { program: string; args: string[]; shell: string | false } | null {
+  const win = platform === "win32";
+  const npm = findProgram(win ? "npm.cmd" : "npm", { env, platform });
+  if (!npm) return null;
+  return win ? { program: `"${npm}"`, args: args.map((a) => `"${a}"`), shell: windowsSystemProgram("cmd") } : { program: npm, args, shell: false };
+}
+
 /** Bring the user-level Scopebond hook entries to the hook this agent carries, and repair any that cannot start. Under
  *  "recommended" (`moveVersions`) an entry naming an older hook, or any `npx` entry, is pinned to the carried hook; under
  *  "hold" only broken entries and `npx` entries that name no version or the carried one are (their version does not
@@ -216,13 +227,14 @@ export async function installAgent(version: string, o: { timeoutMs?: number; fet
   }
   const timeoutMs = o.timeoutMs ?? 5 * 60_000;
   return new Promise((resolve) => {
-    const win = process.platform === "win32";
     const args = npmInstallArgs(`@scopebond/agent@${version}`);
     const env = npmEnvironment();
     // This Node's own npm when it can be found; otherwise npm on PATH (a .cmd on Windows, which Node only
     // starts through a shell; the arguments are fixed and the version is validated).
     const own = ownNpm();
-    const child = own ? spawn(own[0], [...own[1], ...args], { windowsHide: true, env }) : spawn(win ? "npm.cmd" : "npm", args, { shell: win, windowsHide: true, env });
+    const run = own ? { program: own[0], args: [...own[1], ...args], shell: false as const } : npmOnPath(args, env);
+    if (!run) { resolve({ ok: false, output: "npm was not found in a folder on PATH" }); return; }
+    const child = spawn(run.program, run.args, { shell: run.shell, windowsHide: true, env });
     let output = "";
     child.stdout?.on("data", (d) => { output += d; });
     child.stderr?.on("data", (d) => { output += d; });

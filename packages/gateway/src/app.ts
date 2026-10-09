@@ -16,7 +16,7 @@ import {
 } from "./receipts.js";
 import type {
   Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
-  AuthorityFinalState, ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord,
+  ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord,
 } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleProof } from "./anchor.js";
@@ -41,7 +41,9 @@ export interface Executor {
   mode?: "simulation" | "dispatch";
   /** Integration-specific structural validation before authorization/reservation. */
   validate?(intent: Intent): void;
-  execute(intent: Intent, context: { actionId: string }): ExecutionResult | Promise<ExecutionResult>;
+  /** `context.policy` is the policy the action was decided under. Throw `ExecutorInputError` only before anything has been
+   *  sent: the action is then recorded as failed, not as an unknown outcome. */
+  execute(intent: Intent, context: { actionId: string; policy?: Policy }): ExecutionResult | Promise<ExecutionResult>;
   /** Query a prior dispatch by its durable idempotency key. It must never create an effect. */
   query?(context: { actionId: string }): ExecutionQueryResult | Promise<ExecutionQueryResult>;
 }
@@ -107,6 +109,7 @@ export class ReconciliationUnavailableError extends Error {
   constructor(message: string) { super(message); this.name = "ReconciliationUnavailableError"; }
 }
 
+/** An executor refused an action's input: from `validate()`, or from `execute()` before anything was sent. */
 export class ExecutorInputError extends Error {
   readonly status = 400 as const;
   constructor(message: string) { super(message); this.name = "ExecutorInputError"; }
@@ -175,7 +178,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     return state.killed;
   }
 
-  async function setStopped(target: "global" | string, stopped: boolean): Promise<void> {
+  async function setStopped(target: string, stopped: boolean): Promise<void> {
     if (store.setStopped) await store.setStopped(target, stopped);
     if (target === "global") state.killed = stopped;
   }
@@ -366,7 +369,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     // switch and before any executor, and it answers with everything it spent or nothing at all.
     let guardDenied: string | null = null;
     if (d.allow && config.dispatchGuard && !(await isStopped(req.intent.signer))) {
-      const group = (req.intent.params as Record<string, unknown> | undefined)?.action_group;
+      const group = (req.intent.params)?.action_group;
       let verdict;
       try {
         verdict = await config.dispatchGuard.authorize({
@@ -396,7 +399,7 @@ export function createGateway(config: GatewayConfig): Gateway {
         executionState = "cooperative_allow";
         assertion = "none";
       } else if (executor.mode === "simulation") {
-        const result = await executor.execute(req.intent, { actionId });
+        const result = await executor.execute(req.intent, { actionId, policy: activePolicy });
         ref = result.ref;
         output = result.output;
         executionState = "simulated";
@@ -408,13 +411,16 @@ export function createGateway(config: GatewayConfig): Gateway {
         }, attester);
         await store.prepareDispatch(actionId, pendingReceipt, executor.id ?? "scopebond:unidentified-dispatch-adapter");
         try {
-          const result = await executor.execute(req.intent, { actionId });
+          const result = await executor.execute(req.intent, { actionId, policy: activePolicy });
           ref = result.ref;
           output = result.output;
           executionState = "executed";
           assertion = "adapter_reported_success";
         } catch (error) {
-          const resolution = await queryAfterDispatchError(actionId, error);
+          // An executor that refused its input sent nothing: the action failed, its outcome is not unknown.
+          const resolution: ExecutionQueryResult = error instanceof ExecutorInputError
+            ? { state: "failed", ref: `error:sha256:${sha256(`${error.name}:${error.message}`)}` }
+            : await queryAfterDispatchError(actionId, error);
           ref = resolution.ref ?? null;
           output = "output" in resolution ? resolution.output : undefined;
           executionState = resolution.state;
@@ -429,7 +435,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       ...receiptFields(finalResult, executionState, assertion, ref),
       ...(override && finalResult === "approved" ? { override } : {}),
     }, attester);
-    const finalState = executionState as AuthorityFinalState;
+    const finalState = executionState;
     if (store.finalizeAction && store.reserveAction) await store.finalizeAction(actionId, receipt, finalState);
     else await store.put(receipt);
 
@@ -579,7 +585,7 @@ export function createGateway(config: GatewayConfig): Gateway {
   // Ed25519-signed by the attester. Before signing, the log is checked against
   // the previous anchor so a rewritten or reordered prefix is never re-anchored.
   async function anchor(): Promise<AnchorV2> {
-    const receipts = (await store.list()) as SignedReceipt[];
+    const receipts = (await store.list());
     const payloads = receipts.map((r) => r.payload);
     const leaves = await Promise.all(payloads.map(receiptLeafHash));
     const prior = (await store.anchors?.()) ?? [];
@@ -709,7 +715,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     const target = await findAnchor(c.req.query("anchor_seq"));
     if (!target) return c.json({ error: "anchor not found — POST /v1/anchor first" }, 404);
     const size = isAnchorV2(target) ? target.tree_size : target.count;
-    const receipts = ((await store.list()) as SignedReceipt[]).slice(0, size);
+    const receipts = ((await store.list())).slice(0, size);
     const wantLeaf = c.req.query("leaf");
     const wantIntent = c.req.query("intent_hash");
     if (isAnchorV2(target)) {
@@ -744,7 +750,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     if (!first || !second) return c.json({ error: "anchor not found" }, 404);
     if (!isAnchorV2(first) || !isAnchorV2(second)) return c.json({ error: "consistency proofs require v2 anchors" }, 400);
     if (first.tree_size > second.tree_size) return c.json({ error: "from must not be larger than to" }, 400);
-    const receipts = ((await store.list()) as SignedReceipt[]).slice(0, second.tree_size);
+    const receipts = ((await store.list())).slice(0, second.tree_size);
     if (receipts.length < second.tree_size) return c.json({ error: "receipt log is shorter than the anchor" }, 409);
     const leaves = await Promise.all(receipts.map(leafOf));
     const proof = await consistencyProof(leaves, first.tree_size);

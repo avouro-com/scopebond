@@ -16,11 +16,10 @@
 // `rules.test.mjs` asserts that against `starterPolicy()`, so a change here cannot
 // quietly alter what is enforced.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
-import { createExclusive } from "./safe-fs.js";
+import { createExclusive, replaceFile } from "./safe-fs.js";
 
 /** One protected location. `under`/`named`/`dir` are the readable, editable shapes;
  *  `raw` carries the few patterns with bespoke exceptions (`.env` templates are allowed,
@@ -268,7 +267,7 @@ export function loadRules(configDir: string): RuleSet | null {
 export function saveRules(configDir: string, rules: RuleSet): string {
   const file = rulesPath(configDir);
   forgetCached(file);
-  writeFileSync(file, `${JSON.stringify(rules, null, 2)}\n`);
+  replaceFile(file, `${JSON.stringify(rules, null, 2)}\n`);
   return file;
 }
 
@@ -285,6 +284,7 @@ export function createRules(configDir: string, rules: RuleSet): boolean {
  *  kind of location it was. */
 export function pathRuleMatches(rule: PathRule, path: string): boolean {
   if (path === "") return false;
+  // eslint-disable-next-line security/detect-non-literal-regexp -- the rule's own policy pattern, exactly as the compiled policy evaluates it: a typed path is escaped by escapeRegex, a raw pattern is the rule file's own
   return !new RegExp(`^${pathPattern(rule)}.+`).test(path);
 }
 

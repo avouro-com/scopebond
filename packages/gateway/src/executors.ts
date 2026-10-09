@@ -5,34 +5,73 @@
 import { createHash } from "node:crypto";
 import { ExecutorInputError } from "./app.js";
 import type { Executor, ExecutionQueryResult } from "./app.js";
-import type { Intent } from "@scopebond/verify";
-import { bareHost } from "@scopebond/verify";
+import type { Intent, Policy, EndpointDestination } from "@scopebond/verify";
+import { endpointDestination, endpointDenylistClauses } from "@scopebond/verify";
+
+/** The addresses a host name resolves to, as `dns.promises.lookup(name, { all: true })` returns them. */
+export type HostLookup = (hostname: string) => Promise<ReadonlyArray<{ address: string; family: number }>>;
 
 export interface HttpExecutorOptions {
   /** Injectable fetch (defaults to global fetch) — makes forwarding testable. */
   fetch?: typeof fetch;
   /** URL scheme for forwarded calls (default https). */
   scheme?: "http" | "https";
+  /** Resolves a host name before the request is sent (default: the system resolver, every address). Used when the policy's
+   *  endpoint_denylist lists an address, so that a name resolving to a denied address is refused. */
+  lookup?: HostLookup;
+}
+
+const systemLookup: HostLookup = async (hostname) => (await import("node:dns")).promises.lookup(hostname, { all: true });
+
+// Whether a denylist clause lists an address (or a loopback name), which a resolved address can match.
+const listsAddress = (clause: Record<string, unknown>): boolean => Array.isArray(clause.hosts) && clause.hosts.some((h) => {
+  const entry = endpointDestination(h);
+  return entry !== null && (entry.address || entry.loopback);
+});
+
+/** Refuse a call whose host name resolves to an address an enforced endpoint_denylist clause denies. The policy decided the
+ *  name as written; a clause it already applied (and a person may have overridden) is not applied again. */
+async function refuseDeniedAddresses(policy: Policy, params: Record<string, unknown>, dest: EndpointDestination, lookup: HostLookup): Promise<void> {
+  if (dest.address) return; // an address was decided as itself
+  const decided = new Set(endpointDenylistClauses(policy, params).map((c) => c.id));
+  const enforced = (c: { id: string; mode?: string }): boolean => c.mode !== "monitor" && !decided.has(c.id);
+  if (!(policy.clauses ?? []).some((c) => c.type === "endpoint_denylist" && enforced(c) && listsAddress(c))) return;
+  const addresses = await lookup(dest.host);
+  if (addresses.length === 0) throw new Error(`http.call host ${dest.host} did not resolve`);
+  for (const { address } of addresses) {
+    const literal = address.includes(":") ? `[${address}]` : address;
+    const host = dest.port === null ? literal : `${literal}:${dest.port}`;
+    const denied = endpointDenylistClauses(policy, { ...params, host }).find(enforced);
+    if (denied) throw new ExecutorInputError(`http.call host ${dest.host} resolves to ${address}, which endpoint_denylist clause ${denied.id} denies`);
+  }
 }
 
 export function createHttpExecutor(opts: HttpExecutorOptions = {}): Executor {
   const f = opts.fetch ?? fetch;
   const scheme = opts.scheme ?? "https";
+  const defaultPort = scheme === "https" ? 443 : 80;
+  const lookup = opts.lookup ?? systemLookup;
   return {
     id: "scopebond:http-call",
     mode: "dispatch",
-    async execute(intent: Intent) {
-      const p = (intent.params ?? {}) as Record<string, any>;
+    async execute(intent: Intent, context?: { actionId: string; policy?: Policy }) {
+      const p: Record<string, unknown> = intent.params ?? {};
       if (!p.host) return { ref: "noop:non-http-action" };
-      // The request goes only to the host the policy checked: a bare host, a path from the root, parsed as a URL and compared
-      // again. Concatenating strings let a path such as "@other.example/x" or ".other.example/x" reach another host.
-      const host = bareHost(p.host);
+      // The request goes only to the destination the policy checked: a bare host, a path from the root, parsed as a URL and
+      // compared again. Concatenating strings let a path such as "@other.example/x" or ".other.example/x" reach another host.
+      const dest = endpointDestination(p.host);
       const path = p.path ?? "/";
-      if (host === null) throw new ExecutorInputError("http.call host must be a bare host name or address");
+      if (dest === null) throw new ExecutorInputError("http.call host must be a bare host name or address");
       if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) throw new ExecutorInputError("http.call path must start with a single /");
-      const url = new URL(path, `${scheme}://${host}`);
-      if (url.host !== host || url.username || url.password) throw new ExecutorInputError("http.call would reach another host than the one checked");
-      const res = await f(url.href, { method: p.method ?? "GET", headers: p.headers, body: p.body, redirect: "error" });
+      const url = new URL(path, `${scheme}://${dest.port === null ? dest.host : `${dest.host}:${dest.port}`}`);
+      if (url.hostname !== dest.host || (url.port === "" ? defaultPort : Number(url.port)) !== (dest.port ?? defaultPort) || url.username || url.password) {
+        throw new ExecutorInputError("http.call would reach another host than the one checked");
+      }
+      // The policy decided the host as written; a name is also checked by the addresses it resolves to now.
+      if (context?.policy) await refuseDeniedAddresses(context.policy, p, dest, lookup);
+      // Method, headers and body pass through as the intent gave them; fetch refuses ones it cannot send.
+      const init = { method: (p.method ?? "GET") as string, headers: p.headers as HeadersInit | undefined, body: p.body as BodyInit | null | undefined };
+      const res = await f(url.href, { ...init, redirect: "error" });
       const text = await res.text();
       const digest = createHash("sha256").update(text).digest("hex");
       return { ref: `http:${res.status}:sha256:${digest.slice(0, 16)}` };

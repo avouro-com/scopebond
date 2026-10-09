@@ -2,10 +2,10 @@
 // lives in the core with an in-memory implementation; these are durable local
 // implementations for the Node server. On Cloudflare, D1/KV are the edge ones.)
 
-import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } from "node:fs";
+import { appendFileSync, closeSync, constants as fsConstants, readFileSync, existsSync, mkdirSync, openSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
-import { restrictToOwner } from "./node-permissions.js";
+import { keepOwnerOnly, placeOwnerOnly, prepareOwnerOnlyDatabase } from "./node-files.js";
 
 /** `node:sqlite` from Node's built-ins (a bundled build cannot resolve it through a module path), else by require. */
 function nodeSqlite(): unknown {
@@ -38,7 +38,7 @@ function readJsonl<T>(file: string): T[] {
     try { items.push(JSON.parse(t) as T); }
     catch (error) {
       const isLast = lines.slice(i + 1).every((rest) => !rest.trim());
-      if (!isLast || text.endsWith("\n")) throw new Error(`${file}: corrupt record on line ${i + 1}: ${(error as Error).message}`);
+      if (!isLast || text.endsWith("\n")) throw new Error(`${file}: corrupt record on line ${i + 1}: ${(error as Error).message}`, { cause: error });
       torn = true;
     }
   }
@@ -55,10 +55,10 @@ type SqliteDb = { exec(sql: string): void; prepare(sql: string): { run(...a: unk
 function openSqlite(path: string, fresh?: string, busyTimeoutMs = 15_000): SqliteDb {
   ensureDir(path);
   const { DatabaseSync } = nodeSqlite() as { DatabaseSync: new (p: string) => SqliteDb };
-  const created = !existsSync(path);
+  // The database and its journal files hold signed evidence: readable by their owner alone from their first byte, and
+  // restricted when an older version made them (on Windows a new file would inherit its folder's ACL).
+  prepareOwnerOnlyDatabase(path);
   const db = new DatabaseSync(path);
-  // A new database holds signed evidence: readable by its owner alone (on Windows the inherited access list is replaced).
-  if (created) restrictToOwner(path);
   try {
     db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))};`);
     // Page size and vacuum mode are fixed once a file is in WAL mode, so a new file gets them first.
@@ -103,6 +103,8 @@ export class FileReceiptStore implements ReceiptStore {
     ensureDir(file);
     this.anchorFile = file + ".anchors";
     this.stopFile = file + ".stops";
+    // Logs an older version made are restricted to their owner when opened.
+    for (const log of [file, this.anchorFile, this.stopFile]) if (existsSync(log)) keepOwnerOnly(log);
     if (existsSync(file)) this.cache.push(...readJsonl<SignedReceipt>(file));
     if (existsSync(this.anchorFile)) this.anchorLog.push(...readJsonl<Anchor>(this.anchorFile));
     if (existsSync(this.stopFile)) {
@@ -112,16 +114,18 @@ export class FileReceiptStore implements ReceiptStore {
     }
   }
   private append(file: string, line: string): void {
-    // Create the log exclusively when it is new ("ax"), else append: the create itself says whether this call made it.
-    let fresh = true;
-    try { appendFileSync(file, line + "\n", { mode: 0o600, flag: "ax" }); }
+    // Appended to the log when it exists (opened without create). A new log holds signed evidence: it is created
+    // exclusively with its first record, readable by its owner alone from its first byte; if another process created it
+    // first, the record is appended to that one.
+    const appendTo = (): number => openSync(file, fsConstants.O_WRONLY | fsConstants.O_APPEND);
+    let fd: number;
+    try { fd = appendTo(); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      fresh = false;
-      appendFileSync(file, line + "\n", { mode: 0o600, flag: "a" });
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (placeOwnerOnly(file, line + "\n", true)) return;
+      fd = appendTo();
     }
-    // A new log holds signed evidence: readable by its owner alone (on Windows the mode is ignored).
-    if (fresh) restrictToOwner(file);
+    try { appendFileSync(fd, line + "\n"); } finally { closeSync(fd); }
   }
   put(r: SignedReceipt): void {
     const serialized = JSON.stringify(r);
@@ -138,7 +142,7 @@ export class FileReceiptStore implements ReceiptStore {
   putAnchor(a: Anchor): void { this.append(this.anchorFile, JSON.stringify(a)); this.anchorLog.push(a); }
   anchors(): Anchor[] { return this.anchorLog.slice(); }
   getStopState(): StopState { return { global: this.stops.has("global"), agents: [...this.stops].filter((key) => key !== "global") }; }
-  setStopped(target: "global" | string, stopped: boolean): void {
+  setStopped(target: string, stopped: boolean): void {
     this.append(this.stopFile, JSON.stringify({ target, stopped }));
     if (stopped) this.stops.add(target); else this.stops.delete(target);
   }
@@ -360,7 +364,8 @@ export class SqliteReceiptStore implements ReceiptStore {
       }
       const realtimeResult = "realtime_result" in decision ? decision.realtime_result as RealtimeResult : null;
       // The candidate, policy reference and policy are already in `authority_actions`; the lifecycle row keeps the rest.
-      const { candidate: _candidate, policy_ref: _ref, policy_snapshot: _snapshot, ...rest } = reservation;
+      const rest: Partial<AuthorityReservation> = { ...reservation };
+      delete rest.candidate; delete rest.policy_ref; delete rest.policy_snapshot;
       this.db.prepare(
         `INSERT INTO authority_lifecycle (action_id,reservation_json,realtime_result) VALUES (?,?,?)`,
       ).run(reservation.action_id, JSON.stringify({ ...rest, [SLIM_RESERVATION]: 1 }), realtimeResult);
@@ -471,7 +476,7 @@ export class SqliteReceiptStore implements ReceiptStore {
     const targets = rows.map((row) => row.target);
     return { global: targets.includes("global"), agents: targets.filter((target) => target !== "global") };
   }
-  setStopped(target: "global" | string, stopped: boolean): void {
+  setStopped(target: string, stopped: boolean): void {
     this.db.prepare(
       `INSERT INTO gateway_stops (target, stopped) VALUES (?, ?) ON CONFLICT(target) DO UPDATE SET stopped = excluded.stopped`,
     ).run(target, stopped ? 1 : 0);
@@ -750,8 +755,9 @@ function rowToLifecycle(row: LifecycleRow, policyText: (stored: string) => strin
   else {
     const stored = JSON.parse(row.reservation_json) as AuthorityReservation & Record<string, unknown>;
     if (stored[SLIM_RESERVATION]) {
-      const { [SLIM_RESERVATION]: _slim, ...rest } = stored;
-      reservation = { ...(rest as Partial<AuthorityReservation>), ...fromAction() } as AuthorityReservation;
+      const rest: Record<string, unknown> = { ...stored };
+      delete rest[SLIM_RESERVATION];
+      reservation = { ...(rest as Partial<AuthorityReservation>), ...fromAction() };
     } else reservation = stored;
   }
   const terminal = row.terminal_receipt_json ? JSON.parse(row.terminal_receipt_json) as SignedReceipt : null;

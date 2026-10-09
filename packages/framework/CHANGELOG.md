@@ -1,5 +1,28 @@
 # @scopebond/framework
 
+## 0.3.15
+
+### Patch Changes
+
+- a6904aa: Drop the unused direct dependency on `@scopebond/policy-schema`. The framework never imports it; it still arrives through `@scopebond/gateway`.
+- Updated dependencies [7529bc5]
+- Updated dependencies [da85dd4]
+- Updated dependencies [0929cac]
+- Updated dependencies [aaa031e]
+- Updated dependencies [8d94b55]
+- Updated dependencies [4f79b89]
+  - @scopebond/gateway@0.17.6
+
+## 0.3.14
+
+### Patch Changes
+
+- 611d02c: Lint clean-ups in the tool adapters that change no behaviour.
+- Updated dependencies [611d02c]
+- Updated dependencies [a17f73b]
+  - @scopebond/gateway@0.17.5
+  - @scopebond/sdk@0.1.7
+
 ## 0.3.13
 
 ### Patch Changes

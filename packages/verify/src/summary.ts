@@ -16,6 +16,7 @@
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { merkleTreeHash, receiptLeafHash } from "./anchor.js";
 import { deriveKeyId, importEd25519PublicKey, SUPPORTED_ATTESTER_KINDS, SUPPORTED_SIGNATURE_ALGS, type SignatureVerification } from "./signature.js";
+import { jsonText } from "./text.js";
 import type { ValidationResult } from "./validate.js";
 
 export const SUMMARY_TYPE = "scopebond:summary" as const;
@@ -53,6 +54,7 @@ const onlyKeys = (o: Obj, keys: readonly string[]) => Object.keys(o).every((k) =
 const hasKeys = (o: Obj, keys: readonly string[]) => keys.every((k) => Object.prototype.hasOwnProperty.call(o, k));
 const isInt = (v: unknown, min: number, max: number) => typeof v === "number" && Number.isSafeInteger(v) && v >= min && v <= max;
 const isText = (v: unknown, min: number, max: number) => typeof v === "string" && v.length >= min && v.length <= max;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear (the only optional group is a fraction closed by Z or an offset) and run only on strings of at most 40 characters
 const isTime = (v: unknown) => typeof v === "string" && v.length <= 40 && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v));
 
 const PAYLOAD_KEYS = ["type", "version", "canonicalization", "evidence_class", "summary_id", "attester", "session_id", "harness", "window",
@@ -144,7 +146,7 @@ export async function verifySummarySignature(record: unknown, publicKey: string 
 export function summaryOrder<T>(receiptPayloads: readonly T[]): T[] {
   const key = (p: unknown) => {
     const x = (p ?? {}) as { timestamp?: unknown; action_ref?: { action_id?: unknown } };
-    return [String(x.timestamp ?? ""), String(x.action_ref?.action_id ?? ""), canonical(p)] as const;
+    return [jsonText(x.timestamp ?? ""), jsonText(x.action_ref?.action_id ?? ""), canonical(p)] as const;
   };
   return [...receiptPayloads].map((p) => ({ p, k: key(p) }))
     .sort((a, b) => (a.k[0] < b.k[0] ? -1 : a.k[0] > b.k[0] ? 1 : a.k[1] < b.k[1] ? -1 : a.k[1] > b.k[1] ? 1 : a.k[2] < b.k[2] ? -1 : a.k[2] > b.k[2] ? 1 : 0))
@@ -185,7 +187,7 @@ export async function verifySummaryCoverage(record: unknown, receipts: ReadonlyA
     for (const [type, result, n] of rows) m.set(`${type}\u0000${result}`, (m.get(`${type}\u0000${result}`) ?? 0) + n);
     return [...m.entries()].sort().map(([k, v]) => `${k}=${v}`).join("\n");
   };
-  out.totals_valid = totals(payloads.map((x) => [String((x!.intent as Obj | undefined)?.action_type ?? ""), String(x!.realtime_result), 1]))
+  out.totals_valid = totals(payloads.map((x) => [jsonText((x!.intent as Obj | undefined)?.action_type ?? ""), String(x!.realtime_result), 1]))
     === totals(p.counts.map((c) => [c.action_type, c.result, c.count]));
   out.valid = out.count_valid && out.root_valid && out.window_valid && out.routine_only && out.totals_valid;
   return out;

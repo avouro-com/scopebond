@@ -12,6 +12,9 @@ name: Native release (signed)
 #   release    a draft GitHub release with the signed files, for a person to check and publish
 #
 # Run by hand from main: Actions → Native release (signed) → Run workflow.
+#
+# A pull request that touches this workflow, packages/native or packages/tray runs the `build` job alone (no secrets,
+# no `signing`): a build or "Check it runs" step that would break the release fails on the pull request instead.
 
 on:
   workflow_dispatch:
@@ -20,12 +23,18 @@ on:
         description: "Create a draft GitHub release with the signed files"
         type: boolean
         default: true
+  pull_request:
+    paths:
+      - .github/workflows/native-release.yml
+      - packages/native/**
+      - packages/tray/**
 
 permissions: {}
 
 concurrency:
-  group: native-release
-  cancel-in-progress: false
+  # One release at a time from main; a pull request's build is its own group, replaced by the next push.
+  group: native-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -52,8 +61,11 @@ jobs:
         shell: pwsh
         run: |
           $exe = "packages/native/build/scopebond-agent.exe"
-          & $exe hook help | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0) { throw "the executable did not run" }
+          # Read all of the output first: `| Select-Object -First 1` stops the program after one line, and its exit code
+          # is then -1 however it ran.
+          $out = & $exe hook help
+          if ($LASTEXITCODE -ne 0) { throw "the executable did not run (exit $LASTEXITCODE)" }
+          $out | Select-Object -First 1
       # The native tray (Rust, Tauri 2), from its committed Cargo.lock, with no cache: a release build starts from the
       # lockfile alone.
       - name: Rust toolchain (packages/tray/rust-toolchain.toml)
@@ -360,7 +372,7 @@ jobs:
   release:
     name: draft release
     needs: [build, sign-installer]
-    if: inputs.release
+    if: github.event_name == 'workflow_dispatch' && inputs.release
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the draft release and upload the signed files to it

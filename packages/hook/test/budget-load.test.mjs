@@ -218,7 +218,8 @@ test("the export's agent_kid must be this machine's agent key: a match loads as 
   {
     const server = await startServer();
     const home = makeHome({ url: server.url });
-    const { agent_kid, ...old } = goldenExport();
+    const old = goldenExport();
+    delete old.agent_kid;
     const missing = await run(home.dir, ["budget", "load", writeExport(home.dir, old), "--yes"]);
     assert.equal(missing.status, 1);
     assert.match(missing.stderr, /agent_kid is missing/);

@@ -1,5 +1,71 @@
 # @scopebond/hook
 
+## 0.21.9
+
+### Patch Changes
+
+- cbfe241: The always-on protection no longer refuses ordinary work. It now counts a coding agent as started with its config folder moved only when the agent is actually launched with or after the variable change, not when its name appears in a commit message or argument. It protects agent settings folders only where they belong to this project or this home folder: a vendored or temporary `.git`, a test fixture's `.claude`, brace-listed build folders, filtered deletes and a `git clean -x` that cannot reach Scopebond's folder are allowed again. Git configuration is read from the environment only through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_PARAMETERS`, so a redirected `HOME` or config file no longer turns a feature-branch push, `git lfs` or `git flow` into an unknown push.
+
+## 0.21.8
+
+### Patch Changes
+
+- 7529bc5: A chain that went back is now reported even when the workspace stamps the lower head at or before a higher one it already handed out. The Cloud exporter hands `onChainHead` this computer's own delivery times (`{ sentAt, receivedAt }`), the chain-heads store keeps them beside each head (`local: { sent_at, received_at }`) and drops anything else the workspace put beside its signed head, and `checkChainHeads` also compares kept heads in the order this computer sent its deliveries, which the workspace cannot choose. `verifyAnchorList`, `verifyChainHeadSignature`, `checkChainHeads` and `verifySegmentChain` never throw on hostile input (a record that is not an object, text that is not well-formed Unicode, a key that is not a key), and `scopebond verify --anchor` reports such a list or segment as a problem instead of crashing.
+- da85dd4: Delivery no longer stalls behind a record the workspace will never accept, and it honours a workspace that asks a computer to wait. A record over the workspace's size limit (one long URL or one large tool argument) used to be re-sent at the head of every batch and hold every newer record back for good; now large records travel alone, a batch refused for its size is split, and a record refused on its own for its size leaves the queue as an `oversize` gap (shown in `status`, `status --json` and `doctor`, reported to the workspace with the other gaps, and kept in the local log). A refused batch listing records refused for good beside records kept back (a clock ahead, a key not yet enrolled) now settles the first and keeps the second. A 429, or a 503 with Retry-After, is now honoured across hook calls and agent cycles: the wait (at most an hour plus a small random spread; a 429 without Retry-After starts at 30 seconds and doubles) is kept in `delivery.json`, `status` shows the next try, and `status --json` adds `delivery.backoff_until`.
+- 99b0577: The always-on protection now stops a coding agent started with its config folder moved from anywhere in the same command (an earlier `export`, an enclosing `sh -c`, a PowerShell `$env:` assignment), and the removal or rename of a folder that holds what it protects (`.claude`, `.cursor`, `.codex`, `.git`, the working folder, a home folder); with `protect-branches` enforced, a push alias given through git's environment configuration is denied like one given with `-c`.
+- aaa031e: Keys, the Cloud credential, chain heads and the receipt and dispatch databases (with the journal files SQLite keeps beside them) are readable by their owner alone from their first byte, on Windows and POSIX, also in a folder other local users can open; a credential write replaces a file or link at its name instead of writing through it, and processes that create a key at the same moment now agree on one key.
+  
+  Upgrading: the hook's and the agent's folder is made readable by its owner alone on their next run, files an older version left there included. A self-hosted gateway or MCP proxy restricts its existing key files, credential file and databases the next time it opens them.
+- 8d94b55: Remove more typed secrets before a receipt is signed: PowerShell environment variables set with `Set-Item Env:`, `New-Item`, `Set-Content`, `[Environment]::SetEnvironmentVariable` or `setx`; credential-named variables and hashtable entries (`$token = '…'`, `@{ Authorization = 'Bearer …' }`); `ConvertTo-SecureString` strings in any parameter order or piped in; a value piped into `--password-stdin`; and a URL password that contains "@".
+- 4f79b89: Programs started by name are no longer looked up in the current folder, which Windows otherwise searches before PATH: `git`, `npm` and an MCP upstream named without a folder come from the absolute folders on PATH, and Windows' own tools (`icacls`, `reg`, `powershell`, `cmd`, `conhost`, `explorer`) from the system folder. A `git.exe` or similar placed in a project, or in a pull request's checkout, is no longer run by the hook, the agent, the MCP proxy or the pull request check; a program that cannot be found that way is not started. `@scopebond/gateway/node` exports the lookup as `findProgram`, `programPath` and `windowsSystemProgram`.
+- Updated dependencies [7529bc5]
+- Updated dependencies [da85dd4]
+- Updated dependencies [0929cac]
+- Updated dependencies [aaa031e]
+- Updated dependencies [8d94b55]
+- Updated dependencies [4f79b89]
+  - @scopebond/gateway@0.17.6
+  - @scopebond/policy-schema@0.7.2
+
+## 0.21.7
+
+### Patch Changes
+
+- 3805a5a: Reading a command, a package spec or a `wrangler.toml` now takes time in proportion to its length: a crafted one (a word of many wildcards, a long hyphenated header name, thousands of blank lines) could hold a hook check for seconds or, in the worst cases, far past the agent's time limit.
+- Updated dependencies [611d02c]
+- Updated dependencies [a17f73b]
+  - @scopebond/gateway@0.17.5
+  - @scopebond/sdk@0.1.7
+
+## 0.21.6
+
+### Patch Changes
+
+- 52502c3: The same action gets the same treatment in Claude Code, Codex and Cursor.
+  
+  - Cursor is answered `allow` only for a clean evaluated allow. An action a monitored rule finds out of policy now gets no
+    opinion (`ask`), so Cursor's own approval decides, as Claude Code's and Codex's do when the hook stays silent.
+  - A Cursor edit reported after it was written (`afterFileEdit`) that breaks a blocking rule is signed with the new execution
+    state `observed_after` (`realtime_result: "deny"`, `executed: true`) instead of `denied`. `log` shows it as "recorded, not
+    prevented", the tray and local counts keep it apart from blocks, and it is never counted as one. The gateway takes this as
+    the `observedAfter` action option (nothing is dispatched and no override is asked); the receipt schema, evidence vectors
+    and evidence check accept the new state.
+  - The hook program answers deny on any failure the commands do not catch themselves (a module that cannot load, an uncaught
+    error): Claude Code gets exit 2, Codex and Cursor their deny answer.
+  - The Scopebond Agent checks the Codex and Cursor hook entries on each maintenance pass and keeps each outage (an entry that
+    cannot start) as one `hook_unresolvable` delivery gap, which the rules check reports with the other gaps; `status` lists
+    such outages apart from records that missed delivery.
+- 4e6ceff: The hook keeps the evidence-chain head each delivery answer carries in `chain-heads.json`, and `scopebond verify --anchor <file-or-url> [--segments <dir>]` checks the kept heads against a published day of anchors and, optionally, against evidence segments downloaded from the workspace. It exits non-zero when a chain went back below a head this computer kept, when one position names two segments, or when a kept head's segment is no longer in the chain.
+- f4ff598: A computer whose workspace has not named an evidence detail now sends the Standard detail by default: notable receipts in
+  full, routine ones as one signed summary per five minutes. Full detail (every receipt sent) is used only when the workspace
+  says "full" on a rules check, or when this computer's own saved setting is "full". An unknown saved value is read as
+  Standard, never as Full. Every receipt is still kept on the computer for the retention the workspace set.
+- Updated dependencies [58fa74d]
+- Updated dependencies [4e6ceff]
+- Updated dependencies [52502c3]
+  - @scopebond/gateway@0.17.4
+  - @scopebond/policy-schema@0.7.1
+
 ## 0.21.5
 
 ### Patch Changes

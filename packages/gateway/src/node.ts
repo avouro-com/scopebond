@@ -1,6 +1,8 @@
 // "@scopebond/gateway/node" — Node-only helpers (fs / node:sqlite). Kept out of
 // the package root so the core stays importable in edge runtimes.
 export { loadOrCreateAttester } from "./node-keys.js";
+export { ensurePrivateDir } from "./node-permissions.js";
+export { keepOwnerOnly, loadOrCreateHexKey, placeOwnerOnly } from "./node-files.js";
 export { FileReceiptStore, SqliteReceiptStore, SqliteCloudOutbox, openReceiptStore } from "./node-stores.js";
 export type { StoreMaintenanceOptions, StoreMaintenanceReport } from "./node-stores.js";
 export type { SqliteCloudOutboxOptions } from "./node-stores.js";
@@ -10,3 +12,5 @@ export { DispatchStore, createDispatchGuard, DISPATCH_DB, CLOCK_TOLERANCE_MS } f
 export type { DispatchGuardConfig } from "./dispatch-store.js";
 export { openApprovalBinder, openDispatchGuard, openCloudSource, targetIdFor, BINDING_KEY_FILE, TARGET_ID_DOMAIN, readDispatchFile, readApprovalInbox, DISPATCH_FILE, APPROVAL_INBOX, DELEGATION_ENV } from "./dispatch-config.js";
 export type { DispatchFile, ApprovalBinder } from "./dispatch-config.js";
+export { findProgram, programPath, isBareProgramName, windowsSystemProgram } from "./node-programs.js";
+export type { FindProgramOptions, WindowsSystemProgram } from "./node-programs.js";

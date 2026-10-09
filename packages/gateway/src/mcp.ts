@@ -11,9 +11,15 @@ const PROTOCOL_VERSION = "2024-11-05";
 // package.json at runtime; keep this in sync with the package version on release.
 const SERVER_VERSION = "0.4.1";
 
-export async function handleMcp(body: any, handleAction: HandleAction): Promise<unknown> {
-  const id = body?.id ?? null;
-  const method = body?.method;
+/** An object's fields, or none for anything else. */
+const fields = (value: unknown): Record<string, unknown> => (value !== null && typeof value === "object" ? value as Record<string, unknown> : {});
+/** A JSON-RPC value as it appears in an error message: a scalar as itself, anything else by its type. */
+const shown = (value: unknown): string => (value === null || ["string", "number", "boolean", "undefined"].includes(typeof value) ? String(value) : typeof value);
+
+export async function handleMcp(body: unknown, handleAction: HandleAction): Promise<unknown> {
+  const request = fields(body);
+  const id = request.id ?? null;
+  const method = request.method;
   const ok = (result: unknown) => ({ jsonrpc: "2.0", id, result });
   const fail = (code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 
@@ -39,10 +45,11 @@ export async function handleMcp(body: any, handleAction: HandleAction): Promise<
         }],
       });
     case "tools/call": {
-      const name = body?.params?.name;
-      const args = body?.params?.arguments ?? {};
-      if (name !== "scopebond.evaluate") return fail(-32602, `unknown tool: ${name}`);
-      if (!args?.intent?.action_type) return fail(-32602, "intent.action_type required");
+      const params = fields(request.params);
+      const name = params.name;
+      const args = fields(params.arguments);
+      if (name !== "scopebond.evaluate") return fail(-32602, `unknown tool: ${shown(name)}`);
+      if (!fields(args.intent).action_type) return fail(-32602, "intent.action_type required");
       let result: ActionResultLike;
       try { result = await handleAction({ intent: args.intent, authorization: args.authorization, approval: args.approval }); }
       // Only a refusal meant for the caller is passed on; anything else is reported generically (no internal detail).
@@ -53,6 +60,6 @@ export async function handleMcp(body: any, handleAction: HandleAction): Promise<
       });
     }
     default:
-      return fail(-32601, `method not found: ${method}`);
+      return fail(-32601, `method not found: ${shown(method)}`);
   }
 }

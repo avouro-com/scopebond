@@ -182,8 +182,10 @@ test("on Windows, the helper installs nothing and records why when the installer
   const org = /(?:^|,\s*)O=([^,]+)/.exec(signer.subject)?.[1];
   assert.ok(org, signer.subject);
   // Anchored to the whole field: a publisher whose name only starts the same way does not count.
+  // eslint-disable-next-line security/detect-non-literal-regexp -- the publisher pattern under test, built from an escaped name
   const prefix = runHelper(signed, new RegExp(`(^|,\\s*)O=${escape(org.slice(0, -1))}(,|$)`));
   assert.equal(prefix.msiexec, null);
+  // eslint-disable-next-line security/detect-non-literal-regexp -- the publisher pattern under test, built from an escaped name
   const installed = runHelper(signed, new RegExp(`(^|,\\s*)O=${escape(org)}(,|$)`));
   assert.equal(installed.result.installed, true, installed.result.reason);
   assert.equal(installed.result.exit_code, 0);
@@ -230,12 +232,12 @@ test("beside the native tray, autostart is the tray's Run value and the launcher
   };
   const home = mkdtempSync(join(tmpdir(), "sb-tray-autostart-"));
   const user = fakeReg(new Set(["HKCU:ScopebondAgent"]));
-  assert.match(enableAutostart(home, "", "x", "win32", tray, user.reg), new RegExp(`added ${TRAY_RUN_VALUE}`));
+  assert.ok(enableAutostart(home, "", "x", "win32", tray, user.reg).includes(`added ${TRAY_RUN_VALUE}`));
   assert.deepEqual([...user.values], [`HKCU:${TRAY_RUN_VALUE}`], "the launcher's ScopebondAgent value is gone");
   assert.ok(user.calls.some((c) => c.includes(`/d "${tray}"`)), "the tray's path, quoted");
   assert.equal(existsSync(join(home, "agent-launch.cmd")), false, "no launcher is written");
   assert.equal(autostartHealth(home, "win32", tray, user.reg).ok, true);
-  assert.match(disableAutostart(home, "win32", tray, user.reg), new RegExp(`removed ${TRAY_RUN_VALUE}`));
+  assert.ok(disableAutostart(home, "win32", tray, user.reg).includes(`removed ${TRAY_RUN_VALUE}`));
   assert.equal(autostartHealth(home, "win32", tray, user.reg).on, false);
   // Installed for every user: the machine's value starts it, and this user's is never added.
   const machine = fakeReg(new Set([`HKLM:${TRAY_RUN_VALUE}`]));

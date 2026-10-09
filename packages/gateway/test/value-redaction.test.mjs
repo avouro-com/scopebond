@@ -68,3 +68,56 @@ test("a summary's folder digest is keyed, and stays the same for one key so fold
   const other = await buildSummary(rs, { attester, window, notableCount: 0, digestKey: "22".repeat(32) });
   assert.notEqual(other.payload.counts[0].cwd_digest, a.payload.counts[0].cwd_digest);
 });
+
+test("a query credential after another parameter's value is still scrubbed", () => {
+  assert.equal(scrubSecretText(`https://a.example/x?page=2;api_token=${tok}&b=1`), "https://a.example/x?page=2;api_token=***&b=1");
+  assert.equal(scrubSecretText(`?X-Amz-Signature=${tok}#frag`), "?X-Amz-Signature=***#frag");
+  assert.equal(scrubSecretText("?page=2&sort=asc"), "?page=2&sort=asc");
+  assert.equal(scrubSecretText(`PASSWORD = '${pw}'`), "PASSWORD = '***'");
+});
+
+test("PowerShell secret shapes and a URL password holding '@' are scrubbed inside values; ordinary values stay", () => {
+  for (const [value, secret] of [
+    [`Set-Item -Path Env:DB_PASSWORD -Value '${pw}'`, pw],
+    [`Set-Item Env:DB_PASSWORD '${pw}'`, pw],
+    [`[Environment]::SetEnvironmentVariable('API_TOKEN', '${pw}', 'User')`, pw],
+    [`setx DB_PASSWORD ${pw}`, pw],
+    [`$token = '${tok}'`, tok],
+    [`$DbPass = "${pw}"`, pw],
+    [`$env:DB_PASSWORD = "${pw}"`, pw],
+    [`$p = ConvertTo-SecureString -AsPlainText -Force -String '${pw}'`, pw],
+    [`$p = '${pw}' | ConvertTo-SecureString -AsPlainText -Force`, pw],
+    [`$headers = @{ Authorization = 'Bearer ${bearer}' }`, bearer],
+    [`git push https://deploy:p4ss@${userinfo}@git.example.test/o/r.git main`, userinfo],
+  ]) {
+    const out = scrubSecretText(value);
+    assert.ok(!out.includes(secret), `${secret.slice(0, 6)}… left in ${out}`);
+  }
+  assert.equal(scrubSecretText(`https://bot:a@${userinfo}@git.example.test/repo.git`), "https://***@git.example.test/repo.git");
+  assert.equal(scrubSecretText(`https://${tok}@git.example.test/repo.git`), "https://***@git.example.test/repo.git", "a token alone as the user");
+  assert.equal(scrubSecretText("https://api.example.test/find?email=a@example.test"), "https://api.example.test/find?email=a@example.test");
+  assert.equal(scrubSecretText("$name = 'build'; Set-Item Env:PATH 'C:/tools'"), "$name = 'build'; Set-Item Env:PATH 'C:/tools'");
+});
+
+test("scrubbing stays linear on adversarial 50,000-character values", () => {
+  const n = 50_000;
+  for (const text of [
+    "Set-Item Env:TOKEN ".repeat(n / 19),  // many Env: paths in one command
+    "ConvertTo-SecureString ".repeat(n / 23),
+    "'TOKEN', ".repeat(n / 10),             // many credential names given as arguments
+    "a".repeat(n) + " = 'x'",              // a long name before "="
+    "$token = @' ".repeat(n / 12),          // unclosed here-strings
+    "'x' | ".repeat(n / 6) + "ConvertTo-SecureString",
+    "://" + "a@".repeat(n / 2),            // URL userinfo with many "@"
+    "?" + "token".repeat(n / 5),           // a parameter name full of credential words and no "="
+    "password" + " ".repeat(n) + "x",     // a long run of spaces after a SQL password keyword
+    "identified by" + " ".repeat(n) + "x",
+    "--password" + " ".repeat(n),
+    "-----BEGIN " + "A ".repeat(n / 2),
+    "://a:" + "a".repeat(n),
+  ]) {
+    const started = performance.now();
+    scrubSecretText(text);
+    assert.ok(performance.now() - started < 250, `slow on ${JSON.stringify(text.slice(0, 20))}`);
+  }
+});
