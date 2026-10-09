@@ -869,8 +869,8 @@ async function runVerify(args: string[] = []): Promise<void> {
   const anchors: string[] = [];
   let segmentsDir: string | undefined;
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--anchor" && args[i + 1]) anchors.push(args[++i]!);
-    else if (args[i] === "--segments" && args[i + 1]) segmentsDir = resolve(args[++i]!);
+    if (args[i] === "--anchor" && args[i + 1]) anchors.push(args[++i]);
+    else if (args[i] === "--segments" && args[i + 1]) segmentsDir = resolve(args[++i]);
     else { console.error(`unknown option for verify: ${args[i]}. Use: ${cliCommand("verify [--anchor <file-or-url>] [--segments <dir>]")}`); process.exit(2); }
   }
   const chainCheck = anchors.length > 0 || segmentsDir !== undefined;
