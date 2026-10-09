@@ -5,7 +5,7 @@
 // there is owner-only from its first byte, the journal files SQLite creates beside a database included. Best effort: a
 // failure is reported to the caller, never thrown, because the hook and the gateway must still start (they warn instead).
 
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fchmodSync, fstatSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
@@ -35,9 +35,16 @@ function grantOwnerOnly(path: string, inherit: boolean, timeoutMs: number): stri
 
 /** Restrict `file` to its owner. Returns null when done (or nothing to do), else why it could not be. */
 export function restrictToOwner(file: string): string | null {
-  if (!existsSync(file)) return null;
-  if (onWindows()) return grantOwnerOnly(file, false, 10_000);
-  try { chmodSync(file, 0o600); return null; } catch (error) { return reason(error); }
+  if (onWindows()) return existsSync(file) ? grantOwnerOnly(file, false, 10_000) : null;
+  // Checked and changed on the open file, so the file whose mode was read is the one changed.
+  let fd: number;
+  try { fd = openSync(file, "r"); }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : reason(error); }
+  try {
+    if ((fstatSync(fd).mode & 0o077) !== 0) fchmodSync(fd, 0o600);
+    return null;
+  } catch (error) { return reason(error); }
+  finally { closeSync(fd); }
 }
 
 /** Windows: restrict a folder this process just made (a staging folder) to its owner, passed on to what is created in it. */
@@ -76,10 +83,11 @@ export function isPrivateDir(dir: string): boolean {
   try { return (statSync(dir).mode & 0o077) === 0; } catch { return false; }
 }
 
-/** Whether the access of the files in `dir` is already decided by the folder: private, or (Windows) tried within the last
- *  day and not possible. Files there are then not restricted one by one each time they are opened. */
+/** Windows: whether the access of the files in `dir` is already decided by the folder (private, or tried within the last
+ *  day and not possible), so they are not restricted one by one, an icacls run each, every time they are opened. On POSIX
+ *  that costs a chmod, so every file stays 0600 whatever its folder: never decided by the folder. */
 export function folderDecides(dir: string): boolean {
-  return onWindows() ? markerState(dir) !== null : isPrivateDir(dir);
+  return onWindows() && markerState(dir) !== null;
 }
 
 /** Make `dir`, one of Scopebond's own folders, readable by its owner alone, together with everything already in it (keys,
