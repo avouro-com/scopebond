@@ -23,6 +23,7 @@ import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
+import { replaceFile } from "./safe-fs.js";
 import { scaffold, harnessSnippet, placeHook, migrateToMonitorDefault, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
@@ -678,7 +679,7 @@ async function runRules(args: string[]): Promise<void> {
         rules.local_overrides = { ...(rules.local_overrides ?? {}), [id]: verb };
         const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
         saveRules(dir, rules);
-        writeFileSync(join(dir, "policy.json"), `${JSON.stringify(compileManaged(rules, doc, agentKid), null, 2)}\n`);
+        replaceFile(join(dir, "policy.json"), `${JSON.stringify(compileManaged(rules, doc, agentKid), null, 2)}\n`);
         console.log(`✓ ${verb === "enforce" ? `${id} now blocks on this computer` : `${id} now records on this computer, without blocking`} (your workspace allows changes on computers)`);
         await reportRules(dir);
         process.exit(0);
@@ -708,7 +709,7 @@ async function runRules(args: string[]): Promise<void> {
   const policyPath = join(dir, "policy.json");
   const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
   saveRules(dir, rules);
-  writeFileSync(policyPath, `${JSON.stringify(compile(rules, agentKid), null, 2)}\n`);
+  replaceFile(policyPath, `${JSON.stringify(compile(rules, agentKid), null, 2)}\n`);
   console.log(`✓ ${changed}`);
   console.log(`  rules          ${rulesPath(dir)}`);
   console.log(`  policy         ${policyPath} (recompiled)`);

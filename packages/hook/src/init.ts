@@ -4,10 +4,10 @@
 
 import { copyFileSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { loadOrCreateAttester } from "@scopebond/gateway/node";
+import { ensurePrivateDir, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import { compile, createRules, defaultRules, loadRules, saveRules, rulesPath } from "./rules.js";
-import { createExclusive } from "./safe-fs.js";
+import { createExclusive, replaceFile } from "./safe-fs.js";
 import {
   readHarnessConfig, projectHarnessFile, localHarnessFile, harnessEntryMatches, backupHarnessConfig,
   gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
@@ -17,6 +17,8 @@ import { loadOrCreateDigestKey } from "./minimize.js";
 
 export function scaffold(dir: string, opts: { force?: boolean; enforce?: readonly string[] } = {}): { agentKid: string; policyPath: string; rulesPath: string } {
   mkdirSync(dir, { recursive: true });
+  // Keys, the Cloud credential and the receipt log live here: readable by this user alone, from their first byte.
+  ensurePrivateDir(dir);
   const keyPath = join(dir, "agent.key");
   const attesterPath = join(dir, "attester.key");
   const policyPath = join(dir, "policy.json");
@@ -38,7 +40,7 @@ export function scaffold(dir: string, opts: { force?: boolean; enforce?: readonl
   const starterRules = { ...defaultRules(), enforce: [...(opts.enforce ?? [])] };
   if (opts.force) saveRules(dir, starterRules); else createRules(dir, starterRules);
   const policyText = (): string => JSON.stringify(compile(loadRules(dir) ?? defaultRules(), agent.kid), null, 2) + "\n";
-  if (opts.force) writeFileSync(policyPath, policyText()); else createExclusive(policyPath, policyText);
+  if (opts.force) replaceFile(policyPath, policyText()); else createExclusive(policyPath, policyText);
   return { agentKid: agent.kid, policyPath, rulesPath: rulesFile };
 }
 
@@ -63,7 +65,7 @@ export function migrateToMonitorDefault(dir: string): boolean {
   const agent = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") });
   copyFileSync(policyPath, join(dir, "policy.previous.json"));
   saveRules(dir, { ...rules, enforce: [] });
-  writeFileSync(policyPath, JSON.stringify(compile({ ...rules, enforce: [] }, agent.kid), null, 2) + "\n");
+  replaceFile(policyPath, JSON.stringify(compile({ ...rules, enforce: [] }, agent.kid), null, 2) + "\n");
   return true;
 }
 

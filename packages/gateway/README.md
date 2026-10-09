@@ -78,8 +78,11 @@ Routes: `POST /v1/evaluate`, `POST /v1/observe`, `POST /mcp` (MCP ingress), `POS
 `GET /healthz`.
 
 On first run the gateway generates and persists an Ed25519 attester key
-(`./scopebond-attester.key`, mode 0600) and a durable SQLite receipt store
-(`./scopebond.db`), so **receipts stay verifiable and survive restarts**. It also
+(`./scopebond-attester.key`) and a durable SQLite receipt store
+(`./scopebond.db`), so **receipts stay verifiable and survive restarts**. Both, and
+the database's journal files, are readable by their owner alone (mode 0600; on
+Windows an ACL for the current user and SYSTEM), from their first byte; files an
+older version made are restricted when the gateway next opens them. It also
 **anchors** the receipt log and **hot-reloads** the policy (below). These mechanisms
 do not close the alpha findings described above. Configure:
 

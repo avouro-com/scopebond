@@ -12,7 +12,7 @@ import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFil
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { programPath } from "@scopebond/gateway/node";
-import { readIfPresent } from "./safe-fs.js";
+import { readIfPresent, replaceFile } from "./safe-fs.js";
 
 export type Harness = "claude" | "cursor" | "codex";
 
@@ -184,7 +184,7 @@ export function trustProjectPolicy(dir: string): string {
   const trusted = readTrusted();
   trusted[trustKey(dir)] = digest;
   mkdirSync(userHome(), { recursive: true });
-  writeFileSync(trustedProjectsFile(), JSON.stringify(trusted, null, 2) + "\n");
+  replaceFile(trustedProjectsFile(), JSON.stringify(trusted, null, 2) + "\n");
   return digest;
 }
 

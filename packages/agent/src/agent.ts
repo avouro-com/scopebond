@@ -7,7 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createCloudExporter } from "@scopebond/gateway";
-import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder } from "@scopebond/gateway/node";
+import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, ensurePrivateDir } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import {
   LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, deliveryBackoff, hookVersion, ingestUrl,
@@ -58,6 +58,9 @@ export function missingHookEntries(harnesses: Harness[] = expectedHarnesses()): 
 export async function runCycle(options: CycleOptions): Promise<CycleResult> {
   const now = options.now ?? Date.now;
   const dir = options.dir;
+  // The credential, the keys, the delivery queue and the chain heads: readable by this user alone, those an older version
+  // left included. Done once per folder; afterwards a small check.
+  ensurePrivateDir(dir);
   const result: CycleResult = { at: now(), connected: false, delivered: 0, pending: 0, deliveryError: null, rules: "skipped", missingHookEntries: [], requested: null, more: false };
   try { result.missingHookEntries = missingHookEntries(); } catch { /* reported as none */ }
   const connection = loadConnection(dir);

@@ -2,10 +2,10 @@
 // lives in the core with an in-memory implementation; these are durable local
 // implementations for the Node server. On Cloudflare, D1/KV are the edge ones.)
 
-import { appendFileSync, readFileSync, existsSync, mkdirSync, truncateSync } from "node:fs";
+import { appendFileSync, closeSync, constants as fsConstants, readFileSync, existsSync, mkdirSync, openSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
 import { createRequire } from "node:module";
-import { restrictToOwner } from "./node-permissions.js";
+import { keepOwnerOnly, placeOwnerOnly, prepareOwnerOnlyDatabase } from "./node-files.js";
 
 /** `node:sqlite` from Node's built-ins (a bundled build cannot resolve it through a module path), else by require. */
 function nodeSqlite(): unknown {
@@ -55,10 +55,10 @@ type SqliteDb = { exec(sql: string): void; prepare(sql: string): { run(...a: unk
 function openSqlite(path: string, fresh?: string, busyTimeoutMs = 15_000): SqliteDb {
   ensureDir(path);
   const { DatabaseSync } = nodeSqlite() as { DatabaseSync: new (p: string) => SqliteDb };
-  const created = !existsSync(path);
+  // The database and its journal files hold signed evidence: readable by their owner alone from their first byte, and
+  // restricted when an older version made them (on Windows a new file would inherit its folder's ACL).
+  prepareOwnerOnlyDatabase(path);
   const db = new DatabaseSync(path);
-  // A new database holds signed evidence: readable by its owner alone (on Windows the inherited access list is replaced).
-  if (created) restrictToOwner(path);
   try {
     db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))};`);
     // Page size and vacuum mode are fixed once a file is in WAL mode, so a new file gets them first.
@@ -103,6 +103,8 @@ export class FileReceiptStore implements ReceiptStore {
     ensureDir(file);
     this.anchorFile = file + ".anchors";
     this.stopFile = file + ".stops";
+    // Logs an older version made are restricted to their owner when opened.
+    for (const log of [file, this.anchorFile, this.stopFile]) if (existsSync(log)) keepOwnerOnly(log);
     if (existsSync(file)) this.cache.push(...readJsonl<SignedReceipt>(file));
     if (existsSync(this.anchorFile)) this.anchorLog.push(...readJsonl<Anchor>(this.anchorFile));
     if (existsSync(this.stopFile)) {
@@ -112,16 +114,18 @@ export class FileReceiptStore implements ReceiptStore {
     }
   }
   private append(file: string, line: string): void {
-    // Create the log exclusively when it is new ("ax"), else append: the create itself says whether this call made it.
-    let fresh = true;
-    try { appendFileSync(file, line + "\n", { mode: 0o600, flag: "ax" }); }
+    // Appended to the log when it exists (opened without create). A new log holds signed evidence: it is created
+    // exclusively with its first record, readable by its owner alone from its first byte; if another process created it
+    // first, the record is appended to that one.
+    const appendTo = (): number => openSync(file, fsConstants.O_WRONLY | fsConstants.O_APPEND);
+    let fd: number;
+    try { fd = appendTo(); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      fresh = false;
-      appendFileSync(file, line + "\n", { mode: 0o600, flag: "a" });
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (placeOwnerOnly(file, line + "\n", true)) return;
+      fd = appendTo();
     }
-    // A new log holds signed evidence: readable by its owner alone (on Windows the mode is ignored).
-    if (fresh) restrictToOwner(file);
+    try { appendFileSync(fd, line + "\n"); } finally { closeSync(fd); }
   }
   put(r: SignedReceipt): void {
     const serialized = JSON.stringify(r);
