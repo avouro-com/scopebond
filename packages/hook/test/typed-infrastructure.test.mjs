@@ -326,7 +326,7 @@ test("privacy canaries: no SQL text, rows, names, credentials, paths, queries or
   assert.ok(!/CANARY/i.test(text), `a canary leaked: ${text.match(/.{20}CANARY.{20}/i)?.[0]}`);
   for (const op of ops) assert.equal(operationProblem(op), null);
   // Only the schema's own keys exist: nothing like sql, statement, query, body, path or rows.
-  for (const op of ops) for (const key of Object.keys(op)) assert.ok(!/sql|statement|query|body|path|row|header|credential|password|token|secret|name$/i.test(key), key);
+  for (const op of ops) for (const key of Object.keys(op)) assert.ok(!/(?:sql|statement|query|body|path|row|header|credential|password|token|secret)|(?:name$)/i.test(key), key);
 });
 
 // ---- dispatch integration and manifest ---------------------------------------------------------------------------
