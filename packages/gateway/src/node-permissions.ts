@@ -5,7 +5,7 @@
 // there is owner-only from its first byte, the journal files SQLite creates beside a database included. Best effort: a
 // failure is reported to the caller, never thrown, because the hook and the gateway must still start (they warn instead).
 
-import { chmodSync, closeSync, existsSync, fchmodSync, fstatSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, fstatSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
@@ -36,12 +36,14 @@ function grantOwnerOnly(path: string, inherit: boolean, timeoutMs: number): stri
 /** Restrict `file` to its owner. Returns null when done (or nothing to do), else why it could not be. */
 export function restrictToOwner(file: string): string | null {
   if (onWindows()) return existsSync(file) ? grantOwnerOnly(file, false, 10_000) : null;
-  // Checked and changed on the open file, so the file whose mode was read is the one changed.
+  // Checked and changed on the open file, so the file whose mode was read is the one changed. Only group and other access is
+  // removed: the owner's own bits stay (a file made read-only stays read-only).
   let fd: number;
   try { fd = openSync(file, "r"); }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : reason(error); }
   try {
-    if ((fstatSync(fd).mode & 0o077) !== 0) fchmodSync(fd, 0o600);
+    const mode = fstatSync(fd).mode;
+    if ((mode & 0o077) !== 0) fchmodSync(fd, mode & 0o700);
     return null;
   } catch (error) { return reason(error); }
   finally { closeSync(fd); }
@@ -99,11 +101,16 @@ export function ensurePrivateDir(dir: string): string | null {
   const full = resolve(dir), home = resolve(homedir());
   if (dirname(full) === full || (onWindows() ? full.toLowerCase() === home.toLowerCase() : full === home)) return `${dir} is not a folder of Scopebond's own`;
   if (!onWindows()) {
+    // Group and other access removed on the open folder; the owner's own bits stay.
+    let fd: number;
+    try { fd = openSync(dir, "r"); }
+    catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : reason(error); }
     try {
-      const mode = statSync(dir).mode;
-      if ((mode & 0o077) !== 0) chmodSync(dir, 0o700);
+      const mode = fstatSync(fd).mode;
+      if ((mode & 0o077) !== 0) fchmodSync(fd, mode & 0o700);
       return null;
-    } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : reason(error); }
+    } catch (error) { return reason(error); }
+    finally { closeSync(fd); }
   }
   const id = folderId(dir);
   if (id === null) return null;
