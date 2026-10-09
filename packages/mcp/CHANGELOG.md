@@ -1,5 +1,13 @@
 # @scopebond/mcp
 
+## 2.0.9
+
+### Patch Changes
+
+- 0225f33: The proxy's local binding key is now created exclusively with owner-only permissions (a damaged one is replaced atomically), and `init` writes the starter policy through an exclusive create when it is absent.
+- Updated dependencies [0225f33]
+  - @scopebond/gateway@0.17.3
+
 ## 2.0.8
 
 ### Patch Changes

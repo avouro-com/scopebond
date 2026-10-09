@@ -8,9 +8,10 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
+import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { readIfPresent } from "./safe-fs.js";
 
 export type Harness = "claude" | "cursor" | "codex";
 
@@ -122,7 +123,7 @@ export function excludeFromGit(file: string): boolean {
     const prefix = execFileSync("git", ["rev-parse", "--show-prefix"], { cwd, encoding: "utf8", timeout: 5000 }).trim();
     const exclude = resolve(cwd, execFileSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd, encoding: "utf8", timeout: 5000 }).trim());
     const entry = "/" + prefix + basename(file);
-    const existing = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+    const existing = readIfPresent(exclude) ?? "";
     if (!existing.split(/\r?\n/).includes(entry)) {
       mkdirSync(dirname(exclude), { recursive: true });
       writeFileSync(exclude, `${existing}${existing && !existing.endsWith("\n") ? "\n" : ""}${entry}\n`);
@@ -134,9 +135,9 @@ export function excludeFromGit(file: string): boolean {
 /** Remove the Scopebond entries whose command `remove` selects, leaving every other
  *  setting alone. Returns the number of entries removed. */
 export function pruneHarnessEntries(file: string, remove: (command: string) => boolean): number {
-  if (!existsSync(file)) return 0;
-  let config: Record<string, unknown>;
-  try { config = readHarnessConfig(file); } catch { return 0; }
+  let config: Record<string, unknown> | undefined;
+  try { config = readHarnessConfigIfPresent(file); } catch { return 0; }
+  if (config === undefined) return 0;
   const hooks = isRecord(config.hooks) ? config.hooks : null;
   if (!hooks) return 0;
   let removed = 0;
@@ -280,8 +281,15 @@ export function readConfigText(file: string): string {
 }
 
 export function readHarnessConfig(file: string): Record<string, unknown> {
-  if (!existsSync(file)) return {};
-  const text = readConfigText(file);
+  return readHarnessConfigIfPresent(file) ?? {};
+}
+
+/** `readHarnessConfig`, but undefined when there is no file. The file is read directly (a missing file is the read's
+ *  ENOENT), never checked first: a check followed by the read and a later write races a path swap between them. */
+function readHarnessConfigIfPresent(file: string): Record<string, unknown> | undefined {
+  const raw = readIfPresent(file);
+  if (raw === undefined) return undefined;
+  const text = raw.replace(/^﻿/, "");
   if (!text.trim()) return {};
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch (error) {
@@ -300,17 +308,17 @@ export function readHarnessConfig(file: string): Record<string, unknown> {
  *  know are involved (`~/.claude/settings.json` holds their theme, plugins and
  *  permissions), and the undo was previously "hope the merge was right". */
 export function backupHarnessConfig(file: string): string | null {
-  if (!existsSync(file)) return null;
   const backup = `${file}.scopebond-backup`;
-  if (existsSync(backup)) return null;
-  try { copyFileSync(file, backup); return backup; } catch { return null; }
+  // No file to back up, or a backup already there (the exclusive copy refuses to replace it): nothing written.
+  try { copyFileSync(file, backup, fsConstants.COPYFILE_EXCL); return backup; } catch { return null; }
 }
 
 /** Write (idempotently) a harness hook entry pointing at an explicit command string.
  *  Shared by the project installer (npx command) and the user installer (absolute path). */
 export function writeHarnessConfig(file: string, harness: Harness, command: string): string {
-  const config = readHarnessConfig(file);
-  const before = existsSync(file) ? JSON.stringify(config) : null;
+  const present = readHarnessConfigIfPresent(file);
+  const config = present ?? {};
+  const before = present !== undefined ? JSON.stringify(config) : null;
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   if (harness === "cursor") {
     config.version = config.version ?? 1;
@@ -343,9 +351,9 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
 /** Remove any Scopebond hook entry from a user-level harness config, leaving the rest
  *  intact. Returns true if the file existed. */
 export function removeHarnessConfig(file: string): boolean {
-  if (!existsSync(file)) return false;
-  let config: Record<string, unknown>;
-  try { config = readHarnessConfig(file); } catch { return true; } // unreadable: leave it untouched
+  let config: Record<string, unknown> | undefined;
+  try { config = readHarnessConfigIfPresent(file); } catch { return true; } // unreadable: leave it untouched
+  if (config === undefined) return false;
   const hooks = isRecord(config.hooks) ? config.hooks : {};
   for (const [event, value] of Object.entries(hooks)) {
     if (Array.isArray(value)) (hooks as Record<string, unknown[]>)[event] = value.filter((e) => !entryMatches(e));
@@ -385,7 +393,6 @@ export function nativeHookCommand(harness: Harness, exe: string = process.execPa
 }
 
 export function isHarnessConfigured(file: string): boolean {
-  if (!existsSync(file)) return false;
   try {
     const p = JSON.parse(readConfigText(file));
     if (!isRecord(p) || !isRecord(p.hooks)) return false;
@@ -397,7 +404,6 @@ export function isHarnessConfigured(file: string): boolean {
  *  check that a pinned command still resolves: a hook entry that cannot start is worse
  *  than none, because a harness can read the failure as "no hook". */
 export function configuredHookCommands(file: string): string[] {
-  if (!existsSync(file)) return [];
   const found: string[] = [];
   const collect = (entry: unknown): void => {
     if (!isRecord(entry)) return;
@@ -463,9 +469,9 @@ export function wireLifecycleHooks(file: string, command: string): string {
 /** Remove only the lifecycle entries `wireLifecycleHooks` added, leaving PreToolUse and every
  *  other setting alone. Returns the number removed. */
 export function unwireLifecycleHooks(file: string): number {
-  if (!existsSync(file)) return 0;
-  let config: Record<string, unknown>;
-  try { config = readHarnessConfig(file); } catch { return 0; }
+  let config: Record<string, unknown> | undefined;
+  try { config = readHarnessConfigIfPresent(file); } catch { return 0; }
+  if (config === undefined) return 0;
   const hooks = isRecord(config.hooks) ? config.hooks : null;
   if (!hooks) return 0;
   let removed = 0;

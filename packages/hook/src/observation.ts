@@ -16,8 +16,8 @@
 // identifier is reduced to a keyed opaque id or a closed enum before it is placed in a
 // payload; the key stays on this machine and is never uploaded.
 
-import { createHash, createHmac, createPrivateKey, randomBytes, randomUUID, sign as edSign, type KeyObject } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, createHmac, createPrivateKey, randomUUID, sign as edSign, type KeyObject } from "node:crypto";
+import { loadOrCreateHexKey } from "./safe-fs.js";
 import { join } from "node:path";
 import { redactCommand, scrubParam } from "./minimize.js";
 import type { FileProbe } from "./typed-infra.js";
@@ -149,14 +149,7 @@ export function bindingKeyFromHex(hex: string): BindingKey {
 
 /** Load (or create, 0600) the installation-local key beside the other hook keys. */
 export function loadOrCreateBindingKey(dir: string): BindingKey {
-  const file = join(dir, BINDING_KEY_FILE);
-  if (existsSync(file)) {
-    const hex = readFileSync(file, "utf8").trim();
-    if (/^[0-9a-f]{64}$/.test(hex)) return bindingKeyFromHex(hex);
-  }
-  const hex = randomBytes(32).toString("hex");
-  writeFileSync(file, hex + "\n", { mode: 0o600 });
-  return bindingKeyFromHex(hex);
+  return bindingKeyFromHex(loadOrCreateHexKey(join(dir, BINDING_KEY_FILE)));
 }
 
 // ---- payload construction ----------------------------------------------------------------

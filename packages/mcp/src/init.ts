@@ -1,7 +1,7 @@
 // `scopebond-mcp init` — scaffold the local enrollment for the proxy: a signing
 // key and a starter policy for one upstream server. Keys and receipts stay local.
 
-import { writeFileSync, existsSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 
 /** The tool-name pattern of the starter policy: an allowlist of names that conventionally mark
@@ -27,8 +27,16 @@ export function scaffold(server: string, opts: { force?: boolean } = {}): { keyF
   const keyFile = "scopebond-agent.key";
   const policyFile = "scopebond.policy.json";
   loadOrCreateAttester({ file: keyFile }); // reused if present
-  if (!existsSync(policyFile) || opts.force) {
-    writeFileSync(policyFile, JSON.stringify(starterMcpPolicy(server), null, 2) + "\n");
+  const policy = JSON.stringify(starterMcpPolicy(server), null, 2) + "\n";
+  if (opts.force) {
+    writeFileSync(policyFile, policy);
+  } else {
+    // Create only when absent; the exclusive create is the existence check, so nothing can slip in between.
+    try {
+      writeFileSync(policyFile, policy, { flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
   }
   return { keyFile, policyFile };
 }
