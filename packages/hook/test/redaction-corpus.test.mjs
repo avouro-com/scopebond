@@ -79,6 +79,25 @@ const add = (id, shape, kind, harness, input, secret, note = "") => corpus.push(
 { const s = r(52, "abcdefghijklmnopqrstuvwxyz234567"); add("S40", "Azure DevOps PAT as userinfo in git push remote", "credential", "claude", bash(`git push https://${s}@dev.azure.com/org/p/_git/r feature-x`), s); }
 { const s = r(26); add("S41", "Cookie PHPSESSID= via curl -b", "credential", "claude", bash(`curl -b "PHPSESSID=${s}" https://app.example.test/`), s); }
 { const s = "Pw" + r(12); add("S42", "env prefix PASS= before a script", "credential", "claude", bash(`PASS=${s} ./deploy.sh`), s); }
+// PowerShell's other ways of holding or setting a secret, a value piped into a secret reader, and a URL password with "@".
+const ps = (command) => ({ tool_name: "PowerShell", tool_input: { command }, cwd: CWD });
+{ const s = "Pw" + r(12); add("S43", "PowerShell $DbPass = '...' (plain variable)", "credential", "claude", ps(`$DbPass = '${s}'`), s); }
+{ const s = "Pw" + r(12); add("S44", "PowerShell ConvertTo-SecureString -AsPlainText -Force -String '...'", "credential", "claude", ps(`$p = ConvertTo-SecureString -AsPlainText -Force -String '${s}'`), s); }
+{ const s = "Pw" + r(12); add("S45", "PowerShell '...' | ConvertTo-SecureString (pipeline)", "credential", "claude", ps(`$p = '${s}' | ConvertTo-SecureString -AsPlainText -Force`), s); }
+{ const s = r(32); add("S46", "PowerShell $apiKey = '<unrecognised token>'", "credential", "claude", ps(`$apiKey = '${s}'`), s); }
+{ const s = r(24); add("S47", "PowerShell $token = '<unrecognised token>' (Codex)", "credential", "codex", ps(`$token = '${s}'`), s); }
+{ const s = "Pw" + r(12); add("S48", "PowerShell $secret = \"...\"", "credential", "claude", ps(`$secret = "${s}"`), s); }
+{ const s = r(32); add("S49", "PowerShell @{ Authorization = 'Bearer ...' }", "credential", "claude", ps(`$headers = @{ Authorization = 'Bearer ${s}' }`), s); }
+{ const s = r(34); add("S50", "PowerShell @{ client_secret = '...' }", "credential", "claude", ps(`$body = @{ client_id = 'app'; client_secret = '${s}' }`), s); }
+{ const s = "Pw" + r(12); add("S51", "PowerShell Set-Item Env:DB_PASSWORD '...'", "credential", "claude", ps(`Set-Item Env:DB_PASSWORD '${s}'`), s); }
+{ const s = "Pw" + r(12); add("S52", "PowerShell [Environment]::SetEnvironmentVariable(\"DB_PASSWORD\", ...)", "credential", "claude", ps(`[Environment]::SetEnvironmentVariable("DB_PASSWORD", "${s}", "User")`), s); }
+{ const s = "Pw" + r(12); add("S53", "PowerShell [Environment]::SetEnvironmentVariable('DB_PASSWORD','...') (no blanks)", "credential", "claude", ps(`[Environment]::SetEnvironmentVariable('DB_PASSWORD','${s}')`), s); }
+{ const s = "Pw" + r(12); add("S54", "PowerShell New-Item -Path Env: -Name API_TOKEN -Value '...'", "credential", "claude", ps(`New-Item -Path Env: -Name API_TOKEN -Value '${s}'`), s); }
+{ const s = "Pw" + r(12); add("S55", "PowerShell Set-Content Env:GH_TOKEN <pw>", "credential", "claude", ps(`Set-Content Env:GH_TOKEN ${s}`), s); }
+{ const s = "Pw" + r(12); add("S56", "setx DB_PASSWORD <pw>", "credential", "claude", ps(`setx DB_PASSWORD ${s}`), s); }
+{ const s = "Pw" + r(12); add("S57", "echo <pw> | docker login --password-stdin", "credential", "claude", bash(`echo "${s}" | docker login -u bob --password-stdin reg.example.test`), s); }
+{ const s = r(14); add("S58", "git push URL whose password holds '@' (git.push params.remote)", "credential", "claude", bash(`git push https://bob:Pw@${s}@git.example.test/o/r.git main`), s); }
+{ const s = r(14); add("S59", "curl URL whose password holds '@'", "credential", "claude", bash(`curl https://alice:se@${s}@api.example.test/v1/x`), s); }
 // Non-shell tools
 { const s = J("AK", "IA", r(16, UPPER)); add("T01", "Write tool content holding a key", "credential", "claude", { tool_name: "Write", tool_input: { file_path: `${CWD}/config/aws.json`, content: `{"key":"${s}"}` }, cwd: CWD }, s); }
 { const s = "Pw" + r(14); add("T02", "Edit old_string/new_string with a password", "credential", "claude", { tool_name: "Edit", tool_input: { file_path: `${CWD}/.env.local`, old_string: "DB_PASSWORD=old", new_string: `DB_PASSWORD=${s}` }, cwd: CWD }, s); }

@@ -8,6 +8,7 @@
 // map to a single intent (a one-element array), or one per spelling of an
 // ambiguous Windows short path.
 
+import { maskWords, pipedSecrets } from "@scopebond/gateway";
 import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { INTERPRETERS, canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf } from "./text.js";
@@ -235,11 +236,23 @@ function protectedCandidate(word: string): string | undefined {
   return undefined;
 }
 
+// A path is scrubbed like any parameter, but a mask must not swallow a separator: scrubbed whole,
+// `token=a/../.scopebond/agent.key` read `token=***` and hid where it leads from the path rules. A word whose scrubbing
+// would remove a separator is scrubbed one segment at a time instead (`token=***/../.scopebond/agent.key`).
+const PATH_SEPARATOR = /[\\/]/g;
+const PATH_PARTS = /([\\/])/;
+const separatorCount = (s: string): number => s.match(PATH_SEPARATOR)?.length ?? 0;
+function scrubPath(word: string): string {
+  const whole = scrubParam(word);
+  if (whole === word || separatorCount(whole) === separatorCount(word)) return whole;
+  return word.split(PATH_PARTS).map((part) => (part === "/" || part === "\\" ? part : scrubParam(part))).join("");
+}
+
 /** The file intents for one path operand, resolving it against a `cd` prefix. */
 function fileIntent(action: "file.read" | "file.write", word: string, dir: string, cwd?: string): Mapped[] {
   let w = word;
   if (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
-  const path = rel(scrubParam(w), cwd);
+  const path = rel(scrubPath(w), cwd);
   if (UNRESOLVED.test(w)) {
     const hit = protectedCandidate(normPath(w));
     if (hit) return pathIntents(action, hit, "shell", { pattern: path });
@@ -269,6 +282,9 @@ const COPIERS = new Set(["cp", "mv", "rsync", "scp", "install", "ln", "copy-item
 const MOVERS = new Set(["mv", "move-item", "mi", "move", "rename-item", "ren"]);
 // Programs whose operands are files they WRITE (or whose metadata they change).
 const WRITERS = new Set(["tee", "touch", "truncate", "set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "clear-content", "clc", "chmod", "chown", "chattr", "attrib", "icacls", "set-acl", "shred", "unlink", "sponge", "tee-object", "expand-archive"]);
+// PowerShell writers whose -Value (any unambiguous spelling: -Va … -Value) is the content written, not a path.
+const CONTENT_SETTERS = new Set(["set-content", "sc", "add-content", "ac", "new-item", "ni"]);
+const VALUE_PARAMETER = new Set(["-va", "-val", "-valu", "-value"]);
 // Deleting changes a file as surely as writing it. A delete of one of the always-protected places (Scopebond's own folder,
 // the coding agents' hook settings, git hooks) is recorded as a write of that path, so the always-on floor stops the coding
 // agent removing Scopebond's files and their evidence. Any other delete stays a plain shell.exec, as before.
@@ -483,6 +499,10 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   const args = sc.argv;
   const spec = OPTIONS.get(prog);
   const flagFiles = READERS.has(prog) || EDITORS.has(prog) || COPIERS.has(prog) || UPLOADERS.has(prog);
+  // A PowerShell content setter's -Value is what it writes, not where (`Set-Content f -Value x`, `New-Item -Path Env:
+  // -Name N -Value x`): read as a path it would record the content, often a secret, as one. A New-Item that names an item
+  // type or a target may be making a link, whose -Value is a path, so it keeps the cautious reading.
+  const valueIsContent = CONTENT_SETTERS.has(prog) && !((prog === "new-item" || prog === "ni") && args.some((a) => /^-[it]/i.test(a)));
 
   // Operands (non-flag words) and flag values (`--flag=value`, `-T value`, `@file`, `if=f`).
   const operands: string[] = [];
@@ -499,6 +519,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     if (t === "--") { operands.push(...args.slice(i + 1)); break; }
     const lower = t.toLowerCase();
     const eq = t.indexOf("=");
+    if (valueIsContent && VALUE_PARAMETER.has(lower.split(":")[0])) { if (!t.includes(":")) i++; continue; }
     if (prog === "curl" || prog === "wget") {
       const flag = eq > 0 && t.startsWith("--") ? t.slice(0, eq) : t;
       if (CURL_DATA.has(flag) || CURL_FORM.has(flag) || flag === CURL_URLENCODE) {
@@ -548,6 +569,15 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     operands.push(t);
   }
   if (PATTERN_FIRST.has(prog) && ![...given].some((g) => PATTERN_OPTIONS.has(g)) && !(prog === "yq" && operands.length === 1)) operands.shift();
+  // `Set-Content Env:NAME value`, `Set-Content -Path Env:NAME value`: an environment variable is not a file, and the word
+  // after a one-word Env: path is the value it is set to. A path list (`Env:A, f`) may name a file, so it is left alone.
+  if (valueIsContent && (prog === "set-content" || prog === "sc" || prog === "add-content" || prog === "ac")) {
+    const named = args.findIndex((a) => /^-(?:path|literalpath)$/i.test(a));
+    const path = named >= 0 ? args[named + 1] : operands[0];
+    const at = named >= 0 ? 0 : 1;
+    const value = operands[at];
+    if (path !== undefined && value !== undefined && /^env:/i.test(path) && !path.endsWith(",") && !value.startsWith(",") && !value.endsWith(",")) operands.splice(at, 1);
+  }
 
   const git = gitArgs(sc);
   const inPlace = (a: string) => a === "--inplace" || a.startsWith("--in-place") || /^-[a-hj-z]*i/.test(a);
@@ -825,10 +855,15 @@ function selfDisable(sc: SimpleCommand): boolean {
  *  would otherwise read as switching Scopebond off. */
 const NAMES_SCOPEBOND_ITSELF = /\.scopebond\b|@scopebond\/|\bscopebond-(?:hook|agent|mcp|gateway)\b|(?:^|[\s"'`;&|(])scopebond(?:\.cmd|\.exe)?(?=$|[\s"'`;&|)])/i;
 
-function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false): Mapped[] {
+const NOTHING_HIDDEN: ReadonlySet<string> = new Set();
+
+function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: ReadonlySet<string> = NOTHING_HIDDEN): Mapped[] {
+  // Words the whole command shows to be secret (a literal piped into a secret reader) are masked in this part's recorded
+  // text too. Only the text: the program and paths a policy judges are never changed by what another part says.
+  const redact = (raw: string): string => redactCommand(hidden.size ? maskWords(raw, hidden) : raw);
   if (sc.opaque) {
     const opaque: Mapped[] = [{
-      intent: { action_type: "shell.exec", params: { command: redactCommand(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
+      intent: { action_type: "shell.exec", params: { command: redact(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
       evaluated: true, source: "shell",
     }];
     // A command that cannot be read but names Scopebond (`eval "$X @scopebond/hook uninstall"`) is treated as switching it off:
@@ -870,7 +905,7 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
       // Scrub before storing: the raw command through the blob-aware scrubber, and
       // the whole first token BEFORE taking its basename, so a bare-secret command
       // containing "/" cannot leak a path-fragment as the program.
-      params: { command: redactCommand(sc.raw), program: basename(scrubSecrets(sc.programRaw)), ...(cwd ? { cwd } : {}) },
+      params: { command: redact(sc.raw), program: basename(scrubSecrets(sc.programRaw)), ...(cwd ? { cwd } : {}) },
     },
     evaluated: true, source: "shell",
   };
@@ -897,11 +932,14 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
   if (commands.length === 0) {
     return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
   }
+  // A literal piped into a reader of secrets (`'pw' | ConvertTo-SecureString`, `echo pw | docker login --password-stdin`)
+  // sits in the simple command before the pipe, which is recorded on its own: it is masked there too.
+  const piped = pipedSecrets(src);
   const walk = (list: SimpleCommand[], filesOnly: boolean): Mapped[] => {
     let dir = "";
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly);
+      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped);
       out.push(...(filesOnly ? mapped.filter((m) => m.intent.action_type.startsWith("file.")) : mapped));
       if (!sc.opaque && CD.has(canonProgram(sc.program))) {
         const target = sc.argv.find((a) => !a.startsWith("-"));
@@ -966,7 +1004,7 @@ function mapApplyPatch(command: string, cwd?: string): Mapped[] {
   for (const line of command.split(/\r?\n/)) {
     const prefix = prefixes.find((candidate) => line.startsWith(candidate));
     if (!prefix) continue;
-    const path = rel(scrubParam(line.slice(prefix.length).trim()), cwd);
+    const path = rel(scrubPath(line.slice(prefix.length).trim()), cwd);
     if (!path || seen.has(path)) continue;
     seen.add(path);
     paths.push(path);

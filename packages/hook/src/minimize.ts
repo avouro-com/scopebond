@@ -6,6 +6,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { loadOrCreateHexKey } from "./safe-fs.js";
 import { join } from "node:path";
 import { canonical } from "@scopebond/policy-schema/canonical";
+import { isCredentialName, scrubShellSecrets } from "@scopebond/gateway";
 
 /** A plain SHA-256 content hash, for values that are not secret. */
 export const sha256 = (value: string): string => "sha256:" + createHash("sha256").update(value).digest("hex");
@@ -50,17 +51,18 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [new RegExp(String.raw`((?:^|\s)(?:-u|--user)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
   [/(Authorization:\s*(?:Bearer|Basic|Token)\s+)[^\s"']+/gi, `$1${MASK}`],
   [/((?:x-api-key|api-key|x-auth-token|x-access-token|private-token)\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
-  // Any URL userinfo: user:password@, a token alone (an Azure DevOps or GitHub token as the user), or :password@.
-  [/(:\/\/)[^\s/@]+@/g, `$1${MASK}@`],
+  // Any URL userinfo: user:password@, a token alone (an Azure DevOps or GitHub token as the user), or :password@. It runs
+  // to the last "@" before the host, as a URL parser splits it (a password may hold an "@"); the authority ends at "/",
+  // "?" or "#", so an "@" in a path or query is left alone. Linear: the run after each "://" stops at "/".
+  [/(:\/\/)[^\s/?#]*@/g, `$1${MASK}@`],
   // A credential in a URL query (an Azure SAS signature, an OAuth token or code).
   [/([?&](?:sig|signature|sas|token|access_token|refresh_token|id_token|key|api_?key|code|password|secret|client_secret)=)[^&\s"'#]+/gi, `$1${MASK}`],
   // Cookies: the header's value runs to the end of the quoted string; curl's -b/--cookie takes one value.
   [/(\bCookie:\s*)[^"'\n]+/gi, `$1${MASK}`],
   // eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern built from literals (VALUE); no input reaches the source
   [new RegExp(String.raw`((?:^|\s)(?:-b|--cookie)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
-  // PowerShell: a plain-text secure string, and an environment assignment with spaces ($env:NAME = "value").
-  // eslint-disable-next-line security/detect-non-literal-regexp -- a constant pattern built from literals (VALUE); no input reaches the source
-  [new RegExp(String.raw`(ConvertTo-SecureString\s+(?:-String\s+)?)${VALUE}`, "gi"), `$1${MASK}`],
+  // PowerShell's secret shapes (a plain-text secure string, `$env:NAME = "value"`, `Set-Item Env:…`, `$token = '…'`) are
+  // read by the gateway's `scrubShellSecrets`, in `scrubParam` below.
   [/(\bhv[sb]\.)[A-Za-z0-9_-]{20,}/g, `$1${MASK}`],                  // Vault tokens
   [/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, MASK],          // SendGrid keys
   [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, MASK],                           // GitHub tokens
@@ -155,24 +157,18 @@ const BLOB_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/[A-Za-z0-9+/_-]{40,}={0,2}/g, MASK],                             // long base64/base64url blobs
 ];
 
-const SECRET_NAME = /token|secret|passw|pwd|api_?key|access_?key|private_?key|auth|credential|session/i;
-// Short password names (`DB_PASS`, `PASS`, `DB_PW`) and anything ending in KEY (`SERVICE_KEY`).
-const SHORT_SECRET_NAME = /(?:^|[_$:])(?:pass|pw)(?:_|$)|key$/i;
-const secretName = (name: string): boolean => SECRET_NAME.test(name) || SHORT_SECRET_NAME.test(name);
-
 // `NAME=value` where the name looks like a credential (`GH_TOKEN=…`, `export
-// AWS_SECRET_ACCESS_KEY=…`). Done per whitespace-delimited word rather than with
-// one regex so a long identifier cannot cause backtracking. PowerShell's `$env:NAME = "value"` (spaces around `=`) is
-// handled as well.
+// AWS_SECRET_ACCESS_KEY=…`, `DB_PASS=…`, `SERVICE_KEY=…`). Done per whitespace-delimited word rather than with
+// one regex so a long identifier cannot cause backtracking. A spaced or quoted assignment (`$env:NAME = "value"`,
+// `$token = '…'`, `password="a b"`) is read before this by `scrubShellSecrets`.
 function scrubAssignments(text: string): string {
-  const words = text.replace(/\S+/g, (word) => {
+  return text.replace(/\S+/g, (word) => {
     const eq = word.indexOf("=");
     if (eq <= 0 || eq === word.length - 1) return word;
     const name = word.slice(0, eq);
-    if (name.startsWith("-") || !secretName(name.replace(/^.*[?&/]/, ""))) return word; // flags are handled by SECRET_RULES
+    if (name.startsWith("-") || !isCredentialName(name.replace(/^.*[?&/]/, ""))) return word; // flags are handled by SECRET_RULES
     return `${name}=${MASK}`;
   });
-  return words.replace(/(\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)("[^"]*"|'[^']*'|\S+)/gi, (all, head: string, name: string) => secretName(name) ? `${head}${MASK}` : all);
 }
 
 /** A URL path as a record keeps it: segments that look like a secret (long and mixing letters and digits, or a bot token)
@@ -190,15 +186,32 @@ export function scrubUrlPath(path: string): string {
  *  assignments and recognizable token shapes only, so policy matching on ordinary
  *  values is unaffected. */
 export function scrubParam(text: string): string {
-  let out = scrubAssignments(text);
+  let out = scrubAssignments(scrubShellSecrets(text));
   for (const [re, replacement] of SECRET_RULES) out = out.replace(re, replacement);
   return out;
+}
+
+// A credential name and its value joined by a comma, as an argument list reads once the shell parser has taken its quotes
+// off (`[Environment]::SetEnvironmentVariable('DB_PASSWORD','x')` records `('DB_PASSWORD','x')` as a command of its own,
+// with `DB_PASSWORD,x` read as its program). Free text only: the rest of the word after the comma is masked.
+const OPENING = new Set(["(", "[", "{", "@", "'", '"']);
+const QUOTE = new Set(["'", '"']);
+function scrubJoinedArguments(text: string): string {
+  return text.replace(/\S+/g, (word) => {
+    const comma = word.indexOf(",");
+    if (comma <= 0 || comma === word.length - 1) return word;
+    let start = 0;
+    let end = comma;
+    while (start < end && OPENING.has(word[start])) start++;
+    while (end > start && QUOTE.has(word[end - 1])) end--;
+    return isCredentialName(word.slice(start, end)) ? `${word.slice(0, comma + 1)}${MASK}` : word;
+  });
 }
 
 /** Scrub free text: everything `scrubParam` removes, plus the free-text-only argv and
  *  header shapes and generic high-entropy blobs. */
 export function scrubSecrets(text: string): string {
-  let out = scrubParam(text);
+  let out = scrubJoinedArguments(scrubParam(text));
   for (const [re, replacement] of HEAD_RULES) out = out.replace(re, replacement);
   out = scrubSecretHeaders(scrubSpacedPasswords(out));
   for (const [re, replacement] of BLOB_RULES) out = out.replace(re, replacement);

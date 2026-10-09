@@ -55,6 +55,7 @@ export { KvReceiptStore, loadOrCreateKvAttester, createWorkerGateway } from "./w
 export type { KvLike } from "./workers.js";
 export { createCloudExporter, createMemoryCloudOutbox, withCloudExporter, seqRanges, LOSSLESS_CLOUD_OUTBOX, DELIVERY_SEQUENCE_CONTEXT, deliverySequenceMaterial } from "./cloud.js";
 export { scrubSecretText } from "./scrub.js";
+export { scrubShellSecrets, pipedSecrets, maskWords, isCredentialName } from "./shell-secrets.js";
 export { completeCloudEnrollment, CloudEnrollmentError } from "./enrollment.js";
 export type { CloudEnrollmentBundle, CloudEnrollmentResult } from "./enrollment.js";
 export type {
