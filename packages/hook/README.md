@@ -148,9 +148,23 @@ version shows up as a problem rather than as a hook that silently cannot start.
 | File writes / edits | prevented | **recorded, not prevented** | prevented |
 
 Cursor reports a file edit only *after* it is written (`afterFileEdit`; it has no
-before-edit hook), so an out-of-policy edit there is signed and flagged, not blocked —
-and the message says so rather than claiming otherwise. For edits that must be stopped
-before they land, make `@scopebond/github-action` a required check on pull requests.
+before-edit hook), so an out-of-policy edit there is signed as recorded after the fact
+(`execution.state: "observed_after"`, `executed: true`), not as denied. `log` shows it as
+"recorded, not prevented", it is never counted as a block, and the message says so rather
+than claiming otherwise. For edits that must be stopped before they land, make
+`@scopebond/github-action` a required check on pull requests.
+
+Cursor is told `allow` only when every action of the call was checked and permitted. An
+action a monitored rule finds out of policy (recorded, not blocked) gets no opinion
+(`ask`), so Cursor's own approval still decides, as Claude Code's and Codex's do when the
+hook stays silent.
+
+A hook entry the coding agent cannot start at all (a moved Node, a removed install) lets
+actions run with no check: the agents treat that as a non-blocking error. Any failure the
+hook program itself can still catch answers deny (Claude Code: exit 2). For Codex and
+Cursor, which send nothing between actions, the Scopebond Agent checks their entries on
+each maintenance pass and keeps each outage as a `hook_unresolvable` delivery gap that the
+rules check reports to the workspace; `doctor` reports it on any computer.
 
 Codex has no native file-read event: reads it makes through shell commands are derived
 from the command (`cat .env`) and checked, but a read that never goes through a shell
@@ -222,6 +236,25 @@ npx -y @scopebond/hook@latest connect https://<your-workspace> scopebond-enrollm
 ```
 
 In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Every command the hook prints for you to run uses `npx.cmd` on Windows.
+
+### Checking the workspace's evidence chain
+
+Each delivery answer from the workspace carries its evidence chain's head (how many records
+it had admitted and its newest evidence segment, signed by the workspace when it has a
+signing key). The hook keeps them in `chain-heads.json` beside its receipts. The workspace
+also publishes each day's heads in a public, append-only log. To check that what the
+workspace holds still agrees with what it told this computer:
+
+```
+scopebond verify --anchor <file-or-https-url-of-a-published-day>
+scopebond verify --anchor <day.json> --segments <folder of downloaded evidence segments>
+```
+
+`verify` exits non-zero when a chain went back below a head this computer kept, when one
+position names two different segments, or when a kept head's segment is no longer in the
+chain: records were removed, reordered or re-chained after the workspace acknowledged
+them. With `--segments`, every segment's digest, leaves, Merkle root, links and sequence
+numbers are checked, and every record signed with this computer's key is verified.
 
 ### Is it delivering?
 
@@ -561,9 +594,9 @@ workspace's *Standard* evidence detail never sends; the retention above applies 
 record until the workspace acknowledges it. The local observation queue keeps the newest 1,000 refused observations and
 counts the older ones it removes. Archives written by `prune --before` stay until you delete them.
 
-**What is sent to the workspace.** Every receipt, unless the workspace sets its evidence
-detail to *Standard* (it says so on each rules check). Then the notable receipts are sent
-in full at once — anything not plainly allowed (a block, an override, an approval, an
+**What is sent to the workspace.** By default the *Standard* evidence detail, until the
+workspace sets its evidence detail to *Full* (it says so on each rules check); then every
+receipt is sent. Under *Standard*, the notable receipts are sent in full at once — anything not plainly allowed (a block, an override, an approval, an
 action a Monitor rule matched), pushes, MCP calls, web fetches, and writes outside the
 project or to CI, agent or Scopebond settings — and the routine ones leave as one signed
 summary per five minutes (`scopebond:summary`, see `@scopebond/verify/summary`): their

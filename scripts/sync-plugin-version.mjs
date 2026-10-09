@@ -10,22 +10,33 @@
 //   - packages/gateway/README.md `@scopebond/gateway@x.y.z` pins;
 //   - packages/verify/src/violates.ts VERIFIER_VERSION → the verify version.
 
-import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const read = (path) => readFileSync(path, "utf8");
+/** The file's text, or undefined when it does not exist (read directly: a separate existence check would race it). */
+const readIfPresent = (path) => {
+  try {
+    return read(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+};
 const versions = {};
 for (const dir of readdirSync("packages", { withFileTypes: true })) {
   const file = `packages/${dir.name}/package.json`;
-  if (!dir.isDirectory() || !existsSync(file)) continue;
-  const pkg = JSON.parse(read(file));
+  if (!dir.isDirectory()) continue;
+  const text = readIfPresent(file);
+  if (text === undefined) continue;
+  const pkg = JSON.parse(text);
   if (pkg.name?.startsWith("@scopebond/") && pkg.version) versions[dir.name] = { name: pkg.name, version: pkg.version };
 }
 const VERSION = "[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?";
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 
 function update(file, transform) {
-  if (!existsSync(file)) return;
-  const before = read(file);
+  const before = readIfPresent(file);
+  if (before === undefined) return;
   const after = transform(before);
   if (after !== before) {
     writeFileSync(file, after);

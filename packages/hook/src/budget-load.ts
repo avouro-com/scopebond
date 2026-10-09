@@ -17,13 +17,14 @@
 // An export carries no signature of its own: get the file from your workspace, over its own page or
 // API. Loading replaces an older workspace budget for the same agent; it never replaces a newer one.
 
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { budgetDigest, type ActionBudgetPolicy } from "@scopebond/gateway";
 import { DISPATCH_FILE, readDispatchFile } from "@scopebond/gateway/node";
 import { digestPolicy, type PolicyAckInput, type PolicyLoadError } from "./observation.js";
 import { policyScopeDigest, MAX_EXPORT_BYTES } from "./policy-load.js";
+import { readBounded } from "./safe-fs.js";
 
 export const BUDGET_EXPORT_TYPE = "scopebond:action-budget-export";
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -138,8 +139,9 @@ export type BudgetLoadOutcome =
 export function loadBudgetExport(dir: string, file: string, options: { apply: boolean; agentKid: string; environmentId?: string; now?: number }): BudgetLoadOutcome {
   let raw: unknown;
   try {
-    if (statSync(file).size > MAX_EXPORT_BYTES) return { state: "rejected", error: "schema_invalid", message: "the export file is larger than 1 MiB" };
-    raw = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    const text = readBounded(file, MAX_EXPORT_BYTES);
+    if (text === null) return { state: "rejected", error: "schema_invalid", message: "the export file is larger than 1 MiB" };
+    raw = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch (error) {
     return { state: "rejected", error: "schema_invalid", message: `the export could not be read as JSON (${(error as Error).name})` };
   }

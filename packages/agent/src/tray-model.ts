@@ -43,7 +43,8 @@ export interface TrayInput {
   /** A long step the agent is running (an update, a sign-in, a repair), or null. */
   working: string | null;
   rules: { checked_at: number | null; managed: boolean; block: number; monitor: number } | null;
-  today: { actions: number; blocked: number; allowed_by_person: number } | null;
+  /** `recorded_after`: out of policy but reported only after it ran (a Cursor edit); never counted as blocked. */
+  today: { actions: number; blocked: number; recorded_after?: number; allowed_by_person: number } | null;
   recentBlocks?: RecentBlock[];
   version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null };
   workspace: { name: string | null; environment: string | null; computer_url: string | null } | null;
@@ -179,6 +180,7 @@ export function trayModel(input: TrayInput): TrayModel {
   }
   if (input.today) {
     const parts = [`${input.today.actions} action${input.today.actions === 1 ? "" : "s"}`, `${input.today.blocked} blocked`];
+    if (input.today.recorded_after) parts.push(`${input.today.recorded_after} recorded, not prevented`);
     if (input.today.allowed_by_person) parts.push(`${input.today.allowed_by_person} allowed by a person`);
     if (input.openReviews) parts.push(`${input.openReviews} in Review`);
     rows.push({ label: "Today", value: parts.join(" · ") });

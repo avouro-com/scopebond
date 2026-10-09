@@ -408,6 +408,19 @@ test("one heartbeat helper per session: the lease is claimed once, renewed by th
   c.emitter.close();
 });
 
+test("a heartbeat whose session ended between the helper's check and its write is not queued, so none follows the stop", () => {
+  const c = clockedEmitter();
+  c.emitter.sessionStart("s1", "/work");
+  const sid = c.emitter.sessionIdOf("s1");
+  // Another hook process ends the session after the helper read it as active.
+  c.emitter.sessionStop("s1", "completed");
+  const before = emitted(c.emitter).length;
+  const result = c.emitter.emit({ kind: "health", occurredAt: c.clock.t, sessionId: sid, data: { lease_active: true } }, { whileSessionActive: sid });
+  assert.deepEqual(result, { queued: false, reason: "session_ended" });
+  assert.equal(emitted(c.emitter).length, before, "nothing queued after the stop");
+  c.emitter.close();
+});
+
 test("the real helper: heartbeats flow while a session is active, from one process, and stop when the session ends", async () => {
   const server = await startServer();
   // A failed assertion must not leave the server open: the file would then hang until its time limit.

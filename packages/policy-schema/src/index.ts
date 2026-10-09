@@ -77,6 +77,8 @@ export const EXECUTION_STATES = [
   "simulated", "observed_not_evaluated", "denied", "allowed_pending",
   "cooperative_allow",
   "executed", "failed", "outcome_unknown",
+  // A violation recorded after the action already ran (`realtime_result: "deny"`, `executed: true`): not prevented.
+  "observed_after",
 ] as const;
 
 // Evidence classes (§15 / D65): how strong a receipt's evidence is. Additive

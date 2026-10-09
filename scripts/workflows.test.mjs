@@ -115,7 +115,7 @@ test("publishing runs only for the merged Version packages pull request with no 
   // The step holding the automation token opens the Version packages pull request and publishes nothing.
   for (const job of release.jobs) {
     for (const step of job.steps.filter((s) => AUTOMATION_SECRET.test(s))) {
-      assert.doesNotMatch(step, /^\s+publish:/m, "release.yml: the version step has no publish command");
+      assert.doesNotMatch(step, /^\s+publish(-script)?:/m, "release.yml: the version step has no publish command");
       assert.doesNotMatch(step, NPM_SECRET, "release.yml: the version step has no npm token");
     }
   }
@@ -143,17 +143,22 @@ test("only the release workflow can publish to npm, and no manual publish runs f
   assert.equal(existsSync(join(workflowsDir, "publish.yml")), false, "the manual publish workflow is gone");
 });
 
-test("native signing: the Azure session starts only after the installer tools are restored", () => {
+test("native signing: no job that can sign runs the installer tools, and the installer job holds no signing token", () => {
   const native = readWorkflow("native-release.yml");
-  const sign = native.jobs.find((job) => job.name === "sign");
-  assert.ok(sign, "native-release.yml has the sign job");
-  const login = sign.steps.findIndex((step) => /uses:\s*azure\/login@/.test(step));
-  const restore = sign.steps.findIndex((step) => /build-msi\.mjs --restore\b/.test(step));
-  assert.ok(login > -1 && restore > -1, "the sign job restores the tools and logs in to Azure");
-  assert.ok(restore < login, "the tool restore runs before the Azure login");
-  for (const step of sign.steps.slice(login + 1)) {
-    assert.doesNotMatch(step, /dotnet tool restore|wix extension add/, "nothing is fetched after the Azure login");
-    if (/build-msi\.mjs/.test(step)) assert.match(step, /--no-restore/, "the installer build after login restores nothing");
+  const signing = native.jobs.filter((job) => job.steps.some((step) => /uses:\s*azure\/login@/.test(step)));
+  assert.ok(signing.length >= 1, "native-release.yml signs in to Azure");
+  for (const job of signing) {
+    for (const step of job.steps) {
+      assert.doesNotMatch(step, /build-msi\.mjs|dotnet tool|wix (extension|build)|pnpm install|npm (install|ci)/,
+        `native-release.yml ${job.name}: no build tool or dependency install runs in a job that can sign`);
+    }
+  }
+  const installer = native.jobs.filter((job) => job.steps.some((step) => /build-msi\.mjs/.test(step)));
+  assert.ok(installer.length >= 1, "native-release.yml builds the installer");
+  for (const job of installer) {
+    assert.doesNotMatch(job.header, /^ {4}environment:/m, `native-release.yml ${job.name}: the installer build runs in no environment`);
+    assert.doesNotMatch(job.header, /id-token: write/, `native-release.yml ${job.name}: the installer build cannot ask for an OIDC token`);
+    assert.doesNotMatch(job.steps.join("\n"), /secrets\./, `native-release.yml ${job.name}: the installer build has no secrets`);
   }
   for (const step of native.jobs.flatMap((job) => job.steps.filter(isCheckout))) {
     assert.match(step, /persist-credentials: false/, "native-release.yml: checkout keeps no token in the git config");
@@ -162,9 +167,8 @@ test("native signing: the Azure session starts only after the installer tools ar
 
 test("native signing: the signed update manifest names the commit it was built from", () => {
   const native = readWorkflow("native-release.yml");
-  const sign = native.jobs.find((job) => job.name === "sign");
-  const manifest = sign.steps.find((step) => /manifest\.mjs/.test(step));
-  assert.ok(manifest, "the sign job writes the update manifest");
+  const manifest = native.jobs.flatMap((job) => job.steps).find((step) => /manifest\.mjs/.test(step));
+  assert.ok(manifest, "native-release.yml writes the update manifest");
   assert.match(manifest, /github\.sha/, "the manifest step passes the commit");
 });
 

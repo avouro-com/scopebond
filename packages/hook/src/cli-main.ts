@@ -15,6 +15,7 @@ import { hostname, tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
+import { checkChains } from "./chain-verify.js";
 import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
@@ -290,6 +291,17 @@ function denyCursor(reason: string): never {
   process.exit(0);
 }
 
+/** A clean evaluated allow: the call was allowed and every action in it was checked and permitted (or allowed by a person).
+ *  An action a monitored rule found out of policy is signed `deny` and still allowed; an unchecked one is `not_evaluated`. */
+function cleanAllow(decision: { decision: string; receipt?: unknown; receipts?: unknown[] }): boolean {
+  if (decision.decision !== "allow") return false;
+  const list = decision.receipts?.length ? decision.receipts : decision.receipt !== undefined ? [decision.receipt] : [];
+  return list.length > 0 && list.every((r) => {
+    const result = (r as { payload?: { realtime_result?: unknown } } | null)?.payload?.realtime_result;
+    return result === "allow" || result === "approved";
+  });
+}
+
 /** Keep the local store small when the Scopebond Agent does not (it keeps the user home while it runs). */
 function keepStore(dir: string): void {
   const home = userHome();
@@ -337,18 +349,22 @@ async function runCursor(): Promise<void> {
     // An `afterFileEdit` violation is real and recorded, but the edit has already
     // landed. Say so rather than letting "blocked" imply it was stopped.
     postHoc = mapped.some((m) => m.postHoc);
-    // Three outcomes, three answers:
+    // The answers:
     //   deny  — out of policy, blocked outright.
-    //   allow — a rule was evaluated and permitted it. Returning "ask" here put a
-    //           confirmation prompt in front of every ordinary command, which is not
-    //           "your agent works as normal"; it also trained people to click through
-    //           prompts, which makes the real denials easier to miss. An evaluated
-    //           allow is a decision, not a silent auto-approval.
-    //   ask   — nothing was evaluated (no rule covers this action), so Cursor's own
-    //           permission flow stays in charge. That is the fail-closed case and it
-    //           keeps its prompt.
-    permission = decision.decision === "deny" ? "deny" : decision.decision === "allow" ? "allow" : "ask";
-    message = decision.reason;
+    //   allow — only a clean evaluated allow: every action of the call was checked and
+    //           permitted. Returning "ask" here put a confirmation prompt in front of
+    //           every ordinary command, which is not "your agent works as normal"; it
+    //           also trained people to click through prompts, which makes the real
+    //           denials easier to miss.
+    //   ask   — anything else: no rule covers the action, or a rule that records rather
+    //           than blocks found it out of policy. Cursor's own approval stays in
+    //           charge, exactly as Claude Code's and Codex's do when the hook stays
+    //           silent. Answering "allow" to a recorded violation would approve it on
+    //           the person's behalf and skip the prompt Cursor would otherwise show.
+    permission = decision.decision === "deny" ? "deny" : cleanAllow(decision) ? "allow" : "ask";
+    message = decision.decision === "allow" && permission === "ask"
+      ? "Scopebond recorded this as out of policy under a rule that records rather than blocks; Cursor's own approval decides."
+      : decision.reason;
   } catch (error) {
     permission = "deny";
     message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`;
@@ -469,6 +485,8 @@ function decisionOf(payload: Record<string, unknown>): string {
   const rr = String(payload.realtime_result ?? "");
   const state = String((payload.execution as Record<string, unknown> | undefined)?.state ?? "");
   if (state === "observed_not_evaluated") return "not_evaluated";
+  // Out of policy, but reported only after it ran: recorded, never a block.
+  if (state === "observed_after") return "recorded, not prevented";
   if (rr === "deny") return state === "cooperative_allow" || state === "executed" ? "monitor" : "deny";
   return "allow";
 }
@@ -841,11 +859,25 @@ export function parseSince(value: string | undefined, now: number = Date.now()):
   return Number.isFinite(at) ? at : null;
 }
 
-async function runVerify(): Promise<void> {
+async function runVerify(args: string[] = []): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
   const dbPath = join(dir, "receipts.db");
   const attesterPath = join(dir, "attester.key");
-  if (!existsSync(dbPath) || !existsSync(attesterPath)) { console.log("nothing to verify yet (no receipts or no attester key)."); process.exit(0); }
+  // --anchor <file-or-url> (repeatable) and --segments <dir>: the evidence-chain heads this computer kept, against a
+  // published day's anchor list and the evidence segments downloaded from the workspace.
+  const anchors: string[] = [];
+  let segmentsDir: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--anchor" && args[i + 1]) anchors.push(args[++i]!);
+    else if (args[i] === "--segments" && args[i + 1]) segmentsDir = resolve(args[++i]!);
+    else { console.error(`unknown option for verify: ${args[i]}. Use: ${cliCommand("verify [--anchor <file-or-url>] [--segments <dir>]")}`); process.exit(2); }
+  }
+  const chainCheck = anchors.length > 0 || segmentsDir !== undefined;
+  if (!existsSync(dbPath) || !existsSync(attesterPath)) {
+    console.log("nothing to verify yet (no receipts or no attester key).");
+    if (!chainCheck) process.exit(0);
+    process.exit(await reportChains(dir, anchors, segmentsDir, undefined) ? 0 : 1);
+  }
   const { attester } = loadOrCreateAttester({ file: attesterPath });
   const { store } = openReceiptStore({ db: dbPath });
   // Verification is the one command that must read everything — that is the point of it.
@@ -867,8 +899,18 @@ async function runVerify(): Promise<void> {
   }
   if (progress) process.stderr.write("\r".padEnd(40) + "\r");
   console.log(`${ok}/${all.length} receipt(s) verify offline against ${attesterPath}.`);
-  if (bad.length) { for (const b of bad) console.error(`  ✗ ${b}`); process.exit(1); }
-  process.exit(0);
+  if (bad.length) for (const b of bad) console.error(`  ✗ ${b}`);
+  const chainsOk = chainCheck ? await reportChains(dir, anchors, segmentsDir, attester.publicKeyPem) : true;
+  process.exit(bad.length || !chainsOk ? 1 : 0);
+}
+
+/** Prints the chain-head checks; true when nothing disagrees. */
+async function reportChains(dir: string, anchors: string[], segmentsDir: string | undefined, publicKeyPem: string | undefined): Promise<boolean> {
+  const report = await checkChains({ dir, anchors, segmentsDir, publicKeyPem });
+  for (const line of report.lines) console.log(line);
+  for (const problem of report.problems) console.error(`  ✗ ${problem}`);
+  if (!report.ok) console.error("The workspace's evidence chain disagrees with what it told this computer or published: records may have been removed, reordered or re-chained.");
+  return report.ok;
 }
 
 async function runTest(args: string[]): Promise<void> {
@@ -1890,8 +1932,13 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
   { name: "log", args: "[-n N] [--deny] [--since 7d]",
     summary: "the recent decisions",
     detail: [`--deny shows only blocked actions; --since takes 7d, 24h, 30m or a date.`, `e.g. ${cliCommand("log --deny --since 7d")}`] },
-  { name: "verify", summary: "check every local receipt offline against the countersigning key",
-    detail: ["No network, no account. Exits non-zero if any receipt fails."] },
+  { name: "verify", args: "[--anchor <file-or-url>] [--segments <dir>]", summary: "check every local receipt offline against the countersigning key",
+    detail: [
+      "No network, no account. Exits non-zero if any receipt fails.",
+      "--anchor checks the chain heads this computer kept from its workspace's answers against a published",
+      "day of anchors (a file, or an https address); --segments also checks evidence segments downloaded from",
+      "the workspace. A chain that went back, or a kept head whose segment is gone, fails.",
+    ] },
   { name: "test", args: '"<shell command>"',
     summary: "show the decision for a command without running or recording it",
     detail: [`e.g. ${cliCommand('test "rm -rf /"')}`] },
@@ -1987,7 +2034,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   else if (cmd === "install") { runInstall(rest); }
   else if (cmd === "connect") { await runConnect(rest); }
   else if (cmd === "log") { await runLog(rest); }
-  else if (cmd === "verify") { await runVerify(); }
+  else if (cmd === "verify") { await runVerify(rest); }
   else if (cmd === "test") { await runTest(rest); }
   else if (cmd === "flush") { await runFlush(); }
   else if (cmd === "recover") { await runRecover(rest); }

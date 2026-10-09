@@ -1,5 +1,35 @@
 # @scopebond/agent
 
+## 0.5.6
+
+### Patch Changes
+
+- Updated dependencies [0225f33]
+- Updated dependencies [0225f33]
+- Updated dependencies [faacb85]
+- Updated dependencies [9ed82ed]
+  - @scopebond/gateway@0.17.3
+  - @scopebond/hook@0.21.5
+
+## 0.5.5
+
+### Patch Changes
+
+- Updated dependencies [b35ae68]
+  - @scopebond/hook@0.21.4
+
+## 0.5.4
+
+### Patch Changes
+
+- b9c0504: Each delivery batch's record numbers are now signed with the computer's enrolled key. The Cloud exporter takes an optional `sequenceProof` (the attester and the machine credential's id) and sends `seq_proof: { kid, signature }` beside `seq` and `queue`, over `"scopebond:delivery-sequence/v1\n"` followed by the canonical JSON of the credential id, the queue id, the numbers and the SHA-256 of each receipt as sent. A party holding only the bearer credential can no longer attach numbers to records of its choosing. The hook and the agent sign with the key that signs their receipts; an exporter without a key sends the numbers unsigned, as before.
+- Updated dependencies [bc4999d]
+- Updated dependencies [ddb4033]
+- Updated dependencies [b7bbe7a]
+- Updated dependencies [b9c0504]
+  - @scopebond/hook@0.21.3
+  - @scopebond/gateway@0.17.2
+
 ## 0.5.3
 
 ### Patch Changes

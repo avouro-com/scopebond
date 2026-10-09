@@ -11,7 +11,7 @@ import {
   type Attester, type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
   type CloudSequenceProofOptions, type ReceiptStore,
 } from "@scopebond/gateway";
-import { SqliteCloudOutbox, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX } from "./delivery-report.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { summaryOptions } from "./evidence-detail.js";
@@ -59,7 +59,8 @@ export function loadConnection(dir: string): HookConnection | null {
     const text = readTextCached(path);
     if (text === null) return null;
     const parsed = JSON.parse(text.replace(/^\uFEFF/, "")) as Partial<HookConnection>;
-    if (typeof parsed.url === "string" && typeof parsed.credential === "string") return parsed as HookConnection;
+    // The credential goes only to an HTTPS workspace (or localhost in development), as `login` requires, even if the file was edited.
+    if (typeof parsed.url === "string" && typeof parsed.credential === "string" && safeIngestOrigin(parsed.url) !== null) return parsed as HookConnection;
   } catch { /* fall through */ }
   return null;
 }
@@ -157,8 +158,10 @@ export function attachExporter(
   // `onGap`: a record the queue could not take (its write failed after the local write) is kept as a gap by the caller.
   const summaries = summaryOptions(dirname(outboxDbPath));
   const sequenceProof = sequenceProofFor(connection, summaries?.attester);
+  // The chain head each delivery answer carries is kept beside the receipts (chain-heads.json), for `verify --anchor`.
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: fetchImpl,
-    summaries, ...(sequenceProof ? { sequenceProof } : {}), ...(options.onGap ? { onGap: options.onGap } : {}) });
+    summaries, ...(sequenceProof ? { sequenceProof } : {}), ...(options.onGap ? { onGap: options.onGap } : {}),
+    onChainHead: chainHeadRecorder(join(dirname(outboxDbPath), CHAIN_HEADS_FILE)) });
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }
 

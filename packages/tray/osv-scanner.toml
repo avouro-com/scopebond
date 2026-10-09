@@ -1,0 +1,20 @@
+# osv-scanner reads this beside packages/tray/Cargo.lock (security-audit.yml scans that lockfile).
+#
+# The lockfile pins every crate Tauri can use on any platform. The ones below are only in Tauri's Linux stack (GTK,
+# WebKitGTK, libappindicator); the tray is built for Windows only and never compiles them. Each entry ends on a date, so
+# it is looked at again.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"
+ignoreUntil = 2027-04-01
+reason = "glib 0.18 (VariantStrIter): only in Tauri's Linux GTK stack; the Windows tray does not compile glib"
+
+[[IgnoredVulns]]
+id = "GHSA-wrw7-89jp-8q8g"
+ignoreUntil = 2027-04-01
+reason = "the same glib advisory as RUSTSEC-2024-0429: Linux only, not compiled into the Windows tray"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+ignoreUntil = 2027-04-01
+reason = "proc-macro-error is unmaintained: a build-time macro used only by the Linux GTK crates (glib-macros, gtk3-macros)"

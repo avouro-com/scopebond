@@ -46,8 +46,7 @@ import type { SignedReceipt, CloudExporter } from "@scopebond/gateway";
 import { createMcpProxy, invalidMessageReason } from "./proxy.js";
 import { readLines, upstreamEnv, MAX_LINE_BYTES } from "./stdio.js";
 import { requestBinderFromHex, type ObservationSink, type RequestBinder, type TypedAdapterConfig } from "./typed.js";
-import { existsSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { loadOrCreateHexKey } from "./key-file.js";
 import { join, resolve } from "node:path";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
 import { scaffold } from "./init.js";
@@ -197,10 +196,7 @@ const upstream: McpUpstream = {
 // The proxy's local key: a file beside the signing key, made on first use and never uploaded. It keys the typed
 // adapter's request binding (when the hook does not supply one) and every receipt's args_digest.
 function localBindingKey(): string {
-  const file = `${keyPath}.binding`;
-  let hex = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
-  if (!/^[0-9a-f]{64}$/.test(hex)) { hex = randomBytes(32).toString("hex"); writeFileSync(file, hex + "\n", { mode: 0o600 }); }
-  return hex;
+  return loadOrCreateHexKey(`${keyPath}.binding`);
 }
 const typedPath = arg("--typed", process.env.SCOPEBOND_MCP_TYPED);
 let typed: TypedAdapterConfig | undefined;

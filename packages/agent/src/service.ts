@@ -5,13 +5,13 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { hostname, uptime } from "node:os";
 import { join } from "node:path";
-import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, runStoreUpkeep, writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
-import { fetchVerifiedInstaller, installAfterExit, installKind } from "./native-update.js";
-import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, startCommands } from "./autostart.js";
+import { fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind, nativeTrayPath, takeInstallResult } from "./native-update.js";
+import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
@@ -22,7 +22,11 @@ import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { checkResult, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
-import { agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand } from "./update.js";
+import {
+  agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
+} from "./update.js";
+import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
+import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
@@ -31,6 +35,9 @@ const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const SUMMARY_EVERY_MS = 5 * 60 * 1000;
 export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
+/** Left in the Scopebond folder when this computer's user stops the agent (`scopebond-agent stop`), and removed when it
+ *  starts: the native tray then leaves it stopped instead of starting it again. */
+export const STOPPED_FILE = "agent-stopped.json";
 /** The person's tray settings (D143: notifications about problems by default, none about blocks). */
 export const TRAY_SETTINGS_FILE = "agent-settings.json";
 export type NotificationSetting = "all" | "problems" | "off";
@@ -62,10 +69,14 @@ export interface ServiceOptions {
   maintenance?: boolean;
   /** Called after a successful update instead of restarting (tests). */
   onUpdated?: (version: string) => void;
+  /** Confirms the newly installed agent starts and reports its version before this one hands over (tests replace it). */
+  startCheck?: (version: string) => Promise<{ ok: boolean; output: string }>;
   /** Shows the Scopebond window for an override (tests replace it). */
   prompter?: Prompter;
   /** The Windows tray icon (default on Windows; SCOPEBOND_AGENT_TRAY=off turns it off). */
   tray?: boolean;
+  /** Runs one local store upkeep pass (default: `scopebond-agent upkeep` in a child process; tests replace it). */
+  upkeep?: (dir: string) => Promise<UpkeepReport>;
   /** Called once the agent has stopped because `stop` (or `autostart off`) asked it to; the CLI exits. */
   onStopped?: () => void;
   /** Each delivery request's time limit (default 30 s) and one cycle's (default 10 minutes). A cycle that runs past its
@@ -96,7 +107,7 @@ export interface MaintenanceResult {
   hookEntries: Array<{ harness: Harness; file: string; reason: string }>;
   selfCheck: Awaited<ReturnType<typeof runSelfCheck>>;
   /** The local store's upkeep this pass (D144): rows rewritten, receipts past retention removed, space returned. */
-  store?: ReturnType<typeof runStoreUpkeep>;
+  store?: UpkeepReport;
   error: string | null;
 }
 
@@ -163,7 +174,10 @@ export async function takeOver(dir: string, cli: string, waitMs = 30_000): Promi
   const refresh = process.env[REFRESH_LAUNCHER_ENV] === "1";
   delete process.env[AFTER_PID_ENV];
   delete process.env[REFRESH_LAUNCHER_ENV];
-  if (Number.isInteger(previous) && previous > 0) await waitForExit(previous, waitMs);
+  // The agent being replaced stops serving (control channel closed, lock released) and then waits for this one to answer
+  // before it exits, so it can go back to its own version if this one never starts. Unless the launcher must be rewritten
+  // (nothing may still run it), its stopping is enough.
+  if (Number.isInteger(previous) && previous > 0) await waitForExit(previous, waitMs, refresh ? undefined : () => !lockHeldBy(dir, previous));
   if (!refresh) return;
   // The old launcher reads its last lines after its agent exits; give it a moment to finish before its file changes.
   await new Promise((r) => setTimeout(r, 2_000));
@@ -171,12 +185,32 @@ export async function takeOver(dir: string, cli: string, waitMs = 30_000): Promi
   catch (error) { console.log(`${new Date().toISOString()} could not rewrite the autostart launcher: ${(error as Error).message}`); }
 }
 
-export async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
+export async function waitForExit(pid: number, timeoutMs: number, released?: () => boolean): Promise<void> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     try { process.kill(pid, 0); } catch { return; }
+    if (released?.()) return;
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+/** Whether the one-agent lock names `pid`. */
+export function lockHeldBy(dir: string, pid: number): boolean {
+  try { return readFileSync(join(dir, AGENT_LOCK), "utf8").trim().split(/\s+/)[0] === String(pid); } catch { return false; }
+}
+
+/** How long the agent that handed over waits for its replacement to answer before going back to its own version. */
+export const HANDOVER_CONFIRM_MS = 3 * 60_000;
+
+/** Wait until an agent other than this process answers on the local channel reporting `version`. */
+export async function waitForAgentVersion(dir: string, version: string, timeoutMs: number): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const status = await callAgent(dir, "GET", "/status", undefined, 2_000) as { agent?: { pid?: number; version?: string } | null } | null;
+    if (status?.agent && status.agent.pid !== process.pid && status.agent.version === `agent/${version}`) return true;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return false;
 }
 
 export const AGENT_LOCK = "agent.lock";
@@ -222,7 +256,12 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
   const lock = acquireAgentLock(options.dir);
   if (!lock) throw new Error("a Scopebond Agent is already running for this computer");
+  rmSync(join(options.dir, STOPPED_FILE), { force: true });
+  // What the install helper of a signed update recorded before this start (installAfterExit).
+  const installed = takeInstallResult(options.dir);
+  if (installed) log(installed.installed ? `the Scopebond Agent ${installed.version} was installed` : `the update to ${installed.version} was not installed: ${installed.reason ?? "unknown"}`);
   const interval = options.intervalMs ?? INTERVAL_MS;
+  const nativeTray = process.platform === "win32" ? nativeTrayPath() : null;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
   let failures = 0;
@@ -234,8 +273,16 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let stopped = false;
   let lastSelfCheckAt = 0;
   // SB388: time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
-  // computer slept (or the agent was stopped); waiting is counted again from the next cycle.
-  let awakeSince = Date.now();
+  // computer slept (or the agent was stopped); waiting is counted again from the next cycle. The wake time is kept across
+  // restarts of the agent alone (awake.ts), so a restart never hides a backlog; after a long gap the waiting records decide.
+  const allowedGapMs = Math.max(3 * interval, 5 * 60_000);
+  const startedAt = Date.now();
+  let oldestPendingAt: number | null = null;
+  try {
+    const age = computerStatus(options.dir, startedAt).delivery.oldest_pending_age_s;
+    oldestPendingAt = age === null ? null : startedAt - age * 1000;
+  } catch { /* no store yet: nothing waiting */ }
+  let awakeSince = awakeSinceAtStart({ saved: readAwake(options.dir), now: startedAt, uptimeMs: uptime() * 1000, allowedGapMs, oldestPendingAt });
   let lastCycleAt = 0;
   // A long step the person should see as "working" (an update), or null.
   let working: string | null = null;
@@ -269,16 +316,17 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const cycle = async (): Promise<CycleResult> => {
     if (running) return running;
     const started = Date.now();
-    const allowedGap = failures ? MAX_BACKOFF_MS + 5 * 60_000 : Math.max(3 * interval, 5 * 60_000);
+    const allowedGap = failures ? MAX_BACKOFF_MS + 5 * 60_000 : allowedGapMs;
     if (lastCycleAt && started - lastCycleAt > allowedGap) awakeSince = started;
     lastCycleAt = started;
+    writeAwake(options.dir, { awake_since: awakeSince, last_cycle_at: started });
     cycleStartedAt = started;
     // A cycle that does not finish within its limit is left behind (its requests time out on their own), counted as
     // a failure, and the loop goes on. Nothing — the next cycle, Send now, stop — waits on it.
     let limitTimer: ReturnType<typeof setTimeout> | undefined;
     const overrun = new Promise<CycleResult>((resolve) => {
       limitTimer = setTimeout(() => resolve({ at: started, connected: true, delivered: 0, pending: computerStatus(options.dir).delivery.pending,
-        deliveryError: `a delivery cycle did not finish within ${Math.round(cycleLimit / 1000)} s`, rules: "skipped", missingHookEntries: [], requested: null }), cycleLimit);
+        deliveryError: `a delivery cycle did not finish within ${Math.round(cycleLimit / 1000)} s`, rules: "skipped", missingHookEntries: [], requested: null, more: false }), cycleLimit);
       limitTimer.unref?.();
     });
     const work = runCycle({ dir: options.dir, fetchImpl: options.fetchImpl, deliveryTimeoutMs: options.deliveryTimeoutMs });
@@ -294,6 +342,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // SB390: asked from the workspace's computer page. Send again now (the cycle sent before its rules check), or run the
       // self-check; each once.
       if (result.requested === "flush") { log("the workspace asked this computer to send now"); setTimeout(() => { void cycle(); }, 0); }
+      // A long queue: this cycle's sending time ran out, so the next one starts right away instead of at the next interval.
+      else if (result.more && !stopped) setTimeout(() => { void cycle(); }, 1_000);
       if (result.requested === "self_check") { log("the workspace asked this computer to check now"); setTimeout(() => { void maintain(true); }, 0); }
       if (result.connected && Date.now() - summaryAt > SUMMARY_EVERY_MS) void refreshSummary();
       return result;
@@ -309,54 +359,63 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const target = connection ? await fetchClientVersion(connection, options.fetchImpl) : null;
       if (target) result.policy = target.policy;
       const current = agentVersion();
-      // Hook entries first: under "recommended" they move to the newest hook named or carried; under "hold" only broken ones
-      // are repaired, at the version they already name or the one the agent carries. Done before a self-update, so an update
-      // whose handover fails never leaves the hook behind.
-      const hookTarget = target?.policy === "recommended" && target.hook && compareVersions(target.hook, hookVersion()) > 0 ? target.hook : hookVersion();
-      result.hookEntries = maintainHookEntries(harnesses, hookTarget, target?.policy !== "hold");
+      // Hook entries first: always the hook this agent carries, by its path (never a version the workspace names, and never
+      // an npx form resolved at run time). Under "hold" only broken ones are repaired. After an update the new agent pins
+      // them to the hook it carries at its own first upkeep.
+      // Codex and Cursor send nothing between actions, so a hook entry of theirs that cannot start is kept as a gap the
+      // workspace hears of, before the repair below (the actions in between ran unchecked either way).
+      const outage = noteUnresolvableHooks(options.dir, harnesses.filter((h) => h === "codex" || h === "cursor"));
+      if (outage.recorded.length) log(`hook entry cannot start for ${outage.recorded.join(", ")}: kept as a gap for the workspace`);
+      result.hookEntries = maintainHookEntries(harnesses, target?.policy !== "hold");
       for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
       const kind = installKind();
-      if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 && kind === "per-machine") {
+      const newer = target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 ? target.agent : null;
+      if (newer && kind === "per-machine") {
         // Installed for every user: the organisation that deployed it updates it.
-        log(`the workspace recommends the Scopebond Agent ${target.agent}; this install is updated by your organization`);
-      } else if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 && kind === "per-user") {
-        log(`updating the Scopebond Agent ${current} -> ${target.agent} (signed installer)`);
-        const verified = await fetchVerifiedInstaller(target.agent, { dir: options.dir, fetchImpl: options.fetchImpl });
-        if (verified.ok) {
-          result.updatedTo = target.agent;
+        log(`the workspace recommends the Scopebond Agent ${newer}; this install is updated by your organization`);
+      } else if (newer && kind === "per-user") {
+        log(`updating the Scopebond Agent ${current} -> ${newer} (signed installer)`);
+        const verified = await fetchVerifiedInstaller(newer, { dir: options.dir, fetchImpl: options.fetchImpl });
+        if (verified.ok && installerUnchanged(verified)) {
+          result.updatedTo = newer;
           lastMaintenance = result;
-          if (options.onUpdated) options.onUpdated(target.agent);
+          if (options.onUpdated) options.onUpdated(newer);
           else {
-            // The installer replaces this file, so it runs after this agent has exited, and starts the agent again.
-            installAfterExit(verified.path, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null);
+            // The installer replaces this file, so it runs after this agent has exited, checks it again, and starts the tray
+            // (which starts the agent) or the agent again.
+            installAfterExit(verified, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null, nativeTray);
             setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
           }
           return result;
         }
-        result.error = `update to ${target.agent} could not be verified: ${verified.reason}; nothing was installed`;
+        result.error = `update to ${newer} could not be verified: ${verified.ok ? "the installer changed after it was checked" : verified.reason}; nothing was installed`;
         log(result.error);
-      } else if (target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0) {
-        log(`updating the Scopebond Agent ${current} -> ${target.agent}`);
-        const installed = await installAgent(target.agent);
-        if (installed.ok) {
-          result.updatedTo = target.agent;
+      } else if (newer && recentlyFailedUpdate(options.dir, newer)) {
+        log(`the Scopebond Agent ${newer} did not start here earlier; staying on ${current} for now`);
+      } else if (newer) {
+        log(`updating the Scopebond Agent ${current} -> ${newer}`);
+        const installed = await installAgent(newer, { fetchImpl: options.fetchImpl });
+        const started = installed.ok ? await (options.startCheck ?? startCheck)(newer) : null;
+        if (installed.ok && started?.ok) {
+          result.updatedTo = newer;
           lastMaintenance = result;
-          if (options.onUpdated) options.onUpdated(target.agent);
-          else {
-            const code = spawnReplacement(options.dir) ? 0 : RESTART_EXIT_CODE;
-            // Hand over: stop, then exit. A stop that never finishes (a tray or window child that will not close) must not
-            // keep the old agent alive with the replacement waiting on it, so the exit has a hard deadline.
-            setTimeout(() => { setTimeout(() => process.exit(code), 5_000).unref(); void stop().finally(() => process.exit(code)); }, 500);
-          }
+          if (options.onUpdated) options.onUpdated(newer);
+          else handOver(newer, current);
           return result;
         }
-        result.error = `update to ${target.agent} failed: ${installed.output.slice(-300)}`;
+        if (installed.ok) {
+          // Installed, but the new program does not start: put the running version back.
+          recordFailedUpdate(options.dir, newer);
+          const back = await installAgent(current, { provenance: false });
+          result.error = `the Scopebond Agent ${newer} did not start (${(started?.output ?? "").slice(-200)}); ${back.ok ? `went back to ${current}` : `going back to ${current} failed: ${back.output.slice(-200)}`}`;
+        } else result.error = `update to ${newer} failed: ${installed.output.slice(-300)}`;
         log(result.error);
       }
       // The local store: older rows rewritten, acknowledged receipts past the retention window removed, space returned.
       // The agent may rewrite the whole file once (the hook never does that during a tool call).
       try {
-        result.store = runStoreUpkeep(options.dir, { budgetMs: 30_000, allowFullVacuum: true });
+        // In a process of its own: a pass is synchronous SQLite work for up to 30 s, and the agent keeps answering meanwhile.
+        result.store = await (options.upkeep ?? runUpkeepApart)(options.dir);
         const kept = result.store;
         if (kept && (kept.migrated || kept.receiptsRemoved || kept.stateRemoved || kept.pagesFreed)) {
           log(`local store: ${kept.migrated} row(s) rewritten, ${kept.receiptsRemoved} receipt(s) past retention removed, ${kept.stateRemoved} finished check record(s) removed, ${kept.pagesFreed} page(s) returned`);
@@ -473,6 +532,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // `scopebond-agent stop` and `autostart off`: answer first, then stop, so the caller hears back.
     "POST /stop": () => {
       log("stopping: asked to by this computer's user");
+      try { writeFileSync(join(options.dir, STOPPED_FILE), `${JSON.stringify({ stopped_at: new Date().toISOString(), pid: process.pid })}\n`); } catch { /* the tray may start it again */ }
       setTimeout(() => { void stop().finally(() => options.onStopped?.()); }, 50);
       return { stopping: true };
     },
@@ -488,8 +548,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (answer.decision === "ask" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);
       return answer;
     },
-  });
-  const tray = (options.tray ?? true) && process.env.SCOPEBOND_AGENT_TRAY !== "off" ? startTray(options.dir) : null;
+  }, nativeTray ? { loopback: false } : {}); // beside the native tray nothing uses loopback: its tray and its hook use the pipe
+  // Beside the native tray (the signed install), the tray is that program: it started this agent, or starts at sign-in.
+  const tray = (options.tray ?? true) && process.env.SCOPEBOND_AGENT_TRAY !== "off" && !nativeTray ? startTray(options.dir) : null;
+  if (nativeTray && retireLauncherRunValue()) log("removed the ScopebondAgent sign-in entry: the Scopebond tray starts the agent");
   const stop = async () => {
     stopped = true;
     try { tray?.kill(); } catch { /* already gone */ }
@@ -500,7 +562,29 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     await control.close();
     releaseAgentLock(lock);
   };
-  log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on 127.0.0.1:${control.endpoint.port})`);
+  /** Hand over to the agent just installed: start it, stop serving, and wait for it to answer with the new version. If it
+   *  never does, put `previous` back, start that, and exit. A service manager (systemd) restarts the agent itself instead. */
+  const handOver = (version: string, previous: string) => {
+    setTimeout(() => {
+      void (async () => {
+        // Whatever happens below, this process ends.
+        setTimeout(() => process.exit(0), HANDOVER_CONFIRM_MS + 10 * 60_000).unref();
+        const spawned = spawnReplacement(options.dir);
+        // A stop that never finishes (a tray or window child that will not close) must not keep this agent serving.
+        await Promise.race([stop().catch(() => undefined), new Promise((r) => setTimeout(r, 5_000))]);
+        if (!spawned) process.exit(RESTART_EXIT_CODE);
+        if (await waitForAgentVersion(options.dir, version, HANDOVER_CONFIRM_MS)) process.exit(0);
+        log(`the Scopebond Agent ${version} did not answer within ${Math.round(HANDOVER_CONFIRM_MS / 1000)} s; going back to ${previous}`);
+        recordFailedUpdate(options.dir, version);
+        const back = await installAgent(previous, { provenance: false });
+        log(back.ok ? `went back to the Scopebond Agent ${previous}` : `going back to ${previous} failed: ${back.output.slice(-300)}`);
+        // The replacement's launcher may restart it on the files just put back; otherwise start the previous version now.
+        if (!await waitForAgentVersion(options.dir, previous, 45_000)) spawnReplacement(options.dir);
+        process.exit(0);
+      })();
+    }, 500);
+  };
+  log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on ${[control.endpoint.socket, control.endpoint.port ? `127.0.0.1:${control.endpoint.port}` : null].filter(Boolean).join(" and ")})`);
   // Maintenance is armed before the first cycle, so a first cycle that hangs cannot keep it from ever starting.
   if (options.maintenance !== false) {
     // Shortly after start (so a fresh sign-in is not slowed), then every six hours.

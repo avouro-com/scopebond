@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/hook",
-  "version": "0.21.2",
+  "version": "0.21.5",
   "description": "Free, open-source guardrails for Claude Code, Cursor, and Codex: check supported actions and create signed local decision records. Optional connection to the separate proprietary Scopebond Cloud workspace.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
@@ -42,19 +42,20 @@
     "dist"
   ],
   "dependencies": {
+    "@scopebond/gateway": "workspace:^",
     "@scopebond/policy-schema": "workspace:^",
-    "@scopebond/sdk": "workspace:^",
-    "@scopebond/gateway": "workspace:^"
+    "@scopebond/sdk": "workspace:^"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepublishOnly": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.json && node --test --test-timeout=120000 test/*.test.mjs && node --test --test-timeout=1800000 test/windows-journey.run.mjs"
+    "test": "tsc -p tsconfig.json && node --test --test-timeout=120000 test/*.test.mjs test/*.test.js && node --test --test-timeout=1800000 test/windows-journey.run.mjs"
   },
   "publishConfig": {
     "access": "public"
   },
   "devDependencies": {
-    "@scopebond/fake-cloud": "workspace:*"
+    "@scopebond/fake-cloud": "workspace:*",
+    "fast-check": "^4.10.2"
   }
 }

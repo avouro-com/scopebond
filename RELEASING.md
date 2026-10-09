@@ -17,6 +17,22 @@ decision, not just a documentation update.
    When changesets remain, it opens or updates **Version packages**, which bumps
    versions and writes package changelogs. `pnpm version:packages` also synchronizes
    plugin versions and README release references.
+   The repository does not let the workflow's own token create pull requests, so without the `PERSONAL_ACCESS_TOKEN` secret the workflow only
+   pushes the `changeset-release/main` branch and its log ends with
+   "GitHub Actions is not permitted to create or approve pull requests". Open the
+   PR from that branch with one command:
+
+   ```bash
+   gh pr create --repo avouro-com/scopebond --base main --head changeset-release/main --title "Version packages" --body "Versions and changelogs from the pending changesets."
+   ```
+
+   Its install and Windows journey checks install the packages from npm, so they
+   fail with `ETARGET` until the new gateway version is published. Before
+   merging, read those logs and confirm `ETARGET` for the new version is the only
+   failure; any other failure blocks the release. Either of two settings makes the
+   workflow open the PR itself: the `PERSONAL_ACCESS_TOKEN` secret (a token that
+   may open pull requests here), or Settings → Actions → General → "Allow GitHub
+   Actions to create and approve pull requests".
 3. Review the version PR, checks, and package scope. Obtain maintainer approval
    before merging. When the pushed commit is the merge of that PR (branch
    `changeset-release/main`) and changesets are consumed, the workflow's `publish`
@@ -30,12 +46,15 @@ decision, not just a documentation update.
 
 ## Configuration and checks
 
-- Use the Node version in `.nvmrc` and pnpm 9.12.0 from `package.json`.
-- The workflow supplies `NPM_TOKEN_SCOPEBOND` as `NPM_TOKEN` to the publish step
-  only (not to install or build), and enables npm provenance. The automation token
-  is used only by the step that opens the version PR. Installs run with
-  `--ignore-scripts` and no dependency cache, and checkouts keep no token. Never
-  put credential values in source or release instructions.
+- Use the Node version in `.nvmrc` and pnpm 10.34.6 from `package.json`.
+- The workflow supplies `NPM_TOKEN_SCOPEBOND` as `NODE_AUTH_TOKEN` (read through the
+  `.npmrc` that `actions/setup-node` writes for the npm registry) to the publish
+  step only (not to install or build), in the `npm-publish` environment, and
+  enables npm provenance. The automation token is used only by the step that
+  opens the version PR, in the `npm` environment. Installs run with
+  `--ignore-scripts` and no dependency cache, and checkouts keep no token. Keep
+  credentials in repository secrets; never put their values in source or
+  release instructions.
 - Public packages set `publishConfig.access: public`. The Changesets ignore list
   is empty; the gateway is already published, not awaiting its first release.
 - Run `pnpm run gate` and the relevant build, test, and package smoke checks before

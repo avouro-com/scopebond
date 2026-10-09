@@ -52,3 +52,31 @@ test("a manifest without a full commit id is not written", () => {
   }
   assert.ok(manifestFor("1.2.3", folder, "a".repeat(64)));
 });
+
+test("the manifest names the id of the key that signed it, the agent computes the same id, and a key list builds in", async () => {
+  const { keyId, keyIdOfPrivate } = await import("../manifest.mjs");
+  const { keyId: agentKeyId } = await import("@scopebond/agent");
+  const { updaterKeysDefine } = await import("../build-sea.mjs");
+  const folder = mkdtempSync(join(tmpdir(), "sb-manifest-kid-"));
+  writeFileSync(join(folder, "scopebond-agent-1.2.3-x64.msi"), "msi");
+  const a = generateKeyPairSync("ed25519"), b = generateKeyPairSync("ed25519");
+  const pub = (k) => k.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  const pem = (k) => k.privateKey.export({ type: "pkcs8", format: "pem" });
+  assert.equal(keyId(pub(a)), agentKeyId(pub(a)));
+  assert.equal(keyIdOfPrivate(pem(a)), keyId(pub(a)));
+  const text = manifestFor("1.2.3", folder, COMMIT, keyIdOfPrivate(pem(b)));
+  assert.equal(JSON.parse(text).kid, keyId(pub(b)));
+  assert.equal(JSON.parse(text).commit, COMMIT);
+  const ring = [{ kid: keyId(pub(a)), key: pub(a), not_after: "2027-01-01" }, { kid: keyId(pub(b)), key: pub(b), not_after: null }];
+  assert.ok(verifyManifest(text, signManifest(text, pem(b)), ring, Date.parse("2026-10-08T00:00:00Z")));
+  assert.equal(verifyManifest(text, signManifest(text, pem(a)), ring), null, "a manifest naming key b is not accepted under key a");
+
+  const keys = mkdtempSync(join(tmpdir(), "sb-keys-"));
+  assert.equal(updaterKeysDefine(keys), "undefined", "no keys: the build never updates itself");
+  writeFileSync(join(keys, "updater-public-key.txt"), `${pub(a)}\n`);
+  assert.deepEqual(JSON.parse(JSON.parse(updaterKeysDefine(keys))), [{ kid: keyId(pub(a)), key: pub(a), not_after: null }]);
+  writeFileSync(join(keys, "updater-keys.json"), JSON.stringify(ring));
+  assert.deepEqual(JSON.parse(JSON.parse(updaterKeysDefine(keys))), ring, "the list wins over the single key");
+  writeFileSync(join(keys, "updater-keys.json"), JSON.stringify([{ kid: "0000000000000000", key: pub(a), not_after: null }]));
+  assert.throws(() => updaterKeysDefine(keys), /not the id of its key/);
+});

@@ -1,5 +1,41 @@
 # @scopebond/hook
 
+## 0.21.5
+
+### Patch Changes
+
+- 0225f33: The digest key and the observation binding key are now created exclusively with owner-only permissions, and a damaged one is replaced atomically, so a file or link placed at the path beforehand never receives the key; config and export files are read without a separate existence check.
+- faacb85: A heartbeat is queued only while its session is still active, checked in the same database transaction as the write, so a session ended by another hook process at that moment no longer gets a heartbeat after its stop.
+- 9ed82ed: A stored Cloud connection is used only when its workspace address is HTTPS (or localhost), the same rule `login` applies, so the machine credential is never sent in clear even if `cloud.json` was edited by hand.
+- Updated dependencies [0225f33]
+  - @scopebond/gateway@0.17.3
+
+## 0.21.4
+
+### Patch Changes
+
+- b35ae68: Workspace allowed-site patterns escape every regular-expression character in a host name, not only the dots. The document check already admits only letters, digits, hyphens and dots, so no current policy changes; the pattern now stays literal even if that check ever widens.
+
+## 0.21.3
+
+### Patch Changes
+
+- bc4999d: The always-on protection of Scopebond's own folder and the coding agents' hook settings holds in more cases. The signed
+  executable's own commands (`scopebond-agent.exe hook uninstall`, `rules` changes, `login`/`connect`, `uninstall`, `setup`),
+  removing the signed or npm install through Windows (msiexec, winget, the Settings → Apps uninstall script, the Run value),
+  and stopping the tray by name are treated as switching Scopebond off. NTFS stream and index suffixes in a path are read as
+  the plain path. PowerShell's .NET file calls (`[IO.File]::…`, `New-Object IO.StreamWriter`), `Tee-Object -FilePath` and
+  `Expand-Archive -DestinationPath` are read as file reads and writes. Claude Code's Grep tool is a read of what it searches.
+  Deleting Scopebond's files or the agents' hook settings (`rm`, `Remove-Item`, `find -delete`) is a protected write.
+- ddb4033: More commands are read as writing the file they name: `certutil -decode`/`-urlcache … OUT`, `expand SRC DST`,
+  `bitsadmin /transfer … DST`, `git clone URL DIR` and `split FILE PREFIX`. A write whose target is only known at run time
+  (`> "$P"`, `tee $(…)`, a clone into the repository's own name) is also recorded as a write the hook cannot judge, so strict
+  mode refuses it and normal mode records it, instead of treating it as an ordinary write.
+- b7bbe7a: Scopebond's always-on protection now also holds when code reaches an interpreter on standard input or in a here-document, when a path is built from pieces or matched by a wildcard, when files are deleted through `find -delete`/`-exec rm`, `git clean` or an SQL `ATTACH`, when a home folder is copied or archived, when the connection file is read from a copy, when a coding agent is started with its hooks off or another config folder, and for Glob over the hook's folder. The remote-database rule treats psql SQL it cannot read (standard input, a redirect, a here-document) and inline `PGHOST`/service hosts as unknown, and the SQL classifier refuses text the PostgreSQL and SQLite lexers read differently.
+- b9c0504: Each delivery batch's record numbers are now signed with the computer's enrolled key. The Cloud exporter takes an optional `sequenceProof` (the attester and the machine credential's id) and sends `seq_proof: { kid, signature }` beside `seq` and `queue`, over `"scopebond:delivery-sequence/v1\n"` followed by the canonical JSON of the credential id, the queue id, the numbers and the SHA-256 of each receipt as sent. A party holding only the bearer credential can no longer attach numbers to records of its choosing. The hook and the agent sign with the key that signs their receipts; an exporter without a key sends the numbers unsigned, as before.
+- Updated dependencies [b9c0504]
+  - @scopebond/gateway@0.17.2
+
 ## 0.21.2
 
 ### Patch Changes

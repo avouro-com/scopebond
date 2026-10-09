@@ -2,6 +2,7 @@
 // a bounded outbox then retries evidence-v1 receipts without weakening execution.
 
 import { canonical, sha256 } from "./crypto.js";
+import { isSignedChainHead, type SignedChainHead } from "@scopebond/verify/chain";
 import type { Attester, ReceiptPayload, ReceiptStore, SignedReceipt } from "./receipts.js";
 import { buildSummary, isNotable } from "./summary.js";
 
@@ -20,7 +21,9 @@ export interface CloudOutboxEntry {
 
 export interface CloudDeliveryGap {
   id: string | null;
-  reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error" | "rekeyed" | "rejected";
+  /** `hook_unresolvable`: not a record. A coding agent's hook entry could not start, so its actions ran with no check and no
+   *  record for a while; kept once per outage so the workspace sees the silence (see the hook's `noteUnresolvableHooks`). */
+  reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error" | "rekeyed" | "rejected" | "hook_unresolvable";
   at: number;
   /** The record's number in this queue, when it had one. A record dropped at capacity takes the next number before it is
    *  dropped, so the numbers the workspace sees leave a hole where it was. */
@@ -84,8 +87,10 @@ export interface CloudExporterStatus extends CloudOutboxStatus {
 
 export interface CloudExporter {
   enqueue(r: SignedReceipt): void;
-  /** `routine: false` (a per-call process with summaries on): run only when a notable record was queued since the last flush. */
-  flush(options?: { routine?: boolean }): Promise<void>;
+  /** `routine: false` (a per-call process with summaries on): run only when a notable record was queued since the last flush.
+   *  `maxMs`: start no new batch once this long has passed; what is left waits for the next flush (a long queue never holds up
+   *  the caller's other work). */
+  flush(options?: { routine?: boolean; maxMs?: number }): Promise<void>;
   stop(): void;
   pending(): number;
   status(): CloudExporterStatus;
@@ -119,6 +124,11 @@ export interface CloudExporterOptions {
    *  only the bearer credential cannot attach numbers to records of its choosing. Needs both the key and the machine
    *  credential's id; without them the numbers are sent unsigned, as before. */
   sequenceProof?: CloudSequenceProofOptions;
+  /** Called with the chain head a workspace's delivery answer carries (`chain_head`: the environment chain's newest sequence
+   *  number and evidence segment, signed by the workspace). Keep it: heads held outside the workspace let anyone show later
+   *  that its evidence chain lost, reordered or re-chained records (see @scopebond/verify/chain). A failing callback never
+   *  affects delivery. */
+  onChainHead?: (head: SignedChainHead) => void;
 }
 
 export interface CloudSequenceProofOptions {
@@ -153,6 +163,12 @@ export interface CloudSummaryOptions {
 
 /** How many queued records one summarising pass looks at. */
 const SUMMARY_PEEK = 2_000;
+
+/** Let the event loop run between steps of a long flush, so a process that also answers requests (the agent) stays
+ *  responsive while it reads and sends thousands of records. */
+const yieldToLoop = (): Promise<void> => new Promise((resolve) => {
+  if (typeof setImmediate === "function") setImmediate(resolve); else setTimeout(resolve, 0);
+});
 /** A window is summarised this long after it ends, so a record finishing late still lands in it. */
 const SUMMARY_GRACE_MS = 30_000;
 /** Summaries per POST. */
@@ -342,10 +358,13 @@ function retryAfter(res: Response, at: number): number {
 }
 
 /** The action ids of records a successful response lists as refused (`rejected[].index`). */
-async function refusedIn(res: Response, batch: CloudOutboxEntry[]): Promise<Array<{ entry: CloudOutboxEntry; code: string | null }>> {
+async function answerOf(res: Response): Promise<unknown> {
+  try { return typeof res.json === "function" ? await res.json() : null; } catch { return null; }
+}
+
+function refusedIn(answer: unknown, batch: CloudOutboxEntry[]): Array<{ entry: CloudOutboxEntry; code: string | null }> {
   try {
-    if (typeof res.json !== "function") return [];
-    const body = await res.json() as { rejected?: Array<{ index?: unknown; code?: unknown }> };
+    const body = answer as { rejected?: Array<{ index?: unknown; code?: unknown }> } | null;
     if (!Array.isArray(body?.rejected)) return [];
     return body.rejected.flatMap((r) => typeof r?.index === "number" && batch[r.index]
       ? [{ entry: batch[r.index], code: typeof r.code === "string" ? r.code : null }] : []);
@@ -408,6 +427,12 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   // Both parts or none: a proof without the credential's id (or the key) could never verify.
   const proofKey = opts.sequenceProof?.attester && typeof opts.sequenceProof.credentialId === "string" && opts.sequenceProof.credentialId.trim()
     ? opts.sequenceProof : null;
+  // The chain head an answer carries goes to the caller; a malformed one, or a callback that throws, is ignored.
+  const keepHead = (answer: unknown) => {
+    const head = (answer as { chain_head?: unknown } | null)?.chain_head;
+    if (!opts.onChainHead || !isSignedChainHead(head)) return;
+    try { opts.onChainHead(head); } catch { /* never affects delivery */ }
+  };
 
   const fail = (error: unknown, retryAfterMs = 0) => {
     consecutiveFailures += 1;
@@ -473,6 +498,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       // Only what the workspace says it has leaves the queue: a summary it refused on its own sends its records in full; a
       // count that does not add up is a failure, retried under the same summary ids.
       const answer = await (typeof res.json === "function" ? res.json().catch(() => null) : Promise.resolve(null)) as { accepted?: unknown; duplicates?: unknown; rejected?: Array<{ index?: unknown }> } | null;
+      keepHead(answer);
       const refusedAt = new Set((Array.isArray(answer?.rejected) ? answer!.rejected : []).map((r) => Number(r?.index)).filter((n) => Number.isInteger(n)));
       const held = Number(answer?.accepted ?? NaN) + Number(answer?.duplicates ?? 0);
       if (!Number.isFinite(held) || held + refusedAt.size < part.length) {
@@ -491,7 +517,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   // A flush asked for while one is sending waits for that one instead of returning at once, so a caller that bounds its wait
   // (a hook call) waits on real work, and can tell when its time ran out.
   let inflight: Promise<void> | null = null;
-  function flush(options: { routine?: boolean } = {}): Promise<void> {
+  function flush(options: { routine?: boolean; maxMs?: number } = {}): Promise<void> {
     if (inflight) return inflight;
     const run = flushOnce(options);
     if (!sending) return run; // nothing was due: it settled at once
@@ -499,7 +525,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     return inflight;
   }
 
-  async function flushOnce(options: { routine?: boolean } = {}): Promise<void> {
+  async function flushOnce(options: { routine?: boolean; maxMs?: number } = {}): Promise<void> {
     if (sending || stopped || (nextAttemptAt !== null && now() < nextAttemptAt)) return;
     // Routine records wait for their summary; a per-call flush with nothing notable to send has nothing to do.
     if (options.routine === false && summarising() && !notableQueued) {
@@ -519,8 +545,13 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     // Routine records of a window this queue already summarised: they go in full.
     const lateThisFlush = new Set<string>();
     const skip = () => (keptThisFlush.size ? keptThisFlush : undefined);
+    const stopAt = options.maxMs !== undefined && Number.isFinite(options.maxMs) ? Date.now() + Math.max(0, options.maxMs) : Infinity;
     try {
-      for (;;) {
+      for (let pass = 0; ; pass++) {
+        if (pass > 0) {
+          if (Date.now() >= stopAt) break;
+          await yieldToLoop();
+        }
         let batch: CloudOutboxEntry[];
         if (summarising()) {
           const windowMs = Math.max(60_000, Math.trunc(opts.summaries!.windowMs ?? 300_000));
@@ -531,6 +562,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
             const part = opts.outbox.peek(100, now(), seenIds.size ? seenIds : undefined);
             for (const e of part) { seen.push(e); seenIds.add(e.id); }
             if (part.length < 100 || seen.length >= SUMMARY_PEEK) break;
+            await yieldToLoop();
           }
           if (!seen.length) break;
           // A window counts as complete only when every record queued until it closed was seen: with more records waiting
@@ -603,7 +635,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           // A record the workspace refused on its own (the rest of the batch was stored) can never be
           // accepted as it is: it leaves the queue as a "rejected" gap, so it never holds up the records
           // behind it. It stays in the local log.
-          const listed = await refusedIn(res, batch);
+          const answer = await answerOf(res);
+          keepHead(answer);
+          const listed = refusedIn(answer, batch);
           // A record refused for a reason that can pass (a clock ahead, a key not enrolled) stays queued and is sent again.
           kept = new Set(listed.filter((r) => keepForClock(r.entry, r.code, now())).map((r) => r.entry.id));
           refused = listed.filter((r) => !kept.has(r.entry.id)).map((r) => ({ id: r.entry.id, reason: "rejected" as const }));

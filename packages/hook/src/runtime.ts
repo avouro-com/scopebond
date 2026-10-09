@@ -353,7 +353,10 @@ export function createHookRuntime(config: RuntimeConfig) {
       }
       // Evaluated actions, and (in strict mode) unmapped tool.<name>/opaque commands,
       // go through policy — a closed allowlist denies an unlisted action.
-      const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, override ? { override: override.handler } : undefined);
+      // An action the coding agent reported only after it ran (Cursor's afterFileEdit) is signed as recorded after the
+      // fact when a rule denies it: the receipt must not claim it was prevented.
+      const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}) };
+      const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(options).length ? options : undefined);
       const granted = (result.receipt as { payload?: { override?: { state?: string } } } | undefined)?.payload?.override;
       if (result.allowed && granted?.state === "offered") {
         return { decision: "ask", reason: "Scopebond: a workspace rule blocks this, and your workspace lets you allow it once. Allow only if you meant it; your answer is recorded.", receipt: result.receipt };
