@@ -31,7 +31,9 @@ if (existsSync(privateFile)) { console.error(`${privateFile} exists already; not
 if (notAfter !== null && !/^\d{4}-\d{2}-\d{2}$/.test(notAfter ?? "")) { console.error("--not-after takes a date, YYYY-MM-DD"); process.exit(1); }
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const pub = publicKey.export({ type: "spki", format: "der" }).toString("base64");
-writeFileSync(privateFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+// Created exclusively: if the file appeared since the check above, nothing is overwritten.
+try { writeFileSync(privateFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600, flag: "wx" }); }
+catch (error) { console.error(`${privateFile} could not be created (${error.code ?? error.message}); nothing changed`); process.exit(1); }
 if (add) {
   const list = existsSync(listFile) ? JSON.parse(readFileSync(listFile, "utf8"))
     : existsSync(publicFile) ? [{ kid: keyId(readFileSync(publicFile, "utf8").trim()), key: readFileSync(publicFile, "utf8").trim(), not_after: null }] : [];
