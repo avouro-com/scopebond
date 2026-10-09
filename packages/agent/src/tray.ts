@@ -7,6 +7,7 @@
 // it recovers.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { windowsSystemProgram } from "@scopebond/gateway/node";
 import { AGENT_FILE, TOKEN_HEADER } from "./ipc.js";
 import type { Health, HealthLevel } from "./health.js";
 
@@ -152,7 +153,7 @@ export function startTray(home: string, agentPid = process.pid): ChildProcess | 
   if (process.platform !== "win32") return null;
   try {
     const encoded = Buffer.from(trayScript(home, agentPid), "utf16le").toString("base64");
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-EncodedCommand", encoded], { stdio: "ignore", windowsHide: true });
+    const child = spawn(windowsSystemProgram("powershell"), ["-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-EncodedCommand", encoded], { stdio: "ignore", windowsHide: true });
     child.on("error", () => { /* no PowerShell, or blocked: the agent keeps working without an icon */ });
     return child;
   } catch { return null; }

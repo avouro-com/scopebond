@@ -31,7 +31,7 @@ import {
   outcomeData, policyAckData, queueData, sessionStartData, sessionStopData, sourceReceiptHash,
   type BindingKey, type CallRequest, type ExitCategory, type ObservationSigner, type PolicyAckInput, type SessionStopReason, type CapabilityProofInput,
 } from "./observation.js";
-import { openApprovalBinder } from "@scopebond/gateway/node";
+import { openApprovalBinder, programPath } from "@scopebond/gateway/node";
 import { MAX_TERMINAL, OBSERVATION_DB, ObservationStore, type EnqueueResult } from "./obs-store.js";
 import type { GitProbe } from "./typed-ops.js";
 import { isProtectedBranch, loadRules } from "./rules.js";
@@ -356,7 +356,7 @@ export class ObservationEmitter {
 /** HEAD of the workspace repository, or null when it cannot be read quickly. */
 export function gitHead(cwd: string): string | null {
   try {
-    const sha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000 }).trim();
+    const sha = execFileSync(programPath("git"), ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000 }).trim();
     return /^([0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) ? sha : null;
   } catch { return null; }
 }

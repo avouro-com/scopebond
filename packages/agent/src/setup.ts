@@ -15,7 +15,7 @@ import { autostartHealth, enableAutostart, startNow } from "./autostart.js";
 import { writeAppsEntry } from "./apps-entry.js";
 import { installKind } from "./native-update.js";
 import { callAgent } from "./ipc.js";
-import { compareVersions, npmEnvironment, npmInstallArgs, ownNpm } from "./update.js";
+import { compareVersions, npmEnvironment, npmInstallArgs, npmOnPath, ownNpm } from "./update.js";
 import { repairHookEntries } from "./service.js";
 
 export type SetupStep = "login" | "install_agent" | "autostart";
@@ -69,12 +69,12 @@ export function addToPathCommand(dir: string): string {
 }
 
 function npm(args: string[], env?: NodeJS.ProcessEnv): { ok: boolean; out: string } {
-  const win = process.platform === "win32";
-  // This Node's own npm, without a shell; otherwise npm on PATH (a .cmd on Windows, started through a shell, each argument quoted).
+  // This Node's own npm, without a shell; otherwise npm on PATH by its full path (a .cmd on Windows, started through a shell,
+  // each argument quoted).
   const own = ownNpm();
-  const r = own
-    ? spawnSync(own[0], [...own[1], ...args], { encoding: "utf8", windowsHide: true, timeout: 5 * 60_000, env })
-    : spawnSync(win ? "npm.cmd" : "npm", win ? args.map((a) => `"${a}"`) : args, { encoding: "utf8", shell: win, windowsHide: true, timeout: 5 * 60_000, env });
+  const run = own ? { program: own[0], args: [...own[1], ...args], shell: false as const } : npmOnPath(args, env);
+  if (!run) return { ok: false, out: "npm was not found in a folder on PATH" };
+  const r = spawnSync(run.program, run.args, { encoding: "utf8", shell: run.shell, windowsHide: true, timeout: 5 * 60_000, env });
   return { ok: r.status === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 

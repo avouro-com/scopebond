@@ -19,6 +19,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { programPath } from "@scopebond/gateway/node";
 import { join } from "node:path";
 import { parseMcpName } from "./map.js";
 import { decomposeShell, gitArgs, canonProgram, type SimpleCommand } from "./shell.js";
@@ -47,7 +48,8 @@ const SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 
 function git(cwd: string, args: string[]): string | null {
   try {
-    const out = execFileSync("git", ["-C", cwd, ...args], {
+    // By full path from PATH: by bare name Windows would look in the current folder (the project) first.
+    const out = execFileSync(programPath("git"), ["-C", cwd, ...args], {
       encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     }).trim();
     return out === "" ? null : out;

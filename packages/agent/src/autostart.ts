@@ -11,7 +11,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir } from "node:os";
 import { dirname, join, win32 } from "node:path";
 import { isSingleExecutable } from "@scopebond/hook";
-import { nativeTrayPath } from "./native-update.js";
+import { nativeTrayPath, windowsTool } from "./native-update.js";
 
 export const LABEL = "com.scopebond.agent";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -183,8 +183,10 @@ function writeLauncher(scopebondHome: string, node: string, cli: string, platfor
  *  when autostart is turned on (RunAtLoad, enable --now). */
 export function startCommands(launcher: string, platform: NodeJS.Platform = process.platform): Array<[string, string[]]> {
   if (platform !== "win32") return [];
-  // Passed verbatim (startNow sets windowsVerbatimArguments): Node's own quoting follows other rules than cmd's.
-  return [["conhost.exe", ["--headless", "cmd.exe", cmdRun(launcher)]], ["cmd.exe", [cmdRun(launcher)]]];
+  // Passed verbatim (startNow sets windowsVerbatimArguments): Node's own quoting follows other rules than cmd's. Both by
+  // full path: started by bare name from a terminal open in a project, Windows would look in that folder first.
+  const cmd = windowsTool("cmd");
+  return [[windowsTool("conhost"), ["--headless", cmd, cmdRun(launcher)]], [cmd, [cmdRun(launcher)]]];
 }
 
 // The signed Windows install with its native tray (`scopebond-tray.exe` beside the agent): the installer adds a Run value
@@ -194,7 +196,7 @@ export function startCommands(launcher: string, platform: NodeJS.Platform = proc
 /** Runs `reg.exe` with these arguments; whether it succeeded. Tests pass their own. */
 export type RegRunner = (args: string[]) => boolean;
 const runReg: RegRunner = (args) => {
-  try { execFileSync("reg", args, { stdio: "ignore", windowsHide: true }); return true; } catch { return false; }
+  try { execFileSync(windowsTool("reg"), args, { stdio: "ignore", windowsHide: true }); return true; } catch { return false; }
 };
 export const TRAY_RUN_VALUE = "Scopebond";
 const MACHINE_RUN_KEY = "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -241,7 +243,7 @@ export function enableAutostart(scopebondHome: string, cli: string, node = proce
   const launcher = writeLauncher(scopebondHome, node, cli, platform);
   const paths = autostartPaths();
   if (platform === "win32") {
-    execFileSync("reg", ["add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ", "/d", windowsRunCommand(launcher), "/f"], { stdio: "ignore" });
+    execFileSync(windowsTool("reg"), ["add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ", "/d", windowsRunCommand(launcher), "/f"], { stdio: "ignore" });
     return `added ${RUN_VALUE} to ${RUN_KEY} (launcher ${launcher})`;
   }
   if (platform === "darwin") {
@@ -267,7 +269,7 @@ export function disableAutostart(scopebondHome: string, platform = process.platf
     return trayForEveryone(reg) ? "Scopebond starts for every user of this computer; whoever installed it changes that" : "autostart was not on";
   }
   if (platform === "win32") {
-    try { execFileSync("reg", ["delete", RUN_KEY, "/v", RUN_VALUE, "/f"], { stdio: "ignore" }); } catch { return "autostart was not on"; }
+    try { execFileSync(windowsTool("reg"), ["delete", RUN_KEY, "/v", RUN_VALUE, "/f"], { stdio: "ignore" }); } catch { return "autostart was not on"; }
     return `removed ${RUN_VALUE} from ${RUN_KEY}`;
   }
   if (platform === "darwin") {
@@ -293,7 +295,7 @@ export function autostartHealth(scopebondHome: string, platform = process.platfo
   const paths = autostartPaths();
   let on: boolean;
   if (platform === "win32") {
-    try { execFileSync("reg", ["query", RUN_KEY, "/v", RUN_VALUE], { stdio: "ignore" }); on = true; } catch { on = false; }
+    try { execFileSync(windowsTool("reg"), ["query", RUN_KEY, "/v", RUN_VALUE], { stdio: "ignore" }); on = true; } catch { on = false; }
   } else on = existsSync(platform === "darwin" ? paths.macPlist : paths.linuxUnit);
   // The fix as the person types it: PowerShell blocks the plain scopebond-agent script shim.
   const fix = `${platform === "win32" ? "scopebond-agent.cmd" : "scopebond-agent"} autostart on`;

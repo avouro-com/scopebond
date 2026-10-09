@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { programPath } from "@scopebond/gateway/node";
 import { readIfPresent } from "./safe-fs.js";
 
 export type Harness = "claude" | "cursor" | "codex";
@@ -97,7 +98,8 @@ export function gitShareState(file: string): GitShare {
   const git = (args: string[]): number => {
     try {
       mkdirSync(cwd, { recursive: true });
-      execFileSync("git", args, { cwd, stdio: "ignore", timeout: 5000 });
+      // By full path from PATH: by bare name Windows would look in `cwd`, a project folder, first.
+      execFileSync(programPath("git"), args, { cwd, stdio: "ignore", timeout: 5000 });
       return 0;
     } catch (error) {
       const status = (error as { status?: number | null }).status;
@@ -120,8 +122,8 @@ export function excludeFromGit(file: string): boolean {
     // tree (`--show-prefix`), not from comparing file-system paths: the same directory
     // can be spelled two ways (a Windows 8.3 short name, a symlinked temp dir), and a
     // path computed across the two spellings excludes the wrong file.
-    const prefix = execFileSync("git", ["rev-parse", "--show-prefix"], { cwd, encoding: "utf8", timeout: 5000 }).trim();
-    const exclude = resolve(cwd, execFileSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd, encoding: "utf8", timeout: 5000 }).trim());
+    const prefix = execFileSync(programPath("git"), ["rev-parse", "--show-prefix"], { cwd, encoding: "utf8", timeout: 5000 }).trim();
+    const exclude = resolve(cwd, execFileSync(programPath("git"), ["rev-parse", "--git-path", "info/exclude"], { cwd, encoding: "utf8", timeout: 5000 }).trim());
     const entry = "/" + prefix + basename(file);
     const existing = readIfPresent(exclude) ?? "";
     if (!existing.split(/\r?\n/).includes(entry)) {

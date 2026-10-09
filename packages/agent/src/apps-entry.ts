@@ -6,6 +6,7 @@
 // the connection, records not yet sent) stays, so installing again is the same computer; `uninstall --purge` deletes it.
 
 import { execFileSync } from "node:child_process";
+import { windowsSystemProgram } from "@scopebond/gateway/node";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -106,7 +107,7 @@ export function writeAppsEntry(home: string, o: { version: string; cli: string; 
   const node = o.node ?? process.execPath;
   const script = writeUninstallScript(home, { node, cli: o.cli, npm: npmBeside(node) });
   for (const [name, type, data] of appsEntryValues({ version: o.version, script, home })) {
-    execFileSync("reg", ["add", UNINSTALL_KEY, "/v", name, "/t", type, "/d", data, "/f"], { stdio: "ignore" });
+    execFileSync(windowsSystemProgram("reg"), ["add", UNINSTALL_KEY, "/v", name, "/t", type, "/d", data, "/f"], { stdio: "ignore" });
   }
   return `listed ${DISPLAY_NAME} in Settings -> Apps (uninstall removes it)`;
 }
@@ -115,6 +116,6 @@ export function writeAppsEntry(home: string, o: { version: string; cli: string; 
 export function removeAppsEntry(home: string, platform = process.platform): string | null {
   if (platform !== "win32") return null;
   rmSync(join(home, UNINSTALL_SCRIPT), { force: true });
-  try { execFileSync("reg", ["delete", UNINSTALL_KEY, "/f"], { stdio: "ignore" }); } catch { return null; }
+  try { execFileSync(windowsSystemProgram("reg"), ["delete", UNINSTALL_KEY, "/f"], { stdio: "ignore" }); } catch { return null; }
   return `removed ${DISPLAY_NAME} from Settings -> Apps`;
 }

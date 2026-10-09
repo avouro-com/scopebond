@@ -10,3 +10,5 @@ export { DispatchStore, createDispatchGuard, DISPATCH_DB, CLOCK_TOLERANCE_MS } f
 export type { DispatchGuardConfig } from "./dispatch-store.js";
 export { openApprovalBinder, openDispatchGuard, openCloudSource, targetIdFor, BINDING_KEY_FILE, TARGET_ID_DOMAIN, readDispatchFile, readApprovalInbox, DISPATCH_FILE, APPROVAL_INBOX, DELEGATION_ENV } from "./dispatch-config.js";
 export type { DispatchFile, ApprovalBinder } from "./dispatch-config.js";
+export { findProgram, programPath, isBareProgramName, windowsSystemProgram } from "./node-programs.js";
+export type { FindProgramOptions, WindowsSystemProgram } from "./node-programs.js";
