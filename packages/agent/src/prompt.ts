@@ -23,6 +23,7 @@ export interface OverrideAnswer { decision: "allow" | "deny" | "unavailable" | "
 export type Prompter = (question: OverrideQuestion) => Promise<OverrideAnswer>;
 
 const ID = /^[A-Za-z0-9._:-]{16,200}$/;
+// eslint-disable-next-line no-control-regex -- deliberately replaces control characters in text shown in the window
 const clip = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max) : "");
 
 /** Check a request from the local channel. Anything malformed is refused before a window opens. */

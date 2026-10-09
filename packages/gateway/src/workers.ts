@@ -45,7 +45,7 @@ export class KvReceiptStore implements ReceiptStore {
     const raw = await this.kv.get(this.key + ":stops", "text");
     return raw ? JSON.parse(raw) as StopState : { global: false, agents: [] };
   }
-  async setStopped(target: "global" | string, stopped: boolean): Promise<void> {
+  async setStopped(target: string, stopped: boolean): Promise<void> {
     const state = await this.getStopState();
     const agents = new Set(state.agents);
     if (target === "global") state.global = stopped;

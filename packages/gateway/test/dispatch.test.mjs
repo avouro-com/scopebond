@@ -22,7 +22,7 @@ function principal(purposes) {
   const raw = pair.publicKey.export({ format: "jwk" });
   return { kid: deriveKid({ crv: raw.crv, kty: raw.kty, x: raw.x }), publicKeyPem, privateKey: pair.privateKey, purposes };
 }
-const registry = (...ps) => new StaticPrincipalKeyRegistry(ps.map(({ privateKey: _p, ...r }) => ({ ...r, status: "active" })));
+const registry = (...ps) => new StaticPrincipalKeyRegistry(ps.map((p) => { const r = { ...p, status: "active" }; delete r.privateKey; return r; }));
 
 /** A clock the test moves by hand. */
 function clock(start = T0) { const c = { t: start, now: () => c.t }; return c; }

@@ -22,7 +22,7 @@ export function createHttpExecutor(opts: HttpExecutorOptions = {}): Executor {
     id: "scopebond:http-call",
     mode: "dispatch",
     async execute(intent: Intent) {
-      const p = (intent.params ?? {}) as Record<string, any>;
+      const p: Record<string, unknown> = intent.params ?? {};
       if (!p.host) return { ref: "noop:non-http-action" };
       // The request goes only to the host the policy checked: a bare host, a path from the root, parsed as a URL and compared
       // again. Concatenating strings let a path such as "@other.example/x" or ".other.example/x" reach another host.
@@ -32,7 +32,9 @@ export function createHttpExecutor(opts: HttpExecutorOptions = {}): Executor {
       if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) throw new ExecutorInputError("http.call path must start with a single /");
       const url = new URL(path, `${scheme}://${host}`);
       if (url.host !== host || url.username || url.password) throw new ExecutorInputError("http.call would reach another host than the one checked");
-      const res = await f(url.href, { method: p.method ?? "GET", headers: p.headers, body: p.body, redirect: "error" });
+      // Method, headers and body pass through as the intent gave them; fetch refuses ones it cannot send.
+      const init = { method: (p.method ?? "GET") as string, headers: p.headers as HeadersInit | undefined, body: p.body as BodyInit | null | undefined };
+      const res = await f(url.href, { ...init, redirect: "error" });
       const text = await res.text();
       const digest = createHash("sha256").update(text).digest("hex");
       return { ref: `http:${res.status}:sha256:${digest.slice(0, 16)}` };

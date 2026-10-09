@@ -213,20 +213,22 @@ export type ScopeEntryKind = (typeof SCOPE_ENTRY_KINDS)[number];
 /** One scope entry: SHA-256 of the domain, the kind and the value, separated by NUL. An unknown kind throws: the vocabulary is closed. */
 export const scopeEntryDigest = (kind: ScopeEntryKind, value: string): string => {
   if (!(SCOPE_ENTRY_KINDS as readonly string[]).includes(kind)) throw new Error(`unknown scope entry kind: ${String(kind)}`);
-  return sha256(`${SCOPE_ENTRY_DOMAIN}${kind} ${value}`);
+  return sha256(`${SCOPE_ENTRY_DOMAIN}${kind}\u0000${value}`);
 };
 
 /** The entry that authorizes granting `permission` on `resourceScope`. */
-export const privilegeScopeEntry = (resourceScope: string, permission: string): string => scopeEntryDigest("privilege", `${resourceScope} ${permission}`);
+export const privilegeScopeEntry = (resourceScope: string, permission: string): string => scopeEntryDigest("privilege", `${resourceScope}\u0000${permission}`);
 
-const ACTION_ENTRY_TYPE = /^[a-z][a-z0-9_]{0,40}(?:.[a-z][a-z0-9_]{0,40}){0,2}$/;
+// Dotted segments ("git.push"). The separator is a literal "." (an unescaped "." once let any character through, NUL included).
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: every repeat is bounded and each segment starts after a literal "."
+const ACTION_ENTRY_TYPE = /^[a-z][a-z0-9_]{0,40}(?:\.[a-z][a-z0-9_]{0,40}){0,2}$/;
 /** The entry for an ordinary action: kind `action`, value `<action_type> NUL <target>` (exact target) or `<action_type> NUL *` (any target, `target = null`).
  *  The target is the opaque target id the dispatch boundary sends (never the raw path or ref): a non-empty string of at most 200 characters without NUL;
  *  the literal `*` is refused because it would collide with the any-target entry. Anything invalid throws. */
 export function actionScopeEntry(actionType: string, target: string | null): string {
   if (!ACTION_ENTRY_TYPE.test(actionType)) throw new Error("invalid action_type for a scope entry");
-  if (target !== null && (target.length < 1 || target.length > 200 || target.includes(" ") || target === "*")) throw new Error("invalid target for a scope entry");
-  return scopeEntryDigest("action", `${actionType} ${target ?? "*"}`);
+  if (target !== null && (target.length < 1 || target.length > 200 || target.includes("\u0000") || target === "*")) throw new Error("invalid target for a scope entry");
+  return scopeEntryDigest("action", `${actionType}\u0000${target ?? "*"}`);
 }
 
 /** The entries that would cover one dispatch intent: the exact action on the exact target id, or every target of the action type (`*`). Throws on invalid input. */
@@ -261,7 +263,8 @@ export interface ActionBudgetPolicy {
 
 /** The digest an acknowledgement must echo: everything but the acknowledgement itself. */
 export function budgetDigest(p: ActionBudgetPolicy): string {
-  const { acknowledgement: _ack, ...rest } = p;
+  const rest: Partial<ActionBudgetPolicy> = { ...p };
+  delete rest.acknowledgement;
   return sha256("scopebond:action-budget/v1\n" + canonical(rest));
 }
 

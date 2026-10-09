@@ -38,7 +38,7 @@ function pack() {
 function withHookFrom(agentTgz, hookTgz, dest) {
   const work = mkdtempSync(join(tmpdir(), "sb-journey-agent-"));
   // Windows' own tar: Git's GNU tar, often first on PATH, reads "C:" as a remote host.
-  const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\Windows", "System32", "tar.exe") : "tar";
+  const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
   const untar = spawnSync(tar, ["-xzf", agentTgz, "-C", work], { encoding: "utf8" });
   assert.equal(untar.status, 0, `tar: ${untar.stderr}`);
   const manifest = join(work, "package", "package.json");

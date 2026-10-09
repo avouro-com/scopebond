@@ -382,9 +382,8 @@ test("an idle session sends one final heartbeat that releases the lease, then no
   const c = clockedEmitter();
   const sid = c.emitter.sessionIdOf("s1");
   c.emitter.sessionStart("s1", "/work");
-  let last = c.clock.t;
+  const last = c.clock.t;
   assert.equal(tickAt(c, sid, last, 60_000), "continue");
-  last = c.clock.t;
   c.clock.t += IDLE_LIMIT_MS; // no hook activity for the whole idle limit (kept awake, no gap)
   assert.equal(c.emitter.heartbeatTick(sid, c.clock.t - 60_000), "stop");
   const items = emitted(c.emitter).filter((p) => p.kind === "health");
