@@ -59,7 +59,8 @@ export function loadConnection(dir: string): HookConnection | null {
     const text = readTextCached(path);
     if (text === null) return null;
     const parsed = JSON.parse(text.replace(/^\uFEFF/, "")) as Partial<HookConnection>;
-    if (typeof parsed.url === "string" && typeof parsed.credential === "string") return parsed as HookConnection;
+    // The credential goes only to an HTTPS workspace (or localhost in development), as `login` requires, even if the file was edited.
+    if (typeof parsed.url === "string" && typeof parsed.credential === "string" && safeIngestOrigin(parsed.url) !== null) return parsed as HookConnection;
   } catch { /* fall through */ }
   return null;
 }
