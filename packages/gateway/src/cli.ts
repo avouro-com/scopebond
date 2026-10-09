@@ -18,7 +18,7 @@
 //      SCOPEBOND_CLOUD_URL + SCOPEBOND_CLOUD_CREDENTIAL for durable hosted export.
 
 import { serve } from "@hono/node-server";
-import { readFileSync, writeFileSync, watch, existsSync } from "node:fs";
+import { closeSync, openSync, readFileSync, unlinkSync, writeFileSync, watch } from "node:fs";
 import { createPublicKey, randomBytes } from "node:crypto";
 import { createGateway, createCloudExporter, withCloudExporter, StaticPrincipalKeyRegistry, deriveKid, completeCloudEnrollment } from "./index.js";
 import type { CloudExporter } from "./index.js";
@@ -264,16 +264,45 @@ function cmdInit(args: string[]): void {
   const policyFile = "scopebond.policy.json";
 
   // Refuse before writing (or generating a key): a run that will not overwrite must
-  // leave the directory exactly as it found it, never a stray agent key behind.
-  if (existsSync(keysRegistry) && !force) fail(`${keysRegistry} already exists (use --force to overwrite)`);
-  if (existsSync(policyFile) && !force) fail(`${policyFile} already exists (use --force to overwrite)`);
+  // leave the directory exactly as it found it, never a stray agent key behind. Without
+  // --force both files are claimed by an exclusive create, which is itself the check, and
+  // released again if the run stops before filling them.
+  const claimed = new Map<string, number>();
+  const release = (): void => {
+    for (const [file, fd] of claimed) {
+      try { closeSync(fd); } catch { /* already closed */ }
+      try { unlinkSync(file); } catch { /* already gone */ }
+    }
+    claimed.clear();
+  };
+  const fill = (file: string, text: string): void => {
+    const fd = claimed.get(file);
+    if (fd === undefined) { writeFileSync(file, text); return; }
+    claimed.delete(file);
+    try { writeFileSync(fd, text); } finally { closeSync(fd); }
+  };
+  if (!force) {
+    for (const file of [keysRegistry, policyFile]) {
+      try { claimed.set(file, openSync(file, "wx")); }
+      catch (error) {
+        release();
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") fail(`${file} already exists (use --force to overwrite)`);
+        throw error;
+      }
+    }
+  }
 
   // 1. The agent's signing key (Ed25519, persisted PKCS8) — reused across restarts.
-  const existed = existsSync(keyFile);
-  const { attester: agent } = loadOrCreateAttester({ file: keyFile });
+  let agent: Attester;
+  let existed: boolean;
+  try {
+    const loaded = loadOrCreateAttester({ file: keyFile });
+    agent = loaded.attester;
+    existed = !loaded.created;
+  } catch (error) { release(); throw error; }
 
   // 2. Register the agent's public key so the gateway accepts its signatures.
-  writeFileSync(keysRegistry, JSON.stringify(
+  fill(keysRegistry, JSON.stringify(
     [{ public_key_pem: agent.publicKeyPem, purposes: ["agent"], status: "active" }], null, 2) + "\n");
 
   // 3. A starter policy bound to this agent's key. Edit the limits to taste.
@@ -288,7 +317,7 @@ function cmdInit(args: string[]): void {
       { id: "keys", type: "key_policy", active_keys: [agent.kid], description: "Only this agent key may sign" },
     ],
   };
-  writeFileSync(policyFile, JSON.stringify(policy, null, 2) + "\n");
+  fill(policyFile, JSON.stringify(policy, null, 2) + "\n");
 
   // 4. A control token for the kill switch / control routes — printed once, kept out of files.
   const controlToken = randomBytes(24).toString("base64url");

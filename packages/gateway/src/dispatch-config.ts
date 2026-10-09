@@ -6,9 +6,10 @@
 // behaves exactly as before. A file that is present but unreadable is an error, never a
 // silent default, because it is the thing that says what may be spent.
 
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { createHmac, randomBytes } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { loadOrCreateHexKey, readBoundedIfPresent } from "./node-files.js";
 import { createCloudDispatchSource, CLOUD_DISPATCH_SCOPE, type CloudDispatchSource } from "./dispatch-cloud.js";
 import { createDispatchGuard, DISPATCH_DB } from "./dispatch-store.js";
 import { StaticPrincipalKeyRegistry } from "./auth.js";
@@ -36,10 +37,9 @@ export interface DispatchFile {
 }
 
 export function readDispatchFile(dir: string): DispatchFile | null {
-  const file = join(dir, DISPATCH_FILE);
-  if (!existsSync(file)) return null;
-  if (statSync(file).size > MAX_FILE_BYTES) throw new Error(`${DISPATCH_FILE} is larger than ${MAX_FILE_BYTES} bytes`);
-  const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
+  const text = readBoundedIfPresent(join(dir, DISPATCH_FILE), MAX_FILE_BYTES, () => { throw new Error(`${DISPATCH_FILE} is larger than ${MAX_FILE_BYTES} bytes`); });
+  if (text === undefined) return null;
+  const raw = JSON.parse(text) as unknown;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${DISPATCH_FILE} must be a JSON object`);
   const f = raw as DispatchFile;
   for (const b of f.budgets ?? []) if (!validateBudgetPolicy(b)) throw new Error(`${DISPATCH_FILE} holds an invalid budget policy`);
@@ -50,13 +50,16 @@ export function readDispatchFile(dir: string): DispatchFile | null {
 /** Approvals a person left for this hook: one JSON file each, in `approvals/`. Unreadable files are skipped, never trusted. */
 export function readApprovalInbox(dir: string): unknown[] {
   const inbox = join(dir, APPROVAL_INBOX);
-  if (!existsSync(inbox)) return [];
+  let names: string[];
+  try { names = readdirSync(inbox); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   const out: unknown[] = [];
-  for (const name of readdirSync(inbox).filter((n) => n.endsWith(".json")).slice(0, MAX_INBOX)) {
+  for (const name of names.filter((n) => n.endsWith(".json")).slice(0, MAX_INBOX)) {
     try {
-      const file = join(inbox, name);
-      if (statSync(file).size > 16 * 1024) continue;
-      out.push(JSON.parse(readFileSync(file, "utf8")));
+      // Size-checked on the open file, so the approval that passed the check is the one read.
+      const text = readBoundedIfPresent(join(inbox, name), 16 * 1024, () => undefined);
+      if (text === undefined) continue;
+      out.push(JSON.parse(text));
     } catch { /* an unreadable approval approves nothing */ }
   }
   return out;
@@ -64,19 +67,14 @@ export function readApprovalInbox(dir: string): unknown[] {
 
 /** An opaque id for a target, so a path or ref never leaves the machine. Stable across processes; created (0600) when absent. */
 export function targetIdFor(dir: string): (target: string) => string {
-  const file = join(dir, BINDING_KEY_FILE);
-  let hex = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
-  if (!/^[0-9a-f]{64}$/.test(hex)) { hex = randomBytes(32).toString("hex"); writeFileSync(file, hex + "\n", { mode: 0o600 }); }
-  const key = Buffer.from(hex, "hex");
+  const key = Buffer.from(loadOrCreateHexKey(join(dir, BINDING_KEY_FILE)), "hex");
   return (target) => `sbt_${createHmac("sha256", key).update(TARGET_ID_DOMAIN + target, "utf8").digest("hex").slice(0, 32)}`;
 }
 
 /** The workspace source for this machine, when it is connected with the grant the calls need. Otherwise null and everything stays local. */
 export function openCloudSource(dir: string, options: { fetch?: typeof fetch; timeoutMs?: number } = {}): CloudDispatchSource | null {
-  const file = join(dir, "cloud.json");
-  if (!existsSync(file)) return null;
   try {
-    const c = JSON.parse(readFileSync(file, "utf8")) as { url?: unknown; credential?: unknown; scopes?: unknown };
+    const c = JSON.parse(readFileSync(join(dir, "cloud.json"), "utf8")) as { url?: unknown; credential?: unknown; scopes?: unknown };
     if (typeof c.url !== "string" || typeof c.credential !== "string" || !Array.isArray(c.scopes) || !c.scopes.includes(CLOUD_DISPATCH_SCOPE)) return null;
     return createCloudDispatchSource({ url: c.url, credential: c.credential, targetId: targetIdFor(dir), ...options });
   } catch { return null; }

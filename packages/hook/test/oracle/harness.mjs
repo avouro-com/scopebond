@@ -13,13 +13,19 @@
 // whose "secret" files hold only a plain marker string.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 const MARK = "SBCANARY";
 const FS = "\x1f";
 const RS = "\x1e";
+
+/** A file's text when it is smaller than `max` bytes, else null. Size and text come from one open descriptor. */
+function readSmall(path, max) {
+  const fd = openSync(path, "r");
+  try { return fstatSync(fd).size < max ? readFileSync(fd, "utf8") : null; } finally { closeSync(fd); }
+}
 
 /** Programs the starter policy denies by name (the oracle's notion of destructive). */
 export const DESTRUCTIVE = ["rm", "rmdir", "shred", "dd", "truncate", "unlink", "wipe", "srm", "sudo", "doas", "mkfs", "shutdown", "reboot", "halt", "poweroff"];
@@ -198,9 +204,9 @@ export function createOracle() {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const p = join(dir, e.name);
         if (e.isDirectory()) { if (e.name !== skip) scan(p); }
-        else if (e.isFile() && statSync(p).size < 65536 && e.name !== ".sbmarker") {
+        else if (e.isFile() && e.name !== ".sbmarker") {
           const rel = p.slice(box.length + 1).replace(/\\/g, "/");
-          if (!PROTECTED_FILES.has(rel) && readFileSync(p, "utf8").includes(MARK)) leaks.push(`marker copied into ${rel}`);
+          if (!PROTECTED_FILES.has(rel) && readSmall(p, 65536)?.includes(MARK)) leaks.push(`marker copied into ${rel}`);
         }
       }
     };

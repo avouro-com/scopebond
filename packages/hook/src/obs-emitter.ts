@@ -148,8 +148,8 @@ export class ObservationEmitter {
   private get adapterVersion(): string { return this.options.adapterVersion ?? "unknown"; }
 
   /** Queue one observation. Any failure is contained: emission never throws to the caller. */
-  emit(draft: Parameters<ObservationStore["enqueue"]>[0]): EnqueueResult | null {
-    try { return this.store.enqueue(draft, this.context, this.signer); } catch { return null; }
+  emit(draft: Parameters<ObservationStore["enqueue"]>[0], options?: Parameters<ObservationStore["enqueue"]>[3]): EnqueueResult | null {
+    try { return this.store.enqueue(draft, this.context, this.signer, options); } catch { return null; }
   }
 
   /** Try to deliver the outbox, bounded. Never throws. */
@@ -268,11 +268,12 @@ export class ObservationEmitter {
       return "stop";
     }
     if (at - row.last_activity_at > IDLE_LIMIT_MS) {
-      this.emit({ kind: "health", occurredAt: at, sessionId, data: heartbeatData(false, { policyDigest: this.policyDigest(), intervalS: this.intervalS() }) });
+      this.emit({ kind: "health", occurredAt: at, sessionId, data: heartbeatData(false, { policyDigest: this.policyDigest(), intervalS: this.intervalS() }) }, { whileSessionActive: sessionId });
       this.store.releaseHeartbeat(sessionId);
       return "stop";
     }
-    this.emit({ kind: "health", occurredAt: at, sessionId, data: heartbeatData(true, { policyDigest: this.policyDigest(), intervalS: this.intervalS() }) });
+    const beat = this.emit({ kind: "health", occurredAt: at, sessionId, data: heartbeatData(true, { policyDigest: this.policyDigest(), intervalS: this.intervalS() }) }, { whileSessionActive: sessionId });
+    if (beat && !beat.queued && beat.reason === "session_ended") { this.store.releaseHeartbeat(sessionId); return "stop"; }
     this.queueTelemetry();
     return this.store.renewHeartbeat(sessionId, 2.5 * heartbeatIntervalMs(this.dir), true) ? "continue" : "stop";
   }
