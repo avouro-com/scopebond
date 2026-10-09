@@ -1,12 +1,14 @@
 name: Release
 
-# Versioning and publish-on-merge, in three jobs so that npm publishing rights live
-# in one small, approval-gated job (see RELEASING.md):
+# Versioning and publish-on-merge, split so that npm publishing rights live in one
+# small, approval-gated job (see RELEASING.md):
 #
 #   version  On every push to main, decides what the repository state calls for.
-#            With pending changesets it opens/updates the "Version packages" PR.
-#            With none pending, it records which workspace package versions are not
-#            on npm yet (a publish plan). No npm credentials, no environment.
+#            With pending changesets it opens/updates the "Version packages" PR
+#            (branch changeset-release/main). With none pending, it records which
+#            workspace package versions are not on npm yet (a publish plan). No npm
+#            credentials.
+#   check    Whether the pushed commit is the merge of the Version packages PR.
 #   pack     Only when a publish is due: builds and packs the planned packages into
 #            tarballs. Read-only; the build never runs with publishing rights.
 #   publish  Only when a publish is due: in the `npm-publish` environment (owner
@@ -14,8 +16,18 @@ name: Release
 #            trusted publishing (OIDC, `id-token: write`) and provenance, then
 #            creates the git tags and GitHub releases.
 #
-# Merging the Version PR is the publish decision; approving the `npm-publish`
-# deployment is the second confirmation.
+# A publish is due when no changesets are pending, some version is missing from
+# npm, and the pushed commit is the Version packages merge (or a maintainer re-runs
+# the workflow by hand on main). Any other push to main, including a PR that edits
+# a `version` field directly, publishes nothing. Merging the Version PR is the
+# publish decision; approving the `npm-publish` deployment is the second
+# confirmation.
+#
+# Credentials stay with the step that needs them: the automation token only in the
+# step that opens the Version pull request, the npm fallback token only in the
+# publish step. Every job that reads a secret is bound to an environment. Installs
+# run no dependency scripts and restore no shared cache, and checkouts keep no
+# token in the git config.
 
 on:
   push:
@@ -36,7 +48,12 @@ jobs:
     name: version or plan publish
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # No environment and no npm secret: this job can never publish.
+    # The automation token is read only in this environment's jobs (deployment:
+    # false — this job opens a pull request; it deploys nothing). No npm secret:
+    # this job can never publish.
+    environment:
+      name: npm
+      deployment: false
     permissions:
       contents: write # push the changeset-release/main branch with the version bumps
       pull-requests: write # open and update the "Version packages" pull request
@@ -49,17 +66,13 @@ jobs:
           # Not kept in .git/config: changesets/action commits the version branch
           # through the GitHub API with its github-token input.
           persist-credentials: false
-          # The repository currently disallows Actions' default token from
-          # creating pull requests. Reuse the existing company automation PAT
-          # when configured (a repository or organization secret: this job has no
-          # environment), while retaining github.token for forks/dev copies.
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # No dependency cache: a release job starts from the lockfile alone.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22.20.0
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       # "version" when changesets are pending; "publish" when none are pending and
       # some public package version is missing from npm (the publish plan is uploaded
       # as an artifact for the next jobs); otherwise "none".
@@ -71,19 +84,49 @@ jobs:
         run: |
           git config user.name "avourohq"
           git config user.email "founder@avouro.com"
+      # Opens/updates the Version pull request only; it publishes nothing.
       - name: Open or update the Version packages PR
         if: steps.mode.outputs.mode == 'version'
         uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
+          # The repository currently disallows Actions' default token from
+          # creating pull requests. Reuse the existing company automation PAT
+          # when configured, while retaining github.token for forks/dev copies.
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
           script: pnpm version:packages
           commit-message: "chore: version packages"
           pr-title: "Version packages"
 
+  check:
+    name: is this the Version packages merge
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read the pull requests associated with this commit
+      pull-requests: read # read the pull requests associated with this commit
+    outputs:
+      versionMerge: ${{ steps.merge.outputs.versionMerge }}
+    steps:
+      # True only when this exact commit is the merge of a pull request from this
+      # repository's changeset-release/main branch into main.
+      - id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          count=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '[.[] | select(.merged_at != null and .merge_commit_sha == $ENV.SHA and .base.ref == "main" and .head.ref == "changeset-release/main" and .head.repo.full_name == $ENV.REPO)] | length')
+          if [ "$count" = "1" ]; then
+            echo "versionMerge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "versionMerge=false" >> "$GITHUB_OUTPUT"
+            echo "Not the merge of the Version packages pull request: a push publishes nothing."
+          fi
+
   pack:
     name: build and pack
-    needs: version
-    if: needs.version.outputs.mode == 'publish'
+    needs: [version, check]
+    if: needs.version.outputs.mode == 'publish' && (needs.check.outputs.versionMerge == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: read # check out the source being released
@@ -94,12 +137,14 @@ jobs:
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # No dependency cache: a release job starts from the lockfile alone.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22.20.0
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build every package (no credentials)
+        run: pnpm -r build
       # `changeset pack` packs exactly the planned packages (workspace: ranges are
       # rewritten to real versions) and uploads the tarballs as an artifact.
       - name: Pack planned packages
@@ -110,11 +155,13 @@ jobs:
 
   publish:
     name: publish to npm
-    needs: pack
+    needs: [version, check, pack]
+    if: needs.version.outputs.mode == 'publish' && (needs.check.outputs.versionMerge == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    # Owner approval is required to deploy to this environment. npm's trusted
-    # publisher for each package names this repository, release.yml and this
-    # environment, so no other workflow or job can publish with OIDC.
+    # Owner approval is required to deploy to this environment, and the npm token
+    # is read only in it. npm's trusted publisher for each package names this
+    # repository, release.yml and this environment, so no other workflow or job can
+    # publish with OIDC.
     environment:
       name: npm-publish
       deployment: false
@@ -132,27 +179,28 @@ jobs:
           # No dependency cache in the job that holds publishing rights.
           package-manager-cache: false
           # Writes an .npmrc for the npm registry that reads NODE_AUTH_TOKEN (the
-          # fallback token below).
+          # fallback token, set only on the publish step below).
           registry-url: "https://registry.npmjs.org"
       # Trusted publishing needs npm >= 11.5.1; Node 22.20.0 bundles npm 10. pnpm 10
       # publishes a tarball by running `npm publish` from PATH, so this npm is used.
       - name: Install npm with trusted publishing support
         run: |
-          npm install -g npm@11.21.0
+          npm install -g --ignore-scripts npm@11.21.0
           npm --version
       # Installs @changesets/cli for the publish step; nothing is built here.
-      - run: pnpm install --frozen-lockfile
-      - name: Configure company commit identity
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Configure company commit identity (release tags)
         run: |
           git config user.name "avourohq"
           git config user.email "founder@avouro.com"
-      # Runs `changeset publish --from-pack-dir`, which publishes each packed tarball
-      # (pnpm publish -> npm publish), then pushes the tags and creates the GitHub
-      # releases through the API with github-token.
+      # The one step with publishing rights: `changeset publish --from-pack-dir`
+      # publishes each packed tarball (pnpm publish -> npm publish, no package
+      # scripts), then the action pushes the tags and creates the GitHub releases
+      # through the API with the workflow token.
       - name: Publish packed packages
         uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
+          github-token: ${{ github.token }}
           pack-dir-artifact-id: ${{ needs.pack.outputs.pack-dir-artifact-id }}
         env:
           # Fallback only: npm exchanges the OIDC token for a short-lived publish token
@@ -161,3 +209,4 @@ jobs:
           # trusted publish; see RELEASING.md.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
           NPM_CONFIG_PROVENANCE: "true"
+          npm_config_ignore_scripts: "true"

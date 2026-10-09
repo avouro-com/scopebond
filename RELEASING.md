@@ -2,9 +2,11 @@
 
 Packages are versioned and published with
 [Changesets](https://github.com/changesets/changesets). **The Release workflow
-publishes on merge** once version changes are committed and no pending changesets
-remain. A public merge or npm publication needs maintainer approval; approving and
-merging a version PR is a publication decision, not just a documentation update.
+publishes on merge** of the "Version packages" pull request, once no pending
+changesets remain. Any other push to `main`, including a PR that edits a `version`
+field directly, publishes nothing. A public merge or npm publication needs
+maintainer approval; approving and merging a version PR is a publication
+decision, not just a documentation update.
 
 ## Flow
 
@@ -32,10 +34,11 @@ merging a version PR is a publication decision, not just a documentation update.
    may open pull requests here), or Settings → Actions → General → "Allow GitHub
    Actions to create and approve pull requests".
 3. Review the version PR, checks, and package scope. Obtain maintainer approval
-   before merging. With the version changes committed and changesets consumed,
-   the workflow's `version` job finds the package versions missing from npm, the
-   `pack` job builds all packages and packs those versions into tarballs, and the
-   `publish` job waits for approval in the `npm-publish` environment.
+   before merging. When the pushed commit is the merge of that PR (branch
+   `changeset-release/main`) and changesets are consumed, the workflow's `version`
+   job finds the package versions missing from npm, the `pack` job builds all
+   packages and packs those versions into tarballs, and the `publish` job waits for
+   approval in the `npm-publish` environment.
 4. Approve the `npm-publish` deployment on the workflow run (the second publication
    decision). The `publish` job publishes the tarballs with npm trusted publishing
    and provenance, then creates the git tags and GitHub releases.
@@ -52,14 +55,17 @@ merging a version PR is a publication decision, not just a documentation update.
 
 | Job | Runs when | Environment | Permissions | npm credentials |
 | --- | --- | --- | --- | --- |
-| `version` | every push to `main` | none | `contents: write`, `pull-requests: write` | none |
+| `version` | every push to `main` | `npm` (automation token; no deployment) | `contents: write`, `pull-requests: write` | none |
+| `check` | every push to `main` | none | `contents: read`, `pull-requests: read` | none |
 | `pack` | a publish is due | none | `contents: read` | none |
 | `publish` | a publish is due | `npm-publish` (owner approval) | `contents: write`, `id-token: write` | OIDC; token fallback |
 
-"A publish is due" means no changesets are pending and some public package
-version is not on npm (the `changesets/action/select-mode` publish plan). A merge
-that leaves every version published does not reach `pack` or `publish`, so it does
-not ask for approval.
+"A publish is due" means no changesets are pending, some public package version
+is not on npm (the `changesets/action/select-mode` publish plan), and the pushed
+commit is the merge of the Version packages PR (the `check` job), or a maintainer
+ran the workflow on `main` from the Actions tab. Any other push to `main`,
+including a PR that edits a `version` field directly, does not reach `pack` or
+`publish`, and neither does a merge that leaves every version published.
 
 ## Trusted publishing
 
@@ -77,8 +83,9 @@ workflow meets them:
   environment named in each package's trusted publisher.
 
 npm allows one trusted publisher per package, so only `release.yml` can publish
-with OIDC; the manual `publish.yml` workflow authenticates only with the
-`NPM_TOKEN` secret and stops working once tokens are disallowed.
+with OIDC. It is also the only workflow that publishes at all: there is no
+separate manual publish workflow, and a manual run of the Release workflow on
+`main` takes its place.
 
 ### One-time owner setup
 
@@ -107,8 +114,7 @@ with OIDC; the manual `publish.yml` workflow authenticates only with the
 3. After the first release whose `publish` job log shows a successful trusted
    publish (and npm shows the new versions with provenance):
    - remove `NODE_AUTH_TOKEN` from the `publish` job in `release.yml`;
-   - delete the `NPM_TOKEN_SCOPEBOND` and `NPM_TOKEN` repository secrets and remove
-     the token-only `publish.yml` workflow;
+   - delete the `NPM_TOKEN_SCOPEBOND` and `NPM_TOKEN` repository secrets;
    - revoke those tokens on npmjs.com (**Access Tokens**);
    - for each package, set **Settings** → **Publishing access** to **Require
      two-factor authentication and disallow tokens**. Trusted publishing keeps
@@ -118,11 +124,14 @@ with OIDC; the manual `publish.yml` workflow authenticates only with the
 
 - Use the Node version in `.nvmrc` and pnpm 10.34.6 from `package.json`.
 - The `publish` job authenticates with npm trusted publishing. Until the first
-  trusted publish succeeds it also supplies `NPM_TOKEN_SCOPEBOND` as
-  `NODE_AUTH_TOKEN` (read through the `.npmrc` that `actions/setup-node` writes);
-  npm tries the OIDC exchange first and uses that token only if the exchange
-  fails. Keep credentials in repository secrets; never put their values in source
-  or release instructions.
+  trusted publish succeeds its publish step (only that step, not install or
+  build) also supplies `NPM_TOKEN_SCOPEBOND` as `NODE_AUTH_TOKEN` (read through
+  the `.npmrc` that `actions/setup-node` writes); npm tries the OIDC exchange
+  first and uses that token only if the exchange fails. The automation token is
+  used only by the step that opens the version PR, in the `npm` environment.
+  Installs run with `--ignore-scripts` and no dependency cache, and checkouts keep
+  no token. Keep credentials in repository secrets; never put their values in
+  source or release instructions.
 - Public packages set `publishConfig.access: public`. The Changesets ignore list
   is empty; the gateway is already published, not awaiting its first release.
 - Run `pnpm run gate` and the relevant build, test, and package smoke checks before

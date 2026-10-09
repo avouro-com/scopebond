@@ -254,11 +254,13 @@ jobs:
           Pop-Location
       # The manifest signed installs trust before updating themselves (the updater key, separate from Authenticode).
       # Without the secret the run fails: a release without it is one signed installs would never update to.
+      # The manifest names the commit it was built from, so a signed release is bound to one source tree.
       - name: Signed release manifest
         env:
           UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
           VERSION: ${{ needs.build.outputs.version }}
-        run: node packages/native/manifest.mjs "$env:VERSION" out
+          COMMIT: ${{ github.sha }}
+        run: node packages/native/manifest.mjs "$env:VERSION" out "$env:COMMIT"
         shell: pwsh
       # The winget manifests (Avouro.Scopebond) for this release's installer; the owner submits them to winget-pkgs.
       - name: winget manifests
