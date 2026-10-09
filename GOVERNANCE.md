@@ -42,6 +42,6 @@ every future review.
 
 ## Releases & security
 
-Releases follow semantic versioning once the first package is tagged; the policy
+Releases follow semantic versioning; the policy
 vocabulary and `scopebond-verify` version independently (see the vocabulary spec).
 Security issues follow [SECURITY.md](SECURITY.md).

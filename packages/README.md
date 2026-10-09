@@ -18,7 +18,7 @@ See the [root README](../README.md) for product scope and hosted versus local se
 | `github-action` | Agent pull-request checks in your own runner. Make the check required to gate merge; signing is configurable. | **experimental** (published 0.5.10) |
 | `mcp` | Checks routed MCP tools/call requests before forwarding; other MCP operations are outside the tool-call policy. | **experimental** (published 2.0.10) |
 | `framework` | Guards supported tools in Vercel AI SDK, LangGraph/LangChain, and custom loops; the application must honor the decision. | **experimental** (published 0.3.14) |
-| `fake-cloud` | A stand-in Scopebond workspace for tests: device sign-in, enrollment, delivery, rules, self-check and client version, with fault injection (401, 409, 429, 500, slow, dropped). | **experimental** (test tool; release with the next version) |
+| `fake-cloud` | A stand-in Scopebond workspace for tests: device sign-in, enrollment, delivery, rules, self-check and client version, with fault injection (401, 409, 429, 500, slow, dropped). | **experimental** (private test tool; not published) |
 | `agent` | Open-source companion for delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.6.1) |
 
 **Core-package rule:** `policy-schema`, `verify`, `gateway`, and `sdk` carry no
