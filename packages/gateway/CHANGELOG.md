@@ -1,5 +1,34 @@
 # @scopebond/gateway
 
+## 0.17.4
+
+### Patch Changes
+
+- 58fa74d: The agent keeps answering while it works. The local store's upkeep (up to 30 seconds of database work, or a full rewrite
+  of an older file) now runs as `scopebond-agent upkeep` in a process of its own, so the tray, `status` and the workspace's
+  requests are answered meanwhile. One cycle sends for at most a minute and the next cycle starts at once while records
+  remain, so a long queue never holds up the rules check. The gateway's exporter lets the event loop run between batches
+  and takes `flush({ maxMs })`: no new batch starts once that time is up.
+- 4e6ceff: The Cloud exporter hands the chain head a workspace returns with each delivery (`chain_head`) to a new `onChainHead` callback; a malformed head or a failing callback never affects delivery. `@scopebond/gateway/node` adds a small store for those heads (`chainHeadRecorder`, `readChainHeads`, `mergeChainHead`; `chain-heads.json`) that keeps each day's newest head per chain and every head that disagrees with the one before it. The chain checks from `@scopebond/verify/chain` are re-exported.
+- 52502c3: The same action gets the same treatment in Claude Code, Codex and Cursor.
+  
+  - Cursor is answered `allow` only for a clean evaluated allow. An action a monitored rule finds out of policy now gets no
+    opinion (`ask`), so Cursor's own approval decides, as Claude Code's and Codex's do when the hook stays silent.
+  - A Cursor edit reported after it was written (`afterFileEdit`) that breaks a blocking rule is signed with the new execution
+    state `observed_after` (`realtime_result: "deny"`, `executed: true`) instead of `denied`. `log` shows it as "recorded, not
+    prevented", the tray and local counts keep it apart from blocks, and it is never counted as one. The gateway takes this as
+    the `observedAfter` action option (nothing is dispatched and no override is asked); the receipt schema, evidence vectors
+    and evidence check accept the new state.
+  - The hook program answers deny on any failure the commands do not catch themselves (a module that cannot load, an uncaught
+    error): Claude Code gets exit 2, Codex and Cursor their deny answer.
+  - The Scopebond Agent checks the Codex and Cursor hook entries on each maintenance pass and keeps each outage (an entry that
+    cannot start) as one `hook_unresolvable` delivery gap, which the rules check reports with the other gaps; `status` lists
+    such outages apart from records that missed delivery.
+- Updated dependencies [52502c3]
+- Updated dependencies [4e6ceff]
+  - @scopebond/policy-schema@0.7.1
+  - @scopebond/verify@0.6.2
+
 ## 0.17.3
 
 ### Patch Changes
