@@ -58,7 +58,8 @@ jobs:
       # suppressions and would open it as an alert, so suppressed results are left out of the upload.
       - name: eslint (leave out suppressed results)
         if: hashFiles('eslint.sarif') != ''
-        run: node scripts/sarif-drop-suppressed.mjs eslint.sarif
+        # The count goes to the run summary too, so a growing number of suppressions is visible.
+        run: node scripts/sarif-drop-suppressed.mjs eslint.sarif | tee -a "$GITHUB_STEP_SUMMARY"
       - name: eslint (summary)
         run: |
           {
