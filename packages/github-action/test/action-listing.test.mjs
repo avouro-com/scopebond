@@ -223,7 +223,7 @@ test("with gh absent the fallback diff of a normal PR is exact and a production 
 });
 
 test("an API that fails mid-run yields no paths and the check fails closed", () => {
-  const { repo, baseSha, headSha } = makeRepo(["src/a.ts"]);
+  const { repo, headSha } = makeRepo(["src/a.ts"]);
   const r = runAction({ repo, baseSha: "0".repeat(40), headSha, changedFiles: 1, apiFiles: [] });
   assert.equal(r.status, 1);
 });

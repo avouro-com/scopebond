@@ -161,7 +161,7 @@ export async function submit(gatewayUrl: string, signed: SignedIntent, fetchImpl
   });
   let body: unknown;
   try { body = await res.json(); }
-  catch (e) { throw new Error(`gateway answered HTTP ${res.status} without a JSON decision: ${(e as Error).message}`); }
+  catch (e) { throw new Error(`gateway answered HTTP ${res.status} without a JSON decision: ${(e as Error).message}`, { cause: e }); }
   const allowed = body !== null && typeof body === "object" ? (body as { allowed?: unknown }).allowed : undefined;
   if (typeof allowed !== "boolean") throw new Error(`gateway answered HTTP ${res.status} without a boolean "allowed" (failing closed)`);
   if (!res.ok && allowed !== false) throw new Error(`gateway answered HTTP ${res.status} (failing closed)`);

@@ -12,7 +12,7 @@ import { requestHash } from "@scopebond/gateway";
 import type { SignedReceipt, Attester, DispatchGuard, DispatchDecision } from "@scopebond/gateway";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { describeToolCall, intentDraft, manifestHash, outcomeDraft, type ExitCategory, type TypedAdapterConfig } from "./typed.js";
+import { describeToolCall, intentDraft, jsonString, manifestHash, outcomeDraft, type ExitCategory, type TypedAdapterConfig } from "./typed.js";
 
 export interface JsonRpcMessage {
   jsonrpc?: string;
@@ -45,10 +45,11 @@ const defaultArgsDigest = (args: unknown): string =>
  * digested (keyed), never stored. */
 export function mapMcpToolCall(
   server: string, params: Record<string, unknown> | undefined, argsDigest: (args: unknown) => string = defaultArgsDigest,
-): { action_type: string; params: Record<string, unknown> } {
+): { action_type: string; params: { server: string; tool: string; args_digest: string } } {
   return {
     action_type: "mcp.tool.call",
-    params: { server, tool: String(params?.name ?? ""), args_digest: argsDigest(params?.arguments ?? {}) },
+    // The same text String() gave, but a name like {"toString": 1} no longer throws out of the proxy.
+    params: { server, tool: jsonString(params?.name ?? ""), args_digest: argsDigest(params?.arguments ?? {}) },
   };
 }
 
@@ -107,7 +108,7 @@ export interface McpProxy {
   /** Decide and forward one JSON-RPC message. Anything that is not a single JSON-RPC object
    *  (a batch array, null, a primitive) or whose `method` is not a string is answered with a
    *  -32600 Invalid Request error and never forwarded. */
-  handle(message: JsonRpcMessage | unknown): Promise<JsonRpcMessage>;
+  handle(message: unknown): Promise<JsonRpcMessage>;
 }
 
 /** A JSON-RPC -32600 reply for a message the proxy will not forward. */
@@ -147,6 +148,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
   let verified = false;
   let mismatchSeen = false;
   const learn = (hash: string): void => {
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- a tool-list hash compared with the pinned manifest hash, both public; not a secret
     if (hash !== typed?.manifest?.hash) mismatchSeen = true;
     verified = !mismatchSeen;
     verifiedAt = nowMs();
@@ -175,13 +177,14 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
     if (nowMs() - verifiedAt < recheck) return verified;
     let hash: string | undefined;
     try { hash = await readToolList(); } catch { hash = undefined; }
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- checks whether a tool list was read at all; no secret is compared
     if (hash === undefined) { verified = false; verifiedAt = nowMs(); }
     else learn(hash);
     return verified;
   };
 
   return {
-    async handle(raw: JsonRpcMessage | unknown): Promise<JsonRpcMessage> {
+    async handle(raw: unknown): Promise<JsonRpcMessage> {
       const invalid = invalidMessageReason(raw);
       if (invalid) return invalidRequest((raw as { id?: unknown } | null)?.id, invalid);
       const message = raw as JsonRpcMessage;
@@ -221,7 +224,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
 
       // The boundary, for a call policy has allowed. The exact request forwarded below is what an approval is bound to.
       let boundary: DispatchDecision | undefined;
-      const guardTarget = `${config.server}/${String(intent.params.tool)}`;
+      const guardTarget = `${config.server}/${intent.params.tool}`;
       const guardRequest = { server: config.server, method: "tools/call", params: dispatched.params ?? {} };
       if (decision === "allow" && config.dispatch) {
         const target = guardTarget;

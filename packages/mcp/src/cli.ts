@@ -258,7 +258,14 @@ const proxy = createMcpProxy({
 });
 
 const reply = (m: unknown): void => { process.stdout.write(JSON.stringify(m) + "\n"); };
-readLines(process.stdin, MAX_LINE_BYTES, async (line) => {
+// Lines are decided concurrently, as they arrive. Every failure while deciding one is answered inside
+// `handleLine`; the `.catch` only keeps anything left over (a failed reply write) from becoming an
+// unhandled rejection, which would end the proxy.
+readLines(process.stdin, MAX_LINE_BYTES, (line) => {
+  handleLine(line).catch((e: unknown) => { process.stderr.write(`scopebond-mcp: ${e instanceof Error ? e.message : String(e)}\n`); });
+}, () => reply({ jsonrpc: "2.0", id: null, error: { code: -32600, message: `Invalid Request: message over ${MAX_LINE_BYTES} bytes` } }));
+
+async function handleLine(line: string): Promise<void> {
   if (!line.trim()) return;
   let parsed: unknown;
   try { parsed = JSON.parse(line); } catch { return; }
@@ -274,5 +281,5 @@ readLines(process.stdin, MAX_LINE_BYTES, async (line) => {
     // Fail closed: a proxy error becomes a JSON-RPC error, never a silent forward.
     if (expectsReply) reply({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `scopebond-mcp failed closed: ${(e as Error).message}` } });
   }
-}, () => reply({ jsonrpc: "2.0", id: null, error: { code: -32600, message: `Invalid Request: message over ${MAX_LINE_BYTES} bytes` } }));
+}
 }

@@ -226,7 +226,7 @@ test("with a dispatch guard requiring approval, the typed operation carries the 
   const { mkdtempSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { requestHash, createDispatchGuard: _unused } = await import("@scopebond/gateway");
+  const { requestHash } = await import("@scopebond/gateway");
   const { createDispatchGuard, openApprovalBinder, targetIdFor } = await import("@scopebond/gateway/node");
   const dir = mkdtempSync(join(tmpdir(), "sb-mcp-bind-"));
   const settings = (s) => { writeFileSync(join(dir, "dispatch.json"), JSON.stringify(s)); return openApprovalBinder(dir); };

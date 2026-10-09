@@ -102,8 +102,21 @@ export function manifestHash(tools: unknown[]): string {
   const norm = tools
     .filter((t): t is Record<string, unknown> => !!t && typeof t === "object")
     .map((t) => ({ name: t.name ?? null, description: t.description ?? null, inputSchema: t.inputSchema ?? null, annotations: t.annotations ?? null }))
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    .sort((a, b) => jsonString(a.name).localeCompare(jsonString(b.name)));
   return `sha256:${createHash("sha256").update(canonical(norm)).digest("hex")}`;
+}
+
+/** `String(v)` for a parsed JSON value — the same text for a string, number, boolean, null, array or plain
+ *  object — without calling the value's own `toString`/`valueOf`: parsed JSON with a "toString" key
+ *  (`{"toString": 1}`) made String() throw. Internal; not exported from the package. */
+export function jsonString(v: unknown): string {
+  switch (typeof v) {
+    case "string": return v;
+    case "object":
+      if (v === null) return "null";
+      return Array.isArray(v) ? v.map((el: unknown) => (el == null ? "" : jsonString(el))).join(",") : "[object Object]";
+    default: return String(v);
+  }
 }
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/;

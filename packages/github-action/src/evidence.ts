@@ -49,6 +49,7 @@ export interface EvidenceInput {
   env?: Record<string, string | undefined>;
 }
 
+// eslint-disable-next-line no-control-regex -- deliberately rejects a value carrying a C0 control character
 const bounded = (value: string | undefined, max = 200): string | undefined => (value !== undefined && value !== "" && value.length <= max && !/[\u0000-\u001f]/.test(value) ? value : undefined);
 
 /** `success` for allow, `failure` for deny, `neutral` when the pull request was not evaluated. */

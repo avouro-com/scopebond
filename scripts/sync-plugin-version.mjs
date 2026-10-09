@@ -48,6 +48,7 @@ function update(file, transform) {
 const pinScoped = (text) => {
   let out = text;
   for (const { name, version } of Object.values(versions)) {
+    // eslint-disable-next-line security/detect-non-literal-regexp -- a package name from the workspace's own package.json files, escaped, followed by the fixed VERSION pattern
     out = out.replace(new RegExp(`${escape(name)}@${VERSION}`, "g"), `${name}@${version}`);
   }
   return out;

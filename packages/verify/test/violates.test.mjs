@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { durationToMs, validateIntent, validatePolicy } from "../dist/violates.js";
+import { bareHost, durationToMs, validateIntent, validatePolicy } from "../dist/violates.js";
 // Every verdict here is also checked against the bounded prior set (bounded.mjs).
 import { violatesBoth as violates } from "./bounded.mjs";
 
@@ -253,4 +253,37 @@ test("force_push_guard: validates as a policy clause (with and without protected
   assert.equal(validatePolicy(valid({ clauses: [{ id: "fpg", type: "force_push_guard" }] })).valid, true);
   assert.equal(validatePolicy(valid({ clauses: [{ id: "fpg", type: "force_push_guard", protected_refs: ["main", "release/*"] }] })).valid, true);
   assert.equal(validatePolicy(valid({ clauses: [{ id: "fpg", type: "force_push_guard", protected_refs: [] }] })).valid, false);
+});
+
+test("param_bounds: an invalid items pattern makes the policy invalid instead of throwing from violates()", () => {
+  const policy = valid({ clauses: [{ id: "tags", type: "action_allowlist", action_types: ["x.tag"], param_bounds: { tags: { items: { pattern: "(" } } } }] });
+  assert.equal(validatePolicy(policy).valid, false);
+  const v = violates(policy, [], rcpt({ intent: { action_type: "x.tag", params: { tags: ["a"] } }, ts: "2026-09-12T12:00:00Z" }));
+  assert.equal(v.violated, true);
+  assert.match(v.explanation, /^invalid policy: .*param_bounds\/tags has an invalid pattern/);
+});
+
+test("explanations show agent-supplied param values without calling their own toString", () => {
+  const policy = valid({ clauses: [{ id: "env", type: "action_allowlist", action_types: ["deploy.run"], param_bounds: { env: { enum: ["staging"] } } }] });
+  const at = (env) => violates(policy, [], rcpt({ intent: { action_type: "deploy.run", params: { env } }, ts: "2026-09-12T12:00:00Z" }));
+  // Parsed JSON can carry a "toString" key; a template literal threw on it.
+  assert.equal(at(JSON.parse('{"toString":1}')).explanation, "param env=[object Object] not in enum");
+  // Ordinary values read exactly as before.
+  assert.equal(at("prod").explanation, "param env=prod not in enum");
+  assert.equal(at(7).explanation, "param env=7 not in enum");
+  assert.equal(at(["a", null, 2]).explanation, "param env=a,,2 not in enum");
+  const addr = valid({ clauses: [{ id: "to", type: "address_allowlist", addresses: ["0xabc"] }] });
+  const v = violates(addr, [], rcpt({ intent: { action_type: "evm.transfer", params: { to: JSON.parse('{"toString":1}') } }, ts: "2026-09-12T12:00:00Z" }));
+  assert.equal(v.violated, true);
+});
+
+test("the duration and host patterns stay fast on a 50k-character adversarial input", () => {
+  const long = "P" + "1".repeat(50_000) + "X";
+  const t0 = performance.now();
+  assert.throws(() => durationToMs(long), /unsupported duration/);
+  assert.throws(() => durationToMs("PT" + "1".repeat(50_000)), /unsupported duration/);
+  assert.equal(validatePolicy(valid({ clauses: [{ id: "r", type: "rate_limit", action_types: ["a"], max_count: 1, window: long }] })).valid, false);
+  assert.equal(bareHost("a.".repeat(25_000) + "!"), null);
+  assert.equal(bareHost("[" + ":".repeat(50_000)), null);
+  assert.ok(performance.now() - t0 < 1000, "patterns are linear");
 });

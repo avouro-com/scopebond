@@ -13,8 +13,10 @@ test("starterMcpPolicy allows read-only tool names and denies every other tool",
   const p = starterMcpPolicy("filesystem");
   const bound = p.clauses[0].param_bounds;
   assert.deepEqual(bound.server.enum, ["filesystem"]);
-  assert.ok(new RegExp(bound.tool.pattern).test("read_file"));
-  assert.equal(new RegExp(bound.tool.pattern).test("delete_file"), false);
+  // eslint-disable-next-line security/detect-non-literal-regexp -- compiles the starter policy's own fixed tool pattern, the thing under test
+  const toolPattern = new RegExp(bound.tool.pattern);
+  assert.ok(toolPattern.test("read_file"));
+  assert.equal(toolPattern.test("delete_file"), false);
 });
 
 test("scopebond-mcp init scaffolds a key and a starter policy", () => {
