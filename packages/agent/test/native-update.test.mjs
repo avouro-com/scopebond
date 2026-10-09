@@ -84,7 +84,7 @@ test("the install helper is constant text; the installer, its digest, size and p
   const { installHelper, INSTALL_HELPER_SCRIPT, INSTALL_RESULT, PUBLISHER } = await import("../dist/index.js");
   const installer = { path: join("D:", "Apps", "O'Brien $x", ".scopebond", "updates", installerName(VERSION)), version: VERSION, sha256: "ab".repeat(32), size: 1234 };
   const helper = installHelper(installer, 4242, join("D:", "Apps", "launch.cmd"), { tray: join("D:", "Apps", "scopebond-tray.exe") });
-  assert.equal(helper.program, "powershell.exe");
+  assert.match(helper.program, /System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i, "Windows PowerShell by its full path");
   assert.deepEqual(helper.args, ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", INSTALL_HELPER_SCRIPT]);
   for (const value of [installer.path, installer.sha256, "1234", VERSION, "4242", "O'Brien"]) {
     assert.ok(!INSTALL_HELPER_SCRIPT.includes(value), `the script text carries ${value}`);
@@ -111,7 +111,7 @@ test("the install helper is constant text; the installer, its digest, size and p
     at("-ne 'Valid'"),
     at("$subject -cmatch $env:SB_PUBLISHER"),
     at("if ($reason) { Write-Result $false $reason $null }"),
-    at("Start-Process -FilePath $env:SB_MSIEXEC"),
+    at("Start-Process -FilePath $msiexec"),
     at("finally { if ($lock) { $lock.Dispose() } }"),
     at("Start-Process -FilePath $env:SB_TRAY"),
   ];
@@ -204,8 +204,8 @@ test("after an update the helper stops the tray first, installs, then starts the
   const at = (s) => script.indexOf(s);
   assert.ok(at("Stop-Process") >= 0 && at("Stop-Process") < at("Wait-Process"), "the tray would otherwise start the old agent again");
   assert.match(script, /Where-Object \{ \$_\.Path -eq \$env:SB_TRAY \}/, "only this install's tray");
-  assert.ok(at("Start-Process -FilePath $env:SB_MSIEXEC") >= 0, "it installs");
-  assert.ok(at("Start-Process -FilePath $env:SB_MSIEXEC") < at("Start-Process -FilePath $env:SB_TRAY"), "the new tray starts the new agent");
+  assert.ok(at("Start-Process -FilePath $msiexec") >= 0, "it installs");
+  assert.ok(at("Start-Process -FilePath $msiexec") < at("Start-Process -FilePath $env:SB_TRAY"), "the new tray starts the new agent");
   // The tray is started again also when nothing was installed (the check refused the installer): never left without one.
   assert.ok(at("finally { if ($lock) { $lock.Dispose() } }") < at("Start-Process -FilePath $env:SB_TRAY"));
   assert.match(script, /elseif \(\$env:SB_LAUNCHER\)/, "without the tray, the launcher as before");
