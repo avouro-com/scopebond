@@ -6,7 +6,7 @@
 // transport. The proxy decides the caller's request (no agent signature), so its
 // receipts are pep_authorized (§15) — the identity is the configured principal.
 
-import { violates } from "@scopebond/verify";
+import { violates, historyNeed, boundPrior } from "@scopebond/verify";
 import { buildPepReceipt, attesterFromPrivateKeyPem } from "@scopebond/gateway";
 import { requestHash } from "@scopebond/gateway";
 import type { SignedReceipt, Attester, DispatchGuard, DispatchDecision } from "@scopebond/gateway";
@@ -152,9 +152,22 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
   // Session history of authorized calls. A forwarded call actually runs, so it
   // counts as executed for windowed clauses (rate_limit, sequence, spend_limit); a call
   // still being decided after policy allowed it is held here too, until it is forwarded or refused.
-  const history: CountableCall[] = [...(config.history ?? [])];
-  const typed = config.typed;
+  // Only what the policy can read is kept: nothing for a policy without windowed clauses, and the calls inside the longest
+  // window for one with them (the policy is fixed for the proxy's life). Keeping every call made each decision re-read
+  // and re-hash the whole session, so decisions slowed down and memory grew for as long as the proxy ran.
+  const need = historyNeed(config.policy as never);
   const nowMs = (): number => (config.now ? Date.parse(config.now()) : Date.now());
+  const history: CountableCall[] = boundPrior(need, [...(config.history ?? [])], new Date(nowMs()).toISOString());
+  // Calls are dropped a while after they leave the window (another window, at least five minutes), so a clock that steps
+  // back a little does not lose calls a decision still counts. Each decision is then trimmed exactly by boundPrior.
+  const retention = need.kind === "window" ? { kind: "window" as const, ms: need.ms + Math.max(need.ms, 5 * 60_000) } : need;
+  /** Drop the calls no clause can read any more at `at`, in place (in-flight calls are found again by identity). */
+  const prune = (at: string): void => {
+    if (retention.kind !== "window" || history.length === 0) return;
+    const kept = boundPrior(retention, history, at);
+    if (kept.length !== history.length) history.splice(0, history.length, ...kept);
+  };
+  const typed = config.typed;
   const argsDigest = config.argsDigestKey ? keyedArgsDigest(config.argsDigestKey) : defaultArgsDigest;
 
   // The live tool list is read from the upstream itself, and again after the recheck interval,
@@ -235,11 +248,12 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       const timestamp = config.now?.() ?? new Date().toISOString();
       // Its own id, so two identical calls stamped in the same millisecond count as two.
       const claimed: CountableCall = { intent, executed: true, timestamp, intent_hash: digest(intent).slice(7), action_id: globalThis.crypto.randomUUID() };
-      const verdict = violates(config.policy as never, history as never, claimed as never, { at: timestamp });
+      prune(timestamp);
+      const verdict = violates(config.policy as never, boundPrior(need, history, timestamp) as never, claimed as never, { at: timestamp });
       // A call policy allows takes its place in the window in the same step as its verdict, before anything below awaits,
       // so calls decided while it is still in flight (concurrent or pipelined requests) count it. A call that is then not
-      // forwarded gives its place back.
-      const held = !verdict.violated;
+      // forwarded gives its place back. A policy that reads no history keeps none.
+      const held = !verdict.violated && need.kind !== "none";
       if (held) history.push(claimed);
       let forwarded = false;
       try {
