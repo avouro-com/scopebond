@@ -1,5 +1,19 @@
 # @scopebond/mcp
 
+## 2.0.12
+
+### Patch Changes
+
+- 5a85492: The tray no longer says a plan change lifts the workspace's monthly limit unless the workspace said so (then it names the limit that plan gives); the record exporter treats a redirect as a failed delivery and retries, never sending records on; an unsent "Ask an admin" request is never dropped to make room in `requests.json`; the typed MCP adapter checks its config at start and approves a resource only on an exact match in a list; `policy load --yes` in a trusted project keeps the loaded policy trusted, so it is the one that governs; `dedupe --keep plugin` with no enabled Scopebond plugin changes nothing, and dedupe backs up and replaces a settings file whole; autostart health checks that the sign-in entry starts this home's launcher, a systemd unit writes `%` and `$` literally, and a Windows home path with `%` is refused; the agent's loopback channel refuses a foreign Host and any request with an Origin.
+- fc919a7: A recorded wait the workspace asked for (429, or 503 with Retry-After) never holds delivery more than an hour and five minutes after it was recorded, and a clock that jumps no longer extends it; a host name that does not resolve is recorded as failed, not as an unknown outcome; a scoped link-local IPv6 address from the resolver is compared without its zone index; the chain-head check no longer reports a rollback after a clock step back or across computers sharing one folder; and the MCP proxy's session history is bounded in calls and bytes.
+- cbddbcc: The self-hosted gateway now listens on 127.0.0.1 unless `HOST` is set, keeps reloading a policy or key registry file that is replaced by rename (a revoked key takes effect without a restart), and refuses a `/v1/resume` that does not name what it lifts. The HTTP and refund executors bound response size and time, and refuse a call they cannot send with 400 before it is charged. The Workers KV store no longer loses or drops receipts or accepts one authorization twice, public anchor proofs no longer re-read the whole log, a non-numeric `approval_max_lifetime_seconds` is refused, and the MCP proxy keeps only the history its policy can read.
+- Updated dependencies [5a85492]
+- Updated dependencies [fc919a7]
+- Updated dependencies [b1d3728]
+- Updated dependencies [cbddbcc]
+  - @scopebond/gateway@0.17.7
+  - @scopebond/verify@0.6.5
+
 ## 2.0.11
 
 ### Patch Changes
