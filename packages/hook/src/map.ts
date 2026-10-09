@@ -9,7 +9,8 @@
 // ambiguous Windows short path.
 
 import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
-import { INTERPRETERS, canonProgram, decomposeShell, gitArgs, parseGitPush, type SimpleCommand } from "./shell.js";
+import { maskWords, pipedSecrets } from "./shell-secrets.js";
+import { INTERPRETERS, canonProgram, decomposeShell, envAssignments, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf } from "./text.js";
 
 export interface NormalizedIntent {
@@ -235,11 +236,23 @@ function protectedCandidate(word: string): string | undefined {
   return undefined;
 }
 
+// A path is scrubbed like any parameter, but a mask must not swallow a separator: scrubbed whole,
+// `token=a/../.scopebond/agent.key` read `token=***` and hid where it leads from the path rules. A word whose scrubbing
+// would remove a separator is scrubbed one segment at a time instead (`token=***/../.scopebond/agent.key`).
+const PATH_SEPARATOR = /[\\/]/g;
+const PATH_PARTS = /([\\/])/;
+const separatorCount = (s: string): number => s.match(PATH_SEPARATOR)?.length ?? 0;
+function scrubPath(word: string): string {
+  const whole = scrubParam(word);
+  if (whole === word || separatorCount(whole) === separatorCount(word)) return whole;
+  return word.split(PATH_PARTS).map((part) => (part === "/" || part === "\\" ? part : scrubParam(part))).join("");
+}
+
 /** The file intents for one path operand, resolving it against a `cd` prefix. */
 function fileIntent(action: "file.read" | "file.write", word: string, dir: string, cwd?: string): Mapped[] {
   let w = word;
   if (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
-  const path = rel(scrubParam(w), cwd);
+  const path = rel(scrubPath(w), cwd);
   if (UNRESOLVED.test(w)) {
     const hit = protectedCandidate(normPath(w));
     if (hit) return pathIntents(action, hit, "shell", { pattern: path });
@@ -269,17 +282,92 @@ const COPIERS = new Set(["cp", "mv", "rsync", "scp", "install", "ln", "copy-item
 const MOVERS = new Set(["mv", "move-item", "mi", "move", "rename-item", "ren"]);
 // Programs whose operands are files they WRITE (or whose metadata they change).
 const WRITERS = new Set(["tee", "touch", "truncate", "set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "clear-content", "clc", "chmod", "chown", "chattr", "attrib", "icacls", "set-acl", "shred", "unlink", "sponge", "tee-object", "expand-archive"]);
+// PowerShell writers whose -Value (any unambiguous spelling: -Va … -Value) is the content written, not a path.
+const CONTENT_SETTERS = new Set(["set-content", "sc", "add-content", "ac", "new-item", "ni"]);
+const VALUE_PARAMETER = new Set(["-va", "-val", "-valu", "-value"]);
 // Deleting changes a file as surely as writing it. A delete of one of the always-protected places (Scopebond's own folder,
 // the coding agents' hook settings, git hooks) is recorded as a write of that path, so the always-on floor stops the coding
 // agent removing Scopebond's files and their evidence. Any other delete stays a plain shell.exec, as before.
-const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri"]);
+const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri", "trash", "trash-put"]);
 const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks)(?:$|[\\/:])/i;
+// Removing or renaming a folder takes everything inside it. A folder that holds an always-protected place is recorded as a
+// write of that place, so the always-on floor stops the removal as it would a change to the place itself: an agent's own
+// settings folder (`.claude`, `.cursor`, `.codex`, whose hook settings are inside) and a `.git` folder (its hooks). The
+// second entry is the protected place inside; empty when the folder itself is protected.
+const HOLDS_PROTECTED: ReadonlyArray<readonly [string, string]> = [
+  [".scopebond", ""], [".claude", "/settings.json"], [".cursor", "/hooks.json"], [".codex", "/hooks.json"], [".git", "/hooks"],
+  [".husky", ""], [".githooks", ""], [".mcp.json", ""],
+];
+// A variable that names the working folder.
+const WORKING_FOLDER_VAR = /^(?:\$PWD|\$\{PWD\}|\$CLAUDE_PROJECT_DIR|\$\{CLAUDE_PROJECT_DIR\}|%CD%)[\\/]?$/i;
 // Programs that send what they are given elsewhere (network, clipboard, mail): an
 // operand naming a secret location is a read of it.
 const TREE_COPIERS = new Set(["tar", "bsdtar", "zip", "7z", "7za", "7zr", "rsync", "cp", "scp", "robocopy", "xcopy", "copy-item", "cpi", "ditto", "compress-archive", "cpio", "pax"]);
 /** A home folder, written any way a shell or PowerShell names it, or a folder above every home (`/`, `/home`, `/Users`, C:\Users). */
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, one unbounded segment per alternative, then a fixed-length tail
 const HOME_OR_ABOVE = /^(?:~|\$HOME|\$\{HOME\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%|%HOMEPATH%|\/|\/home(?:\/[^/]+)?|\/Users(?:\/[^/]+)?|\/root|[A-Za-z]:\\Users(?:\\[^\\]+)?|[A-Za-z]:\/Users(?:\/[^/]+)?|[A-Za-z]:\\?)[\\/]?\.?[\\/]?$/i;
+
+/** The segments of a slash path with `.` and `..` resolved and case folded, its root (`""` for `/`, `c:` for a drive) first.
+ *  A relative path keeps the `..` that climb above where it starts. */
+function resolvedSegments(path: string): string[] {
+  const segs = path.split("/");
+  const rooted = segs[0] === "" || /^[A-Za-z]:$/.test(segs[0]);
+  const out: string[] = rooted ? [segs[0].toLowerCase()] : [];
+  for (const seg of segs.slice(rooted ? 1 : 0)) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length > (rooted ? 1 : 0) && out[out.length - 1] !== "..") out.pop();
+      else if (!rooted) out.push("..");
+      continue;
+    }
+    out.push(seg.toLowerCase());
+  }
+  return out;
+}
+
+/** Whether `path` (already joined to the folder a `cd` before it moved to) names the working folder or a folder above it:
+ *  `.`, `..`, `$PWD`, the working folder's own absolute path or a parent of it. */
+function coversWorkingFolder(path: string, cwd?: string): boolean {
+  if (WORKING_FOLDER_VAR.test(path)) return true;
+  if (UNRESOLVED.test(path) || path.startsWith("~")) return false;
+  const p = normPath(path);
+  const rooted = p.startsWith("/") || /^[A-Za-z]:(?:\/|$)/.test(p);
+  if (!cwd) return !rooted && resolvedSegments(p).every((s) => s === "..");
+  const base = normPath(cwd).replace(/\/+$/, "");
+  const target = resolvedSegments(rooted ? p : `${base}/${p}`);
+  const here = resolvedSegments(base);
+  return target.length <= here.length && target.every((s, i) => s === here[i]);
+}
+
+/** The always-protected places a removal or rename of `word` takes with it, as paths to record as writes: the protected place
+ *  inside a folder in `HOLDS_PROTECTED` it names, or could name through a wildcard (`.c*`, `.scope*`, `.*`; a bare `*` names
+ *  none of these dot-folders). `whole` is a removal of everything below `word` (`rm -r`, a move), not one a filter narrows
+ *  (`find -delete`, `git clean`): then the working folder or a folder above it takes the project's `.scopebond`, and a home
+ *  folder or above takes `~/.scopebond`. */
+function removedPlaces(word: string, dir: string, cwd: string | undefined, whole: boolean): string[] {
+  let w = word;
+  if (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
+  const p = normPath(w);
+  const out: string[] = [];
+  if (whole && (HOME_OR_ABOVE.test(w) || HOME_OR_ABOVE.test(p))) out.push("~/.scopebond");
+  if (whole && coversWorkingFolder(p, cwd)) out.push(".scopebond");
+  // The folder named last: `x/.claude/` and `x/.claude/.` are `x/.claude`.
+  let end = p.length;
+  while (end > 0 && (p[end - 1] === "/" || (p[end - 1] === "." && (end === 1 || p[end - 2] === "/")))) end--;
+  const trimmed = p.slice(0, end);
+  const at = trimmed.lastIndexOf("/");
+  const parent = trimmed.slice(0, at + 1);
+  const last = trimmed.slice(at + 1);
+  if (UNRESOLVED.test(last)) {
+    if (!/[^/]/.test(last.replace(EXPANSION, ""))) return out;
+    const matcher = wordMatcher(last);
+    for (const [name, inside] of HOLDS_PROTECTED) if (matcher.test(name)) out.push(parent + name + inside);
+  } else {
+    for (const [name, inside] of HOLDS_PROTECTED) if (inside && last.toLowerCase() === name) out.push(parent + name + inside);
+  }
+  return out;
+}
+
 const UPLOADERS = new Set([
   "curl", "wget", "http", "https", "xh", "httpie", "nc", "ncat", "netcat", "socat", "telnet", "ftp", "sftp", "lftp", "smbclient",
   "aws", "gsutil", "gcloud", "az", "rclone", "s3cmd", "gh", "glab", "mail", "mailx", "sendmail", "mutt", "xclip", "xsel",
@@ -480,9 +568,18 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     if (COMPUTED_TARGET.test(w)) unknownTarget = true;
     if (isPathWord(w)) ops.push(...fileIntent("file.write", w, dir, cwd));
   };
+  // A removal or rename of `w`: the protected places it takes with it are writes too (see removedPlaces).
+  const remove = (w: string | undefined, whole: boolean) => {
+    if (w === undefined || !isPathWord(w)) return;
+    for (const place of removedPlaces(w, dir, cwd, whole)) ops.push(...fileIntent("file.write", place, "", cwd));
+  };
   const args = sc.argv;
   const spec = OPTIONS.get(prog);
   const flagFiles = READERS.has(prog) || EDITORS.has(prog) || COPIERS.has(prog) || UPLOADERS.has(prog);
+  // A PowerShell content setter's -Value is what it writes, not where (`Set-Content f -Value x`, `New-Item -Path Env:
+  // -Name N -Value x`): read as a path it would record the content, often a secret, as one. A New-Item that names an item
+  // type or a target may be making a link, whose -Value is a path, so it keeps the cautious reading.
+  const valueIsContent = CONTENT_SETTERS.has(prog) && !((prog === "new-item" || prog === "ni") && args.some((a) => /^-[it]/i.test(a)));
 
   // Operands (non-flag words) and flag values (`--flag=value`, `-T value`, `@file`, `if=f`).
   const operands: string[] = [];
@@ -499,6 +596,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     if (t === "--") { operands.push(...args.slice(i + 1)); break; }
     const lower = t.toLowerCase();
     const eq = t.indexOf("=");
+    if (valueIsContent && VALUE_PARAMETER.has(lower.split(":")[0])) { if (!t.includes(":")) i++; continue; }
     if (prog === "curl" || prog === "wget") {
       const flag = eq > 0 && t.startsWith("--") ? t.slice(0, eq) : t;
       if (CURL_DATA.has(flag) || CURL_FORM.has(flag) || flag === CURL_URLENCODE) {
@@ -548,6 +646,15 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     operands.push(t);
   }
   if (PATTERN_FIRST.has(prog) && ![...given].some((g) => PATTERN_OPTIONS.has(g)) && !(prog === "yq" && operands.length === 1)) operands.shift();
+  // `Set-Content Env:NAME value`, `Set-Content -Path Env:NAME value`: an environment variable is not a file, and the word
+  // after a one-word Env: path is the value it is set to. A path list (`Env:A, f`) may name a file, so it is left alone.
+  if (valueIsContent && (prog === "set-content" || prog === "sc" || prog === "add-content" || prog === "ac")) {
+    const named = args.findIndex((a) => /^-(?:path|literalpath)$/i.test(a));
+    const path = named >= 0 ? args[named + 1] : operands[0];
+    const at = named >= 0 ? 0 : 1;
+    const value = operands[at];
+    if (path !== undefined && value !== undefined && /^env:/i.test(path) && !path.endsWith(",") && !value.startsWith(",") && !value.endsWith(",")) operands.splice(at, 1);
+  }
 
   const git = gitArgs(sc);
   const inPlace = (a: string) => a === "--inplace" || a.startsWith("--in-place") || /^-[a-hj-z]*i/.test(a);
@@ -574,14 +681,17 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       const all = [...before, ...(after ?? [])];
       all.slice(0, -1).forEach(read);
       all.forEach(write);
+      all.slice(0, -1).forEach((p) => remove(p, true));
     } else if (sub === "clean") {
       // `git clean -fdx [paths]` deletes untracked (and ignored) files under its paths, the working folder when none.
+      // With -x or -X it deletes ignored files too, which is all of the project's `.scopebond`.
       const { before, after } = gitPositionals(a, ["-e", "--exclude"]);
       const paths = [...before, ...(after ?? [])];
-      for (const p of paths.length ? paths : ["."]) { write(p); if (HOME_OR_ABOVE.test(p)) write("~/.scopebond"); }
+      const ignored = a.some((x) => /^-[^-]*[xX]/.test(x));
+      for (const p of paths.length ? paths : ["."]) { write(p); remove(p, ignored); if (!ignored && HOME_OR_ABOVE.test(p)) write("~/.scopebond"); }
     } else if (sub === "rm" && !a.includes("--cached")) {
       const { before, after } = gitPositionals(a, ["--pathspec-from-file"]);
-      [...before, ...(after ?? [])].forEach(write);
+      [...before, ...(after ?? [])].forEach((p) => { write(p); remove(p, true); });
     } else if (sub === "config") write(gitConfigWrite(a));
     else if (sub === "show" || sub === "cat-file") {
       // `git show REV:path` prints that file's content from history.
@@ -597,7 +707,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     // `find DIR -delete` and `find DIR -exec rm {} +` (or `unlink`, `shred`, `rmdir`) remove what they find under DIR: a
     // write of DIR, and of Scopebond's folder when DIR is a home folder or above it (`find ~ -name 'receipts.db*' -delete`).
     const deletes = args.includes("-delete") || args.some((w, k) => /^-(?:exec|execdir|ok|okdir)$/.test(w) && /^(?:rm|unlink|shred|rmdir|del|trash)$/.test(canonProgram(args[k + 1] ?? "")));
-    if (deletes) for (const start of starts.length ? starts : ["."]) { write(start); if (HOME_OR_ABOVE.test(start)) write("~/.scopebond"); }
+    if (deletes) for (const start of starts.length ? starts : ["."]) { write(start); remove(start, false); if (HOME_OR_ABOVE.test(start)) write("~/.scopebond"); }
     args.forEach((w, k) => { if (/^-(?:fprint0?|fprintf|fls)$/.test(w)) write(args[k + 1]); });
   } else if ((prog === "docker" || prog === "podman" || prog === "kubectl") && operands[0] === "cp") {
     const local = (p: string | undefined) => p !== undefined && (!/^[^/\\]+:/.test(p) || /^[A-Za-z]:[\\/]/.test(p));
@@ -648,11 +758,12 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     const hasTarget = args.some((a) => /^(?:-t|--target-directory(?:=.*)?|-destination)$/i.test(a) || /^--target-directory=/.test(a));
     const sources = hasTarget ? operands : operands.slice(0, -1);
     sources.forEach(read);
-    if (MOVERS.has(prog)) sources.forEach(write);
+    if (MOVERS.has(prog)) sources.forEach((s) => { write(s); remove(s, true); });
     if (!hasTarget) write(operands[operands.length - 1]);
   } else if (DELETERS.has(prog)) {
-    operands.filter((o) => ALWAYS_PROTECTED.test(o)).forEach(write);
-    for (let k = 0; k < args.length - 1; k++) if (/^-(?:path|literalpath)$/i.test(args[k]) && ALWAYS_PROTECTED.test(args[k + 1])) write(args[k + 1]);
+    const targets = new Set(operands);
+    for (let k = 0; k < args.length - 1; k++) if (/^-(?:path|literalpath)$/i.test(args[k])) targets.add(args[k + 1]);
+    for (const t of targets) { if (ALWAYS_PROTECTED.test(t)) write(t); remove(t, true); }
   } else if (WRITERS.has(prog)) {
     // A permission/owner spec is not a path: `chmod +x f`, `chmod 0755 f`,
     // `chattr +i f`, `chown root:wheel f`, `attrib +r f` write f, not "+x".
@@ -696,6 +807,10 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   } else if (UPLOADERS.has(prog)) {
     operands.filter(isSensitiveOperand).forEach(read);
   }
+
+  // PowerShell names what it moves or renames with -Path / -LiteralPath as well as by position (`Rename-Item -Path .claude
+  // -NewName x`, `Move-Item -Path a -Destination b`): the source is removed from where it was.
+  if (MOVERS.has(prog)) args.forEach((w, k) => { if (/^-(?:path|literalpath)$/i.test(w)) { write(args[k + 1]); remove(args[k + 1], true); } });
 
   // A link (`ln -s T L`, `New-Item -ItemType Junction -Target T`, `mklink L T`) makes
   // T reachable through the workspace. The link itself is recorded above; T is recorded
@@ -766,19 +881,42 @@ function uninstallsScopebond(prog: string, args: string[]): boolean {
 // Coding agents a session can start, and the ways to start one without this computer's hooks: a settings override, a
 // config folder of its own, permission checks skipped, or (Codex) a config override that touches hooks or notify.
 const HARNESSES = new Set(["claude", "codex", "cursor-agent", "cursor", "gemini", "opencode", "aider"]);
-const HARNESS_CONFIG_ENV = /(?:^|\s)(?:CLAUDE_CONFIG_DIR|CODEX_HOME|CURSOR_CONFIG_DIR|XDG_CONFIG_HOME)=/;
+// The agents' packages, as `npx` and the like start them.
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored package names, one optional version, then the end
+const HARNESS_PACKAGE = /^@(?:anthropic-ai\/claude-code|openai\/codex|google\/gemini-cli)(?:@[^/\s]*)?$/i;
+const isHarnessWord = (w: string): boolean => HARNESSES.has(canonProgram(w)) || HARNESS_PACKAGE.test(w);
+// A coding agent's name standing alone anywhere in the command text (a script being written or fed in): counted only beside an
+// assignment of a config-folder variable.
+const HARNESS_IN_TEXT = /(?:^|[\s;&|(`'"])(?:claude|codex|cursor-agent|gemini|opencode|aider)(?:\.exe|\.cmd)?(?=$|[\s;&|)`'"])/i;
+// The variables that move a coding agent's config folder, and with it the hooks it loads: its own, the XDG base folder, and the
+// home folder (`~/.claude`, `~/.codex` and `~/.cursor` sit there). Set anywhere in a call, they reach an agent it starts.
+const HARNESS_CONFIG_NAMES = /CLAUDE_CONFIG_DIR|CODEX_HOME|CURSOR_CONFIG_DIR|XDG_CONFIG_HOME|USERPROFILE|HOME/gi;
+const setsHarnessConfig = (text: string): boolean => envAssignments(text, HARNESS_CONFIG_NAMES).length > 0;
+// A PowerShell environment assignment (`$env:NAME = …`) reads as a command named by a variable; it runs no program.
+const POWERSHELL_ENV_ASSIGNMENT = /^\s*\$\{?env:\w+\}?\s*\+?=/i;
 function harnessWithoutHooks(sc: SimpleCommand, all: string[]): boolean {
-  const k = all.findIndex((w) => HARNESSES.has(canonProgram(w)));
+  const k = all.findIndex(isHarnessWord);
   if (k === -1) return false;
   const args = all.slice(k + 1);
-  if (HARNESS_CONFIG_ENV.test(sc.raw)) return true;
-  if (args.some((a) => /^--settings(?:=|$)|^--dangerously-skip-permissions$|^--dangerously-bypass-approvals-and-sandbox$|^--yolo$/i.test(a))) return true;
+  if (setsHarnessConfig(sc.raw)) return true;
+  if (args.some((a) => /^--settings(?:=|$)|^--setting-sources(?:=|$)|^--dangerously-skip-permissions$|^--dangerously-bypass-approvals-and-sandbox$|^--yolo$/i.test(a))) return true;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     const value = /^(?:-c|--config)$/.test(a) ? args[i + 1] : /^--config=/.test(a) ? a.slice(9) : null;
     if (value && /hook|notify|disable/i.test(value)) return true;
   }
   return false;
+}
+/** A call that starts a coding agent with its config folder moved: it sets one of `HARNESS_CONFIG_NAMES` anywhere (an earlier
+ *  `export`, an enclosing `VAR=… sh -c '…'`, a nested `cmd /c`, a PowerShell `$env:` assignment) and starts an agent anywhere
+ *  — or sets one and holds a part that cannot be read (a command that does not parse, a program known only at run time),
+ *  which could be an agent. `texts` is the call as given and as parsed. */
+function startsAgentElsewhere(texts: string[], commands: SimpleCommand[]): boolean {
+  const starts = texts.some((t) => HARNESS_IN_TEXT.test(t))
+    || commands.some((c) => (c.opaque ? !POWERSHELL_ENV_ASSIGNMENT.test(c.raw) : [c.programRaw, ...c.argv].some(isHarnessWord)));
+  if (!starts) return false;
+  // The words too: `export CLAUDE_CON"FIG_DIR"=…` names the variable only once its quotes are removed.
+  return texts.some(setsHarnessConfig) || commands.some((c) => setsHarnessConfig(c.raw) || setsHarnessConfig([c.programRaw, ...c.argv].join(" ")));
 }
 function selfDisable(sc: SimpleCommand): boolean {
   const all = [sc.programRaw, ...sc.argv];
@@ -825,10 +963,15 @@ function selfDisable(sc: SimpleCommand): boolean {
  *  would otherwise read as switching Scopebond off. */
 const NAMES_SCOPEBOND_ITSELF = /\.scopebond\b|@scopebond\/|\bscopebond-(?:hook|agent|mcp|gateway)\b|(?:^|[\s"'`;&|(])scopebond(?:\.cmd|\.exe)?(?=$|[\s"'`;&|)])/i;
 
-function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false): Mapped[] {
+const NOTHING_HIDDEN: ReadonlySet<string> = new Set();
+
+function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: ReadonlySet<string> = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = []): Mapped[] {
+  // Words the whole command shows to be secret (a literal piped into a secret reader) are masked in this part's recorded
+  // text too. Only the text: the program and paths a policy judges are never changed by what another part says.
+  const redact = (raw: string): string => redactCommand(hidden.size ? maskWords(raw, hidden) : raw);
   if (sc.opaque) {
     const opaque: Mapped[] = [{
-      intent: { action_type: "shell.exec", params: { command: redactCommand(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
+      intent: { action_type: "shell.exec", params: { command: redact(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
       evaluated: true, source: "shell",
     }];
     // A command that cannot be read but names Scopebond (`eval "$X @scopebond/hook uninstall"`) is treated as switching it off:
@@ -837,7 +980,7 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
     if (windowsReading ? NAMES_SCOPEBOND_ITSELF.test(sc.raw) : /scopebond/i.test(sc.raw)) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
     return opaque;
   }
-  const push = parseGitPush(sc);
+  const push = parseGitPush(sc, gitLineConfigs);
   if (push) {
     // One intent per pushed destination, so a protected branch cannot ride behind
     // an allowed one (`git push origin feature main`).
@@ -870,7 +1013,7 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
       // Scrub before storing: the raw command through the blob-aware scrubber, and
       // the whole first token BEFORE taking its basename, so a bare-secret command
       // containing "/" cannot leak a path-fragment as the program.
-      params: { command: redactCommand(sc.raw), program: basename(scrubSecrets(sc.programRaw)), ...(cwd ? { cwd } : {}) },
+      params: { command: redact(sc.raw), program: basename(scrubSecrets(sc.programRaw)), ...(cwd ? { cwd } : {}) },
     },
     evaluated: true, source: "shell",
   };
@@ -897,11 +1040,20 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
   if (commands.length === 0) {
     return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
   }
+  // A literal piped into a reader of secrets (`'pw' | ConvertTo-SecureString`, `echo pw | docker login --password-stdin`)
+  // sits in the simple command before the pipe, which is recorded on its own: it is masked there too.
+  const piped = pipedSecrets(src);
+  // Git configuration set through the environment anywhere in the call (`export GIT_CONFIG_PARAMETERS=…; git x`, an enclosing
+  // `GIT_CONFIG_COUNT=… sh -c 'git x'`) reaches every git command in it, as `-c` would.
+  const texts = [...new Set([command, src])];
+  const gitLine = commands.some((c) => !c.opaque && canonProgram(c.program) === "git")
+    ? [...new Set([...texts, ...commands.map((c) => c.raw)].flatMap(gitEnvConfigs))]
+    : [];
   const walk = (list: SimpleCommand[], filesOnly: boolean): Mapped[] => {
     let dir = "";
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly);
+      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped, gitLine);
       out.push(...(filesOnly ? mapped.filter((m) => m.intent.action_type.startsWith("file.")) : mapped));
       if (!sc.opaque && CD.has(canonProgram(sc.program))) {
         const target = sc.argv.find((a) => !a.startsWith("-"));
@@ -913,6 +1065,10 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
     return out;
   };
   const out = walk(commands, false);
+  // A coding agent started with its config folder moved loads none of this computer's hooks: a switch-off, wherever in the call
+  // the variable is set and the agent started (the inline `CLAUDE_CONFIG_DIR=… claude` is caught per command, in selfDisable).
+  const switchOff = (m: Mapped) => m.intent.action_type === "file.write" && m.intent.params.path === ".scopebond/policy.json";
+  if (!out.some(switchOff) && startsAgentElsewhere(texts, commands)) out.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
   // A "Bash" command may really run under PowerShell or cmd (Codex and Cursor on
   // Windows), where `\` separates paths instead of escaping. Read it both ways for
   // file effects, so `.scopebond\policy.json` is not lost as `.scopebondpolicy.json`.
@@ -966,7 +1122,7 @@ function mapApplyPatch(command: string, cwd?: string): Mapped[] {
   for (const line of command.split(/\r?\n/)) {
     const prefix = prefixes.find((candidate) => line.startsWith(candidate));
     if (!prefix) continue;
-    const path = rel(scrubParam(line.slice(prefix.length).trim()), cwd);
+    const path = rel(scrubPath(line.slice(prefix.length).trim()), cwd);
     if (!path || seen.has(path)) continue;
     seen.add(path);
     paths.push(path);

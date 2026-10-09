@@ -4,6 +4,7 @@
 // data (base64 for PowerShell, arguments for osascript and zenity), never spliced into code.
 
 import { spawn } from "node:child_process";
+import { windowsSystemProgram } from "@scopebond/gateway/node";
 import { userInfo } from "node:os";
 
 export interface OverrideQuestion {
@@ -125,7 +126,7 @@ $out = @{ decision = $script:answer; lasts = $script:lasts; reason = $(if ($scri
 
 async function promptWindows(q: OverrideQuestion): Promise<OverrideAnswer> {
   const encoded = Buffer.from(windowsScript(q), "utf16le").toString("base64");
-  const { code, stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-EncodedCommand", encoded], q.timeout_ms);
+  const { code, stdout } = await run(windowsSystemProgram("powershell"), ["-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-EncodedCommand", encoded], q.timeout_ms);
   if (code !== 0) return { decision: "unavailable" };
   try {
     const parsed = JSON.parse(stdout.trim()) as { decision?: string; reason?: string; lasts?: string };

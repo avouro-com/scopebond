@@ -1,10 +1,12 @@
 // Reading and creating local files without a separate existence check. A check followed by a read or write races a path
-// swap between the two; here the read or the create is itself the check. Secrets are created exclusively, owner only, and
-// a damaged one is replaced through a fresh temporary file renamed over it, so a file or link that someone else placed at
-// the path never receives the secret.
+// swap between the two; here the read or the create is itself the check. Secrets (and the files that decide what the hook
+// enforces) are written to a new file, owner-only from its first byte, that is linked or renamed into place, so a file or
+// link someone else placed at the path never receives them and a reader never sees half of one.
 
-import { randomBytes } from "node:crypto";
-import { closeSync, fstatSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { placeOwnerOnly } from "@scopebond/gateway/node";
+
+export { loadOrCreateHexKey } from "@scopebond/gateway/node";
 
 /** The error's code, e.g. ENOENT or EEXIST. */
 export const errorCode = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | null)?.code;
@@ -40,36 +42,8 @@ export function createExclusive(file: string, text: string | (() => string), mod
   return true;
 }
 
-/** Replace `file` atomically: a new temporary file beside it (created exclusively), renamed over it. */
-export function replaceFile(file: string, text: string, mode = 0o600): void {
-  const temp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
-  try {
-    writeFileSync(temp, text, { mode, flag: "wx" });
-    renameSync(temp, file);
-  } catch (error) {
-    if (errorCode(error) !== "EEXIST") { try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ } }
-    throw error;
-  }
-}
-
-const validKey = (text: string | undefined): string | undefined => {
-  const hex = text?.trim();
-  return hex !== undefined && /^[0-9a-f]{64}$/.test(hex) ? hex : undefined;
-};
-
-/** A 32-byte hex secret kept in `file`: read when present and valid, else made. A new file is created exclusively and
- *  owner only (0600); a file that holds no valid key is replaced atomically with a new one. */
-export function loadOrCreateHexKey(file: string): string {
-  const existing = readIfPresent(file);
-  const found = validKey(existing);
-  if (found) return found;
-  const hex = randomBytes(32).toString("hex");
-  if (existing === undefined) {
-    if (createExclusive(file, hex + "\n", 0o600)) return hex;
-    // Another process made it in the meantime: use its key when it is valid.
-    const raced = validKey(readIfPresent(file));
-    if (raced) return raced;
-  }
-  replaceFile(file, hex + "\n");
-  return hex;
+/** Replace `file` atomically with a new file, owner-only from its first byte, renamed over it: a file or link already
+ *  there is replaced, never written through. */
+export function replaceFile(file: string, text: string): void {
+  placeOwnerOnly(file, text, false);
 }

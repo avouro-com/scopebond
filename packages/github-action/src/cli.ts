@@ -27,6 +27,7 @@ import { execFileSync } from "node:child_process";
 import { isAbsolute, relative } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 import { validatePolicy } from "@scopebond/verify";
+import { programPath } from "@scopebond/gateway/node";
 import { evaluatePullRequest } from "./pr.js";
 import { buildPullRequestReceipt } from "./receipt.js";
 import { buildActionEvidence } from "./evidence.js";
@@ -69,7 +70,9 @@ catch (e) { die(`could not read the event payload: ${(e as Error).message}`); }
 const policySource = arg("--policy-source", process.env.SCOPEBOND_POLICY_SOURCE || "base");
 if (policySource !== "base" && policySource !== "workspace") die(`--policy-source must be "base" or "workspace", not "${policySource}"`);
 
-const git = (args: string[]): string => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+// git by its full path from PATH: by bare name a Windows runner would look in the current folder, the pull
+// request's own checkout, first.
+const git = (args: string[]): string => execFileSync(programPath("git"), args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 
 /** The policy as committed on the pull request's base, fetching that commit if the
  *  checkout is shallow. Any failure is fatal: evaluating without the base policy — or

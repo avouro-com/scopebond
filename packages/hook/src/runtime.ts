@@ -6,7 +6,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createGateway, StaticPrincipalKeyRegistry, withCloudExporter, type CloudExporter } from "@scopebond/gateway";
-import { loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
+import { ensurePrivateDir, loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
@@ -15,7 +15,7 @@ import { RULES_FILE, loadRules } from "./rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
-import { recordDeliveryAttempt } from "./delivery-state.js";
+import { deliveryBackoff, recordDeliveryAttempt } from "./delivery-state.js";
 import { isRepairableStore, noteQueueMiss, repairDelivery } from "./delivery-repair.js";
 import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
@@ -234,6 +234,9 @@ const STORE_BUSY_MS = 15_000;
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
  *  key, unavailable store) — the CLI turns that into a fail-closed deny. */
 export function createHookRuntime(config: RuntimeConfig) {
+  // The keys, the credential, the receipt log and its journal files: readable by this user alone, those an older version
+  // left included. Done once per folder; afterwards a small check.
+  ensurePrivateDir(dirname(config.policyPath));
   const policy = upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8").replace(/^\uFEFF/, "")));
   const agent = createSigner({ privateKeyPem: readFileSync(config.keyPath, "utf8") });
   const keys = new StaticPrincipalKeyRegistry([
@@ -262,6 +265,8 @@ export function createHookRuntime(config: RuntimeConfig) {
       const attached = attachExporter(config.dbPath + ".cloud-outbox.db", config.cloud.connection, baseStore, config.cloud.fetch, {
         busyTimeoutMs: config.queueBusyTimeoutMs ?? HOT_PATH_QUEUE_BUSY_MS,
         onGap: (gap) => { if (gap.reason === "outbox_error") noteQueueMiss(dir, after, gap.id, gap.at); },
+        // A wait the workspace asked for (429, or 503 with Retry-After) that an earlier call recorded holds for this call too.
+        backoff: deliveryBackoff(dir),
       });
       store = attached.store;
       exporter = attached.exporter;

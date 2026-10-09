@@ -9,7 +9,9 @@
 // What this module checks:
 //   - a list's and a head's Ed25519 signatures against the key the list publishes (whose id is derived from it);
 //   - that heads agree with each other, wherever they come from (kept by the computer, or published): a chain's sequence
-//     never goes back, and one sequence number never ends two different segments;
+//     never goes back, and one sequence number never ends two different segments. "Goes back" is judged in issue order and
+//     also in the computer's own order of deliveries, which the workspace cannot choose (it signs `issued_at`, so it could
+//     stamp a lower head before a higher one it already handed out);
 //   - downloaded evidence segments against the heads: each segment's digest, canonical form, leaves, Merkle root and
 //     sequence numbers, the previous-segment links, and that every head's segment is still in the chain its newest head
 //     names. A deleted, truncated or re-chained segment then contradicts a head somebody outside the workspace holds.
@@ -44,6 +46,13 @@ export interface ChainHead {
 export interface ChainSignature { alg: "Ed25519"; kid: string; sig: string }
 export interface SignedChainHead { head: ChainHead; signed: boolean; signature: ChainSignature | null }
 export interface AnchorKey { alg: "Ed25519"; kid: string; public_key_spki: string }
+
+/** This computer's own clock around a head it kept (ISO 8601), never the workspace's: `sent_at`, when the delivery whose
+ *  answer carried the head was sent (the workspace issued the head after it); `received_at`, a time by which this computer
+ *  held the head. A head kept before these were recorded has neither, or only `received_at`. */
+export interface HeadTiming { sent_at?: string; received_at?: string }
+/** A head as this computer keeps it: the workspace's signed head and, beside it, this computer's times. */
+export type KeptChainHead = SignedChainHead & { local?: HeadTiming };
 
 export interface AnchorList {
   type: typeof ANCHOR_LIST_TYPE;
@@ -103,11 +112,16 @@ export async function segmentKeyId(publicKeySpki: string): Promise<string> {
 /** The exact string a head's signature covers. */
 export const chainHeadSigningInput = (head: ChainHead): string => CHAIN_HEAD_CONTEXT + canonical(head);
 
-/** Does this signed head verify under `key` (and name it)? Never throws; an unsigned head is false. */
+/** Does this signed head verify under `key` (and name it)? Never throws; an unsigned head, or a key that is not one, is
+ *  false. */
 export async function verifyChainHeadSignature(signed: SignedChainHead, key: AnchorKey): Promise<boolean> {
-  if (!isSignedChainHead(signed) || !signed.signed || !signed.signature || signed.signature.kid !== key.kid) return false;
-  if ((await segmentKeyId(key.public_key_spki)) !== key.kid) return false;
-  return ed25519Verify(key.public_key_spki, chainHeadSigningInput(signed.head), signed.signature.sig);
+  try {
+    if (!isObj(key) || typeof key.kid !== "string" || typeof key.public_key_spki !== "string") return false;
+    if (!isSignedChainHead(signed) || !signed.signed || !signed.signature || signed.signature.kid !== key.kid) return false;
+    if ((await segmentKeyId(key.public_key_spki)) !== key.kid) return false;
+    // canonical() refuses text that is not well-formed Unicode: such a head was never signed.
+    return await ed25519Verify(key.public_key_spki, chainHeadSigningInput(signed.head), signed.signature.sig);
+  } catch { return false; }
 }
 
 export interface AnchorListCheck {
@@ -121,8 +135,13 @@ export interface AnchorListCheck {
 }
 
 /** Check one day's published list: its shape, that its key id matches its key, the list signature, and every head's
- *  signature. Never throws. */
+ *  signature. Never throws: a list it cannot check is not valid. */
 export async function verifyAnchorList(value: unknown): Promise<AnchorListCheck> {
+  try { return await checkAnchorList(value); }
+  catch (error) { return { valid: false, signed: false, kid: null, heads: 0, problems: [`the list could not be checked (${(error as Error)?.message ?? String(error)})`] }; }
+}
+
+async function checkAnchorList(value: unknown): Promise<AnchorListCheck> {
   const problems: string[] = [];
   const out = (signed: boolean, kid: string | null, heads: number): AnchorListCheck => ({ valid: problems.length === 0, signed, kid, heads, problems });
   if (!isObj(value) || value.type !== ANCHOR_LIST_TYPE || value.version !== 1 || typeof value.date !== "string" || !DAY.test(value.date) || !Array.isArray(value.heads)) {
@@ -152,8 +171,11 @@ export async function verifyAnchorList(value: unknown): Promise<AnchorListCheck>
   if ((await segmentKeyId(anchorKey.public_key_spki)) !== anchorKey.kid) problems.push("the key id does not name the published key");
   const signature = value.signature;
   const body = { type: value.type, version: value.version, date: value.date, key: value.key, heads: value.heads };
-  if (!isObj(signature) || signature.kid !== anchorKey.kid || typeof signature.sig !== "string"
-      || !(await ed25519Verify(anchorKey.public_key_spki, ANCHOR_LIST_CONTEXT + canonical(body), signature.sig))) {
+  // A list with text that is not well-formed Unicode has no canonical form, so no signature over it can verify.
+  let signingInput: string | null = null;
+  try { signingInput = ANCHOR_LIST_CONTEXT + canonical(body); } catch { /* reported below */ }
+  if (!isObj(signature) || signature.kid !== anchorKey.kid || typeof signature.sig !== "string" || signingInput === null
+      || !(await ed25519Verify(anchorKey.public_key_spki, signingInput, signature.sig))) {
     problems.push("the list signature does not verify");
   }
   for (const h of heads) {
@@ -174,30 +196,62 @@ export interface HeadsCheck {
   matched: number;
 }
 
-type Sourced = { head: ChainHead; from: "kept" | "published" };
+type Sourced = { head: ChainHead; from: "kept" | "published"; sentAt: number; heldBy: number };
 
-/** Do the heads agree? Kept heads (from this computer's delivery answers) and published heads are merged per chain and
- *  ordered by issue time: a chain's sequence number never goes back, and one sequence number never ends two different
- *  segments. Only published heads of chains the kept heads name are compared. */
-export function checkChainHeads(kept: readonly SignedChainHead[], published: readonly SignedChainHead[] = []): HeadsCheck {
+/** One of this computer's own times kept beside a head, in ms; NaN when there is none (or it is not a time). */
+const localTime = (h: KeptChainHead, field: keyof HeadTiming): number => {
+  const local = (h as { local?: unknown }).local;
+  const value = isObj(local) ? local[field] : undefined;
+  return typeof value === "string" ? Date.parse(value) : NaN;
+};
+
+/** Do the heads agree? A chain's sequence number never goes back, and one sequence number never ends two different
+ *  segments. Kept heads (from this computer's delivery answers, with the times it kept beside them) and published heads
+ *  are merged per chain. "Never goes back" is checked two ways, and either one failing is reported:
+ *   - in this computer's own order, which the workspace cannot choose: a kept head that answered a delivery sent after
+ *     another kept head was held was issued after it, so its sequence number is not lower (deliveries in flight together
+ *     may be answered out of order, and are not compared);
+ *   - in issue order (`issued_at`), which also covers published heads and heads kept without times.
+ *  Only published heads of chains the kept heads name are compared; times a published head carries are ignored. Never
+ *  throws. */
+export function checkChainHeads(kept: readonly KeptChainHead[], published: readonly SignedChainHead[] = []): HeadsCheck {
+  try { return compareHeads(kept, published); }
+  catch (error) { return { ok: false, problems: [`the chain heads could not be compared (${(error as Error)?.message ?? String(error)})`], chains: 0, matched: 0 }; }
+}
+
+function compareHeads(kept: readonly KeptChainHead[], published: readonly SignedChainHead[]): HeadsCheck {
   const problems: string[] = [];
   const chains = new Map<string, Sourced[]>();
   for (const h of kept) {
     if (!isSignedChainHead(h)) { problems.push("a kept head is malformed"); continue; }
-    chains.set(h.head.anchor_id, [...(chains.get(h.head.anchor_id) ?? []), { head: h.head, from: "kept" }]);
+    chains.set(h.head.anchor_id, [...(chains.get(h.head.anchor_id) ?? []), { head: h.head, from: "kept", sentAt: localTime(h, "sent_at"), heldBy: localTime(h, "received_at") }]);
   }
   let matched = 0;
   for (const h of published) {
     if (!isSignedChainHead(h) || !chains.has(h.head.anchor_id)) continue;
     matched += 1;
-    chains.get(h.head.anchor_id)!.push({ head: h.head, from: "published" });
+    chains.get(h.head.anchor_id)!.push({ head: h.head, from: "published", sentAt: NaN, heldBy: NaN });
   }
   for (const [id, list] of chains) {
+    const reported = new Set<Sourced>();
     const ordered = [...list].sort((a, b) => Date.parse(a.head.issued_at) - Date.parse(b.head.issued_at) || a.head.ingest_seq - b.head.ingest_seq);
     for (let i = 1; i < ordered.length; i++) {
       const a = ordered[i - 1], b = ordered[i];
       if (b.head.ingest_seq < a.head.ingest_seq) {
+        reported.add(b);
         problems.push(`chain ${short(id)} went back: sequence ${a.head.ingest_seq} (${a.from}, ${a.head.issued_at}) then ${b.head.ingest_seq} (${b.from}, ${b.head.issued_at})`);
+      }
+    }
+    // This computer's order: the highest head already held when each later delivery was sent.
+    for (const b of list) {
+      if (b.from !== "kept" || !Number.isFinite(b.sentAt) || reported.has(b)) continue;
+      let before: Sourced | null = null;
+      for (const a of list) {
+        if (a.from !== "kept" || !Number.isFinite(a.heldBy) || a.heldBy > b.sentAt || a.head.ingest_seq <= b.head.ingest_seq) continue;
+        if (!before || a.head.ingest_seq > before.head.ingest_seq) before = a;
+      }
+      if (before) {
+        problems.push(`chain ${short(id)} went back: sequence ${before.head.ingest_seq} (kept, issued ${before.head.issued_at}, held here by ${new Date(before.heldBy).toISOString()}) then ${b.head.ingest_seq} (kept, issued ${b.head.issued_at}, answering a delivery sent after that, at ${new Date(b.sentAt).toISOString()})`);
       }
     }
     const ends = new Map<number, { digest: string; from: string }>();
@@ -236,9 +290,18 @@ export interface SegmentChainCheck {
  *  the signature of every record and summary that names that key; an environment's other computers sign theirs with their
  *  own keys, and those are counted, not checked), then per chain the links from its newest head's segment back to the first,
  *  consecutive across segments, and every other head of that chain naming a segment on that path with the same last
- *  sequence number. Never throws. */
+ *  sequence number. Never throws: segments it cannot check do not pass. */
 export async function verifySegmentChain(
   segmentTexts: readonly string[], heads: readonly SignedChainHead[] = [], options: { publicKey?: string | JsonWebKey } = {},
+): Promise<SegmentChainCheck> {
+  try { return await checkSegmentChain(segmentTexts, heads, options); }
+  catch (error) {
+    return { ok: false, problems: [`the segments could not be checked (${(error as Error)?.message ?? String(error)})`], segments: 0, records: 0, covered: {}, signatures: { checked: 0, other_keys: 0 } };
+  }
+}
+
+async function checkSegmentChain(
+  segmentTexts: readonly string[], heads: readonly SignedChainHead[], options: { publicKey?: string | JsonWebKey },
 ): Promise<SegmentChainCheck> {
   const problems: string[] = [];
   const docs = new Map<string, SegmentDoc>();
@@ -258,8 +321,15 @@ export async function verifySegmentChain(
     try { if (canonical(doc) !== text) problems.push(`segment ${name} is not in canonical form`); } catch { problems.push(`segment ${name} is not in canonical form`); }
     const leaves: string[] = [];
     let expected = doc.bounds.first_ingest_seq;
-    for (const r of doc.records) {
+    for (const [position, r] of doc.records.entries()) {
       records += 1;
+      if (!isObj(r)) {
+        // It still takes its place: the records after it keep their expected sequence numbers, and its leaf is empty.
+        problems.push(`segment ${name}: the record at position ${position} is not an object`);
+        expected = typeof expected === "number" ? expected + 1 : expected;
+        leaves.push("");
+        continue;
+      }
       if (r.ingest_seq !== expected) problems.push(`segment ${name}: sequence ${String(r.ingest_seq)} where ${String(expected)} was expected`);
       expected = typeof r.ingest_seq === "number" ? r.ingest_seq + 1 : expected;
       const leaf = typeof r.leaf === "string" ? r.leaf : "";

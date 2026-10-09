@@ -18,6 +18,7 @@ function nodeSqlite(): unknown {
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { PrincipalKeyRegistry } from "./auth.js";
+import { prepareOwnerOnlyDatabase } from "./node-files.js";
 import { whileBusy } from "./node-stores.js";
 import type { CloudDelegation, CloudDispatchSource, ConsumeAnswer } from "./dispatch-cloud.js";
 import {
@@ -37,6 +38,8 @@ export const CLOCK_TOLERANCE_MS = 2_000;
 function open(path: string): Db {
   mkdirSync(dirname(path), { recursive: true });
   const { DatabaseSync } = nodeSqlite() as { DatabaseSync: new (p: string) => Db };
+  // The approvals spent and the budget counters: readable and writable by their owner alone, journal files included.
+  prepareOwnerOnlyDatabase(path);
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 15000;");
   whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));

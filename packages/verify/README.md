@@ -93,6 +93,14 @@ claim-time verification over the full receipt set is unaffected.
 `endpoint_denylist`, `address_allowlist` / `address_denylist`,
 `contract_allowlist`, `action_allowlist` (param bounds), `key_policy`.
 
+Endpoint clauses compare `endpointDestination(host)`: the host as the WHATWG URL
+parser (and so `fetch`) reads it, with every spelling of an address in one form and an
+IPv4-mapped IPv6 address as its IPv4 address. An allowlist entry allows exactly its host
+and port. A denylist entry without a port covers every port, and a loopback name or
+address covers every loopback destination. `endpointDenylistClauses(policy, call)`
+applies the denylist rule alone, for an executor that checks the addresses a name
+resolves to.
+
 ### Intent shape conventions
 
 Finalized alongside the gateway/SDK; used by the clause logic and the vectors:
@@ -195,7 +203,19 @@ canonical head; a list over `"scopebond:chain-anchors/v1\n"` followed by the can
 list without `signed` and `signature`. The list publishes its key; the key id is `seg_`
 plus the first 16 hex of SHA-256 over the base64 SPKI, so a changed key shows. A list or
 head marked `signed: false` was published without a key: it can still be compared, but
-does not show who published it. With `publicKey`, `verifySegmentChain` checks the
+does not show who published it.
+
+A head's `issued_at` is set and signed by the workspace, so it cannot by itself order a
+rollback check: a workspace could stamp a lower head at or before a higher one it already
+handed out. A kept head can carry `local: { sent_at, received_at }`, the computer's own
+clock for when the delivery it answered was sent and by when it was held (the hook and
+agent keep these). `checkChainHeads` then also reports a kept head that answered a
+delivery sent after a higher kept head was held, whatever either says about its issue
+time; deliveries in flight together may be answered out of order and are not compared.
+Times on published heads are ignored. The checks never throw on hostile input: a list,
+head or segment that cannot be checked is reported as a problem.
+
+With `publicKey`, `verifySegmentChain` checks the
 signature of every record and summary that names that key and counts the others (an
 environment's other computers sign with their own keys). Also: `verifyChainHeadSignature`,
 `isSignedChainHead`, `segmentKeyId`.

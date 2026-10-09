@@ -118,6 +118,48 @@
     "expect": { "violated": false }
   },
   {
+    "name": "endpoint_denylist: covered (a port on a host listed without one)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["blocked.example"] }] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "Blocked.Example:8443", "path": "/x", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
+    "expect": { "violated": true, "clause_id": "epd" }
+  },
+  {
+    "name": "endpoint_denylist: not violated (another port than the listed one)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["blocked.example:8443"] }] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "blocked.example:9443", "path": "/x", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "endpoint_denylist: covered (IPv4-mapped IPv6 spelling of a listed address)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["169.254.169.254"] }] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "[::ffff:a9fe:a9fe]", "path": "/latest/meta-data", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
+    "expect": { "violated": true, "clause_id": "epd" }
+  },
+  {
+    "name": "endpoint_denylist: covered (decimal spelling of a listed address)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["169.254.169.254"] }] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "2852039166", "path": "/latest/meta-data", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
+    "expect": { "violated": true, "clause_id": "epd" }
+  },
+  {
+    "name": "endpoint_denylist: covered (another loopback address for a listed loopback host)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["localhost"] }] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "[::1]:3000", "path": "/admin", "method": "POST" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
+    "expect": { "violated": true, "clause_id": "epd" }
+  },
+  {
+    "name": "endpoint_allowlist: not violated (hex spelling of an allowlisted address)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ep", "type": "endpoint_allowlist", "mode": "monitor", "hosts": ["10.0.0.5:8080"] }] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "0xa000005:8080", "path": "/v1/x", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
+    "expect": { "violated": false }
+  },
+  {
+    "name": "endpoint_allowlist: covered (another loopback address than the allowlisted one)",
+    "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ep", "type": "endpoint_allowlist", "mode": "monitor", "hosts": ["127.0.0.1:8080"] }] },
+    "claimed": { "intent": { "action_type": "http.call", "params": { "host": "[::1]:8080", "path": "/v1/x", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
+    "expect": { "violated": true, "clause_id": "ep" }
+  },
+  {
     "name": "address_allowlist: covered (destination not allowlisted)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "aa", "type": "address_allowlist", "mode": "monitor", "addresses": ["0xAAA"], "chain_ids": [8453] }] },
     "claimed": { "intent": { "action_type": "chain.transfer", "params": { "to": "0xBBB", "chain_id": 8453 } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },

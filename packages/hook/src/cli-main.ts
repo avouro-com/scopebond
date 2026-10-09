@@ -17,12 +17,13 @@ import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { checkChains } from "./chain-verify.js";
-import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
+import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
+import { replaceFile } from "./safe-fs.js";
 import { scaffold, harnessSnippet, placeHook, migrateToMonitorDefault, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
@@ -66,10 +67,11 @@ import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofRece
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
  *  the runtime fills it in before evaluating; on failure the ref stays absent and
- *  the starter policy fails closed. */
+ *  the starter policy fails closed. git is started by its full path from PATH, never
+ *  from `cwd`, which is the project and could hold a git.exe of its own. */
 function currentBranch(cwd: string): string | null {
   try {
-    return execFileSync("git", ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+    return execFileSync(programPath("git"), ["-C", cwd, "symbolic-ref", "--quiet", "--short", "HEAD"], {
       encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     }).trim() || null;
   } catch { return null; }
@@ -677,7 +679,7 @@ async function runRules(args: string[]): Promise<void> {
         rules.local_overrides = { ...(rules.local_overrides ?? {}), [id]: verb };
         const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
         saveRules(dir, rules);
-        writeFileSync(join(dir, "policy.json"), `${JSON.stringify(compileManaged(rules, doc, agentKid), null, 2)}\n`);
+        replaceFile(join(dir, "policy.json"), `${JSON.stringify(compileManaged(rules, doc, agentKid), null, 2)}\n`);
         console.log(`✓ ${verb === "enforce" ? `${id} now blocks on this computer` : `${id} now records on this computer, without blocking`} (your workspace allows changes on computers)`);
         await reportRules(dir);
         process.exit(0);
@@ -707,7 +709,7 @@ async function runRules(args: string[]): Promise<void> {
   const policyPath = join(dir, "policy.json");
   const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
   saveRules(dir, rules);
-  writeFileSync(policyPath, `${JSON.stringify(compile(rules, agentKid), null, 2)}\n`);
+  replaceFile(policyPath, `${JSON.stringify(compile(rules, agentKid), null, 2)}\n`);
   console.log(`✓ ${changed}`);
   console.log(`  rules          ${rulesPath(dir)}`);
   console.log(`  policy         ${policyPath} (recompiled)`);
@@ -1148,7 +1150,9 @@ async function runFlush(): Promise<void> {
   // Unbounded, so its outcome is a real one: `status` and `doctor` show it like any other.
   if (status) recordDeliveryAttempt(dir, status, Date.now(), before, null, "hook");
   runtime.exporter?.stop();
-  console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}`);
+  // A wait the workspace asked for (429, or 503 with Retry-After) holds here too: say when the next try is.
+  const wait = status?.pending && status.backoff && status.backoff.until > Date.now() && !status.lastError ? status.backoff.until : null;
+  console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}${wait ? ` (the workspace asked this computer to wait; next try after ${new Date(wait).toISOString()})` : ""}`);
   // Let pending HTTP handles close normally (forced exit can abort on Windows).
   process.exitCode = status && status.pending > 0 ? 1 : 0;
 }
@@ -1601,7 +1605,7 @@ async function runDoctor(): Promise<void> {
     // Windows PowerShell finds its own modules only without PowerShell 7's PSModulePath, which a doctor run from
     // pwsh would pass on; and its errors are not this computer's problem to print.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath"));
-    try { policy = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
+    try { policy = execFileSync(windowsSystemProgram("powershell"), ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
     const advice = policy ? executionPolicyAdvice(policy) : null;
     if (advice) console.log(`  powershell       ${advice}`);
   }

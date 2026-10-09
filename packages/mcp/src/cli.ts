@@ -50,7 +50,7 @@ import { loadOrCreateHexKey } from "./key-file.js";
 import { join, resolve } from "node:path";
 import type { JsonRpcMessage, McpUpstream } from "./proxy.js";
 import { scaffold } from "./init.js";
-import { openApprovalBinder, openDispatchGuard } from "@scopebond/gateway/node";
+import { openApprovalBinder, openDispatchGuard, isBareProgramName, programPath } from "@scopebond/gateway/node";
 import { connectCloud, loadMcpConnection, connectionFileFor, openExporter } from "./cloud.js";
 
 // Options are read only before `--`: everything after it belongs to the upstream command.
@@ -135,8 +135,16 @@ try {
   childEnv = upstreamEnv(process.env, [...listed, ...args("--env")]);
 } catch (e) { die((e as Error).message); }
 
+// A bare program name is looked up in the absolute folders on the upstream's PATH, never in the current folder (a
+// spawn by bare name on Windows looks in the project folder first); a name with a folder in it is started as given.
+let upstreamProgram = upstreamCmd[0];
+if (isBareProgramName(upstreamProgram)) {
+  try { upstreamProgram = programPath(upstreamProgram, { env: childEnv }); }
+  catch (e) { die(`could not start the upstream server: ${(e as Error).message}`); }
+}
+
 // Spawn the upstream server with an allow-listed environment and correlate its responses by id.
-const child = spawn(upstreamCmd[0], upstreamCmd.slice(1), { stdio: ["pipe", "pipe", "inherit"], env: childEnv });
+const child = spawn(upstreamProgram, upstreamCmd.slice(1), { stdio: ["pipe", "pipe", "inherit"], env: childEnv });
 child.on("error", (e) => die(`could not start the upstream server: ${e.message}`));
 const shutdown = (code: number) => {
   const done = (): never => process.exit(code);

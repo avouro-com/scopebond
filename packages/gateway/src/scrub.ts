@@ -6,7 +6,11 @@
 // The rules are the hook's structured-parameter rules (its `scrubParam`) plus URL query and SQL password shapes. Generic
 // high-entropy blobs are deliberately not matched: a commit id or a content hash in a parameter is not a secret, and a
 // policy may match on it. Every pattern is a single pass over simple character classes, so matching stays linear in the
-// value's length. Pure string work: no Node built-ins, so it runs wherever the gateway does.
+// value's length. Pure string work: no Node built-ins, so it runs wherever the gateway does. Shell shapes with no label
+// to key on (PowerShell's ways of setting a secret, a value piped into a secret reader, `$token = '…'`) are read by
+// `scrubShellSecrets` (shell-secrets.ts, the same scanner the hook's command scrubber uses).
+
+import { scrubShellSecrets } from "./shell-secrets.js";
 
 const MASK = "***";
 // A flag or header value: a quoted string or a run of non-whitespace.
@@ -49,7 +53,9 @@ const SECRET_RULES: ReadonlyArray<readonly [RegExp, string] | ((text: string) =>
   [new RegExp(String.raw`((?:^|\s)(?:-u|--user)[=\s]+)${VALUE}`, "g"), `$1${MASK}`],
   [/(Authorization:\s*(?:Bearer|Basic|Token)\s+)[^\s"']+/gi, `$1${MASK}`],
   [/((?:x-api-key|api-key|x-auth-token|x-access-token|private-token)\s*:\s*)[^\s"']+/gi, `$1${MASK}`],
-  [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, `$1${MASK}@`],                     // URL userinfo
+  // URL userinfo, to the last "@" before the host as a URL parser splits it (a password may hold an "@"); the authority
+  // ends at "/", "?" or "#", so an "@" in a path or query is left alone. Linear: the run after each "://" stops at "/".
+  [/(:\/\/)[^\s/?#]*@/g, `$1${MASK}@`],
   scrubQueryParameters,
   // A password literal in SQL (`PASSWORD 'x'`, `IDENTIFIED BY "x"`, `PASSWORD = 'x'`). `\s*(?:=\s*)?`, not `\s*=?\s*`:
   // two adjacent whitespace runs split a long run of spaces every possible way (quadratic).
@@ -86,7 +92,7 @@ function scrubAssignments(text: string): string {
 
 /** Scrub credential shapes from one string value. Ordinary text (paths, refs, commit ids, plain URLs) is unchanged. */
 export function scrubSecretText(text: string): string {
-  let out = scrubAssignments(text);
+  let out = scrubAssignments(scrubShellSecrets(text));
   for (const rule of SECRET_RULES) out = typeof rule === "function" ? rule(out) : out.replace(rule[0], rule[1]);
   return out;
 }
