@@ -134,8 +134,7 @@ evidence in a separate SQLite outbox. Exact action-ID retries are free, successf
 batches are acknowledged by ID and content hash, and failures use bounded exponential
 backoff. Queue count, bytes and age are bounded; overflow, conflicting IDs and expiry
 produce explicit delivery-gap events instead of silent deletion. Cloud availability
-never changes the local enforcement decision. The current hosted service is not ready
-for customer enrollment; use the local/staging acceptance flow until its gates close.
+never changes the local enforcement decision.
 Hosted export uses `node:sqlite` and therefore requires Node 22 or newer. Receipts from
 before durable action IDs are retained locally and recorded as `missing_action_id`
 delivery gaps rather than uploaded under an invented identity.
