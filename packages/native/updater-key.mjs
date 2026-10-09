@@ -12,7 +12,7 @@
 //   node updater-key.mjs --add [private-key-file] [--not-after YYYY-MM-DD]
 
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,16 +27,21 @@ const publicFile = join(here, "updater-public-key.txt");
 const listFile = join(here, "updater-keys.json");
 const keyId = (b64) => createHash("sha256").update(Buffer.from(b64, "base64")).digest("hex").slice(0, 16);
 
-if (existsSync(privateFile)) { console.error(`${privateFile} exists already; nothing changed`); process.exit(1); }
 if (notAfter !== null && !/^\d{4}-\d{2}-\d{2}$/.test(notAfter ?? "")) { console.error("--not-after takes a date, YYYY-MM-DD"); process.exit(1); }
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const pub = publicKey.export({ type: "spki", format: "der" }).toString("base64");
-// Created exclusively: if the file appeared since the check above, nothing is overwritten.
+// Created exclusively: an existing key file is never overwritten.
 try { writeFileSync(privateFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600, flag: "wx" }); }
-catch (error) { console.error(`${privateFile} could not be created (${error.code ?? error.message}); nothing changed`); process.exit(1); }
+catch (error) {
+  console.error(error.code === "EEXIST" ? `${privateFile} exists already; nothing changed` : `${privateFile} could not be created (${error.code ?? error.message}); nothing changed`);
+  process.exit(1);
+}
+/** A file's text, or null when it does not exist (read once; no separate existence check). */
+const readIfThere = (file) => { try { return readFileSync(file, "utf8"); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
 if (add) {
-  const list = existsSync(listFile) ? JSON.parse(readFileSync(listFile, "utf8"))
-    : existsSync(publicFile) ? [{ kid: keyId(readFileSync(publicFile, "utf8").trim()), key: readFileSync(publicFile, "utf8").trim(), not_after: null }] : [];
+  const listed = readIfThere(listFile);
+  const single = listed === null ? readIfThere(publicFile)?.trim() : null;
+  const list = listed !== null ? JSON.parse(listed) : single ? [{ kid: keyId(single), key: single, not_after: null }] : [];
   list.push({ kid: keyId(pub), key: pub, not_after: notAfter });
   writeFileSync(listFile, `${JSON.stringify(list, null, 2)}\n`);
   console.log(`Added key ${keyId(pub)} to ${listFile} (commit it; the next release trusts every key listed there).`);
