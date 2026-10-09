@@ -59,7 +59,7 @@ export function noteQueueMiss(dir: string, after: number, actionId: string | nul
 interface MissLine { after: number; id: string | null; at?: number }
 
 function readLines(file: string): MissLine[] {
-  let text = "";
+  let text: string;
   try { text = readFileSync(file, "utf8"); } catch { return []; }
   return text.split("\n").flatMap((line) => {
     try {

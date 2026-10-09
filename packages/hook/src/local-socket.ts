@@ -16,7 +16,7 @@ export function requestOverSocket(socketPath: string, method: "GET" | "POST", pa
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => { raw += chunk; if (raw.length > 4 * 1024 * 1024) req.destroy(); });
       res.on("end", () => {
-        let parsed: unknown = null;
+        let parsed: unknown;
         try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
         resolve({ status: res.statusCode ?? 0, body: parsed });
       });

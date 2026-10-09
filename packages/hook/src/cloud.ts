@@ -4,7 +4,7 @@
 // durable exporter (D40 — no new transport). The machine credential and the complete
 // receipt log stay local-first; export is best-effort and never blocks a tool call.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,

@@ -28,7 +28,7 @@ export function decisionEntries(file: string, harness: Harness): string[] {
       const entry = e as Record<string, unknown>;
       if (typeof entry.command === "string") return entry.command;
       const inner = (entry.hooks as unknown[]).find((h) => isRecord(h) && typeof h.command === "string") as Record<string, unknown> | undefined;
-      return String(inner?.command ?? "");
+      return typeof inner?.command === "string" ? inner.command : "";
     });
   } catch { return []; }
 }
@@ -45,11 +45,11 @@ export function enabledPluginHookFiles(home = homedir()): string[] {
   const found: string[] = [];
   const walk = (dir: string, depth: number) => {
     if (depth > 6 || found.length > 50) return;
-    let names: string[] = [];
+    let names: string[];
     try { names = readdirSync(dir); } catch { return; }
     for (const name of names) {
       const path = join(dir, name);
-      let isDir = false;
+      let isDir: boolean;
       try { isDir = statSync(path).isDirectory(); } catch { continue; }
       if (isDir) walk(path, depth + 1);
       else if (name === "hooks.json" && enabled.some((plugin) => path.split(sep).includes(plugin))) found.push(path);
@@ -98,7 +98,7 @@ export function describeEntry(e: HookEntry): string {
 /** An entry without its Scopebond commands: a flat entry that is Scopebond's goes (null); in a group
  *  ({ matcher, hooks: [...] }) only the Scopebond commands go, and the group goes only when nothing
  *  else is left in it, so a person's own hook that shares a group with ours is kept. */
-function withoutScopebond(entry: unknown): unknown | null {
+function withoutScopebond(entry: unknown): unknown {
   if (!harnessEntryMatches(entry)) return entry;
   const record = entry as Record<string, unknown>;
   if (!Array.isArray(record.hooks)) return null;

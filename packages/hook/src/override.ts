@@ -59,6 +59,7 @@ function writeState(dir: string, state: OverrideState, now: number): void {
 }
 
 /** Control, bidi and zero-width characters: shown to a person, they can make a command read as a different one. */
+// eslint-disable-next-line no-control-regex -- deliberate: these are the characters being found and written out
 const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/g;
 
 /** The text with each such character written out as ⟨U+XXXX⟩, so the summary a person (and an admin) reads is what runs. */
@@ -82,7 +83,10 @@ export function actionSummary(intent: { action_type?: string; params?: Record<st
 /** The same action, whatever tool call it came from: its type and parameters without the per-call group id. */
 export function actionKey(intent: { action_type?: string; params?: Record<string, unknown> }): string {
   // The group fields name the tool call an action came from (its id, size and place in it), so they are left out.
-  const { action_group: _group, action_group_size: _size, action_group_seq: _seq, ...params } = intent.params ?? {};
+  const params: Record<string, unknown> = { ...intent.params };
+  delete params.action_group;
+  delete params.action_group_size;
+  delete params.action_group_seq;
   const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
     : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
   return digestOf(JSON.stringify({ action_type: intent.action_type ?? "", params: sorted(params) }));

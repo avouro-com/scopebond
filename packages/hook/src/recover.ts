@@ -11,6 +11,7 @@ import type { SignedReceipt } from "@scopebond/gateway";
 import { SqliteCloudOutbox, SqliteReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
 import { ingestUrl, type HookConnection } from "./cloud.js";
+import { textOf } from "./text.js";
 
 /** The workspace accepts at most 1 MiB and 100 receipts per request. */
 const MAX_BATCH_BYTES = 900 * 1024;
@@ -94,17 +95,17 @@ export async function recoverEarlierReceipts(
         result.skipped += group.count; continue;
       }
       if (asked.status === 401) { io.log("  This computer's own connection is not valid. Reconnect it first (login), then run recover again."); result.failed = true; return result; }
-      if (asked.status >= 400) { io.log(`  The workspace refused: ${String(asked.json.error ?? `HTTP ${asked.status}`)}`); result.skipped += group.count; continue; }
-      const id = String(asked.json.id ?? "");
-      let status = String(asked.json.status ?? "");
+      if (asked.status >= 400) { io.log(`  The workspace refused: ${textOf(asked.json.error ?? `HTTP ${asked.status}`)}`); result.skipped += group.count; continue; }
+      const id = textOf(asked.json.id);
+      let status = textOf(asked.json.status);
       if (status === "pending") {
-        io.log(`  Waiting for an owner or admin to approve it on Activity:\n\n    ${String(asked.json.approve_url ?? connection.url)}\n`);
+        io.log(`  Waiting for an owner or admin to approve it on Activity:\n\n    ${textOf(asked.json.approve_url ?? connection.url)}\n`);
         if (!options.wait) { result.pending += group.count; io.log("  Run recover again after it is approved."); continue; }
         const deadline = io.now() + options.waitMs;
         while (status === "pending" && io.now() < deadline) {
           await io.sleep(options.pollMs);
           const polled = await call(io, connection, `/v1/recover/${encodeURIComponent(id)}`).catch(() => null);
-          if (polled?.status === 200) status = String(polled.json.status ?? status);
+          if (polled?.status === 200) status = textOf(polled.json.status ?? status);
         }
       }
       if (status === "declined") { io.log("  Declined in the workspace. Nothing was sent."); result.skipped += group.count; continue; }
@@ -136,7 +137,7 @@ async function uploadGroup(
     const body = `{"receipts":[${batch.join(",")}]}`;
     const started = io.now();
     for (let attempt = 1; ; attempt++) {
-      const answer = await call(io, connection, `/v1/recover/${encodeURIComponent(id)}/receipts`, body).catch((error: Error) => ({ status: 0, json: { error: error.message } } as Answer));
+      const answer = await call(io, connection, `/v1/recover/${encodeURIComponent(id)}/receipts`, body).catch((error: Error): Answer => ({ status: 0, json: { error: error.message } }));
       if (answer.status === 200) {
         totals.accepted += Number(answer.json.accepted ?? 0);
         totals.duplicates += Number(answer.json.duplicates ?? 0);
@@ -155,7 +156,7 @@ async function uploadGroup(
         await io.sleep(wait);
         continue;
       }
-      io.log(`  Stopped: ${String(answer.json.error ?? `HTTP ${answer.status}`)}. Records already sent stay recovered; run recover again to continue.`);
+      io.log(`  Stopped: ${textOf(answer.json.error ?? `HTTP ${answer.status}`)}. Records already sent stay recovered; run recover again to continue.`);
       totals.stopped = true;
       return false;
     }

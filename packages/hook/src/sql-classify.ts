@@ -87,6 +87,7 @@ function statements(text: string): string[] {
 /** Split `text` at a top-level (depth 0) whole-word keyword; returns the parts. */
 function splitTop(text: string, word: string): string[] {
   const parts: string[] = [];
+  // eslint-disable-next-line security/detect-non-literal-regexp -- word is one of this module's literal keywords (or, and, where)
   const re = new RegExp(`^${word}(?![A-Za-z0-9_])`, "i");
   let depth = 0;
   let last = 0;
@@ -104,6 +105,7 @@ function splitTop(text: string, word: string): string[] {
   return parts;
 }
 
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored alternatives, each a single repeat
 const LITERAL = /^(?:'[^']*'|-?\d+(?:\.\d+)?|true|false|null)$/i;
 
 function stripParens(s: string): string {
@@ -172,6 +174,7 @@ function one(stmt: string): One | "neutral" | null {
     // `PRAGMA name = value` and `PRAGMA name(value)` change settings; only the bare form reads.
     case "PRAGMA": return s.includes("=") || s.includes("(") ? null : { verb: "read", predicate: "not_applicable" };
     case "EXPLAIN": {
+      // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; each repeated option starts with its own fixed word and ends in blanks no option starts with
       const rest = s.replace(/^explain\s+(?:analyze\s+|verbose\s+|query\s+plan\s+)*(?:\([^)]*\)\s*)?/i, "");
       return rest === s || rest === "" ? null : one(rest);
     }
