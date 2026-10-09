@@ -52,8 +52,11 @@ jobs:
         shell: pwsh
         run: |
           $exe = "packages/native/build/scopebond-agent.exe"
-          & $exe hook help | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0) { throw "the executable did not run" }
+          # Read all of the output first: `| Select-Object -First 1` stops the program after one line, and its exit code
+          # is then -1 however it ran.
+          $out = & $exe hook help
+          if ($LASTEXITCODE -ne 0) { throw "the executable did not run (exit $LASTEXITCODE)" }
+          $out | Select-Object -First 1
       # The native tray (Rust, Tauri 2), from its committed Cargo.lock, with no cache: a release build starts from the
       # lockfile alone.
       - name: Rust toolchain (packages/tray/rust-toolchain.toml)
