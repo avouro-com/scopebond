@@ -164,8 +164,8 @@ review each package's coverage and operational limits before important work.
 Source availability is not a certification of production protection.
 
 Current release set: `@scopebond/policy-schema@0.7.2`, `@scopebond/verify@0.6.4`,
-`@scopebond/gateway@0.17.6`, `@scopebond/sdk@0.1.7`, `@scopebond/hook@0.21.8`,
-`@scopebond/agent@0.6.2`, `@scopebond/github-action@0.5.11`, `@scopebond/mcp@2.0.11`,
+`@scopebond/gateway@0.17.6`, `@scopebond/sdk@0.1.7`, `@scopebond/hook@0.21.9`,
+`@scopebond/agent@0.6.3`, `@scopebond/github-action@0.5.11`, `@scopebond/mcp@2.0.11`,
 and `@scopebond/framework@0.3.15`. Release tooling keeps these references in step
 with package manifests. Public setup selects npm's latest published release;
 generated hook configuration and managed workspace updates can pin versions
