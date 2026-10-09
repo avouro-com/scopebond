@@ -182,12 +182,21 @@ process.stdout.write(JSON.stringify(out));`);
   } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); }
 });
 
-test("a folder whose own access cannot be changed: every file in it is still restricted on its own", { skip: !windows && "Windows access lists" }, () => {
-  // The user may create, change and delete files in the folder but not change the folder's own access list (OWNER RIGHTS
-  // limits the owner there to Modify), as for a folder an installer or an administrator made; other users may change it too.
-  const dir = mkdtempSync(join(tmpdir(), "sb-no-dac-"));
+/** Windows: a folder this user may fill but whose own access list it may not change (OWNER RIGHTS limits the owner there to
+ *  Modify), open to other users too, as for a folder an installer or an administrator made. Null where this user can change it
+ *  all the same (an elevated administrator), so the case cannot be set up there. */
+function folderWithoutAccessChanges(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${self}:(OI)(CI)M`, "*S-1-5-11:(OI)(CI)M", "*S-1-5-18:(OI)(CI)F", "*S-1-3-4:M"], { stdio: "ignore" });
+  try { execFileSync("icacls", [dir, "/grant", "*S-1-5-18:(OI)(CI)F"], { stdio: "ignore" }); } catch { return dir; }
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  return null;
+}
+
+test("a folder whose own access cannot be changed: every file in it is still restricted on its own", { skip: !windows && "Windows access lists" }, (t) => {
+  const dir = folderWithoutAccessChanges("sb-no-dac-");
+  if (!dir) { t.skip("this user can change any folder's access list here (an elevated administrator)"); return; }
   try {
-    execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${self}:(OI)(CI)M`, "*S-1-5-11:(OI)(CI)M", "*S-1-5-18:(OI)(CI)F", "*S-1-3-4:M"], { stdio: "ignore" });
     assert.notEqual(ensurePrivateDir(dir), null, "the folder cannot be made private");
     assert.equal(ownerOnlyState(dir), "per-file", "status and doctor can say so");
     loadOrCreateAttester({ file: join(dir, "attester.key") });

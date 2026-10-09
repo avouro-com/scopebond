@@ -113,11 +113,18 @@ test("a folder an older version set up is made readable by this user alone on th
   }
 });
 
-test("a hook folder whose own access cannot be changed: each file is still readable by this user alone, and status says so", { skip: !windows && "Windows access lists" }, async () => {
+test("a hook folder whose own access cannot be changed: each file is still readable by this user alone, and status says so", { skip: !windows && "Windows access lists" }, async (t) => {
   // The user may create, change and delete files there but not change the folder's own access list (OWNER RIGHTS limits the
   // owner to Modify), as for a folder an installer or an administrator made; other users may change it too.
   const dir = mkdtempSync(join(tmpdir(), "sb-hook-no-dac-"));
   execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${self}:(OI)(CI)M`, "*S-1-5-11:(OI)(CI)M", "*S-1-5-18:(OI)(CI)F", "*S-1-3-4:M"], { stdio: "ignore" });
+  try {
+    // An elevated administrator can change any folder's access list: the case cannot be set up there.
+    execFileSync("icacls", [dir, "/grant", "*S-1-5-18:(OI)(CI)F"], { stdio: "ignore" });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+    t.skip("this user can change any folder's access list here (an elevated administrator)");
+    return;
+  } catch { /* as intended: this user cannot change the folder's own access list */ }
   let runtime;
   try {
     scaffold(dir);
