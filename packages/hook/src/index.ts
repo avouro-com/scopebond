@@ -89,6 +89,7 @@ export type { Allowance, BlockedItem } from "./allowances.js";
 export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requests.js";
 export type { AdminRequest } from "./requests.js";
 export { localActivity } from "./local-activity.js";
+export { noteUnresolvableHooks, HOOK_OUTAGE_FILE } from "./hook-outage.js";
 export type { LocalActivity } from "./local-activity.js";
 export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEFAULT_RETENTION_DAYS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./store-upkeep.js";
 export type { UpkeepOptions } from "./store-upkeep.js";

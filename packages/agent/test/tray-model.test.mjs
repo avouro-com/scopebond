@@ -183,3 +183,8 @@ test("an agent the workspace's plan paused says so, with Open workspace as the f
   assert.match(m.headline, /^Paused by your workspace's plan: 12 records waiting$/);
   assert.equal(m.fix.id, "open_workspace");
 });
+
+test("today: an edit recorded after it ran is shown apart from blocks, never added to them", () => {
+  const m = trayModel(input(status(), { today: { actions: 10, blocked: 2, recorded_after: 1, allowed_by_person: 0 } }));
+  assert.equal(m.rows.find((r) => r.label === "Today").value, "10 actions · 2 blocked · 1 recorded, not prevented");
+});

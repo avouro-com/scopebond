@@ -52,6 +52,10 @@ export const EXECUTION_STATES = [
   "executed",
   "failed",
   "outcome_unknown",
+  // A violation recorded after the action already happened (an agent that reports an edit only once it is written).
+  // The receipt says the rule was broken (`realtime_result: "deny"`) and that the action ran (`executed: true`): it was
+  // recorded, not prevented, and is never a block.
+  "observed_after",
 ] as const;
 export type ExecutionState = (typeof EXECUTION_STATES)[number];
 
@@ -370,6 +374,7 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     executed: "adapter_reported_success",
     failed: "adapter_reported_failure",
     outcome_unknown: "adapter_outcome_unknown",
+    observed_after: "none",
   };
   return hasOnlyKeys(payload, [
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
@@ -398,7 +403,8 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     ((state === "observed_not_evaluated") === (payload.realtime_result === "not_evaluated")) &&
     EXECUTION_STATES.includes(state as ExecutionState) && ASSERTIONS.has(assertion) &&
     (assertionForState[state as ExecutionState] == null || assertionForState[state as ExecutionState] === assertion) &&
-    typeof payload.executed === "boolean" && payload.executed === (state === "executed") &&
+    typeof payload.executed === "boolean" && payload.executed === (state === "executed" || state === "observed_after") &&
+    (state !== "observed_after" || payload.realtime_result === "deny") &&
     (payload.execution.reference === null || typeof payload.execution.reference === "string") &&
     payload.execution.reference === payload.execution_ref &&
     payload.execution.external_effect === "not_independently_verified" &&
@@ -685,7 +691,7 @@ export type ReceiptContext = Omit<
   "type" | "realtime_result" | "executed" | "execution_ref" | "execution"
 >;
 
-export type AuthorityFinalState = "denied" | "simulated" | "cooperative_allow" | "executed" | "failed" | "outcome_unknown";
+export type AuthorityFinalState = "denied" | "simulated" | "cooperative_allow" | "executed" | "failed" | "outcome_unknown" | "observed_after";
 export type AuthorityLifecycleState = "reserved" | "dispatching" | AuthorityFinalState;
 
 export interface ActionLifecycleRecord {

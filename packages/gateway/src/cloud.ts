@@ -20,7 +20,9 @@ export interface CloudOutboxEntry {
 
 export interface CloudDeliveryGap {
   id: string | null;
-  reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error" | "rekeyed" | "rejected";
+  /** `hook_unresolvable`: not a record. A coding agent's hook entry could not start, so its actions ran with no check and no
+   *  record for a while; kept once per outage so the workspace sees the silence (see the hook's `noteUnresolvableHooks`). */
+  reason: "missing_action_id" | "id_conflict" | "capacity" | "expired" | "outbox_error" | "rekeyed" | "rejected" | "hook_unresolvable";
   at: number;
   /** The record's number in this queue, when it had one. A record dropped at capacity takes the next number before it is
    *  dropped, so the numbers the workspace sees leave a hole where it was. */

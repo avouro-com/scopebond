@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname, uptime } from "node:os";
 import { join } from "node:path";
-import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, readBlocked, readMeta, ruleReport, writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
 import { fetchVerifiedInstaller, installAfterExit, installKind, nativeTrayPath, takeInstallResult } from "./native-update.js";
@@ -336,6 +336,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // are repaired, at the version they already name or the one the agent carries. Done before a self-update, so an update
       // whose handover fails never leaves the hook behind.
       const hookTarget = target?.policy === "recommended" && target.hook && compareVersions(target.hook, hookVersion()) > 0 ? target.hook : hookVersion();
+      // Codex and Cursor send nothing between actions, so a hook entry of theirs that cannot start is kept as a gap the
+      // workspace hears of, before the repair below (the actions in between ran unchecked either way).
+      const outage = noteUnresolvableHooks(options.dir, harnesses.filter((h) => h === "codex" || h === "cursor"));
+      if (outage.recorded.length) log(`hook entry cannot start for ${outage.recorded.join(", ")}: kept as a gap for the workspace`);
       result.hookEntries = maintainHookEntries(harnesses, hookTarget, target?.policy !== "hold");
       for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
       const kind = installKind();
