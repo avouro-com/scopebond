@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const workflowsDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows");
-const NPM_SECRET = /secrets\.NPM_TOKEN\w*/;
+const NPM_SECRET = /secrets\.(?:NPM_TOKEN\w*|\w*_NPM_TOKEN)\b/;
 const AUTOMATION_SECRET = /secrets\.PERSONAL_ACCESS_TOKEN/;
 
 const indentOf = (line) => line.length - line.trimStart().length;

@@ -205,8 +205,8 @@ jobs:
         env:
           # Fallback only: npm exchanges the OIDC token for a short-lived publish token
           # first and uses this long-lived token only if that exchange fails. Remove
-          # this line (and the NPM_TOKEN_SCOPEBOND secret) after the first successful
+          # this line (and the SCOPEBOND_NPM_TOKEN secret) after the first successful
           # trusted publish; see RELEASING.md.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_SCOPEBOND }}
+          NODE_AUTH_TOKEN: ${{ secrets.SCOPEBOND_NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
           npm_config_ignore_scripts: "true"

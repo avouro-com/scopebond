@@ -114,7 +114,7 @@ separate manual publish workflow, and a manual run of the Release workflow on
 3. After the first release whose `publish` job log shows a successful trusted
    publish (and npm shows the new versions with provenance):
    - remove `NODE_AUTH_TOKEN` from the `publish` job in `release.yml`;
-   - delete the `NPM_TOKEN_SCOPEBOND` and `NPM_TOKEN` repository secrets;
+   - delete the `SCOPEBOND_NPM_TOKEN` secret (in the `npm-publish` environment);
    - revoke those tokens on npmjs.com (**Access Tokens**);
    - for each package, set **Settings** → **Publishing access** to **Require
      two-factor authentication and disallow tokens**. Trusted publishing keeps
@@ -125,7 +125,7 @@ separate manual publish workflow, and a manual run of the Release workflow on
 - Use the Node version in `.nvmrc` and pnpm 10.34.6 from `package.json`.
 - The `publish` job authenticates with npm trusted publishing. Until the first
   trusted publish succeeds its publish step (only that step, not install or
-  build) also supplies `NPM_TOKEN_SCOPEBOND` as `NODE_AUTH_TOKEN` (read through
+  build) also supplies `SCOPEBOND_NPM_TOKEN` (an `npm-publish` environment secret) as `NODE_AUTH_TOKEN` (read through
   the `.npmrc` that `actions/setup-node` writes); npm tries the OIDC exchange
   first and uses that token only if the exchange fails. The automation token is
   used only by the step that opens the version PR, in the `npm` environment.
