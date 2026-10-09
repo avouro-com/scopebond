@@ -59,7 +59,7 @@ export { completeCloudEnrollment, CloudEnrollmentError } from "./enrollment.js";
 export type { CloudEnrollmentBundle, CloudEnrollmentResult } from "./enrollment.js";
 export type {
   CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus,
-  CloudOutbox, CloudOutboxEntry, CloudOutboxStatus, MemoryCloudOutboxOptions, CloudSummaryOptions, CloudSequenceProofOptions,
+  CloudOutbox, CloudOutboxEntry, CloudOutboxStatus, MemoryCloudOutboxOptions, CloudSummaryOptions, CloudSequenceProofOptions, ChainHeadDelivery,
 } from "./cloud.js";
 export {
   requestHash, requestParams, checkApproval, validateDispatchApproval, approvalClaims as dispatchApprovalClaims,
@@ -80,5 +80,5 @@ export { historyNeed } from "@scopebond/verify";
 export { buildSummary, isNotable, repeatKey } from "./summary.js";
 // Evidence-chain heads from a workspace's delivery answers and the published day lists (pure; @scopebond/verify/chain).
 export { checkChainHeads, isSignedChainHead, verifyAnchorList, verifyChainHeadSignature, verifySegmentChain } from "@scopebond/verify/chain";
-export type { AnchorList, AnchorListCheck, ChainHead, HeadsCheck, SegmentChainCheck, SignedChainHead } from "@scopebond/verify/chain";
+export type { AnchorList, AnchorListCheck, ChainHead, HeadTiming, HeadsCheck, KeptChainHead, SegmentChainCheck, SignedChainHead } from "@scopebond/verify/chain";
 export type { SummaryOptions, SummaryPayload, SummaryRecord } from "./summary.js";

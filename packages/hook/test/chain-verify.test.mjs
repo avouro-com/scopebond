@@ -64,7 +64,12 @@ test("the hook keeps the chain head of each delivery answer beside its receipts"
       await store.put({ payload: { action_ref: { action_id: "action:chain-head-hook-1" } }, signature: { alg: "Ed25519", sig: "fixture" } });
       await exporter.flush();
     } finally { exporter.stop(); }
-    assert.deepEqual(readChainHeads(join(dir, CHAIN_HEADS_FILE)).chains[ANCHOR], [answer]);
+    const [kept, ...more] = readChainHeads(join(dir, CHAIN_HEADS_FILE)).chains[ANCHOR];
+    assert.deepEqual(more, []);
+    const { local, ...signed } = kept;
+    assert.deepEqual(signed, answer);
+    // Beside it, this computer's own times: when the delivery left and when its answer arrived.
+    assert.ok(Date.parse(local.sent_at) <= Date.parse(local.received_at), JSON.stringify(local));
   } finally { done(); }
 });
 

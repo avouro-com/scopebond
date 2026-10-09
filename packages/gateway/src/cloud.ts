@@ -126,10 +126,15 @@ export interface CloudExporterOptions {
   sequenceProof?: CloudSequenceProofOptions;
   /** Called with the chain head a workspace's delivery answer carries (`chain_head`: the environment chain's newest sequence
    *  number and evidence segment, signed by the workspace). Keep it: heads held outside the workspace let anyone show later
-   *  that its evidence chain lost, reordered or re-chained records (see @scopebond/verify/chain). A failing callback never
-   *  affects delivery. */
-  onChainHead?: (head: SignedChainHead) => void;
+   *  that its evidence chain lost, reordered or re-chained records (see @scopebond/verify/chain). `delivery` is this
+   *  computer's own clock (ms): when the request the head answered was sent, and when the answer arrived. Keep it beside
+   *  the head: unlike the head's `issued_at`, the workspace cannot choose it, so it is what shows a later head went back.
+   *  A failing callback never affects delivery. */
+  onChainHead?: (head: SignedChainHead, delivery: ChainHeadDelivery) => void;
 }
+
+/** When a delivery that carried a chain head back was sent, and when its answer arrived (this computer's clock, ms). */
+export interface ChainHeadDelivery { sentAt: number; receivedAt: number }
 
 export interface CloudSequenceProofOptions {
   /** The key the workspace enrolled for this computer (the one that signs its receipts). */
@@ -427,11 +432,12 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   // Both parts or none: a proof without the credential's id (or the key) could never verify.
   const proofKey = opts.sequenceProof?.attester && typeof opts.sequenceProof.credentialId === "string" && opts.sequenceProof.credentialId.trim()
     ? opts.sequenceProof : null;
-  // The chain head an answer carries goes to the caller; a malformed one, or a callback that throws, is ignored.
-  const keepHead = (answer: unknown) => {
+  // The chain head an answer carries goes to the caller, with when its request was sent and when the answer arrived; a
+  // malformed one, or a callback that throws, is ignored.
+  const keepHead = (answer: unknown, sentAt: number) => {
     const head = (answer as { chain_head?: unknown } | null)?.chain_head;
     if (!opts.onChainHead || !isSignedChainHead(head)) return;
-    try { opts.onChainHead(head); } catch { /* never affects delivery */ }
+    try { opts.onChainHead(head, { sentAt, receivedAt: now() }); } catch { /* never affects delivery */ }
   };
 
   const fail = (error: unknown, retryAfterMs = 0) => {
@@ -480,6 +486,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     for (let i = 0; i < items.length; i += SUMMARIES_PER_POST) {
       const part = items.slice(i, i + SUMMARIES_PER_POST);
       let res: Response;
+      const sentAt = now();
       try {
         res = await doFetch(summaryEndpoint, {
           method: "POST",
@@ -498,7 +505,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       // Only what the workspace says it has leaves the queue: a summary it refused on its own sends its records in full; a
       // count that does not add up is a failure, retried under the same summary ids.
       const answer = await (typeof res.json === "function" ? res.json().catch(() => null) : Promise.resolve(null)) as { accepted?: unknown; duplicates?: unknown; rejected?: Array<{ index?: unknown }> } | null;
-      keepHead(answer);
+      keepHead(answer, sentAt);
       const refusedAt = new Set((Array.isArray(answer?.rejected) ? answer.rejected : []).map((r) => Number(r?.index)).filter((n) => Number.isInteger(n)));
       const held = Number(answer?.accepted ?? NaN) + Number(answer?.duplicates ?? 0);
       if (!Number.isFinite(held) || held + refusedAt.size < part.length) {
@@ -623,6 +630,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
         }
         const json = JSON.stringify(body);
         const compress = workspaceReadsGzip && gzipMinBytes > 0 && json.length >= gzipMinBytes && typeof CompressionStream === "function";
+        const sentAt = now();
         const res = await doFetch(endpoint, {
           method: "POST",
           headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json", ...(compress ? { "content-encoding": "gzip" } : {}) },
@@ -636,7 +644,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           // accepted as it is: it leaves the queue as a "rejected" gap, so it never holds up the records
           // behind it. It stays in the local log.
           const answer = await answerOf(res);
-          keepHead(answer);
+          keepHead(answer, sentAt);
           const listed = refusedIn(answer, batch);
           // A record refused for a reason that can pass (a clock ahead, a key not enrolled) stays queued and is sent again.
           kept = new Set(listed.filter((r) => keepForClock(r.entry, r.code, now())).map((r) => r.entry.id));
