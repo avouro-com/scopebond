@@ -17,7 +17,8 @@ import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
 import { checkChains } from "./chain-verify.js";
-import { openReceiptStore, loadOrCreateAttester, ownerOnlyState, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
+import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
+import * as gatewayNode from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
@@ -1440,8 +1441,10 @@ function describeStore(dbPath: string): string {
 /** What `status` and `doctor` say when the folder that holds the keys and records could not be made readable by this user
  *  alone (its own access list could not be changed): each file in it is then restricted on its own. Null when it was. */
 function fileAccessLine(dir: string): string | null {
-  // On POSIX every key and record file is created 0600 whatever its folder: nothing to say.
-  return process.platform === "win32" && ownerOnlyState(dir) === "per-file"
+  // On POSIX every key and record file is created 0600 whatever its folder: nothing to say. Read through the namespace: with
+  // an older gateway installed beside this hook the function is not there, and nothing is said.
+  const ownerOnlyState = (gatewayNode as Partial<typeof gatewayNode>).ownerOnlyState;
+  return process.platform === "win32" && typeof ownerOnlyState === "function" && ownerOnlyState(dir) === "per-file"
     ? `${dir} could not be made readable by you alone (its own access could not be changed); its key and record files are restricted one by one`
     : null;
 }
