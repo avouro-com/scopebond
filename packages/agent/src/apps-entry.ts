@@ -95,7 +95,8 @@ export function npmBeside(node: string): string {
 /** Write the uninstall script (UTF-8 with a byte-order mark) into the Scopebond folder; returns its path. */
 export function writeUninstallScript(home: string, o: { node: string; cli: string; npm: string; key?: string }): string {
   const script = join(home, UNINSTALL_SCRIPT);
-  writeFileSync(script, UTF8_BOM + uninstallScript(o), "utf8");
+  // Readable and writable by this user only (on Windows the folder's own access list decides; elsewhere the mode does).
+  writeFileSync(script, UTF8_BOM + uninstallScript(o), { encoding: "utf8", mode: 0o600 });
   return script;
 }
 
