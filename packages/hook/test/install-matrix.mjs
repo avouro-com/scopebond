@@ -7,17 +7,19 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startFakeCloud } from "./fake-cloud.mjs";
+import { packLinked } from "./pack-local.mjs";
 
 const isWin = process.platform === "win32";
 
-/** The global install under test: the hook tarball this run packed, installed the way a user installs it. */
+/** The global install under test: the hook tarball this run packed, installed the way a user installs it. The
+ *  @scopebond packages it depends on are packed from this checkout too and named by path (pack-local.mjs), so a
+ *  release branch whose versions are not on npm yet installs without ETARGET. */
 function installPackedTarball(packDir) {
-  const tarball = readdirSync(packDir).filter((name) => name.endsWith(".tgz")).map((name) => join(packDir, name))[0];
-  if (!tarball) throw new Error(`no packed tarball in ${packDir}`);
+  const tarball = packLinked(["@scopebond/hook"], { packDir }).get("@scopebond/hook");
   // npm is a .cmd shim on Windows, which only runs through a shell; the path is quoted for it.
   const npm = (args) => {
     const res = spawnSync("npm", args, { encoding: "utf8", shell: isWin, stdio: ["ignore", "pipe", "inherit"] });
