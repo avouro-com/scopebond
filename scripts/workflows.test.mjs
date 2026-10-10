@@ -216,3 +216,25 @@ test("no workflow runs wrangler unpinned or with a job-wide Cloudflare token", (
     }
   }
 });
+
+test("the Version packages PR needs no stored token: the job's own token opens it and dispatches its required checks", () => {
+  const release = readWorkflow("release.yml");
+  const all = release.top + release.jobs.map((job) => job.header + job.steps.join("\n")).join("\n");
+  assert.doesNotMatch(all, AUTOMATION_SECRET, "release.yml: no stored automation token");
+  const versionJob = release.jobs.find((job) => job.steps.some((step) => /changesets\/action\/version@/.test(step)));
+  assert.match(versionJob.steps.find((step) => /changesets\/action\/version@/.test(step)), /github-token: \$\{\{ github\.token \}\}/);
+  for (const job of release.jobs) {
+    if (job === versionJob) assert.match(job.header, /actions: write/, "release.yml: the version job can dispatch the checks");
+    else assert.doesNotMatch(job.header, /actions: write/, `release.yml ${job.name}: no other job can start workflows`);
+  }
+  const dispatch = versionJob.steps.find((step) => /gh workflow run/.test(step));
+  assert.ok(dispatch, "release.yml: a step starts the required checks");
+  assert.match(dispatch, /if: steps\.mode\.outputs\.mode == 'version'/, "only when a Version packages PR was opened or updated");
+  assert.match(dispatch, /--ref changeset-release\/main/, "only on the Version packages branch");
+  const dispatched = dispatch.match(/for workflow in ([^;]+);/)?.[1].trim().split(/\s+/) ?? [];
+  // Every workflow that produces a required check on main must be dispatched, and must accept a dispatch.
+  assert.deepEqual(dispatched.sort(), ["ci.yml", "oss-guard.yml", "security-audit.yml"]);
+  for (const name of dispatched) {
+    assert.ok(onTriggers(readWorkflow(name).top).workflow_dispatch, `${name}: accepts the release workflow's dispatch`);
+  }
+});

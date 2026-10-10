@@ -9,6 +9,9 @@ on:
     branches: [main]
   # Required check: it must also run for the merge queue, or queued PRs never merge.
   merge_group: {}
+  # The release workflow dispatches it on the Version packages branch, whose pull
+  # request (opened with the workflow's own token) starts no runs by itself.
+  workflow_dispatch: {}
 
 # A newer push to the same pull request supersedes the run in flight; runs on
 # main (the defense-in-depth tree scan) are never cancelled.
@@ -42,5 +45,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/oss-gate.mjs --messages-range "$BASE_SHA..$HEAD_SHA"
+      - name: Scan the branch's commit messages (dispatched run)
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: node scripts/oss-gate.mjs --messages-range "origin/main..HEAD"
       - name: Enforce core-package dependency boundary (ADR-008)
         run: node scripts/deps-allowlist.mjs

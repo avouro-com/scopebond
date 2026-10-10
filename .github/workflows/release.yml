@@ -23,8 +23,8 @@ name: Release
 # publish decision; approving the `npm-publish` deployment is the second
 # confirmation.
 #
-# Credentials stay with the step that needs them: the automation token only in the
-# step that opens the Version pull request, the npm fallback token only in the
+# Credentials stay with the step that needs them: no stored token opens the Version
+# pull request (the job's own token does), the npm fallback token only in the
 # publish step. Every job that reads a secret is bound to an environment. Installs
 # run no dependency scripts and restore no shared cache, and checkouts keep no
 # token in the git config.
@@ -48,15 +48,15 @@ jobs:
     name: version or plan publish
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # The automation token is read only in this environment's jobs (deployment:
-    # false — this job opens a pull request; it deploys nothing). No npm secret:
-    # this job can never publish.
+    # Bound to the npm environment (deployment: false — this job opens a pull
+    # request; it deploys nothing). No npm secret: this job can never publish.
     environment:
       name: npm
       deployment: false
     permissions:
       contents: write # push the changeset-release/main branch with the version bumps
       pull-requests: write # open and update the "Version packages" pull request
+      actions: write # start the required checks on the Version packages branch
     outputs:
       mode: ${{ steps.mode.outputs.mode }}
       publish-plan-artifact-id: ${{ steps.mode.outputs.publish-plan-artifact-id }}
@@ -89,13 +89,27 @@ jobs:
         if: steps.mode.outputs.mode == 'version'
         uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          # The repository currently disallows Actions' default token from
-          # creating pull requests. Reuse the existing company automation PAT
-          # when configured, while retaining github.token for forks/dev copies.
-          github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
+          # The workflow's own token, valid for this job only: no stored automation
+          # token. The repository lets Actions open pull requests; the next step
+          # starts the required checks, which a pull request opened this way does not.
+          github-token: ${{ github.token }}
           script: pnpm version:packages
           commit-message: "chore: version packages"
           pr-title: "Version packages"
+      # A pull request opened with the job's own token starts no workflow runs, so its
+      # required checks would never report. A dispatch is GitHub's exception: start the
+      # required checks on the branch. They run on its head commit, which is the pull
+      # request's, so they count for it like pull-request runs do.
+      - name: Run the required checks on the Version packages branch
+        if: steps.mode.outputs.mode == 'version'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for workflow in ci.yml oss-guard.yml security-audit.yml; do
+            gh workflow run "$workflow" --ref changeset-release/main
+          done
 
   check:
     name: is this the Version packages merge
