@@ -37,14 +37,14 @@ function deliveryHeaders(dir: string): Record<string, string> {
       // The oldest time is in this computer's clock; sending the clock beside it lets the workspace measure how long records
       // have waited on its own clock, and see a clock running ahead (its records are then refused as signed in the future).
       ...(oldest !== null ? { "x-scopebond-clock": String(Date.now()) } : {}),
-      // SB289: which queue, and the highest number it has given a record. If this queue is later
+      // Which queue, and the highest number it has given a record. If this queue is later
       // removed, the workspace knows how many of its numbers never arrived.
       ...(queueId ? { "x-scopebond-queue-id": queueId, "x-scopebond-seq-assigned": String(seqAssigned ?? 0) } : {}),
       // Records that missed normal delivery (refused, a failed queue write, set aside after a key change...): the queue's
       // lifetime total and its counts by reason code, so the workspace sees them and not only a hole in the numbering.
       ...(gapsTotal > 0 ? { "x-scopebond-gaps-total": String(gapsTotal), "x-scopebond-gaps-by-reason": JSON.stringify(gapsByReason) } : {}),
       ...(state.last_error ? { "x-scopebond-last-error": state.last_error.replace(/[^\x20-\x7e]/g, " ").slice(0, 200) } : {}),
-      // D140: the rule settings this computer runs and who set each, so the workspace shows what is true here.
+      // The rule settings this computer runs and who set each, so the workspace shows what is true here.
       ...rulesHeader(dir),
     };
   } catch { return {}; }
@@ -104,9 +104,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const meta = readMeta(dir);
   // The workspace's recommended versions ride on every rules check; kept with the rules' state.
   let recommended = meta.recommended ?? null;
-  // So does the local retention the workspace chose (D144).
+  // So does the local retention the workspace chose.
   let retention = meta.local_retention_days ?? null;
-  // And the evidence detail: what this computer sends (D144).
+  // And the evidence detail: what this computer sends.
   let detail = meta.evidence_detail ?? null;
   // A workspace that reads a heartbeat's interval says so; until then heartbeats stay every 60 s.
   let heartbeatInterval = meta.heartbeat_interval_s ?? null;
@@ -133,7 +133,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     res = await fetchImpl(`${base}/v1/policy`, {
       // The hook's version tells the workspace which settings this computer understands (for example exact-target
       // exclusions), so it is never sent a document an older hook would refuse.
-      // D144: the settings this hook understands beyond its version (the workspace sends allowances, "Block, person may ask"
+      // The settings this hook understands beyond its version (the workspace sends allowances, "Block, person may ask"
       // and the always/requests terms only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
@@ -182,7 +182,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   try { raw = await res.json(); } catch { raw = null; }
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const etag = res.headers.get("etag");
-  // D140: whether people may change rules on this computer is outside the rules digest, so the same version can arrive
+  // Whether people may change rules on this computer is outside the rules digest, so the same version can arrive
   // with only that switch changed; it is a change to install, not "unchanged".
   const sameVersion = isManaged(dir) && r.revision === meta.revision && r.rules_digest === meta.rules_digest && meta.revision !== null;
   const switchChanged = sameVersion && (r.local_changes === true) !== installedLocalChanges(dir);

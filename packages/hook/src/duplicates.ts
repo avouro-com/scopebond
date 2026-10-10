@@ -1,4 +1,4 @@
-// Duplicate hooks (SB302): the same agent asking Scopebond twice about each action, because the
+// Duplicate hooks: the same agent asking Scopebond twice about each action, because the
 // Scopebond hook sits in more than one place it reads — the user settings and a project's, two
 // entries in one file, or an enabled Claude Code plugin beside a settings entry. Each answer is
 // the same, but every action is signed and delivered twice and `status` reads confusingly.

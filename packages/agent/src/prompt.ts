@@ -15,7 +15,7 @@ export interface OverrideQuestion {
   reason_min: number;
   lasts: string;
   timeout_ms: number;
-  /** D144: override = "Block, person may allow"; ask = "Block, person may ask" (only Ask an admin). */
+  /** Override = "Block, person may allow"; ask = "Block, person may ask" (only Ask an admin). */
   mode: "override" | "ask";
   /** Which choices the workspace allows: allow (once), fifteen (for 15 minutes), always (an allowance), ask (Ask an admin). */
   offers: { allow: boolean; always: boolean; ask: boolean; fifteen?: boolean };
@@ -37,7 +37,7 @@ export function parseQuestion(raw: unknown): OverrideQuestion | null {
   if (!Number.isInteger(reasonMin) || reasonMin < 10 || reasonMin > 200) return null;
   const mode = r.mode === "ask" ? "ask" : "override";
   const o = (r.offers && typeof r.offers === "object" ? r.offers : {}) as Record<string, unknown>;
-  // A hook before D144 sends no offers: the window offers "Allow once", as it always did.
+  // An older hook sends no offers: the window offers "Allow once", as it always did.
   const offers = r.offers === undefined ? { allow: true, always: false, ask: false }
     : { allow: mode === "override" && o.allow === true, always: mode === "override" && o.always === true, ask: o.ask === true,
         // A hook that does not say offers 15 minutes wherever it offers "always" (both came with allowances).

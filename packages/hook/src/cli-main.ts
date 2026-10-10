@@ -559,7 +559,7 @@ async function runLog(args: string[]): Promise<void> {
  *  Without this, "edit the limits" meant hand-writing a ~700-character case-folded
  *  negative lookahead, which nobody does — so the starter policy was effectively the only
  *  policy. The lists live in `.scopebond/rules.json`; `policy.json` is compiled from them. */
-/** D140: tell the workspace now what this computer runs (a rules check carries the report). Bounded; silent when not connected. */
+/** Tell the workspace now what this computer runs (a rules check carries the report). Bounded; silent when not connected. */
 async function reportRules(dir: string): Promise<void> {
   if (!loadConnection(dir)) return;
   try {
@@ -668,7 +668,7 @@ async function runRules(args: string[]): Promise<void> {
         process.exit(1);
       }
       if (isManaged(dir)) {
-        // D140: the workspace sets this computer's rules. A person's own choice applies only where the workspace allows
+        // The workspace sets this computer's rules. A person's own choice applies only where the workspace allows
         // changes on computers; either way the workspace hears what this computer runs.
         const doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument;
         if (doc.local_changes !== true) {
@@ -1359,7 +1359,7 @@ function cliPath(): string {
   return hookCliPath();
 }
 
-/** `install` — the once-per-machine, user-level install (SB112). Scaffolds the
+/** `install` — the once-per-machine, user-level install. Scaffolds the
  *  user home and registers the hook by absolute path in the user-level agent config,
  *  so every project a developer opens is governed without a per-repo `init`. */
 /** The command a user-level agent setting runs. Run through `npx`, this CLI lives in npm's
@@ -1524,7 +1524,7 @@ function runStatus(args: string[] = []): void {
   for (const line of duplicateLines(process.cwd())) console.log(line);
 }
 
-/** SB302: each agent that would ask Scopebond more than once per action, and the one command that keeps one. */
+/** Each agent that would ask Scopebond more than once per action, and the one command that keeps one. */
 function duplicateLines(cwd: string): string[] {
   const lines: string[] = [];
   for (const harness of ["claude", "cursor", "codex"] as const) {
@@ -1700,7 +1700,7 @@ async function runDoctor(): Promise<void> {
       reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
     } catch (error) { reachable = `unreachable (${(error as Error).message})`; }
     console.log(`  cloud            ${connection.url} — ${reachable}`);
-    // SB273: an authenticated check. Reaching the workspace says nothing about whether it
+    // An authenticated check. Reaching the workspace says nothing about whether it
     // still accepts this computer; the rules endpoint answers 401 when it does not.
     let accepted: string;
     let recommended = readMeta(active).recommended ?? null;
@@ -1813,7 +1813,7 @@ async function runLogin(args: string[]): Promise<void> {
     });
     return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, unknown>, retryAfter: response.headers.get("retry-after") };
   };
-  // SB276: run from inside an agent session (its own terminal or tool call), a sign-in can
+  // Run from inside an agent session (its own terminal or tool call), a sign-in can
   // land in the agent's working folder rather than this person's, and the person may never
   // see the code to approve. Say so plainly; the hook settings are left alone either way.
   if (process.env.CLAUDECODE || process.env.CODEX_SANDBOX || process.env.CURSOR_AGENT) {

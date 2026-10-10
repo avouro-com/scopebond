@@ -352,7 +352,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       const signed = agent.sign(mapped.intent);
       if (!mapped.evaluated && !config.strict) {
         // Unknown tool or unparseable command, non-strict: observe without
-        // evaluating — grants nothing (D30).
+        // evaluating — grants nothing.
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization });
         return { decision: "not_evaluated", reason: `no policy applies to ${mapped.intent.action_type}`, receipt };
       }

@@ -2,7 +2,7 @@
 // taxonomy action and decide it against policy with @scopebond/verify. Pure and
 // deterministic, so the conformance vector runs against it directly. Enforcement
 // is the required status check in the customer's own Actions runner (ADR-011 §2,
-// D33) — no Scopebond-held credential and no GitHub SDK.
+// ) — no Scopebond-held credential and no GitHub SDK.
 
 import { violates } from "@scopebond/verify";
 

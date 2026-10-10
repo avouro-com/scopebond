@@ -1,6 +1,6 @@
 // Receipts: the scopebond:receipt envelope, Ed25519 countersigning, and the
-// ReceiptStore interface with an in-memory implementation (D40: an interface with
-// a local implementation; SQLite/D1 are edge implementations added later).
+// ReceiptStore interface with an in-memory implementation (an interface with
+// a local implementation; SQLite/ are edge implementations added later).
 
 import {
   generateKeyPairSync, sign as edSign, verify as edVerify,
@@ -19,7 +19,7 @@ export { canonical, deriveKid, intentHash, sha256 } from "./crypto.js";
 
 export type RealtimeResult = "allow" | "deny" | "approved" | "timeout" | "not_evaluated";
 
-// Evidence class (GATEWAY_SPEC §15 / D65): how strong the evidence is, so a
+// Evidence class: how strong the evidence is, so a
 // verifier, the workspace and every export can say what a receipt proves without
 // over-claiming. It is an additive payload field; the envelope is unchanged.
 export type EvidenceClass = "signed_intent" | "pep_authorized" | "boundary";
@@ -436,7 +436,7 @@ export interface BoundaryReceiptInput {
   now?: () => string;
 }
 
-/** Build and sign a boundary-class receipt (§15 / D65). A gate decided the
+/** Build and sign a boundary-class receipt. A gate decided the
  *  consequence of an action that already happened elsewhere; there is no agent
  *  signature (`authorization.mode: "boundary"`), and the identity is the
  *  attribution. Reusable by any boundary-lane connector (GitHub App, host agent). */
