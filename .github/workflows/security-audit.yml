@@ -18,6 +18,10 @@ name: Security audit
 on:
   pull_request:
     branches: [main]
+  # Merge queue: the required gitleaks and zizmor checks must report on the queued
+  # tree too. The changed-file gates below are pull-request only; a queue run
+  # reports the whole-directory backlog instead, as a scheduled run does.
+  merge_group: {}
   schedule:
     # Mondays, 06:00 UTC. Vulnerability databases move under a static tree, so
     # a scheduled run finds things a pull-request run cannot.
