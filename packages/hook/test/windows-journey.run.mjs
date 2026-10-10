@@ -6,10 +6,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { packLinked } from "./pack-local.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const root = join(here, "..", "..", "..");
@@ -17,38 +18,20 @@ const script = join(here, "windows-journey.ps1");
 // SCOPEBOND_WINDOWS_JOURNEY=0 leaves the journeys out of the unit run (a CI job that runs them on its own, in parallel).
 const enabled = process.platform === "win32" && process.env.SCOPEBOND_WINDOWS_JOURNEY !== "0" && (process.env.CI === "true" || process.env.SCOPEBOND_WINDOWS_JOURNEY === "1");
 
-function pack() {
-  const dest = mkdtempSync(join(tmpdir(), "sb-journey-pack-"));
-  for (const pkg of ["hook", "agent"]) {
+let packDir = null;
+
+// The hook and the agent as this tree would publish them. Every @scopebond package either one needs is
+// packed from this checkout too and named by path, so npm never fetches an unpublished version
+// (or the last release) from the registry. `outDir` is where the linked tarballs go.
+function pack(outDir) {
+  for (const pkg of ["policy-schema", "verify", "sdk", "gateway", "hook", "agent"]) {
     // The hook's tests run before the agent's own build in `pnpm -r test`: build it, or the tarball has no dist/.
     const built = spawnSync("pnpm", ["--dir", join(root, "packages", pkg), "run", "build"], { encoding: "utf8", shell: true });
     assert.equal(built.status, 0, `pnpm build ${pkg}: ${built.stdout}${built.stderr}`);
-    // pnpm rewrites the workspace dependencies to the versions a published package names.
-    const r = spawnSync("pnpm", ["--dir", join(root, "packages", pkg), "pack", "--pack-destination", dest], { encoding: "utf8", shell: true });
-    assert.equal(r.status, 0, `pnpm pack ${pkg}: ${r.stdout}${r.stderr}`);
   }
-  const files = readdirSync(dest);
-  const find = (name) => join(dest, files.find((f) => f.startsWith(`scopebond-${name}-`) && f.endsWith(".tgz")));
-  const hook = find("hook");
-  return { hook, agent: withHookFrom(find("agent"), hook, dest) };
-}
-
-// The agent and the hook are released together; the packed agent names the hook by version, which
-// npm would fetch from the registry (the last release, not this one). Point it at this hook instead.
-function withHookFrom(agentTgz, hookTgz, dest) {
-  const work = mkdtempSync(join(tmpdir(), "sb-journey-agent-"));
-  // Windows' own tar: Git's GNU tar, often first on PATH, reads "C:" as a remote host.
-  const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
-  const untar = spawnSync(tar, ["-xzf", agentTgz, "-C", work], { encoding: "utf8" });
-  assert.equal(untar.status, 0, `tar: ${untar.stderr}`);
-  const manifest = join(work, "package", "package.json");
-  const pkg = JSON.parse(readFileSync(manifest, "utf8"));
-  pkg.dependencies["@scopebond/hook"] = "file:" + hookTgz.replace(/\\/g, "/");
-  writeFileSync(manifest, JSON.stringify(pkg, null, 2));
-  const out = mkdtempSync(join(dest, "agent-"));
-  const repack = spawnSync("npm", ["pack", join(work, "package"), "--pack-destination", out], { encoding: "utf8", shell: true });
-  assert.equal(repack.status, 0, `npm pack agent: ${repack.stdout}${repack.stderr}`);
-  return join(out, readdirSync(out).find((f) => f.endsWith(".tgz")));
+  packDir ??= mkdtempSync(join(tmpdir(), "sb-journey-pack-"));
+  const linked = packLinked(["@scopebond/hook", "@scopebond/agent"], { packDir, ...(outDir ? { outDir } : {}) });
+  return { hook: linked.get("@scopebond/hook"), agent: linked.get("@scopebond/agent") };
 }
 
 function hasShell(exe) {
@@ -94,7 +77,6 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
   const { randomBytes } = await import("node:crypto");
   const { copyFileSync, existsSync, mkdirSync } = await import("node:fs");
   const { dirname } = await import("node:path");
-  packed ??= pack();
   const user = "sbjourney";
   // 13 characters: `net user` stops to ask a yes/no question for a password over 14.
   const password = `Sb!${randomBytes(6).toString("base64url")}9a`;
@@ -114,11 +96,9 @@ test("the Windows journey passes for a standard (non-administrator) user", { ski
     `console.log(cloud.url);`,
     "",
   ].join("\n"));
-  const hook = join(shared, "hook.tgz");
-  copyFileSync(packed.hook, hook);
-  // The packed agent names the hook tarball in this account's temp folder, which the standard
-  // user cannot read: point it at the shared copy.
-  const agent = withHookFrom(packed.agent, hook, shared);
+  // The linked tarballs name each other by path, and the standard user cannot read this account's temp
+  // folder: link a second set inside the shared folder.
+  const { hook, agent } = pack(join(shared, "packages"));
   const quiet = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] };
   const run = (cmd, args) => spawnSync(cmd, args, quiet);
   try {
