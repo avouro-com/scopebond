@@ -17,17 +17,16 @@ decision, not just a documentation update.
    When changesets remain, it opens or updates **Version packages**, which bumps
    versions and writes package changelogs. `pnpm version:packages` also synchronizes
    plugin versions and README release references.
-   The workflow opens the PR with the `PERSONAL_ACCESS_TOKEN` secret of the `npm`
-   environment (a fine-grained token, or a GitHub App token, with contents and pull
-   request write access to this repository). A PR opened with that token runs CI like
-   any other; one opened with the workflow's own token would run none. Without the
-   secret, the repository's setting stops the workflow's own token from creating
-   pull requests: the workflow only pushes the `changeset-release/main` branch and its
-   log ends with "GitHub Actions is not permitted to create or approve pull
-   requests". Open the PR from that branch with one command:
+   The workflow opens the PR with its own short-lived token; no automation token is
+   stored. The repository setting "Allow GitHub Actions to create and approve pull
+   requests" must stay on for that. A pull request opened with the workflow's own
+   token starts no workflow runs, so the workflow then dispatches the required
+   checks (`ci.yml`, `oss-guard.yml`, `security-audit.yml`) on
+   `changeset-release/main`; they run on the PR's head commit and count for it.
+   If the PR ever shows no checks, dispatch them by hand:
 
    ```bash
-   gh pr create --repo avouro-com/scopebond --base main --head changeset-release/main --title "Version packages" --body "Versions and changelogs from the pending changesets."
+   for w in ci.yml oss-guard.yml security-audit.yml; do gh workflow run "$w" --repo avouro-com/scopebond --ref changeset-release/main; done
    ```
 
    The version PR's checks are expected to pass. Its install and Windows journey
