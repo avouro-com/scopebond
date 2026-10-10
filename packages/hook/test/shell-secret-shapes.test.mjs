@@ -6,7 +6,7 @@
 // literal token in this file).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -185,9 +185,10 @@ test("a literal piped into a secret reader is masked in the command it was piped
 });
 
 test("the hook's shell secret scanner is the gateway's, so receipts and gateway evidence scrub the same shapes", () => {
-  // Each package ships its own copy so either can be released alone; a change to one must be made to both.
-  const source = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8").replace(/\r\n/g, "\n");
-  assert.equal(source("../src/shell-secrets.ts"), source("../../gateway/src/shell-secrets.ts"));
+  // One copy: the gateway ships the scanner and the hook imports it (the hook already depends on the gateway).
+  const source = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+  assert.ok(!existsSync(fileURLToPath(new URL("../src/shell-secrets.ts", import.meta.url))), "the hook keeps no copy of the scanner");
+  for (const file of ["../src/map.ts", "../src/minimize.ts"]) assert.match(source(file), /from "@scopebond\/gateway";/);
 });
 
 /** Run `fn` and fail when it takes a second or more. */

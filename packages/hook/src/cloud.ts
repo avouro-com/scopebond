@@ -1,7 +1,7 @@
 // scopebond-hook → Scopebond Cloud: enroll the machine's countersigning key with a
 // workspace and auto-export signed receipts to the hosted portal, so a connected
 // hook starts monitoring automatically. Reuses the gateway's enrollment and bounded
-// durable exporter (D40 — no new transport). The machine credential and the complete
+// durable exporter (— no new transport). The machine credential and the complete
 // receipt log stay local-first; export is best-effort and never blocks a tool call.
 
 import { existsSync, mkdirSync, renameSync } from "node:fs";
@@ -152,7 +152,7 @@ export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
   options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void; backoff?: CloudBackoff | null } = {},
 ): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
-  // Lossless (SB275): no cap and no expiry. A record leaves the queue only when the workspace
+  // Lossless: no cap and no expiry. A record leaves the queue only when the workspace
   // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
   // gateway's defaults (10,000 records, 64 MiB, 7 days) dropped the newest records once a long
   // outage filled the queue.

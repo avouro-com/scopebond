@@ -1,11 +1,11 @@
-// What the tray shows, as data (SB387, SB388). The tray (today a PowerShell script, later a native one) only draws this: one
+// What the tray shows, as data. The tray (today a PowerShell script, later a native one) only draws this: one
 // state, one headline, the rows that have data, the one fix when something is wrong, and the actions that apply now. It never
 // works out health itself, so the tray, `status` and the workspace's computer page say the same thing.
 
 import type { StatusJson } from "@scopebond/hook";
 import type { Health } from "./health.js";
 
-/** The six icon states of the "S" tile (D143): no badge when protected; a badge with its own glyph otherwise. */
+/** The six icon states of the "S" tile: no badge when protected; a badge with its own glyph otherwise. */
 export type TrayState = "protected" | "working" | "offline" | "attention" | "problem" | "disconnected";
 
 export interface TrayAction {
@@ -31,7 +31,7 @@ export interface TrayModel {
   recent_blocks: RecentBlock[];
 }
 
-/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray (D144); `acted`: what they did. */
+/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did. */
 export interface RecentBlock { action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | null }
 
 export interface TrayInput {
@@ -57,7 +57,7 @@ export interface TrayInput {
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
-/** Records waiting this long while the computer is awake and online need attention (D143 §4.1). */
+/** Records waiting this long while the computer is awake and online need attention. */
 export const WAITING_ATTENTION_MS = 15 * MIN;
 /** Offline (the workspace unreachable) this long needs attention. */
 export const OFFLINE_ATTENTION_MS = 4 * HOUR;
@@ -129,7 +129,7 @@ export function trayModel(input: TrayInput): TrayModel {
   const d = status.delivery;
   const pending = d.pending;
   const oldestAt = d.oldest_pending_age_s === null ? null : now - d.oldest_pending_age_s * 1000;
-  // Sleep-aware (SB388): time the computer was asleep or off never counts as waiting.
+  // Sleep-aware: time the computer was asleep or off never counts as waiting.
   const waitingMs = oldestAt === null ? 0 : now - Math.max(oldestAt, input.awakeSince);
   const offline = d.connected && unreachable(d.last_error);
   const offlineFor = offline ? now - Math.max(d.last_success_at ?? input.awakeSince, input.awakeSince) : 0;
@@ -220,7 +220,7 @@ export function trayModel(input: TrayInput): TrayModel {
   };
 }
 
-/** What "Check now" says afterwards, for five seconds (SB387): never silence. */
+/** What "Check now" says afterwards, for five seconds: never silence. */
 export function checkResult(selfCheck: { ok: boolean; failed: string[] } | null, error: string | null): string {
   if (error) return `Check could not finish: ${error}`.slice(0, 200);
   if (!selfCheck) return "Checked just now: this computer is not connected to a workspace, so only local checks ran";

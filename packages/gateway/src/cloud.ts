@@ -12,7 +12,7 @@ export interface CloudOutboxEntry {
   receipt: SignedReceipt;
   enqueuedAt: number;
   bytes: number;
-  /** SB289: this computer's number for the record, 1, 2, 3… in the order it was queued, never reused.
+  /** This computer's number for the record, 1, 2, 3… in the order it was queued, never reused.
    *  The workspace compares the numbers it has seen with how many it received, so a record lost on
    *  the computer (aged out, or a queue that was deleted) shows as missing instead of silently absent.
    *  Absent for a record queued before numbering existed. */
@@ -42,10 +42,10 @@ export interface CloudOutboxStatus {
   gaps: number;
   retainedGapRecords: number;
   latestGap: CloudDeliveryGap | null;
-  /** SB289: this queue's own id, made once when the queue is created. A queue that was removed and
+  /** This queue's own id, made once when the queue is created. A queue that was removed and
    *  made again gets a new id, so the workspace can tell numbering that restarted from a resend. */
   queueId?: string;
-  /** SB289: the highest number this queue has given a record so far (0 before the first). */
+  /** The highest number this queue has given a record so far (0 before the first). */
   seqAssigned?: number;
   /** Gaps by reason over the queue's lifetime (`gaps` is their total), kept apart from the gap rows, which are trimmed to
    *  the newest ones. A queue made before these counts starts from its retained rows, so the counts may sum below `gaps`. */
@@ -700,7 +700,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
         if (!batch.length) break;
         const numbered = batch.some((entry) => entry.seq !== undefined);
         if (numbered && queue === null) queue = opts.outbox.status().queueId;
-        // SB289: each record's number travels beside it (the signed receipt is unchanged); a workspace
+        // Each record's number travels beside it (the signed receipt is unchanged); a workspace
         // that does not read it ignores it.
         // The queue's id says which numbering the numbers belong to.
         let body: Record<string, unknown> = { receipts: batch.map((entry) => entry.receipt) };

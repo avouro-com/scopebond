@@ -1,5 +1,5 @@
 // Where a person sees the agent. Windows: a tray icon from Windows' own signed PowerShell (no extra program to install or
-// sign). It draws the "S" tile with a status badge (D143: shape and colour together, no seal), shows the agent's tray model
+// sign). It draws the "S" tile with a status badge (shape and colour together, no seal), shows the agent's tray model
 // (`GET /tray`: one headline, the rows that have data, the one fix, the actions that apply now), says what "Check now" found,
 // and shows a balloon only when the state gets worse (after five minutes for "needs attention", so sleep and wake do not
 // flap) or recovers, as the person's notification setting allows. It asks the agent's local channel every 30 seconds and
@@ -111,7 +111,7 @@ function Refresh {
       $when = $(try { ([datetime]$b.at).ToLocalTime().ToString('HH:mm') } catch { '' })
       $note = $(if ($b.acted -eq 'allowed') { '   (allowed)' } elseif ($b.acted -eq 'asked') { '   (asked an admin)' } elseif ($b.can_act) { '   Allow or ask…' } else { '' })
       $row = $blocks.DropDownItems.Add($b.summary + '   ' + $when + $note)
-      # D144: the Scopebond window asks; the person allows it (once, 15 min, always) or asks an admin. Nothing runs again by itself.
+      # The Scopebond window asks; the person allows it (once, 15 min, always) or asks an admin. Nothing runs again by itself.
       if ($b.can_act) { $id = $b.action_id; $row.Add_Click({ try { $r = Call 'POST' '/blocked' @{ action_id = $id }; [Windows.Forms.MessageBox]::Show($r.text, 'Scopebond') | Out-Null } catch {} ; Refresh }.GetNewClosure()) }
       else { $row.Enabled = $false }
     }

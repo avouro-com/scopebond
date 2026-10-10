@@ -1,4 +1,4 @@
-// Evidence detail (D144): what this computer sends its workspace. "full" sends every receipt; "standard" sends the notable
+// Evidence detail: what this computer sends its workspace. "full" sends every receipt; "standard" sends the notable
 // ones in full and the routine ones as one signed summary per five minutes (`buildSummary` in the gateway). Every action keeps
 // its own signed receipt here either way, for the retention the workspace set, and the summary's root lets anybody check the
 // receipts against it. The workspace names the level on every rules check (`x-scopebond-evidence-detail`); until it does,

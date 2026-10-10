@@ -107,6 +107,9 @@ const PERSONAL_OR_PRIVATE_PATTERNS = [
   { name: "private repository name", re: new RegExp("scopebond-" + "internal", "i") },
 ];
 
+// An internal backlog id ("SB" and two or three digits) in a package's source.
+const TRACKER_ID = /\bSB\d{2,3}\b/;
+
 // Do not advertise an assistant or generation tool in commit metadata. Product
 // references to AI providers remain valid source content and are not blocked.
 const TOOL_ATTRIBUTION_PATTERNS = [
@@ -285,6 +288,11 @@ for (const f of files) {
       violations.push({ path, kind: "PERSONAL OR PRIVATE CONTENT", detail: `${name}: ${m[0]}` });
       break;
     }
+  }
+  // Package sources name no internal tracker ids (readers of this repository cannot look them up).
+  if (/^packages\/[^/]+\/src\//.test(path)) {
+    const id = content.match(TRACKER_ID);
+    if (id) violations.push({ path, kind: "PRIVATE CONTENT", detail: `internal tracker id "${id[0]}" in package source` });
   }
   for (const sig of PRIVATE_DOC_SIGNATURES) {
     if (content.includes(sig)) {

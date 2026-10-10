@@ -1,5 +1,5 @@
 // Clean-room, dependency-free validation of the vocabulary-v1 policy and action
-// documents (ADR-008/D40: core packages carry no vendor SDKs — no ajv). This
+// documents (ADR-008/: core packages carry no vendor SDKs — no ajv). This
 // mirrors packages/policy-schema/schema/{policy,action}.schema.json exactly; the
 // conformance vectors and unit tests are the behavioural oracle.
 

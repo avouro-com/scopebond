@@ -1,4 +1,4 @@
-// SB391 (D143): the workspace's summary of this computer, for the tray. Optional: a workspace that does not implement
+// The workspace's summary of this computer, for the tray. Optional: a workspace that does not implement
 // `GET /v1/computer/summary` (a self-hosted gateway, the fake cloud) answers 404, and the tray leaves those rows out. The tray
 // opens only links on the workspace this computer is connected to, never a URL from anywhere else.
 

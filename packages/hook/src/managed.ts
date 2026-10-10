@@ -63,7 +63,7 @@ const OPAQUE = /^[A-Za-z0-9._:-]{1,128}$/;
  *  used when the Scopebond window is not available. Who may override is the workspace's decision: it sends "override" only then. */
 export interface OverrideTerms {
   reason_min: number; minutes: number; daily_limit: number; harness_prompt: boolean;
-  /** D144 (sent only to a hook that reports the `allowances` capability): what a person's "Always allow this here…" does —
+  /**  (sent only to a hook that reports the `allowances` capability): what a person's "Always allow this here…" does —
    *  applies at once (listed in the workspace for an admin to confirm or revoke), waits for an admin, or is not offered. */
   always?: "at_once" | "needs_admin" | "off";
   /** Days an "always" allowance lasts (30 by default). */
@@ -71,7 +71,7 @@ export interface OverrideTerms {
   /** Whether the window offers "Ask an admin". */
   requests?: boolean;
 }
-/** D144 rule modes, in the workspace's words: monitor = Monitor, block = Block, override = "Block, person may allow",
+/**  rule modes, in the workspace's words: monitor = Monitor, block = Block, override = "Block, person may allow",
  *  ask = "Block, person may ask". */
 export type ManagedRule = { mode: "monitor" | "block" | "override" | "ask"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
 const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
@@ -116,7 +116,7 @@ export interface ManagedDocument {
   rules_digest: string;
   /** Whether a person may change a rule on this computer (`rules enforce|monitor`); absent means no. */
   local_changes?: boolean;
-  /** D144: allowances the workspace holds for this computer (approved requests, confirmed ones), and the ones it revoked. */
+  /** Allowances the workspace holds for this computer (approved requests, confirmed ones), and the ones it revoked. */
   allowances?: unknown[];
   revoked_allowances?: string[];
 }
@@ -214,7 +214,7 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
       ...(r["secret-read"].mode !== "monitor" ? ["protect-read"] : []),
     ],
   };
-  // D140: where the workspace allows changes on computers, a person's own choice for a rule wins on this computer.
+  // Where the workspace allows changes on computers, a person's own choice for a rule wins on this computer.
   if (doc.local_changes === true && local.local_overrides) {
     const enforce = new Set(rules.enforce);
     for (const [id, mode] of Object.entries(local.local_overrides)) {
@@ -263,9 +263,9 @@ export interface ManagedMeta {
   last_error: string | null;
   /** The Scopebond versions the workspace recommends for its computers, as its last rules check said. */
   recommended?: Recommended | null;
-  /** How many days this computer keeps receipts the workspace acknowledged, as its last rules check said (D144). */
+  /** How many days this computer keeps receipts the workspace acknowledged, as its last rules check said. */
   local_retention_days?: number | null;
-  /** D144: what this computer sends its workspace (full: every receipt; standard: notable ones and summaries). */
+  /** What this computer sends its workspace (full: every receipt; standard: notable ones and summaries). */
   evidence_detail?: "full" | "standard" | null;
   /** How often this computer's session heartbeat may beat, in seconds, as its workspace says on each rules check (absent: 60). */
   heartbeat_interval_s?: number | null;
@@ -314,7 +314,7 @@ export function restoreLocal(dir: string, agentKid: string): void {
 }
 
 export type RuleSource = "workspace" | "computer";
-/** D140: what this computer runs for each rule and who set it, as it reports to its workspace. Reads the files only. */
+/** What this computer runs for each rule and who set it, as it reports to its workspace. Reads the files only. */
 export function ruleReport(dir: string): Record<string, [ "enforce" | "monitor", RuleSource ]> | null {
   try {
     const policy = JSON.parse(readFileSync(join(dir, "policy.json"), "utf8")) as { clauses?: Array<{ id?: unknown; mode?: unknown }> };
