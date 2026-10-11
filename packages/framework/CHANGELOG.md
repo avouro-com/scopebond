@@ -1,5 +1,13 @@
 # @scopebond/framework
 
+## 0.3.16
+
+### Patch Changes
+
+- e7ddb4a: The shell secret scanner has one copy. `@scopebond/gateway` exports `scrubShellSecrets`, `pipedSecrets`, `maskWords`, `isCredentialName` and the `PipedSecret` type, and the hook's command scrubber and mapper import them instead of keeping an identical file. The gateway's standalone server and `@scopebond/framework` are labelled preview in their READMEs. Internal tracker ids are removed from package source comments.
+- Updated dependencies [e7ddb4a]
+  - @scopebond/gateway@0.18.0
+
 ## 0.3.15
 
 ### Patch Changes
