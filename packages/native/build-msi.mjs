@@ -23,6 +23,14 @@ export const SUPPRESSED_ICES = {
   // REINSTALLMODE=amus in the Property table (wix/Package.wxs says why): an upgrade must replace the agent that releases
   // up to 0.6.0 shipped with Node's file version (22.x), higher than any release's own.
   ICE40: "REINSTALLMODE is set on purpose so an upgrade always replaces this package's own files",
+  // The Start-menu entry is per-user data in a per-user install and per-machine data with ALLUSERS=1, so its key path is
+  // HKMU (HKCU or HKLM to match). ICE57 assumes a package is one or the other; an HKCU key path would leave every-user
+  // installs keyed to the one administrator who ran them.
+  ICE57: "the Start-menu entry's HKMU key path follows the install's scope (perUserOrMachine)",
+  // ICE105 refuses any deferred action that does not impersonate in a package that can install per user. The one here is
+  // WiX's own close-application action (util:CloseApplication), which must close every user's tray and agent in an
+  // install for every user; in a per-user install Windows Installer runs it with the person's own rights, no elevation.
+  ICE105: "WiX's CloseApplication deferred action needs system rights in an every-user install",
 };
 
 /** The installer's version: three numbers (the agent package's, unless `version` says otherwise). */
