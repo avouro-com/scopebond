@@ -12,7 +12,8 @@ import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync,
 import { hookCliPath, isSingleExecutable } from "./self.js";
 import { textOf } from "./text.js";
 import { join, resolve } from "node:path";
-import { hostname, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
+import { clientNameField } from "./computer-name.js";
 import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
 import { verifyReceipt } from "@scopebond/gateway";
@@ -1854,7 +1855,7 @@ async function runLogin(args: string[]): Promise<void> {
     console.error("Note: this looks like a coding agent's own terminal. Signing in works best from your own terminal window, outside the agent.");
   }
   let start: { status: number; json: Record<string, unknown> };
-  try { start = await post("/v1/device/code", { client_name: hostname(), harness }); }
+  try { start = await post("/v1/device/code", { ...clientNameField(), harness }); }
   catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}. ${unreachableHint(error)}`); process.exit(1); }
   const deviceCode = typeof start.json.device_code === "string" ? start.json.device_code : "";
   if (start.status !== 200 || !deviceCode) {

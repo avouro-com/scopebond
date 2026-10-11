@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { createExclusive, replaceFile } from "./safe-fs.js";
+import { maskHomeFolder, maskHomeInPattern } from "./home-mask.js";
 
 /** One protected location. `under`/`named`/`dir` are the readable, editable shapes;
  *  `raw` carries the few patterns with bespoke exceptions (`.env` templates are allowed,
@@ -84,7 +85,9 @@ const escapeRegex = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|/]/
  *  which was both hard to read and quadratic on a path of many leading dots
  *  (CodeQL js/polynomial-redos). */
 export function pathRuleFor(input: string): PathRule {
-  const trimmed = input.trim();
+  // Signed paths carry the home folder as `~` (home-mask.ts), so a rule typed with the full home path is kept the same
+  // way: the home folder's `secrets` folder, typed in full, is stored as `~/secrets`.
+  const trimmed = maskHomeFolder(input.trim());
   const withForwardSlashes = trimmed.split("\\").join("/");
   const withoutDotSlash = withForwardSlashes.startsWith("./") ? withForwardSlashes.slice(2) : withForwardSlashes;
   // Drop trailing separators without a quantifier, so the cost is plainly linear.
@@ -285,7 +288,7 @@ export function createRules(configDir: string, rules: RuleSet): boolean {
 export function pathRuleMatches(rule: PathRule, path: string): boolean {
   if (path === "") return false;
   // eslint-disable-next-line security/detect-non-literal-regexp -- the rule's own policy pattern, exactly as the compiled policy evaluates it: a typed path is escaped by escapeRegex, a raw pattern is the rule file's own
-  return !new RegExp(`^${pathPattern(rule)}.+`).test(path);
+  return !new RegExp(`^${maskHomeInPattern(pathPattern(rule))}.+`).test(maskHomeFolder(path));
 }
 
 /** Whether a shell program is on the destructive list, folded the way the compiled

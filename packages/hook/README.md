@@ -615,6 +615,41 @@ Change the rule: edit clause "protect-branches" in /repo/.scopebond/policy.json
 Commands are stored as a scrubbed head plus a digest; file contents are never
 stored; common secret shapes are removed before signing.
 
+**Your home folder is written as `~`.** A home folder's path carries your account name
+(Windows and macOS keep it under a `Users` folder, Linux under `home`), so before an
+action is signed the hook replaces it with `~` everywhere it appears: the working folder
+(`cwd`), file paths and the command line. A project in your home folder is recorded as
+`~/repo`, and `cat` of a notes file there as `cat ~/notes.txt`. Another account's home
+folder keeps its place but not its name: the name is recorded as `~other`. Shared
+folders (`Public`, `Shared`, `Default`) are left as they are. A path inside the working
+folder is recorded relative to it, as before.
+
+- The home folder is the one the system reports, plus the `HOME` and `USERPROFILE`
+  values, so a shell with its own `HOME` (Git Bash, WSL) is covered, as are the Git Bash
+  (`/c/…`) and WSL (`/mnt/c/…`) spellings of a Windows home. A Windows home is matched in
+  any case and with either separator. A home of `/` or a bare drive is never replaced.
+- Rules keep matching. A rule written relative (`.env`, `.ssh/`) or from the home folder
+  (`~/secrets/`) matches the recorded paths as it is. A rule that names the home folder
+  by its full path is read as `~/secrets/` when the hook loads the rules, and
+  `rules protect <path>` stores a full home path as `~/…`. Workspace-root scoping
+  (`allowed_roots`) still resolves the real, absolute paths before anything is masked.
+- A rule that names *another* account's home folder by its full path does not match the
+  `~other` form: write that account's name as `~other` in the rule (or re-add it with
+  `rules protect`, which does this for you) if you need one.
+- Receipts are signed after masking, so `verify` checks exactly what was recorded.
+
+**The computer name.** Signing in (`login`, and the Scopebond Agent's first sign-in)
+sends this computer's host name so the person approving it can tell which computer it
+is. Set `SCOPEBOND_HOSTNAME_MODE` to choose what is sent:
+
+| Value | Sent |
+|---|---|
+| `full` (default) | the host name, as the system reports it |
+| `hash` | the first 12 hex characters of the SHA-256 of the lower-cased host name: stable for this computer, and it does not give the name back |
+| `off` | no computer name; the workspace names the computer itself |
+
+Any other value is read as `hash`. Receipts themselves do not carry the host name.
+
 **Where receipts live, and how much room they take.** `.scopebond/receipts.db` in the
 project, about 3 KiB per action (each receipt is kept once and each policy once). A tool
 call's decision does not read that log unless the policy has a windowed limit, and then

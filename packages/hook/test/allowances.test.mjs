@@ -5,7 +5,7 @@ import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 
 const ME = userInfo().username; // a person-scoped allowance applies to the account that made it
 import { join } from "node:path";
@@ -227,4 +227,27 @@ test("a workspace without the allowance terms gets no 15-minute allowance", asyn
   assert.equal(d.decision, "allow");
   assert.equal(d.asked[0].offers.fifteen, false);
   assert.equal(readAllowances(dir).length, 0, "allowed once, no standing allowance");
+});
+
+test("an allowance made before records masked the home folder still lets the same action through", async () => {
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms() } });
+  // An older version keyed the action on the working folder as the coding agent reported it, home folder and all.
+  const cwd = join(homedir(), "repo");
+  const legacyKey = actionKey(mapClaudeToolUse({ cwd, ...bash("rm -rf build") }).find((m) => m.intent.action_type === "shell.exec").intent);
+  const standing = makeAllowance({ rule: "destructive-shell", actionKey: legacyKey, reason: "release clean-up step", osUserDigest: null, lasts: "always" });
+  writeAllowances(dir, [standing]);
+  const runtime = createHookRuntime({
+    policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd,
+    override: (agentKid) => {
+      const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", permissionMode: "default", waitMs: 50, ask: async () => ({ decision: "unavailable" }) });
+      return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
+    },
+  });
+  try {
+    const d = await runtime.evaluate(mapClaudeToolUse({ cwd, ...bash("rm -rf build") }));
+    assert.equal(d.decision, "allow");
+    const exec = d.receipts.find((r) => r.payload.intent.action_type === "shell.exec");
+    assert.match(exec.payload.intent.params.cwd, /^~[\\/]repo$/, "the record carries the masked working folder");
+    assert.equal(exec.payload.override.repeat_of, standing.id, "and names the older allowance");
+  } finally { runtime.close(); }
 });

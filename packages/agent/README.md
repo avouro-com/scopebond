@@ -48,7 +48,9 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
   starts it again. The workspace is the one the installer was given (`msiexec /i … WORKSPACE=https://<your-workspace>`,
   kept as `Workspace` under `HKCU\Software\Avouro\Scopebond`, or `HKLM` for an install for every user), else
   `https://cloud.scopebond.com`. Only an https address there is used. From a terminal the same is
-  `scopebond-agent setup https://<your-workspace>`.
+  `scopebond-agent setup https://<your-workspace>`. The sign-in sends this computer's host name so the approver can
+  tell which computer it is; set `SCOPEBOND_HOSTNAME_MODE=hash` to send a short stable hash of it instead, or `off` to
+  send none (see the hook's README).
 - **Commands.** `scopebond-agent <command>` (the table below), and the hook's commands as `scopebond-agent hook <command>`.
 - **Updates.** An install for this user updates itself when the workspace names a newer published signed build
   (`native_agent` in its answer to `GET /v1/client-version`; never the npm release, which can come out first). The
