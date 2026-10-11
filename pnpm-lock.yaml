@@ -145,6 +145,9 @@ importers:
       '@scopebond/fake-cloud':
         specifier: workspace:*
         version: link:../fake-cloud
+      '@scopebond/verify':
+        specifier: workspace:*
+        version: link:../verify
       fast-check:
         specifier: ^4.10.2
         version: 4.10.2

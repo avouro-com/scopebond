@@ -15,7 +15,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { userInfo } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
 import { compileManaged, floorDocument, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type ManagedDocument, type ManagedRuleId } from "./managed.js";
 import { makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, writeAllowances, type BlockedItem } from "./allowances.js";
@@ -23,6 +23,7 @@ import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
 import { requestOverSocket } from "./local-socket.js";
+import { maskHomeInPolicy, unmaskHomeFolder, unmaskHomeInValue } from "./home-mask.js";
 
 export const OVERRIDE_STATE_FILE = "overrides.json";
 const AGENT_FILE = "agent.json";
@@ -90,6 +91,19 @@ export function actionKey(intent: { action_type?: string; params?: Record<string
   const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
     : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
   return digestOf(JSON.stringify({ action_type: intent.action_type ?? "", params: sorted(params) }));
+}
+
+/** The keys an older version gave this action, before records masked the home folder as `~`: the working folder as the
+ *  coding agent reported it, and also every path with the home folder written out. Lookups only; new allowances use
+ *  `actionKey`. */
+export function legacyActionKeys(intent: { action_type?: string; params?: Record<string, unknown> }, home: string = homedir()): string[] {
+  const params = intent.params ?? {};
+  if (!home || !JSON.stringify(params).includes("~")) return [];
+  const cwd = typeof params.cwd === "string" ? { cwd: unmaskHomeFolder(params.cwd, home) } : {};
+  const workingFolder = { ...params, ...cwd };
+  const everywhere = { ...unmaskHomeInValue(params, home.replace(/\\/g, "/")), ...cwd };
+  const own = actionKey(intent);
+  return [...new Set([workingFolder, everywhere].map((p) => actionKey({ ...intent, params: p })))].filter((k) => k !== own);
 }
 
 /** The window's answer. allow: allow this action (`lasts`: once, or also for 15 minutes, or always via an allowance). ask: send
@@ -161,7 +175,8 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     const title = RULE_TITLE[rule];
     // Would the action still be denied with every overridable rule only recorded? Then a Block rule or Scopebond's own
     // protection denies it too, and no one may override that.
-    const floor = compileManaged(loadRules(ctx.dir) ?? defaultRules(), floorDocument(doc, rule), ctx.agentKid);
+    // The intent was signed with the home folder masked, so the floor's patterns are masked the same way (as the runtime's).
+    const floor = maskHomeInPolicy(compileManaged(loadRules(ctx.dir) ?? defaultRules(), floorDocument(doc, rule), ctx.agentKid));
     const atFloor = evaluate(floor, [], { intent, intent_hash }, new Date(now()).toISOString(), { cooperative: true });
     if (!atFloor.allow) { last = { rule, title, outcome: "not_overridable" }; return null; }
 
@@ -170,7 +185,9 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     // A standing allowance for this rule and this exact action lets it through, and the receipt names it.
     let allowances = readAllowances(ctx.dir);
     if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, doc.allowances, doc.revoked_allowances);
-    const standing = matchAllowance(allowances, { rule, actionKey: key, osUserDigest: osDigest, now: t });
+    // An allowance made before records masked the home folder is keyed on the action as it was then: try those keys too.
+    const standing = [key, ...legacyActionKeys(intent)].reduce<ReturnType<typeof matchAllowance>>(
+      (found, k) => found ?? matchAllowance(allowances, { rule, actionKey: k, osUserDigest: osDigest, now: t }), null);
     if (standing) {
       standing.uses += 1;
       try { writeAllowances(ctx.dir, allowances, t); } catch { /* the receipt records the use; a one-time allowance may be used again */ }

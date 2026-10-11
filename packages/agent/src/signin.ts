@@ -10,9 +10,8 @@
 // process, so no second program is left waiting when the agent stops or is updated.
 
 import { execFileSync } from "node:child_process";
-import { hostname } from "node:os";
 import {
-  configuredHookCommands, connectCloud, isHarnessConfigured, loadConnection, observationStatus, scaffold, userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
+  clientNameField, configuredHookCommands, connectCloud, isHarnessConfigured, loadConnection, observationStatus, scaffold, userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
   type Harness,
 } from "@scopebond/hook";
 import { expectedHarnesses } from "./agent.js";
@@ -95,7 +94,7 @@ export async function startFirstSignIn(dir: string, origin: string, o: FirstSign
     return { status: res.status, json, retryAfter: res.headers.get("retry-after") };
   };
   let start: Awaited<ReturnType<typeof post>>;
-  try { start = await post("/v1/device/code", { client_name: hostname(), harness: "claude" }); }
+  try { start = await post("/v1/device/code", { ...clientNameField(), harness: "claude" }); }
   catch (error) { return { error: `could not reach ${origin}: ${(error as Error).message}` }; }
   const deviceCode = textOf(start.json.device_code);
   const userCode = textOf(start.json.user_code, 40);

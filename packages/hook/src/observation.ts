@@ -20,6 +20,7 @@ import { createHash, createHmac, createPrivateKey, randomUUID, sign as edSign, t
 import { loadOrCreateHexKey } from "./safe-fs.js";
 import { join } from "node:path";
 import { redactCommand, scrubParam } from "./minimize.js";
+import { maskHomeFolder } from "./home-mask.js";
 import type { FileProbe } from "./typed-infra.js";
 import { deriveTypedOperations, gitPushOperation, type CallRequest, type GitProbe, type TypedContext } from "./typed-ops.js";
 export type { CallRequest } from "./typed-ops.js";
@@ -387,7 +388,9 @@ export function buildOperation(action: DispatchedAction, context: OperationConte
         verb: action.action_type === "file.read" ? "read" : "write",
         target_ids: [id], root_id: key.resourceId("root", context.cwd),
         resolution: resolved ? "resolved" : "unresolved", path_class: pathClass(path),
-        ...(resolved ? { outside_root: isAbsolutePath(path) && !isInside(context.cwd, path) || /(^|[\\/])\.\.([\\/]|$)/.test(path) } : {}),
+        // The path was signed with the home folder masked (`~/repo/a.ts`); the working folder is as reported, so both
+        // of its spellings are compared.
+        ...(resolved ? { outside_root: isAbsolutePath(path) && !isInside(context.cwd, path) && !isInside(maskHomeFolder(context.cwd), path) || /(^|[\\/])\.\.([\\/]|$)/.test(path) } : {}),
       };
     }
     case "git.push": {

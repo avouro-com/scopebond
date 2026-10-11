@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, isTrustedProject, resolveConfigDir, trustProjectPolicy, writeHarnessConfig } from "../dist/index.js";
+import { scaffold, hashedHostname, isTrustedProject, resolveConfigDir, trustProjectPolicy, writeHarnessConfig } from "../dist/index.js";
 import { ENFORCE } from "./enforce-all.mjs";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -98,6 +98,20 @@ test("login: a code, then approval, then the enrollment completes as connect wou
     assert.doesNotMatch(r.stdout, /dc_x/, "the device code is never printed");
     assert.doesNotMatch(readFileSync(join(dir, "cloud.json"), "utf8"), /dc_x/, "and never written");
   } finally { workspace.close(); }
+});
+
+test("login: SCOPEBOND_HOSTNAME_MODE=hash sends a hash of the computer name, and off sends none", async () => {
+  for (const [mode, expected] of [["hash", hashedHostname(hostname())], ["off", undefined]]) {
+    const project = mkdtempSync(join(tmpdir(), "sb-hook-login-host-"));
+    const dir = join(project, ".scopebond");
+    const workspace = await startFakeWorkspace({ pendingPolls: 0, outcome: "deny" });
+    try {
+      await runCli(["login", workspace.url, "--no-install"], { ...process.env, SCOPEBOND_HOOK_DIR: dir, SCOPEBOND_HOSTNAME_MODE: mode }, project);
+      assert.ok(workspace.seen.codeRequest, "the sign-in started");
+      assert.equal(workspace.seen.codeRequest.client_name, expected, `${mode}: ${JSON.stringify(workspace.seen.codeRequest)}`);
+      assert.equal(workspace.seen.codeRequest.harness, "claude");
+    } finally { workspace.close(); }
+  }
 });
 
 test("login --project: with a user-level install, the connected project governs, so its receipts reach the workspace", async () => {

@@ -19,6 +19,7 @@ import { deliveryBackoff, recordDeliveryAttempt } from "./delivery-state.js";
 import { isRepairableStore, noteQueueMiss, repairDelivery } from "./delivery-repair.js";
 import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
+import { homeFolders, maskHomeInPolicy, maskHomeInValue } from "./home-mask.js";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -42,6 +43,9 @@ export interface RuntimeConfig {
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
    *  (see override.ts). `hint` explains, in a denial, how an override would have been possible. */
   override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null } | null;
+  /** The current account's home folder, in every spelling to mask (see home-mask.ts). Defaults to `os.homedir()`,
+   *  `HOME` and `USERPROFILE`; tests pass their own. */
+  homeFolders?: readonly string[];
 }
 
 export interface Decision {
@@ -248,7 +252,17 @@ export function createHookRuntime(config: RuntimeConfig) {
   // The keys, the credential, the receipt log and its journal files: readable by this user alone, those an older version
   // left included. Done once per folder; afterwards a small check.
   ensurePrivateDir(dirname(config.policyPath));
-  const policy = upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8").replace(/^\uFEFF/, "")));
+  // Paths are signed with the home folder masked (home-mask.ts), so a rule that names the home folder by its full path
+  // is rewritten the same way to keep matching.
+  const homes = config.homeFolders ?? homeFolders();
+  const policy = maskHomeInPolicy(upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8").replace(/^\uFEFF/, ""))), homes);
+  /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
+   *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
+   *  absolute paths. */
+  const masked = (m: Mapped): Mapped => {
+    const params = maskHomeInValue(m.intent.params, homes);
+    return params === m.intent.params ? m : { ...m, intent: { ...m.intent, params } };
+  };
   const agent = createSigner({ privateKeyPem: readFileSync(config.keyPath, "utf8") });
   const keys = new StaticPrincipalKeyRegistry([
     { kid: agent.kid, publicKeyPem: agent.publicKeyPem, purposes: ["agent"], status: "active" },
@@ -359,7 +373,8 @@ export function createHookRuntime(config: RuntimeConfig) {
       try { boundary?.close(); } catch { /* best effort */ }
     },
     /** Decide one mapped action, recording a receipt either way. */
-    async evaluateOne(mapped: Mapped): Promise<Decision> {
+    async evaluateOne(input: Mapped): Promise<Decision> {
+      const mapped = masked(input);
       const signed = agent.sign(mapped.intent);
       if (!mapped.evaluated && !config.strict) {
         // Unknown tool or unparseable command, non-strict: observe without
@@ -407,7 +422,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       // link to each other and count once as an action. It is part of the signed
       // intent, so it is authenticated by the same signature as the rest.
       const scoped = scopeRoots.length ? applyRootScope(raw, { cwd: config.cwd ?? process.cwd(), roots: scopeRoots }) : raw;
-      const list = withActionGroup(scoped, actionGroupId(options.groupKey));
+      const list = withActionGroup(scoped.map(masked), actionGroupId(options.groupKey));
       const receipts: unknown[] = [];
       const dispatched: NonNullable<Decision["dispatched"]> = [];
       let allow: Decision | null = null;
