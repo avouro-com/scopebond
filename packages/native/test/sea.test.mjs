@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundle, buildSea } from "../build-sea.mjs";
+import { readVersionInfo } from "../stamp.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const hookCli = join(here, "..", "..", "hook", "dist", "cli.js");
@@ -81,4 +82,24 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
   console.log(`single executable beside a user-level install: median warm hook call ${besideUser.toFixed(0)} ms`);
   assert.ok(besideUser < CEILING_MS, `median beside a user-level install ${besideUser.toFixed(0)} ms`);
   assert.ok(besideUser <= median * 1.2 + 25, `beside a user-level install ${besideUser.toFixed(0)} ms against ${median.toFixed(0)} ms`);
+});
+
+test("the single executable says it is the Scopebond Agent at this release, and still runs once stamped", { skip: (!enabled || process.platform !== "win32") && "set SCOPEBOND_SEA=1 on Windows to build and run the executable" }, async () => {
+  const built = join(here, "..", "build", "scopebond-agent.exe");
+  const exe = existsSync(built) ? built : await buildSea();
+  const agent = JSON.parse(readFileSync(join(here, "..", "..", "agent", "package.json"), "utf8")).version;
+  const info = readVersionInfo(exe);
+  assert.equal(info.fileVersion, `${agent}.0`, "the agent's version, not Node's");
+  assert.equal(info.productVersion, `${agent}.0`);
+  assert.equal(info.strings.FileDescription, "Scopebond Agent", "the name Task Manager shows");
+  assert.equal(info.strings.ProductName, "Scopebond");
+  assert.equal(info.strings.CompanyName, "Avouro LLC");
+  assert.equal(info.strings.OriginalFilename, "scopebond-agent.exe");
+  assert.ok(info.icons >= 1, "an icon");
+  assert.ok(info.seaBlob, "the application blob is still in the file");
+  const run = spawnSync(exe, ["--version"], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(run.stdout.startsWith(`agent/${agent} hook/`), run.stdout);
+  assert.doesNotMatch(run.stderr, /SingleExecutableApplication|experimental/i, "it starts as the application, not as plain Node");
+  assert.ok(existsSync(join(here, "..", "build", "scopebond.ico")), "the icon the installer uses is written beside it");
 });

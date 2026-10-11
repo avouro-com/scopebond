@@ -3,8 +3,9 @@
 //
 //   node build-sea.mjs            → build/scopebond-agent(.exe)
 //
-// The copy of Node keeps its own version resources; signing happens in the release workflow, after this. A copy of a
-// signed node.exe carries Node's signature, which no longer matches once the blob is in, so it is removed first.
+// On Windows the copy's version resource is then stamped with the release (stamp.mjs: Scopebond Agent, the agent's
+// version, the Scopebond icon) instead of Node's. Signing happens in the release workflow, after this. A copy of a signed
+// node.exe carries Node's signature, which no longer matches once the blob is in, so it is removed first.
 
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
@@ -12,6 +13,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync,
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { keyId } from "./manifest.mjs";
+import { stampExecutable } from "./stamp.mjs";
+import { writeIcon } from "./icon.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "build");
@@ -40,7 +43,7 @@ export function updaterKeysDefine(folder = here) {
   return JSON.stringify(JSON.stringify(keys.map((k) => ({ kid: keyId(k.key), key: k.key, not_after: k.not_after ?? null }))));
 }
 
-export async function bundle() {
+export async function bundle({ agentVersion } = {}) {
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   const result = await build({
@@ -52,7 +55,7 @@ export async function bundle() {
     define: {
       "import.meta.url": "__sbUrl",
       __SCOPEBOND_HOOK_VERSION__: JSON.stringify(version("hook")),
-      __SCOPEBOND_AGENT_VERSION__: JSON.stringify(version("agent")),
+      __SCOPEBOND_AGENT_VERSION__: JSON.stringify(agentVersion ?? version("agent")),
       // The updater keys this build trusts (updater-keys.json, or the single updater-public-key.txt), when there are any;
       // without them the build never updates itself.
       __SCOPEBOND_UPDATER_KEYS__: updaterKeysDefine(),
@@ -76,8 +79,11 @@ function signtool() {
   return null;
 }
 
-export async function buildSea() {
-  const main = await bundle();
+/** Build the executable. `agentVersion` replaces the agent package's version (the bundle's and the stamped one), and
+ *  `stamp: false` keeps Node's version resource, as releases up to 0.6.0 did: only the installer's upgrade test builds
+ *  an older release this way. */
+export async function buildSea({ agentVersion, stamp = true } = {}) {
+  const main = await bundle({ agentVersion });
   const config = join(out, "sea-config.json");
   writeFileSync(config, JSON.stringify({ main, output: join(out, "sea-prep.blob"), disableExperimentalSEAWarning: true, useCodeCache: true, useSnapshot: false }, null, 2));
   execFileSync(process.execPath, ["--experimental-sea-config", config], { stdio: "inherit" });
@@ -92,6 +98,10 @@ export async function buildSea() {
   const postject = join(here, "node_modules", "postject", "dist", "cli.js");
   execFileSync(process.execPath, [postject, exe, "NODE_SEA_BLOB", join(out, "sea-prep.blob"), "--sentinel-fuse", FUSE,
     ...(process.platform === "darwin" ? ["--macho-segment-name", "NODE_SEA"] : [])], { stdio: "inherit" });
+  // After the blob is in (postject rewrites the resources) and before anything signs it: Scopebond's name, version and
+  // icon. The installer reuses the icon for its entry in Settings -> Apps.
+  if (windows && stamp) stampExecutable(exe, "agent", agentVersion ?? version("agent"));
+  if (windows) writeIcon(join(out, "scopebond.ico"));
   return exe;
 }
 

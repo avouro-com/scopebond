@@ -15,6 +15,9 @@ name: Release
 #            approval required), publishes the packed tarballs to npm with npm
 #            trusted publishing (OIDC, `id-token: write`) and provenance, then
 #            creates the git tags and GitHub releases.
+#   native   Only when the publish included @scopebond/agent: starts the signed
+#            Windows build (native-release.yml on main) for that version. It holds
+#            no secret and signs nothing; the signing approvals stay where they are.
 #
 # A publish is due when no changesets are pending, some version is missing from
 # npm, and the pushed commit is the Version packages merge (or a maintainer re-runs
@@ -182,6 +185,9 @@ jobs:
     permissions:
       contents: write # push the release tags and create the GitHub releases
       id-token: write # npm trusted publishing (OIDC) and provenance
+    outputs:
+      # What was published, as [{ "name", "version" }]: the native job starts the signed build for a new agent.
+      published-packages: ${{ steps.publish.outputs.published-packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -212,6 +218,7 @@ jobs:
       # scripts), then the action pushes the tags and creates the GitHub releases
       # through the API with the workflow token.
       - name: Publish packed packages
+        id: publish
         uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           github-token: ${{ github.token }}
@@ -224,3 +231,30 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.SCOPEBOND_NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
           npm_config_ignore_scripts: "true"
+
+  # The signed Windows build follows each new @scopebond/agent on npm: this starts native-release.yml on main with the
+  # version just published (that workflow fails when main says otherwise). It only starts the run: both signing
+  # environments still wait for an owner's approval, and the GitHub release stays a draft pre-release for a person to
+  # publish. A dispatch is the one way the job's own token can start another workflow.
+  native:
+    name: start the signed Windows build
+    needs: publish
+    if: contains(needs.publish.outputs.published-packages, '"@scopebond/agent"')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # start native-release.yml on main
+    steps:
+      - name: Start the native release for the new agent version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PUBLISHED: ${{ needs.publish.outputs.published-packages }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r '.[] | select(.name == "@scopebond/agent") | .version' <<<"$PUBLISHED")
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::@scopebond/agent was published, but its version is not a release version: '$version'"
+            exit 1
+          fi
+          gh workflow run native-release.yml --ref main -f release=true -f version="$version"
+          echo "Started the signed Windows build for @scopebond/agent $version (native-release.yml on main)." >> "$GITHUB_STEP_SUMMARY"
