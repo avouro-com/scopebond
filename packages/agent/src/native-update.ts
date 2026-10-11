@@ -252,10 +252,11 @@ export function removeOldHelpers(dir: string, keep: string | null = null): void 
 export interface HelperPlan { program: string; args: string[]; env: Record<string, string> }
 
 /** The helper's program (the copy of this executable), its one argument and its environment (pure, so it can be tested). */
-export function installHelper(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, o: { dir?: string; program?: string; publisher?: RegExp; tray?: string | null; previous?: string } = {}): HelperPlan {
-  const dir = o.dir ?? dirname(dirname(installer.path));
+export function installHelper(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, o: { dir: string; publisher?: RegExp; tray?: string | null; previous?: string }): HelperPlan {
+  const dir = o.dir;
   return {
-    program: o.program ?? helperCopyPath(dir, pid),
+    // Named from the Scopebond folder and this agent's process id only: nothing from the release reaches the command line.
+    program: helperCopyPath(dir, pid),
     args: [UPDATE_HELPER_COMMAND],
     env: {
       SB_PID: String(pid),
@@ -278,7 +279,7 @@ export function installHelper(installer: { path: string; version: string; sha256
  *  helper is this signed executable itself, from a copy in the updates folder (the installer replaces the installed file),
  *  run detached with `update-helper`; it checks the installer again first (INSTALLER_CHECK_SCRIPT), runs Windows' own
  *  msiexec by its full path with a verbose log, and checks that the new agent starts. Throws when the copy cannot be made. */
-export function installAfterExit(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, tray: string | null = null, o: { dir?: string; previous?: string } = {}): void {
+export function installAfterExit(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, tray: string | null, o: { dir: string; previous?: string }): void {
   const helper = installHelper(installer, pid, launcher, { tray, dir: o.dir, previous: o.previous });
   copyFileSync(process.execPath, helper.program);
   const child = spawn(helper.program, helper.args, { detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env, ...helper.env } });
