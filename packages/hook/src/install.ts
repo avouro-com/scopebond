@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { programPath } from "@scopebond/gateway/node";
+import { findProgram, programPath } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 
 export type Harness = "claude" | "cursor" | "codex";
@@ -394,6 +394,22 @@ export function nativeHookCommand(harness: Harness, exe: string = process.execPa
   return `"${exe}" hook ${harness}`;
 }
 
+/** The program a single-executable hook entry runs (`"<…\scopebond-agent.exe>" hook claude`), or null for any other form. */
+export function nativeHookProgram(command: string): string | null {
+  const m = /^"([^"]+)"\s+hook\s+(?:claude|cursor|codex)\s*$/i.exec(command.trim());
+  return m && /scopebond-agent(?:\.exe)?$/i.test(m[1]) ? m[1] : null;
+}
+
+/** Each hook entry in `file` that runs a single executable which is no longer there: an administrator removed an install
+ *  for every user (Program Files) and left the per-user entries behind, or the folder was deleted. The coding agent then
+ *  fails to start the hook on every action, shows that as a hook error, and runs the action with no check. */
+export function missingHookPrograms(file: string, exists: (path: string) => boolean = existsSync): Array<{ command: string; program: string }> {
+  return configuredHookCommands(file).flatMap((command) => {
+    const program = nativeHookProgram(command);
+    return program && !exists(program) ? [{ command, program }] : [];
+  });
+}
+
 export function isHarnessConfigured(file: string): boolean {
   try {
     const p = JSON.parse(readConfigText(file));
@@ -418,6 +434,17 @@ export function configuredHookCommands(file: string): string[] {
     for (const list of Object.values(p.hooks)) if (Array.isArray(list)) for (const e of list) collect(e);
   } catch { return []; }
   return found;
+}
+
+/** Whether a hook command is the portable npm form (`npx -y @scopebond/hook@<version> <harness>`). */
+export function isNpxHookCommand(command: string): boolean {
+  return /(^|\s)npx(\.cmd)?\s/.test(command);
+}
+
+/** Whether `npx` is on PATH here. A computer set up only with the signed installer may have no Node.js, so the portable
+ *  form a project shares (`init --shared`) cannot start there; the installer's own hook entry covers it instead. */
+export function npxAvailable(platform: NodeJS.Platform = process.platform): boolean {
+  try { return findProgram(platform === "win32" ? "npx.cmd" : "npx", { platform }) !== null; } catch { return false; }
 }
 
 /** Whether a configured hook command can actually start. An `npx` form always can

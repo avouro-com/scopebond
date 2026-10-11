@@ -96,11 +96,21 @@ const CI_WRITE = [
 // upgraded in memory (see LEGACY_STARTER_PATTERNS).
 const PROTECTED_WRITE_PREV = "^" + [...GUARDRAIL_WRITE_PREV, ...CI_WRITE_PREV].join("") + ".+";
 const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
+// The folder the signed Windows installer puts the program in (the Scopebond Agent, which is also the hook every coding
+// agent runs, and the tray): `%LOCALAPPDATA%\Programs\Scopebond` for one user, `%ProgramFiles%\Scopebond` for every user.
+// A coding agent that replaced or deleted that program would run its own code as the hook, or none. Matched by the folder's
+// standard names, in any case, through the spellings an agent may use: the full path, `%LOCALAPPDATA%\Programs\…`,
+// `$env:ProgramFiles\…`, `${env:ProgramFiles}\…`, `%ProgramFiles(x86)%\…` and 8.3 short names (`PROGRA~1`, `SCOPEB~1`).
+// Reading it stays allowed. The hook does not read the registry, so an install moved elsewhere is not covered by this.
+const INSTALL_PARENT = `(?:${ci("programs")}|${ci("program files")}(?: \\(${ci("x86")}\\))?|${ci("progra")}~\\d|[%$]\\{?(?:${ci("env")}:)?${ci("program")}[^/]*)`;
+export const INSTALL_FOLDER = `(?!(?:.*/)?${INSTALL_PARENT}/(?:${ci("scopebond")}|${ci("scopeb")}~\\d)(?:/|$))`;
+/** What the always-on write protection compiled to before it covered the install folder: upgraded on load. */
+const GUARDRAIL_WRITE_PATTERN_PREV = "^" + GUARDRAIL_WRITE.join("") + ".+";
 /** The write protection that is always on, whoever manages the rules: the hook's own settings and those of the agents it
- *  guards. A workspace can relax CI-configuration writes; it can never relax these. */
-export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + ".+";
+ *  guards, and the installed program. A workspace can relax CI-configuration writes; it can never relax these. */
+export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER + ".+";
 /** The always-on floor as bare lookaheads, for a pattern that must also refuse these paths (the hook's own folder included). */
-export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("");
+export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER;
 /** The read protection that is always on, whoever manages the rules: the hook's own folder, which holds this computer's
  *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
 export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
@@ -114,7 +124,7 @@ export function selfProtectionClauses(): Array<Record<string, unknown>> {
     {
       id: "protect-scopebond-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
       param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
-      description: "Never change Scopebond's own settings, keys and policy, or the coding agents' hook settings, and never switch Scopebond off (always on; it cannot be relaxed).",
+      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files), or the coding agents' hook settings, and never switch Scopebond off (always on; it cannot be relaxed).",
     },
     {
       id: "protect-scopebond-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
@@ -159,6 +169,7 @@ const SAFE_REF = `^(?!(?:${ci("main")}|${ci("master")})$)(?!${ci("release")}/)(?
 // these strings and are left untouched.
 const LEGACY_STARTER_PATTERNS: Record<string, string> = {
   [PROTECTED_WRITE_PREV]: PROTECTED_WRITE,
+  [GUARDRAIL_WRITE_PATTERN_PREV]: GUARDRAIL_WRITE_PATTERN,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+": SAFE_SHELL,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+": SAFE_SHELL,

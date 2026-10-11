@@ -11,8 +11,9 @@ import { createExclusive, replaceFile } from "./safe-fs.js";
 import {
   readHarnessConfig, projectHarnessFile, localHarnessFile, harnessEntryMatches, backupHarnessConfig,
   gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
+  userHarnessFile, isNpxHookCommand, hookCommandResolves, nativeHookCommand,
 } from "./install.js";
-import { hookCommand } from "./version.js";
+import { cliCommand, hookCommand } from "./version.js";
 import { loadOrCreateDigestKey } from "./minimize.js";
 
 export function scaffold(dir: string, opts: { force?: boolean; enforce?: readonly string[] } = {}): { agentKid: string; policyPath: string; rulesPath: string } {
@@ -150,6 +151,34 @@ export function placeHook(
   }
   const file = installHarness(harness, cwd, pinned);
   return { file, command: pinned, scope: "personal", repaired: 0 };
+}
+
+/** After `init` put the portable `npx` form in a project file, on a computer that has the signed installer's program but
+ *  no npx (no Node.js): that entry cannot start here, and a coding agent runs an action whose hook cannot start with no
+ *  check. This computer is covered instead by, in order:
+ *  - a user-level hook that starts here (from `install`, or the installer's `setup`), which already checks every project;
+ *  - for Claude Code, the installer's own command in `.claude/settings.local.json`, which only this computer reads and
+ *    which is kept out of git for this clone (were npx installed later, `status` reports the two as a duplicate);
+ *  - otherwise (Cursor and Codex have no personal file), the command that adds a user-level hook is printed.
+ *  Teammates keep the shared npx form, which starts on macOS, Linux and any computer with Node.js. Returns what to print. */
+export function coverWithoutNpx(harness: "claude" | "cursor" | "codex", cwd: string, opts: { label: string; command?: string }): string[] {
+  const lines = ["this computer has no npx (Node.js), so the shared command cannot start here; teammates with Node.js use it as before"];
+  const user = userHarnessFile(harness);
+  if (configuredHookCommands(user).some((c) => !isNpxHookCommand(c) && hookCommandResolves(c))) {
+    lines.push(`${opts.label} on this computer is covered by the user-level hook in ${user}`);
+    return lines;
+  }
+  const local = localHarnessFile(harness, cwd);
+  if (local) {
+    const state = gitShareState(local);
+    if (state === "ignored" || state === "none" || (state === "untracked" && excludeFromGit(local))) {
+      installHarness(harness, cwd, opts.command ?? nativeHookCommand(harness), local);
+      lines.push(`${opts.label} on this computer runs the installer's program from ${local} (kept out of git)`);
+      return lines;
+    }
+  }
+  lines.push(`to check ${opts.label} on this computer too, run \`${cliCommand(`install${harness === "claude" ? "" : ` --${harness}`}`)}\` (a user-level hook for every project)`);
+  return lines;
 }
 
 /** Install the hook into the agent's own config file, merging with anything already

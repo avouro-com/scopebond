@@ -59,6 +59,8 @@ const trimDotsSpaces = (seg: string): string => {
 const NTFS_SUFFIX = /^([^:]+):(?:[^:]*)(?::\$[A-Za-z_]+)?$/;
 const stripStream = (seg: string, index: number): string => {
   if (index === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
+  // A PowerShell variable (`$env:ProgramFiles`, `${env:LOCALAPPDATA}`) is not a stream: its name stays.
+  if (/^\$\{?env:/i.test(seg)) return seg;
   const match = NTFS_SUFFIX.exec(seg);
   return match ? match[1] : seg;
 };
@@ -88,6 +90,8 @@ const SHORT_TARGETS = [
   "config.toml", "agents", ".ssh", ".aws", ".kube", ".docker", ".azure", ".gnupg", ".config", ".env", ".env.local", ".env.production",
   ".envrc", ".npmrc", ".pypirc", ".netrc", ".git-credentials", "credentials", ".credentials.json", "id_ed25519", "config.json",
   "accessTokens.json", "credentials.db", "attester.key", "policy.json", "cloud.json",
+  // the signed installer's folder (`C:\PROGRA~1\SCOPEB~1`)
+  "Scopebond", "Program Files",
 ];
 function abbreviates(prefix: string, ext: string, long: string): boolean {
   const name = long.replace(/^\.+/, "");
@@ -290,7 +294,8 @@ const VALUE_PARAMETER = new Set(["-va", "-val", "-valu", "-value"]);
 // the coding agents' hook settings, git hooks) is recorded as a write of that path, so the always-on floor stops the coding
 // agent removing Scopebond's files and their evidence. Any other delete stays a plain shell.exec, as before.
 const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri", "trash", "trash-put"]);
-const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks)(?:$|[\\/:])/i;
+// The signed installer's folder (`%LOCALAPPDATA%\Programs\Scopebond`, `%ProgramFiles%\Scopebond`) holds the hook's program.
+const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks|(?:programs|program files(?: \(x86\))?|progra~\d|[%$]\{?(?:env:)?program[^\\/]*)[\\/](?:scopebond|scopeb~\d))(?:$|[\\/:])/i;
 // Removing or renaming a folder takes everything inside it. A folder that holds an always-protected place is recorded as a
 // write of that place, so the always-on floor stops the removal as it would a change to the place itself. Each entry is a folder
 // and the protected place inside it (empty when the folder itself is protected): this project's (in its working folder or above)
@@ -1308,9 +1313,85 @@ function selfDisable(sc: SimpleCommand): boolean {
  *  would otherwise read as switching Scopebond off. */
 const NAMES_SCOPEBOND_ITSELF = /\.scopebond\b|@scopebond\/|\bscopebond-(?:hook|agent|mcp|gateway)\b|(?:^|[\s"'`;&|(])scopebond(?:\.cmd|\.exe)?(?=$|[\s"'`;&|)])/i;
 
+/** Programs that only search text: a word given to one of them is a pattern or a file to read, never a file it writes. */
+const SEARCH_PROGRAMS = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack", "findstr", "select-string", "sls"]);
+/** A mention of Scopebond's folder or its connection file: a path, which a search reads, so never let through here. */
+const NAMES_SCOPEBOND_FOLDER = /\.scopebond\b|cloud\.json/i;
+/** Long enough for any search a person or an agent types; a longer command is judged as before. */
+const SEARCH_SCAN_LIMIT = 8192;
+
+/** The parts of `text` that cmd or PowerShell runs as separate commands (split at every unquoted `&`, `|`, `;`, `<`, `>`
+ *  and line break, which also cuts a redirect's target off as a part of its own), each with whether it holds something
+ *  that runs code inside an argument (PowerShell's `(…)`, `$(…)`, `{…}`; cmd's `%name%`). Quoting is the shell's own: cmd
+ *  toggles on `"` and escapes with `^`; PowerShell quotes with `"` and `'` (doubled inside to mean itself) and escapes with
+ *  the backtick. A backslash quotes nothing in either. Splitting at more characters than a shell does only adds parts. */
+function windowsParts(text: string, quoting: "cmd" | "powershell"): Array<{ text: string; runsCode: boolean }> {
+  const ps = quoting === "powershell";
+  const out: Array<{ text: string; runsCode: boolean }> = [];
+  let cur = "", runsCode = false, quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote !== null) {
+      cur += c;
+      if (ps && quote === '"' && c === "`") { cur += text[i + 1] ?? ""; i++; continue; }
+      if (ps && quote === '"' && c === "$" && text[i + 1] === "(") runsCode = true;
+      if (c === quote) {
+        if (ps && text[i + 1] === quote) { cur += quote; i++; continue; }
+        quote = null;
+      }
+      continue;
+    }
+    if ((ps && c === "`") || (!ps && c === "^")) { cur += c + (text[i + 1] ?? ""); i++; continue; }
+    if (c === '"' || (ps && c === "'")) { quote = c; cur += c; continue; }
+    if ("&|;<>\n\r".includes(c)) { out.push({ text: cur, runsCode }); cur = ""; runsCode = false; continue; }
+    if (ps && "({".includes(c)) runsCode = true;
+    if (!ps && c === "%" && /^%[^%\s]+%/.test(text.slice(i, i + 256))) runsCode = true;
+    cur += c;
+  }
+  out.push({ text: cur, runsCode });
+  return out;
+}
+
+/** Whether a part starts with a search program (`grep`, `rg`, `findstr`, `Select-String`, `git grep`, …). */
+function isSearchPart(part: string): boolean {
+  const words = part.trim().split(/\s+/).map((w) => w.replace(/^["']+|["']+$/g, ""));
+  const prog = (words[0] ?? "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.exe$/, "");
+  if (SEARCH_PROGRAMS.has(prog)) return true;
+  if (prog !== "git") return false;
+  // `git [-C <dir>] [-c <name=value>] [--no-pager] grep …`
+  for (let k = 1; k < words.length; k++) {
+    const w = words[k].toLowerCase();
+    if (w === "-c") { k++; continue; } // -C <dir> or -c <name=value> (lowercased)
+    if (w.startsWith("-")) continue;
+    return w === "grep";
+  }
+  return false;
+}
+
+/** Whether every mention of Scopebond (by `names`) in a command that did not read cleanly sits in the pattern of a search,
+ *  however cmd or PowerShell would split it: `grep -rhoE "scopebond-agent(\.cmd)? (setup|status)[^\"]*" docs/` read with
+ *  `\` as a path separator leaves a quote open, and the whole text used to count as switching Scopebond off. A part that
+ *  is not a search, a redirect's target, an argument that runs code, or a mention of Scopebond's folder (a search reads the
+ *  files it names) all still count. */
+function mentionsOnlyInSearch(text: string, names: RegExp): boolean {
+  if (text.length > SEARCH_SCAN_LIMIT) return false;
+  let mentioned = false;
+  for (const quoting of ["cmd", "powershell"] as const) {
+    for (const part of windowsParts(text, quoting)) {
+      if (!names.test(part.text)) continue;
+      mentioned = true;
+      if (part.runsCode || NAMES_SCOPEBOND_FOLDER.test(part.text) || !isSearchPart(part.text)) return false;
+    }
+  }
+  return mentioned;
+}
+
 const NOTHING_HIDDEN: readonly PipedSecret[] = [];
 
-function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: readonly PipedSecret[] = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = []): Mapped[] {
+/** `searchReading`: the command text is the one cmd or PowerShell itself reads (a Windows reading, or a PowerShell command
+ *  with no backtick, whose quoting the normalization left as it was), so a mention of Scopebond only in a search's
+ *  pattern may be told apart from one that switches it off. */
+function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: readonly PipedSecret[] = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = [], searchReading = false): Mapped[] {
   // Words the whole command shows to be secret (a literal piped into a secret reader) are masked in this part's recorded
   // text too. Only the text: the program and paths a policy judges are never changed by what another part says.
   const redact = (raw: string): string => redactCommand(hidden.length ? maskWords(raw, hidden) : raw);
@@ -1322,7 +1403,8 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
     // A command that cannot be read but names Scopebond (`eval "$X @scopebond/hook uninstall"`) is treated as switching it off:
     // self-protection never depends on a readable command. In the Windows reading of a command the POSIX
     // reading already understood, only a reference to Scopebond itself counts, not the word anywhere.
-    if (windowsReading ? NAMES_SCOPEBOND_ITSELF.test(sc.raw) : /scopebond/i.test(sc.raw)) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+    const names = windowsReading ? NAMES_SCOPEBOND_ITSELF : /scopebond/i;
+    if (names.test(sc.raw) && !(searchReading && mentionsOnlyInSearch(sc.raw, names))) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
     return opaque;
   }
   const push = parseGitPush(sc, gitLineConfigs);
@@ -1381,6 +1463,8 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
   // (``Re`move-Item`` runs Remove-Item). Normalize both before the POSIX parser sees
   // them, so neither hides a program or mangles a Windows path.
   const src = dialect === "powershell" ? command.replace(/`(.)/g, "$1").replace(/\\/g, "/") : command;
+  // PowerShell text with no backtick keeps its own quoting through the normalization above.
+  const plainPowerShell = dialect === "powershell" && !command.includes("`");
   const commands = decomposeShell(src);
   if (commands.length === 0) {
     return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
@@ -1405,7 +1489,7 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
     const vars: Variables = new Map();
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc));
+      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell);
       const kept = filesOnly ? mapped.filter(isFile) : mapped;
       out.push(...kept);
       // The command read with the values its variables may hold, and in each other folder it may run in: the file effects and
@@ -1475,7 +1559,7 @@ function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell"
         const runsScopebond = (c: SimpleCommand) => NAMES_SCOPEBOND_ITSELF.test(c.programRaw || c.program)
           // eslint-disable-next-line security/detect-unsafe-regex -- bounded: fixed words with optional fixed suffixes
           || (/^(?:npx|pnpx|bunx|pnpm|yarn)(?:\.cmd|\.exe)?$/i.test(c.program) && c.argv.some((a) => /@scopebond\/|^scopebond(?:-\w+)?$/i.test(a)));
-        if (/\.scopebond\b/i.test(win) || closed.some(runsScopebond)) out.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+        if ((/\.scopebond\b/i.test(win) || closed.some(runsScopebond)) && !mentionsOnlyInSearch(win, NAMES_SCOPEBOND_ITSELF)) out.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
       }
     }
     for (const m of walk(reading, true)) {

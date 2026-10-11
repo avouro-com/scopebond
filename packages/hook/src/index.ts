@@ -32,14 +32,14 @@ export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS } from "./pol
 export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";
 export type { Vector, VectorAgent, Dialect } from "./vectors.js";
-export { scaffold, harnessSnippet, installHarness, placeHook } from "./init.js";
+export { scaffold, harnessSnippet, installHarness, placeHook, coverWithoutNpx } from "./init.js";
 export type { HookPlacement } from "./init.js";
 export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
   readHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
-  isScopebondHookCommand, harnessEntryMatches,
+  isScopebondHookCommand, harnessEntryMatches, nativeHookProgram, missingHookPrograms, npxAvailable, isNpxHookCommand,
   localHarnessFile, isMachineSpecificCommand, gitShareState, excludeFromGit, pruneHarnessEntries,
 } from "./install.js";
 export type { Harness, HarnessScopes, GitShare } from "./install.js";
@@ -99,3 +99,4 @@ export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-d
 export type { EvidenceDetail } from "./evidence-detail.js";
 export { isSingleExecutable, hookCliPath, hookSelfCommand, nodeSqlite } from "./self.js";
 export { requestOverSocket } from "./local-socket.js";
+export { onboardingSteps } from "./onboarding.js";

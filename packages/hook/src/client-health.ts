@@ -3,6 +3,8 @@
 // whether the Scopebond Agent, which delivers in the background and installs updates, runs here.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isSingleExecutable } from "./self.js";
+import { agentCommand } from "./windows-hints.js";
 
 /** The versions the workspace recommends for its computers, as its last rules check said (null: it did not say). */
 export interface Recommended { hook: string | null; agent: string | null }
@@ -48,22 +50,30 @@ function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
-const win = () => process.platform === "win32";
-const agentCommand = (sub: string) => `scopebond-agent${win() ? ".cmd" : ""} ${sub}`;
-const npx = () => (win() ? "npx.cmd" : "npx");
+/** Where the signed installer is downloaded: an install from it is updated by installing a newer one. */
+export const NATIVE_DOWNLOAD_URL = "https://scopebond.com/get-started#desktop-agent";
 
 export interface HealthLine { label: string; text: string; problem: boolean }
 
-/** The update and background-agent lines of `status` and `doctor`, each with the one command that fixes it. */
+/** The update and background-agent lines of `status` and `doctor`, each with the one command that fixes it, in the form
+ *  this installation runs (`native`: the signed installer's single executable, where there may be no Node.js or npm). */
 export function healthLines(input: {
   hookVersion: string; recommended: Recommended | null; agent: AgentPresence; connected: boolean; workspaceUrl?: string | null;
+  native?: boolean; platform?: NodeJS.Platform;
 }): HealthLine[] {
   const lines: HealthLine[] = [];
   const { hookVersion, recommended, agent } = input;
+  const native = input.native ?? isSingleExecutable();
+  const platform = input.platform ?? process.platform;
+  const npx = platform === "win32" ? "npx.cmd" : "npx";
+  const agentCmd = (sub: string) => agentCommand(sub, platform, native);
   if (recommended?.hook && olderVersion(hookVersion, recommended.hook)) {
+    const how = native
+      ? `install the newer Scopebond from ${NATIVE_DOWNLOAD_URL}`
+      : `${npx} -y @scopebond/hook@${recommended.hook} install`;
     lines.push({
       label: "update",
-      text: `Scopebond ${hookVersion} is older than the ${recommended.hook} your workspace recommends. Update: ${npx()} -y @scopebond/hook@${recommended.hook} install`
+      text: `Scopebond ${hookVersion} is older than the ${recommended.hook} your workspace recommends. Update: ${how}`
         + (agent.state === "running" ? " (the Scopebond Agent also installs it within six hours)" : ""),
       problem: true,
     });
@@ -76,10 +86,13 @@ export function healthLines(input: {
       lines.push({ label: "background agent", text: `running${agent.version ? ` ${agent.version}` : ""}: records send and Scopebond stays up to date without a coding agent open`, problem: false });
     }
   } else if (agent.state === "stopped") {
-    lines.push({ label: "background agent", text: `installed but not running, so records send only while a coding agent works and nothing installs updates. Start it: ${agentCommand("autostart on")}`, problem: true });
+    lines.push({ label: "background agent", text: `installed but not running, so records send only while a coding agent works and nothing installs updates. Start it: ${agentCmd("autostart on")}`, problem: true });
+  } else if (native) {
+    // This program is the Scopebond Agent: it is installed, it has only never been started.
+    lines.push({ label: "background agent", text: `not running, so records send only while a coding agent works and nothing installs updates. Start it: ${agentCmd("autostart on")}`, problem: true });
   } else {
     const url = input.workspaceUrl ? ` ${input.workspaceUrl}` : " <your workspace>";
-    lines.push({ label: "background agent", text: `not installed, so records send only while a coding agent works and nothing installs updates. Install it: ${npx()} -y @scopebond/agent@${recommended?.agent ?? "latest"} setup${url}`, problem: true });
+    lines.push({ label: "background agent", text: `not installed, so records send only while a coding agent works and nothing installs updates. Install it: ${npx} -y @scopebond/agent@${recommended?.agent ?? "latest"} setup${url}`, problem: true });
   }
   return lines;
 }
