@@ -1,4 +1,4 @@
-// The local store's upkeep in a process of its own (D144). A pass can take up to its budget (30 s), and the first pass over
+// The local store's upkeep in a process of its own. A pass can take up to its budget (30 s), and the first pass over
 // an older file rewrites the whole file; both are synchronous SQLite work. Run inside the agent they kept it from answering
 // the tray and the CLI for as long as they took, so the agent starts `scopebond-agent upkeep` and waits for it without
 // blocking: the tray, `status` and the workspace's requests are answered meanwhile.

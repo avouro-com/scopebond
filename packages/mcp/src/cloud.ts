@@ -1,6 +1,6 @@
 // scopebond-mcp → Scopebond Cloud: enroll the proxy's signing key with a workspace
 // and export the PEP-authorized receipts it emits, so governed MCP tool calls show
-// in the hosted portal. Reuses the gateway's enrollment and durable exporter (D40).
+// in the hosted portal. Reuses the gateway's enrollment and durable exporter.
 // The proxy is long-running, so the exporter's own flush timer delivers; a durable
 // outbox next to the key survives restarts.
 

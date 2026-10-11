@@ -1,4 +1,4 @@
-// SB392 (D143): "Reconnect…" from the tray, with no terminal. The agent runs the hook's own sign-in (`login <workspace>
+// "Reconnect…" from the tray, with no terminal. The agent runs the hook's own sign-in (`login <workspace>
 // --no-install`) for the workspace this computer is already connected to, never a URL from a link or a notification. It reads
 // the code the sign-in prints, opens the approval page on that workspace, and the sign-in keeps waiting for the approval in
 // the background. The workspace lets the same computer keep its key, so records waiting on it are delivered as they are.

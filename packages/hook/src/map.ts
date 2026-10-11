@@ -10,7 +10,7 @@
 
 import { existsSync } from "node:fs";
 import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
-import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "./shell-secrets.js";
+import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf } from "./text.js";
 

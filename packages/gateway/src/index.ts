@@ -78,6 +78,8 @@ export {
 export type { CloudDispatchSource, CloudDelegation, CloudSourceOptions, ConsumeAnswer, ConsumeRefusal, ConsumeRequest, DelegationAnswer, ActiveApprovalQuery, ActiveApprovalAnswer } from "./dispatch-cloud.js";
 export { historyNeed } from "@scopebond/verify";
 export { buildSummary, isNotable, repeatKey } from "./summary.js";
+// The shell secret scanner the gateway's scrubber uses; the hook's command scrubber and mapper use the same one.
+export { isCredentialName, maskWords, pipedSecrets, scrubShellSecrets, type PipedSecret } from "./shell-secrets.js";
 // Evidence-chain heads from a workspace's delivery answers and the published day lists (pure; @scopebond/verify/chain).
 export { checkChainHeads, isSignedChainHead, verifyAnchorList, verifyChainHeadSignature, verifySegmentChain } from "@scopebond/verify/chain";
 export type { AnchorList, AnchorListCheck, ChainHead, HeadTiming, HeadsCheck, KeptChainHead, SegmentChainCheck, SignedChainHead } from "@scopebond/verify/chain";

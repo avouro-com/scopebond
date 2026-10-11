@@ -1,4 +1,4 @@
-// D144 (SB411): the agent tells the workspace about allowances a person made on this computer and the requests they sent to
+// The agent tells the workspace about allowances a person made on this computer and the requests they sent to
 // an admin. Each record is signed by the key this computer enrolled with (the same key that countersigns its receipts), so
 // the workspace can show it was made here. Sent once; one the workspace refuses for good (400) is not sent again; one it
 // could not take (offline, 5xx) waits for the next cycle. A workspace without these calls (404) leaves them on the computer.

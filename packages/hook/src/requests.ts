@@ -1,4 +1,4 @@
-// "Ask an admin" (D144, SB411): a person asks the workspace's admins to allow an action a rule blocked. The hook keeps the
+// "Ask an admin": a person asks the workspace's admins to allow an action a rule blocked. The hook keeps the
 // request here until the Scopebond Agent sends it (`POST /v1/requests`); the workspace answers through the rules document
 // (an approved request arrives as an allowance). The block stands meanwhile.
 

@@ -142,7 +142,7 @@ async function uploadGroup(
         totals.accepted += Number(answer.json.accepted ?? 0);
         totals.duplicates += Number(answer.json.duplicates ?? 0);
         totals.rejected += Number(answer.json.rejected_count ?? 0);
-        // A batch the workspace took whole is held there, so retention may later remove the local copies (D144). The answer
+        // A batch the workspace took whole is held there, so retention may later remove the local copies. The answer
         // does not say which record of a partly refused batch was refused, so such a batch keeps all of them.
         if (Number(answer.json.rejected_count ?? 0) === 0) { try { acknowledged(batchIds); } catch { /* they stay local */ } }
         break;
@@ -184,7 +184,7 @@ async function uploadGroup(
   return totals;
 }
 
-/** Record that the workspace holds these receipts, in the delivery queue's acknowledgements (D144 retention). */
+/** Record that the workspace holds these receipts, in the delivery queue's acknowledgements (retention). */
 function markAcknowledged(dir: string, ids: string[]): void {
   if (!ids.length) return;
   const outbox = new SqliteCloudOutbox(join(dir, OUTBOX_FILE), LOSSLESS_OUTBOX);

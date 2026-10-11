@@ -1,7 +1,7 @@
 // Framework adapters: wrap a framework's tool loop around the guard's `check`, so
 // a denied tool call returns a synthetic denial result instead of executing. The
 // adapters are duck-typed against each framework's tool shape — the framework is
-// an optional peer, never a dependency (D40).
+// an optional peer, never a dependency.
 
 import type { ToolGuard } from "./guard.js";
 

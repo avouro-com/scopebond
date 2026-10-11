@@ -1,4 +1,4 @@
-// What the tray shows from this computer's own records (SB387, SB389): today's counts and the last few blocks. Read-only and
+// What the tray shows from this computer's own records: today's counts and the last few blocks. Read-only and
 // bounded: one indexed count since local midnight and a scan of at most the newest few thousand rows for blocks, so a large
 // store costs the tray nothing. Works with no workspace: these are the computer's own receipts.
 import { existsSync } from "node:fs";

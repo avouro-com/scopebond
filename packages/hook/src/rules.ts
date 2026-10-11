@@ -45,7 +45,7 @@ export interface RuleSet {
    *  Scopebond's own protection (its settings, keys and hook entries, and an agent switching it off), which always does. */
   enforce?: string[];
   /** On a computer its workspace manages: a person's own choice per rule (`rules enforce|monitor`), applied only while the
-   *  workspace allows changes on computers (D140), and reported to the workspace either way. */
+   *  workspace allows changes on computers, and reported to the workspace either way. */
   local_overrides?: Partial<Record<string, "enforce" | "monitor">>;
   /** Optional workspace scope. When set, a write whose physical target (symlinks and
    *  junctions followed, rename and link destinations included) is outside these roots,
@@ -53,7 +53,7 @@ export interface RuleSet {
    *  enforced, which is the default. */
   allowed_roots?: string[];
   /** Optional. When true, a shell command that runs SQL against a remote database (a Wrangler
-   *  D1 command without --local, or psql to a host other than this machine) is denied before it
+   *   command without --local, or psql to a host other than this machine) is denied before it
    *  runs if the SQL drops a table, deletes or updates every row, drops or renames in an ALTER, or
    *  cannot be read. Absent = not enforced, which is the default. */
   protect_remote_database?: boolean;

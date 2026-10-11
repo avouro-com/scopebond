@@ -164,7 +164,7 @@ export function recordDeliveryAttempt(dir: string, status: Pick<CloudExporterSta
       backoff_until: null, backoff_count: 0, retry_after_ms: null, backoff_at: null });
   } else if (limitMs !== null && status.pending > 0) {
     // A refusal seen earlier is kept: a timeout says nothing about whether the workspace
-    // accepts this computer. A timeout is the last problem only when nothing has been delivered for a while (SB385):
+    // accepts this computer. A timeout is the last problem only when nothing has been delivered for a while:
     // after a recent delivery (often the agent's) it is history, not something to fix.
     patch.last_timeout_at = at;
     const current = readDeliveryState(dir);

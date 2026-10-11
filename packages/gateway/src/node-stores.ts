@@ -1,6 +1,6 @@
-// Node-only durable ReceiptStore implementations (D40: the ReceiptStore interface
+// Node-only durable ReceiptStore implementations (the ReceiptStore interface
 // lives in the core with an in-memory implementation; these are durable local
-// implementations for the Node server. On Cloudflare, D1/KV are the edge ones.)
+// implementations for the Node server. On Cloudflare, /KV are the edge ones.)
 
 import { appendFileSync, closeSync, constants as fsConstants, readFileSync, existsSync, mkdirSync, openSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
@@ -188,7 +188,7 @@ const LAYOUT_VERSION = 2;
 const HELD_STATES = "('reserved','dispatching','outcome_unknown')";
 
 /** SQLite-backed receipt store using Node's built-in `node:sqlite` (no native
- *  dependency). Durable and queryable; mirrors the D1 store used at the edge.
+ *  dependency). Durable and queryable; mirrors the store used at the edge.
  *
  *  Layout 2 keeps each policy once (`policy_snapshots`, referenced by digest), each receipt once (`receipts`; a finished
  *  action points at its row), and no lifecycle row for an action that finished without being dispatched. Layout 1
@@ -868,7 +868,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
           touched_at INTEGER NOT NULL
         );
       `);
-      // SB289: a number per queued record, kept across restarts. Queues made before it get the columns
+      // A number per queued record, kept across restarts. Queues made before it get the columns
       // here; records already in them stay unnumbered.
       const has = (table: string, column: string) =>
         (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
@@ -881,10 +881,10 @@ export class SqliteCloudOutbox implements CloudOutbox {
       };
       addColumn("cloud_outbox", "seq", "INTEGER");
       addColumn("cloud_outbox_metadata", "next_seq", "INTEGER NOT NULL DEFAULT 1");
-      // SB289: the queue's id, made once. Two processes opening a new queue at once both try; the
+      // The queue's id, made once. Two processes opening a new queue at once both try; the
       // first write wins and both read the same id back.
       addColumn("cloud_outbox_metadata", "queue_id", "TEXT");
-      // SB406: the queue's totals, kept here instead of counted on every record. NULL means "count once": a queue made
+      // The queue's totals, kept here instead of counted on every record. NULL means "count once": a queue made
       // before them. A total an older version left behind is corrected whenever `status()` runs.
       addColumn("cloud_outbox_metadata", "pending_count", "INTEGER");
       addColumn("cloud_outbox_metadata", "pending_bytes", "INTEGER");
@@ -981,7 +981,7 @@ export class SqliteCloudOutbox implements CloudOutbox {
         for (const row of remove.all(entry.id, entry.payloadHash) as Array<{ bytes: number }>) {
           count++;
           bytes += Number(row.bytes);
-          // D144: retention removes a local receipt only after the workspace holds it; this row is that proof. A record
+          // Retention removes a local receipt only after the workspace holds it; this row is that proof. A record
           // that left the queue because the workspace refused it is not held, and stays in the local log.
           if (held?.has(entry.id)) acked.run(entry.id, at);
         }

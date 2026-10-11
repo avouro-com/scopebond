@@ -39,7 +39,7 @@ export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
 /** Left in the Scopebond folder when this computer's user stops the agent (`scopebond-agent stop`), and removed when it
  *  starts: the native tray then leaves it stopped instead of starting it again. */
 export const STOPPED_FILE = "agent-stopped.json";
-/** The person's tray settings (D143: notifications about problems by default, none about blocks). */
+/** The person's tray settings (notifications about problems by default, none about blocks). */
 export const TRAY_SETTINGS_FILE = "agent-settings.json";
 export type NotificationSetting = "all" | "problems" | "off";
 export interface TraySettings { notifications: NotificationSetting }
@@ -107,7 +107,7 @@ export interface MaintenanceResult {
   updatedTo: string | null;
   hookEntries: Array<{ harness: Harness; file: string; reason: string }>;
   selfCheck: Awaited<ReturnType<typeof runSelfCheck>>;
-  /** The local store's upkeep this pass (D144): rows rewritten, receipts past retention removed, space returned. */
+  /** The local store's upkeep this pass: rows rewritten, receipts past retention removed, space returned. */
   store?: UpkeepReport;
   error: string | null;
 }
@@ -275,7 +275,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const cycleLimit = options.cycleLimitMs ?? CYCLE_LIMIT_MS;
   let stopped = false;
   let lastSelfCheckAt = 0;
-  // SB388: time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
+  // Time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
   // computer slept (or the agent was stopped); waiting is counted again from the next cycle. The wake time is kept across
   // restarts of the agent alone (awake.ts), so a restart never hides a backlog; after a long gap the waiting records decide.
   const allowedGapMs = Math.max(3 * interval, 5 * 60_000);
@@ -289,9 +289,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let lastCycleAt = 0;
   // A long step the person should see as "working" (an update), or null.
   let working: string | null = null;
-  // SB391: the workspace's own summary for the tray (names, links, open reviews), refreshed every five minutes; null when the
+  // The workspace's own summary for the tray (names, links, open reviews), refreshed every five minutes; null when the
   // workspace does not answer it (a self-hosted gateway), and the tray simply leaves those rows out.
-  // SB392: a sign-in started from the tray, while it waits for approval.
+  // A sign-in started from the tray, while it waits for approval.
   let reconnecting: ReconnectStart | null = null;
   let summary: ComputerSummary | null = null;
   let summaryAt = 0;
@@ -310,7 +310,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     if (!connection) return;
     try { const sent = await flushReasons(options.dir, connection, options.fetchImpl); if (sent) log(`sent ${sent} override reason(s) to the workspace`); }
     catch { /* they wait for the next cycle */ }
-    // D144: allowances a person made here, and their requests to an admin.
+    // Allowances a person made here, and their requests to an admin.
     try {
       const sent = await sendAllowancesAndRequests(options.dir, connection, options.fetchImpl);
       if (sent.allowances || sent.requests) log(`sent ${sent.allowances} allowance(s) and ${sent.requests} request(s) to the workspace`);
@@ -342,7 +342,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       failures = result.deliveryError ? failures + 1 : 0;
       if (result.delivered) log(`delivered ${result.delivered} record(s); ${result.pending} waiting`);
       if (result.deliveryError) log(`delivery problem: ${result.deliveryError}`);
-      // SB390: asked from the workspace's computer page. Send again now (the cycle sent before its rules check), or run the
+      // Asked from the workspace's computer page. Send again now (the cycle sent before its rules check), or run the
       // self-check; each once.
       if (result.requested === "flush") { log("the workspace asked this computer to send now"); setTimeout(() => { void cycle(); }, 0); }
       // A long queue: this cycle's sending time ran out, so the next one starts right away instead of at the next interval.
@@ -440,7 +440,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     timer = setTimeout(() => { void cycle().finally(schedule); }, delay);
   };
 
-  // D144: a block under a rule a person may allow or ask about can be acted on afterwards, from the tray.
+  // A block under a rule a person may allow or ask about can be acted on afterwards, from the tray.
   const actionable = (blocks: Array<{ action_id: string | null; summary: string; at: string; rule: string | null }>, now: number): RecentBlock[] => {
     const known = new Map(readBlocked(options.dir).map((b) => [b.id, b]));
     return blocks.map((b) => {
@@ -470,22 +470,22 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   };
 
   const control = await startControl(options.dir, `${AGENT_VERSION} hook/${hookVersion()}`, {
-    // SB387: what the tray draws, and the person's tray settings.
+    // What the tray draws, and the person's tray settings.
     "GET /tray": () => ({ tray: trayState(), settings: readTraySettings(options.dir) }),
     "POST /settings": (body) => ({ settings: writeTraySettings(options.dir, body) }),
-    // SB387: "Check now" always says what it found.
+    // "Check now" always says what it found.
     "POST /check": async () => {
       const result = await maintain(true);
       return { text: checkResult(result.selfCheck, result.error), tray: trayState() };
     },
-    // SB389: install the version the workspace recommends now, instead of at the next six-hourly check.
+    // Install the version the workspace recommends now, instead of at the next six-hourly check.
     "POST /update": async () => {
       working = "Updating Scopebond…";
       try { const result = await maintain(true); return { updated_to: result.updatedTo, error: result.error }; }
       finally { working = null; }
     },
-    // SB389: the newest blocks on this computer, summarised the way `log` prints them (never raw arguments).
-    // SB391: open this computer's page in the workspace, only on the workspace this computer is connected to.
+    // The newest blocks on this computer, summarised the way `log` prints them (never raw arguments).
+    // Open this computer's page in the workspace, only on the workspace this computer is connected to.
     "POST /open-workspace": () => {
       const connection = loadConnection(options.dir);
       const url = summary?.computer_url;
@@ -493,7 +493,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       openInBrowser(url);
       return { opened: true };
     },
-    // SB392: sign in again for the connected workspace; the tray shows the code, the approval page opens in the browser.
+    // Sign in again for the connected workspace; the tray shows the code, the approval page opens in the browser.
     "POST /reconnect": async () => {
       if (reconnecting) return reconnecting;
       working = "Signing in again…";
@@ -508,7 +508,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return result.started;
     },
     "GET /recent-blocks": () => ({ recent_blocks: actionable(localActivity(options.dir, { limit: 10 })?.recent_blocks ?? [], Date.now()) }),
-    // D144: allow an earlier block, or ask an admin, from the tray. The caller names the block; only the Scopebond window
+    // Allow an earlier block, or ask an admin, from the tray. The caller names the block; only the Scopebond window
     // answers (the same window the hook uses), so whoever calls this channel cannot allow anything by itself. Scopebond never
     // runs the action: the person or the coding agent runs it again.
     "POST /blocked": async (body) => {

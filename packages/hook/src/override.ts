@@ -167,7 +167,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
 
     const t = now();
     const osDigest = osUserDigest();
-    // D144: a standing allowance for this rule and this exact action lets it through, and the receipt names it.
+    // A standing allowance for this rule and this exact action lets it through, and the receipt names it.
     let allowances = readAllowances(ctx.dir);
     if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, doc.allowances, doc.revoked_allowances);
     const standing = matchAllowance(allowances, { rule, actionKey: key, osUserDigest: osDigest, now: t });
@@ -179,7 +179,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     }
     const summary = actionSummary(intent);
     const blocked = () => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness }, t);
-    // A workspace that sends the D144 terms knows allowances; an older one gets "Allow once" only (its receipts could not
+    // A workspace that sends the terms knows allowances; an older one gets "Allow once" only (its receipts could not
     // carry an allowance's use).
     const knowsAllowances = terms.always !== undefined || terms.requests !== undefined;
     const offers = {
@@ -221,7 +221,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
         reason_length: reason.length, os_user_digest: answer.os_user ? digestOf(answer.os_user) : osUserDigest(), decided_at: new Date(t).toISOString() };
       state.entries.push({ rule, action_key: key, action_id, at: t, reason_digest: record.reason_digest!, reason_length: reason.length });
       try { writeState(ctx.dir, state, t); } catch { /* the receipt still records it; the count is checked again in the workspace */ }
-      // "Allow for 15 min" and "Always allow this here…" also stand for the same action afterwards (D144).
+      // "Allow for 15 min" and "Always allow this here…" also stand for the same action afterwards.
       if ((answer.lasts === "15m" && offers.fifteen) || (answer.lasts === "always" && offers.always)) {
         try {
           const made = makeAllowance({ rule, actionKey: key, reason, osUserDigest: record.os_user_digest, lasts: answer.lasts,
@@ -246,7 +246,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
   return { handler, note: () => last };
 }
 
-/** A block a person may act on afterwards, from the tray (D144): what the Scopebond window may offer for it now. */
+/** A block a person may act on afterwards, from the tray: what the Scopebond window may offer for it now. */
 export interface BlockedQuestion {
   item: BlockedItem;
   title: string;

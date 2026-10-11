@@ -1,6 +1,6 @@
 // A hook call reads `rules.json` and `cloud.json` from several places (the decision, the database guard, delivery, the rules
 // check, upkeep). Each read after the first comes from here while the file is unchanged on disk (same size and modification
-// time); a write by this process forgets the entry, and a write by another process changes what `stat` reports (SB407).
+// time); a write by this process forgets the entry, and a write by another process changes what `stat` reports.
 // The file is opened once and both the stat and the read use that descriptor, so the size and time that key the cache
 // belong to the text read.
 import { closeSync, fstatSync, openSync, readFileSync, statSync } from "node:fs";

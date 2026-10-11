@@ -81,7 +81,7 @@ export const EXECUTION_STATES = [
   "observed_after",
 ] as const;
 
-// Evidence classes (§15 / D65): how strong a receipt's evidence is. Additive
+// Evidence classes: how strong a receipt's evidence is. Additive
 // payload field; the verifier never upgrades an explicitly set class.
 export const EVIDENCE_CLASSES = ["signed_intent", "pep_authorized", "boundary"] as const;
 export const BOUNDARY_GATES = ["merge", "deploy", "egress", "platform_event"] as const;

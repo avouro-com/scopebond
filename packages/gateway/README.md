@@ -55,6 +55,10 @@ they remain suitable for simulation and passive observation.
 
 ## Quickstart
 
+**Preview:** running the gateway as a standalone server (below) is a preview. It works and is tested, but its
+configuration and routes may still change between minor versions. Embedding it as a library (see "Embed it") and
+the Scopebond hook are the supported paths.
+
 Scaffold a working key, key registry and starter policy, then follow the printed steps:
 
 ```bash

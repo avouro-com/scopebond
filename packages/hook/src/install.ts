@@ -1,4 +1,4 @@
-// SB112 — the user-level installer. One install per developer machine (not per repo):
+// The user-level installer. One install per developer machine (not per repo):
 // keys and a starter policy live in a user-level home (~/.scopebond, override
 // SCOPEBOND_HOME), and the hook is registered by absolute path in the user-level agent
 // config (~/.claude/settings.json, ~/.cursor/hooks.json, ~/.codex/hooks.json). When a
@@ -218,7 +218,7 @@ export function resolveConfigDir(payloadCwd: string | undefined): string {
 /** A project policy present but ignored because it is not trusted (for status/doctor). */
 export function untrustedProjectPolicy(payloadCwd: string | undefined): string | null {
   if (process.env.SCOPEBOND_HOOK_DIR || !existsSync(join(userHome(), "policy.json"))) return null;
-  // Run from the user's home folder, `<cwd>/.scopebond` is the user-level home itself, not a project setup (SB384).
+  // Run from the user's home folder, `<cwd>/.scopebond` is the user-level home itself, not a project setup.
   const fold = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
   const home = fold(userHome());
   const dirs = [payloadCwd, process.env.CLAUDE_PROJECT_DIR].filter(Boolean).map((d) => join(d as string, ".scopebond"));
@@ -340,7 +340,7 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
       : { matcher: "*", hooks: [{ type: "command", command }] };
     if (at >= 0) list[at] = entry; else list.push(entry);
   }
-  // SB276: a settings file that already holds exactly this entry is left byte-for-byte
+  // A settings file that already holds exactly this entry is left byte-for-byte
   // untouched — no rewrite, no backup. A running agent session watches this file, and
   // rewriting it (even with the same content) is what disturbed a live session on re-login.
   if (before !== null && JSON.stringify(config) === before) return file;

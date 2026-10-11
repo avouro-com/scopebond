@@ -1,4 +1,4 @@
-// SB273/SB274: what delivery to the workspace looks like from this computer — the persisted
+// What delivery to the workspace looks like from this computer — the persisted
 // delivery state plus the queue — in the lines `status` prints and the problems `doctor` reports.
 
 import { existsSync } from "node:fs";

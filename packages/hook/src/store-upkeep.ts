@@ -1,4 +1,4 @@
-// Keeping the local store small (SB401–SB405, D144). Every action still gets a signed receipt here; what is bounded is how
+// Keeping the local store small (–). Every action still gets a signed receipt here; what is bounded is how
 // long the computer keeps one the workspace already holds. A receipt is removed only after the workspace acknowledged it,
 // and only once the retention window (30 days by default, 7–365 as the workspace sets it) has passed. A computer with no
 // workspace keeps everything until `prune`. The Scopebond Agent runs the upkeep; a hook-only install runs a short pass

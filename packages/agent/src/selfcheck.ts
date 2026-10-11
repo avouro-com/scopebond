@@ -1,4 +1,4 @@
-// The daily end-to-end self-check (SB347). The agent checks this computer's side (the hook entry
+// The daily end-to-end self-check. The agent checks this computer's side (the hook entry
 // is present and starts, autostart works, nothing is stuck, the connection is not about to lapse),
 // then signs the day with the key it enrolled with and sends everything to the workspace, which
 // verifies the signature. A pass means the whole path works, end to end; a failure names what broke.
@@ -27,7 +27,7 @@ export function localChecks(dir: string, connection: HookConnection, harnesses: 
   checks.push({ id: "hook_entry", ok: entries.length > 0, ...(entries.length ? {} : { detail: "no agent setting holds the Scopebond hook" }) });
   const broken = entries.filter((c) => !hookCommandResolves(c));
   checks.push({ id: "hook_starts", ok: entries.length > 0 && broken.length === 0, ...(broken.length ? { detail: `${broken.length} hook command(s) cannot start` } : {}) });
-  // SB302: the hook twice in the user settings, or an enabled plugin beside them, signs and sends every action twice.
+  // The hook twice in the user settings, or an enabled plugin beside them, signs and sends every action twice.
   const dupes = harnesses.flatMap((h) => duplicateHooks(h, homedir()) ? [h] : []);
   checks.push({ id: "hook_duplicates", ok: dupes.length === 0, ...(dupes.length ? { detail: `the Scopebond hook runs more than once per action for ${dupes.join(", ")} (fix: ${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/hook@${hookVersion()} dedupe)` } : {}) });
   const autostart = autostartHealth(dir);
