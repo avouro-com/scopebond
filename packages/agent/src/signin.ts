@@ -1,0 +1,169 @@
+// The first sign-in of a signed Windows install, with no terminal. The installer may name the workspace
+// (`msiexec … WORKSPACE=https://…`, kept as `Workspace` under HKCU, or HKLM for every user, `Software\Avouro\Scopebond`);
+// without one it is Scopebond Cloud. Only an https origin read from there is used: never a URL from a link, a
+// notification or anything else that reaches the agent.
+//
+// The agent runs the device-code sign-in itself (the same requests the hook's `login` makes): it asks the workspace for a
+// code, opens the approval page (on that workspace only), and keeps waiting for the approval in the background, while the
+// tray shows the code. Once approved it completes the enrollment with the hook's own `connectCloud`, then does the rest of
+// a first-time setup: the hook entries for the coding agents on this computer, and autostart. It runs inside the agent
+// process, so no second program is left waiting when the agent stops or is updated.
+
+import { execFileSync } from "node:child_process";
+import { hostname } from "node:os";
+import {
+  configuredHookCommands, connectCloud, isHarnessConfigured, loadConnection, observationStatus, scaffold, userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
+  type Harness,
+} from "@scopebond/hook";
+import { expectedHarnesses } from "./agent.js";
+import { windowsTool } from "./native-update.js";
+import { openInBrowser, sameOrigin } from "./summary.js";
+import { maintainedHookCommand } from "./update.js";
+import type { ReconnectStart } from "./reconnect.js";
+
+/** The workspace a signed install signs in to when its installer named none. */
+export const DEFAULT_WORKSPACE = "https://cloud.scopebond.com";
+/** Where the installer keeps its settings: this user's first, then the machine's (an install for every user). */
+export const SETTINGS_KEYS = ["HKCU\\Software\\Avouro\\Scopebond", "HKLM\\Software\\Avouro\\Scopebond"] as const;
+export const WORKSPACE_VALUE = "Workspace";
+
+/** Reads one registry string value; null when it is not there. Tests pass their own. */
+export type RegistryReader = (key: string, name: string) => string | null;
+
+/** `reg query <key> /v <name>`, Windows' own reg.exe by its full path, in the 64-bit view the installer writes. */
+export const readRegistryValue: RegistryReader = (key, name) => {
+  let out: string;
+  try { out = execFileSync(windowsTool("reg"), ["query", key, "/v", name, "/reg:64"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, timeout: 10_000 }); }
+  catch { return null; }
+  const line = out.split(/\r?\n/).find((l) => l.trim().toLowerCase().startsWith(`${name.toLowerCase()} `));
+  return /^\s*\S+\s+REG_(?:EXPAND_)?SZ\s+(.*?)\s*$/.exec(line ?? "")?.[1] ?? null;
+};
+
+/** The https origin of `value`, or null for anything else (another scheme, a user name or password in it, not a URL). */
+export function httpsOrigin(value: string): string | null {
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "https:" || url.username || url.password || !url.hostname) return null;
+    return url.origin;
+  } catch { return null; }
+}
+
+/** The workspace the installer named (this user's setting, then the machine's), else Scopebond Cloud. A setting that is
+ *  there but is not an https address is refused, not skipped: signing in somewhere else would surprise whoever set it. */
+export function installedWorkspace(read: RegistryReader = readRegistryValue): { origin: string; from: string } | { error: string } {
+  for (const key of SETTINGS_KEYS) {
+    const value = read(key, WORKSPACE_VALUE);
+    if (value === null || value.trim() === "") continue;
+    const origin = httpsOrigin(value);
+    if (!origin) return { error: `the ${WORKSPACE_VALUE} setting in ${key} is not an https address of a workspace (${value.slice(0, 100)})` };
+    return { origin, from: key };
+  }
+  return { origin: DEFAULT_WORKSPACE, from: "default" };
+}
+
+/** Left in the Scopebond folder once the agent has started a first sign-in by itself, so it never does so twice. */
+export const FIRST_SIGNIN_FILE = "first-signin.json";
+
+export interface FirstSignInOptions {
+  fetchImpl?: typeof fetch;
+  open?: (url: string) => void;
+  /** The coding agents to set the hook up for (default: Claude Code, and Cursor and Codex where they are installed). */
+  harnesses?: Harness[];
+  /** Turns autostart on (the agent's own enableAutostart); returns what it did. */
+  autostart?: () => string;
+  /** Called once, when the sign-in ends: connected, or why not. */
+  onDone?: (outcome: { ok: true; lines: string[] } | { ok: false; error: string }) => void;
+  /** The longest the agent waits for the approval, whatever the workspace says (default 15 minutes). */
+  maxWaitMs?: number;
+}
+
+export interface FirstSignIn { started: ReconnectStart; cancel(): void; done: Promise<boolean> }
+
+const textOf = (v: unknown, max = 2048): string => (typeof v === "string" ? v.slice(0, max) : "");
+
+/** Start a first-time sign-in to `origin`. Resolves with the code and the approval page once the workspace gave them (the
+ *  page is opened in the browser when it is on that workspace); the approval is waited for in the background. */
+export async function startFirstSignIn(dir: string, origin: string, o: FirstSignInOptions = {}): Promise<FirstSignIn | { error: string }> {
+  const fetchImpl = o.fetchImpl ?? fetch;
+  const post = async (path: string, body: unknown, signal?: AbortSignal) => {
+    const res = await fetchImpl(new URL(path, origin).toString(), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: "error",
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+    });
+    let json: Record<string, unknown> = {};
+    try { json = await res.json() as Record<string, unknown>; } catch { /* no body */ }
+    return { status: res.status, json, retryAfter: res.headers.get("retry-after") };
+  };
+  let start: Awaited<ReturnType<typeof post>>;
+  try { start = await post("/v1/device/code", { client_name: hostname(), harness: "claude" }); }
+  catch (error) { return { error: `could not reach ${origin}: ${(error as Error).message}` }; }
+  const deviceCode = textOf(start.json.device_code);
+  const userCode = textOf(start.json.user_code, 40);
+  if (start.status !== 200 || !deviceCode || !userCode) return { error: `${origin} did not start a sign-in (HTTP ${start.status})` };
+  const page = textOf(start.json.verification_uri_complete) || textOf(start.json.verification_uri) || origin;
+  // The approval page only when it is on the workspace signed in to; otherwise the tray shows the code alone.
+  const started: ReconnectStart = { user_code: userCode, verification_url: sameOrigin(page, origin) ? page : origin };
+  if (sameOrigin(page, origin)) (o.open ?? openInBrowser)(page);
+
+  const stop = new AbortController();
+  let intervalMs = Math.max(1, Math.min(60, Number(start.json.interval ?? 5) || 5)) * 1000;
+  const lifetimeMs = Math.max(60, Math.min(3600, Number(start.json.expires_in ?? 600) || 600)) * 1000;
+  const deadline = Date.now() + Math.min(lifetimeMs, o.maxWaitMs ?? 15 * 60_000);
+  const sleep = (ms: number) => new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    stop.signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+  const finish = (outcome: Parameters<NonNullable<FirstSignInOptions["onDone"]>>[0]) => { try { o.onDone?.(outcome); } catch { /* reported by the caller */ } return outcome.ok; };
+
+  const done = (async (): Promise<boolean> => {
+    // Keys and the starter rules first, as the hook's sign-in does: the enrollment binds this computer's keys.
+    try { scaffold(dir, {}); } catch (error) { return finish({ ok: false, error: `the Scopebond folder could not be set up: ${(error as Error).message}` }); }
+    while (Date.now() < deadline && !stop.signal.aborted) {
+      await sleep(intervalMs);
+      if (stop.signal.aborted) break;
+      let polled: Awaited<ReturnType<typeof post>>;
+      try { polled = await post("/v1/device/token", { device_code: deviceCode }, stop.signal); }
+      catch { continue; } // a passing network problem: keep waiting until the deadline
+      if (polled.status === 429 || polled.status === 503) { intervalMs = Math.max(intervalMs, Math.min(300, Number(polled.retryAfter) || 10) * 1000); continue; }
+      const enrollment = polled.json.enrollment;
+      if (polled.status === 200 && enrollment && typeof enrollment === "object") {
+        try { return finish({ ok: true, lines: await completeSetup(dir, origin, enrollment, o) }); }
+        catch (error) { return finish({ ok: false, error: `the sign-in was approved but could not be completed: ${(error as Error).message}` }); }
+      }
+      const error = polled.json.error;
+      if (error === "authorization_pending") continue;
+      if (error === "slow_down") { intervalMs += 5_000; continue; }
+      if (error === "access_denied") return finish({ ok: false, error: "the sign-in was denied in the workspace; nothing was connected" });
+      if (error === "expired_token") break;
+      return finish({ ok: false, error: `the sign-in failed (${textOf(error, 80) || `HTTP ${polled.status}`})` });
+    }
+    return finish({ ok: false, error: stop.signal.aborted ? "the sign-in was stopped" : "the code expired before it was approved" });
+  })();
+  return { started, cancel: () => stop.abort(), done };
+}
+
+/** What a first-time setup does after the approval: enroll, then the hook entries and autostart. */
+async function completeSetup(dir: string, origin: string, enrollment: object, o: FirstSignInOptions): Promise<string[]> {
+  const lines: string[] = [];
+  const connected = await connectCloud(dir, origin, enrollment as Parameters<typeof connectCloud>[2], o.fetchImpl);
+  lines.push(`connected to ${connected.url}`);
+  // The hook entries: the hook this agent carries, for each coding agent on this computer, where none is there yet (an
+  // existing Scopebond entry is the agent's upkeep's to keep current).
+  const harnesses = o.harnesses ?? expectedHarnesses();
+  for (const harness of harnesses) {
+    const file = userHarnessFile(harness);
+    if (isHarnessConfigured(file)) continue;
+    writeHarnessConfig(file, harness, maintainedHookCommand(harness));
+    lines.push(`put the Scopebond hook in ${file}`);
+  }
+  // Session and after-action observations, when the workspace granted them (Claude Code only), as the hook's sign-in does.
+  if (harnesses.includes("claude") && observationStatus(loadConnection(dir)).state === "on") {
+    const file = userHarnessFile("claude");
+    const command = configuredHookCommands(file)[0];
+    if (command) { wireLifecycleHooks(file, command); lines.push(`turned on session and after-action observations in ${file}`); }
+  }
+  if (o.autostart) {
+    try { lines.push(o.autostart()); } catch (error) { lines.push(`autostart was not turned on: ${(error as Error).message}`); }
+  }
+  return lines;
+}

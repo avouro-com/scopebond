@@ -4,13 +4,16 @@
 // with an updater key (a separate Ed25519 key; the public halves it trusts are built into this program, each with a key id
 // and an optional last day of use, so the key can be rotated), the installer's SHA-256 and size are the manifest's, and
 // the installer's Authenticode signature is valid and names Avouro LLC. The helper that runs msiexec after this agent has
-// exited checks the digest, size and signature again from a handle that keeps the file from being changed, and only then
-// starts msiexec. Anything else and nothing is installed: the agent says the update could not be verified. An install for
-// every user (Program Files) never updates itself; the organisation that deployed it updates it.
+// exited (a copy of this signed executable, `update-helper`) checks the digest, size and signature again from a handle that
+// keeps the file from being changed, and only then starts msiexec, with a verbose log in the updates folder. Anything else
+// and nothing is installed: the agent says the update could not be verified. The helper then checks that the new agent
+// starts and reports its version; a version that did not install or start is recorded and not tried again for a day.
+// The version comes from the workspace's `native_agent` (the newest published signed build), never its npm `agent`.
+// An install for every user (Program Files) never updates itself; the organisation that deployed it updates it.
 
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";
 import { isSingleExecutable } from "@scopebond/hook";
 import { windowsSystemProgram, type WindowsSystemProgram } from "@scopebond/gateway/node";
@@ -145,7 +148,7 @@ export async function fetchVerifiedInstaller(version: string, o: {
   const bytes = await get(entry.name);
   if (!bytes) return { ok: false, reason: "the installer could not be downloaded" };
   if (bytes.length !== entry.size || createHash("sha256").update(bytes).digest("hex") !== entry.sha256) return { ok: false, reason: "the installer is not the one the manifest names" };
-  const folder = join(o.dir, "updates");
+  const folder = updatesDir(o.dir);
   mkdirSync(folder, { recursive: true });
   const path = join(folder, entry.name);
   writeFileSync(path, bytes);
@@ -155,30 +158,33 @@ export async function fetchVerifiedInstaller(version: string, o: {
   return { ok: true, path, version, sha256: entry.sha256, size: entry.size };
 }
 
+/** Where updates are downloaded, checked and logged: `updates` in the Scopebond folder. */
+export function updatesDir(dir: string): string {
+  return join(dir, "updates");
+}
+
+/** msiexec's verbose log of installing `version`, beside the installer. */
+export function msiLogPath(dir: string, version: string): string {
+  return join(updatesDir(dir), `msi-${version}.log`);
+}
+
 /** What the helper that installs after this agent exits records, beside the installer. */
 export const INSTALL_RESULT = "install-result.json";
 
-export interface InstallResult { at: string; version: string; installed: boolean; reason: string | null; exit_code: number | null }
+export interface InstallResult { at: string; version: string; installed: boolean; reason: string | null; exit_code: number | null; log?: string | null }
 
-/** The helper's script. It is constant text: every value (the installer, its digest and size, the publisher rule, where to
- *  record the outcome) reaches it through environment variables, never through the script itself.
+/** The check right before installing, in Windows PowerShell (5.1) for Windows' own Authenticode verdict. It is constant
+ *  text: the installer, its digest and size and the publisher rule reach it as environment variables (SB_MSI, SB_SHA256,
+ *  SB_SIZE, SB_PUBLISHER), never through the script itself.
  *
- *  Between the download and the install the agent exits and up to a minute passes, so the helper checks the installer again
- *  right before it runs msiexec, the same way the agent did: its size and SHA-256 are the signed manifest's, its Authenticode
- *  signature is valid and its signer matches the same anchored publisher rule (PUBLISHER). It holds the file open, denying
- *  writes and deletes, from that check until msiexec has finished, so the file checked is the file installed. Any mismatch
- *  installs nothing and records why in INSTALL_RESULT; the agent is started again either way. */
-export const INSTALL_HELPER_SCRIPT = [
+ *  It opens the installer sharing it for reading only (nobody can change or delete it while the handle is open), checks
+ *  its size and SHA-256 against the signed manifest's from that handle, then its Authenticode signature (valid, and the
+ *  signer matches the same anchored publisher rule as the first check). It prints one JSON line, `{"ok":true}` or
+ *  `{"ok":false,"reason":…}`. When the installer checks out it keeps the handle open until its standard input closes: the
+ *  helper closes it once msiexec has finished, so the file checked is the file installed. Exit code 0 when it checks out,
+ *  3 when it does not. */
+export const INSTALLER_CHECK_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
-  "function Write-Result([bool] $installed, $reason, $code) {",
-  "  try {",
-  "    $json = [ordered]@{ at = [DateTime]::UtcNow.ToString('o'); version = $env:SB_VERSION; installed = $installed; reason = $reason; exit_code = $code } | ConvertTo-Json -Compress",
-  "    [IO.File]::WriteAllText($env:SB_RESULT, $json, (New-Object Text.UTF8Encoding $false))",
-  "  } catch { }",
-  "}",
-  // The native tray first: it would start the old agent again, and the installer replaces its file. Only this install's.
-  "if ($env:SB_TRAY) { try { Get-Process -Name scopebond-tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:SB_TRAY } | Stop-Process -Force -ErrorAction SilentlyContinue } catch { } }",
-  "try { Wait-Process -Id ([int]$env:SB_PID) -Timeout 60 -ErrorAction SilentlyContinue } catch { }",
   "$lock = $null",
   "$reason = $null",
   "try {",
@@ -187,7 +193,7 @@ export const INSTALL_HELPER_SCRIPT = [
   "  else {",
   "    $sha = [Security.Cryptography.SHA256]::Create()",
   "    $digest = ([BitConverter]::ToString($sha.ComputeHash($lock)) -replace '-', '').ToLowerInvariant()",
-  "    if ($digest -cne $env:SB_SHA256.ToLowerInvariant()) { $reason = 'the installer changed after it was checked: its SHA-256 is not the manifest''s' }",
+  "    if ($digest -cne \"$($env:SB_SHA256)\".ToLowerInvariant()) { $reason = 'the installer changed after it was checked: its SHA-256 is not the manifest''s' }",
   "    else {",
   "      $sig = Get-AuthenticodeSignature -LiteralPath $env:SB_MSI",
   "      $subject = \"$($sig.SignerCertificate.Subject)\"",
@@ -196,26 +202,23 @@ export const INSTALL_HELPER_SCRIPT = [
   "    }",
   "  }",
   "} catch { $reason = \"the installer could not be checked: $($_.Exception.Message)\" }",
-  "try {",
-  "  if ($reason) { Write-Result $false $reason $null }",
-  "  else {",
-  "    try {",
-  // Windows' own msiexec by its full path (SB_MSIEXEC only replaces it in tests).
-  "      $msiexec = if ($env:SB_MSIEXEC) { $env:SB_MSIEXEC } else { Join-Path $env:SystemRoot 'System32\\msiexec.exe' }",
-  "      $p = Start-Process -FilePath $msiexec -ArgumentList @('/i', ('\"' + $env:SB_MSI + '\"'), '/qn', '/norestart') -Wait -PassThru",
-  "      $code = [int]$p.ExitCode",
-  "      if ($code -eq 0 -or $code -eq 3010) { Write-Result $true $null $code } else { Write-Result $false \"msiexec ended with exit code $code\" $code }",
-  "    } catch { Write-Result $false \"msiexec could not start: $($_.Exception.Message)\" $null }",
-  "  }",
-  "} finally { if ($lock) { $lock.Dispose() } }",
-  // Installed or not, the tray starts again (it starts the agent), or else the agent through autostart's launcher.
-  "if ($env:SB_TRAY) { Start-Process -FilePath $env:SB_TRAY } elseif ($env:SB_LAUNCHER) { Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\\cmd.exe') -ArgumentList @('/d', '/s', '/c', ('\"\"' + $env:SB_LAUNCHER + '\"\"')) -WindowStyle Hidden }",
+  "if ($reason) {",
+  "  if ($lock) { $lock.Dispose() }",
+  "  [Console]::Out.WriteLine((@{ ok = $false; reason = $reason } | ConvertTo-Json -Compress))",
+  "  exit 3",
+  "}",
+  "[Console]::Out.WriteLine('{\"ok\":true}')",
+  "[Console]::Out.Flush()",
+  // Held until the helper says msiexec is done (it closes this standard input).
+  "try { [void][Console]::In.ReadToEnd() } catch { }",
+  "$lock.Dispose()",
+  "exit 0",
 ].join("\n");
 
-/** The helper's script (INSTALL_HELPER_SCRIPT): stop the native tray, wait for this agent to exit, check the installer
- *  again, install, then start the tray again (or the agent through autostart's launcher). */
-export function installAfterExitScript(): string {
-  return INSTALL_HELPER_SCRIPT;
+/** The check alone, as the helper runs it (INSTALLER_CHECK_SCRIPT): exit 0 when SB_MSI is still the verified installer,
+ *  3 when it is not. */
+export function installerRecheckScript(): string {
+  return INSTALLER_CHECK_SCRIPT;
 }
 
 /** The native Scopebond tray the installer puts beside the single executable (`scopebond-tray.exe`), when it is there. It
@@ -226,32 +229,61 @@ export function nativeTrayPath(execPath = process.execPath, single = isSingleExe
   return exists(tray) ? tray : null;
 }
 
-/** The helper's program, arguments and environment values (pure, so it can be tested). */
-export function installHelper(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, o: { msiexec?: string; publisher?: RegExp; tray?: string | null } = {}): { program: string; args: string[]; env: Record<string, string> } {
+/** The agent's subcommand that installs an update after the agent has exited (internal; see update-helper.ts). */
+export const UPDATE_HELPER_COMMAND = "update-helper";
+
+/** The copy of this signed executable that runs as the helper: in the updates folder, named for the agent it replaces, so
+ *  the installer can replace the installed file while the helper runs. */
+export function helperCopyPath(dir: string, pid: number): string {
+  return join(updatesDir(dir), `scopebond-update-helper-${pid}.exe`);
+}
+
+/** The helper copies an earlier update left behind (a running helper's own file cannot be removed; it is next time). */
+export function removeOldHelpers(dir: string, keep: string | null = null): void {
+  try {
+    for (const name of readdirSync(updatesDir(dir))) {
+      const file = join(updatesDir(dir), name);
+      if (/^scopebond-update-helper-\d+\.exe$/.test(name) && file !== keep) rmSync(file, { force: true });
+    }
+  } catch { /* no updates folder, or a helper still running */ }
+}
+
+/** Everything the helper needs, as environment values for it: never on its command line, never inside a script. */
+export interface HelperPlan { program: string; args: string[]; env: Record<string, string> }
+
+/** The helper's program (the copy of this executable), its one argument and its environment (pure, so it can be tested). */
+export function installHelper(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, o: { dir: string; publisher?: RegExp; tray?: string | null; previous?: string }): HelperPlan {
+  const dir = o.dir;
   return {
-    program: windowsTool("powershell"),
-    args: ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", INSTALL_HELPER_SCRIPT],
+    // Named from the Scopebond folder and this agent's process id only: nothing from the release reaches the command line.
+    program: helperCopyPath(dir, pid),
+    args: [UPDATE_HELPER_COMMAND],
     env: {
       SB_PID: String(pid),
+      SB_HOME: dir,
       SB_MSI: installer.path,
       SB_VERSION: installer.version,
+      SB_PREVIOUS: o.previous ?? "",
       SB_SHA256: installer.sha256,
       SB_SIZE: String(installer.size),
       SB_PUBLISHER: (o.publisher ?? PUBLISHER).source,
       SB_RESULT: join(dirname(installer.path), INSTALL_RESULT),
-      SB_MSIEXEC: o.msiexec ?? windowsTool("msiexec"),
+      SB_LOG: msiLogPath(dir, installer.version),
       SB_LAUNCHER: launcher ?? "",
       SB_TRAY: o.tray ?? "",
     },
   };
 }
 
-/** Install it once this agent has exited, then start the tray again (or the agent through autostart's launcher). A detached
- *  helper does it, because the installer replaces this very file; it checks the installer again first (INSTALL_HELPER_SCRIPT). */
-export function installAfterExit(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, tray: string | null = null): void {
-  const helper = installHelper(installer, pid, launcher, { tray });
-  const child = spawn(helper.program, helper.args, { detached: true, stdio: "ignore", windowsHide: true, env: powershellEnv(helper.env) });
-  child.on("error", () => { /* the next sign-in starts the agent */ });
+/** Install it once this agent has exited, then start the tray again (or the agent through autostart's launcher). The
+ *  helper is this signed executable itself, from a copy in the updates folder (the installer replaces the installed file),
+ *  run detached with `update-helper`; it checks the installer again first (INSTALLER_CHECK_SCRIPT), runs Windows' own
+ *  msiexec by its full path with a verbose log, and checks that the new agent starts. Throws when the copy cannot be made. */
+export function installAfterExit(installer: { path: string; version: string; sha256: string; size: number }, pid: number, launcher: string | null, tray: string | null, o: { dir: string; previous?: string }): void {
+  const helper = installHelper(installer, pid, launcher, { tray, dir: o.dir, previous: o.previous });
+  copyFileSync(process.execPath, helper.program);
+  const child = spawn(helper.program, helper.args, { detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env, ...helper.env } });
+  child.on("error", () => { /* the next start records that the update did not finish */ });
   child.unref();
 }
 
@@ -265,44 +297,37 @@ export function installerUnchanged(installer: Pick<VerifiedInstaller, "path" | "
   } catch { return false; }
 }
 
-/** PowerShell that opens $env:SB_MSI so nobody can change it while the handle is open, checks its size ($env:SB_SIZE),
- *  SHA-256 ($env:SB_SHA256) and Authenticode signature (valid, Avouro LLC), and runs `whenGood` only if all hold. */
-function recheck(whenGood: string[]): string[] {
-  return [
-    "$ok = $false",
-    "$f = $null",
-    "try {",
-    "  $f = [System.IO.File]::Open($env:SB_MSI, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)",
-    "  if ($f.Length -eq [int64]$env:SB_SIZE) {",
-    "    $sha = [System.Security.Cryptography.SHA256]::Create()",
-    "    $h = -join ($sha.ComputeHash($f) | ForEach-Object { $_.ToString('x2') })",
-    "    if ($h -eq $env:SB_SHA256) {",
-    "      $s = Get-AuthenticodeSignature -LiteralPath $env:SB_MSI",
-    "      $ok = (\"$($s.Status)\" -eq 'Valid') -and (\"$($s.SignerCertificate.Subject)\" -match '(^|,\\s*)O=Avouro LLC(,|$)')",
-    "    }",
-    "  }",
-    ...whenGood.map((line) => `  if ($ok) { ${line} }`),
-    "} catch { $ok = $false } finally { if ($f) { $f.Dispose() } }",
-  ];
-}
-
-/** The helper's check alone: exit 0 when $env:SB_MSI is still the verified installer, 3 when it is not. */
-export function installerRecheckScript(): string {
-  return [...recheck([]), "if ($ok) { exit 0 } else { exit 3 }"].join("\n");
-}
-
-/** The helper script that installs after this agent exits (INSTALL_HELPER_SCRIPT). */
-export function installHelperScript(): string {
-  return INSTALL_HELPER_SCRIPT;
-}
-
 /** What the last install helper recorded, once: the file is removed when read. Null when there is nothing. */
 export function takeInstallResult(dir: string): InstallResult | null {
-  const file = join(dir, "updates", INSTALL_RESULT);
+  const file = join(updatesDir(dir), INSTALL_RESULT);
   try {
     const raw = readFileSync(file, "utf8").replace(/^\uFEFF/, "");
     rmSync(file, { force: true });
     const r = JSON.parse(raw) as Partial<InstallResult>;
-    return { at: String(r.at ?? ""), version: String(r.version ?? ""), installed: r.installed === true, reason: typeof r.reason === "string" ? r.reason : null, exit_code: typeof r.exit_code === "number" ? r.exit_code : null };
+    return {
+      at: String(r.at ?? ""), version: String(r.version ?? ""), installed: r.installed === true, reason: typeof r.reason === "string" ? r.reason : null,
+      exit_code: typeof r.exit_code === "number" ? r.exit_code : null, log: typeof r.log === "string" ? r.log : null,
+    };
   } catch { return null; }
+}
+
+/** Written by the agent right before it hands an update to the helper, and removed when an agent next starts and has heard
+ *  how it went. One left behind for long means the helper never finished. */
+export const UPDATE_PENDING_FILE = "update-pending.json";
+/** How long a handed-over update may take before the agent counts it as not finished. */
+export const UPDATE_PENDING_MS = 15 * 60_000;
+
+export function writeUpdatePending(dir: string, version: string, now = Date.now()): void {
+  try { writeFileSync(join(updatesDir(dir), UPDATE_PENDING_FILE), `${JSON.stringify({ version, at: now })}\n`, { mode: 0o600 }); } catch { /* best effort */ }
+}
+
+export function readUpdatePending(dir: string): { version: string; at: number } | null {
+  try {
+    const r = JSON.parse(readFileSync(join(updatesDir(dir), UPDATE_PENDING_FILE), "utf8")) as { version?: unknown; at?: unknown };
+    return typeof r.version === "string" && typeof r.at === "number" ? { version: r.version, at: r.at } : null;
+  } catch { return null; }
+}
+
+export function clearUpdatePending(dir: string): void {
+  rmSync(join(updatesDir(dir), UPDATE_PENDING_FILE), { force: true });
 }

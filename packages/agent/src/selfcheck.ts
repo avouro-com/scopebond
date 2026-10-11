@@ -14,6 +14,8 @@ import {
 } from "@scopebond/hook";
 import { autostartHealth } from "./autostart.js";
 import { installKind } from "./native-update.js";
+import { hookCli } from "./commands.js";
+import { missingPrograms } from "./hook-entries.js";
 
 export interface SelfCheckItem { id: string; ok: boolean; detail?: string }
 
@@ -26,10 +28,13 @@ export function localChecks(dir: string, connection: HookConnection, harnesses: 
   const entries = harnesses.flatMap((h) => configuredHookCommands(userHarnessFile(h)).filter((c) => isScopebondHookCommand(c)));
   checks.push({ id: "hook_entry", ok: entries.length > 0, ...(entries.length ? {} : { detail: "no agent setting holds the Scopebond hook" }) });
   const broken = entries.filter((c) => !hookCommandResolves(c));
-  checks.push({ id: "hook_starts", ok: entries.length > 0 && broken.length === 0, ...(broken.length ? { detail: `${broken.length} hook command(s) cannot start` } : {}) });
+  // A hook entry whose program is gone (Scopebond removed for every user of this computer, or an npm copy uninstalled)
+  // names the missing file, so the person knows what to remove or install again.
+  const gone = missingPrograms(broken);
+  checks.push({ id: "hook_starts", ok: entries.length > 0 && broken.length === 0, ...(broken.length ? { detail: `${broken.length} hook command(s) cannot start${gone.length ? ` (${gone.join(", ")} no longer there)` : ""}` } : {}) });
   // The hook twice in the user settings, or an enabled plugin beside them, signs and sends every action twice.
   const dupes = harnesses.flatMap((h) => duplicateHooks(h, homedir()) ? [h] : []);
-  checks.push({ id: "hook_duplicates", ok: dupes.length === 0, ...(dupes.length ? { detail: `the Scopebond hook runs more than once per action for ${dupes.join(", ")} (fix: ${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/hook@${hookVersion()} dedupe)` } : {}) });
+  checks.push({ id: "hook_duplicates", ok: dupes.length === 0, ...(dupes.length ? { detail: `the Scopebond hook runs more than once per action for ${dupes.join(", ")} (fix: ${hookCli("dedupe")})` } : {}) });
   const autostart = autostartHealth(dir);
   checks.push({ id: "autostart", ok: autostart.ok, ...(autostart.ok ? {} : { detail: autostart.detail }) });
   const { pending, oldest } = queueStatus(dir);

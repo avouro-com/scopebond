@@ -1,11 +1,14 @@
 // "Reconnect…" from the tray, with no terminal. The agent runs the hook's own sign-in (`login <workspace>
-// --no-install`) for the workspace this computer is already connected to, never a URL from a link or a notification. It reads
+// --no-install`) for the workspace this computer is already connected to (a signed install that was never connected signs
+// in for the first time instead: signin.ts), never a URL from a link or a notification. It reads
 // the code the sign-in prints, opens the approval page on that workspace, and the sign-in keeps waiting for the approval in
 // the background. The workspace lets the same computer keep its key, so records waiting on it are delivered as they are.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { homedir } from "node:os";
 import { hookSelfCommand, loadConnection } from "@scopebond/hook";
 import { openInBrowser, sameOrigin } from "./summary.js";
+import { hookCli } from "./commands.js";
 
 export interface ReconnectStart { user_code: string; verification_url: string }
 
@@ -21,7 +24,7 @@ export interface Reconnecting { child: ChildProcess; started: ReconnectStart }
 /** Start the sign-in. Resolves with the code once the sign-in prints it (or an error); `onDone` runs when it finishes. */
 export function startReconnect(dir: string, onDone: (ok: boolean) => void, spawnImpl: typeof spawn = spawn, open: (url: string) => void = openInBrowser): Promise<{ started: ReconnectStart; child: ChildProcess } | { error: string }> {
   const connection = loadConnection(dir);
-  if (!connection) return Promise.resolve({ error: "this computer was never connected to a workspace; sign in from a terminal first" });
+  if (!connection) return Promise.resolve({ error: `this computer was never connected to a workspace; connect it from a terminal: ${hookCli("login https://<your-workspace>")}` });
   const origin = new URL(connection.url).origin;
   // The hook this agent carries: its cli.js from npm, or this same file in the single executable.
   const [program, args] = hookSelfCommand(["login", origin, "--no-install"]);
@@ -29,7 +32,8 @@ export function startReconnect(dir: string, onDone: (ok: boolean) => void, spawn
     let output = "";
     let settled = false;
     const child = spawnImpl(program, args, {
-      env: { ...process.env, SCOPEBOND_HOME: dir }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+      // From the home folder, so a project's own Scopebond setup in the folder the agent started from never takes the sign-in.
+      cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: dir }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
     });
     const timer = setTimeout(() => { if (!settled) { settled = true; resolve({ error: "the workspace did not start a sign-in in time" }); } }, 30_000);
     const read = (chunk: Buffer) => {

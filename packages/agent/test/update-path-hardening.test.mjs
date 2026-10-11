@@ -181,7 +181,7 @@ test("the workspace's version answer is bounded: strict x.y.z, sane ranges, a si
   const big = async () => new Response(JSON.stringify({ policy: "recommended", hook: null, agent: next(), pad: "x".repeat(64 * 1024) }), { headers: { "content-type": "application/json" } });
   assert.equal(await fetchClientVersion(conn, big), null, "an oversized answer is refused");
   assert.equal(await fetchClientVersion(conn, async () => new Response("[1,2]")), null, "not an object");
-  assert.deepEqual(await fetchClientVersion(conn, cloud({ policy: "recommended", hook: hookVersion(), agent: next() })), { policy: "recommended", hook: hookVersion(), agent: next() });
+  assert.deepEqual(await fetchClientVersion(conn, cloud({ policy: "recommended", hook: hookVersion(), agent: next() })), { policy: "recommended", hook: hookVersion(), agent: next(), native_agent: null });
   let opts = null;
   await fetchClientVersion(conn, async (_u, o) => { opts = o; return new Response("{}", { status: 404 }); });
   assert.equal(opts.redirect, "error", "redirects are refused on this request");

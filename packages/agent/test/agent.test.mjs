@@ -240,6 +240,8 @@ test("the agent reads the versions its workspace names, and treats anything odd 
   const answers = [
     { status: 200, body: { policy: "recommended", hook: "0.15.0", agent: "0.2.0" } },
     { status: 200, body: { policy: "hold", hook: null, agent: null } },
+    { status: 200, body: { policy: "recommended", hook: "0.15.0", agent: "0.2.0", native_agent: "0.1.9" } },
+    { status: 200, body: { policy: "recommended", hook: null, agent: "0.2.0", native_agent: "0.2; rm" } },
     { status: 200, body: { policy: "recommended", hook: "latest; rm -rf", agent: "0.2.0" } },
     { status: 200, body: { policy: "stop", hook: null, agent: "0.2.0" } },
     { status: 401, body: { error: "revoked" } },
@@ -251,8 +253,11 @@ test("the agent reads the versions its workspace names, and treats anything odd 
     return new Response(JSON.stringify(next.body), { status: next.status, headers: { "content-type": "application/json" } });
   };
   const connection = { url: "https://workspace.example", credential: "sbm_test" };
-  assert.deepEqual(await fetchClientVersion(connection, fake), { policy: "recommended", hook: "0.15.0", agent: "0.2.0" });
-  assert.deepEqual(await fetchClientVersion(connection, fake), { policy: "hold", hook: null, agent: null });
+  // native_agent: the newest published signed build; an older workspace leaves it out (no native update).
+  assert.deepEqual(await fetchClientVersion(connection, fake), { policy: "recommended", hook: "0.15.0", agent: "0.2.0", native_agent: null });
+  assert.deepEqual(await fetchClientVersion(connection, fake), { policy: "hold", hook: null, agent: null, native_agent: null });
+  assert.deepEqual(await fetchClientVersion(connection, fake), { policy: "recommended", hook: "0.15.0", agent: "0.2.0", native_agent: "0.1.9" });
+  assert.equal(await fetchClientVersion(connection, fake), null, "a malformed native_agent refuses the whole answer too");
   assert.equal(await fetchClientVersion(connection, fake), null, "a malformed version refuses the whole answer");
   assert.equal(await fetchClientVersion(connection, fake), null, "an unknown policy refuses the whole answer");
   assert.equal(await fetchClientVersion(connection, fake), null);

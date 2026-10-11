@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fetchVerifiedInstaller, installerName, installerUnchanged, installHelperScript, installerRecheckScript, keyId, MANIFEST_DOMAIN, verifyManifest, windowsTool } from "../dist/index.js";
+import { fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript, keyId, MANIFEST_DOMAIN, verifyManifest, windowsTool } from "../dist/index.js";
 
 const newKey = () => {
   const k = generateKeyPairSync("ed25519");
@@ -49,14 +49,16 @@ test("the installer is checked again right before it runs: a replacement after t
   assert.equal(installerUnchanged(r, avouro), false, "a same-user replacement is caught before the helper starts");
   writeFileSync(r.path, msi);
   assert.equal(installerUnchanged(r, () => ({ valid: false, subject: "" })), false, "the signature is checked again too");
-  // The helper that runs msiexec checks digest, size and signature itself, from a handle that keeps the file from being
-  // changed, before it starts msiexec; and it starts Windows' own tools by their full paths.
-  const script = installHelperScript();
-  const at = (s) => { const i = script.indexOf(s); assert.ok(i >= 0, `the helper has ${s}`); return i; };
-  assert.ok(at("FileShare]::Read") < at("msiexec.exe"));
-  assert.ok(at("SB_SHA256") < at("msiexec.exe"));
-  assert.ok(at("Get-AuthenticodeSignature") < at("msiexec.exe"));
-  assert.match(script, /System32\\msiexec\.exe/);
+  // The helper's own check reads size, digest and signature from a handle that keeps the file from being changed, and says
+  // it checks out (then keeps holding the file while msiexec runs) only after all three; Windows' tools by full path.
+  const script = installerRecheckScript();
+  const at = (s) => { const i = script.indexOf(s); assert.ok(i >= 0, `the check has ${s}`); return i; };
+  assert.ok(at("FileShare]::Read") < at("$env:SB_SIZE"));
+  assert.ok(at("$env:SB_SIZE") < at("$env:SB_SHA256"));
+  assert.ok(at("$env:SB_SHA256") < at("Get-AuthenticodeSignature -LiteralPath"));
+  assert.ok(at("Get-AuthenticodeSignature -LiteralPath") < at("WriteLine('{\"ok\":true}')"));
+  assert.ok(at("WriteLine('{\"ok\":true}')") < at("ReadToEnd()"));
+  assert.match(windowsTool("msiexec"), /System32\\msiexec\.exe$/);
   assert.match(windowsTool("powershell"), /System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/);
 });
 
