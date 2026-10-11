@@ -1,16 +1,19 @@
 // What the CLI tells a person to do next, in the form their system runs. On Windows,
 // PowerShell's default script policy blocks the `npx`, `npm` and `scopebond-agent` script
 // shims, so every command printed there is the `.cmd` form, which PowerShell and Command
-// Prompt both run. Human output only; never on the per-action hook path.
+// Prompt both run. Installed by the signed installer, the program is `scopebond-agent.exe` itself (no script shim, no
+// Node), so the plain name is printed there. Human output only; never on the per-action hook path.
 
 import { cliCommand } from "./version.js";
+import { isSingleExecutable } from "./self.js";
 import { textOf } from "./text.js";
 
 const isWin = (platform: NodeJS.Platform) => platform === "win32";
 
-/** `scopebond-agent <sub>` as the person types it. */
-export function agentCommand(sub: string, platform: NodeJS.Platform = process.platform): string {
-  return `${isWin(platform) ? "scopebond-agent.cmd" : "scopebond-agent"} ${sub}`;
+/** `scopebond-agent <sub>` as the person types it: the installer's program by its plain name, or npm's `.cmd` shim on
+ *  Windows. */
+export function agentCommand(sub: string, platform: NodeJS.Platform = process.platform, native: boolean = isSingleExecutable()): string {
+  return `${isWin(platform) && !native ? "scopebond-agent.cmd" : "scopebond-agent"} ${sub}`;
 }
 
 /** `npm install -g <spec>` as the person types it. */

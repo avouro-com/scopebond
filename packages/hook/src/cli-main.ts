@@ -25,7 +25,7 @@ import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { replaceFile } from "./safe-fs.js";
-import { scaffold, harnessSnippet, placeHook, migrateToMonitorDefault, type HookPlacement } from "./init.js";
+import { scaffold, harnessSnippet, placeHook, coverWithoutNpx, migrateToMonitorDefault, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
 import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand, unreachableHint } from "./windows-hints.js";
@@ -36,7 +36,8 @@ import {
   cursorDetected, codexDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
   localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy, isTrustedProject,
-  wireLifecycleHooks, unwireLifecycleHooks,
+  wireLifecycleHooks, unwireLifecycleHooks, nativeHookProgram, missingHookPrograms,
+  npxAvailable,
 } from "./install.js";
 import {
   openObservations, describeObservations, observationStatus, stopReasonFromClaude, exitFromClaudeFailure,
@@ -49,7 +50,7 @@ import { connectCloud, ingestUrl, loadConnection, reportUninstall } from "./clou
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { compileManaged, isManaged, readMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
-import { agentPresence, healthLines, recommendedFrom } from "./client-health.js";
+import { agentPresence, healthLines, recommendedFrom, NATIVE_DOWNLOAD_URL } from "./client-health.js";
 import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.js";
 import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
@@ -415,8 +416,11 @@ function runInit(args: string[]): void {
       console.log(`Would print         the ${harnessFileName(harness)} snippet instead of writing it`);
     } else if (personal) {
       console.log(`Would configure     ${personal} (this machine only; kept out of git)`);
-      console.log(`  adding hook       "<node>" "${pinnedCliPath(hookVersion())}" ${harness}`);
-      console.log(`                    (or the path this copy runs from, when it is already installed durably)`);
+      if (isSingleExecutable()) console.log(`  adding hook       ${nativeHookCommand(harness)}`);
+      else {
+        console.log(`  adding hook       "<node>" "${pinnedCliPath(hookVersion())}" ${harness}`);
+        console.log(`                    (or the path this copy runs from, when it is already installed durably)`);
+      }
       if (local) console.log(`  and remove        any machine-specific Scopebond entry from ${shared}`);
     } else {
       console.log(`Would configure     ${shared} (shared — safe to commit)`);
@@ -454,7 +458,7 @@ function runInit(args: string[]): void {
     // No per-action millisecond claim here: it varies by machine, and this project only
     // states numbers it has measured. The measured comparison lives in the changelog.
     console.log(`  hook runtime   ${placed.scope === "personal"
-      ? `${pin.cli}\n                 pinned — no npx resolution per action`
+      ? `${pin.cli}\n                 ${native ? "the signed installer's program — no Node.js or npx needed" : "pinned — no npx resolution per action"}`
       : `npx @scopebond/hook@${hookVersion()} — portable, but re-resolves on every action`}`);
     console.log("");
     console.log(`✓ ${harnessName(harness)} configured in ${placed.file}`);
@@ -463,6 +467,7 @@ function runInit(args: string[]): void {
       : `  shared — the portable command starts on any machine that clones this project`);
     if (placed.repaired > 0) console.log(`  moved a machine-specific hook out of ${projectHarnessFile(harness, process.cwd())}; commit that change`);
     if (placed.note) console.log(`  note: ${placed.note}`);
+    if (placed.scope === "shared" && isSingleExecutable() && !npxAvailable()) for (const line of coverWithoutNpx(harness, process.cwd(), { label: harnessName(harness) })) console.log(`  ${line}`);
     if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
   } else {
@@ -1009,7 +1014,9 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
       // `--project` (a per-project connection) keeps the project placement.
       const file = forUser
         ? writeHarnessConfig(userHarnessFile(harness), harness, durableHookCommand(harness))
-        : placeHook(harness, process.cwd(), undefined).file;
+        // The installer's program needs no npx, so a per-project connection made with it pins that program (kept out of
+        // git, as `init` does); from npm it keeps the portable form.
+        : placeHook(harness, process.cwd(), isSingleExecutable() ? nativeHookCommand(harness) : undefined).file;
       console.log(`✓ ${harnessName(harness)} configured in ${file}`);
       if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     } else {
@@ -1521,7 +1528,29 @@ function runStatus(args: string[] = []): void {
   for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
     for (const file of [scopes.project, scopes.local, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
   }
+  for (const problem of missingProgramProblems(process.cwd())) console.log(`  MISSING PROGRAM  ${problem}`);
   for (const line of duplicateLines(process.cwd())) console.log(line);
+}
+
+/** What to say about a hook entry whose single executable is gone, with the command that repairs it in the form this
+ *  installation runs: `install` (or `init` for a project's entry) points it at this Scopebond, `uninstall` removes it. */
+function missingProgramProblem(name: string, file: string, program: string, scope: "user" | "project"): string {
+  const repair = scope === "user" ? cliCommand("install") : cliCommand("init");
+  return `${name} hook entry in ${file} points at a missing program (${program}), so ${name} shows a hook error on each action and runs it unchecked. `
+    + `Reinstall Scopebond (${NATIVE_DOWNLOAD_URL}), run \`${repair}\` to point it at this Scopebond, or \`${cliCommand("uninstall")}\` to remove it`;
+}
+
+/** Every hook entry, in every agent and scope, that runs a single executable which is no longer there. */
+function missingProgramProblems(cwd: string): string[] {
+  const out: string[] = [];
+  for (const harness of ["claude", "cursor", "codex"] as const) {
+    const scopes = harnessScopes(harness, cwd);
+    for (const [file, scope] of [[scopes.project, "project"], [scopes.local, "project"], [scopes.user, "user"]] as const) {
+      if (!file) continue;
+      for (const { program } of missingHookPrograms(file)) out.push(missingProgramProblem(harnessName(harness), file, program, scope));
+    }
+  }
+  return out;
 }
 
 /** Each agent that would ask Scopebond more than once per action, and the one command that keeps one. */
@@ -1625,8 +1654,9 @@ async function runDoctor(): Promise<void> {
   console.log(`Scopebond doctor`);
   console.log(`  node             ${process.versions.node} ${nodeOk ? "ok" : "TOO OLD (need >=22.13)"}`);
   if (!nodeOk) problems.push("node >=22.13 is required (the Cloud outbox uses node:sqlite)");
-  if (process.platform === "win32") {
-    // The commands this computer's person types: PowerShell's script policy decides whether plain npx runs.
+  if (process.platform === "win32" && !isSingleExecutable()) {
+    // The commands this computer's person types: PowerShell's script policy decides whether plain npx runs. The
+    // installer's program is an .exe, which the policy does not touch.
     let policy = "";
     // Windows PowerShell finds its own modules only without PowerShell 7's PSModulePath, which a doctor run from
     // pwsh would pass on; and its errors are not this computer's problem to print.
@@ -1635,8 +1665,8 @@ async function runDoctor(): Promise<void> {
     const advice = policy ? executionPolicyAdvice(policy) : null;
     if (advice) console.log(`  powershell       ${advice}`);
   }
-  const cli = cliPath();
-  console.log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}`);
+  const cli = isSingleExecutable() ? process.execPath : cliPath();
+  console.log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}${isSingleExecutable() ? " (the signed installer's program)" : ""}`);
   const active = resolveConfigDir(process.cwd());
   const hasPolicy = existsSync(join(active, "policy.json"));
   console.log(`  active config    ${active} ${hasPolicy ? "ok" : `no policy (run \`${cliCommand("init")}\` here, or \`${cliCommand("install")}\` once for your user)`}`);
@@ -1678,7 +1708,11 @@ async function runDoctor(): Promise<void> {
         const ok = hookCommandResolves(command);
         const leaks = ok && shared && isMachineSpecificCommand(command);
         console.log(`    ${ok && !leaks ? "ok  " : "BAD "} ${file}`);
-        if (!ok) {
+        const program = nativeHookProgram(command);
+        if (!ok && program && !existsSync(program)) {
+          console.log(`         command cannot start (missing program): ${command}`);
+          problems.push(missingProgramProblem(name, file, program, file === scopes.user ? "user" : "project"));
+        } else if (!ok) {
           console.log(`         command cannot start: ${command}`);
           problems.push(`${name} hook command no longer resolves in ${file} — run \`${cliCommand("init")}\` to repair it`);
         } else if (leaks) {

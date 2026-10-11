@@ -22,14 +22,44 @@ with the [workspace getting-started guide](https://scopebond.com/get-started).
 
 ## Install once for your machine
 
+### Windows: the signed installer
+
+On Windows, install Scopebond with the signed installer
+([scopebond.com/get-started](https://scopebond.com/get-started#desktop-agent), or `winget install Avouro.Scopebond`).
+It installs one signed program, `scopebond-agent.exe`, that is both the Scopebond Agent and this hook, and needs
+neither Node.js nor npm. It installs for you alone in `%LOCALAPPDATA%\Programs\Scopebond`, or for every user in
+`%ProgramFiles%\Scopebond`, and puts that folder on PATH. Then:
+
+```
+scopebond-agent setup https://<your-workspace>   # sign in, set up the coding agents, start with Windows
+scopebond-agent hook status                      # every hook command below, after `hook`
+scopebond-agent hook rules
+```
+
+The coding agents' settings run the program by its full path (`"…\scopebond-agent.exe" hook claude`). Every
+command the hook prints for you to run (in a blocked action's message, `status`, `doctor`, help and next steps) is
+then the `scopebond-agent hook …` form, never `npx.cmd` or `npm.cmd`, which would fail on a computer without Node.js.
+The coding agent may read the install folder, but the always-on protection refuses to let it change or delete
+anything there (see [Scopebond's own protection](#changing-the-rules)).
+
+If the program is removed while a coding agent's settings still name it (an administrator removed an install for
+every user, say), the coding agent cannot start the hook: it shows a hook error on each action and runs the action
+with no check. `status` and `doctor` report that entry as pointing at a missing program and name the fix: reinstall,
+or run `install` (or `init` for a project) to point it at the Scopebond that runs them, or `uninstall` to remove it.
+
+### macOS and Linux (and existing npm installs on Windows)
+
 ```
 npm i -g @scopebond/hook@latest
 scopebond install                   # detects Cursor and Codex
 scopebond install --codex           # set up Codex only
 ```
 
-In Windows PowerShell type `npm.cmd` and `scopebond.cmd` (PowerShell's default script policy blocks
-the plain names; the `.cmd` forms work without changing it).
+The npm commands in the rest of this page are for macOS and Linux, and for computers that already have Scopebond
+from npm. With the signed installer on Windows, type `scopebond-agent hook <command>` instead of
+`npx -y @scopebond/hook@latest <command>` or `scopebond <command>`. On a Windows computer set up from npm, type
+`npm.cmd`, `npx.cmd` and `scopebond.cmd` in PowerShell (its default script policy blocks the plain names; the `.cmd`
+forms work without changing it).
 
 `install` sets Scopebond up **once per developer machine**, not per repository: it
 scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
@@ -90,6 +120,14 @@ portable command (`npx -y @scopebond/hook@<version> claude`) to `.claude/setting
 until a teammate runs `init` themselves it blocks their agent's actions with a message
 saying how to set it up.
 
+The shared file always gets the npx form, so it starts on macOS, Linux and any computer with Node.js. A computer
+with only the signed Windows installer has no npx, so that entry cannot start there (the coding agent shows a hook
+error and the entry checks nothing). `init --shared` run there covers that computer separately: a user-level hook
+that starts there already does; otherwise, for Claude Code, it puts the installer's command in
+`.claude/settings.local.json` (this computer only, kept out of git); for Cursor and Codex, which have no personal
+file, it prints the `install` command that adds a user-level hook. Without `--shared`, `init` from the installer
+pins the installer's program, as it pins the npm copy.
+
 Check what it did with `npx -y @scopebond/hook@latest status` (which agents are configured, in
 which scope) and `npx -y @scopebond/hook@latest doctor` (whether each configured command can
 actually start).
@@ -114,8 +152,10 @@ The compiled patterns are identical to the ones this package has always shipped 
 is a test that pins them against the starter policy — so the readable front end cannot
 change what a rule matches. Whether a matching action is blocked or only recorded is the
 `enforce` list in `rules.json`: empty by default, so every rule records until you turn it on.
-Scopebond's own protection (its settings, keys and the agents' hook settings) is not a rule
-in that list: it always blocks. A project set up by an earlier version, whose rules were never
+Scopebond's own protection (its settings, keys and the agents' hook settings, and on Windows the signed
+installer's folder, `%LOCALAPPDATA%\Programs\Scopebond` or `%ProgramFiles%\Scopebond`, which a coding agent may read
+but not change or delete) is not a rule in that list: it always blocks. The folder is matched by those standard
+names, in any case and in their `%…%`, `$env:…` and short-name spellings; an install moved elsewhere is not covered. A project set up by an earlier version, whose rules were never
 edited, moves to recording on the first run after the update and keeps the old policy as
 `policy.previous.json`; a project with its own edits keeps blocking what it blocked.
 Each clause description is generated from the list too, so it
@@ -235,7 +275,17 @@ portal's **Connect** step (it gives you a one-use enrollment bundle), save it as
 npx -y @scopebond/hook@latest connect https://<your-workspace> scopebond-enrollment.json
 ```
 
-In Windows PowerShell, use `npx.cmd` instead of `npx` if script execution policy blocks `npx.ps1`; no execution-policy change is needed. Every command the hook prints for you to run uses `npx.cmd` on Windows.
+With the signed installer on Windows, the same commands are `scopebond-agent hook login https://<your-workspace>` and
+`scopebond-agent hook connect https://<your-workspace> scopebond-enrollment.json` (or `scopebond-agent setup
+https://<your-workspace>`, which also sets up autostart). A per-project connection (`--project`) made there puts the
+installer's program in the project's settings for this computer only, as `init` does, since the portable npx form
+cannot start without Node.js. On a Windows computer set up from npm, use `npx.cmd` instead of `npx` if script
+execution policy blocks `npx.ps1`; no execution-policy change is needed. Every command the hook prints for you to run
+uses the form your installation runs: `scopebond-agent hook …` from the installer, `npx.cmd` from npm on Windows.
+
+**The MCP proxy needs Node.js.** `@scopebond/mcp`, the proxy that checks MCP tool calls in-path, is published to npm
+only and is not part of the signed Windows installer. To use it on Windows, install a current Node.js LTS release
+first; the hook itself does not need it.
 
 ### Checking the workspace's evidence chain
 
