@@ -146,7 +146,9 @@ jobs:
           retention-days: 7
 
   # The installer with the tray, on this throwaway runner: install per user, the tray starts the agent, the agent killed
-  # comes back within 30 seconds, a second tray gives way, and removing it leaves nothing running and nothing behind.
+  # comes back within 30 seconds, a second tray gives way, and removing it leaves nothing running and nothing behind. Then
+  # an older release installed and upgraded while its tray and agent run: both files replaced, the new ones running, one
+  # Settings -> Apps entry, the workspace kept, and no reboot needed.
   installer:
     name: tray installer (windows)
     needs: tray
@@ -166,7 +168,7 @@ jobs:
         with:
           name: scopebond-tray-unsigned
           path: tray-build
-      - name: Install, start, kill, come back, remove
+      - name: Install, start, kill, come back, upgrade while running, remove
         run: node --test --test-name-pattern "with the native tray" packages/native/test/msi.test.mjs
         env:
           SCOPEBOND_MSI: "1"
@@ -176,7 +178,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/tray-logs" | Out-Null
-          Copy-Item "$env:RUNNER_TEMP/msi-tray-*.log", "$env:USERPROFILE/.scopebond/*.log" "$env:RUNNER_TEMP/tray-logs" -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP/msi-tray-*.log", "$env:RUNNER_TEMP/msi-upgrade-*.log", "$env:USERPROFILE/.scopebond/*.log" "$env:RUNNER_TEMP/tray-logs" -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

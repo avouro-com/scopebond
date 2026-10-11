@@ -18,6 +18,8 @@ test("three manifests for Avouro.Scopebond: version, installer (user and machine
   assert.match(installer, /Scope: user\n    InstallerUrl: https:\/\/github\.com\/avouro-com\/scopebond\/releases\/download\/agent-native-v0\.5\.0\/scopebond-agent-0\.5\.0-x64\.msi\n    InstallerSha256: (AB){32}\n/);
   assert.match(installer, /Scope: machine[\s\S]*Custom: ALLUSERS=1/);
   assert.match(installer, /^ProductCode: '\{12345678-90AB-CDEF-1234-567890ABCDEF\}'$/m);
+  // The command the installer puts on PATH, so `winget search --command scopebond-agent` finds the package.
+  assert.match(installer, /^Commands:\n {2}- scopebond-agent$/m);
   assert.match(files[`${PACKAGE_ID}.locale.en-US.yaml`], /^Publisher: Avouro LLC$/m);
   for (const text of Object.values(files)) assert.match(text, /^PackageVersion: 0\.5\.0$/m);
 });

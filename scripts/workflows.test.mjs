@@ -223,8 +223,10 @@ test("the Version packages PR needs no stored token: the job's own token opens i
   assert.doesNotMatch(all, AUTOMATION_SECRET, "release.yml: no stored automation token");
   const versionJob = release.jobs.find((job) => job.steps.some((step) => /changesets\/action\/version@/.test(step)));
   assert.match(versionJob.steps.find((step) => /changesets\/action\/version@/.test(step)), /github-token: \$\{\{ github\.token \}\}/);
+  const nativeJob = release.jobs.find((job) => job.steps.some((step) => /gh workflow run native-release\.yml/.test(step)));
   for (const job of release.jobs) {
     if (job === versionJob) assert.match(job.header, /actions: write/, "release.yml: the version job can dispatch the checks");
+    else if (job === nativeJob) assert.match(job.header, /actions: write/, "release.yml: the native job can start the signed build");
     else assert.doesNotMatch(job.header, /actions: write/, `release.yml ${job.name}: no other job can start workflows`);
   }
   const dispatch = versionJob.steps.find((step) => /gh workflow run/.test(step));
@@ -237,4 +239,33 @@ test("the Version packages PR needs no stored token: the job's own token opens i
   for (const name of dispatched) {
     assert.ok(onTriggers(readWorkflow(name).top).workflow_dispatch, `${name}: accepts the release workflow's dispatch`);
   }
+});
+
+test("a new agent on npm starts the signed Windows build on main, and that job can do nothing else", () => {
+  const release = readWorkflow("release.yml");
+  const native = release.jobs.find((job) => job.steps.some((step) => /gh workflow run native-release\.yml/.test(step)));
+  assert.ok(native, "release.yml: a job starts native-release.yml");
+  const publishJob = release.jobs.find((job) => job.steps.some((step) => NPM_SECRET.test(step)));
+  assert.ok(native.header.split("\n").some((line) => line.trim() === `needs: ${publishJob.name}`), "only after the publish");
+  assert.match(native.header, /if: contains\(needs\.publish\.outputs\.published-packages, '"@scopebond\/agent"'\)/, "only when the agent was published");
+  assert.match(publishJob.header, /published-packages: \$\{\{ steps\.publish\.outputs\.published-packages \}\}/);
+  // Its one permission starts workflows; it checks nothing out, holds no secret and runs in no environment.
+  assert.equal(section(native.header, "permissions").trim().replace(/\s*#.*$/, ""), "actions: write");
+  assert.doesNotMatch(native.header + native.steps.join("\n"), /secrets\.|^ {4}environment:|actions\/checkout@/m);
+  assert.equal(native.steps.length, 1);
+  const [step] = native.steps;
+  assert.match(step, /gh workflow run native-release\.yml --ref main -f release=true -f version="\$version"/, "on main, for that version");
+  assert.match(step, /PUBLISHED: \$\{\{ needs\.publish\.outputs\.published-packages \}\}/, "the published list reaches the script through env");
+  assert.doesNotMatch(step.replace(/^ {8}env:[\s\S]*?(?=^ {8}run:)/m, ""), /\$\{\{/, "no expression inside the script");
+  // The signed build keeps its approvals and checks the version it was asked for.
+  const nativeRelease = readWorkflow("native-release.yml");
+  assert.ok(onTriggers(nativeRelease.top).workflow_dispatch);
+  assert.match(section(nativeRelease.top, "on"), /^ {6}version:/m, "native-release.yml takes the version");
+  const build = nativeRelease.jobs.find((job) => job.name === "build");
+  assert.match(build.steps.join("\n"), /WANTED: \$\{\{ inputs\.version \}\}/);
+  assert.match(build.steps.join("\n"), /\$env:WANTED -ne \$v/, "the build fails when the commit's agent version is another");
+  for (const name of ["sign", "sign-installer"]) {
+    assert.match(nativeRelease.jobs.find((job) => job.name === name).header, /^ {4}environment: signing$/m, `${name} stays in the signing environment`);
+  }
+  assert.match(nativeRelease.jobs.find((job) => job.name === "release").steps.join("\n"), /--draft --prerelease/, "the release stays a draft pre-release");
 });

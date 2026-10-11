@@ -6,14 +6,23 @@
 
     msiexec /i scopebond-agent-<version>-x64.msi /qn                     per user, silent
     msiexec /i scopebond-agent-<version>-x64.msi /qn ALLUSERS=1          every user
-    msiexec /i … WORKSPACE=https://cloud.scopebond.com                   the workspace `setup` connects to
+    msiexec /i … WORKSPACE=https://cloud.scopebond.com                   the workspace `setup` connects to (kept on upgrades)
+    msiexec /x … PURGE=1                                                  removal also deletes the Scopebond folder
 
   Removing it runs `scopebond-agent.exe uninstall` first, as the person removing it: autostart off, the agent stopped,
-  the hook taken out of the coding agents' settings and the workspace told. The Scopebond folder (keys, receipts) stays.
+  the hook taken out of the coding agents' settings and the workspace told. The Scopebond folder (keys, receipts) stays,
+  unless PURGE=1 (the agent's `uninstall` with its purge option).
+
+  The install folder is added to PATH (this user's, or the system's with ALLUSERS=1), so `scopebond-agent status` works in
+  a new terminal; removal takes it out again. An upgrade or a removal first asks a running agent to stop and closes any
+  that is left, so no file is in use when it is replaced and no reboot is needed.
 
   Built with the native tray (build-msi.mjs passes TrayPath), it also installs scopebond-tray.exe, starts it at sign-in
   (a Run value named Scopebond, for this user or, with ALLUSERS=1, for every user), starts it at the end of a per-user
   install, and closes it before files are replaced or removed. The tray starts the agent and keeps it running.
+
+  Both programs carry the release's version in their version resource (stamp.mjs), so an upgrade replaces them: Windows
+  Installer leaves an installed file in place when the new one's version is not higher.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package Name="Scopebond Agent" Manufacturer="Avouro LLC" Version="$(var.Version)" UpgradeCode="{92E9376F-D496-4CBE-A4B5-0E860E488A44}"
@@ -21,11 +30,38 @@
     <SummaryInformation Description="Scopebond Agent: guardrails and signed records for AI coding agents" Manufacturer="Avouro LLC" />
     <!-- The new version is installed before the old one leaves, so the hook's executable is never missing for long. -->
     <MajorUpgrade Schedule="afterInstallExecute" DowngradeErrorMessage="A newer Scopebond Agent is already installed." />
+    <!-- Every file of this package is replaced whatever version the installed one says ("a" instead of the default "o").
+         Releases up to 0.6.0 shipped the agent with Node's own file version (22.x), which is higher than any release
+         version, so the default rule would keep that old file for ever; the files are this package's alone, and the
+         running programs are stopped first, so replacing them always is safe. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- WORKSPACE given on the command line wins; otherwise the one an earlier install recorded is kept (an upgrade, such
+         as the agent's own update, passes none), so the Workspace value is written again and is not lost when the old
+         version's components go. The searches fill properties of their own, so they never replace a value that was given;
+         a search cannot name HKMU, so this user's (HKCU) and every user's (HKLM, with ALLUSERS=1) are read apart. -->
     <Property Id="WORKSPACE" Secure="yes" />
+    <Property Id="REMEMBERED_USER_WORKSPACE" Secure="yes">
+      <RegistrySearch Id="RememberedUserWorkspace" Root="HKCU" Key="Software\Avouro\Scopebond" Name="Workspace" Type="raw" />
+    </Property>
+    <Property Id="REMEMBERED_MACHINE_WORKSPACE" Secure="yes">
+      <RegistrySearch Id="RememberedMachineWorkspace" Root="HKLM" Key="Software\Avouro\Scopebond" Name="Workspace" Type="raw" />
+    </Property>
+    <SetProperty Action="SetWorkspaceFromUser" Id="WORKSPACE" Value="[REMEMBERED_USER_WORKSPACE]" After="AppSearch" Sequence="both"
+                 Condition="NOT WORKSPACE AND REMEMBERED_USER_WORKSPACE AND ALLUSERS &lt;&gt; &quot;1&quot;" />
+    <SetProperty Action="SetWorkspaceFromMachine" Id="WORKSPACE" Value="[REMEMBERED_MACHINE_WORKSPACE]" After="AppSearch" Sequence="both"
+                 Condition="NOT WORKSPACE AND REMEMBERED_MACHINE_WORKSPACE AND ALLUSERS = &quot;1&quot;" />
+    <!-- PURGE=1: removal deletes the Scopebond folder too (keys, connection, records not yet sent). -->
+    <Property Id="PURGE" Secure="yes" />
+
+    <!-- Settings -> Apps: the Scopebond icon, who makes it, and where help and updates are. -->
+    <Icon Id="scopebond.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="scopebond.ico" />
+    <Property Id="ARPCONTACT" Value="Avouro LLC" />
     <Property Id="ARPURLINFOABOUT" Value="https://scopebond.com" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/avouro-com/scopebond" />
+    <Property Id="ARPHELPLINK" Value="https://scopebond.com/documentation" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/avouro-com/scopebond/releases" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="1" />
 
@@ -50,20 +86,30 @@
         <Component Id="WorkspaceSetting" Condition="WORKSPACE">
           <RegistryValue Root="HKMU" Key="Software\Avouro\Scopebond" Name="Workspace" Type="string" Value="[WORKSPACE]" KeyPath="yes" />
         </Component>
+        <!-- The folder on PATH, at its end: this user's PATH for a per-user install, the system's for every user. Removal
+             takes out this entry only. -->
+        <Component Id="UserPath" Condition="ALLUSERS &lt;&gt; &quot;1&quot;">
+          <Environment Id="UserPathEntry" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="no" Permanent="no" />
+          <RegistryValue Root="HKMU" Key="Software\Avouro\Scopebond" Name="UserPath" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+        <Component Id="MachinePath" Condition="ALLUSERS = &quot;1&quot;">
+          <Environment Id="MachinePathEntry" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+          <RegistryValue Root="HKMU" Key="Software\Avouro\Scopebond" Name="MachinePath" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
 
-    <!-- One Start-menu entry: the agent's status (the tray's status panel, or the status in a window without the tray). Its
-         AppUserModelID lets notifications name Scopebond. -->
+    <!-- One Start-menu entry, with the Scopebond icon: the agent's status (the tray's status panel, or the status in a
+         window without the tray). Its AppUserModelID lets notifications name Scopebond. -->
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut">
 <?ifdef TrayPath?>
-        <Shortcut Id="StatusShortcut" Name="Scopebond Agent status" Description="What the Scopebond Agent reports about this computer"
+        <Shortcut Id="StatusShortcut" Name="Scopebond Agent status" Description="What the Scopebond Agent reports about this computer" Icon="scopebond.ico"
                   Target="[INSTALLFOLDER]scopebond-tray.exe" Arguments="--status" WorkingDirectory="INSTALLFOLDER">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="Avouro.Scopebond" />
         </Shortcut>
 <?else?>
-        <Shortcut Id="StatusShortcut" Name="Scopebond Agent status" Description="What the Scopebond Agent reports about this computer"
+        <Shortcut Id="StatusShortcut" Name="Scopebond Agent status" Description="What the Scopebond Agent reports about this computer" Icon="scopebond.ico"
                   Target="[System64Folder]cmd.exe" Arguments="/k &quot;&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; status&quot;" WorkingDirectory="INSTALLFOLDER">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="Avouro.Scopebond" />
         </Shortcut>
@@ -76,6 +122,8 @@
       <ComponentRef Id="AgentExecutable" />
       <ComponentRef Id="InstallSettings" />
       <ComponentRef Id="WorkspaceSetting" />
+      <ComponentRef Id="UserPath" />
+      <ComponentRef Id="MachinePath" />
       <ComponentRef Id="StartMenuShortcut" />
 <?ifdef TrayPath?>
       <ComponentRef Id="TrayExecutable" />
@@ -91,12 +139,23 @@
     <CustomAction Id="StartTray" Directory="INSTALLFOLDER" ExeCommand="&quot;[INSTALLFOLDER]scopebond-tray.exe&quot;" Execute="immediate"
                   Impersonate="yes" Return="asyncNoWait" />
 <?endif?>
+    <!-- Before an upgrade or a removal looks for files in use (InstallValidate): the installed agent is asked to stop, as
+         the person installing, with no window (`scopebond-agent.exe stop`; a tray beside it then leaves it stopped). An
+         agent or a hook call still running when the files are replaced is closed, after the two seconds a hook call takes
+         at most. Neither ever stops the install. -->
+    <SetProperty Id="WixQuietExecCmdLine" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; stop" Before="StopAgent" Sequence="execute" />
+    <CustomAction Id="StopAgent" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="immediate" Return="ignore" />
+    <util:CloseApplication Id="CloseAgent" Target="scopebond-agent.exe" TerminateProcess="1" Timeout="2" RebootPrompt="no" />
 
     <!-- On removal (not on an upgrade), before the files go: the agent's own uninstall, as the person removing it, with no
-         window. A failure never stops the removal. -->
-    <SetProperty Id="ReportUninstall" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; uninstall" Before="ReportUninstall" Sequence="execute" />
+         window; with PURGE=1, its purge option too (the Scopebond folder goes). A failure never stops the removal. -->
+    <SetProperty Id="ReportUninstall" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; uninstall" Before="ReportUninstall" Sequence="execute"
+                 Condition="PURGE &lt;&gt; &quot;1&quot;" />
+    <SetProperty Action="SetReportUninstallPurge" Id="ReportUninstall" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; uninstall --purge"
+                 Before="ReportUninstall" Sequence="execute" Condition="PURGE = &quot;1&quot;" />
     <CustomAction Id="ReportUninstall" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Impersonate="yes" Return="ignore" />
     <InstallExecuteSequence>
+      <Custom Action="StopAgent" After="CostFinalize" Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="ReportUninstall" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
 <?ifdef TrayPath?>
       <Custom Action="StartTray" After="InstallFinalize" Condition="NOT REMOVE AND ALLUSERS &lt;&gt; &quot;1&quot;" />

@@ -18,27 +18,36 @@ node packages/native/build-sea.mjs     # → packages/native/build/scopebond-age
 
 The build bundles the agent and the hook into one CommonJS file with esbuild (versions fixed at build time), makes a
 single executable application blob with a code cache, copies the Node that runs the build, removes that copy's own
-signature and injects the blob with postject. It is unsigned; the release workflow signs it.
+signature and injects the blob with postject. On Windows it then stamps the file's version resource (`stamp.mjs`, with
+`resedit`): FileVersion and ProductVersion are the agent's version (`0.6.5` → `0.6.5.0`), the description "Scopebond
+Agent", product "Scopebond", company "Avouro LLC", its own file name, and the Scopebond icon (`icon.mjs` draws the tray's
+icon in code, so the repository holds no image file) instead of Node's. Every other resource, the application blob among
+them, stays. `node packages/native/stamp.mjs <tray.exe> tray` does the same for the tray (its own build always says
+0.1.0). Windows Installer compares these versions on an upgrade, and Task Manager, Explorer and Settings -> Apps show them.
+It is unsigned; the release workflow signs it, after the stamp.
 
 ## Test
 
-`node --test packages/native/test/` checks the bundle everywhere. With `SCOPEBOND_SEA=1` it also builds the executable
-and checks that it decides Claude Code calls exactly as the npm hook does and how quickly it starts (CI runs this on
-Windows).
+`node --test packages/native/test/*.test.mjs` checks the bundle, the version stamp and the icon everywhere. With
+`SCOPEBOND_SEA=1` it also builds the executable and checks that it decides Claude Code calls exactly as the npm hook does,
+how quickly it starts, and that the stamped file names itself and still runs (CI runs this on Windows).
 
 ## Release (signed)
 
-`.github/workflows/native-release.yml`, run by hand from `main`:
+`.github/workflows/native-release.yml`, on `main`. The npm release workflow (`release.yml`) starts it with the version
+of `@scopebond/agent` it has just published, so each npm release of the agent gets its signed build; it can also be run by
+hand. The build fails when the commit's `packages/agent` is not the version it was started for.
 
 1. **build** (windows-latest, no secrets): the executable, the native tray (`packages/tray`, `cargo build --release
-   --locked` from its committed `Cargo.lock`), and their CycloneDX SBOM (`sbom.mjs`: the bundle's packages from its
-   metafile, Node, and every crate in the tray's `Cargo.lock`).
+   --locked` from its committed `Cargo.lock`), both stamped with the release's version and names (and checked), and
+   their CycloneDX SBOM (`sbom.mjs`: the bundle's packages from its metafile, Node, and every crate in the tray's
+   `Cargo.lock`).
 2. **sign**, in the protected `signing` environment (an owner approves it; protected branches only): Azure Artifact
    Signing through GitHub's OIDC token (no stored secret), timestamped, for the executable and the tray. Nothing else
    runs there: no dependency, no build tool.
 3. **installer** (no secrets and no OIDC token): checks that both programs are signed by Avouro LLC, then builds the
-   installer around them with WiX (`dotnet tool restore`, its extension, `wix build`). The build tools never run in a job
-   that can ask for a signing token.
+   installer around them with WiX (`dotnet tool restore`, its extension, `wix build`, then `wix msi validate`: Windows
+   Installer's ICE rules, warnings included). The build tools never run in a job that can ask for a signing token.
 4. **sign-installer**, in the `signing` environment again (a second approval): signs the installer, then
    `verify-signed.ps1` (`signtool verify /pa`, a valid signature, a timestamp, and the publisher: the subject's `O=` is
    exactly `Avouro LLC`, the rule the updater uses), `SHA256SUMS`, the signed release manifest (the run fails without
@@ -59,14 +68,26 @@ stays on 5). The installer:
 - installs per user by default, with no administrator prompt (`%LOCALAPPDATA%\Programs\Scopebond`), or for every user
   with `ALLUSERS=1` (Program Files; for Intune or Group Policy);
 - records its folder in `HKCU` (or `HKLM`) `\Software\Avouro\Scopebond\InstallPath`, and `WORKSPACE=<url>` as
-  `Workspace` there;
+  `Workspace` there; an upgrade without `WORKSPACE` (the agent's own update passes none) keeps the recorded one;
+- adds its folder to PATH (this user's, or the system's with `ALLUSERS=1`), so `scopebond-agent status` works in a new
+  terminal; removal takes that entry out;
+- shows the Scopebond icon in Settings -> Apps, with Avouro LLC as the contact, help at
+  <https://scopebond.com/documentation> and updates on the GitHub releases page;
 - adds a Start-menu entry "Scopebond Agent status" with the AppUserModelID `Avouro.Scopebond`;
-- installs a new version before removing the old one, so the hook's executable is never missing for long;
+- installs a new version before removing the old one, so the hook's executable is never missing for long, and replaces
+  every file whatever version the installed one says (`REINSTALLMODE=amus`: releases up to 0.6.0 carried Node's own
+  file version, 22.x, which the default rule would never replace);
+- before an upgrade or a removal checks for files in use, asks the installed agent to stop (`scopebond-agent.exe stop`,
+  as the person installing) and then closes any agent or hook call still running, so nothing needs a reboot;
 - on removal, first runs `scopebond-agent.exe uninstall` as the person removing it: autostart off, the agent stopped,
-  the hook taken out of the coding agents' settings and the workspace told (the Scopebond folder stays).
+  the hook taken out of the coding agents' settings and the workspace told (the Scopebond folder stays; with `PURGE=1`,
+  `msiexec /x … PURGE=1`, it runs `uninstall --purge` and the folder goes too).
 
 Signing in, the hook entries and autostart come from `scopebond-agent.exe setup <workspace-url>` after installing, as with
-npm. CI installs and removes it, per user and for every user (`test/msi.test.mjs`, only with `SCOPEBOND_MSI=1`).
+npm. CI installs and removes it, per user and for every user (`test/msi.test.mjs`, only with `SCOPEBOND_MSI=1`). The
+build fails on an ICE error, and in CI (`CI=true`) on an ICE warning too; the rules the package breaks on purpose are
+listed, each with its reason, in `SUPPRESSED_ICES` (`build-msi.mjs`). Without an administrator, WiX cannot run the
+validation and only warns.
 
 **With the native tray** (`node build-msi.mjs <agent.exe> <tray.exe>`, or `SCOPEBOND_TRAY_EXE`; the release always builds
 it this way), the installer also:
@@ -82,7 +103,10 @@ it this way), the installer also:
 
 The `tray installer (windows)` job in `.github/workflows/tray.yml` installs it on a throwaway runner, checks that the tray
 starts the agent, ends the agent from outside and checks it is back within 30 seconds, checks a second tray gives way, and
-removes it: nothing left running, no files, no Run value, no Start-menu entry.
+removes it: nothing left running, no files, no Run value, no Start-menu entry. It then installs an older release (built
+as 0.6.0 was, with Node's version resource) and upgrades it while its tray and agent run: `msiexec` ends with 0 (not 3010,
+a reboot), both installed files and both running programs are the new release, Settings -> Apps lists one entry, and the
+workspace is kept.
 
 ## Updates
 
@@ -115,8 +139,9 @@ update themselves only to a release with a signed manifest.
 
 ## Release checklist (owner)
 
-1. Actions → *Native release (signed)* → Run workflow on `main`; approve the `signing` environment when asked (twice: once
-   for the programs, once for the installer).
+1. Publishing a new `@scopebond/agent` to npm starts *Native release (signed)* on `main` (or: Actions → *Native release
+   (signed)* → Run workflow on `main`); approve the `signing` environment when asked (twice: once for the programs, once
+   for the installer).
 2. Check the draft release: the agent exe, the tray exe and the msi, `SHA256SUMS`, the signed manifest and its `.sig`, the SBOM, the three
    winget manifests; `gh attestation verify scopebond-agent-<version>-x64.msi --repo avouro-com/scopebond`.
 3. Submit the exe and the msi to Microsoft's file submission portal (Security Intelligence, as a software developer) so
