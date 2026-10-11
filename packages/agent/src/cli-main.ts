@@ -13,9 +13,11 @@
 //   scopebond-agent version             this program's version and the hook it carries (an update checks the new one starts)
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { win32 } from "node:path";
 import { homedir } from "node:os";
-import { hookSelfCommand, hookVersion, isEphemeralPath, userHome } from "@scopebond/hook";
-import { computerStatus } from "./agent.js";
+import { configuredHookCommands, hookCommandResolves, hookSelfCommand, hookVersion, isEphemeralPath, userHarnessFile, userHome } from "@scopebond/hook";
+import { computerStatus, expectedHarnesses } from "./agent.js";
 import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
 import { agentCliPath } from "./self.js";
@@ -23,14 +25,21 @@ import { runSetup } from "./setup.js";
 import { agentVersion } from "./update.js";
 import { writeOutputTo } from "./log-file.js";
 import { removeAppsEntry, writeAppsEntry } from "./apps-entry.js";
-import { installKind } from "./native-update.js";
+import { installKind, UPDATE_HELPER_COMMAND } from "./native-update.js";
 import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
+import { agentProgram, npmProgram, setupCli } from "./commands.js";
+import { missingPrograms } from "./hook-entries.js";
+import { findNpmInstall, hasNpmInstall, npmRemovalCommand } from "./migrate.js";
+import { readRegistryValue, SETTINGS_KEYS } from "./signin.js";
+import { helperInput, runUpdateHelper } from "./update-helper.js";
+import { failedUpdate } from "./update.js";
 
 let cmd = "help";
 let rest: string[] = [];
-// What a person types here: on Windows, PowerShell blocks the plain name's script shim.
-const me = process.platform === "win32" ? "scopebond-agent.cmd" : "scopebond-agent";
+// What a person types here: `scopebond-agent` from the signed installer (on PATH); from npm on Windows the .cmd shim,
+// because PowerShell blocks the plain name's script shim.
+const me = agentProgram();
 const dir = process.env.SCOPEBOND_HOME ?? userHome();
 
 function help(): void {
@@ -72,13 +81,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       upkeepCommand(dir, rest);
       return;
     }
+    case UPDATE_HELPER_COMMAND: {
+      // Internal: a copy of the signed executable installs an update after the agent has exited (update-helper.ts).
+      const input = process.platform === "win32" && installKind() !== "npm" ? helperInput() : null;
+      if (!input) { console.error("update-helper is started by the Scopebond Agent itself"); process.exitCode = 1; return; }
+      const outcome = await runUpdateHelper(input);
+      process.exitCode = outcome.installed && outcome.started !== false ? 0 : 1;
+      return;
+    }
     case "version":
     case "--version":
       console.log(`agent/${agentVersion()} hook/${hookVersion()}`);
       return;
     case "status": {
       const live = await callAgent(dir, "GET", "/status") as (ReturnType<typeof computerStatus> & { agent?: AgentReport | null }) | null;
-      const status = { ...(live ?? { ...computerStatus(dir), agent: null }), autostart: autostartHealth(dir) };
+      const notes = installNotes();
+      const status = { ...(live ?? { ...computerStatus(dir), agent: null }), autostart: autostartHealth(dir), notes };
       if (rest.includes("--json")) { console.log(JSON.stringify(status, null, 2)); return; }
       const d = status.delivery;
       console.log(`Scopebond Agent: ${live ? "running" : "not running"}`);
@@ -90,6 +108,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       console.log(`  autostart        ${status.autostart.detail}`);
       const check = status.agent?.last_maintenance?.selfCheck;
       if (check) console.log(`  self-check       ${check.ok ? "passed" : `failed: ${check.failed.join(", ")}`}`);
+      const failed = failedUpdate(dir);
+      if (failed) console.log(`  update           ${failed.version} did not install or start here${failed.reason ? ` (${failed.reason})` : ""}; tried again after a day`);
+      for (const line of notes) console.log(`  note             ${line}`);
       if (!live) console.log(`\nStart it with: ${me} autostart on`);
       return;
     }
@@ -112,7 +133,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         if (url.protocol === "https:" || (local && url.protocol === "http:")) origin = url.origin;
       } catch { origin = null; }
       if (!origin) {
-        console.error(`usage: ${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/agent@${agentVersion()} setup <workspace-url> [--claude|--cursor|--codex]`);
+        console.error(`usage: ${setupCli("<workspace-url> [--claude|--cursor|--codex]", undefined, agentVersion())}`);
         console.error("The workspace URL is the address of your Scopebond workspace, for example https://cloud.scopebond.com.");
         process.exitCode = 1;
         return;
@@ -143,7 +164,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (rest[0] !== "on" && rest[0] !== "off") { console.error(`usage: ${me} autostart on|off`); process.exitCode = 1; return; }
       if (on && isEphemeralPath(agentCliPath())) {
         // npx runs from a cache npm clears; an autostart entry pointing there would stop working.
-        console.error(`Install the agent first so autostart has a stable path: ${process.platform === "win32" ? "npm.cmd" : "npm"} install -g @scopebond/agent`);
+        console.error(`Install the agent first so autostart has a stable path: ${npmProgram()} install -g @scopebond/agent`);
         process.exitCode = 1;
         return;
       }
@@ -208,6 +229,34 @@ async function stopRunning(): Promise<boolean> {
     if (!await callAgent(dir, "GET", "/status", undefined, 1_000)) return true;
   }
   return true;
+}
+
+/** What `status` adds about the installs on this computer: an npm copy beside the signed install (or the other way
+ *  round), and hook entries whose program is gone (Scopebond removed for every user while this user's settings kept it). */
+function installNotes(): string[] {
+  const notes: string[] = [];
+  const kind = installKind();
+  if (process.platform === "win32") {
+    try {
+      if (kind !== "npm") {
+        const found = findNpmInstall(dir);
+        if (hasNpmInstall(found)) {
+          notes.push(`the Scopebond Agent is also installed with npm${found.packageDir ? ` (${found.packageDir})` : ""}; this signed install is the one in use${found.hookEntries.length ? `, and it moves the hook entries of ${found.hookEntries.join(", ")} to itself when it starts` : ""}. Remove the npm copy: ${npmRemovalCommand()}`);
+        }
+      } else {
+        const signed = SETTINGS_KEYS.map((key) => readRegistryValue(key, "InstallPath")).find((path) => path && existsSync(win32.join(path, "scopebond-agent.exe")));
+        if (signed) notes.push(`the signed Scopebond installer is also installed (${signed}); it takes over from this npm copy when it starts. Then remove this one: ${npmRemovalCommand()}`);
+      }
+    } catch { /* the registry or the settings could not be read: nothing to add */ }
+  }
+  try {
+    const files = expectedHarnesses().map((h) => userHarnessFile(h));
+    const brokenFiles = files.filter((f) => configuredHookCommands(f).some((c) => !hookCommandResolves(c)));
+    const broken = files.flatMap((f) => configuredHookCommands(f).filter((c) => !hookCommandResolves(c)));
+    const gone = missingPrograms(broken);
+    if (gone.length) notes.push(`${broken.length} Scopebond hook entr${broken.length === 1 ? "y" : "ies"} cannot start: ${gone.join(", ")} is no longer there (Scopebond was removed, perhaps for every user of this computer). Install Scopebond again, or take the Scopebond entries out of ${[...new Set(brokenFiles)].join(", ")}`);
+  } catch { /* unreadable settings: the self-check reports them */ }
+  return notes;
 }
 
 interface AgentReport { version?: string; last_maintenance?: { selfCheck?: { ok: boolean; failed: string[] } | null } | null }

@@ -2,6 +2,8 @@
 // the notifications (macOS, Linux) show this; nothing else decides colour.
 
 import type { StatusJson } from "@scopebond/hook";
+import { hookCli, setupCli, type CommandContext } from "./commands.js";
+import { installKind } from "./native-update.js";
 
 export type HealthLevel = "green" | "amber" | "red";
 export interface Health {
@@ -13,12 +15,18 @@ export interface Health {
   hint: string | null;
 }
 
-export function healthOf(status: StatusJson, selfCheck: { ok: boolean; failed: string[] } | null | undefined): Health {
+/** `commands`: how this agent was installed, which decides the commands the hints name (default: this agent's). */
+export function healthOf(status: StatusJson, selfCheck: { ok: boolean; failed: string[] } | null | undefined, commands: CommandContext = { kind: installKind(), platform: process.platform }): Health {
   if (status.state === "not_governing") {
     return { level: "red", headline: "Scopebond is not checking any coding agent on this computer", fix: { label: "Repair", route: "/repair" }, hint: null };
   }
   if (!status.delivery.connected) {
-    return { level: "red", headline: "Not connected to a workspace: records stay on this computer", fix: null, hint: "Connect it: npx @scopebond/hook login https://<your-workspace>" };
+    // The signed install signs in from its own tray (Sign in…) or with its own setup, which also writes the hook entries
+    // and turns autostart on; an npm install with the hook's sign-in.
+    const hint = commands.kind === "npm"
+      ? `Connect it: ${hookCli("login https://<your-workspace>", commands)}`
+      : `Connect it: Sign in… in the Scopebond icon's menu, or run: ${setupCli("https://<your-workspace>", commands)}`;
+    return { level: "red", headline: "Not connected to a workspace: records stay on this computer", fix: null, hint };
   }
   // While the hook's delivery queue cannot be opened, actions stay allowed and are recorded on this computer only; they are
   // sent once the queue can be written again.
@@ -27,7 +35,7 @@ export function healthOf(status: StatusJson, selfCheck: { ok: boolean; failed: s
     return { level: "red", headline: "Records stay on this computer: the delivery queue cannot be opened", fix: null, hint: `${queueError}. Free some disk space, or make that file and its -wal and -shm files writable (do not delete it).` };
   }
   if (status.delivery.connection_refused_since !== null) {
-    return { level: "red", headline: "The workspace refuses this computer's connection", fix: null, hint: "Sign in again: npx @scopebond/hook login https://<your-workspace>" };
+    return { level: "red", headline: "The workspace refuses this computer's connection", fix: null, hint: `Sign in again: ${hookCli("login https://<your-workspace>", commands)}` };
   }
   if (status.state === "recording_locally") {
     const n = status.delivery.pending;

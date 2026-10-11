@@ -11,7 +11,10 @@ import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManag
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
-import { fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind, nativeTrayPath, takeInstallResult } from "./native-update.js";
+import {
+  clearUpdatePending, fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind, nativeTrayPath, readUpdatePending, removeOldHelpers, takeInstallResult, UPDATE_PENDING_MS,
+  writeUpdatePending, type InstallKind,
+} from "./native-update.js";
 import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
@@ -23,8 +26,12 @@ import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { checkResult, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
+import { FIRST_SIGNIN_FILE, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
+import { migrateFromNpm, readMigration, npmRemovalCommand } from "./migrate.js";
+import { enableAutostart } from "./autostart.js";
 import {
-  agentVersion, compareVersions, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
+  agentVersion, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
+  updateTarget, type ClientVersion,
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
 import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
@@ -84,6 +91,15 @@ export interface ServiceOptions {
    *  limit is counted as a failure and the next one is scheduled; nothing waits on it. */
   deliveryTimeoutMs?: number;
   cycleLimitMs?: number;
+  /** How this agent was installed (default: found out; tests name one). */
+  installKind?: InstallKind;
+  /** A signed install that was never connected starts its first sign-in by itself, once (default: on for a signed
+   *  install, off from npm). */
+  autoSignIn?: boolean;
+  /** The first sign-in's workspace setting and side effects (tests replace them). */
+  signIn?: { registry?: RegistryReader; open?: (url: string) => void; autostart?: () => string };
+  /** A signed install takes over from an npm install of the agent before it starts (default on; tests turn it off). */
+  migrate?: boolean;
 }
 
 /** The agent's own delivery problem, kept apart from a hook call's cut-off. */
@@ -249,8 +265,43 @@ export function releaseAgentLock(file: string): void {
   try { if (readFileSync(file, "utf8").trim().split(/\s+/)[0] === String(process.pid)) rmSync(file, { force: true }); } catch { /* already gone */ }
 }
 
+/** How the last signed update went, heard once when an agent starts: what the install helper recorded, or, when it recorded
+ *  nothing, the update this agent's predecessor handed over. A version that was not installed, installed but is not the one
+ *  now running, or whose helper never finished is recorded as failed, so it is not tried again for a day and status and
+ *  the tray say so. */
+export function noteUpdateOutcome(dir: string, log: (line: string) => void, running = agentVersion(), now = Date.now()): void {
+  const installed = takeInstallResult(dir);
+  const pending = readUpdatePending(dir);
+  removeOldHelpers(dir);
+  if (installed) {
+    clearUpdatePending(dir);
+    if (!installed.installed) {
+      recordFailedUpdate(dir, installed.version, now, installed.reason ?? "it was not installed");
+      log(`the update to ${installed.version} was not installed: ${installed.reason ?? "unknown"}`);
+    } else if (installed.version !== running) {
+      const why = `the installer reported ${installed.version} installed, but the agent that started is ${running}${installed.log ? ` (log: ${installed.log})` : ""}`;
+      recordFailedUpdate(dir, installed.version, now, why);
+      log(`the update to ${installed.version} did not take: ${why}`);
+    } else log(`the Scopebond Agent ${installed.version} was installed`);
+    return;
+  }
+  if (!pending) return;
+  // Installed, and its result already read by an earlier start of this version.
+  if (pending.version === running) { clearUpdatePending(dir); return; }
+  // Still under way (the helper waits for the old agent and runs msiexec), unless it has been far too long.
+  if (now >= pending.at && now - pending.at < UPDATE_PENDING_MS) return;
+  clearUpdatePending(dir);
+  recordFailedUpdate(dir, pending.version, now, "the update helper did not finish");
+  log(`the update to ${pending.version} did not finish: its helper never reported back`);
+}
+
 export async function startService(options: ServiceOptions): Promise<Service> {
   const log = options.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
+  const kind = options.installKind ?? installKind();
+  const nativeTray = process.platform === "win32" ? nativeTrayPath() : null;
+  // The signed install takes over from an npm install of the agent first: the npm agent is stopped and its sign-in entry
+  // retired before this one looks for a running agent or takes the lock, so the npm one never keeps it from starting.
+  if (kind !== "npm" && options.migrate !== false && process.platform === "win32") await migrateFromNpm(options.dir, kind, nativeTray, log);
   if (await callAgent(options.dir, "GET", "/status", undefined, 2_000)) throw new Error("a Scopebond Agent is already running for this computer");
   // Two agents started within moments of each other (a slow first start, then a second start) both see
   // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
@@ -261,10 +312,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   if (unprotected) log(`the folder ${options.dir} could not be made readable by this user alone: ${unprotected}`);
   rmSync(join(options.dir, STOPPED_FILE), { force: true });
   // What the install helper of a signed update recorded before this start (installAfterExit).
-  const installed = takeInstallResult(options.dir);
-  if (installed) log(installed.installed ? `the Scopebond Agent ${installed.version} was installed` : `the update to ${installed.version} was not installed: ${installed.reason ?? "unknown"}`);
+  noteUpdateOutcome(options.dir, log);
   const interval = options.intervalMs ?? INTERVAL_MS;
-  const nativeTray = process.platform === "win32" ? nativeTrayPath() : null;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
   let failures = 0;
@@ -291,8 +340,12 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let working: string | null = null;
   // The workspace's own summary for the tray (names, links, open reviews), refreshed every five minutes; null when the
   // workspace does not answer it (a self-hosted gateway), and the tray simply leaves those rows out.
-  // A sign-in started from the tray, while it waits for approval.
+  // A sign-in started from the tray (or, once, by a signed install's first start), while it waits for approval; and what
+  // stops it when the agent stops (the hook's sign-in child, or the first sign-in this agent runs itself).
   let reconnecting: ReconnectStart | null = null;
+  let endSignIn: (() => void) | null = null;
+  // The workspace's last version answer: the tray offers Update now from it, per kind of install.
+  let lastTarget: ClientVersion | null = null;
   let summary: ComputerSummary | null = null;
   let summaryAt = 0;
   const refreshSummary = async () => {
@@ -360,7 +413,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const connection = loadConnection(options.dir);
       const harnesses = expectedHarnesses();
       const target = connection ? await fetchClientVersion(connection, options.fetchImpl) : null;
-      if (target) result.policy = target.policy;
+      if (target) { result.policy = target.policy; lastTarget = target; }
       const current = agentVersion();
       // Hook entries first: always the hook this agent carries, by its path (never a version the workspace names, and never
       // an npx form resolved at run time). Under "hold" only broken ones are repaired. After an update the new agent pins
@@ -371,31 +424,45 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (outage.recorded.length) log(`hook entry cannot start for ${outage.recorded.join(", ")}: kept as a gap for the workspace`);
       result.hookEntries = maintainHookEntries(harnesses, target?.policy !== "hold");
       for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
-      const kind = installKind();
-      const newer = target?.policy === "recommended" && target.agent && compareVersions(target.agent, current) > 0 ? target.agent : null;
+      // The npm install follows the workspace's `agent`; the signed install its `native_agent` only (updateTarget).
+      const newer = updateTarget(target, kind, current);
+      const pending = readUpdatePending(options.dir);
       if (newer && kind === "per-machine") {
         // Installed for every user: the organisation that deployed it updates it.
         log(`the workspace recommends the Scopebond Agent ${newer}; this install is updated by your organization`);
+      } else if (newer && recentlyFailedUpdate(options.dir, newer)) {
+        log(`the Scopebond Agent ${newer} did not install or start here earlier; staying on ${current} for now`);
+      } else if (newer && kind === "per-user" && pending && pending.version === newer && Date.now() - pending.at < UPDATE_PENDING_MS) {
+        log(`the update to ${newer} is under way`);
       } else if (newer && kind === "per-user") {
         log(`updating the Scopebond Agent ${current} -> ${newer} (signed installer)`);
         const verified = await fetchVerifiedInstaller(newer, { dir: options.dir, fetchImpl: options.fetchImpl });
         if (verified.ok && installerUnchanged(verified)) {
-          result.updatedTo = newer;
-          lastMaintenance = result;
-          if (options.onUpdated) options.onUpdated(newer);
-          else {
-            // The installer replaces this file, so it runs after this agent has exited, checks it again, and starts the tray
-            // (which starts the agent) or the agent again.
-            installAfterExit(verified, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null, nativeTray);
-            setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
+          if (options.onUpdated) {
+            result.updatedTo = newer;
+            lastMaintenance = result;
+            options.onUpdated(newer);
+            return result;
           }
-          return result;
+          // The installer replaces this file, so a copy of this executable installs it after this agent has exited, checks
+          // it again, starts the tray (which starts the agent) or the agent again, and checks the new one answers.
+          try {
+            installAfterExit(verified, process.pid, existsSync(launcherPath(options.dir)) ? launcherPath(options.dir) : null, nativeTray, { dir: options.dir, previous: current });
+            writeUpdatePending(options.dir, newer);
+            result.updatedTo = newer;
+            lastMaintenance = result;
+            setTimeout(() => { setTimeout(() => process.exit(0), 5_000).unref(); void stop().finally(() => process.exit(0)); }, 500);
+            return result;
+          } catch (error) {
+            recordFailedUpdate(options.dir, newer, Date.now(), `the update helper could not start: ${(error as Error).message}`);
+            result.error = `update to ${newer} could not start its installer: ${(error as Error).message}; nothing was installed`;
+          }
+        } else {
+          // Tried again at the next check: a download or a release not yet complete can pass then.
+          result.error = `update to ${newer} could not be verified: ${verified.ok ? "the installer changed after it was checked" : verified.reason}; nothing was installed`;
         }
-        result.error = `update to ${newer} could not be verified: ${verified.ok ? "the installer changed after it was checked" : verified.reason}; nothing was installed`;
         log(result.error);
-      } else if (newer && recentlyFailedUpdate(options.dir, newer)) {
-        log(`the Scopebond Agent ${newer} did not start here earlier; staying on ${current} for now`);
-      } else if (newer) {
+      } else if (newer && kind === "npm") {
         log(`updating the Scopebond Agent ${current} -> ${newer}`);
         const installed = await installAgent(newer, { fetchImpl: options.fetchImpl });
         const started = installed.ok ? await (options.startCheck ?? startCheck)(newer) : null;
@@ -461,12 +528,80 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       rules: report ? { checked_at: meta.checked_at ? Date.parse(meta.checked_at) : null, managed: isManaged(options.dir), block: modes.filter((m) => m === "enforce").length, monitor: modes.filter((m) => m === "monitor").length } : null,
       today: activity?.today ?? null,
       recentBlocks: actionable(activity?.recent_blocks ?? [], now),
-      version: { agent: agentVersion(), hook: hookVersion(), policy: lastMaintenance?.policy ?? "unknown", recommendedAgent: meta.recommended?.agent ?? null, recommendedHook: meta.recommended?.hook ?? null },
+      version: { agent: agentVersion(), hook: hookVersion(), policy: lastMaintenance?.policy ?? "unknown", ...offeredVersions(), failedUpdate: failedUpdate(options.dir) },
       workspace: summary ? { name: summary.workspace_name, environment: summary.environment_name, computer_url: summary.computer_url } : null,
       openReviews: summary?.open_reviews ?? 0,
       computerName: hostname(),
       canReconnect: true,
+      // A signed install signs in for the first time from the tray; an npm one from a terminal.
+      canSignIn: kind !== "npm",
+      signingIn: reconnecting,
+      notice: migrationNotice(),
     });
+  };
+  /** What this install can update to, for the tray: from npm, the workspace's agent and hook (as its rules check said);
+   *  the signed install, only the signed build the workspace names (the hook is inside it); for every user, nothing. */
+  const offeredVersions = (): { recommendedAgent: string | null; recommendedHook: string | null } => {
+    if (kind === "per-machine") return { recommendedAgent: null, recommendedHook: null };
+    if (kind === "per-user") return { recommendedAgent: lastTarget?.policy === "recommended" ? lastTarget.native_agent : null, recommendedHook: null };
+    const meta = readMeta(options.dir);
+    return { recommendedAgent: meta.recommended?.agent ?? null, recommendedHook: meta.recommended?.hook ?? null };
+  };
+  /** After taking over from an npm install, for a week, while the npm package is still there: how to remove it. */
+  const migrationNotice = (): string | null => {
+    if (kind === "npm") return null;
+    const moved = readMigration(options.dir);
+    if (!moved?.package_dir || Date.now() - moved.at > 7 * 24 * 60 * 60 * 1000 || !existsSync(moved.package_dir)) return null;
+    return `The Scopebond Agent installed with npm is no longer used. To remove it, run: ${npmRemovalCommand()}`;
+  };
+
+  // Sign in: again, for the workspace this computer is connected to (the hook's own sign-in); or, for a signed install
+  // never connected, for the first time, to the workspace the installer named (else Scopebond Cloud). The tray shows the
+  // code; asked again while it waits, it opens the approval page again and gives the same code.
+  let signInOrigin: string | null = null;
+  const signIn = async (by: string): Promise<ReconnectStart | { error: string }> => {
+    if (reconnecting) {
+      if (signInOrigin && sameOrigin(reconnecting.verification_url, signInOrigin)) (options.signIn?.open ?? openInBrowser)(reconnecting.verification_url);
+      return reconnecting;
+    }
+    const connection = loadConnection(options.dir);
+    working = connection ? "Signing in again…" : "Signing in…";
+    try {
+      if (connection || kind === "npm") {
+        const result = await startReconnect(options.dir, (ok) => {
+          reconnecting = null; endSignIn = null;
+          log(ok ? "signed in again" : "the sign-in did not finish");
+          if (ok) void cycle();
+        }, undefined, options.signIn?.open);
+        if ("error" in result) return { error: result.error };
+        reconnecting = result.started;
+        signInOrigin = connection ? new URL(connection.url).origin : null;
+        endSignIn = () => { try { result.child.kill(); } catch { /* already gone */ } };
+        log(`signing in again: waiting for approval of code ${result.started.user_code}`);
+        return result.started;
+      }
+      const workspace = installedWorkspace(options.signIn?.registry);
+      if ("error" in workspace) { log(`cannot sign in: ${workspace.error}`); return { error: workspace.error }; }
+      log(`signing in for the first time (${by}) to ${workspace.origin}, ${workspace.from === "default" ? "Scopebond Cloud (the installer named no workspace)" : `named in ${workspace.from}`}`);
+      // Autostart as setup turns it on: the tray's sign-in entry beside the native tray, else the launcher. Only the signed
+      // executable itself does it (a test names its own).
+      const autostart = options.signIn?.autostart ?? (isSingleExecutable() ? () => enableAutostart(options.dir, agentCliPath()) : undefined);
+      const first: FirstSignIn | { error: string } = await startFirstSignIn(options.dir, workspace.origin, {
+        fetchImpl: options.fetchImpl, open: options.signIn?.open, autostart,
+        onDone: (outcome) => {
+          reconnecting = null; endSignIn = null;
+          if (!outcome.ok) { log(`the first sign-in did not finish: ${outcome.error}`); return; }
+          for (const line of outcome.lines) log(`first sign-in: ${line}`);
+          void cycle(); void refreshSummary();
+        },
+      });
+      if ("error" in first) { log(`the first sign-in could not start: ${first.error}`); return { error: first.error }; }
+      reconnecting = first.started;
+      signInOrigin = workspace.origin;
+      endSignIn = () => first.cancel();
+      log(`signing in: waiting for approval of code ${first.started.user_code}`);
+      return first.started;
+    } finally { working = null; }
   };
 
   const control = await startControl(options.dir, `${AGENT_VERSION} hook/${hookVersion()}`, {
@@ -494,19 +629,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return { opened: true };
     },
     // Sign in again for the connected workspace; the tray shows the code, the approval page opens in the browser.
-    "POST /reconnect": async () => {
-      if (reconnecting) return reconnecting;
-      working = "Signing in again…";
-      const result = await startReconnect(options.dir, (ok) => {
-        reconnecting = null; working = null;
-        log(ok ? "signed in again" : "the sign-in did not finish");
-        if (ok) void cycle();
-      });
-      if ("error" in result) { working = null; return { error: result.error }; }
-      reconnecting = result.started;
-      log(`signing in again: waiting for approval of code ${result.started.user_code}`);
-      return result.started;
-    },
+    // A computer never connected (the signed install): the first sign-in, with the hook entries and autostart.
+    "POST /reconnect": () => signIn("from the tray"),
     "GET /recent-blocks": () => ({ recent_blocks: actionable(localActivity(options.dir, { limit: 10 })?.recent_blocks ?? [], Date.now()) }),
     // Allow an earlier block, or ask an admin, from the tray. The caller names the block; only the Scopebond window
     // answers (the same window the hook uses), so whoever calls this channel cannot allow anything by itself. Scopebond never
@@ -524,7 +648,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       log(`earlier block under "${q.title}": ${done.outcome}`);
       return { outcome: done.outcome, text: blockedText(done.outcome) };
     },
-    "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: { pid: process.pid, version: AGENT_VERSION, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance } }),
+    // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
+    "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
+      pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
+      failed_update: failedUpdate(options.dir), signing_in: reconnecting,
+    } }),
     "POST /flush": async () => ({ cycle: await cycle() }),
     "POST /repair": () => {
       const repaired = repairHookEntries();
@@ -558,6 +686,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const stop = async () => {
     stopped = true;
     try { tray?.kill(); } catch { /* already gone */ }
+    // A sign-in waiting for approval ends with the agent (an update or an uninstall replaces this program).
+    try { endSignIn?.(); } catch { /* already over */ }
     if (timer) clearTimeout(timer);
     if (maintenanceTimer) clearInterval(maintenanceTimer);
     // A cycle under way gets a moment to finish; stop never waits on one that does not.
@@ -587,6 +717,14 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       })();
     }, 500);
   };
+  // The very first start of a signed install that was never connected: sign in once, by itself (the approval page opens in
+  // the browser, the tray shows the code). The note is written first, so this never happens twice, even after a crash.
+  if ((options.autoSignIn ?? kind !== "npm") && !loadConnection(options.dir) && !existsSync(join(options.dir, FIRST_SIGNIN_FILE))) {
+    let noted = false;
+    try { writeFileSync(join(options.dir, FIRST_SIGNIN_FILE), `${JSON.stringify({ started_at: new Date().toISOString(), pid: process.pid })}\n`, { mode: 0o600, flag: "wx" }); noted = true; }
+    catch { /* written already, or the folder cannot be written: not started by itself */ }
+    if (noted) void signIn("on the first start of this install");
+  }
   log(`Scopebond Agent ${agentVersion()} running for ${options.dir} (control on ${[control.endpoint.socket, control.endpoint.port ? `127.0.0.1:${control.endpoint.port}` : null].filter(Boolean).join(" and ")})`);
   // Maintenance is armed before the first cycle, so a first cycle that hangs cannot keep it from ever starting.
   if (options.maintenance !== false) {

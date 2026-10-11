@@ -16,6 +16,8 @@ import {
 } from "@scopebond/hook";
 import { findProgram, windowsSystemProgram } from "@scopebond/gateway/node";
 import { agentCliPath } from "./self.js";
+import { useNativeHookEntries } from "./hook-entries.js";
+import type { InstallKind } from "./native-update.js";
 
 /** x.y.z with no leading zeros, no tags, and each part of a sane size. */
 const VERSION = /^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,5})$/;
@@ -40,7 +42,12 @@ export function agentVersion(): string {
 
 export const isVersion = (v: unknown): v is string => typeof v === "string" && VERSION.test(v);
 
-export interface ClientVersion { policy: "recommended" | "hold"; hook: string | null; agent: string | null }
+/** The workspace's answer to `GET /v1/client-version`. `agent` is the npm release to run; `native_agent` is the newest
+ *  published signed Windows build (the version of its release manifest and installer), or null when there is none or the
+ *  workspace holds it back. An install from the signed installer updates only to `native_agent`, never to `agent`: an
+ *  npm release can be out before its signed build, or never get one. A workspace that does not send the field (an older
+ *  one) offers the signed install no update. */
+export interface ClientVersion { policy: "recommended" | "hold"; hook: string | null; agent: string | null; native_agent: string | null }
 
 /** A response body as text, or null when it is larger than `max` bytes. */
 async function boundedText(res: Response, max: number): Promise<string | null> {
@@ -83,16 +90,25 @@ export async function fetchClientVersion(
     if (text === null) return null;
     const body = JSON.parse(text) as unknown;
     if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-    const { policy, hook, agent } = body as Record<string, unknown>;
+    const { policy, hook, agent, native_agent: nativeAgent } = body as Record<string, unknown>;
     if (policy !== "recommended" && policy !== "hold") return null;
     const version = (v: unknown, current: string): string | null | undefined => {
       if (v === null || v === undefined) return null;
       return isVersion(v) && inRange(v, current) ? v : undefined;
     };
-    const h = version(hook, running.hook), a = version(agent, running.agent);
-    if (h === undefined || a === undefined) return null;
-    return { policy, hook: h, agent: a };
+    const h = version(hook, running.hook), a = version(agent, running.agent), n = version(nativeAgent, running.agent);
+    if (h === undefined || a === undefined || n === undefined) return null;
+    return { policy, hook: h, agent: a, native_agent: n };
   } catch { return null; }
+}
+
+/** The version this install should move to, or null: under "recommended" only, newer than the one running, and from the
+ *  field for this kind of install: an npm install follows `agent`; the signed installer follows `native_agent` alone (no
+ *  field, or null, means no update for it). */
+export function updateTarget(target: ClientVersion | null, kind: InstallKind, current: string): string | null {
+  if (!target || target.policy !== "recommended") return null;
+  const want = kind === "npm" ? target.agent : target.native_agent;
+  return want && compareVersions(want, current) > 0 ? want : null;
 }
 
 /** Compare x.y.z versions: negative when a < b. */
@@ -146,6 +162,9 @@ export function npmOnPath(args: string[], env: NodeJS.ProcessEnv = process.env, 
  *  "hold" only broken entries and `npx` entries that name no version or the carried one are (their version does not
  *  change). Entries of other tools are never touched. Returns the files changed. */
 export function maintainHookEntries(harnesses: Harness[], moveVersions = true): Array<{ harness: Harness; file: string; reason: string }> {
+  // The signed install: every Scopebond entry runs this executable, whatever wrote it (an npm install before it, an npx
+  // form), under either policy: the hook is the one inside this program, so no version moves.
+  if (isSingleExecutable()) return useNativeHookEntries(harnesses);
   const carried = hookVersion();
   const changed: Array<{ harness: Harness; file: string; reason: string }> = [];
   for (const harness of harnesses) {
@@ -267,8 +286,17 @@ export function startCheck(version: string, cli = agentCliPath(), timeoutMs = 60
 export const FAILED_UPDATE_FILE = "update-failed.json";
 export const FAILED_UPDATE_RETRY_MS = 24 * 60 * 60 * 1000;
 
-export function recordFailedUpdate(dir: string, version: string, now = Date.now()): void {
-  try { writeFileSync(join(dir, FAILED_UPDATE_FILE), `${JSON.stringify({ version, at: now })}\n`, { mode: 0o600 }); } catch { /* best effort */ }
+export function recordFailedUpdate(dir: string, version: string, now = Date.now(), reason: string | null = null): void {
+  try { writeFileSync(join(dir, FAILED_UPDATE_FILE), `${JSON.stringify({ version, at: now, ...(reason ? { reason: reason.slice(0, 300) } : {}) })}\n`, { mode: 0o600 }); } catch { /* best effort */ }
+}
+
+/** The update that did not install or start here within the last day, with why, or null. */
+export function failedUpdate(dir: string, now = Date.now()): { version: string; at: number; reason: string | null } | null {
+  try {
+    const r = JSON.parse(readFileSync(join(dir, FAILED_UPDATE_FILE), "utf8")) as { version?: unknown; at?: unknown; reason?: unknown };
+    if (typeof r.version !== "string" || typeof r.at !== "number" || !(now - r.at >= 0 && now - r.at < FAILED_UPDATE_RETRY_MS)) return null;
+    return { version: r.version, at: r.at, reason: typeof r.reason === "string" ? r.reason : null };
+  } catch { return null; }
 }
 
 export function recentlyFailedUpdate(dir: string, version: string, now = Date.now()): boolean {

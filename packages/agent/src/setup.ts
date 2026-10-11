@@ -13,7 +13,9 @@ import { hookSelfCommand, isSingleExecutable, loadConnection, nodeTooOldLines, r
 import { agentCliPath, agentSelfCommand } from "./self.js";
 import { autostartHealth, enableAutostart, startNow } from "./autostart.js";
 import { writeAppsEntry } from "./apps-entry.js";
-import { installKind } from "./native-update.js";
+import { installKind, nativeTrayPath } from "./native-update.js";
+import { migrateFromNpm } from "./migrate.js";
+import { npmProgram, setupCli } from "./commands.js";
 import { callAgent } from "./ipc.js";
 import { compareVersions, npmEnvironment, npmInstallArgs, npmOnPath, ownNpm } from "./update.js";
 import { repairHookEntries } from "./service.js";
@@ -107,6 +109,11 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   // The signed installer put the agent (one executable with the hook) in place: nothing to install with npm, and no Node
   // or npm need be on this computer. Autostart then starts this executable itself.
   const single = isSingleExecutable();
+  // The signed install takes over from an npm install of the agent first (its agent stopped, its sign-in entry, Apps entry
+  // and hook entries moved to this executable), as it does when it starts.
+  if (single && process.platform === "win32") {
+    for (const step of await migrateFromNpm(o.dir, installKind(), nativeTrayPath(), () => { /* said below */ })) say(`✓ Moved from the npm install: ${step}`);
+  }
   const global = agentOnThisComputer(single, o.version);
   const state: SetupState = {
     connectedTo,
@@ -123,9 +130,7 @@ export async function runSetup(o: SetupOptions): Promise<number> {
     // From the home folder, so a project's own setup in the current folder can never take the sign-in;
     // and a failed sign-in names this setup command, which also installs and starts the agent.
     const harnessFlag = o.harness === "claude" ? "" : ` --${o.harness}`;
-    const again = single
-      ? `"${process.execPath}" setup ${o.origin}${harnessFlag}`
-      : `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/agent@${o.version} setup ${o.origin}${harnessFlag}`;
+    const again = setupCli(`${o.origin}${harnessFlag}`, undefined, o.version);
     const [program, args] = hookSelfCommand(["login", o.origin, flag]);
     const r = spawnSync(program, args, { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: o.dir, SCOPEBOND_RETRY_COMMAND: again } });
     if (r.status !== 0) { console.error("Setup stopped: the sign-in did not finish. Run the same command again for a new code."); return 1; }
@@ -138,7 +143,7 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   let cli = global.cli;
   if (steps.includes("install_agent")) {
     const spec = process.env.SCOPEBOND_AGENT_INSTALL_SPEC || `@scopebond/agent@${o.version}`;
-    say(`Installing the Scopebond Agent for this user: ${process.platform === "win32" ? "npm.cmd" : "npm"} install -g ${spec}`);
+    say(`Installing the Scopebond Agent for this user: ${npmProgram()} install -g ${spec}`);
     // Package scripts off and the public registry pinned, as the agent's own updates do.
     const installed = npm(npmInstallArgs(spec), npmEnvironment());
     if (!installed.ok) { console.error(`Setup stopped: npm could not install the agent.\n${installed.out.slice(-1500)}`); return 1; }

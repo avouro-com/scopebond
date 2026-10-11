@@ -46,13 +46,23 @@ export interface TrayInput {
   /** `recorded_after`: out of policy but reported only after it ran (a Cursor edit); never counted as blocked. */
   today: { actions: number; blocked: number; recorded_after?: number; allowed_by_person: number } | null;
   recentBlocks?: RecentBlock[];
-  version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null };
+  /** `recommendedAgent`/`recommendedHook`: what this install can update to (the signed install: the workspace's signed
+   *  build, and never a separate hook; an install for every user: nothing). `failedUpdate`: a version that did not install
+   *  or start here within the last day (not offered again until then). */
+  version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null; failedUpdate?: { version: string; reason: string | null } | null };
   workspace: { name: string | null; environment: string | null; computer_url: string | null } | null;
   computerName: string;
   /** Items about this computer waiting in the workspace's Review (from the workspace's summary). */
   openReviews?: number;
   /** Whether the agent can run the sign-in itself (`POST /reconnect`); until then the tray shows the command. */
   canReconnect?: boolean;
+  /** A computer never connected can be signed in from the tray (the signed install: `POST /reconnect` runs the first-time
+   *  sign-in and setup). */
+  canSignIn?: boolean;
+  /** A sign-in waiting for approval in the workspace: its code, shown until it is approved. */
+  signingIn?: { user_code: string; verification_url: string } | null;
+  /** Something to tell the person once things are fine (shown as the hint when there is no other). */
+  notice?: string | null;
 }
 
 const MIN = 60_000;
@@ -115,12 +125,14 @@ const newer = (want: string | null, have: string): boolean => {
   return false;
 };
 
-const ACTIONS: Record<TrayAction["id"], TrayAction> = {
+const ACTIONS: Record<TrayAction["id"] | "sign_in", TrayAction> = {
   send_now: { id: "send_now", label: "Send records now", route: "/flush" },
   update_now: { id: "update_now", label: "Update now", route: "/update" },
   check_now: { id: "check_now", label: "Check now", route: "/check" },
   repair: { id: "repair", label: "Repair", route: "/repair" },
   reconnect: { id: "reconnect", label: "Reconnect…", route: "/reconnect" },
+  // The same route and id (the tray shows the code the answer carries for "reconnect"), for a computer never connected.
+  sign_in: { id: "reconnect", label: "Sign in…", route: "/reconnect" },
   open_workspace: { id: "open_workspace", label: "Open workspace", route: "/open-workspace" },
 };
 
@@ -133,14 +145,25 @@ export function trayModel(input: TrayInput): TrayModel {
   const waitingMs = oldestAt === null ? 0 : now - Math.max(oldestAt, input.awakeSince);
   const offline = d.connected && unreachable(d.last_error);
   const offlineFor = offline ? now - Math.max(d.last_success_at ?? input.awakeSince, input.awakeSince) : 0;
-  const updateAvailable = input.version.policy === "recommended" && (newer(input.version.recommendedAgent, input.version.agent) || newer(input.version.recommendedHook, input.version.hook));
+  const failed = input.version.failedUpdate ?? null;
+  const offered = (want: string | null) => want !== null && want !== failed?.version ? want : null;
+  const updateAvailable = input.version.policy === "recommended" && (newer(offered(input.version.recommendedAgent), input.version.agent) || newer(offered(input.version.recommendedHook), input.version.hook));
 
   let state: TrayState;
   let headline: string;
   let fix: TrayAction | null = null;
   let hint: string | null = null;
-  if (input.working) {
+  if (input.signingIn) {
+    // The code to check on the approval page; "Sign in…" shows it again and opens the page again.
+    state = "working"; headline = `Approve this computer in your workspace: code ${input.signingIn.user_code}`;
+    hint = `The approval page opened in your browser. Check that it shows the code ${input.signingIn.user_code}, then approve this computer.`;
+    fix = ACTIONS.sign_in;
+  } else if (input.working) {
     state = "working"; headline = input.working;
+  } else if (!d.connected && input.canSignIn) {
+    // First things first: signing in also puts the hook in the coding agents' settings, so it fixes "not checking" too.
+    state = "disconnected"; headline = "Not signed in to a workspace yet: records stay on this computer";
+    hint = "Sign in to connect this computer to your workspace: the approval page opens in your browser, and Scopebond sets up your coding agents."; fix = ACTIONS.sign_in;
   } else if (health.level === "red" && d.connection_refused_since !== null) {
     state = "disconnected"; headline = "Not connected to your workspace: using this computer's own rules";
     if (input.canReconnect) fix = ACTIONS.reconnect; else hint = health.hint;
@@ -199,7 +222,8 @@ export function trayModel(input: TrayInput): TrayModel {
   }
   rows.push({
     label: "Version",
-    value: updateAvailable ? `Update available (agent ${input.version.recommendedAgent ?? input.version.agent})`
+    value: failed && !updateAvailable ? `agent ${input.version.agent} · the update to ${failed.version} did not install; tried again later`
+      : updateAvailable ? `Update available (agent ${input.version.recommendedAgent ?? input.version.agent})`
       : input.version.policy === "hold" ? `agent ${input.version.agent} · updates managed by your workspace`
       : `Up to date (agent ${input.version.agent})`,
   });
@@ -209,6 +233,8 @@ export function trayModel(input: TrayInput): TrayModel {
   if (updateAvailable && !input.working) actions.push(ACTIONS.update_now);
   if (fix?.id !== "check_now") actions.push(ACTIONS.check_now);
   if (input.workspace?.computer_url) actions.push(ACTIONS.open_workspace);
+
+  if (hint === null && input.notice) hint = input.notice;
 
   const where = [input.workspace?.name, input.workspace?.environment].filter(Boolean).join(" · ");
   const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : headline;

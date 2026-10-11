@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join, win32 } from "node:path";
 import { isSingleExecutable } from "@scopebond/hook";
 import { nativeTrayPath, windowsTool } from "./native-update.js";
+import { agentCli } from "./commands.js";
 
 export const LABEL = "com.scopebond.agent";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -358,7 +359,7 @@ export function autostartHealth(scopebondHome: string, platform = process.platfo
     const on = reg(["query", RUN_KEY, "/v", TRAY_RUN_VALUE]) || trayForEveryone(reg);
     return on
       ? { on, ok: true, detail: "starts with sign-in (the Scopebond tray keeps the agent running)" }
-      : { on, ok: false, detail: "the Scopebond tray does not start with sign-in (turn on Start with Windows in its menu, or run: scopebond-agent.exe autostart on)" };
+      : { on, ok: false, detail: `the Scopebond tray does not start with sign-in (turn on Start with Windows in its menu, or run: ${agentCli("autostart on", { kind: "per-user", platform })})` };
   }
   const paths = autostartPaths();
   // The Run value is read once: whether it is there, and what it starts.
@@ -368,8 +369,8 @@ export function autostartHealth(scopebondHome: string, platform = process.platfo
     runValue = readRun();
     on = runValue !== null;
   } else on = existsSync(platform === "darwin" ? paths.macPlist : paths.linuxUnit);
-  // The fix as the person types it: PowerShell blocks the plain scopebond-agent script shim.
-  const fix = `${platform === "win32" ? "scopebond-agent.cmd" : "scopebond-agent"} autostart on`;
+  // The fix as the person types it (from npm on Windows the .cmd shim: PowerShell blocks the plain script shim).
+  const fix = agentCli("autostart on", { kind: isSingleExecutable() ? "per-user" : "npm", platform });
   if (!on) return { on, ok: false, detail: `the agent does not start with sign-in (run: ${fix})` };
   const launcher = launcherPath(scopebondHome, platform);
   const target = entryTarget(platform, () => runValue);

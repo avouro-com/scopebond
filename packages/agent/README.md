@@ -15,7 +15,8 @@ agent never takes part in a decision. It only keeps everything around the decisi
 - **Repair.** It notices when an agent's settings lost the Scopebond hook entry (an update or a reset can remove it)
   and, on request, puts it back without touching anything else in the file.
 - **Updates, under the workspace's control.** Every six hours it asks the workspace which versions to run. When
-  the workspace recommends a newer agent, it installs it from npm and restarts itself; when the workspace holds
+  the workspace recommends a newer agent, it installs it from npm and restarts itself (the signed Windows install: the
+  signed build, see below); when the workspace holds
   updates, it changes nothing. It also moves the Scopebond hook entries in agent settings to the recommended hook
   and repairs any entry that can no longer start. Other tools' hook entries are never touched.
 - **A small local store.** With each update check it keeps the local receipt store small: receipts the workspace
@@ -34,9 +35,47 @@ agent never takes part in a decision. It only keeps everything around the decisi
   signed with the key this computer enrolled with, once; a workspace without these calls leaves them on the computer.
 - **Health.** It reports the same machine-readable status as `scopebond status --json` (`scopebond.status.v1`).
 
+## Windows: the signed installer
+
+On Windows, install Scopebond with the signed installer (`scopebond-agent-<version>-x64.msi` from the
+[releases](https://github.com/avouro-com/scopebond/releases), or `winget install Avouro.Scopebond`). It needs neither
+Node.js nor npm: one signed program is both the agent and the hook, and the Scopebond tray keeps it running.
+
+- **First run.** After the installer, the tray starts the agent, and on its very first start the agent signs in by
+  itself, once: the approval page opens in your browser and the tray shows the code to check there. Once you approve it,
+  the agent puts the hook into the settings of the coding agents on this computer (Claude Code, and Cursor and Codex where
+  they are installed) and turns autostart on, as `setup` does. If you close the page, **Sign in…** in the tray's menu
+  starts it again. The workspace is the one the installer was given (`msiexec /i … WORKSPACE=https://<your-workspace>`,
+  kept as `Workspace` under `HKCU\Software\Avouro\Scopebond`, or `HKLM` for an install for every user), else
+  `https://cloud.scopebond.com`. Only an https address there is used. From a terminal the same is
+  `scopebond-agent setup https://<your-workspace>`.
+- **Commands.** `scopebond-agent <command>` (the table below), and the hook's commands as `scopebond-agent hook <command>`.
+- **Updates.** An install for this user updates itself when the workspace names a newer published signed build
+  (`native_agent` in its answer to `GET /v1/client-version`; never the npm release, which can come out first). The
+  installer is checked three ways (a release manifest signed with the updater key, the installer's SHA-256 and size,
+  and its Authenticode signature by Avouro LLC), checked again right before it runs, and installed with Windows' own
+  `msiexec` by a copy of the signed program itself, with a verbose log in `.scopebond\updates\msi-<version>.log`. The
+  new agent must start and report its version within three minutes; a version that does not install or start is
+  recorded, shown in `status` and the tray, and not tried again for a day. An install for every user (Program Files) is
+  updated by whoever deployed it.
+- **From an npm install.** Existing npm installs keep working until the signed installer is installed. When the signed
+  agent first starts (or `setup` runs) it takes over: it stops the npm agent, removes its `ScopebondAgent` sign-in entry,
+  its launcher, its Settings -> Apps entry and that entry's uninstall script, and points every Scopebond hook entry at
+  itself (`"<install folder>\scopebond-agent.exe" hook <tool>`). The npm package itself is left in place; remove it with
+  `npm.cmd uninstall -g @scopebond/agent`. `status` says so while both are there.
+- **Removing it.** Settings -> Apps -> Scopebond Agent -> Uninstall first runs `scopebond-agent uninstall` as the person
+  removing it (autostart off, the agent stopped, the hook taken out of that person's coding-agent settings, the workspace
+  told). An install for every user removed by a deployment tool (Intune, Group Policy, the system account) cleans only the
+  profile it runs as: the agent does not edit other people's profiles. Before removing it for everyone, have each person
+  run `scopebond-agent uninstall` (or remove it for them as them); afterwards, any hook entries left in someone's
+  settings point at a program that is gone, and `status` and the daily self-check name that file
+  (`hook_starts`). Installing Scopebond again, or taking the Scopebond entries out of those settings files, clears it.
+
+npm stays the way to install on macOS and Linux:
+
 ## Use
 
-One command from nothing to a connected computer:
+One command from nothing to a connected computer (macOS, Linux, and existing npm installs on Windows):
 
 ```bash
 npx -y @scopebond/agent@latest setup https://cloud.scopebond.com      # Windows: npx.cmd
