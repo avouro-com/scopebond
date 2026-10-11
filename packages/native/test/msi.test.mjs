@@ -12,6 +12,11 @@ import { buildMsi, installerVersion } from "../build-msi.mjs";
 import { readVersionInfo, stampExecutable } from "../stamp.mjs";
 
 const enabled = process.platform === "win32" && process.env.SCOPEBOND_MSI === "1";
+// Every install here names a workspace that cannot answer (.test never resolves), so an agent started by the tray, which
+// signs a never-connected computer in to the recorded workspace (or the default one) on its first start, fails fast here
+// and never sends a real sign-in request or opens a browser on the runner. The upgrade passes none on purpose: it keeps
+// this recorded one.
+const TEST_WORKSPACE = "https://cloud.example.test";
 const reg = (key, name) => {
   const r = spawnSync("reg", ["query", key, "/v", name], { encoding: "utf8" });
   return r.status === 0 ? (/REG_\w+\s+(.*)$/m.exec(r.stdout)?.[1] ?? "").trim() : null;
@@ -54,12 +59,12 @@ test("the installer installs per user without an administrator, and removing it 
   const logs = process.env.RUNNER_TEMP ?? process.env.TEMP;
   const installed = join(process.env.LOCALAPPDATA, "Programs", "Scopebond", "scopebond-agent.exe");
   const shortcut = join(process.env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Scopebond Agent status.lnk");
-  const install = msiexec(["/i", msi, "WORKSPACE=https://cloud.example.test"], join(logs, "msi-user-install.log"));
+  const install = msiexec(["/i", msi, `WORKSPACE=${TEST_WORKSPACE}`], join(logs, "msi-user-install.log"));
   assert.equal(install.status, 0, install.log.slice(-3000));
   assert.ok(existsSync(installed), `not installed at ${installed}`);
   assert.ok(existsSync(shortcut), "the Start-menu entry");
   assert.equal(reg("HKCU\\Software\\Avouro\\Scopebond", "InstallPath")?.replace(/\\$/, ""), join(process.env.LOCALAPPDATA, "Programs", "Scopebond"));
-  assert.equal(reg("HKCU\\Software\\Avouro\\Scopebond", "Workspace"), "https://cloud.example.test");
+  assert.equal(reg("HKCU\\Software\\Avouro\\Scopebond", "Workspace"), TEST_WORKSPACE);
   const run = spawnSync(installed, ["hook", "help"], { encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
   // On this user's PATH, once, so `scopebond-agent status` works in a new terminal.
@@ -104,10 +109,11 @@ test("with ALLUSERS=1 it installs for every user in Program Files, and removes c
   const msi = buildMsi();
   const logs = process.env.RUNNER_TEMP ?? process.env.TEMP;
   const installed = join(process.env.ProgramFiles, "Scopebond", "scopebond-agent.exe");
-  const install = msiexec(["/i", msi, "ALLUSERS=1"], join(logs, "msi-machine-install.log"));
+  const install = msiexec(["/i", msi, "ALLUSERS=1", `WORKSPACE=${TEST_WORKSPACE}`], join(logs, "msi-machine-install.log"));
   assert.equal(install.status, 0, install.log.slice(-3000));
   assert.ok(existsSync(installed), `not installed at ${installed}`);
   assert.equal(reg("HKLM\\Software\\Avouro\\Scopebond", "InstallPath")?.replace(/\\$/, ""), join(process.env.ProgramFiles, "Scopebond"));
+  assert.equal(reg("HKLM\\Software\\Avouro\\Scopebond", "Workspace"), TEST_WORKSPACE, "the workspace, for every user");
   // On the system's PATH, for every user, and not on this user's own.
   const folder = join(process.env.ProgramFiles, "Scopebond");
   assert.equal(onPath(MACHINE_ENV, folder), 1, `the folder on the system's PATH: ${reg(MACHINE_ENV, "Path")}`);
@@ -154,7 +160,7 @@ test("with the native tray: it starts at sign-in and keeps the agent running, an
   const tray = join(folder, "scopebond-tray.exe");
   const home = join(process.env.USERPROFILE, ".scopebond");
   const shortcut = join(process.env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Scopebond Agent status.lnk");
-  const install = msiexec(["/i", msi], join(logs, "msi-tray-install.log"));
+  const install = msiexec(["/i", msi, `WORKSPACE=${TEST_WORKSPACE}`], join(logs, "msi-tray-install.log"));
   assert.equal(install.status, 0, install.log.slice(-3000));
   assert.ok(existsSync(tray), `the tray is not installed at ${tray}`);
   assert.equal(reg(RUN, "Scopebond"), `"${tray}"`, "the tray starts at sign-in");
@@ -232,7 +238,7 @@ test("with the native tray: an upgrade replaces both running programs, keeps the
   const trayPath = join(folder, "scopebond-tray.exe");
   const home = join(process.env.USERPROFILE, ".scopebond");
   try {
-    const first = msiexec(["/i", oldMsi, "WORKSPACE=https://cloud.example.test", "/norestart"], join(logs, "msi-upgrade-old.log"));
+    const first = msiexec(["/i", oldMsi, `WORKSPACE=${TEST_WORKSPACE}`, "/norestart"], join(logs, "msi-upgrade-old.log"));
     assert.equal(first.status, 0, first.log.slice(-3000));
     const oldAgent = await agentUp(home, 90_000);
     assert.ok(oldAgent, "the older tray started the older agent");
@@ -263,7 +269,7 @@ test("with the native tray: an upgrade replaces both running programs, keeps the
     const listed = appsEntries().filter((e) => e.DisplayName === "Scopebond Agent");
     assert.equal(listed.length, 1, JSON.stringify(listed));
     assert.equal(listed[0].DisplayVersion, NEW);
-    assert.equal(reg("HKCU\\Software\\Avouro\\Scopebond", "Workspace"), "https://cloud.example.test", "the workspace is kept");
+    assert.equal(reg("HKCU\\Software\\Avouro\\Scopebond", "Workspace"), TEST_WORKSPACE, "the workspace is kept");
     assert.equal(onPath(USER_ENV, folder), 1, `the folder on PATH once: ${reg(USER_ENV, "Path")}`);
   } finally {
     // Never leave an install behind, whatever this test found.
