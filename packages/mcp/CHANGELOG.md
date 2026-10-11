@@ -1,5 +1,12 @@
 # @scopebond/mcp
 
+## 2.0.13
+
+### Patch Changes
+
+- Updated dependencies [e7ddb4a]
+  - @scopebond/gateway@0.18.0
+
 ## 2.0.12
 
 ### Patch Changes
