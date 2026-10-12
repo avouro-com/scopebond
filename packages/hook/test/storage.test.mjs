@@ -1,5 +1,5 @@
 // A hook call's memory does not grow with the local history, an older store shrinks when it is compacted, and the
-// retention the workspace sets is read and bounded (SB401–SB407, D144). The 700 MB proof is the same code with
+// retention the workspace sets is read and bounded. The 700 MB proof is the same code with
 // `node test/large-store.mjs "" 700`; CI builds a smaller file.
 import { test } from "node:test";
 import assert from "node:assert/strict";

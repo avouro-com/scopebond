@@ -1,4 +1,4 @@
-// SB392: Reconnect… from the tray runs the hook's sign-in for the workspace this computer is connected to, reads the code,
+// Reconnect… from the tray runs the hook's sign-in for the workspace this computer is connected to, reads the code,
 // and opens the approval page only on that workspace.
 import { test } from "node:test";
 import assert from "node:assert/strict";

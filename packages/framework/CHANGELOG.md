@@ -159,7 +159,7 @@
 
 ### Minor Changes
 
-- 5d5724a: Connector hardening (SB68).
+- 5d5724a: Connector hardening.
 
   - **github-action:** `claude[bot]` and `github-actions[bot]` are now governed
     coding-agent actors (a repo can still narrow the set via `agentActors`), and a

@@ -137,7 +137,7 @@ test("every separator splits: ; | && || & and newline", () => {
   }
 });
 
-// ---- SB111: self-protection completeness (the holes reproduced in published 0.3.0) ----
+// ---- Self-protection completeness (the holes reproduced in published 0.3.0) ----
 
 test("a shell read of the signing key / a secret file emits a file.read the read-guard sees", () => {
   // `cat .scopebond/attester.key` used to map to shell.exec(cat) only, bypassing the

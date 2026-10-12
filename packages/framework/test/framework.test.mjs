@@ -87,7 +87,7 @@ test("onReceipt receives a receipt for every checked call", async () => {
   assert.equal(receipts[1].payload.realtime_result, "deny");
 });
 
-test("stateful clauses bind across cooperative tool calls (SB66)", async () => {
+test("stateful clauses bind across cooperative tool calls", async () => {
   // rate_limit and windowed spend must accumulate across a long-running guard's
   // cooperative allows, or an agent could post/pay without limit.
   const statefulPolicy = {

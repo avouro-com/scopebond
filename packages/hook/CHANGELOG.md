@@ -768,7 +768,7 @@ program fails pattern`. It now names the action, the deciding rule, that rule's 
   Existing scaffolded policies are unchanged — only newly-initialized policies pick up
   the tighter destructive denylist; the mapper-level protections apply to every install.
 
-- e6143b0: Real install package: a once-per-machine, user-level installer (SB112).
+- e6143b0: Real install package: a once-per-machine, user-level installer.
 
   - New `scopebond` bin (alongside `scopebond-hook`) and commands: `install`
     (user-level home in `~/.scopebond`, hook registered by absolute path in
@@ -784,7 +784,7 @@ program fails pattern`. It now names the action, the deciding rule, that rule's 
 
 ### Patch Changes
 
-- c07b340: Starter policy: block writes to CI config and reads of environment secret files (SB81).
+- c07b340: Starter policy: block writes to CI config and reads of environment secret files.
 
   `npx @scopebond/hook init` now scaffolds a starter policy whose `protect-write` clause
   also denies writes to CI configuration (`.github/workflows/`, `.github/actions/`,

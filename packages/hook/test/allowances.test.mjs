@@ -1,4 +1,4 @@
-// D144 (SB411): allowances and "Ask an admin". A standing allowance lets the same action through on a rule a person may act
+// Allowances and "Ask an admin". A standing allowance lets the same action through on a rule a person may act
 // on, and the receipt names it; one-time, revoked and expired allowances do not; nothing allows Scopebond's own protection.
 // "Block, person may ask" never allows on the spot: the person asks an admin, the request waits for the agent, the block stands.
 import { ENFORCE } from "./enforce-all.mjs";

@@ -1,6 +1,6 @@
 // Conformance suite runner. Each vector in vectors/conformance.json is run
 // through violates() and checked against its expected verdict. This is the
-// moat-bearing artifact (D27): a gateway build passes conformance only if it
+// reference suite: a gateway build passes conformance only if it
 // produces identical verdicts on every vector here.
 
 import { test } from "node:test";

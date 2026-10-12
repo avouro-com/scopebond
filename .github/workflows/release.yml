@@ -86,7 +86,7 @@ jobs:
         if: steps.mode.outputs.mode == 'version'
         run: |
           git config user.name "avourohq"
-          git config user.email "founder@avouro.com"
+          git config user.email "286100447+avourohq@users.noreply.github.com"
       # Opens/updates the Version pull request only; it publishes nothing.
       - name: Open or update the Version packages PR
         if: steps.mode.outputs.mode == 'version'
@@ -212,7 +212,7 @@ jobs:
       - name: Configure company commit identity (release tags)
         run: |
           git config user.name "avourohq"
-          git config user.email "founder@avouro.com"
+          git config user.email "286100447+avourohq@users.noreply.github.com"
       # The one step with publishing rights: `changeset publish --from-pack-dir`
       # publishes each packed tarball (pnpm publish -> npm publish, no package
       # scripts), then the action pushes the tags and creates the GitHub releases

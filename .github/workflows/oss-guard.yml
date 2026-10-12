@@ -48,5 +48,5 @@ jobs:
       - name: Scan the branch's commit messages (dispatched run)
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         run: node scripts/oss-gate.mjs --messages-range "origin/main..HEAD"
-      - name: Enforce core-package dependency boundary (ADR-008)
+      - name: Enforce core-package dependency boundary
         run: node scripts/deps-allowlist.mjs

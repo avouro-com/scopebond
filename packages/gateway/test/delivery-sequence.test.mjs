@@ -1,4 +1,4 @@
-// SB289: each queued record carries this computer's number for it, so the workspace can tell a
+// Each queued record carries this computer's number for it, so the workspace can tell a
 // record lost on the computer from one that was never made.
 import { test } from "node:test";
 import assert from "node:assert/strict";

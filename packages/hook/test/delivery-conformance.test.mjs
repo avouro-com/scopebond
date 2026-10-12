@@ -226,7 +226,7 @@ test("DIC-1: no agent wired to the hook is reported as not governing", async () 
   } finally { ws.close(); }
 });
 
-// SB290: identity changes while records wait. A workspace that accepts only the credential it issued last.
+// Identity changes while records wait. A workspace that accepts only the credential it issued last.
 function strictWorkspace() {
   const received = [];
   let accepted = "sbm_us_first";
@@ -273,7 +273,7 @@ async function actAs(dir, url, credential, n) {
 }
 const pendingIn = (dir) => buildStatusJson({ version: "test", activeDir: dir, candidateDirs: [dir], hasPolicy: true, agents: { claude: true, cursor: false, codex: false } }).delivery.pending;
 
-test("SB290: a key revoked mid-queue keeps every record; signing in again delivers them all, once", async () => {
+test("a key revoked mid-queue keeps every record; signing in again delivers them all, once", async () => {
   const ws = await strictWorkspace();
   try {
     const dir = mkdtempSync(join(tmpdir(), "sb-sb290-revoke-"));
@@ -291,7 +291,7 @@ test("SB290: a key revoked mid-queue keeps every record; signing in again delive
   } finally { ws.close(); }
 });
 
-test("SB290: signing in again three times while records wait loses nothing and sends nothing twice", async () => {
+test("signing in again three times while records wait loses nothing and sends nothing twice", async () => {
   const ws = await strictWorkspace();
   try {
     const dir = mkdtempSync(join(tmpdir(), "sb-sb290-relogin-"));
@@ -307,7 +307,7 @@ test("SB290: signing in again three times while records wait loses nothing and s
   } finally { ws.close(); }
 });
 
-test("SB290: two configurations on one computer each deliver their own records, with their own credential", async () => {
+test("two configurations on one computer each deliver their own records, with their own credential", async () => {
   const ws = await strictWorkspace();
   try {
     const home = mkdtempSync(join(tmpdir(), "sb-sb290-home-"));
@@ -322,7 +322,7 @@ test("SB290: two configurations on one computer each deliver their own records, 
   } finally { ws.close(); }
 });
 
-test("SB290: a clock ahead of the workspace keeps the record; it is delivered once the time passes, the others at once", async () => {
+test("a clock ahead of the workspace keeps the record; it is delivered once the time passes, the others at once", async () => {
   const ws = await workspace();
   try {
     const pc = computer(ws.url);
@@ -343,7 +343,7 @@ test("SB290: a clock ahead of the workspace keeps the record; it is delivered on
   } finally { ws.close(); }
 });
 
-test("SB290: a queue that cannot be written (a full disk) does not stop the decision; the runtime names the file and the fix; delivery resumes when it can write", async () => {
+test("a queue that cannot be written (a full disk) does not stop the decision; the runtime names the file and the fix; delivery resumes when it can write", async () => {
   const { chmodSync, existsSync } = await import("node:fs");
   const ws = await workspace();
   try {

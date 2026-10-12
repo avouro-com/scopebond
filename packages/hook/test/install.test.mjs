@@ -57,7 +57,7 @@ test("resolveConfigDir: with a user install, a project policy governs only once 
   rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true });
 });
 
-test("run from the user's home folder, the user-level home is not an untrusted project setup (SB384)", () => {
+test("run from the user's home folder, the user-level home is not an untrusted project setup", () => {
   const profile = tmp();
   const home = join(profile, ".scopebond");
   mkdirSync(home, { recursive: true });

@@ -1,6 +1,6 @@
 {
   "taxonomy_version": "1.0",
-  "description": "Scopebond Action Taxonomy v1 — the coding, GitHub, MCP and HTTP action types and their parameter bounds, an extension of the policy vocabulary. Parameters are carried under intent.params; bound-able parameters (boundable: true) may be constrained by an action_allowlist clause's param_bounds. This JSON is the machine source; docs/integrations/ACTION_TAXONOMY.md is its human index. Money/commerce action types keep their existing gateway/demo shapes and are not redefined here.",
+  "description": "Scopebond Action Taxonomy v1 — the coding, GitHub, MCP and HTTP action types and their parameter bounds, an extension of the policy vocabulary. Parameters are carried under intent.params; bound-able parameters (boundable: true) may be constrained by an action_allowlist clause's param_bounds. This JSON is the machine source; the @scopebond/policy-schema README describes it. Money/commerce action types keep their existing gateway/demo shapes and are not redefined here.",
   "actions": [
     {
       "id": "shell.exec",

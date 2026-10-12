@@ -1,6 +1,6 @@
 // GitHub connector conformance vector (evaluation half). Each case runs a PR
 // context through evaluatePullRequest against the "no agent changes to production
-// paths" policy — exercising the Action Taxonomy pr.merge type and the D67
+// paths" policy — exercising the Action Taxonomy pr.merge type and the
 // element-wise array path bound end to end. Signed boundary-receipt emission is
 // covered in receipt.test.mjs.
 

@@ -49,7 +49,7 @@ test("onDenied customizes the denial value", async () => {
   assert.match(r.reason, /not allowlisted/);
 });
 
-test("guardedTool throws on a tool with no execute — never a silent unguarded passthrough (SB68)", () => {
+test("guardedTool throws on a tool with no execute — never a silent unguarded passthrough", () => {
   const g = guard();
   // An OpenAI-Agents constructed tool exposes `invoke`, not `execute`; guarding it
   // here would have silently returned it unguarded before this fix.

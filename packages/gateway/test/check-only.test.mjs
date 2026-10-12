@@ -93,7 +93,7 @@ test("replay protection holds in check-only: a reused signed request_id is rejec
   );
 });
 
-test("windowed spend accumulates across cooperative allows (SB66)", async () => {
+test("windowed spend accumulates across cooperative allows", async () => {
   // In cooperative mode the gateway authorized the first payout, so it counts toward
   // the window for the next decision — otherwise a per-window cap could never bind.
   // The receipt still records executed:false; the coercion is for the live decision
@@ -114,7 +114,7 @@ test("windowed spend accumulates across cooperative allows (SB66)", async () => 
   assert.equal(two.receipt.payload.execution.state, "denied");
 });
 
-test("rate_limit binds across cooperative allows (SB66)", async () => {
+test("rate_limit binds across cooperative allows", async () => {
   const oncePerHour = {
     vocabulary_version: "1.0", policy_id: "m0-rate", version: 1,
     clauses: [{ id: "rl", type: "rate_limit", mode: "enforce", action_types: ["social.post"], max_count: 1, window: "PT1H" }],
@@ -127,7 +127,7 @@ test("rate_limit binds across cooperative allows (SB66)", async () => {
   assert.match(second.reason ?? "", /max_count/);
 });
 
-test("sequence cooldown sees prior cooperative allows (SB66)", async () => {
+test("sequence cooldown sees prior cooperative allows", async () => {
   // A cooldown: a second deploy within the forbidden window is a violation because a
   // prior deploy is in range. For it to bind cooperatively, the first (cooperative)
   // deploy must be counted.

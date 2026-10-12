@@ -78,7 +78,7 @@ test("non-tool-call methods pass through unchanged", async () => {
   assert.equal(upstream.calls.length, 1, "the passthrough reached the upstream");
 });
 
-test("rate_limit binds across calls: the proxy counts prior authorized calls (SB66)", async () => {
+test("rate_limit binds across calls: the proxy counts prior authorized calls", async () => {
   const ratePolicy = {
     vocabulary_version: "1.0", policy_id: "mcp-rate", version: 1,
     clauses: [
@@ -100,7 +100,7 @@ test("rate_limit binds across calls: the proxy counts prior authorized calls (SB
   assert.equal(upstream.calls.length, 2, "only the two authorized calls were forwarded");
 });
 
-test("seeded history counts toward the window at startup (SB66)", async () => {
+test("seeded history counts toward the window at startup", async () => {
   const ratePolicy = {
     vocabulary_version: "1.0", policy_id: "mcp-rate2", version: 1,
     clauses: [

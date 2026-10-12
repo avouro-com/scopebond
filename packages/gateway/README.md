@@ -259,7 +259,7 @@ const { app, handleAction } = createGateway({ policy, authentication: { keys } }
 // app is a Hono app (serve it anywhere); handleAction(req) evaluates directly.
 ```
 
-Swappable interfaces (D40 — an interface with a local implementation):
+Swappable interfaces (each an interface with a local implementation):
 `ReceiptStore` and `Executor`. Node-only durable stores and the key loader live
 under the `@scopebond/gateway/node` subpath (they use `node:fs` / `node:sqlite`):
 

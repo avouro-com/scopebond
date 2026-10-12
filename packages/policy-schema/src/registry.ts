@@ -1,6 +1,6 @@
 // @scopebond/policy-schema/registry — the Action Taxonomy v1 registry and a
-// structural parameter validator. The registry is the machine source that the
-// human index (docs/integrations/ACTION_TAXONOMY.md) mirrors. Bound-able
+// structural parameter validator. The registry JSON (registry/actions-1.0.json)
+// is the machine source; the package README describes it. Bound-able
 // parameters may be constrained by an action_allowlist clause's param_bounds;
 // this module validates the *shape* of a normalized action, not policy verdicts
 // (verdicts are @scopebond/verify's `violates`).

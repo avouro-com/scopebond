@@ -6,7 +6,7 @@
 import { evaluatePullRequest } from "@scopebond/github-action";
 
 // Policy: an agent PR may merge only if *every* changed path stays out of
-// infra/prod/** (the D67 element-wise array bound, match "all").
+// infra/prod/** (the element-wise array bound, match "all").
 const policy = {
   vocabulary_version: "1.0", policy_id: "pr-gate", version: 1,
   clauses: [{

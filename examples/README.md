@@ -19,7 +19,7 @@
   required status check would in your own Actions runner. Pure and deterministic (no
   credential, no network). Shows a human PR never blocked, an agent PR within policy
   allowed, and an agent PR touching `infra/prod/**` denied by the element-wise array
-  path bound (D67).
+  path bound.
 
 - **`mcp-proxy.mjs`** — the MCP connector's in-path proxy (`@scopebond/mcp`): one policy
   in front of every `tools/call`. An allowed call is forwarded to the upstream and gets a
