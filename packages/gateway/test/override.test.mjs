@@ -59,7 +59,7 @@ test("the kill switch is never overridable", async () => {
 test("an override record has one exact shape, and only an approved decision may carry one", () => {
   assert.equal(validateOverrideRecord(record()), true);
   assert.equal(validateOverrideRecord(record({ method: "harness_prompt", state: "offered", reason_digest: null, reason_length: null })), true);
-  // D144: an action a standing allowance let through names the allowance and carries the digest of its reason.
+  // An action a standing allowance let through names the allowance and carries the digest of its reason.
   assert.equal(validateOverrideRecord(record({ method: "allowance", repeat_of: "alw_0123456789abcdefghij" })), true);
   assert.equal(validateOverrideRecord(record({ method: "allowance", repeat_of: null })), false, "an allowance is always named");
   assert.equal(validateOverrideRecord(record({ method: "allowance", state: "offered", repeat_of: "alw_0123456789abcdefghij" })), false);

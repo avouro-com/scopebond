@@ -418,7 +418,7 @@ test("monitor is the default; Scopebond's own protection blocks whatever the rul
 });
 
 
-test("D140: on a computer its workspace manages, rules enforce|monitor applies only where the workspace allows changes on computers", async () => {
+test("on a computer its workspace manages, rules enforce|monitor applies only where the workspace allows changes on computers", async () => {
   const { digestRules } = await import("../dist/index.js");
   const project = mkdtempSync(join(tmpdir(), "sb-hook-local-"));
   const dir = join(project, ".scopebond");

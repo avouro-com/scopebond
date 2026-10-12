@@ -4,8 +4,8 @@ name: Security audit
 # no other workflow performs: GitHub Actions static analysis, workflow linting,
 # secret scanning over full history, dependency vulnerabilities against OSV, and
 # SAST. CodeQL already runs here via GitHub's default setup — this workflow is
-# additive, and everything in it also runs on the private repository, where
-# GitHub's own scanning is a paid add-on.
+# additive, and every job is self-contained, so the same definitions also work
+# on repositories where GitHub's own scanning is a paid add-on.
 #
 # Cost: one job per tool so a failure names itself. Every job runs on each pull
 # request as well as weekly and on demand: Actions minutes are free on a public
@@ -125,7 +125,7 @@ jobs:
           actionlint -color -ignore "SC2016" $changed
 
       # Ratchet, not a wall. The existing workflows carry a backlog of high
-      # findings (mostly unpinned actions, which SB139 is draining), and a check
+      # findings (mostly unpinned actions, being pinned over time), and a check
       # that lands permanently red teaches people to ignore it. So: on a pull
       # request, only the workflow files this PR touches have to be clean. The
       # backlog is reported every run but blocks nothing, and it cannot grow.
@@ -200,7 +200,7 @@ jobs:
   # advisories Dependabot does not, reads the pnpm lockfile and the native tray's
   # Cargo.lock directly (packages/tray/osv-scanner.toml says which Linux-only
   # crates are set aside, and until when), and gives
-  # the private repository — where Dependabot is off — the same coverage.
+  # a repository where Dependabot is off the same coverage.
   # ---------------------------------------------------------------------------
   deps:
     name: deps (osv-scanner + SBOM)
@@ -248,8 +248,8 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # SAST. On this repository CodeQL is the primary engine and semgrep is the
-  # second opinion; on the private repository semgrep is the only engine, so the
-  # same job definition earns its keep in both places.
+  # second opinion; where CodeQL is not available semgrep is the only engine, so
+  # the same job definition earns its keep in both places.
   # ---------------------------------------------------------------------------
   sast:
     name: sast (semgrep)

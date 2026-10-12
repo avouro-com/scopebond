@@ -33,7 +33,7 @@ test("declared file options still count: sort -o writes, grep -f reads, curl -o 
   assert.deepEqual(paths(bash("curl -o .scopebond/policy.json https://example.com"), "file.write"), [".scopebond/policy.json"]);
 });
 
-test("sed's script is not a file: sed -n a,bp f reads f only (SB408)", () => {
+test("sed's script is not a file: sed -n a,bp f reads f only", () => {
   assert.deepEqual(paths(bash("sed -n 3420,3760p src/app.ts"), "file.read"), ["src/app.ts"]);
   assert.deepEqual(paths(bash("sed 's/a/b/' notes.txt"), "file.read"), ["notes.txt"]);
   assert.deepEqual(paths(bash("sed -e 's/a/b/' -e 's/c/d/' notes.txt other.txt"), "file.read"), ["notes.txt", "other.txt"]);
@@ -42,7 +42,7 @@ test("sed's script is not a file: sed -n a,bp f reads f only (SB408)", () => {
   assert.deepEqual(paths(bash("sed -n 1,5p .scopebond/attester.key"), "file.read"), [".scopebond/attester.key"], "a protected file stays a read");
 });
 
-test("a bare variable or glob is not a read of a file by that name; one that could name a protected file still is (SB408)", () => {
+test("a bare variable or glob is not a read of a file by that name; one that could name a protected file still is", () => {
   assert.deepEqual(paths(bash("cat $f"), "file.read"), []);
   assert.deepEqual(paths(bash(`cat "$FILE"`), "file.read"), []);
   assert.deepEqual(paths(bash("cat *"), "file.read"), []);
@@ -51,7 +51,7 @@ test("a bare variable or glob is not a read of a file by that name; one that cou
   assert.ok(paths(bash("cat $D/agent.key"), "file.read").some((p) => p.endsWith("agent.key")), "it could name a signing key");
 });
 
-test("Scopebond's folder named in an interpreter's argument is a read, through any API (SB408)", () => {
+test("Scopebond's folder named in an interpreter's argument is a read, through any API", () => {
   const reads = (command) => paths(bash(command), "file.read");
   assert.ok(reads(`node -e "new (require('node:sqlite').DatabaseSync)('D:/work/.scopebond/receipts.db', { readOnly: true })"`).some((p) => p.includes(".scopebond/receipts.db")));
   assert.ok(reads("python3 tools/inspect.py ~/.scopebond/receipts.db").some((p) => p.includes(".scopebond/receipts.db")));
@@ -67,7 +67,7 @@ test("Scopebond's folder named in an interpreter's argument is a read, through a
 test("a second here-document after a body with an apostrophe is still data: no false switch-off", () => {
   for (const command of [
     ["cat > a <<'EOF'", "it's", "EOF", "cat > b <<'EOF'", "it's", "EOF", "echo scopebond"].join("\n"),
-    ["cd /c/GitHub/scopebond-native/packages && cat >> agent/test/x.test.mjs <<'EOF'", "// the agent's own check", "EOF",
+    ["cd /c/work/project/packages && cat >> agent/test/x.test.mjs <<'EOF'", "// the agent's own check", "EOF",
       "cat > native/test/y.test.mjs <<'EOF'", `import { verifyManifest } from "@scopebond/agent";`, "// it's the workflow's", "EOF",
       `grep -n '"devDependencies"' -A4 native/package.json`].join("\n"),
     ["git commit -q -F - <<'EOF'", "It's the updater's key", "EOF", `gh pr create --body "$(cat <<'EOF'`, "Don't merge before @scopebond/hook", "EOF", `)"`].join("\n"),

@@ -1,4 +1,4 @@
-// SB391: the workspace's summary feeds the tray's names, links and Review count; the tray opens only links on the workspace
+// The workspace's summary feeds the tray's names, links and Review count; the tray opens only links on the workspace
 // this computer is connected to, and a workspace without the call simply leaves those rows out.
 import { test } from "node:test";
 import assert from "node:assert/strict";

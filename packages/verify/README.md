@@ -126,7 +126,7 @@ reported as unsupported, never valid. It never throws for a malformed receipt or
 
 ## Conformance suite
 
-`vectors/conformance.json` is the reference vector suite (D27): every implemented
+`vectors/conformance.json` is the reference vector suite: every implemented
 clause type across prevented / covered / ambiguity / refused cases. `pnpm test`
 runs every vector through `violates()` and checks the verdict. A gateway build is
 "Scopebond-compatible" only if it produces identical verdicts on this suite.

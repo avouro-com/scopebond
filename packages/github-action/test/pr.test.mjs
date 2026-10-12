@@ -48,7 +48,7 @@ test("options can extend the governed-agent actor set", () => {
   assert.equal(d.decision, "deny");
 });
 
-test("claude[bot] and github-actions[bot] are governed coding-agent actors (SB68)", () => {
+test("claude[bot] and github-actions[bot] are governed coding-agent actors", () => {
   assert.equal(isAgentActor("claude[bot]"), true);
   assert.equal(isAgentActor("github-actions[bot]"), true);
   const d = evaluatePullRequest({ ...base, actor: "claude[bot]", paths: ["infra/prod/main.tf"] }, noProdPaths);
@@ -56,7 +56,7 @@ test("claude[bot] and github-actions[bot] are governed coding-agent actors (SB68
   assert.deepEqual(d.attribution, { kind: "asserted", actor: "claude[bot]" });
 });
 
-test("time_window binds because evaluation uses a real timestamp, not epoch 0 (SB68)", () => {
+test("time_window binds because evaluation uses a real timestamp, not epoch 0", () => {
   const businessHours = {
     vocabulary_version: "1.0", policy_id: "gh-tw", version: 1,
     clauses: [

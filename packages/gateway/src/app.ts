@@ -1,6 +1,6 @@
 // The gateway: a Hono app wiring policy enforcement (scopebond-verify), receipt
 // countersigning + storage, the kill switch, and HTTP + MCP ingress. The Hono app
-// is runtime-agnostic (ADR-004) and testable in-process via app.request().
+// is runtime-agnostic and testable in-process via app.request().
 
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";

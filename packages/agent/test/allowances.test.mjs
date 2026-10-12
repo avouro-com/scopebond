@@ -1,4 +1,4 @@
-// D144 (SB411): the Scopebond window offers only the choices the workspace allows, and the agent sends a person's allowances
+// The Scopebond window offers only the choices the workspace allows, and the agent sends a person's allowances
 // and requests to the workspace once, signed by the computer's enrolled key.
 import { test } from "node:test";
 import assert from "node:assert/strict";

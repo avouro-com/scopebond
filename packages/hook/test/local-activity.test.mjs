@@ -1,4 +1,4 @@
-// The tray's "Today" row and "Recently blocked" list come from the computer's own receipts (SB387, SB389): counts since
+// The tray's "Today" row and "Recently blocked" list come from the computer's own receipts: counts since
 // local midnight, the newest blocks as the one-line summary `log` prints (never raw arguments), monitored matches excluded.
 import { test } from "node:test";
 import assert from "node:assert/strict";

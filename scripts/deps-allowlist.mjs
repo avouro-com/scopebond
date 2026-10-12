@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * deps-allowlist.mjs — enforce ADR-008: core packages carry no vendor or
+ * deps-allowlist.mjs — enforce the core-package boundary: core packages carry no vendor or
  * agent-framework SDK dependencies. Fail-closed allowlist: a core package's
  * runtime dependencies must be `@scopebond/*` or explicitly allowlisted below.
  * Dev dependencies (test/build tooling) are exempt. Runs in CI and locally.
@@ -13,7 +13,7 @@ const CORE_PACKAGES = ["policy-schema", "verify", "gateway", "sdk", "contracts"]
 // Runtime deps a core package MAY use. Keep this list short and justified;
 // widening it is a maintainer decision (CODEOWNERS covers this file).
 const CORE_DEP_ALLOW = new Set([
-  // Sanctioned platform/runtime deps (D36/ADR-004: Hono is the chosen gateway
+  // Sanctioned platform/runtime deps (Hono is the chosen gateway
   // framework for the one-codebase goal; not a vendor or agent-framework SDK).
   "hono",
   "@hono/node-server",
@@ -33,7 +33,7 @@ for (const pkg of CORE_PACKAGES) {
     for (const name of Object.keys(json[field] || {})) {
       if (isWorkspaceDep(name) || CORE_DEP_ALLOW.has(name)) continue;
       console.error(`  [DEP] core package "${pkg}" has non-allowlisted ${field} "${name}"`);
-      console.error(`        ADR-008: core packages take no vendor/framework SDKs.`);
+      console.error(`        Core packages take no vendor/framework SDKs.`);
       console.error(`        Move it to a leaf package, or add "${name}" to CORE_DEP_ALLOW with justification.`);
       violations++;
     }

@@ -195,7 +195,7 @@ function connected() {
   return h;
 }
 
-test("a request the workspace carries on the rules check reaches the agent once; anything else is ignored (SB390)", async () => {
+test("a request the workspace carries on the rules check reaches the agent once; anything else is ignored", async () => {
   const { dir, agentKid } = connected();
   const asked = [];
   const respond = (value) => async (url) => String(url).endsWith("/v1/policy/ack")
@@ -244,7 +244,7 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
     // Unchanged: the ETag goes out, 304 comes back, no second confirmation.
     w = fakeWorkspace([{ status: 304 }]);
     assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "unchanged", revision: 1 });
-    // D140: every rules check says what this computer runs for each rule and who set it.
+    // Every rules check says what this computer runs for each rule and who set it.
     const reported = JSON.parse(w.calls[0].headers["x-scopebond-rules"]);
     assert.deepEqual(reported["protect-branches"], ["monitor", "workspace"]);
     assert.deepEqual(reported["safe-shell"], ["enforce", "workspace"]);
@@ -349,7 +349,7 @@ test("a tool call finishes promptly when the workspace never answers: no helper 
   }
 });
 
-test("the rules check names the delivery queue and the highest number it has given a record (SB289)", async () => {
+test("the rules check names the delivery queue and the highest number it has given a record", async () => {
   const { SqliteCloudOutbox } = await import("@scopebond/gateway/node");
   const { dir, agentKid } = connected();
   try {
@@ -369,7 +369,7 @@ test("the rules check names the delivery queue and the highest number it has giv
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("D140: a person's choice on a managed computer applies only where the workspace allows changes on computers", () => {
+test("a person's choice on a managed computer applies only where the workspace allows changes on computers", () => {
   const { agentKid } = home();
   const local = { ...defaultRules(), enforce: [], local_overrides: { "safe-shell": "monitor", "protect-read": "enforce" } };
   const mode = (policy, id) => policy.clauses.find((c) => c.id === id)?.mode;
@@ -387,7 +387,7 @@ test("D140: a person's choice on a managed computer applies only where the works
   assert.equal(mode(allowed, "protect-scopebond-read"), "enforce");
 });
 
-test("D140: the same version with only the local-changes switch flipped is installed, not treated as unchanged", async () => {
+test("the same version with only the local-changes switch flipped is installed, not treated as unchanged", async () => {
   const { dir, agentKid } = connected();
   const opts = (fetchImpl) => ({ agentKid, hookVersion: "0.19.0", policyBuilds, fetchImpl });
   const d1 = doc(1, { "push-protected": { mode: "monitor" } });

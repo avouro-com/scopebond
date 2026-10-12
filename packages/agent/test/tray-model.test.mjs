@@ -1,4 +1,4 @@
-// The tray draws the agent's model (SB387, SB388): one state with its own badge, one headline, rows only when there is data,
+// The tray draws the agent's model: one state with its own badge, one headline, rows only when there is data,
 // the one fix when something is wrong, and time asleep never counted as records waiting.
 import { test } from "node:test";
 import assert from "node:assert/strict";

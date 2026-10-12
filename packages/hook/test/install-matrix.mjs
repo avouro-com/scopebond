@@ -1,4 +1,4 @@
-// SB112 — cross-platform install smoke. Installs the packed tarball globally (`npm i -g`,
+// Cross-platform install smoke. Installs the packed tarball globally (`npm i -g`,
 // as a user would; SCOPEBOND_PACK_DIR names the folder `pnpm pack` wrote it to), or runs
 // against one already installed. Exercises the once-per-machine install, doctor, the
 // evaluate path (deny + allow) and a connect against a fake in-process Cloud — all by
@@ -100,7 +100,7 @@ check("doctor reports node ok and finds the policy", () => {
   assert.ok(/All good\./.test(r.out), r.out);
 });
 
-// 3b. SB302: a project's own entry beside the user-level one makes the agent ask twice per action.
+// 3b. A project's own entry beside the user-level one makes the agent ask twice per action.
 check("a project entry beside the user-level one is reported, and dedupe keeps the user-level one", () => {
   const proj = mkdtempSync(join(tmpdir(), "sb-dupes-"));
   mkdirSync(join(proj, ".claude"), { recursive: true });

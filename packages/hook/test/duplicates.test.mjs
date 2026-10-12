@@ -1,4 +1,4 @@
-// SB302: an agent that would ask Scopebond more than once per action is found, and `dedupe` keeps one.
+// An agent that would ask Scopebond more than once per action is found, and `dedupe` keeps one.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

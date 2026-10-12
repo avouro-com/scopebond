@@ -104,11 +104,45 @@ const PERSONAL_OR_PRIVATE_PATTERNS = [
   { name: "Windows user profile path", re: /\b[A-Za-z]:[\\/]Users[\\/][^\\/\s]+/ },
   { name: "macOS user profile path", re: /\/Users\/[^/\s]+/ },
   { name: "Linux user profile path", re: /\/home\/[^/\s]+/ },
-  { name: "private repository name", re: new RegExp("scopebond-" + "internal", "i") },
+  { name: "private repository name", re: new RegExp("scopebond-(?:" + "internal|" + "private)\\b", "i") },
+  { name: "Windows workstation checkout path", re: /\b[A-Za-z]:[\\/]GitHub[\\/]/i },
+  { name: "Git Bash workstation checkout path", re: /(?:^|[\s"'`(=])\/[a-z]\/GitHub\//i },
 ];
 
-// An internal backlog id ("SB" and two or three digits) in a package's source.
-const TRACKER_ID = /\bSB\d{2,3}\b/;
+// Internal planning references: readers of this repository cannot look them up, so they appear nowhere in the tree
+// (code, tests, fixtures, docs, changelogs, workflows). Each pattern is written so the text of this file does not
+// match it.
+const INTERNAL_REFERENCE_PATTERNS = [
+  // A backlog id: "SB" and two or more digits.
+  { name: "internal tracker id", re: /\bSB\d{2,}\b/ },
+  // A decision id used as a reference: "(D67)", "D140: …", "D36/…", "per D27", "the D67 bound", "D65 §2",
+  // "D33 — …". A "D" and digits anywhere else (a hex digest, a GUID part, a D1 database binding) is left alone.
+  { name: "internal decision id", re: /(?<![\w.#{}/-])D\d{2,3}(?![\w.-])(?=\s*(?:[):,;/§]|—|\())|\b(?:per|see|under|the) D\d{2,3}\b/ },
+  { name: "internal work-block id", re: /\bW[1-8]-\d{2}\b/ },
+  { name: "internal milestone label", re: /\bMVP1\b/ },
+  { name: "internal architecture decision record", re: /\bADR-\d+/ },
+  { name: "internal specification name", re: new RegExp("GATEWAY" + "_SPEC") },
+  { name: "pointer to a private document", re: /\bdocs\/(?:integrations|architecture|decisions|ops|strategy|legal|product)\// },
+];
+
+// Assistant attribution pasted into a tracked file: a co-author trailer or a "generated with" line.
+const CONTENT_ATTRIBUTION_PATTERNS = [
+  { name: "AI co-author trailer", re: /co-authored-by:.*(?:claude|anthropic)/i },
+  { name: "AI generation attribution", re: /generated with \[?claude code/i },
+];
+
+// Files that legitimately hold text the internal-reference or attribution checks look for. Keep this list short and
+// say why for each entry; a path here skips only the checks named for it.
+const CONTENT_CHECK_EXCEPTIONS = new Map([
+  // The gate and its tests spell out the patterns they enforce, and sample strings that must trip them.
+  ["scripts/oss-gate.mjs", ["internal", "attribution"]],
+  ["scripts/oss-gate.test.mjs", ["internal", "attribution"]],
+  // Describes, with made-up examples, the id shapes it removes from comments.
+  ["scripts/strip-ticket-ids.mjs", ["internal"]],
+  // A hook test: an agent's commit trailer and PR body that mention the assistant must not read as switching Scopebond off.
+  ["packages/hook/test/self-disable-config-env.test.mjs", ["attribution"]],
+]);
+const exempt = (path, check) => (CONTENT_CHECK_EXCEPTIONS.get(path) ?? []).includes(check);
 
 // Do not advertise an assistant or generation tool in commit metadata. Product
 // references to AI providers remain valid source content and are not blocked.
@@ -289,10 +323,23 @@ for (const f of files) {
       break;
     }
   }
-  // Package sources name no internal tracker ids (readers of this repository cannot look them up).
-  if (/^packages\/[^/]+\/src\//.test(path)) {
-    const id = content.match(TRACKER_ID);
-    if (id) violations.push({ path, kind: "PRIVATE CONTENT", detail: `internal tracker id "${id[0]}" in package source` });
+  if (!exempt(path, "internal")) {
+    for (const { name, re } of INTERNAL_REFERENCE_PATTERNS) {
+      const m = content.match(re);
+      if (m) {
+        violations.push({ path, kind: "PRIVATE CONTENT", detail: `${name} "${m[0].trim()}" (readers of this repository cannot look it up)` });
+        break;
+      }
+    }
+  }
+  if (!exempt(path, "attribution")) {
+    for (const { name, re } of CONTENT_ATTRIBUTION_PATTERNS) {
+      const m = content.match(re);
+      if (m) {
+        violations.push({ path, kind: "TOOL ATTRIBUTION", detail: `${name}: "${m[0]}"` });
+        break;
+      }
+    }
   }
   for (const sig of PRIVATE_DOC_SIGNATURES) {
     if (content.includes(sig)) {

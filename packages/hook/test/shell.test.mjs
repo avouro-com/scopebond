@@ -124,7 +124,7 @@ test("self-protection: the agent cannot rewrite the hook config or read the keys
     ["Write", { file_path: "nested/dir/.claude/settings.local.json" }],
     ["Write", { file_path: ".cursor/hooks.json" }],
     ["Write", { file_path: ".git/hooks/pre-commit" }],
-    // SB81: CI config is protected from silent rewrites (matches the README claim).
+    // CI config is protected from silent rewrites (matches the README claim).
     ["Write", { file_path: ".github/workflows/ci.yml" }],
     ["Write", { file_path: ".github/workflows/release.yaml" }],
     ["Write", { file_path: ".github/actions/build/action.yml" }],
@@ -134,7 +134,7 @@ test("self-protection: the agent cannot rewrite the hook config or read the keys
     ["Read", { file_path: ".scopebond/agent.key" }],
     ["Read", { file_path: "secrets/deploy.key" }],
     ["Read", { file_path: ".scopebond/cloud.json" }],
-    // SB81: environment secret files are protected from reads (exfiltration risk).
+    // Environment secret files are protected from reads (exfiltration risk).
     ["Read", { file_path: ".env" }],
     ["Read", { file_path: ".env.production" }],
     ["Read", { file_path: "config/.env.local" }],
