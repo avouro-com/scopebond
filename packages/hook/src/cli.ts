@@ -42,9 +42,13 @@ function failClosed(error: unknown): never {
       process.exit(0);
     }
     // GitHub Copilot denies on exit 2 whatever stdout holds; the JSON carries the reason.
+    // Written out here, not imported: this handler must work with nothing else loaded (the file runs alone). It is the
+    // same deny copilotAnswer("deny", …) gives (copilot-answer.ts), in both shapes Copilot's surfaces read; a test holds
+    // the two equal.
     if (command === "copilot") {
-      writeNow(1, JSON.stringify({ permissionDecision: "deny", permissionDecisionReason: reason }) + "\n");
-      writeNow(2, `${reason}\n`);
+      const permission = { permissionDecision: "deny", permissionDecisionReason: reason };
+      writeNow(1, JSON.stringify({ ...permission, hookSpecificOutput: { hookEventName: "PreToolUse", ...permission } }) + "\n");
+      writeNow(2, `${reason.startsWith("Scopebond") ? reason : `Scopebond: ${reason}`}\n`);
       process.exit(2);
     }
     writeNow(2, `${reason}\n`);

@@ -163,6 +163,11 @@ test("the hook answers deny when it fails before it can decide (Claude Code: exi
   const cop = run(env, "copilot", copilot("Bash", { command: "ls" }, cwd), cwd, undefined, broken);
   assert.equal(cop.status, 2, "Copilot denies on exit 2 whatever stdout says");
   assert.equal(JSON.parse(cop.stdout).permissionDecision, "deny");
+  // The lone handler writes the same deny the hook gives (copilotAnswer), in both shapes Copilot's surfaces read.
+  const reason = JSON.parse(cop.stdout).permissionDecisionReason;
+  const same = hook.copilotAnswer("deny", reason, false);
+  assert.deepEqual(JSON.parse(cop.stdout), JSON.parse(same.stdout));
+  assert.equal(`${cop.stderr}\n`.endsWith(same.stderr), true);
 });
 
 test("a Codex or Cursor hook entry that cannot start is kept as a delivery gap, once per outage", () => {

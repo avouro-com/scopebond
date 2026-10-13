@@ -63,6 +63,10 @@ function deliveryHeaders(dir: string): Record<string, string> {
 function installedLocalChanges(dir: string): boolean {
   try { return (JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as { local_changes?: unknown }).local_changes === true; } catch { return false; }
 }
+/** The tool settings mark of the workspace document in force (managed.ts `toolSettingsMark`). */
+function installedToolSettingsMark(dir: string): string | null {
+  try { return toolSettingsMark(JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8"))); } catch { return null; }
+}
 function rulesHeader(dir: string): Record<string, string> {
   const report = ruleReport(dir);
   return report ? { "x-scopebond-rules": JSON.stringify(report) } : {};
@@ -75,7 +79,7 @@ function signatureHeader(dir: string): Record<string, string> {
 const ackReasonFor = (reason: SignatureReason): RefusalReason =>
   reason === "wrong_computer" ? "wrong_computer" : reason === "replayed" ? "stale_revision" : "invalid_document";
 import {
-  ruleReport, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
+  ruleReport, toolSettingsMark, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -108,6 +112,25 @@ export interface SyncOptions {
   /** A request the workspace carries once on the rules check (`x-scopebond-request`): send now, or run the self-check.
    *  Only the Scopebond Agent passes this; a hook call ignores the header. */
   onRequest?: (kind: "flush" | "self_check") => void;
+  /** The Scopebond Agent's version (`x-scopebond-agent-version`): a workspace sends tool settings only to an agent that applies
+   *  them. Only the agent passes this. */
+  agentVersion?: string;
+  /** The agent's report of the tool settings it last applied (`x-scopebond-tool-settings`, JSON); null when there is none. */
+  toolSettingsReport?: () => string | null;
+}
+
+/** The longest tool settings report a rules check carries. */
+export const MAX_TOOL_SETTINGS_REPORT = 4_000;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, bounded fields, one optional bounded suffix
+const VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}(-[0-9A-Za-z.-]{1,32})?$/;
+function toolSettingsHeaders(options: SyncOptions): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (options.agentVersion && VERSION.test(options.agentVersion)) headers["x-scopebond-agent-version"] = options.agentVersion;
+  try {
+    const report = options.toolSettingsReport?.();
+    if (report && report.length <= MAX_TOOL_SETTINGS_REPORT && /^[\x20-\x7e]+$/.test(report)) headers["x-scopebond-tool-settings"] = report;
+  } catch { /* the report is best effort */ }
+  return headers;
 }
 
 export async function syncPolicy(dir: string, options: SyncOptions): Promise<SyncOutcome> {
@@ -160,7 +183,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // and the always/requests terms only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
-      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances,session_budgets", "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
+      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances,session_budgets", "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -245,7 +268,10 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   // Whether people may change rules on this computer is outside the rules digest, so the same version can arrive
   // with only that switch changed; it is a change to install, not "unchanged".
   const sameVersion = isManaged(dir) && r.revision === meta.revision && r.rules_digest === meta.rules_digest && meta.revision !== null;
-  const switchChanged = sameVersion && (r.local_changes === true) !== installedLocalChanges(dir);
+  // So are the tool settings (signed on their own): a section with another digest or key is a change to install. An answer
+  // without the section changes nothing here (a hook call is not sent it; only the Scopebond Agent is).
+  const switchChanged = sameVersion && ((r.local_changes === true) !== installedLocalChanges(dir)
+    || (toolSettingsMark(r) !== null && toolSettingsMark(r) !== installedToolSettingsMark(dir)));
   // The same version already in force: confirm it again if the last confirmation did not land.
   if (sameVersion && !switchChanged) {
     // Checked like a new answer: the version in force served again without its signature (or with a bad one) is not

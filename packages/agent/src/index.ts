@@ -48,3 +48,5 @@ export type { NpmInstall, MigrateDeps, Migration } from "./migrate.js";
 export { useNativeHookEntries, hasForeignHookEntries, missingPrograms } from "./hook-entries.js";
 export { agentCli, hookCli, setupCli } from "./commands.js";
 export type { CommandContext } from "./commands.js";
+export { applyToolSettings, toolSettingsReport, readToolSettingsState, TOOL_SETTINGS_STATE_FILE, TOOL_SETTINGS_SUPPORTED } from "./tool-settings.js";
+export type { ToolSettingsReport, HarnessReport, ToolSettingsRefusal } from "./tool-settings.js";

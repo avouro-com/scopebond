@@ -384,8 +384,10 @@ export function backupHarnessConfig(file: string): string | null {
 
 /** The GitHub Copilot events Scopebond registers. The PascalCase names make Copilot send the VS Code-compatible payload
  *  (`hook_event_name`, `session_id`, `tool_name`, `tool_input`), the same shape Claude Code sends. `PreToolUse` decides;
- *  the others only feed session and after-action observations. */
-export const COPILOT_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "SessionStart", "SessionEnd"] as const;
+ *  the others only feed session and after-action observations. `Stop` (the agent finished a turn) is the one event VS
+ *  Code's Local harness sends at the end of a turn, since it has no `SessionEnd`; it marks the session active and prints
+ *  nothing, so it never blocks or prolongs a turn. */
+export const COPILOT_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "SessionStart", "SessionEnd", "Stop"] as const;
 
 /** The PowerShell spelling of a hook command. Copilot runs an entry's `powershell` command on Windows, and PowerShell
  *  reads a command that starts with a quoted path as a string, not a program: the call operator `&` runs it. `npx` there
@@ -400,10 +402,20 @@ export function powershellHookCommand(command: string): string {
   return `${trimmed}${PASS_EXIT_CODE}`;
 }
 
-/** One Copilot hook entry running `command`. No matcher: an entry without one runs for every tool. */
+/** One Copilot hook entry running `command`. No matcher: an entry without one runs for every tool.
+ *
+ *  `bash` and `powershell` are what the Copilot CLI runs (and the cloud agent runs `bash`). The entry also carries the two
+ *  fields VS Code's Local harness documents for its own format, `command` and `timeout`, with the same values: the Copilot
+ *  hooks reference documents both for this file format too (`command` is the cross-platform fallback, used only where
+ *  `bash`/`powershell` are absent, so nothing runs twice; `timeout` is the alias of `timeoutSec`, used only where
+ *  `timeoutSec` is absent). Without `timeout`, a reader that does not know `timeoutSec` would wait its own default (30 s
+ *  in VS Code Local), shorter than the hook's own deadline. `command` holds the `bash` form, which also runs in cmd; no
+ *  `windows` override is written, because the Copilot file format does not document one. Whether VS Code's Local harness
+ *  runs this file at all (it is PascalCase with a numeric version, a mix its reference does not describe) is not known
+ *  until a live run records it (`capabilities --prove --copilot`). */
 export function copilotHookEntry(command: string): Record<string, unknown> {
   const cmd = command.replace(/\b(claude|cursor|codex)$/, "copilot");
-  return { type: "command", bash: cmd, powershell: powershellHookCommand(cmd), timeoutSec: COPILOT_TIMEOUT_SEC };
+  return { type: "command", bash: cmd, powershell: powershellHookCommand(cmd), command: cmd, timeoutSec: COPILOT_TIMEOUT_SEC, timeout: COPILOT_TIMEOUT_SEC };
 }
 
 /** Put Scopebond's Copilot entries into a `version: 1` hooks document, replacing any earlier Scopebond entry and leaving

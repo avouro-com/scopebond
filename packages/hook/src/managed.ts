@@ -146,6 +146,8 @@ export interface ManagedDocument {
   issued_at?: string;
   key_id?: string;
   signature?: string;
+  /** Lists for the AI coding tools' own settings, signed on their own; only the Scopebond Agent applies them. */
+  tool_settings?: ToolSettingsSection;
 }
 
 /** The workspace's signed answer that it sets no rules for this computer (the signed form of a 204):
@@ -398,3 +400,87 @@ export function ruleReport(dir: string): Record<string, [ "enforce" | "monitor",
   } catch { return null; }
 }
 
+
+// --- managed tool settings ---------------------------------------------------------------------------------------------------
+//
+// A rules document may carry a `tool_settings` section: lists the workspace keeps in the user-level settings of the AI coding
+// tools on this computer (their permission allow and deny lists, and the MCP servers they may or may not start). It is signed on
+// its own, by the same workspace key and with the same check as the rules document (policy-signature.ts
+// `checkToolSettingsSignature`), and the Scopebond Agent applies it; the hook only carries it. What the section covers is
+// deliberately narrow: lists of permission rules and MCP server names. It never carries prompts, instruction files or a model.
+
+export const TOOL_SETTINGS_TYPE = "scopebond:tool-settings";
+/** The tools a section may name. Which of them the agent can apply settings to is the agent's decision (tool-settings.ts). */
+export const TOOL_SETTINGS_HARNESSES = ["claude", "cursor", "codex", "copilot"] as const;
+export type ToolSettingsHarness = (typeof TOOL_SETTINGS_HARNESSES)[number];
+/** The lists a section may set for one tool. */
+export const TOOL_SETTINGS_LISTS = ["permissions_allow", "permissions_deny", "mcp_allowed", "mcp_denied"] as const;
+export type ToolSettingsList = (typeof TOOL_SETTINGS_LISTS)[number];
+export type HarnessToolSettings = Partial<Record<ToolSettingsList, string[]>>;
+export const MAX_TOOL_SETTINGS_ENTRIES = 100;
+export const MAX_TOOL_SETTINGS_ENTRY = 256;
+/** An MCP server name: the label a tool's MCP configuration gives it (letters, digits, hyphens and underscores). */
+export const MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+export interface ToolSettingsSection {
+  type: typeof TOOL_SETTINGS_TYPE;
+  version: 1;
+  revision: number;
+  /** enforce: a list changed on the computer is put back. report: it is only reported. */
+  mode: "enforce" | "report";
+  harnesses: Partial<Record<ToolSettingsHarness, HarnessToolSettings>>;
+  /** sha256 of the canonical JSON of `{ type, version, revision, mode, harnesses }`. */
+  settings_digest: string;
+  workspace_id?: string;
+  issued_at?: string;
+  key_id?: string;
+  signature?: string;
+}
+
+export type ToolSettingsInspection =
+  | { ok: true; settings: ToolSettingsSection }
+  | { ok: false; reason: "unsupported" | "invalid"; message: string };
+
+/** The digest a section's signature covers. Its `type` keeps it apart from a rules digest: no rules object hashes the same. */
+export const digestToolSettings = (s: Pick<ToolSettingsSection, "type" | "version" | "revision" | "mode" | "harnesses">): string =>
+  createHash("sha256").update(canonical({ type: s.type, version: s.version, revision: s.revision, mode: s.mode, harnesses: s.harnesses })).digest("hex");
+
+// eslint-disable-next-line no-control-regex -- refusing control characters is the point
+const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/;
+/** Bidirectional and invisible formatting characters (U+200B–200F, U+202A–202E, U+2060–2069, U+FEFF): an entry carrying one can
+ *  read as something other than what it is. */
+const hasFormatCharacter = (v: string): boolean => [...v].some((ch) => {
+  const c = ch.codePointAt(0)!;
+  return (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2060 && c <= 0x2069) || c === 0xfeff;
+});
+const validEntry = (v: unknown): v is string => typeof v === "string" && v.length >= 1 && v.length <= MAX_TOOL_SETTINGS_ENTRY && v.trim() === v && !CONTROL.test(v) && !hasFormatCharacter(v);
+
+/** Check a `tool_settings` section's shape and digest. Pure; the signature is checked separately. A tool this version does not
+ *  know, or a list it does not know, is not an error here: the agent reports that tool as unsupported. */
+export function inspectToolSettings(raw: unknown): ToolSettingsInspection {
+  const bad = (message: string): ToolSettingsInspection => ({ ok: false, reason: "invalid", message });
+  if (!isObject(raw) || raw.type !== TOOL_SETTINGS_TYPE) return bad("this is not a Scopebond tool settings section");
+  if (raw.version !== 1) return { ok: false, reason: "unsupported", message: `unsupported tool settings version ${String(raw.version)}; update Scopebond` };
+  if (!Number.isInteger(raw.revision) || (raw.revision as number) < 1 || (raw.revision as number) > 2_147_483_647) return bad("the tool settings revision is not valid");
+  if (raw.mode !== "enforce" && raw.mode !== "report") return bad("the tool settings mode is neither enforce nor report");
+  if (typeof raw.settings_digest !== "string" || !HEX64.test(raw.settings_digest)) return bad("the tool settings digest is missing or malformed");
+  if (!isObject(raw.harnesses) || Object.keys(raw.harnesses).length > 16) return bad("the tool settings name no tools");
+  for (const [harness, settings] of Object.entries(raw.harnesses)) {
+    if (!OPAQUE.test(harness) || !isObject(settings) || Object.keys(settings).length > 16) return bad(`the tool settings for ${harness.slice(0, 40)} are malformed`);
+    for (const [list, entries] of Object.entries(settings)) {
+      if (!OPAQUE.test(list) || !Array.isArray(entries) || entries.length > MAX_TOOL_SETTINGS_ENTRIES || !entries.every(validEntry)) {
+        return bad(`a tool settings list for ${harness} is malformed`);
+      }
+      if ((list === "mcp_allowed" || list === "mcp_denied") && !entries.every((e) => MCP_SERVER_NAME.test(e))) return bad(`an MCP server name for ${harness} is not valid`);
+    }
+  }
+  const settings = raw as unknown as ToolSettingsSection;
+  if (digestToolSettings(settings) !== settings.settings_digest) return bad("the tool settings do not match their digest; they were changed or damaged");
+  return { ok: true, settings };
+}
+
+/** The `settings_digest` and `key_id` of a document's tool settings section, as one string to compare; null when it has none. */
+export function toolSettingsMark(doc: unknown): string | null {
+  const s = isObject(doc) ? doc.tool_settings : undefined;
+  return isObject(s) && typeof s.settings_digest === "string" ? `${s.settings_digest}:${typeof s.key_id === "string" ? s.key_id : ""}` : null;
+}

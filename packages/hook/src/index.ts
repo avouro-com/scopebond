@@ -3,6 +3,11 @@
 // binary is the thin harness adapter over them.
 
 export { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCopilotCall, copilotAsClaude, normalizeCopilotInput, mapCursorEvent, fillPushBranch, DERIVED_CAP } from "./map.js";
+export {
+  copilotAnswer, copilotCloudAgent, copilotSurface, surfaceSignals, readCopilotProbe, openCopilotProbe, recordCopilotProbe, renderCopilotProbe,
+  COPILOT_CLOUD_ASK_IS_DENY, DOCUMENTED_COPILOT_TOOL_NAMES, COPILOT_PROBE_FILE, COPILOT_PROBE_WINDOW_MS,
+  type CopilotSurface, type CopilotAnswer, type CopilotProbe, type ProbeEntry,
+} from "./copilot-surface.js";
 export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./runtime.js";
 export type { TargetRule } from "./runtime.js";
@@ -27,13 +32,18 @@ export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYP
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
   inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules, ruleReport,
-  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument,
+  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
+  inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
+  MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY,
 } from "./managed.js";
-export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnyManagedRuleId, OptionalRuleId } from "./managed.js";
+export type {
+  ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnyManagedRuleId, OptionalRuleId,
+  ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,
+} from "./managed.js";
 export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked } from "./override.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
-export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS } from "./policy-sync.js";
-export { checkPolicySignature, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload } from "./policy-signature.js";
+export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT } from "./policy-sync.js";
+export { checkPolicySignature, checkToolSettingsSignature, workspaceIdOf, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload, type ToolSettingsSignatureContext } from "./policy-signature.js";
 export { policyKeys, policyKeyProblems, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
 export { versionedFetch, withHookVersion, HOOK_VERSION_HEADER } from "./workspace-fetch.js";
 export {
@@ -54,7 +64,7 @@ export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, copilotDetected, copilotHome, harnessDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
   HARNESSES, COPILOT_EVENTS, COPILOT_HOOK_FILE, COPILOT_TIMEOUT_SEC, COPILOT_DECISION_DEADLINE_MS, copilotHookEntry, powershellHookCommand, harnessEntryCommand,
-  readHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile, canonicalPath, samePath,
+  readHarnessConfig, backupHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile, canonicalPath, samePath,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
   isScopebondHookCommand, harnessEntryMatches, nativeHookProgram, missingHookPrograms, npxAvailable, isNpxHookCommand,
   localHarnessFile, isMachineSpecificCommand, gitShareState, excludeFromGit, pruneHarnessEntries,
