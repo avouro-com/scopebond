@@ -349,3 +349,14 @@ test("the hook says it reads service rules, and a synced list is enforced; a tam
     assert.equal((await run(dir, bash("ffmpeg -version"))).decision, "deny", "and still block");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a shared test vector: a workspace document with blocked services and the digest both sides compute for it", () => {
+  // The exact document a workspace sends, byte for byte, and its rules_digest: the hook must compute the same value.
+  const DOCUMENT = '{"agent_id":"agent-1","blocked_services":[{"key":"curl","kind":"cli"},{"key":"evil.example","kind":"host"},{"key":"pastebin.com","kind":"host"},{"key":"github","kind":"mcp_server"},{"key":"npm:left-pad","kind":"package"}],"environment_id":"env-a","export_id":"rev-3-gw-1","installation_id":"gw-1","revision":3,"rules":{"ci-config-write":{"mode":"monitor"},"destructive-shell":{"mode":"monitor"},"force-push-protected":{"mode":"block"},"network-egress":{"mode":"monitor"},"push-protected":{"mode":"block","protected_branches":["prod"]},"secret-read":{"mode":"block"}},"rules_catalog_version":"coding-pack/3","rules_digest":"00e420f45bab21f46b5cb893f2cecb4ea82c1b0afea6ef6db32965c7f38b7fc6","type":"scopebond:managed-rules","version":1}';
+  const RULES_DIGEST = "00e420f45bab21f46b5cb893f2cecb4ea82c1b0afea6ef6db32965c7f38b7fc6";
+  const vector = JSON.parse(DOCUMENT);
+  assert.equal(digestManaged(vector.rules, vector.blocked_services), RULES_DIGEST);
+  assert.equal(vector.rules_digest, RULES_DIGEST);
+  const inspected = inspectManaged(vector, { installationId: "gw-1", currentRevision: null });
+  assert.equal(inspected.ok, true, inspected.message);
+});
