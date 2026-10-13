@@ -497,6 +497,23 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   own folder (`allowances.json`, `requests.json`, `blocked.json`), which the coding agent cannot
   change. The hook tells the workspace it understands these settings
   (`x-scopebond-hook-capabilities: allowances`); a workspace sends them only then.
+- **Session budgets.** A workspace may limit what one coding-agent session may do, for example an
+  overnight run: at most 50 file writes, no pushes and no package installs, until the budget
+  expires (two hours after it is set, unless the workspace says otherwise). An admin sets one
+  for a session, or approves one from a person's *Ask an admin* request (an allowance an admin
+  approves *for this session* applies in that session only). The workspace sends them in its
+  rules document as `session_budgets` (the schema is `@scopebond/policy-schema`'s
+  `session-budgets.schema.json`), naming the session by the same keyed id receipts carry as
+  `context.session_id`. The hook counts each tool call once per limit before it runs (a retry of
+  the same call is not counted twice; a call a rule denies gives its count back) and keeps the
+  counts in its own folder (`session-budgets.json`, bounded, written atomically). Beyond a limit,
+  or once an `enforce` budget has expired, the call is denied with the reason **session budget**;
+  a `monitor` budget records it and allows. Every receipt a budget counted or refused carries
+  `payload.budget` (the budget, the action type, the count, the limit and the state). If the
+  count cannot be read or written for a session that has a budget, the limited actions are
+  denied, never let through without a limit. A malformed `session_budgets` list refuses the whole
+  rules document (the rules in force stay); a hook older than this ignores the member. The hook
+  says it understands budgets (`x-scopebond-hook-capabilities: allowances,session_budgets`).
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left

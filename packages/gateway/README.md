@@ -267,6 +267,12 @@ checked by `validateReceiptContext`; the gateway refuses to sign one that is not
 `verifyReceipt` treats an unknown key inside it like any other unknown key. Receipts the
 gateway makes without one are unchanged. See [SPEC.md](../../SPEC.md#payload-fields).
 
+A connector that counts actions against a session budget passes the decision the same way:
+`handleAction(req, { budget })` signs it as the optional `payload.budget` (`ReceiptBudget`:
+`version`, `scope: "session"`, `budget_id`, `budget_version`, `mode`, `operation`, `count`,
+`max`, `state`), a closed object checked by `validateReceiptBudget`. A receipt check older than
+this release reports a receipt carrying it as invalid.
+
 Swappable interfaces (each an interface with a local implementation):
 `ReceiptStore` and `Executor`. Node-only durable stores and the key loader live
 under the `@scopebond/gateway/node` subpath (they use `node:fs` / `node:sqlite`):

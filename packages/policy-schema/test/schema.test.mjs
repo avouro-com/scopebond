@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import {
   policySchema, actionSchema, receiptSchema, legacyReceiptSchema, CLAUSE_TYPES, CLAUSE_MODES,
   VOCABULARY_VERSION, EVIDENCE_VERSION, CANONICALIZATION, EXECUTION_STATES, REALTIME_RESULTS,
-  canonical, RECEIPT_CONTEXT_KEYS,
+  canonical, RECEIPT_CONTEXT_KEYS, sessionBudgetsSchema, SESSION_BUDGET_DEFAULT_SECONDS, SESSION_BUDGET_MODES, RECEIPT_BUDGET_STATES,
 } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -114,6 +114,7 @@ function conforms(schema, value, root = receiptSchema) {
   if (typeof value === "number" && (value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity))) return false;
   if (Array.isArray(value)) {
     if (schema.items && !value.every((item) => conforms(schema.items, item, root))) return false;
+    if (value.length < (schema.minItems ?? 0) || value.length > (schema.maxItems ?? Infinity)) return false;
     if (schema.uniqueItems && new Set(value.map((item) => JSON.stringify(item))).size !== value.length) return false;
   }
   if (typeMatches("object", value)) {
@@ -171,4 +172,38 @@ test("a context object canonicalizes like any other member (RFC 8785 key order)"
   const receipt = withContext(evidence.receipt_context.valid[0].context);
   const text = canonical(receipt.payload);
   assert.ok(text.includes('"context":{"branch":"main","harness":"claude","harness_version":null,"model":"example-model-1"'), text);
+});
+
+const sessionVectors = JSON.parse(readFileSync(join(here, "../vectors/session-budgets.json"), "utf8"));
+
+test("session budgets: a closed schema in the gateway's budget words, scope session only", () => {
+  const budget = sessionBudgetsSchema.$defs.sessionBudget;
+  assert.equal(sessionBudgetsSchema.type, "array");
+  assert.equal(budget.additionalProperties, false);
+  assert.equal(sessionBudgetsSchema.$defs.limit.additionalProperties, false);
+  assert.deepEqual(budget.properties.scope, { const: "session" });
+  assert.deepEqual(budget.properties.mode.enum, [...SESSION_BUDGET_MODES]);
+  for (const key of ["budget_id", "limits", "mode", "version", "expires_at", "session_id"]) assert.ok(budget.required.includes(key), key);
+  assert.equal(budget.required.includes("source"), false);
+  assert.equal(SESSION_BUDGET_DEFAULT_SECONDS, 7200);
+});
+
+test("session budget vectors: valid lists validate, invalid ones (unknown keys included) do not", () => {
+  for (const vector of sessionVectors.valid) assert.equal(conforms(sessionBudgetsSchema, vector.session_budgets, sessionBudgetsSchema), true, vector.name);
+  for (const vector of sessionVectors.invalid) assert.equal(conforms(sessionBudgetsSchema, vector.session_budgets, sessionBudgetsSchema), false, vector.name);
+  assert.ok(sessionVectors.invalid.some((vector) => vector.name === "unknown-key"));
+});
+
+test("receipt budget: an optional, closed payload member; valid ones validate, invalid ones do not", () => {
+  const payload = receiptSchema.properties.payload;
+  assert.equal(payload.required.includes("budget"), false);
+  assert.equal(payload.properties.budget.additionalProperties, false);
+  assert.deepEqual(payload.properties.budget.properties.state.enum, [...RECEIPT_BUDGET_STATES]);
+  const withBudget = (budget) => {
+    const receipt = structuredClone(evidence.receipt_context.receipt);
+    receipt.payload.budget = budget;
+    return receipt;
+  };
+  for (const vector of sessionVectors.receipt_budget.valid) assert.equal(conforms(receiptSchema, withBudget(vector.budget)), true, vector.name);
+  for (const vector of sessionVectors.receipt_budget.invalid) assert.equal(conforms(receiptSchema, withBudget(vector.budget)), false, vector.name);
 });

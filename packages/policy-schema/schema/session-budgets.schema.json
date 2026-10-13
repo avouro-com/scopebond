@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scopebond.com/schema/session-budgets-1.0.json",
+  "title": "Scopebond session budgets (the session_budgets member of a workspace rules document)",
+  "description": "Optional. Limits on what one coding-agent session may do: at most so many actions of the listed types (0 = none), until the budget expires. A workspace sends them in its rules document (type scopebond:managed-rules) as session_budgets, only to a hook that understands them; a hook that predates them ignores the member (the rules document check reads only the members it knows). Closed: an unknown key makes a budget invalid, and a hook that receives an invalid list refuses the whole rules document, so a malformed delivery never means no limit. The words follow the action-budget vocabulary of the gateway (budget_id, operations, max, mode, version, expires_at).",
+  "type": "array",
+  "maxItems": 50,
+  "items": { "$ref": "#/$defs/sessionBudget" },
+  "$defs": {
+    "sessionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["budget_id", "scope", "session_id", "limits", "mode", "version", "expires_at"],
+      "properties": {
+        "budget_id": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{8,128}$", "description": "Stable across versions of the same budget." },
+        "scope": { "const": "session" },
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 200, "description": "The opaque session id the hook signs into its receipts as context.session_id (never the coding tool's own session id)." },
+        "limits": {
+          "type": "array", "minItems": 1, "maxItems": 10,
+          "items": { "$ref": "#/$defs/limit" }
+        },
+        "mode": { "enum": ["enforce", "monitor"], "description": "enforce: an action beyond a limit, or of a limited type once the budget expired, is denied. monitor: it is recorded as over and allowed." },
+        "version": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "expires_at": { "type": "string", "format": "date-time", "description": "When the budget ends (two hours after it was approved by default). After it, an enforce budget denies the limited action types for that session." },
+        "source": { "enum": ["request", "admin"], "description": "Approved from a person's Ask an admin request, or set by an admin." }
+      }
+    },
+    "limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operations", "max"],
+      "properties": {
+        "operations": {
+          "type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$", "maxLength": 64 },
+          "description": "The action types counted (for example file.write, git.push, package.install). A tool call counts once for a limit if any of its actions is one of these."
+        },
+        "max": { "type": "integer", "minimum": 0, "maximum": 1000000, "description": "How many may be allowed in the session. 0: none." }
+      }
+    }
+  }
+}

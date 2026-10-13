@@ -173,6 +173,39 @@ export function validateReceiptContext(value: unknown): value is ReceiptPayloadC
   return true;
 }
 
+/** A session budget counted or refused this action (`payload.budget`, optional): which budget, the action type counted, the
+ *  count with this action and the limit, and the state. Session budgets limit what one coding-agent session may do (at most so
+ *  many file writes, pushes or package installs, until the budget expires); a workspace sends them to the hook. within and
+ *  at_limit: counted and allowed. over: beyond the limit (denied under enforce, recorded under monitor). expired: the
+ *  budget had ended. unavailable: the count could not be read or written, so the action was denied. */
+export interface ReceiptBudget {
+  version: 1;
+  scope: "session";
+  budget_id: string;
+  budget_version: number;
+  mode: "enforce" | "monitor";
+  /** The action type counted (file.write, git.push, package.install, ...). */
+  operation: string;
+  /** The count including this action. */
+  count: number;
+  max: number;
+  state: "within" | "at_limit" | "over" | "expired" | "unavailable";
+}
+export const RECEIPT_BUDGET_KEYS = ["version", "scope", "budget_id", "budget_version", "mode", "operation", "count", "max", "state"] as const;
+const BUDGET_ID = /^[A-Za-z0-9._:-]{8,128}$/;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: each repeated group starts with a "." its own class excludes
+const BUDGET_OPERATION = /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$/;
+const BUDGET_STATES = new Set(["within", "at_limit", "over", "expired", "unavailable"]);
+/** The shape payload.budget must have (the receipt schema's): a closed object with every member present. */
+export function validateReceiptBudget(value: unknown): value is ReceiptBudget {
+  if (!isRecord(value) || !hasOnlyKeys(value, [...RECEIPT_BUDGET_KEYS]) || Object.keys(value).length !== RECEIPT_BUDGET_KEYS.length) return false;
+  const int = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+  return value.version === 1 && value.scope === "session" && typeof value.budget_id === "string" && BUDGET_ID.test(value.budget_id)
+    && int(value.budget_version, 1, 2_147_483_647) && (value.mode === "enforce" || value.mode === "monitor")
+    && typeof value.operation === "string" && value.operation.length <= 64 && BUDGET_OPERATION.test(value.operation)
+    && int(value.count, 0, 1_000_001) && int(value.max, 0, 1_000_000) && BUDGET_STATES.has(value.state as string);
+}
+
 export interface ReceiptPayload {
   type: "scopebond:receipt";
   evidence_version: typeof EVIDENCE_VERSION;
@@ -204,6 +237,8 @@ export interface ReceiptPayload {
   override?: OverrideRecord;
   /** Where the receipt was produced (optional; see ReceiptPayloadContext). */
   context?: ReceiptPayloadContext;
+  /** A session budget counted or refused this action (optional; see ReceiptBudget). */
+  budget?: ReceiptBudget;
 }
 
 export interface SignedReceipt {
@@ -426,9 +461,10 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
     "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result",
     "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp",
-    "evidence_class", "principal", "boundary", "override", "context",
+    "evidence_class", "principal", "boundary", "override", "context", "budget",
   ]) && evidenceClassValid(payload as unknown as ReceiptPayload) &&
     (payload.context === undefined || validateReceiptContext(payload.context)) &&
+    (payload.budget === undefined || validateReceiptBudget(payload.budget)) &&
     (payload.override === undefined || (validateOverrideRecord(payload.override) && payload.realtime_result === "approved")) &&
     hasOnlyKeys(payload.action_ref, ["action_id", "authorized_intent_hash", "evidence_intent_hash"]) &&
     hasOnlyKeys(payload.policy_ref, ["id", "version", "digest"]) &&

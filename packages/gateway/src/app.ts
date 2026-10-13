@@ -12,11 +12,11 @@ import type { DispatchGuard } from "./dispatch.js";
 import {
   buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash,
   minimizeIntentForEvidence, REDACTION_PROFILE,
-  CANONICALIZATION, validateReceiptContext,
+  CANONICALIZATION, validateReceiptContext, validateReceiptBudget,
 } from "./receipts.js";
 import type {
   Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
-  ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord, ReceiptPayloadContext,
+  ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord, ReceiptPayloadContext, ReceiptBudget,
 } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleProof } from "./anchor.js";
@@ -127,6 +127,9 @@ export interface ActionOptions {
   /** Where the action was produced, signed into the receipt as `payload.context` (see ReceiptPayloadContext). Checked
    *  before anything is decided: a context that is not a valid one is refused, never signed. */
   context?: ReceiptPayloadContext;
+  /** A session budget's decision for this action, signed into the receipt as payload.budget (see ReceiptBudget). Checked
+   *  like the context: an invalid one is refused, never signed. */
+  budget?: ReceiptBudget;
 }
 
 /** Options for recording a passive observation. */
@@ -258,6 +261,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     const deniedState: ExecutionState = observedAfter ? "observed_after" : "denied";
     assertValidIntent(req.intent);
     assertValidContext(opts?.context);
+    if (opts?.budget !== undefined && !validateReceiptBudget(opts.budget)) throw new TypeError("invalid receipt budget: a closed object of version, scope, budget_id, budget_version, mode, operation, count, max and state");
     const ts = now();
     const ih = intentHash(req.intent);
     const minimized = minimizeIntentForEvidence(req.intent);
@@ -294,6 +298,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       // receipts stay legacy (absent) and are classified at read time.
       ...(authenticated.evidence.agent ? { evidence_class: "signed_intent" as const } : {}),
       ...(opts?.context ? { context: opts.context } : {}),
+      ...(opts?.budget ? { budget: opts.budget } : {}),
     };
     const receiptFields = (
       realtimeResult: RealtimeResult,

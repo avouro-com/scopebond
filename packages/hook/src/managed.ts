@@ -27,6 +27,7 @@ import { GUARDRAIL_LOOKAHEADS, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES } from "./rules.js";
 import type { Recommended } from "./client-health.js";
 import type { SignatureState } from "./policy-signature.js";
+import { validSessionBudgets } from "./session-budget-shape.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
 export const MANAGED_META_FILE = "managed-meta.json";
@@ -121,6 +122,9 @@ export interface ManagedDocument {
   /** Allowances the workspace holds for this computer (approved requests, confirmed ones), and the ones it revoked. */
   allowances?: unknown[];
   revoked_allowances?: string[];
+  /** Limits on what named sessions may do (session-budgets.ts), sent only to a hook that understands them. A hook that predates
+   *  them ignores the member: this check reads only the members it knows. */
+  session_budgets?: unknown[];
   /** Signed rules (policy-signature.ts): `true` on a rules document when present; the workspace's id; when it was issued
    *  (RFC 3339); the signing key's id and the base64 Ed25519 signature. All optional while unsigned documents are accepted. */
   managed?: true;
@@ -196,6 +200,9 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   const network = rules["network-egress"] as ManagedRule;
   if (network.mode !== "monitor" && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
   if (digestRules(rules) !== rulesDigest) return bad("the rules do not match their digest; the document was changed or damaged");
+  // Session budgets are checked whole: a malformed list refuses the document (the rules and budgets in force stay), so a bad
+  // delivery never reads as "no limit".
+  if (raw.session_budgets !== undefined && !validSessionBudgets(raw.session_budgets)) return bad("the session budgets are malformed");
   // The same version with different rules is a newer document too: the workspace can change what reaches this computer without a new
   // version (an agent moved to another team, or this hook started reading a setting it did not read before). The export id binds it here.
   const sameVersionChanged = context.currentRevision !== null && revision === context.currentRevision && !!context.currentDigest && rulesDigest !== context.currentDigest;

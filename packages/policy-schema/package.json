@@ -46,9 +46,11 @@
     "./receipt-legacy.schema.json": "./schema/receipt-legacy.schema.json",
     "./observation.schema.json": "./schema/observation.schema.json",
     "./summary.schema.json": "./schema/summary.schema.json",
+    "./session-budgets.schema.json": "./schema/session-budgets.schema.json",
     "./vectors/evidence-contract.json": "./vectors/evidence-contract.json",
     "./vectors/canonicalization.json": "./vectors/canonicalization.json",
-    "./vectors/observation-contract.json": "./vectors/observation-contract.json"
+    "./vectors/observation-contract.json": "./vectors/observation-contract.json",
+    "./vectors/session-budgets.json": "./vectors/session-budgets.json"
   },
   "files": [
     "dist",

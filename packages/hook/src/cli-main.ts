@@ -59,6 +59,7 @@ import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor } from "./receipt-context.js";
+import { keyedSessionId, sessionBudgetGuardFor } from "./session-budgets.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, ENFORCEABLE_RULES } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { runDispatchCommand } from "./dispatch-cli.js";
@@ -118,6 +119,11 @@ function runtimePaths(dir: string, cwd?: string) {
 }
 /** The harness's own id for this tool call, when it gives one (Claude Code and Codex send
  *  `tool_use_id`), so the receipts of one call share a stable action group. */
+/** The keyed session id for session-scoped allowances; null when it cannot be read (such an allowance then does not apply). */
+function sessionKeyOf(dir: string, input: Record<string, unknown>): string | null {
+  try { return keyedSessionId(dir, input); } catch { return null; }
+}
+
 function callId(input: Record<string, unknown>): string | undefined {
   for (const key of ["tool_use_id", "tool_call_id", "call_id"]) {
     const value = input?.[key];
@@ -288,8 +294,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // Where these receipts come from (harness, model, keyed session id, repository, branch); null while a connected
     // workspace has not said it reads it. Never fails the call.
     const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(dir, input!), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -447,8 +453,8 @@ async function runCursor(): Promise<void> {
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(dir, input), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
