@@ -305,6 +305,8 @@ export interface ManagedMeta {
   policy_signature?: SignatureState | null;
   /** `issued_at` of the newest signed answer this computer accepted; an older signed answer is refused as a replay. */
   policy_issued_at?: string | null;
+  /** The workspace id `policy_issued_at` belongs to. */
+  policy_issued_workspace?: string | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 

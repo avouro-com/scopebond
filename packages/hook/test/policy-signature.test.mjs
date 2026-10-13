@@ -181,6 +181,17 @@ test("enforce: an unsigned answer is refused and the previous policy stays in fo
   } finally { rmSync(h.dir, { recursive: true, force: true }); }
 });
 
+test("replay protection holds per workspace: a computer moved to another workspace is not held to the old one's clock", async () => {
+  const h = connected();
+  try {
+    assert.equal((await sync(h, signed(doc(1), { issuedAt: T(15) }))).outcome.state, "applied");
+    assert.equal((await sync(h, signed(doc(2), { issuedAt: T(14) }))).outcome.signature, "replayed");
+    const conn = JSON.parse(readFileSync(join(h.dir, "cloud.json"), "utf8"));
+    writeFileSync(join(h.dir, "cloud.json"), JSON.stringify({ ...conn, organization_id: "org-sig-2" }));
+    assert.deepEqual((await sync(h, signed(doc(2), { workspace: "org-sig-2", issuedAt: T(14) }))).outcome, { state: "applied", revision: 2 });
+  } finally { rmSync(h.dir, { recursive: true, force: true }); }
+});
+
 test("the mode: dual by default; enforce from the environment or cloud.json, and neither weakens the other", () => {
   assert.equal(signatureMode(null, {}), "dual");
   assert.equal(signatureMode(null, { SCOPEBOND_POLICY_SIGNATURE_MODE: "enforce" }), "enforce");

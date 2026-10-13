@@ -180,8 +180,13 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
   if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
   const at = now.toISOString();
+  // Replay protection holds per workspace: a computer connected to another workspace starts again (an answer from the old
+  // one can never verify here, since the signature binds the workspace id).
+  const workspaceId = workspaceIdOf(connection);
+  const lastIssuedAt = (): string | null => (meta.policy_issued_workspace ?? null) === workspaceId ? meta.policy_issued_at ?? null : null;
+  const issued = (issuedAt: string | null) => (issuedAt ? { policy_issued_at: issuedAt, policy_issued_workspace: workspaceId } : {});
   const signed = (raw: Record<string, unknown>, managed: boolean) => {
-    const check = checkPolicySignature(raw, { workspace: workspaceIdOf(connection), computer: installationId, managed, lastIssuedAt: meta.policy_issued_at ?? null, now });
+    const check = checkPolicySignature(raw, { workspace: workspaceId, computer: installationId, managed, lastIssuedAt: lastIssuedAt(), now });
     return { issuedAt: check.result === "verified" ? check.issuedAt : null, admitted: admitSigned(check, mode, at) };
   };
   if (res.status === 401) {
@@ -207,7 +212,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     const last = meta.last_ack;
     const confirmed = changed || !last || last.revision !== 0 || last.result !== "loaded"
       ? await ack({ export_id: `rev-0-${installationId}`, revision: 0, rules_digest: UNMANAGED_DIGEST, result: "loaded" }) : last;
-    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...(issuedAt ? { policy_issued_at: issuedAt } : {}) });
+    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...issued(issuedAt) });
     return { state: "own_rules", changed };
   };
   if (res.status === 204) return toOwnRules(admitSigned({ result: "unsigned" }, mode, at), null);
@@ -275,7 +280,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   options.afterPolicyWrite?.(dir);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
   save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, last_ack: confirmed, last_error: null,
-    policy_signature: admitted.state, ...(issuedAt ? { policy_issued_at: issuedAt } : {}) });
+    policy_signature: admitted.state, ...issued(issuedAt) });
   return { state: "applied", revision: doc.revision };
 }
 
