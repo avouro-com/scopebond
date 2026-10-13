@@ -10,9 +10,13 @@
 //   - Deterministic and pure: the same simple command gives the same actions, with no model, no network, no clock and no
 //     file read. (Digests are keyed with this computer's digest key, as every other digest the hook records.)
 //   - Bounded: only the subcommands listed in each profile are read. A command this module does not know, a dry run, a
-//     help or listing command, or an option it does not know placed where it could shift the words it reads, derives
-//     nothing: the command stays the plain `shell.exec` it always was. A name read after such an option is left out
-//     (the action keeps its type) rather than guessed.
+//     help or listing command derives nothing: the command stays the plain `shell.exec` it always was. A name read after
+//     an option the reader does not know is left out (the action keeps its type) rather than guessed.
+//   - Uncertain is not unknown: when an option the reader does not know stops it from reading the command, but one of the
+//     tool's destructive words (`delete`, `destroy`, `uninstall`, `rb`, `rm`, `exec`, `deploy`, `reset`,
+//     `downgrade`, `drop`, `remove`, …) is among the command's words, the action is still derived, with every name left
+//     out and a deployment's environment `unknown` (`uncertainFallback`). So an option placed before the subcommand cannot
+//     move a command out of a rule's reach.
 //   - No content: parameters are identifiers (provider, service, kind, region, context, namespace), closed enums and keyed
 //     digests. Never a file's contents, a URL's query, a secret's value, a SQL text or a resource name in the clear: names
 //     are digested (`resource_digest`, `name_digest`, `target_digest`). A value given to a secret command
@@ -39,9 +43,9 @@ type Params = Record<string, unknown>;
 
 /** The tools this module reads, by canonical program name. */
 export const TARGET_TOOLS: ReadonlySet<string> = new Set([
-  "aws", "gcloud", "az", "kubectl", "helm", "terraform", "tofu", "wrangler", "vercel", "fly", "flyctl", "gh",
+  "aws", "gcloud", "az", "kubectl", "helm", "terraform", "tofu", "terragrunt", "wrangler", "vercel", "fly", "flyctl", "gh",
   "prisma", "drizzle-kit", "rails", "rake", "alembic", "flyway", "knex", "sequelize", "sequelize-cli",
-  "eb", "serverless", "sls", "heroku", "vault", "doppler", "op",
+  "eb", "serverless", "sls", "heroku", "vault", "doppler", "op", "pulumi", "cdk", "sst",
 ]);
 
 // ---- shared readers -------------------------------------------------------------------------------------------------
@@ -165,33 +169,73 @@ function act(action_type: string, params: Params): TargetOperation {
 
 /** The tool a simple command runs and its arguments: the program itself, or a tool started through a package runner
  *  (`npx prisma`, `pnpm exec wrangler`, `uv run alembic`, `python -m alembic`, `bundle exec rails`). */
+/** A package runner: the options it takes before its subcommand that take a value, its subcommands that run a tool (none:
+ *  the tool comes first; `optional`: the tool may also come first, as `pnpm wrangler`), and the options of those
+ *  subcommands that take a value (a package to install, a workspace to run in, a file of variables). */
+interface Runner { pre: ReadonlySet<string>; subs: readonly string[]; optional?: true; post: ReadonlySet<string> }
+const NODE_RUN_VALUED = new Set(["-p", "--package", "-c", "--call", "--filter", "-F", "-C", "--dir", "--workspace-dir", "--prefix", "--cwd", "-w", "--workspace",
+  "--cache", "--userconfig", "--registry", "--loglevel", "--reporter", "--shell-mode"]);
+const PY_RUN_VALUED = new Set(["--env-file", "--with", "--with-requirements", "--with-editable", "--project", "--package", "--python", "-p", "--group", "--extra",
+  "--index", "--index-url", "--extra-index-url", "--find-links", "-f", "--directory", "-C", "-P", "--config-file", "--cache-dir", "--no-group", "--only-group", "-e", "--env"]);
+const RUNNERS: Readonly<Record<string, Runner>> = {
+  npx: { pre: NODE_RUN_VALUED, subs: [], post: NODE_RUN_VALUED },
+  pnpx: { pre: NODE_RUN_VALUED, subs: [], post: NODE_RUN_VALUED },
+  bunx: { pre: NODE_RUN_VALUED, subs: [], post: NODE_RUN_VALUED },
+  pnpm: { pre: NODE_RUN_VALUED, subs: ["exec", "dlx", "x"], optional: true, post: NODE_RUN_VALUED },
+  yarn: { pre: NODE_RUN_VALUED, subs: ["exec", "dlx", "x"], optional: true, post: NODE_RUN_VALUED },
+  bun: { pre: NODE_RUN_VALUED, subs: ["exec", "dlx", "x"], optional: true, post: NODE_RUN_VALUED },
+  npm: { pre: NODE_RUN_VALUED, subs: ["exec", "x"], post: NODE_RUN_VALUED },
+  uv: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
+  poetry: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
+  pipenv: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
+  pdm: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
+  hatch: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
+  bundle: { pre: new Set(["--gemfile"]), subs: ["exec"], post: new Set(["--gemfile"]) },
+};
+/** The index of the first word at or after `i` that is not an option (or an option's value). */
+function skipOptions(words: readonly string[], i: number, valued: ReadonlySet<string>): number {
+  while (i < words.length && words[i].startsWith("-") && words[i] !== "-") {
+    if (words[i] === "--") return i + 1;
+    i += !words[i].includes("=") && valued.has(words[i]) ? 2 : 1;
+  }
+  return i;
+}
+
 export function toolOf(sc: SimpleCommand): { tool: string; argv: string[] } | null {
   if (sc.opaque) return null;
   const program = canonProgram(sc.program);
   if (TARGET_TOOLS.has(program)) return { tool: program, argv: sc.argv };
   let rest: string[];
-  const [first, ...after] = sc.argv;
-  if (program === "npx" || program === "pnpx" || program === "bunx") rest = sc.argv;
-  else if (program === "pnpm" || program === "yarn" || program === "bun") rest = first === "exec" || first === "dlx" || first === "x" ? after : sc.argv;
-  else if (program === "npm") { if (first !== "exec" && first !== "x") return null; rest = after; }
-  else if (program === "uv" || program === "poetry" || program === "pipenv" || program === "pdm" || program === "hatch") { if (first !== "run") return null; rest = after; }
-  else if (program === "python" || program === "python3" || program === "py") { if (first !== "-m") return null; rest = after; }
-  else if (program === "bundle") { if (first !== "exec") return null; rest = after; }
-  else return null;
-  // A runner's own options come first; `-p`/`--package` names a package to install, not the command.
-  let i = 0;
-  while (i < rest.length && rest[i].startsWith("-")) { if (rest[i] === "--") { i++; break; } i += rest[i] === "-p" || rest[i] === "--package" ? 2 : 1; }
-  const word = rest[i];
+  if (program === "python" || program === "python3" || program === "py") {
+    // `python -I -m alembic`, `python -X dev -m alembic`: the module after `-m`.
+    let k = 0;
+    while (k < sc.argv.length && sc.argv[k] !== "-m") { if (!sc.argv[k].startsWith("-")) return null; k += sc.argv[k] === "-X" || sc.argv[k] === "-W" ? 2 : 1; }
+    if (sc.argv[k] !== "-m") return null;
+    rest = sc.argv.slice(k + 1);
+  } else {
+    const runner = RUNNERS[program];
+    if (!runner) return null;
+    // The runner's own options first (`pnpm --filter db exec`, `uv --directory api run`), then its subcommand, then that
+    // subcommand's options (`uv run --env-file .env`, `npx -p prisma@5`); an option that takes a value takes the next word.
+    let k = skipOptions(sc.argv, 0, runner.pre);
+    if (runner.subs.length) {
+      if (runner.subs.includes(sc.argv[k] ?? "")) k = skipOptions(sc.argv, k + 1, runner.post);
+      else if (!runner.optional) return null;
+    }
+    rest = sc.argv.slice(k);
+  }
+  const word = rest[0];
   if (word === undefined) return null;
   // `prisma@5`, `wrangler@latest`, `@scope/name` is not one of these tools.
   const at = word.lastIndexOf("@");
   const tool = canonProgram(at > 0 ? word.slice(0, at) : word);
-  return TARGET_TOOLS.has(tool) ? { tool, argv: rest.slice(i + 1) } : null;
+  return TARGET_TOOLS.has(tool) ? { tool, argv: rest.slice(1) } : null;
 }
 
 // ---- aws ------------------------------------------------------------------------------------------------------------
 
-const AWS_GLOBAL_VALUED = new Set(["--region", "--profile", "--output", "--endpoint-url", "--query", "--ca-bundle", "--cli-read-timeout", "--cli-connect-timeout", "--color", "--cli-binary-format"]);
+const AWS_GLOBAL_VALUED = new Set(["--region", "--profile", "--output", "--endpoint-url", "--query", "--ca-bundle", "--cli-read-timeout", "--cli-connect-timeout", "--color", "--cli-binary-format",
+  "--cli-error-format"]);
 const AWS_GLOBAL_BOOL = new Set(["--debug", "--no-verify-ssl", "--no-paginate", "--no-sign-request", "--no-cli-pager", "--cli-auto-prompt", "--no-cli-auto-prompt"]);
 const S3_VALUED = new Set([...AWS_GLOBAL_VALUED, "--exclude", "--include", "--acl", "--sse", "--sse-c", "--sse-c-key", "--sse-kms-key-id", "--storage-class", "--grants", "--website-redirect",
   "--content-type", "--cache-control", "--content-disposition", "--content-encoding", "--content-language", "--expires", "--metadata", "--metadata-directive", "--expected-size", "--page-size",
@@ -220,7 +264,8 @@ function aws(sc: SimpleCommand, argv: string[]): TargetOperation[] {
   }
   if (words.length < 2) return [];
   const [service, op] = words;
-  if (op === "help" || argv.includes("help") || hasWord(argv, "--dry-run", "--dryrun", "--generate-cli-skeleton")) return [];
+  // `help` is help only in the subcommand slot (`aws iam help`, `aws iam delete-role help`), never as an option's value.
+  if (service === "help" || op === "help" || argv[i] === "help" || hasWord(argv, "--dry-run", "--dryrun", "--generate-cli-skeleton")) return [];
   const region = ident(option(argv, "--region") ?? assigned(sc, "AWS_REGION") ?? assigned(sc, "AWS_DEFAULT_REGION"));
   const profile = option(argv, "--profile") ?? assigned(sc, "AWS_PROFILE");
   const env = envOfName(profile);
@@ -276,6 +321,8 @@ function aws(sc: SimpleCommand, argv: string[]): TargetOperation[] {
     if (op === "run-instances") return [cloud("create", "ec2", "instance", undefined)];
     if (["stop-instances", "start-instances", "reboot-instances"].includes(op)) return [cloud("modify", "ec2", "instance", resource)];
   }
+  // Deleting a message a queue delivered is how a consumer acknowledges it, not a change to a resource.
+  if (service === "sqs" && (op === "delete-message" || op === "delete-message-batch")) return [];
   const del = AWS_DELETE.exec(op);
   if (del) return [cloud("delete", svc, del[1], resourceName())];
   const create = AWS_CREATE.exec(op);
@@ -298,11 +345,16 @@ const GCLOUD_BOOL = new Set(["--quiet", "-q", "--log-http", "--no-user-output-en
   "--no-traffic", "--promote", "--no-promote", "-r", "--recursive", "--stop-previous-version", "--no-stop-previous-version", "--trigger-http", "--gen2", "--no-gen2", "--keep-disks", "--delete-disks"]);
 const GCLOUD_VERBS = new Set(["create", "delete", "update", "patch", "deploy", "add", "stop", "start", "reset", "resize", "add-iam-policy-binding", "remove-iam-policy-binding", "set-iam-policy"]);
 
+/** gcloud command groups that change this computer's CLI (its configurations, credentials, components), not a cloud resource. */
+const GCLOUD_LOCAL = new Set(["config", "auth", "components", "init", "info", "topic", "help", "feedback", "survey", "version", "cheat-sheet", "docker", "emulators"]);
+
 function gcloud(sc: SimpleCommand, argv: string[]): TargetOperation[] {
   const a = readArgs(argv, GCLOUD_VALUED, GCLOUD_BOOL);
-  if (has(a, "--help", "-h") || a.pos.includes("help")) return [];
+  if (has(a, "--help", "-h")) return [];
   const path = a.pos.slice(0, a.certain);
   while (path[0] === "alpha" || path[0] === "beta" || path[0] === "preview") path.shift();
+  // `help` is help in the subcommand slot (`gcloud help …`); a local group (`config configurations delete`) is no resource.
+  if (path[0] === undefined || GCLOUD_LOCAL.has(path[0])) return [];
   if (path[0] === "storage" && path[1] === "rm") {
     const target = path[2];
     const bucket = target ? GS_BUCKET.exec(target)?.[1] : undefined;
@@ -390,7 +442,8 @@ function az(argv: string[]): TargetOperation[] {
   const kind = joined === "group delete" || joined === "group create" ? "resource-group" : path.length >= 3 ? path[path.length - 2] : area;
   const cloud = (v: "create" | "modify" | "delete"): TargetOperation =>
     act(`cloud.resource.${v}`, { provider: "azure", service, kind, region, env, resource_digest: digestOf("azure", joined, subscription, group, name), auto_approve: v === "delete" ? auto_approve : undefined });
-  if (last === "delete") return [cloud("delete")];
+  // `delete`, and its batch and purge forms (`storage blob delete-batch`, `keyvault purge`).
+  if (last === "delete" || last === "delete-batch" || last === "purge") return [cloud("delete")];
   if (last === "create") return [cloud("create")];
   if (["update", "stop", "start", "restart", "deallocate", "resize"].includes(last)) return [cloud("modify")];
   return [];
@@ -524,14 +577,43 @@ function terraform(sc: SimpleCommand, tool: string, argv: string[]): TargetOpera
     else if (name === "-help") return [];
   }
   if (refreshOnly) return [];
-  // A saved plan applies without asking.
+  // A saved plan applies without asking, and the command does not show what it changes: it may destroy as well
+  // (`saved_plan`, risk class destructive).
   const planFile = sub === "apply" && positional.length > 0;
   const env = envOfName(chdir) ?? varFiles.map((f) => envOfName(f)).find((e) => e !== undefined) ?? envOfName(assigned(sc, "TF_WORKSPACE"));
   const named = targets.filter((t) => literal(t) !== undefined).sort();
   return [act(destroy ? "cloud.resource.delete" : "cloud.resource.modify", {
     provider: "unknown", service: "terraform", env, auto_approve: autoApprove || planFile, targeted: targets.length > 0,
-    resource_digest: named.length ? targetDigest(tool, ...named) : undefined,
+    resource_digest: named.length ? targetDigest(tool, ...named) : undefined, saved_plan: planFile && !destroy ? true : undefined,
   })];
+}
+
+const TG_VALUED = new Set(["--terragrunt-working-dir", "--working-dir", "--terragrunt-config", "--config", "--terragrunt-iam-role", "--iam-assume-role",
+  "--terragrunt-tfpath", "--tf-path", "--terragrunt-parallelism", "--parallelism", "--terragrunt-log-level", "--log-level"]);
+
+/** Terragrunt runs Terraform: `run-all apply` (or `run --all apply`, `apply-all`) is an apply, `destroy-all` a destroy.
+ *  Its working folder is read like Terraform's `-chdir`. */
+function terragrunt(sc: SimpleCommand, argv: string[]): TargetOperation[] {
+  const words: string[] = [];
+  let chdir: string | undefined;
+  for (let k = 0; k < argv.length; k++) {
+    const t = argv[k];
+    const eq = t.indexOf("=");
+    const name = eq > 0 ? t.slice(0, eq) : t;
+    if (TG_VALUED.has(name)) {
+      const value = eq > 0 ? t.slice(eq + 1) : argv[++k];
+      if (name === "--terragrunt-working-dir" || name === "--working-dir") chdir = value;
+      continue;
+    }
+    if (/^--(?:terragrunt-|tg-)/.test(t) || t === "--all" || t === "--non-interactive") continue;
+    words.push(t);
+  }
+  const sub = words.findIndex((w) => !w.startsWith("-"));
+  if (sub < 0) return [];
+  if (words[sub] === "run-all" || words[sub] === "run") words.splice(sub, 1);
+  else if (words[sub] === "apply-all") words[sub] = "apply";
+  else if (words[sub] === "destroy-all") words[sub] = "destroy";
+  return terraform(sc, "terragrunt", chdir !== undefined ? [`-chdir=${chdir}`, ...words] : words);
 }
 
 // ---- wrangler -----------------------------------------------------------------------------------------------------------
@@ -561,6 +643,7 @@ function wrangler(sc: SimpleCommand): TargetOperation[] {
   }
   if (area === "secret" && sub === "put") return [act("secret.write", { store: "wrangler", name_digest: digestOf("wrangler", value("--name"), envName, pos[2]), env })];
   if (area === "secret" && sub === "bulk") return [act("secret.write", { store: "wrangler", env })];
+  if (area === "secret" && sub === "delete") return [act("secret.write", { store: "wrangler", name_digest: digestOf("wrangler", value("--name"), envName, pos[2]), env, delete: true })];
   if (area === "delete" && pos.length <= 2) return [cf("delete", "workers", "worker", value("--name") ?? pos[1])];
   if (area === "d1" && sub === "migrations" && pos[2] === "apply") {
     const local = s.flags.has("--local");
@@ -589,7 +672,9 @@ function vercel(argv: string[]): TargetOperation[] {
   if (has(a, "--help", "-h", "--version", "-v")) return [];
   const first = certainPos(a, 0);
   const target = flag(a, "--target");
-  const environment = has(a, "--prod") || target === "production" ? "production" : target !== undefined ? envOfName(target) ?? "preview" : "preview";
+  // An option this reader does not know might choose the environment: then it is not known to be a preview.
+  const unknownOption = [...a.flags.keys()].some((f) => !VERCEL_VALUED.has(f) && !VERCEL_BOOL.has(f));
+  const environment = has(a, "--prod") || target === "production" ? "production" : target !== undefined ? envOfName(target) ?? "preview" : unknownOption ? "unknown" : "preview";
   const deploy = (env: string): TargetOperation[] => [act("deploy.release", { provider: "vercel", environment: env, target_digest: digestOf("vercel", flag(a, "--scope", "-S", "--team", "-T")) })];
   if (first === undefined) return a.certain === a.pos.length ? deploy(environment) : [];
   if (first === "deploy" || first === "redeploy" || !VERCEL_COMMANDS.has(first)) return deploy(environment);
@@ -598,6 +683,9 @@ function vercel(argv: string[]): TargetOperation[] {
     const name = certainPos(a, 2);
     const env = certainPos(a, 3);
     return [act("secret.write", { store: "vercel", name_digest: digestOf("vercel", name), env: envOfName(env) })];
+  }
+  if (first === "env" && (certainPos(a, 1) === "rm" || certainPos(a, 1) === "remove")) {
+    return [act("secret.write", { store: "vercel", name_digest: digestOf("vercel", certainPos(a, 2)), env: envOfName(certainPos(a, 3)), delete: true })];
   }
   if (first === "remove" || first === "rm") {
     const names = a.pos.slice(1, a.certain).filter((n) => literal(n) !== undefined).sort();
@@ -671,6 +759,9 @@ function gh(argv: string[]): TargetOperation[] {
     if (ident(host) === undefined) return [];
     const fields = has(a, "-F", "--field", "-f", "--raw-field", "--input");
     const method = (flag(a, "-X", "--method") ?? (endpoint === "graphql" || fields ? "POST" : "GET")).toUpperCase();
+    // A read is what `gh` is for, and a site rule's list names `github.com`, not `api.github.com` (an allowed site
+    // covers its subdomains only when written `*.github.com`): only a call that changes something is a `net.fetch`.
+    if (method === "GET" || method === "HEAD") return [];
     return HTTP_METHODS.has(method) ? [act("net.fetch", { host, method })] : [];
   }
   return [];
@@ -697,16 +788,19 @@ function migrations(sc: SimpleCommand, tool: string, argv: string[]): TargetOper
     }
     return [];
   }
-  if (tool === "drizzle-kit") return argv[0] === "push" || argv[0] === "migrate" ? [migrate("drizzle", "up", undefined)] : [];
+  if (tool === "drizzle-kit") return argv[0] === "push" || argv[0] === "migrate" ? [migrate("drizzle", "up", undefined)] : argv[0] === "drop" ? [migrate("drizzle", "down", undefined)] : [];
   if (tool === "rails" || tool === "rake") {
     // `RAILS_ENV=production rails db:migrate`, `rails db:migrate RAILS_ENV=production`, `rails -e production …`.
     const envWord = argv.find((w) => w.startsWith("RAILS_ENV="))?.slice(10) ?? assigned(sc, "RAILS_ENV") ?? option(argv, "-e", "--environment");
     const env = envOfName(envWord);
+    // `db:migrate VERSION=…` migrates to that version, down as well as up (`VERSION=0` undoes every migration).
+    const toVersion = argv.some((w) => w.startsWith("VERSION=")) || assigned(sc, "VERSION") !== undefined;
     const out: TargetOperation[] = [];
     for (const task of argv) {
-      if (task === "db:migrate" || task === "db:migrate:up" || task === "db:prepare" || task === "db:setup" || task === "db:schema:load") out.push(migrate("rails", task === "db:schema:load" || task === "db:setup" ? "reset" : "up", env));
+      if (task === "db:migrate" && toVersion) out.push(migrate("rails", "down", env));
+      else if (task === "db:migrate" || task === "db:migrate:up" || task === "db:prepare" || task === "db:setup" || task === "db:schema:load") out.push(migrate("rails", task === "db:schema:load" || task === "db:setup" ? "reset" : "up", env));
       else if (task === "db:rollback" || task === "db:migrate:down" || task === "db:migrate:redo") out.push(migrate("rails", "down", env));
-      else if (task === "db:reset" || task === "db:drop" || task === "db:purge") out.push(migrate("rails", "reset", env));
+      else if (task === "db:reset" || task === "db:drop" || task === "db:purge" || task === "db:migrate:reset") out.push(migrate("rails", "reset", env));
     }
     return out;
   }
@@ -739,6 +833,8 @@ function migrations(sc: SimpleCommand, tool: string, argv: string[]): TargetOper
 
 // ---- other deployment and secret tools --------------------------------------------------------------------------------------
 
+const VAULT_NOT_A_SECRET = /^(?:auth\/.+\/login(?:\/|$)|[^/]+\/(?:encrypt|decrypt|rewrap|sign|sign-verbatim|verify|hmac|hash|random|datakey|issue|sign-intermediate|sign-self-issued|tidy)(?:\/|$))/;
+
 function others(sc: SimpleCommand, tool: string, argv: string[]): TargetOperation[] {
   if (tool === "eb") {
     const a = readArgs(argv, new Set(["--profile", "--region", "-r", "-l", "--label", "-m", "--message", "--timeout", "--source", "--version", "--env-group-suffix"]),
@@ -755,7 +851,9 @@ function others(sc: SimpleCommand, tool: string, argv: string[]): TargetOperatio
     const verb = certainPos(a, 0);
     const stage = flag(a, "-s", "--stage");
     const env = envOfName(stage) ?? envOfName(flag(a, "--aws-profile"));
-    if (verb === "deploy") return [act("deploy.release", { provider: "unknown", environment: env ?? "unknown", target_digest: digestOf("serverless", flag(a, "-c", "--config") ?? "", stage ?? "") })];
+    // Without `--stage`, Serverless deploys to its default stage, `dev`.
+    const deployEnv = env ?? (stage === undefined ? "development" : "unknown");
+    if (verb === "deploy") return [act("deploy.release", { provider: "unknown", environment: deployEnv, target_digest: digestOf("serverless", flag(a, "-c", "--config") ?? "", stage ?? "") })];
     if (verb === "remove") return [act("cloud.resource.delete", { provider: "unknown", service: "serverless", kind: "service", region: ident(flag(a, "-r", "--region")), env, resource_digest: digestOf("serverless", flag(a, "-c", "--config") ?? "", stage ?? "") })];
     return [];
   }
@@ -777,6 +875,9 @@ function others(sc: SimpleCommand, tool: string, argv: string[]): TargetOperatio
     const [first, second] = [certainPos(a, 0), certainPos(a, 1)];
     const path = first === "kv" && (second === "put" || second === "patch") ? certainPos(a, 2) : first === "write" ? certainPos(a, 1) : undefined;
     if (path === undefined && !(first === "kv" && (second === "put" || second === "patch")) && first !== "write") return [];
+    // `vault write` also logs in (`auth/<method>/login`), and asks the transit and PKI engines to encrypt, sign or issue:
+    // none of those stores a secret.
+    if (first === "write" && path !== undefined && VAULT_NOT_A_SECRET.test(path)) return [];
     return [act("secret.write", { store: "vault", name_digest: digestOf("vault", flag(a, "-mount") ?? "", path), env: envOfName(flag(a, "-namespace", "-ns")) })];
   }
   if (tool === "doppler") {
@@ -801,21 +902,148 @@ function others(sc: SimpleCommand, tool: string, argv: string[]): TargetOperatio
     const item = second === "edit" ? certainPos(a, 2) : flag(a, "--title");
     return [act("secret.write", { store: "1password", name_digest: digestOf("1password", flag(a, "--vault") ?? "", item) })];
   }
+  if (tool === "pulumi") {
+    const a = readArgs(argv, PULUMI_VALUED, PULUMI_BOOL);
+    if (certainPos(a, 0) !== "destroy" || has(a, "--preview-only")) return [];
+    const stack = flag(a, "-s", "--stack");
+    return [act("cloud.resource.delete", { provider: "unknown", service: "pulumi", kind: "stack", env: envOfName(stack), resource_digest: digestOf("pulumi", stack),
+      auto_approve: has(a, "--yes", "-y", "--skip-preview", "-f") || undefined, targeted: a.flags.has("--target") || a.flags.has("-t") || undefined })];
+  }
+  if (tool === "cdk") {
+    const a = readArgs(argv, CDK_VALUED, CDK_BOOL);
+    if (certainPos(a, 0) !== "destroy") return [];
+    const stacks = a.pos.slice(1, a.certain).filter((n) => literal(n) !== undefined).sort();
+    const env = envOfName(flag(a, "--profile")) ?? (stacks.length === 1 ? envOfName(stacks[0]) : undefined);
+    return [act("cloud.resource.delete", { provider: "aws", service: "cloudformation", kind: "stack", env, resource_digest: stacks.length ? targetDigest("cdk", ...stacks) : undefined,
+      auto_approve: has(a, "--force", "-f") || undefined })];
+  }
+  if (tool === "sst") {
+    const a = readArgs(argv, new Set(["--stage", "--config", "--region", "--profile"]), new Set(["--verbose", "--print-logs"]));
+    if (certainPos(a, 0) !== "remove") return [];
+    const stage = flag(a, "--stage");
+    return [act("cloud.resource.delete", { provider: "unknown", service: "sst", kind: "app", env: envOfName(stage), resource_digest: digestOf("sst", stage) })];
+  }
   return [];
 }
+
+const PULUMI_VALUED = new Set(["-s", "--stack", "-C", "--cwd", "--config-file", "-m", "--message", "-t", "--target", "--exclude", "-p", "--parallel", "--color", "--exec-kind", "-v", "--verbose"]);
+const PULUMI_BOOL = new Set(["--yes", "-y", "--skip-preview", "-f", "--remove", "--debug", "--non-interactive", "--target-dependents", "--exclude-protected", "--continue-on-error",
+  "--refresh", "--diff", "--json", "--preview-only", "--suppress-outputs", "--suppress-permalink", "--show-config"]);
+const CDK_VALUED = new Set(["-a", "--app", "--profile", "-c", "--context", "--role-arn", "-o", "--output", "--ca-bundle-path", "--plugin", "-p", "--proxy"]);
+const CDK_BOOL = new Set(["--all", "-e", "--exclusively", "-f", "--force", "--verbose", "-v", "--debug", "--json", "-j", "--strict", "--no-color", "--ci", "--lookups", "--staging"]);
 
 // ---- entry point ----------------------------------------------------------------------------------------------------------
 
 const VIA: Readonly<Record<string, string>> = { flyctl: "fly", sls: "serverless", "sequelize-cli": "sequelize", rake: "rails" };
+
+// ---- an option the reader does not know -------------------------------------------------------------------------------------
+
+const union = (...sets: ReadonlyArray<ReadonlySet<string>>): ReadonlySet<string> => new Set(sets.flatMap((x) => [...x]));
+/** The options each reader knows. A tool not listed knows none of its options for this purpose: any option there makes the
+ *  reading uncertain when it derived nothing. */
+const KNOWN_OPTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  kubectl: union(KUBECTL_VALUED, KUBECTL_BOOL), helm: union(HELM_VALUED, HELM_BOOL), gcloud: union(GCLOUD_VALUED, GCLOUD_BOOL),
+  fly: union(FLY_VALUED, FLY_BOOL), flyctl: union(FLY_VALUED, FLY_BOOL), vercel: union(VERCEL_VALUED, VERCEL_BOOL, new Set(["-v"])),
+  pulumi: union(PULUMI_VALUED, PULUMI_BOOL), cdk: union(CDK_VALUED, CDK_BOOL),
+};
+const HELP_OPTIONS = new Set(["--help", "-h", "-help", "--version", "-version"]);
+const DRY_RUN = new Set(["--dry-run", "--dryrun", "-dry-run", "--generate-cli-skeleton", "--sql", "-refresh-only", "--refresh-only", "--preview-only"]);
+const optionName = (word: string): string => (word.includes("=") ? word.slice(0, word.indexOf("=")) : word);
+const isDryRun = (word: string): boolean => {
+  if (!DRY_RUN.has(optionName(word))) return false;
+  const value = word.includes("=") ? word.slice(word.indexOf("=") + 1).toLowerCase() : "";
+  return value !== "none" && value !== "false";
+};
+
+/** Whether an option this module's reader for `tool` does not know could have stopped it reading the command. */
+function uncertain(sc: SimpleCommand, tool: string, words: readonly string[]): boolean {
+  if (tool === "wrangler") return readWrangler(sc) === null;
+  if (tool === "aws") {
+    // The AWS reader reads the service and operation only past the global options it knows.
+    let seen = 0;
+    for (let i = 0; i < words.length && seen < 2; i++) {
+      const name = optionName(words[i]);
+      if (!words[i].startsWith("-")) { seen++; continue; }
+      if (AWS_GLOBAL_VALUED.has(name)) { if (!words[i].includes("=")) i++; continue; }
+      if (!AWS_GLOBAL_BOOL.has(name)) return true;
+    }
+    return false;
+  }
+  const known = KNOWN_OPTIONS[tool];
+  return words.some((w) => w.length > 1 && w.startsWith("-") && !/^-\d/.test(w) && !(known?.has(optionName(w)) ?? false));
+}
+
+const anyOf = (words: readonly string[], ...names: string[]): boolean => words.some((w) => names.includes(w));
+
+/** The action a tool's destructive word names, with every name left out: what an uncertain reading still knows. */
+function fallbackOf(tool: string, w: readonly string[]): TargetOperation | undefined {
+  const del = (provider: string, extra: Params = {}): TargetOperation => act("cloud.resource.delete", { provider, ...extra });
+  const deploy = (provider: string): TargetOperation => act("deploy.release", { provider, environment: "unknown" });
+  const migrate = (provider: string, direction: Direction): TargetOperation => act("db.migrate", { provider, direction });
+  switch (tool) {
+    case "kubectl":
+      return anyOf(w, "delete") ? act("k8s.delete", {}) : anyOf(w, "exec", "attach", "debug") ? act("k8s.exec", {}) : undefined;
+    case "helm": return anyOf(w, "uninstall", "delete", "del", "un") ? act("k8s.delete", { kind: "helm-release" }) : undefined;
+    case "gcloud":
+      if (GCLOUD_LOCAL.has(w[0] ?? "")) return undefined;
+      return anyOf(w, "delete", "rm") ? del("gcp") : anyOf(w, "deploy") ? deploy("gcp") : undefined;
+    case "aws": {
+      const op = w.find((x) => x === "rb" || x === "rm" || AWS_DELETE.test(x));
+      if (op === undefined || (anyOf(w, "sqs") && /^delete-message/.test(op))) return undefined;
+      return anyOf(w, "iam") ? act("iam.change", { provider: "aws", kind: "other" }) : del("aws");
+    }
+    case "fly": case "flyctl":
+      return anyOf(w, "destroy", "delete", "remove", "rm") ? del("fly") : anyOf(w, "deploy") ? deploy("fly") : undefined;
+    case "wrangler":
+      if (anyOf(w, "secret") && anyOf(w, "put", "delete", "bulk")) return act("secret.write", { store: "wrangler" });
+      return anyOf(w, "deploy", "publish") ? deploy("cloudflare") : anyOf(w, "delete") ? del("cloudflare") : undefined;
+    case "vercel":
+      if (anyOf(w, "env") && anyOf(w, "add", "rm", "remove")) return act("secret.write", { store: "vercel" });
+      if (w.length === 0 || anyOf(w, "deploy", "redeploy", "promote", "rollback")) return deploy("vercel");
+      return anyOf(w, "remove", "rm") ? del("vercel") : undefined;
+    case "gh": return anyOf(w, "repo") && anyOf(w, "delete") ? del("github", { service: "repo", kind: "repo" }) : undefined;
+    case "prisma": return anyOf(w, "reset") ? migrate("prisma", "reset") : undefined;
+    case "drizzle-kit": return anyOf(w, "drop") ? migrate("drizzle", "down") : undefined;
+    case "alembic": return anyOf(w, "downgrade") ? migrate("alembic", "down") : undefined;
+    case "flyway": return anyOf(w, "clean") ? migrate("flyway", "reset") : anyOf(w, "undo") ? migrate("flyway", "down") : undefined;
+    case "knex": return anyOf(w, "migrate:rollback", "migrate:down") ? migrate("knex", "down") : undefined;
+    case "sequelize": case "sequelize-cli":
+      return anyOf(w, "db:drop") ? migrate("sequelize", "reset") : anyOf(w, "db:migrate:undo", "db:migrate:undo:all") ? migrate("sequelize", "down") : undefined;
+    case "eb": return anyOf(w, "terminate") ? del("aws", { service: "elasticbeanstalk" }) : anyOf(w, "deploy") ? deploy("aws") : undefined;
+    case "serverless": case "sls": return anyOf(w, "remove") ? del("unknown", { service: "serverless" }) : anyOf(w, "deploy") ? deploy("unknown") : undefined;
+    case "heroku": return anyOf(w, "apps:destroy", "apps:delete", "destroy") ? del("heroku") : undefined;
+    case "pulumi": return anyOf(w, "destroy") ? del("unknown", { service: "pulumi" }) : undefined;
+    case "cdk": return anyOf(w, "destroy") ? del("aws", { service: "cloudformation" }) : undefined;
+    case "sst": return anyOf(w, "remove") ? del("unknown", { service: "sst" }) : undefined;
+    default: return undefined;
+  }
+}
+
+/** When a tool's reader derived nothing because an option it does not know stopped it, but one of the tool's destructive
+ *  words is among the command's words (before `--`), the action that word names, with no names. Nothing for a help (a
+ *  help option, or `help` in the subcommand slot) or a dry run. */
+function uncertainFallback(sc: SimpleCommand, tool: string, argv: readonly string[]): TargetOperation[] {
+  const end = argv.indexOf("--");
+  const words = end < 0 ? argv : argv.slice(0, end);
+  if (words.some((w) => HELP_OPTIONS.has(w) || isDryRun(w))) return [];
+  if (!uncertain(sc, tool, words)) return [];
+  const positional = words.filter((w) => !(w.length > 1 && w.startsWith("-")));
+  if (positional[0] === "help") return [];
+  const op = fallbackOf(tool, positional);
+  return op ? [op] : [];
+}
 
 /** The risk class of one instance: the type's class, narrowed where the parameters say more. */
 function riskClassOf(op: TargetOperation): string | undefined {
   const p = op.params;
   switch (op.action_type) {
     case "cloud.resource.delete": case "k8s.delete": case "k8s.exec": return "destructive";
-    case "cloud.resource.create": case "cloud.resource.modify": case "k8s.apply": case "secret.write": return "sensitive";
+    // A saved plan applied without showing its changes may destroy.
+    case "cloud.resource.modify": return p.saved_plan === true ? "destructive" : "sensitive";
+    case "cloud.resource.create": case "k8s.apply": case "secret.write": return "sensitive";
     case "iam.change": return "identity";
-    case "db.migrate": return p.direction === "up" ? "sensitive" : "destructive";
+    // Down or reset loses data, except against a development database the command names.
+    case "db.migrate": return p.direction === "up" || p.env === "development" ? "sensitive" : "destructive";
     case "deploy.release": return p.environment === "production" || p.environment === "unknown" ? "destructive" : "sensitive";
     default: return undefined;
   }
@@ -839,6 +1067,7 @@ export function deriveTargetOperations(sc: SimpleCommand, _probe: TargetProbe = 
       case "kubectl": ops = kubectl(argv); break;
       case "helm": ops = helm(argv); break;
       case "terraform": case "tofu": ops = terraform(sc, tool, argv); break;
+      case "terragrunt": ops = terragrunt(sc, argv); break;
       // Wrangler is read through its own launcher-aware reader (typed-infra.ts), which also refuses an option it does not know.
       case "wrangler": ops = wrangler(sc); break;
       case "vercel": ops = vercel(argv); break;
@@ -848,6 +1077,7 @@ export function deriveTargetOperations(sc: SimpleCommand, _probe: TargetProbe = 
         ops = migrations(sc, tool, argv); break;
       default: ops = others(sc, tool, argv);
     }
+    if (ops.length === 0) ops = uncertainFallback(sc, tool, argv);
   } catch { return []; }
   const via = VIA[tool] ?? tool;
   return ops.map((op) => {

@@ -54,6 +54,8 @@
     },
     { "name": "pr create derives nothing here", "command": "gh pr create --base main --title x --body y", "expect": [] },
     { "name": "secret list derives nothing", "command": "gh secret list", "expect": [] },
-    { "name": "repo view derives nothing", "command": "gh repo view acme/web", "expect": [] }
+    { "name": "repo view derives nothing", "command": "gh repo view acme/web", "expect": [] },
+    { "name": "a read through gh api is not a fetch the site rule decides", "command": "gh api repos/acme/web/pulls", "expect": [] },
+    { "name": "an explicit GET is a read", "command": "gh api -X GET repos/acme/web", "expect": [] }
   ]
 }

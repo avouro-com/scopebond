@@ -93,8 +93,9 @@
     { "name": "an EC2 dry run derives nothing", "command": "aws ec2 terminate-instances --instance-ids i-0aaa --dry-run", "expect": [] },
     { "name": "iam reads derive nothing", "command": "aws iam list-roles", "expect": [] },
     { "name": "help derives nothing", "command": "aws s3 rm help", "expect": [] },
-    { "name": "an unknown global option before the service derives nothing", "command": "aws --mystery-option x s3 rm s3://acme-logs/a", "expect": [] },
+    { "name": "an unknown global option before the service still derives the delete, with no names", "command": "aws --mystery-option x s3 rm s3://acme-logs/a", "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "risk_class": "destructive" } }] },
     { "name": "s3 sync to a local folder is not a cloud change", "command": "aws s3 sync s3://acme-site ./backup --delete", "expect": [] },
-    { "name": "a local configure command derives nothing", "command": "aws configure set region us-east-1", "expect": [] }
+    { "name": "a local configure command derives nothing", "command": "aws configure set region us-east-1", "expect": [] },
+    { "name": "deleting a delivered queue message is not a resource change", "command": "aws sqs delete-message --queue-url https://sqs.example/q --receipt-handle r", "expect": [] }
   ]
 }

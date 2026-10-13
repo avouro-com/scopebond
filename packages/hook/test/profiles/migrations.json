@@ -89,6 +89,10 @@
     { "name": "alembic offline SQL derives nothing", "command": "alembic upgrade head --sql", "expect": [] },
     { "name": "alembic history derives nothing", "command": "alembic history", "expect": [] },
     { "name": "flyway info derives nothing", "command": "flyway info", "expect": [] },
-    { "name": "a package script named like a tool's command is not the tool", "command": "pnpm run migrate", "expect": [] }
+    { "name": "a package script named like a tool's command is not the tool", "command": "pnpm run migrate", "expect": [] },
+    { "name": "rails db:migrate to VERSION=0 goes down", "command": "bin/rails db:migrate VERSION=0", "expect": [{"action_type": "db.migrate", "params": {"provider": "rails", "direction": "down", "risk_class": "destructive"}}], "via": "rails" },
+    { "name": "rails db:migrate:reset", "command": "bin/rails db:migrate:reset", "expect": [{"action_type": "db.migrate", "params": {"provider": "rails", "direction": "reset", "risk_class": "destructive"}}], "via": "rails" },
+    { "name": "drizzle-kit drop", "command": "npx drizzle-kit drop", "expect": [{"action_type": "db.migrate", "params": {"provider": "drizzle", "direction": "down", "risk_class": "destructive"}}], "via": "drizzle-kit" },
+    { "name": "a rollback against a named development database is not destructive", "command": "RAILS_ENV=development bin/rails db:rollback", "expect": [{"action_type": "db.migrate", "params": {"provider": "rails", "direction": "down", "env": "development", "risk_class": "sensitive"}}], "via": "rails" }
   ]
 }

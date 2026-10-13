@@ -56,6 +56,7 @@
     { "name": "switching the subscription is local", "command": "az account set --subscription acme-prod", "expect": [] },
     { "name": "installing an extension is local", "command": "az extension update --name aks-preview", "expect": [] },
     { "name": "credentials for kubectl derive nothing", "command": "az aks get-credentials -g rg-prod -n aks-prod", "expect": [] },
-    { "name": "login derives nothing", "command": "az login --use-device-code", "expect": [] }
+    { "name": "login derives nothing", "command": "az login --use-device-code", "expect": [] },
+    { "name": "storage blob delete-batch", "command": "az storage blob delete-batch -s backups --account-name acme", "expect": [{"action_type": "cloud.resource.delete", "params": {"provider": "azure", "service": "storage", "kind": "blob", "risk_class": "destructive"}}] }
   ]
 }

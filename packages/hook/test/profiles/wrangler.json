@@ -76,6 +76,8 @@
     { "name": "d1 execute stays the database operation", "command": "wrangler d1 execute orders-db --remote --command \"DELETE FROM sessions\"", "expect": [] },
     { "name": "dev derives nothing", "command": "wrangler dev", "expect": [] },
     { "name": "tail derives nothing", "command": "wrangler tail api-worker", "expect": [] },
-    { "name": "an unknown option derives nothing", "command": "wrangler deploy --mystery-option x", "expect": [] }
+    { "name": "an unknown option still derives the deployment, environment unknown", "command": "wrangler deploy --mystery-option x", "expect": [{ "action_type": "deploy.release", "params": { "provider": "cloudflare", "environment": "unknown", "risk_class": "destructive" } }] },
+    { "name": "an unknown option on a listing derives nothing", "command": "wrangler tail api-worker --mystery-option x", "expect": [] },
+    { "name": "secret delete", "command": "wrangler secret delete API_KEY", "expect": [{"action_type": "secret.write", "params": {"store": "wrangler", "name_digest": {"$digest": ["wrangler", "", "", "API_KEY"]}, "delete": true, "risk_class": "sensitive"}}] }
   ]
 }

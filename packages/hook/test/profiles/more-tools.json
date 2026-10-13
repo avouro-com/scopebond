@@ -60,6 +60,17 @@
     { "name": "heroku logs derive nothing", "command": "heroku logs --tail -a acme-prod", "expect": [] },
     { "name": "vault kv get derives nothing", "command": "vault kv get -mount=secret app/db", "expect": [] },
     { "name": "doppler run derives nothing", "command": "doppler run -- node server.js", "expect": [] },
-    { "name": "op read derives nothing", "command": "op read op://Infra/db-admin/password", "expect": [] }
+    { "name": "op read derives nothing", "command": "op read op://Infra/db-admin/password", "expect": [] },
+    { "name": "serverless deploy without --stage goes to the default dev stage", "command": "sls deploy", "via": "serverless", "expect": [{"action_type": "deploy.release", "params": {"provider": "unknown", "environment": "development", "risk_class": "sensitive"}}] },
+    { "name": "vault write to a login path is not a secret", "command": "vault write auth/userpass/login/alice password=x", "via": "vault", "expect": [] },
+    { "name": "vault write to transit encrypt is not a secret", "command": "vault write transit/encrypt/orders plaintext=eA==", "via": "vault", "expect": [] },
+    { "name": "vault write to pki issue is not a secret", "command": "vault write pki/issue/web common_name=web.acme.example", "via": "vault", "expect": [] },
+    { "name": "terragrunt run-all destroy in a production folder", "command": "terragrunt run-all destroy --terragrunt-working-dir envs/prod", "via": "terragrunt", "expect": [{"action_type": "cloud.resource.delete", "params": {"provider": "unknown", "service": "terraform", "env": "production", "auto_approve": false, "targeted": false, "risk_class": "destructive"}}] },
+    { "name": "terragrunt apply", "command": "terragrunt apply -auto-approve", "via": "terragrunt", "expect": [{"action_type": "cloud.resource.modify", "params": {"provider": "unknown", "service": "terraform", "auto_approve": true, "targeted": false, "risk_class": "sensitive"}}] },
+    { "name": "terragrunt plan derives nothing", "command": "terragrunt run-all plan", "via": "terragrunt", "expect": [] },
+    { "name": "pulumi destroy of a production stack", "command": "pulumi destroy -s acme/prod --yes", "via": "pulumi", "expect": [{"action_type": "cloud.resource.delete", "params": {"provider": "unknown", "service": "pulumi", "kind": "stack", "env": "production", "resource_digest": {"$digest": ["pulumi", "acme/prod"]}, "auto_approve": true, "risk_class": "destructive"}}] },
+    { "name": "pulumi preview derives nothing", "command": "pulumi preview -s acme/prod", "via": "pulumi", "expect": [] },
+    { "name": "cdk destroy of a stack", "command": "npx cdk destroy ApiStack --force", "via": "cdk", "expect": [{"action_type": "cloud.resource.delete", "params": {"provider": "aws", "service": "cloudformation", "kind": "stack", "resource_digest": {"$digest": ["cdk", "ApiStack"]}, "auto_approve": true, "risk_class": "destructive"}}] },
+    { "name": "sst remove of the production stage", "command": "npx sst remove --stage production", "via": "sst", "expect": [{"action_type": "cloud.resource.delete", "params": {"provider": "unknown", "service": "sst", "kind": "app", "env": "production", "resource_digest": {"$digest": ["sst", "production"]}, "risk_class": "destructive"}}] }
   ]
 }

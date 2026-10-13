@@ -13,9 +13,9 @@
       "expect": [{ "action_type": "cloud.resource.modify", "params": { "provider": "unknown", "service": "terraform", "env": "staging", "auto_approve": false, "targeted": true, "resource_digest": { "$digest": ["terraform", "aws_instance.web", "module.db"] }, "risk_class": "sensitive" } }]
     },
     {
-      "name": "applying a saved plan does not ask",
+      "name": "applying a saved plan does not ask, and does not show whether it destroys",
       "command": "terraform apply tfplan",
-      "expect": [{ "action_type": "cloud.resource.modify", "params": { "provider": "unknown", "service": "terraform", "auto_approve": true, "targeted": false, "risk_class": "sensitive" } }]
+      "expect": [{ "action_type": "cloud.resource.modify", "params": { "provider": "unknown", "service": "terraform", "auto_approve": true, "targeted": false, "saved_plan": true, "risk_class": "destructive" } }]
     },
     {
       "name": "destroy",

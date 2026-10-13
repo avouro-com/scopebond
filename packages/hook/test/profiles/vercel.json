@@ -46,6 +46,7 @@
     { "name": "env pull derives nothing", "command": "vercel env pull .env.local", "expect": [] },
     { "name": "link derives nothing", "command": "vercel link --yes", "expect": [] },
     { "name": "version derives nothing", "command": "vercel --version", "expect": [] },
-    { "name": "ls derives nothing", "command": "vercel ls", "expect": [] }
+    { "name": "ls derives nothing", "command": "vercel ls", "expect": [] },
+    { "name": "env rm removes a stored variable", "command": "vercel env rm API_KEY production", "expect": [{"action_type": "secret.write", "params": {"store": "vercel", "name_digest": {"$digest": ["vercel", "API_KEY"]}, "env": "production", "delete": true, "risk_class": "sensitive"}}] }
   ]
 }

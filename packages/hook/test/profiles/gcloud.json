@@ -62,6 +62,7 @@
     { "name": "local configuration derives nothing", "command": "gcloud config set project acme-prod", "expect": [] },
     { "name": "credentials for kubectl derive nothing", "command": "gcloud container clusters get-credentials prod --region us-central1", "expect": [] },
     { "name": "help derives nothing", "command": "gcloud compute instances delete --help", "expect": [] },
-    { "name": "an unknown option before the verb hides the command path", "command": "gcloud compute --mystery x instances delete web-1", "expect": [] }
+    { "name": "an unknown option before the verb hides the command path, but not the delete", "command": "gcloud compute --mystery x instances delete web-1", "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "gcp", "risk_class": "destructive" } }] },
+    { "name": "deleting a local CLI configuration is not a resource", "command": "gcloud config configurations delete old-profile", "expect": [] }
   ]
 }

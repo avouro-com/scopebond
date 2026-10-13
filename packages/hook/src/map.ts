@@ -40,9 +40,12 @@ export interface Mapped {
   /** Set on an intent that re-describes the call's own shell command or MCP tool call as the taxonomy action it performs
    *  (`aws s3 rb` as `cloud.resource.delete`, a GitHub MCP `push_files` as `git.push`): typed-targets.ts and
    *  mcp-profiles.ts. It rides beside the `shell.exec` or `mcp.tool.call` intent in the same action group, which stays as
-   *  it always was. The runtime evaluates it only under a policy that has a clause for its action type, and records it
-   *  otherwise, so a policy written before these types existed decides exactly what it decided before. */
+   *  it always was. The runtime evaluates it only under a policy that opts in (it names a type Action Taxonomy 1.1
+   *  introduced: target-rules.ts) and has a clause for its action type, and records it otherwise, so a policy written for
+   *  the 1.0 vocabulary decides exactly what it decided before. */
   derived?: true;
+  /** On a folded derived intent (`capDerived`): how many derived intents of its type it stands for. */
+  count?: number;
 }
 
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
@@ -1472,7 +1475,42 @@ const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
  *  call changes the directory later relative operands resolve against
  *  (`cd .scopebond && cp x policy.json` writes `.scopebond/policy.json`). An empty
  *  command yields a single un-evaluated placeholder (nothing to grant). */
+/** The most derived intents one call records one by one (`capDerived`). */
+export const DERIVED_CAP = 20;
+
+/** Bound the derived intents of one call. Beyond `DERIVED_CAP`, the derived intents of each type fold into one that keeps
+ *  the parameters every one of them shares, with `count` and `members_digest` (a keyed digest of all of their parameters).
+ *  A parameter they do not share is left out, so a rule that bounds it denies the folded intent (fail-closed). A file read
+ *  or write that is evaluated is never folded: each path is checked on its own, as every other file the hook reads is. */
+function capDerived(mapped: Mapped[]): Mapped[] {
+  if (mapped.filter((m) => m.derived).length <= DERIVED_CAP) return mapped;
+  const foldable = (m: Mapped): boolean => m.derived === true && !(m.evaluated && m.intent.action_type.startsWith("file."));
+  const groups = new Map<string, Mapped[]>();
+  for (const m of mapped) if (foldable(m)) groups.set(m.intent.action_type, [...(groups.get(m.intent.action_type) ?? []), m]);
+  const out: Mapped[] = [];
+  const done = new Set<string>();
+  for (const m of mapped) {
+    const type = m.intent.action_type;
+    if (!foldable(m)) { out.push(m); continue; }
+    if (done.has(type)) continue;
+    done.add(type);
+    const members = groups.get(type) ?? [m];
+    if (members.length === 1) { out.push(m); continue; }
+    const same = (key: string): boolean => members.every((x) => JSON.stringify(x.intent.params[key]) === JSON.stringify(m.intent.params[key]));
+    const common = Object.fromEntries(Object.entries(m.intent.params).filter(([key]) => same(key)));
+    out.push({
+      ...m, evaluated: members.every((x) => x.evaluated), count: members.length,
+      intent: { action_type: type, params: { ...common, count: members.length, members_digest: digest(members.map((x) => x.intent.params)) } },
+    });
+  }
+  return out;
+}
+
 function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell" = "posix"): Mapped[] {
+  return capDerived(mapShellCall(command, cwd, dialect));
+}
+
+function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powershell" = "posix"): Mapped[] {
   // PowerShell: `\` is a path separator and the backtick is the escape character
   // (``Re`move-Item`` runs Remove-Item). Normalize both before the POSIX parser sees
   // them, so neither hides a program or mangles a Windows path.
@@ -1622,17 +1660,24 @@ function mapApplyPatch(command: string, cwd?: string): Mapped[] {
 const one = (intent: NormalizedIntent, evaluated: boolean, source: string): Mapped[] => [{ intent, evaluated, source }];
 
 /** An MCP tool call: the `mcp.tool.call` intent it always was, then the taxonomy actions a known server's tool performs
- *  (mcp-profiles.ts). A path the call names is resolved against the working folder like any other. */
-function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | undefined, source: string): Mapped[] {
-  const call = one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(args ?? {}) } }, true, source);
+ *  (mcp-profiles.ts). A path on this computer (a `filesystem` server's) is resolved against the working folder like any
+ *  other. A file written through the GitHub API (`via: "github"`) is in a remote repository, not on this computer: its path
+ *  is kept as the call names it, beside `repo`, and it is recorded, not decided by the rules for this computer's files
+ *  (Scopebond's own protection, the allowed folders); the push to its branch is decided by the push rules. `hint` names
+ *  the server another way when its configured name is not one a profile knows (Cursor's server URL or launch command). */
+function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | undefined, source: string, digestOf: unknown = args, hint?: string): Mapped[] {
+  const call = one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(digestOf ?? {}) } }, true, source);
   const derived = (op: TargetOperation): Mapped[] => {
+    if ((op.action_type === "file.read" || op.action_type === "file.write") && op.params.via === "github") {
+      return [{ intent: op, evaluated: false, derived: true, source }];
+    }
     if (op.action_type === "file.read" || op.action_type === "file.write") {
       const { path, ...extra } = op.params;
       return pathIntents(op.action_type, rel(path, cwd), source, extra).map((m) => ({ ...m, derived: true as const }));
     }
     return [{ intent: op, evaluated: true, derived: true, source }];
   };
-  return [...call, ...deriveMcpOperations(server, tool, args).flatMap(derived)];
+  return capDerived([...call, ...deriveMcpOperations(server, tool, args, hint).flatMap(derived)]);
 }
 
 /** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,
@@ -1821,14 +1866,23 @@ export function mapCursorEvent(event: string, payload: Record<string, unknown>):
       // it just cannot be called prevention.
       return pathIntents("file.write", rel(p.path ?? p.file_path, cwd), event).map((m) => ({ ...m, postHoc: true }));
     case "beforeMCPExecution": {
-      const server = textOf(p.server ?? p.server_name);
-      const tool = textOf(p.tool ?? p.tool_name);
-      const raw = p.args ?? p.arguments ?? {};
-      // Cursor may send the arguments as JSON text; only an object is read for a profile (the digest is of what was sent).
+      // Cursor sends `mcp_server_name`, `tool_name` and `tool_input` (the arguments as JSON text), and the server's `url`
+      // (HTTP) or launch `command` (stdio). Older payloads named them `server`, `tool` and `args`/`arguments`.
+      const server = textOf(p.mcp_server_name ?? p.server ?? p.server_name);
+      const tool = textOf(p.tool_name ?? p.tool);
+      const raw = p.tool_input ?? p.args ?? p.arguments ?? {};
+      // Only an object is read for a profile; the digest is of what was sent.
       let args: unknown = raw;
       if (typeof raw === "string") { try { args = JSON.parse(raw); } catch { args = {}; } }
-      return [...one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(raw) } }, true, event),
-        ...mapMcpCall(server, tool, args, cwd, event).slice(1)];
+      // The server's URL (its host and path, never its query) or launch command names the server when its configured name
+      // does not (`npx @modelcontextprotocol/server-github`, `https://api.githubcopilot.com/mcp/`).
+      let hint: string | undefined;
+      const url = textOf(p.url ?? p.mcp_server_url);
+      if (url) { try { const u = new URL(url); hint = `${u.hostname} ${u.pathname}`; } catch { /* not a URL */ } }
+      if (hint === undefined && p.command !== undefined) hint = textOf(p.command);
+      // beforeMCPExecution carries no `cwd`: a path is resolved against the first workspace folder.
+      const roots = Array.isArray(p.workspace_roots) ? p.workspace_roots.filter((r): r is string => typeof r === "string" && r !== "") : [];
+      return mapMcpCall(server, tool, args, cwd ?? roots[0], event, raw, hint);
     }
     default:
       return one({ action_type: `tool.${event.toLowerCase()}`, params: {} }, false, event);

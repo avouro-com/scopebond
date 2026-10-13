@@ -108,7 +108,11 @@ test("Claude Code, Codex and Cursor derive the same actions from one MCP call, p
   const args = { path: "/work/app/.scopebond/policy.json", content: CANARY };
   const claude = mapClaudeToolUse({ tool_name: "mcp__filesystem__write_file", tool_input: args, cwd: "/work/app" });
   const codex = mapCodexToolUse({ tool_name: "mcp__filesystem__write_file", tool_input: args, cwd: "/work/app" });
-  const cursor = mapCursorEvent("beforeMCPExecution", { server: "filesystem", tool_name: "write_file", tool_input: JSON.stringify(args), arguments: JSON.stringify(args), cwd: "/work/app" });
+  // Cursor's own payload: the server's configured name, the arguments as JSON text, the launch command, and no cwd.
+  const cursor = mapCursorEvent("beforeMCPExecution", {
+    hook_event_name: "beforeMCPExecution", mcp_server_name: "filesystem", tool_name: "write_file", tool_input: JSON.stringify(args),
+    command: "npx -y @modelcontextprotocol/server-filesystem /work/app", workspace_roots: ["/work/app"],
+  });
   for (const mapped of [claude, codex, cursor]) {
     assert.deepEqual(mapped.map((m) => m.intent.action_type), ["mcp.tool.call", "file.write"]);
     assert.equal(mapped[1].intent.params.path, ".scopebond/policy.json");
@@ -123,4 +127,26 @@ test("a push to a protected branch through the GitHub MCP server is classified a
   const mapped = mapClaudeToolUse({ tool_name: "mcp__github__push_files", tool_input: { owner: "acme", repo: "web", branch: "main", files: [{ path: "a.ts", content: "x" }] } });
   const push = mapped.find((m) => m.intent.action_type === "git.push");
   assert.deepEqual(classifyIntent(push.intent, defaultRules()).ids, ["H01"]);
+});
+
+test("Cursor: the arguments come from tool_input, and the server's URL or launch command names it when its configured name does not", () => {
+  const input = { owner: "acme", repo: "web", branch: "main", files: [{ path: "a.ts", content: CANARY }] };
+  const types = (payload) => mapCursorEvent("beforeMCPExecution", payload).map((m) => m.intent.action_type);
+  // An HTTP server configured under a name of the person's choosing.
+  assert.deepEqual(types({ mcp_server_name: "gh-remote", tool_name: "push_files", tool_input: JSON.stringify(input), url: "https://api.githubcopilot.com/mcp/", mcp_server_url: "https://api.githubcopilot.com/mcp/", workspace_roots: ["/w"] }),
+    ["mcp.tool.call", "git.push", "file.write"]);
+  // A stdio server: its launch command.
+  assert.deepEqual(types({ mcp_server_name: "code-host", tool_name: "push_files", tool_input: JSON.stringify(input), command: "docker run -i --rm ghcr.io/github/github-mcp-server", workspace_roots: ["/w"] }),
+    ["mcp.tool.call", "git.push", "file.write"]);
+  // A server neither names stays the plain call.
+  assert.deepEqual(types({ mcp_server_name: "notes", tool_name: "push_files", tool_input: JSON.stringify(input), command: "node notes.js" }), ["mcp.tool.call"]);
+  const [call] = mapCursorEvent("beforeMCPExecution", { mcp_server_name: "gh-remote", tool_name: "push_files", tool_input: JSON.stringify(input), url: "https://api.githubcopilot.com/mcp/" });
+  assert.equal(call.intent.params.server, "gh-remote", "the call records the configured name");
+  assert.equal(call.intent.params.tool, "push_files");
+  assert.ok(!JSON.stringify(mapCursorEvent("beforeMCPExecution", { mcp_server_name: "github", tool_name: "push_files", tool_input: JSON.stringify(input) })).includes(CANARY));
+  // A path is resolved against the first workspace folder (beforeMCPExecution carries no cwd).
+  const write = mapCursorEvent("beforeMCPExecution", { mcp_server_name: "filesystem", tool_name: "write_file", tool_input: JSON.stringify({ path: "/w/src/a.ts", content: "x" }), workspace_roots: ["/w"] });
+  assert.equal(write[1].intent.params.path, "src/a.ts");
+  // Unreadable arguments: only the call.
+  assert.deepEqual(types({ mcp_server_name: "github", tool_name: "push_files", tool_input: "{not json" }), ["mcp.tool.call"]);
 });

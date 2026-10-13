@@ -138,11 +138,14 @@ introduced it, and the 1.0 types are unchanged). Bounds in a policy apply to the
 
 The 1.1 types also take `via` (the tool or MCP server the action was read from), `derived_from` (`shell.exec` or
 `mcp.tool.call`: the action re-describes that call, recorded beside it in the same action group) and `risk_class` (the
-instance's risk: `db.migrate` `up` is `sensitive`, `down` and `reset` are `destructive`). Providers are `aws`, `gcp`,
+instance's risk: `db.migrate` `up`, or `down` against a named development database, is `sensitive`; other `down` and
+`reset` are `destructive`). Providers are `aws`, `gcp`,
 `azure`, `cloudflare`, `vercel`, `fly`, `heroku`, `github` and `unknown` (a tool such as `terraform` whose provider is its
 configuration's). Names are keyed digests; no 1.1 parameter carries a resource name, a secret value, file contents, SQL
 or a URL's path or query. A receipt whose intent uses a 1.1 type verifies like any other: `intent.action_type` and
-`intent.params` are open in the receipt schema.
+`intent.params` are open in the receipt schema. The hook decides a derived action only under a policy that opts in: one
+of its clauses names a type taxonomy 1.1 introduced, other than `db.exec`. Under any other policy a derived action is
+recorded (`not_evaluated`) and the call is decided exactly as it was under 1.0.
 
 ## Verifying a receipt
 

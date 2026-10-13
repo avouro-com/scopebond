@@ -2,9 +2,9 @@
 // the deterministic mapper and the check-only runtime; the `scopebond-hook`
 // binary is the thin harness adapter over them.
 
-export { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCopilotCall, copilotAsClaude, normalizeCopilotInput, mapCursorEvent, fillPushBranch } from "./map.js";
+export { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCopilotCall, copilotAsClaude, normalizeCopilotInput, mapCursorEvent, fillPushBranch, DERIVED_CAP } from "./map.js";
 export type { Mapped, NormalizedIntent } from "./map.js";
-export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, targetRuleClauses, TARGET_RULES, OBSERVED_TARGET_TYPES } from "./runtime.js";
+export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./runtime.js";
 export type { TargetRule } from "./runtime.js";
 export { deriveTargetOperations, toolOf, envOfName, targetDigest, TARGET_TOOLS } from "./typed-targets.js";
 export type { TargetOperation, TargetProbe } from "./typed-targets.js";

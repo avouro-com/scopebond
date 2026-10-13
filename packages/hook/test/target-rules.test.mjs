@@ -47,6 +47,10 @@ const VECTORS = [
   ["npx prisma migrate reset --force", ["H10"]],
   ["bin/rails db:rollback", ["H10"]],
   ["npx prisma migrate deploy", []],
+  ["RAILS_ENV=development bin/rails db:rollback", []],
+  ["terraform apply tfplan", ["H06"]],
+  ["kubectl --warnings-as-errors delete ns prod", ["H06"]],
+  ["wrangler deploy --x-unknown", ["H07"]],
   ["terraform apply -auto-approve", []],
   ["kubectl apply -f k8s/", []],
   ["aws s3 ls", []],
@@ -125,7 +129,7 @@ test("a policy written before the target types existed decides every call as it 
   }
 });
 
-test("an MCP call's derived push is evaluated by the push rule, under any policy that names git.push", async () => {
+test("an MCP call's derived push is evaluated by the push rule, under a policy that opts in", async () => {
   const runtime = runtimeWith((kid) => compile({ ...defaultRules(), ...ENFORCE }, kid));
   try {
     const call = (branch) => mapCodexToolUse({ tool_name: "mcp__github__push_files", tool_input: { owner: "acme", repo: "web", branch, files: [{ path: "src/a.ts", content: "x" }] }, cwd: "/repo" });

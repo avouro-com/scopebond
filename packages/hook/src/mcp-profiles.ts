@@ -17,7 +17,8 @@
 //   fetch            fetch → net.fetch (host, GET)
 //   linear, jira     create or update an issue → work.item.create / work.item.update
 //
-// A server is recognised by a word of its configured name (`github`, `github-mcp`, `plugin_github_github`), and a call is
+// A server is recognised by a word of its configured name (`github`, `github-mcp`, `plugin_github_github`) or, when that names
+// none, of what else names it (Cursor's server URL or launch command: `api.githubcopilot.com`, `server-github`), and a call is
 // described only when its tool is one listed for that server. Any other server or tool stays the plain `mcp.tool.call` it
 // always was. Only the named arguments are read (a path, a branch, a repository, an owner, a URL's host, the SQL to
 // classify); everything else, file contents and message text included, is never read and stays only in the call's
@@ -37,7 +38,7 @@ export function mcpProfileOf(server: string): string | undefined {
 }
 
 const PROFILE_WORDS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ["github", ["github"]],
+  ["github", ["github", "githubcopilot"]],
   ["filesystem", ["filesystem"]],
   ["postgres", ["postgres", "postgresql", "pg"]],
   ["sqlite", ["sqlite", "sqlite3"]],
@@ -169,8 +170,9 @@ function tracker(provider: "linear" | "jira", server: string, tool: string, args
  * call names them; the mapper resolves them against the working folder like every other path. Each action carries
  * `via` (the profile) and `derived_from: "mcp.tool.call"`.
  */
-export function deriveMcpOperations(server: string, tool: string, args: unknown): TargetOperation[] {
-  const profile = mcpProfileOf(server);
+export function deriveMcpOperations(server: string, tool: string, args: unknown, hint?: string): TargetOperation[] {
+  // The configured name first; then, when it names no profile, what else names the server (its URL or launch command).
+  const profile = mcpProfileOf(server) ?? (hint ? mcpProfileOf(hint) : undefined);
   if (!profile) return [];
   const input: Args = args && typeof args === "object" && !Array.isArray(args) ? (args as Args) : {};
   let ops: TargetOperation[];

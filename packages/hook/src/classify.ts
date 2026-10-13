@@ -5,9 +5,10 @@
 // I05 shell inventory; H01 protected push, H02 credential read, H03 CI write,
 // H04 destructive shell, H05 root-escape mutation; C01 protected history rewrite,
 // C02 guardrail modification. The target classes (typed-targets.ts, mcp-profiles.ts): H06 cloud or
-// Kubernetes destructive (cloud.resource.delete, k8s.delete, k8s.exec), H07 production deployment
+// Kubernetes destructive (cloud.resource.delete, k8s.delete, k8s.exec, a saved plan applied), H07 production deployment
 // (deploy.release whose environment is production or not shown), H08 secret write, H09 identity or
-// access change, H10 destructive database migration (db.migrate down or reset). The default policy
+// access change, H10 destructive database migration (db.migrate down or reset, not against a named development
+// database). A file written through the GitHub API (via github) is in a remote repository: I04. The default policy
 // records the target classes (monitor) and never blocks them; a workspace or a person turns each
 // rule on (`cloud-destructive`, `production-deploy`, `secret-write`, `iam-change`,
 // `database-migrate`), and the compiled policy then blocks exactly what the class names. `compile()` decides enforcement from the rule set;
@@ -58,6 +59,9 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
   } else if (intent.action_type === "file.read") {
     if (path === "") unknown.push("read path not resolved");
     else ids.push(rules.protected_read.some((r) => pathRuleMatches(r, path)) ? "H02" : "I03");
+  } else if (intent.action_type === "file.write" && params.via === "github") {
+    // A file written through the GitHub API is in a remote repository: an ordinary write here, whatever its path (map.ts).
+    ids.push("I04");
   } else if (intent.action_type === "file.write") {
     if (path === "") unknown.push("write target not resolved");
     else {
@@ -70,6 +74,9 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
     }
   } else if (intent.action_type === "cloud.resource.delete" || intent.action_type === "k8s.delete" || intent.action_type === "k8s.exec") {
     ids.push("H06");
+  } else if (intent.action_type === "cloud.resource.modify") {
+    // A saved infrastructure plan applied without showing its changes may destroy (typed-targets.ts).
+    if (params.risk_class === "destructive") ids.push("H06");
   } else if (intent.action_type === "deploy.release") {
     // A deployment whose environment the command does not show counts as production.
     const env = typeof params.environment === "string" ? params.environment : "unknown";
@@ -79,7 +86,8 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
   } else if (intent.action_type === "iam.change") {
     ids.push("H09");
   } else if (intent.action_type === "db.migrate") {
-    if (params.direction !== "up") ids.push("H10");
+    // Down or reset, unless against a development database the command names.
+    if (params.direction !== "up" && params.env !== "development") ids.push("H10");
   } else if (intent.action_type === "shell.exec") {
     const program = typeof params.program === "string" ? params.program : "";
     if (program === "") unknown.push("program not resolved");

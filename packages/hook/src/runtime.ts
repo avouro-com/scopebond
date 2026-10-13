@@ -21,8 +21,8 @@ import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
 import { homeFolders, maskHomeInPolicy, maskHomeInValue } from "./home-mask.js";
 import type { ReceiptPayloadContext } from "@scopebond/gateway";
-import { targetRuleClauses } from "./target-rules.js";
-export { targetRuleClauses, TARGET_RULES, OBSERVED_TARGET_TYPES } from "./target-rules.js";
+import { policyOptsIntoTargets, targetRuleClauses } from "./target-rules.js";
+export { targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
 export interface RuntimeConfig {
@@ -373,6 +373,8 @@ export function createHookRuntime(config: RuntimeConfig) {
 
   const contextOption: { context?: ReceiptPayloadContext } = config.context ? { context: config.context } : {};
   const named = namedActionTypes(policy);
+  // A policy decides derived actions only when it opts in (target-rules.ts): it names a type Action Taxonomy 1.1 introduced.
+  const optedIn = policyOptsIntoTargets(policy);
 
   /** Close interrupted evaluations and queue what the queue never got, waiting briefly for locks. Never throws. */
   const repair = async (): Promise<void> => {
@@ -424,9 +426,13 @@ export function createHookRuntime(config: RuntimeConfig) {
       const mapped = masked(input);
       const signed = agent.sign(mapped.intent);
       // A derived intent (the taxonomy action a shell command or MCP call performs, beside the call itself) is evaluated only
-      // under a policy that names its action type; under one written before the type existed it is recorded, so that policy
-      // decides the call exactly as it did before. Strict mode does not change this: the call's own intent is still evaluated.
-      if ((!mapped.evaluated && !config.strict) || (mapped.derived && !named.has(mapped.intent.action_type))) {
+      // under a policy that opts in (it names a type Action Taxonomy 1.1 introduced) and that names its action type. Under any
+      // other policy it is recorded, so a policy written for the 1.0 vocabulary decides every call exactly as it did before:
+      // a `gh api` call, a GitHub MCP push or a fetch MCP call is not newly checked by a push, file or site rule it already
+      // has. A derived intent the mapper marks not evaluated (a file written through a remote API) is always recorded. Strict
+      // mode does not change this: the call's own intent is still evaluated.
+      const derivedRecorded = mapped.derived === true && (!optedIn || !mapped.evaluated || !named.has(mapped.intent.action_type));
+      if ((!mapped.evaluated && !config.strict) || derivedRecorded) {
         // Unknown tool or unparseable command, non-strict: observe without
         // evaluating — grants nothing.
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);
