@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
-import { compileManaged, floorDocument, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type ManagedDocument, type ManagedRuleId } from "./managed.js";
+import { compileManaged, floorDocument, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument } from "./managed.js";
 import { makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, writeAllowances, type BlockedItem } from "./allowances.js";
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
@@ -32,13 +32,18 @@ const TOKEN_HEADER = "x-scopebond-agent-token";
 export const PROMPTING_MODES = new Set(["default", "acceptEdits", "plan"]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const RULE_TITLE: Record<ManagedRuleId, string> = {
+const RULE_TITLE: Record<AnyManagedRuleId, string> = {
   "force-push-protected": "Force-push to a protected branch",
   "push-protected": "Push to a protected branch",
   "destructive-shell": "Destructive command",
   "secret-read": "Reading a secret file",
   "ci-config-write": "Changing CI configuration",
   "network-egress": "Request to a site not on the allowed list",
+  "cloud-destructive": "Deleting a cloud resource or Kubernetes object",
+  "production-deploy": "Deploying to production",
+  "secret-write": "Storing a secret",
+  "iam-change": "Changing identity or access",
+  "database-migrate": "A database migration that goes down or resets",
 };
 
 export const digestOf = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
@@ -159,7 +164,7 @@ export interface OverrideContext {
 }
 
 /** What happened when the last override was considered, so a denial can say how an override would be possible. */
-export interface OverrideNote { rule: ManagedRuleId; title: string; outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" }
+export interface OverrideNote { rule: AnyManagedRuleId; title: string; outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" }
 
 export function createOverrideHandler(ctx: OverrideContext): { handler: OverrideHandler; note(): OverrideNote | null } | null {
   let doc: ManagedDocument;
@@ -281,7 +286,7 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
   if (!item || item.acted || !(now - Date.parse(item.at) < 7 * DAY_MS)) return null;
   let doc: ManagedDocument;
   try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
-  const setting = doc.rules?.[item.rule as ManagedRuleId];
+  const setting = doc.rules?.[item.rule as AnyManagedRuleId];
   if (!personMayAct(setting) || !setting?.override) return null;
   const terms = setting.override;
   const dayStart = now - (now % DAY_MS);
@@ -292,7 +297,7 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
     ask: setting.mode === "ask" || terms.requests === true,
   };
   if (!offers.allow && !offers.ask) return null;
-  return { item, title: RULE_TITLE[item.rule as ManagedRuleId] ?? item.rule, reason_min: terms.reason_min, mode: setting.mode as "override" | "ask", offers };
+  return { item, title: RULE_TITLE[item.rule as AnyManagedRuleId] ?? item.rule, reason_min: terms.reason_min, mode: setting.mode as "override" | "ask", offers };
 }
 
 /** Act on an earlier block with the window's answer. Allowing makes an allowance (once: the next try; 15 minutes; or always,
@@ -315,7 +320,7 @@ export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now =
   const lasts = answer.lasts === "always" && q.offers.always ? "always" : answer.lasts === "15m" ? "15m" : "once";
   let doc: ManagedDocument | null = null;
   try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { /* checked above */ }
-  const terms = doc?.rules?.[q.item.rule as ManagedRuleId]?.override;
+  const terms = doc?.rules?.[q.item.rule as AnyManagedRuleId]?.override;
   const made = makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts,
     alwaysDays: terms?.always_days, needsAdmin: terms?.always === "needs_admin", now });
   const allowances = [...readAllowances(dir), made];

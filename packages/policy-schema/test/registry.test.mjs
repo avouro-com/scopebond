@@ -11,13 +11,18 @@ const vectors = JSON.parse(readFileSync(join(here, "../vectors/action-taxonomy.j
 const PARAM_TYPES = new Set(["string", "integer", "boolean", "array", "enum"]);
 const RISK_CLASSES = new Set(["routine", "sensitive", "destructive", "money", "identity"]);
 
+// Each action carries the taxonomy version that introduced it; the registry carries the current one.
+const KNOWN_VERSIONS = ["1.0", "1.1"];
+const FIRST_TYPES = ["shell.exec", "file.read", "file.write", "git.push", "package.install", "net.fetch", "http.call", "mcp.tool.call", "pr.open", "pr.merge", "deploy.release"];
+
 test("the registry is internally consistent", () => {
-  assert.equal(actionRegistry.taxonomy_version, "1.0");
-  assert.equal(TAXONOMY_VERSION, "1.0");
+  assert.equal(actionRegistry.taxonomy_version, "1.1");
+  assert.equal(TAXONOMY_VERSION, "1.1");
   const ids = actionRegistry.actions.map((a) => a.id);
   assert.equal(new Set(ids).size, ids.length, "action ids are unique");
   for (const a of actionRegistry.actions) {
-    assert.equal(a.taxonomy_version, actionRegistry.taxonomy_version, `${a.id} carries the registry version`);
+    assert.ok(KNOWN_VERSIONS.includes(a.taxonomy_version), `${a.id} carries a known taxonomy version`);
+    assert.equal(a.taxonomy_version, FIRST_TYPES.includes(a.id) ? "1.0" : "1.1", `${a.id} carries the version that introduced it`);
     assert.ok(RISK_CLASSES.has(a.risk_class), `${a.id} has a known risk_class`);
     assert.ok(Array.isArray(a.parameters) && a.parameters.length > 0, `${a.id} declares parameters`);
     const names = a.parameters.map((p) => p.name);
@@ -30,6 +35,28 @@ test("the registry is internally consistent", () => {
       else assert.equal(p.enum, undefined, `${a.id}.${p.name} only enum types carry an enum`);
     }
   }
+});
+
+test("taxonomy 1.1 keeps every 1.0 type and adds the target types", () => {
+  const ids = actionRegistry.actions.map((a) => a.id);
+  for (const id of FIRST_TYPES) assert.ok(ids.includes(id), `${id} is still registered`);
+  for (const id of ["cloud.resource.create", "cloud.resource.modify", "cloud.resource.delete", "k8s.apply", "k8s.delete", "k8s.exec", "db.migrate", "db.exec", "secret.write", "iam.change", "communication.send", "work.item.create", "work.item.update"]) {
+    assert.ok(ids.includes(id), `${id} is registered`);
+  }
+  const risk = Object.fromEntries(actionRegistry.actions.map((a) => [a.id, a.risk_class]));
+  assert.equal(risk["cloud.resource.delete"], "destructive");
+  assert.equal(risk["cloud.resource.modify"], "sensitive");
+  assert.equal(risk["cloud.resource.create"], "sensitive");
+  assert.equal(risk["k8s.delete"], "destructive");
+  assert.equal(risk["k8s.exec"], "destructive");
+  assert.equal(risk["k8s.apply"], "sensitive");
+  assert.equal(risk["db.migrate"], "destructive");
+  assert.equal(risk["secret.write"], "sensitive");
+  assert.equal(risk["iam.change"], "identity");
+  assert.equal(risk["communication.send"], "sensitive");
+  assert.equal(risk["work.item.create"], "routine");
+  // The deployment type the hook now also derives keeps its 1.0 shape.
+  assert.deepEqual(getActionType("deploy.release").parameters.map((p) => p.name), ["repo", "environment", "sha"]);
 });
 
 test("getActionType resolves registered ids and rejects unknown ones", () => {
