@@ -2,12 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, hashedHostname, isTrustedProject, resolveConfigDir, trustProjectPolicy, writeHarnessConfig } from "../dist/index.js";
+import { scaffold, hashedHostname, isTrustedProject, resolveConfigDir, samePath, trustProjectPolicy, writeHarnessConfig } from "../dist/index.js";
 import { ENFORCE } from "./enforce-all.mjs";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -172,15 +172,16 @@ test("login: from a folder with no project setup, it repairs the user-level conn
  *  with a leftover project setup and project agent settings: what a person following the
  *  get-started page from such a folder has. HOME and USERPROFILE point at a temp dir so the
  *  user-level agent settings land there. */
-function leftoverProjectComputer() {
-  const profile = mkdtempSync(join(tmpdir(), "sb-hook-login-profile-"));
+/** `base`: where the computer's folders are made (the temp folder by default; a linked folder for the link test). */
+function leftoverProjectComputer(base = tmpdir()) {
+  const profile = mkdtempSync(join(base, "sb-hook-login-profile-"));
   const home = join(profile, ".scopebond");
   mkdirSync(home, { recursive: true });
   const kids = {
     attester: loadOrCreateAttester({ file: join(home, "attester.key") }).attester.kid,
     agent: loadOrCreateAttester({ file: join(home, "agent.key") }).attester.kid,
   };
-  const folder = mkdtempSync(join(tmpdir(), "sb-hook-login-leftover-"));
+  const folder = mkdtempSync(join(base, "sb-hook-login-leftover-"));
   const project = join(folder, ".scopebond");
   scaffold(project, ENFORCE);
   const projectSettings = join(folder, ".claude", "settings.json");
@@ -214,8 +215,13 @@ test("login: from a folder with a leftover project setup, it signs in the user, 
   }
 });
 
-test("login: a trusted project setup that takes precedence is named, with how to remove it, and status and doctor show it", async () => {
-  const pc = leftoverProjectComputer();
+/** The folder `delete the folder …` names in a sign-in's output. */
+const folderToDelete = (stdout) => /delete the folder (.+?\.scopebond)(?=[,.\s]|$)/.exec(stdout)?.[1] ?? null;
+
+// The hook names folders as the operating system reports its working folder: on macOS that is the physical path
+// (`/private/var/…` for the temp folder at `/var/…`), and through a link on Linux as well. So a folder it names is compared
+// as a folder (`samePath`), not as the text the test happened to build it from.
+async function trustedProjectTakesPrecedence(pc) {
   // Trust is recorded in the user home: pin the project there first, as `init` would have.
   process.env.SCOPEBOND_HOME = pc.home;
   try { trustProjectPolicy(pc.project); } finally { delete process.env.SCOPEBOND_HOME; }
@@ -226,18 +232,31 @@ test("login: a trusted project setup that takes precedence is named, with how to
     assert.ok(existsSync(join(pc.home, "cloud.json")), "the user home is connected");
     assert.match(r.stdout, /takes precedence over this sign-in/);
     assert.match(r.stdout, /stay on this computer: it is not connected/);
-    assert.ok(r.stdout.includes(`delete the folder ${pc.project}`), "says how to remove it");
+    const named = folderToDelete(r.stdout);
+    assert.ok(named && samePath(named, pc.project), `says how to remove it: ${r.stdout}`);
     const status = await runCli(["status"], pc.env, pc.folder);
     assert.match(status.stdout, /user sign-in .* takes precedence here and is not connected/);
     const json = JSON.parse((await runCli(["status", "--json"], pc.env, pc.folder)).stdout);
     assert.equal(json.config.user_connection_shadowed, true);
-    assert.equal(json.config.active, pc.project);
+    assert.ok(samePath(json.config.active, pc.project), `${json.config.active} is ${pc.project}`);
     const doctor = await runCli(["doctor"], pc.env, pc.folder);
     assert.notEqual(doctor.status, 0);
     assert.match(doctor.stdout, /NOT CONNECTED/);
     assert.match(doctor.stdout, /takes precedence over your user-level sign-in/);
     assert.doesNotMatch(doctor.stdout, /All good/);
   } finally { workspace.close(); }
+}
+
+test("login: a trusted project setup that takes precedence is named, with how to remove it, and status and doctor show it", async () => {
+  await trustedProjectTakesPrecedence(leftoverProjectComputer());
+});
+
+test("login: a trusted project reached through a linked folder is still the one named, in sign-in, status and doctor", async () => {
+  // macOS's temp folder sits behind such a link (/var is /private/var); a junction stands in for it on Windows.
+  const real = mkdtempSync(join(tmpdir(), "sb-hook-login-real-"));
+  const link = `${real}-link`;
+  symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
+  await trustedProjectTakesPrecedence(leftoverProjectComputer(link));
 });
 
 test("login: on a computer with nothing set up yet, it connects the user's home, not the folder it was run from", async () => {
