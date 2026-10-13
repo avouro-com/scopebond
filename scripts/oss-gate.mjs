@@ -36,7 +36,7 @@ import { readFileSync } from "node:fs";
 const ALLOW = [
   // Root project & OSS-hygiene files
   "README.md", "LICENSE", "NOTICE", "CHANGELOG.md",
-  "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md",
+  "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "SUPPORT.md",
   "GOVERNANCE.md", "MAINTAINERS.md", "SCOPE.md", "CLA.md", "RELEASING.md",
   "CITATION.cff", "llms.txt", "architecture.svg", "SPEC.md",
   ".claude-plugin/**",
