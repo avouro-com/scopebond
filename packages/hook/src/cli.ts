@@ -4,7 +4,6 @@
 // settings name (`.../dist/cli.js claude`); the commands themselves are in cli-main.ts.
 
 import { writeSync } from "node:fs";
-import { copilotAnswer } from "./copilot-answer.js";
 
 // `node:sqlite` (the receipt store) is still flagged experimental on Node 22, and Node
 // prints a warning on stderr the first time it loads — on every `verify`, and into the
@@ -43,11 +42,14 @@ function failClosed(error: unknown): never {
       process.exit(0);
     }
     // GitHub Copilot denies on exit 2 whatever stdout holds; the JSON carries the reason.
+    // Written out here, not imported: this handler must work with nothing else loaded (the file runs alone). It is the
+    // same deny copilotAnswer("deny", …) gives (copilot-answer.ts), in both shapes Copilot's surfaces read; a test holds
+    // the two equal.
     if (command === "copilot") {
-      const answer = copilotAnswer("deny", reason, false);
-      writeNow(1, answer.stdout);
-      writeNow(2, answer.stderr);
-      process.exit(answer.exitCode);
+      const permission = { permissionDecision: "deny", permissionDecisionReason: reason };
+      writeNow(1, JSON.stringify({ ...permission, hookSpecificOutput: { hookEventName: "PreToolUse", ...permission } }) + "\n");
+      writeNow(2, `${reason.startsWith("Scopebond") ? reason : `Scopebond: ${reason}`}\n`);
+      process.exit(2);
     }
     writeNow(2, `${reason}\n`);
   } catch { /* nothing left to report with */ }

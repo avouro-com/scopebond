@@ -202,6 +202,7 @@ test("the tool-name record is read bounded and printed without control character
   const probe = readCopilotProbe(dir2);
   assert.equal(probe.entries[0].tool_name, "evil[31mname");
   probe.entries[0].tool_name = "again\u001bX";
+  // eslint-disable-next-line no-control-regex -- the point is to find control characters
   assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(renderCopilotProbe(probe, "f").replace(/\n/g, "")), "nothing printed carries a control character");
 });
 

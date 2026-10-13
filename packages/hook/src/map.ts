@@ -1706,7 +1706,7 @@ export const HOOK_SWITCH_GUARD_PATH = ".copilot/hooks/scopebond.json";
 function withHookSwitchGuard(out: Mapped[], toolInput: unknown, source: string): Mapped[] {
   const writesSettings = out.some((m) => m.intent.action_type === "file.write" && VSCODE_SETTINGS_FILE.test(textOf(m.intent.params.path)));
   if (!writesSettings) return out;
-  let text = "";
+  let text: string;
   try { text = typeof toolInput === "string" ? toolInput : JSON.stringify(toolInput ?? {}); } catch { text = ""; }
   return HOOK_SWITCH_SETTING.test(text) ? [...out, ...pathIntents("file.write", HOOK_SWITCH_GUARD_PATH, source)] : out;
 }
