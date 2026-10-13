@@ -422,7 +422,7 @@ export const digestToolSettings = (s: Pick<ToolSettingsSection, "type" | "versio
 const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/;
 /** Bidirectional and invisible formatting characters (U+200B–200F, U+202A–202E, U+2060–2069, U+FEFF): an entry carrying one can
  *  read as something other than what it is. */
-export const hasFormatCharacter = (v: string): boolean => [...v].some((ch) => {
+const hasFormatCharacter = (v: string): boolean => [...v].some((ch) => {
   const c = ch.codePointAt(0)!;
   return (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2060 && c <= 0x2069) || c === 0xfeff;
 });
