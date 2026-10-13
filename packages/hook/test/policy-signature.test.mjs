@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   scaffold, policyBuilds, digestRules, syncPolicy, isManaged, readMeta, checkPolicySignature, signedPolicyBytes, signatureMode,
-  publicKeyFrom, buildStatusJson, describeDelivery, withHookVersion, versionedFetch, reportUninstall, HOOK_VERSION_HEADER,
+  publicKeyFrom, policyKeys, policyKeyProblems, buildStatusJson, describeDelivery, withHookVersion, versionedFetch, reportUninstall, HOOK_VERSION_HEADER,
 } from "../dist/index.js";
 
 const INSTALLATION = "gw-sig-1";
@@ -190,6 +190,64 @@ test("replay protection holds per workspace: a computer moved to another workspa
     writeFileSync(join(h.dir, "cloud.json"), JSON.stringify({ ...conn, organization_id: "org-sig-2" }));
     assert.deepEqual((await sync(h, signed(doc(2), { workspace: "org-sig-2", issuedAt: T(14) }))).outcome, { state: "applied", revision: 2 });
   } finally { rmSync(h.dir, { recursive: true, force: true }); }
+});
+
+test("an answer issued more than an hour ahead is refused, so it cannot become the replay mark", async () => {
+  const h = connected();
+  try {
+    assert.equal((await sync(h, signed(doc(1), { issuedAt: T(15) }))).outcome.state, "applied");
+    const far = await sync(h, signed(doc(2), { issuedAt: "2026-10-20T02:00:00Z" }));
+    assert.equal(far.outcome.signature, "issued_in_future");
+    assert.equal(readMeta(h.dir).policy_issued_at, T(15), "the replay mark did not move");
+    // Within the hour's skew it is accepted, and the next answer from the workspace still applies.
+    assert.equal((await sync(h, signed(doc(2), { issuedAt: "2026-10-20T00:30:00Z" }))).outcome.state, "applied");
+    assert.equal((await sync(h, signed(doc(3), { issuedAt: "2026-10-20T00:45:00Z" }))).outcome.state, "applied");
+  } finally { rmSync(h.dir, { recursive: true, force: true }); }
+});
+
+test("a key shipped ahead of a rotation signs nothing before its window opens, even a document dated inside it", () => {
+  const early = [{ key_id: "ws-next", public_key: pem(trusted), not_before: "2026-10-20T00:20:00Z", not_after: "2027-12-01T00:00:00Z" }];
+  const body = signed(doc(1), { keyId: "ws-next", issuedAt: "2026-10-20T00:30:00Z" });
+  const at = (now) => checkPolicySignature(body, { workspace: WORKSPACE, computer: INSTALLATION, managed: true, lastIssuedAt: null, keys: early, now: new Date(now) });
+  assert.equal(at("2026-10-20T00:00:00Z").reason, "key_not_valid", "now is before the key's window");
+  assert.equal(at("2026-10-20T00:31:00Z").result, "verified", "once the window is open, the same document verifies");
+});
+
+test("enforce: the version in force served again without its signature is refused, not confirmed as loaded", async () => {
+  process.env.SCOPEBOND_POLICY_SIGNATURE_MODE = "enforce";
+  const h = connected();
+  try {
+    const d1 = signed(doc(1));
+    assert.equal((await sync(h, d1)).outcome.state, "applied");
+    const stripped = { ...d1 };
+    for (const field of ["issued_at", "key_id", "signature"]) delete stripped[field];
+    const { outcome, calls } = await sync(h, stripped);
+    assert.equal(outcome.state, "refused");
+    assert.equal(outcome.signature, "unsigned_policy");
+    assert.deepEqual(status(h).policy_signature, { mode: "enforce", last: "refused", reason: "unsigned_policy" });
+    assert.ok(!calls.some((c) => c.url.endsWith("/v1/policy/ack") && c.body.result === "loaded"), "never confirmed as loaded");
+    // The signed one served again is confirmed once more and the state is fresh.
+    const again = await sync(h, d1);
+    assert.deepEqual(again.outcome, { state: "unchanged", revision: 1 });
+    assert.equal(again.calls.find((c) => c.url.endsWith("/v1/policy/ack"))?.body.result, "loaded");
+    assert.equal(status(h).policy_signature.last, "verified");
+  } finally { rmSync(h.dir, { recursive: true, force: true }); }
+});
+
+test("a configured key that cannot be used is left out when the list is read, and doctor is told why", () => {
+  const good = { key_id: "ok", public_key: pem(trusted), not_before: T(1), not_after: T(30) };
+  const env = { SCOPEBOND_POLICY_KEYS_JSON: JSON.stringify([
+    good,
+    { ...good, key_id: "inverted", not_before: T(30), not_after: T(1) },
+    { ...good, key_id: "unreadable", public_key: "bm90IGEga2V5" },
+  ]) };
+  assert.deepEqual(policyKeys(env).map((k) => k.key_id), ["ok"]);
+  const problems = policyKeyProblems(env);
+  assert.equal(problems.length, 2);
+  assert.match(problems[0], /inverted: its window closes/);
+  assert.match(problems[1], /unreadable: public_key is not an Ed25519 public key/);
+  assert.match(policyKeyProblems({ SCOPEBOND_POLICY_KEYS_JSON: "{" })[0], /cannot be read/);
+  assert.deepEqual(policyKeyProblems({}), []);
 });
 
 test("the mode: dual by default; enforce from the environment or cloud.json, and neither weakens the other", () => {

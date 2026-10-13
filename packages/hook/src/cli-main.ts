@@ -66,6 +66,8 @@ import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
+import { HOT_PATH_STORE_BUSY_MS, waitWithinDeadline } from "./hook-deadline.js";
+import { policyKeyProblems } from "./policy-keys.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
 import { describeDelivery } from "./delivery-report.js";
 import { buildStatusJson } from "./status-json.js";
@@ -218,7 +220,8 @@ const cursorCoverageNote = [
  *  additive: it runs after the decision is made and can neither change it nor fail it. */
 function recordObservations(dir: string, cwd: string, input: Record<string, unknown>, decision: Decision, harness: Harness): ObservationEmitter | undefined {
   try {
-    const { emitter } = openObservations(dir, { adapterVersion: hookVersion() });
+    // After the decision, before it is written: a busy observation log waits briefly (it is additive and may miss).
+    const { emitter } = openObservations(dir, { adapterVersion: hookVersion(), busyTimeoutMs: 2_000 });
     if (!emitter) return undefined;
     const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
     // Session lifecycle is Claude Code's and GitHub Copilot's: their SessionStart/SessionEnd hooks are the ones the
@@ -285,8 +288,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // Where these receipts come from (harness, model, keyed session id, repository, branch); null while a connected
     // workspace has not said it reads it. Never fails the call.
     const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, override: (agentKid) => {
-      const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, waitMs: OVERRIDE_WAIT_MS[harness] });
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -444,8 +447,8 @@ async function runCursor(): Promise<void> {
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, override: (agentKid) => {
-      const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, waitMs: OVERRIDE_WAIT_MS.cursor }) : null;
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -1806,6 +1809,11 @@ async function runDoctor(): Promise<void> {
     if (!activeConnected) problems.push(`this folder's own setup (${active}) takes precedence over your user-level sign-in and is not connected, so records from agent sessions here stay on this computer; delete ${active} to use your sign-in here, or run ${cliCommand(`login ${shadowed} --project`)} here to connect it`);
   }
   if (ignored) console.log(`  project policy   ${ignored} IGNORED — not trusted (never trusted, or edited since). Review it, then \`${cliCommand("trust")}\``);
+  // Signing keys for workspace rules that cannot be used (a window that closes before it opens, a key that does not read).
+  for (const problem of policyKeyProblems()) {
+    console.log(`  rules keys       ${problem}`);
+    problems.push(`a signing key for workspace rules is left out: ${problem}`);
+  }
   // Every harness, in both scopes, plus a check that each configured command can
   // actually start. A pinned path that has gone missing is the one failure mode of
   // the fast absolute-path install, so doctor is where it must surface.

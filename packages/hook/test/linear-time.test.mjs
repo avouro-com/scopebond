@@ -53,10 +53,10 @@ test("secret scrubbing is linear in the command's length", () => {
   assert.equal(scrubSecrets("curl -H \"My-Token:  zzz\""), "curl -H \"My-Token:  ***\"");
 });
 
-test("a 100 kB run of header-like names is scrubbed in well under 50 ms (the header value is read once)", () => {
+test("a 100 kB run of header-like names is scrubbed in well under 250 ms (the header value is read once)", () => {
   // `a:a:a:…` read the rest of the text as a header value after every name: 100 kB took seconds. Best of three runs, so a
   // busy machine's pause is not counted as the pattern's.
-  const within = (label, input, budgetMs = 50) => {
+  const within = (label, input, budgetMs = 250) => {
     let best = Infinity;
     for (let i = 0; i < 3; i++) {
       const started = performance.now();

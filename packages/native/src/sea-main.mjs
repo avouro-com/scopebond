@@ -21,11 +21,17 @@ void (async () => {
   const args = process.argv.slice(2);
   if (args[0] === "hook") {
     process.argv.splice(2, 1);
-    // As `cli.js` does: a hook call that has not decided shortly before the coding agent's own time limit denies.
-    const { armHookDeadline } = await import("../../hook/dist/hook-deadline.js");
+    // As `cli.js` does: any failure the commands do not answer, and a call that has not decided shortly before the coding
+    // agent's own time limit, answer with that agent's deny.
+    const { armHookDeadline, failClosed } = await import("../../hook/dist/hook-deadline.js");
+    const fail = (error) => failClosed(error, args[1]);
+    process.on("uncaughtException", fail);
+    process.on("unhandledRejection", fail);
     const disarm = armHookDeadline(args[1]);
-    const { main } = await import("../../hook/dist/cli-main.js");
-    await main(args.slice(1));
+    try {
+      const { main } = await import("../../hook/dist/cli-main.js");
+      await main(args.slice(1));
+    } catch (error) { fail(error); }
     disarm();
     return;
   }

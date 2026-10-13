@@ -527,21 +527,29 @@ even if the answer passed through something that could change it.
   "revision": 0, "rules_digest": "000…0" (64 zeros), "local_changes": false, "issued_at": …,
   "key_id": …, "signature": … }` (a 204 is the unsigned form of the same answer).
 - **What is refused.** A signature that does not verify (a changed digest or switch, a forged
-  answer), a `key_id` this release does not trust, a key outside its validity window, an answer
-  for another computer or workspace, and an answer issued before the signed one in force (a
-  replay). A refusal keeps the rules in force, is confirmed to the workspace and shows in
-  `status` and `doctor`.
+  answer), a `key_id` this release does not trust, a key whose validity window does not hold
+  both the answer's `issued_at` and the present moment, an answer for another computer or
+  workspace, an answer issued before the signed one in force (a replay), and an answer issued
+  more than an hour ahead of this computer's clock. A refusal keeps the rules in force, is
+  confirmed to the workspace and shows in `status` and `doctor`. The version in force served
+  again is checked the same way. To go back to earlier rules, the workspace issues them as a
+  new, higher revision: an older revision is never installed.
 - **Modes.** `dual` (the default): a signed answer must verify; an unsigned one is still accepted
   and recorded as `unsigned_policy`. `enforce`: an unsigned answer is refused too, and so are a
   204 and a 401, which cannot be signed; the computer keeps the policy it has and never falls
   back to no rules. Set `SCOPEBOND_POLICY_SIGNATURE_MODE=enforce`, or `"policy_signature_mode":
-  "enforce"` in `cloud.json`; when either says `enforce`, `enforce` applies.
+  "enforce"` in `cloud.json`; when either says `enforce`, `enforce` applies. Dual mode is a
+  step towards enforce, not a protection by itself: whoever can change the answer on its way can
+  also remove its signature, and it is then accepted as unsigned. In either mode a stale answer
+  is not detected: a replayed "nothing changed" (304), or the signed document in force served
+  again after the workspace has issued a newer one, keeps the rules as they are.
 - **Keys.** The trusted keys are pinned in the release (`src/policy-keys.ts`: `key_id`,
   `public_key` as SPKI PEM or the raw 32-byte key in base64, `not_before`, `not_after`). This
   release pins none yet, because the workspace's signing key does not exist yet: a later release
   pins it. Rotation is a release too: the next key ships ahead of time with a future
   `not_before`. `SCOPEBOND_POLICY_KEYS_JSON` (a JSON array of the same entries) adds keys, for
-  tests and for trying a key before it is pinned.
+  tests and for trying a key before it is pinned. An entry whose window closes before it opens,
+  or whose `public_key` does not read as an Ed25519 key, is left out, and `doctor` says why.
 - **What is reported.** `status --json` has `policy_signature: { mode, last, reason }`, where
   `last` is `verified`, `unsigned` or `refused`; each rules check tells the workspace the same
   (`x-scopebond-policy-signature`).
@@ -721,7 +729,10 @@ action into an approval. Anything unexpected fails closed (deny) with a repair m
 So does a call that has not decided shortly before the coding agent's own hook time limit
 (55 seconds for Claude Code, 45 for GitHub Copilot, 28 for Codex and Cursor), since an agent
 runs an action unchecked when its hook times out; `SCOPEBOND_HOOK_DEADLINE_MS` can only
-shorten that deadline.
+shorten that deadline. The waits a call takes on purpose fit inside it: the person's answer in
+the Scopebond window waits at most what the deadline leaves, and a hook call waits at most 8
+seconds for another process's lock on the local log. A lock wait cannot be interrupted while it
+lasts, so several in one call on a heavily contended log can still outlast the agent's limit.
 
 **Known limits.** `test/bypass-corpus/` lists indirect ways to reach a blocked action
 (interpreter one-liners, indirect writes, renamed programs, `xargs` and `find -exec`, quoting,

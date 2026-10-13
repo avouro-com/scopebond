@@ -17,12 +17,14 @@
 //   enforce  an unsigned document is refused too. A refused document never changes the rules in force: the computer keeps
 //            the policy it has, and never falls back to no rules.
 
-import { createPublicKey, verify, type KeyObject } from "node:crypto";
+import { verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { canonical } from "@scopebond/gateway";
 import type { HookConnection } from "./cloud.js";
-import { policyKeys, type PolicyKey } from "./policy-keys.js";
+import { policyKeys, publicKeyFrom, type PolicyKey } from "./policy-keys.js";
+
+export { publicKeyFrom };
 
 export type SignatureMode = "dual" | "enforce";
 export const SIGNATURE_MODE_ENV = "SCOPEBOND_POLICY_SIGNATURE_MODE";
@@ -30,7 +32,7 @@ export const SIGNATURE_MODE_ENV = "SCOPEBOND_POLICY_SIGNATURE_MODE";
 /** Why a document's signature was not accepted. `unsigned_policy` is also the code recorded when dual mode accepts one. */
 export type SignatureReason =
   | "unsigned_policy" | "malformed_signature" | "no_workspace_id" | "wrong_workspace" | "wrong_computer"
-  | "unknown_key" | "key_not_valid" | "bad_signature" | "replayed";
+  | "unknown_key" | "key_not_valid" | "bad_signature" | "replayed" | "issued_in_future";
 
 export interface SignedPolicyPayload {
   v: 1;
@@ -77,26 +79,14 @@ export function signedPolicyBytes(payload: SignedPolicyPayload): Buffer {
   return Buffer.from(canonical(payload), "utf8");
 }
 
+/** How far ahead of this computer's clock an answer's `issued_at` may be (clock skew). */
+export const FUTURE_SKEW_MS = 60 * 60 * 1000;
+
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, fixed-width fields, one optional bounded fraction
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const BASE64 = /^[A-Za-z0-9+/]{43,200}={0,2}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const KEY_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-
-/** An Ed25519 public key from SPKI PEM, base64 SPKI DER, or the raw 32-byte key in base64; null when it is none of these. */
-export function publicKeyFrom(text: string): KeyObject | null {
-  try {
-    const trimmed = text.trim();
-    const key = trimmed.startsWith("-----BEGIN") ? createPublicKey(trimmed)
-      : (() => {
-        const bytes = Buffer.from(trimmed, "base64");
-        return bytes.length === 32
-          ? createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: bytes.toString("base64url") }, format: "jwk" })
-          : createPublicKey({ key: bytes, format: "der", type: "spki" });
-      })();
-    return key.asymmetricKeyType === "ed25519" ? key : null;
-  } catch { return null; }
-}
 
 export interface SignatureContext {
   /** The workspace id in cloud.json; null when the connection does not name one. */
@@ -127,11 +117,14 @@ export function checkPolicySignature(doc: Record<string, unknown>, context: Sign
   if (doc.installation_id !== context.computer) return refuse("wrong_computer", "the rules document was signed for a different computer");
   const now = (context.now ?? new Date()).getTime();
   const issued = Date.parse(issuedAt);
+  // An answer from the future would become the replay mark, and every later answer would be refused as older than it.
+  if (issued > now + FUTURE_SKEW_MS) return refuse("issued_in_future", `the rules document says it was issued at ${issuedAt}, more than an hour ahead of this computer's clock`);
   const key = (context.keys ?? policyKeys()).find((k) => k.key_id === keyId);
   if (!key) return refuse("unknown_key", `the rules document names a signing key this version does not trust (${keyId}); update Scopebond`);
   const notBefore = Date.parse(key.not_before);
   const notAfter = Date.parse(key.not_after);
-  if (!(issued >= notBefore && issued <= notAfter && now <= notAfter)) {
+  // Both the document and this moment must fall in the key's window: a key shipped ahead of a rotation signs nothing early.
+  if (!(issued >= notBefore && issued <= notAfter && now >= notBefore && now <= notAfter)) {
     return refuse("key_not_valid", `signing key ${keyId} is not valid for this document (valid ${key.not_before} to ${key.not_after})`);
   }
   const publicKey = publicKeyFrom(key.public_key);

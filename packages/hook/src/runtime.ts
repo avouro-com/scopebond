@@ -41,6 +41,9 @@ export interface RuntimeConfig {
    *  (`HOT_PATH_QUEUE_BUSY_MS`), so an override wait plus a lock wait stays inside the coding agent's hook time limit; a write
    *  that fails then is kept as a gap and queued on the next flush. `flush` (no time limit) passes a longer one. */
   queueBusyTimeoutMs?: number;
+  /** How long a local-log statement waits for another process's write lock (15 s by default). A hook call passes less
+   *  (`HOT_PATH_STORE_BUSY_MS`, hook-deadline.ts), so a lock wait cannot by itself carry the call past its deadline. */
+  storeBusyTimeoutMs?: number;
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
    *  (see override.ts). `hint` explains, in a denial, how an override would have been possible. */
   override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null } | null;
@@ -295,6 +298,8 @@ export function createHookRuntime(config: RuntimeConfig) {
     ? `run \`${cliCommand("rules")}\` to see the limits in plain terms, or edit ${join(dirname(config.policyPath), RULES_FILE)}`
     : undefined;
   const { store: baseStore } = openReceiptStore({ db: config.dbPath });
+  const storeBusyMs = config.storeBusyTimeoutMs ?? STORE_BUSY_MS;
+  if (config.storeBusyTimeoutMs !== undefined) { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(storeBusyMs); } catch { /* keeps its wait */ } }
   // When connected, mirror every stored receipt to the hosted portal through a
   // durable outbox. The wrapped store's decision is unchanged; export is best-effort.
   let store = baseStore;
@@ -344,7 +349,7 @@ export function createHookRuntime(config: RuntimeConfig) {
     hint: () => made.hint(),
     handler: (async (ctx) => {
       try { return await made.handler(ctx); }
-      finally { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(AFTER_OVERRIDE_STORE_BUSY_MS); } catch { /* keeps its wait */ } }
+      finally { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(Math.min(AFTER_OVERRIDE_STORE_BUSY_MS, storeBusyMs)); } catch { /* keeps its wait */ } }
     }) as OverrideHandler,
   } : null;
 
@@ -359,7 +364,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       if ((baseStore as { layoutCurrent?: () => boolean }).layoutCurrent?.() === false) return; // an older file: the agent or upkeep migrates it first
       await repairDelivery({ dir, store: repairable, queue: outbox ?? null, attester, connected: !!config.cloud });
     } catch { /* the next flush tries again */ }
-    finally { set(STORE_BUSY_MS); }
+    finally { set(storeBusyMs); }
   };
 
   return {

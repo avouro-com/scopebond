@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scaffold } from "../dist/index.js";
-import { HOOK_DEADLINE_MS, hookDeadlineMs } from "../dist/hook-deadline.js";
+import { HOOK_DEADLINE_MS, HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, armHookDeadline, hookDeadlineMs, hookDeadlineRemainingMs, waitWithinDeadline } from "../dist/hook-deadline.js";
 import { ENFORCE } from "./enforce-all.mjs";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -62,6 +62,22 @@ test("the deadline: shorter than each agent's own limit, longer than the waits t
   assert.equal(hookDeadlineMs("codex", { SCOPEBOND_HOOK_DEADLINE_MS: "soon" }), HOOK_DEADLINE_MS.codex);
   assert.equal(hookDeadlineMs("status", {}), null, "only hook calls have a deadline");
   assert.equal(hookDeadlineMs("toString", {}), null);
+});
+
+test("the person's wait shrinks to what the deadline leaves, and the lock waits fit beside it", () => {
+  assert.equal(hookDeadlineRemainingMs(), Infinity, "no deadline armed: nothing shrinks");
+  assert.equal(waitWithinDeadline(45_000), 45_000);
+  const disarm = armHookDeadline("claude", { SCOPEBOND_HOOK_DEADLINE_MS: "30000" });
+  try {
+    const now = Date.now();
+    assert.ok(hookDeadlineRemainingMs(now) <= 30_000 && hookDeadlineRemainingMs(now) > 29_000);
+    assert.ok(waitWithinDeadline(45_000, now) <= 30_000 - WAIT_RESERVE_MS, "the wait leaves the reserve");
+    assert.equal(waitWithinDeadline(5_000, now), 5_000, "a shorter wait is kept");
+    assert.equal(waitWithinDeadline(45_000, now + 29_000), 1_000, "never less than a second");
+  } finally { disarm(); }
+  assert.equal(hookDeadlineRemainingMs(), Infinity);
+  // Every agent: the longest wait the hook takes on purpose, then the reserve, fits inside the deadline.
+  for (const ms of Object.values(HOOK_DEADLINE_MS)) assert.ok(ms > WAIT_RESERVE_MS + HOT_PATH_STORE_BUSY_MS);
 });
 
 for (const [harness, denied] of [

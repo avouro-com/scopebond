@@ -30,7 +30,7 @@ export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf,
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS } from "./policy-sync.js";
 export { checkPolicySignature, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload } from "./policy-signature.js";
-export { policyKeys, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
+export { policyKeys, policyKeyProblems, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
 export { versionedFetch, withHookVersion, HOOK_VERSION_HEADER } from "./workspace-fetch.js";
 export {
   receiptContextFor, receiptContextAllowed, receiptContextFrom, noteReceiptContext, canonicalRepository, repositoryFacts,

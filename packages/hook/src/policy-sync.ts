@@ -248,9 +248,18 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const switchChanged = sameVersion && (r.local_changes === true) !== installedLocalChanges(dir);
   // The same version already in force: confirm it again if the last confirmation did not land.
   if (sameVersion && !switchChanged) {
-    const confirmed = meta.last_ack?.revision === meta.revision ? meta.last_ack
+    // Checked like a new answer: the version in force served again without its signature (or with a bad one) is not
+    // confirmed as loaded, and what `status` says about the last answer stays true.
+    const again = signed(r, true);
+    if (!again.admitted.ok) {
+      const reason = ackReasonFor(again.admitted.reason);
+      const confirmed = await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "rejected", reason });
+      save({ last_ack: confirmed, policy_signature: again.admitted.state, last_error: again.admitted.message });
+      return { state: "refused", revision: meta.revision, reason, message: again.admitted.message, signature: again.admitted.reason };
+    }
+    const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "loaded" });
-    save({ etag, last_ack: confirmed, last_error: null });
+    save({ etag, last_ack: confirmed, last_error: null, policy_signature: again.admitted.state, ...issued(again.issuedAt) });
     return { state: "unchanged", revision: meta.revision! };
   }
   const inspected = inspectManaged(raw, switchChanged ? { installationId, currentRevision: null }

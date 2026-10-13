@@ -3,6 +3,9 @@
 // before they run, with a signed local receipt. This is the program npm installs and agent
 // settings name (`.../dist/cli.js claude`); the commands themselves are in cli-main.ts.
 
+// Small and dependency-free, so it loads even when the commands cannot.
+import { armHookDeadline, failClosed } from "./hook-deadline.js";
+
 // `node:sqlite` (the receipt store) is still flagged experimental on Node 22, and Node
 // prints a warning on stderr the first time it loads — on every `verify`, and into the
 // agent's transcript on every hook call. It is a notice about Node, not about the user's
@@ -17,42 +20,20 @@
   });
 }
 
-// Fail closed outside the commands too. Claude Code, Codex and Cursor all treat a hook that crashes (a module that cannot
-// load, an uncaught error, a non-zero exit other than Claude Code's 2) as a non-blocking error and run the action with no
-// check. Every failure the commands do not answer themselves is answered here with each agent's own "deny".
-function failClosed(error: unknown): never {
-  const reason = `Scopebond hook failed closed: ${(error as Error | null)?.message ?? String(error)}. Repair: reinstall the Scopebond hook, then run its doctor command.`;
-  const command = process.argv[2];
-  try {
-    if (command === "claude" || command === "codex") {
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }) + "\n");
-      if (command === "claude") process.stderr.write(`${reason}\n`);
-      process.exit(command === "claude" ? 2 : 0);
-    }
-    if (command === "cursor") {
-      process.stdout.write(JSON.stringify({ permission: "deny", agentMessage: reason }) + "\n");
-      process.exit(0);
-    }
-    // GitHub Copilot denies on exit 2 whatever stdout holds; the JSON carries the reason.
-    if (command === "copilot") {
-      process.stdout.write(JSON.stringify({ permissionDecision: "deny", permissionDecisionReason: reason }) + "\n");
-      process.stderr.write(`${reason}\n`);
-      process.exit(2);
-    }
-    process.stderr.write(`${reason}\n`);
-  } catch { /* nothing left to report with */ }
-  process.exit(command === "claude" ? 2 : 1);
-}
-process.on("uncaughtException", failClosed);
-process.on("unhandledRejection", failClosed);
+// Fail closed outside the commands too. Claude Code, Codex, Cursor and GitHub Copilot all treat a hook that crashes (a
+// module that cannot load, an uncaught error, a non-zero exit other than their own deny code) as a non-blocking error and
+// run the action with no check. Every failure the commands do not answer themselves is answered with each agent's own
+// "deny" (hook-deadline.ts holds the one fail-closed answer, shared with the deadline and the single executable).
+const fail = (error: unknown): never => failClosed(error, process.argv[2]);
+process.on("uncaughtException", fail);
+process.on("unhandledRejection", fail);
 
 try {
   // A hook call that has not decided shortly before the coding agent's own time limit denies (hook-deadline.ts).
-  const { armHookDeadline } = await import("./hook-deadline.js");
   const disarm = armHookDeadline(process.argv[2]);
   const { main } = await import("./cli-main.js");
   await main(process.argv.slice(2));
   disarm();
 } catch (error) {
-  failClosed(error);
+  fail(error);
 }
