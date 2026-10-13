@@ -18,6 +18,8 @@
 
 import { join } from "node:path";
 import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
+import { targetRuleClauses, TARGET_RULES } from "./target-rules.js";
+export { TARGET_RULES } from "./target-rules.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { createExclusive, replaceFile } from "./safe-fs.js";
 import { maskHomeFolder, maskHomeInPattern } from "./home-mask.js";
@@ -42,7 +44,8 @@ export interface RuleSet {
   /** Action types recorded but not blocked. */
   observe: string[];
   /** The rules that block. Every other rule records what it would have stopped and lets the action run (monitor).
-   *  Ids: `protect-branches`, `safe-shell`, `protect-write`, `protect-read`. Absent or empty: nothing blocks except
+   *  Ids: `protect-branches`, `safe-shell`, `protect-write`, `protect-read`, and the target rules `cloud-destructive`,
+   *  `production-deploy`, `secret-write`, `iam-change`, `database-migrate`. Absent or empty: nothing blocks except
    *  Scopebond's own protection (its settings, keys and hook entries, and an agent switching it off), which always does. */
   enforce?: string[];
   /** On a computer its workspace manages: a person's own choice per rule (`rules enforce|monitor`), applied only while the
@@ -133,12 +136,14 @@ function sentence(items: string[], limit = 12): string {
 /** The rules a person or a workspace can switch between recording (monitor) and blocking (enforce). */
 export const ENFORCEABLE_RULES = ["protect-branches", "safe-shell", "protect-write", "protect-read"] as const;
 export type EnforceableRule = typeof ENFORCEABLE_RULES[number];
+/** Every rule `rules enforce|monitor` accepts: the four above and the target rules. */
+export const SWITCHABLE_RULES: readonly string[] = [...ENFORCEABLE_RULES, ...TARGET_RULES];
 
 /** Compile a rule set into the policy the gateway evaluates. Monitor is the default: a rule blocks only when it is listed in
  *  `rules.enforce`. Scopebond's own protection is always enforced, whatever the rule set says. */
 export function compile(rules: RuleSet, agentKid: string): Record<string, unknown> {
   const enforced = new Set(rules.enforce ?? []);
-  const mode = (id: EnforceableRule): "enforce" | "monitor" => (enforced.has(id) ? "enforce" : "monitor");
+  const mode = (id: string): "enforce" | "monitor" => (enforced.has(id) ? "enforce" : "monitor");
   return {
     vocabulary_version: "1.0", policy_id: "coding-agent", version: 1,
     clauses: [
@@ -168,6 +173,7 @@ export function compile(rules: RuleSet, agentKid: string): Record<string, unknow
         action_types: rules.observe,
         description: `Observe ${sentence(rules.observe)} — recorded, not blocked. Add bounds to enforce. Change this list in .scopebond/${RULES_FILE}.`,
       },
+      ...targetRuleClauses(mode),
       ...(rules.allowed_roots?.length ? [{
         id: "protect-root", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
         param_bounds: { root_scope: { pattern: "^inside$" } },
@@ -316,7 +322,7 @@ export function isProtectedBranch(rules: RuleSet, ref: string): boolean {
 /** Plain English, for `scopebond-hook rules`. */
 export function describeRules(rules: RuleSet): string {
   const enforced = new Set(rules.enforce ?? []);
-  const how = (id: EnforceableRule) => (enforced.has(id) ? "blocks" : "records");
+  const how = (id: string) => (enforced.has(id) ? "blocks" : "records");
   const lines: string[] = [];
   lines.push("Always blocked (Scopebond's own protection; cannot be relaxed):");
   lines.push("  changing or reading Scopebond's folder, its keys and connection, or the coding agents' hook settings,");
@@ -330,6 +336,13 @@ export function describeRules(rules: RuleSet): string {
   for (const rule of rules.protected_write) lines.push(`                       ${rule.label}`);
   lines.push(`  [${how("protect-read")}] protect-read       reads of ${rules.protected_read.length} protected location(s):`);
   for (const rule of rules.protected_read) lines.push(`                       ${rule.label}`);
+  lines.push("");
+  lines.push("What a coding agent reaches through cloud, Kubernetes, database, deployment and secret tools:");
+  lines.push(`  [${how("cloud-destructive")}] cloud-destructive  deleting cloud resources and Kubernetes objects, running commands in containers`);
+  lines.push(`  [${how("production-deploy")}] production-deploy  deployments to production, or whose environment the command does not show`);
+  lines.push(`  [${how("secret-write")}] secret-write       storing or changing secrets in a secret store`);
+  lines.push(`  [${how("iam-change")}] iam-change         identity and access changes (roles, policies, users, keys)`);
+  lines.push(`  [${how("database-migrate")}] database-migrate   migrations that go down, lose data or reset`);
   lines.push("");
   if (rules.protect_remote_database) {
     lines.push(`  [blocks] remote SQL that drops a table, deletes or updates every row, or cannot be read`);

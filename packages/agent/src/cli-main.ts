@@ -34,6 +34,7 @@ import { findNpmInstall, hasNpmInstall, npmRemovalCommand } from "./migrate.js";
 import { readRegistryValue, SETTINGS_KEYS } from "./signin.js";
 import { helperInput, runUpdateHelper } from "./update-helper.js";
 import { failedUpdate } from "./update.js";
+import { discoverTools, toolLines, type ToolDiscovery } from "./tools.js";
 
 let cmd = "help";
 let rest: string[] = [];
@@ -96,7 +97,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     case "status": {
       const live = await callAgent(dir, "GET", "/status") as (ReturnType<typeof computerStatus> & { agent?: AgentReport | null }) | null;
       const notes = installNotes();
-      const status = { ...(live ?? { ...computerStatus(dir), agent: null }), autostart: autostartHealth(dir), notes };
+      // The coding tools as the running agent last reported them to the workspace; found out here when it has not yet.
+      const reported = live?.agent?.last_maintenance?.selfCheck;
+      const found: ToolDiscovery = reported && Array.isArray(reported.tools) ? { tools: reported.tools, mcp_servers: reported.mcp_servers ?? [] } : await discoverTools();
+      const status = { ...(live ?? { ...computerStatus(dir), agent: null }), autostart: autostartHealth(dir), notes, tools: found.tools, mcp_servers: found.mcp_servers };
       if (rest.includes("--json")) { console.log(JSON.stringify(status, null, 2)); return; }
       const d = status.delivery;
       console.log(`Scopebond Agent: ${live ? "running" : "not running"}`);
@@ -108,6 +112,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       console.log(`  autostart        ${status.autostart.detail}`);
       const check = status.agent?.last_maintenance?.selfCheck;
       if (check) console.log(`  self-check       ${check.ok ? "passed" : `failed: ${check.failed.join(", ")}`}`);
+      const lines = toolLines(status.tools);
+      console.log(`  coding tools     ${lines[0] ?? "none found"}`);
+      for (const line of lines.slice(1)) console.log(`                   ${line}`);
       const failed = failedUpdate(dir);
       if (failed) console.log(`  update           ${failed.version} did not install or start here${failed.reason ? ` (${failed.reason})` : ""}; tried again after a day`);
       for (const line of notes) console.log(`  note             ${line}`);
@@ -259,5 +266,5 @@ function installNotes(): string[] {
   return notes;
 }
 
-interface AgentReport { version?: string; last_maintenance?: { selfCheck?: { ok: boolean; failed: string[] } | null } | null }
+interface AgentReport { version?: string; last_maintenance?: { selfCheck?: ({ ok: boolean; failed: string[] } & Partial<ToolDiscovery>) | null } | null }
 

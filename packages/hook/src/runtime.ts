@@ -21,6 +21,9 @@ import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
 import { homeFolders, maskHomeInPolicy, maskHomeInValue } from "./home-mask.js";
 import type { ReceiptPayloadContext } from "@scopebond/gateway";
+import { policyOptsIntoTargets, targetRuleClauses } from "./target-rules.js";
+export { targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
+export type { TargetRule } from "./target-rules.js";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -255,6 +258,7 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
         action_types: ["net.fetch", "mcp.tool.call"],
         description: "Observe network fetches and MCP tool calls (recorded, not blocked) — add bounds to enforce.",
       },
+      ...targetRuleClauses(mode),
       { id: "keys", type: "key_policy", active_keys: [agentKid], description: "Only the enrolled machine key may sign." },
     ],
   };
@@ -269,6 +273,20 @@ const AFTER_OVERRIDE_STORE_BUSY_MS = 5_000;
 const REPAIR_BUSY_MS = 250;
 /** The local log's usual lock wait (the store's default). */
 const STORE_BUSY_MS = 15_000;
+
+/** The action types a policy has a clause for: what a derived intent needs before it is evaluated rather than recorded. */
+export function namedActionTypes(policy: unknown): Set<string> {
+  const out = new Set<string>();
+  const clauses = (policy as { clauses?: unknown[] } | null)?.clauses;
+  for (const clause of Array.isArray(clauses) ? clauses : []) {
+    const c = clause as { type?: unknown; action_types?: unknown; first_action_types?: unknown; then_action_types?: unknown };
+    for (const list of [c.action_types, c.first_action_types, c.then_action_types]) {
+      if (Array.isArray(list)) for (const type of list) if (typeof type === "string") out.add(type);
+    }
+    if (c.type === "force_push_guard") out.add("git.push");
+  }
+  return out;
+}
 
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
  *  key, unavailable store) — the CLI turns that into a fail-closed deny. */
@@ -354,6 +372,9 @@ export function createHookRuntime(config: RuntimeConfig) {
   } : null;
 
   const contextOption: { context?: ReceiptPayloadContext } = config.context ? { context: config.context } : {};
+  const named = namedActionTypes(policy);
+  // A policy decides derived actions only when it opts in (target-rules.ts): it names a type Action Taxonomy 1.1 introduced.
+  const optedIn = policyOptsIntoTargets(policy);
 
   /** Close interrupted evaluations and queue what the queue never got, waiting briefly for locks. Never throws. */
   const repair = async (): Promise<void> => {
@@ -404,7 +425,14 @@ export function createHookRuntime(config: RuntimeConfig) {
     async evaluateOne(input: Mapped): Promise<Decision> {
       const mapped = masked(input);
       const signed = agent.sign(mapped.intent);
-      if (!mapped.evaluated && !config.strict) {
+      // A derived intent (the taxonomy action a shell command or MCP call performs, beside the call itself) is evaluated only
+      // under a policy that opts in (it names a type Action Taxonomy 1.1 introduced) and that names its action type. Under any
+      // other policy it is recorded, so a policy written for the 1.0 vocabulary decides every call exactly as it did before:
+      // a `gh api` call, a GitHub MCP push or a fetch MCP call is not newly checked by a push, file or site rule it already
+      // has. A derived intent the mapper marks not evaluated (a file written through a remote API) is always recorded. Strict
+      // mode does not change this: the call's own intent is still evaluated.
+      const derivedRecorded = mapped.derived === true && (!optedIn || !mapped.evaluated || !named.has(mapped.intent.action_type));
+      if ((!mapped.evaluated && !config.strict) || derivedRecorded) {
         // Unknown tool or unparseable command, non-strict: observe without
         // evaluating — grants nothing.
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);

@@ -1,0 +1,62 @@
+{
+  "tool": "az",
+  "description": "Azure CLI: group and vm deletes, role assignments and definitions, Entra (ad) users, groups and credentials, Key Vault secrets, web app deployments, and the generic create/delete/update verbs. The command path is the words before the first option.",
+  "cases": [
+    {
+      "name": "group delete --yes; the group name says production",
+      "command": "az group delete --name rg-prod --yes",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "azure", "service": "resource", "kind": "resource-group", "env": "production", "resource_digest": { "$digest": ["azure", "group delete", "", "", "rg-prod"] }, "auto_approve": true, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "vm delete in a staging resource group",
+      "command": "az vm delete -g rg-staging -n build-agent-3",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "azure", "service": "vm", "kind": "vm", "env": "staging", "resource_digest": { "$digest": ["azure", "vm delete", "", "rg-staging", "build-agent-3"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "storage account create with a location",
+      "command": "az storage account create -n acmelogs -g rg-dev -l westeurope",
+      "expect": [{ "action_type": "cloud.resource.create", "params": { "provider": "azure", "service": "storage", "kind": "account", "region": "westeurope", "env": "development", "resource_digest": { "$digest": ["azure", "storage account create", "", "rg-dev", "acmelogs"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "role assignment create",
+      "command": "az role assignment create --assignee ci@acme.example --role Contributor --scope /subscriptions/0000/resourceGroups/rg-prod",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "azure", "kind": "role", "name_digest": { "$digest": ["azure", "role assignment create", "Contributor\nci@acme.example\n/subscriptions/0000/resourceGroups/rg-prod"] }, "risk_class": "identity" } }]
+    },
+    {
+      "name": "ad sp create-for-rbac creates a credential",
+      "command": "az ad sp create-for-rbac --name deployer",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "azure", "kind": "key", "name_digest": { "$digest": ["azure", "ad sp create-for-rbac", "deployer"] }, "risk_class": "identity" } }]
+    },
+    {
+      "name": "ad user delete",
+      "command": "az ad user delete --id old.user@acme.example",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "azure", "kind": "user", "name_digest": { "$digest": ["azure", "ad user delete", "old.user@acme.example"] }, "risk_class": "identity" } }]
+    },
+    {
+      "name": "keyvault secret set; the value is never read",
+      "command": "az keyvault secret set --vault-name kv-prod --name db-password --value {{SECRET}}",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "azure-keyvault", "name_digest": { "$digest": ["azure-keyvault", "kv-prod", "db-password"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "webapp deploy without a slot reaches the production slot",
+      "command": "az webapp deploy --resource-group rg-web --name acme-web --src-path app.zip",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "azure", "environment": "production", "target_digest": { "$digest": ["azure", "webapp", "rg-web", "", "acme-web"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "webapp deploy to a staging slot",
+      "command": "az webapp deploy -g rg-web -n acme-web --slot staging --src-path app.zip",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "azure", "environment": "staging", "target_digest": { "$digest": ["azure", "webapp", "rg-web", "staging", "acme-web"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "functionapp zip deployment",
+      "command": "az functionapp deployment source config-zip -g rg-fn -n acme-fn --src fn.zip",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "azure", "environment": "production", "target_digest": { "$digest": ["azure", "functionapp", "rg-fn", "", "acme-fn"] }, "risk_class": "destructive" } }]
+    },
+    { "name": "a list derives nothing", "command": "az vm list -g rg-prod", "expect": [] },
+    { "name": "switching the subscription is local", "command": "az account set --subscription acme-prod", "expect": [] },
+    { "name": "installing an extension is local", "command": "az extension update --name aks-preview", "expect": [] },
+    { "name": "credentials for kubectl derive nothing", "command": "az aks get-credentials -g rg-prod -n aks-prod", "expect": [] },
+    { "name": "login derives nothing", "command": "az login --use-device-code", "expect": [] },
+    { "name": "storage blob delete-batch", "command": "az storage blob delete-batch -s backups --account-name acme", "expect": [{"action_type": "cloud.resource.delete", "params": {"provider": "azure", "service": "storage", "kind": "blob", "risk_class": "destructive"}}] }
+  ]
+}

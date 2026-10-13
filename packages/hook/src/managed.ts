@@ -5,6 +5,10 @@
 // to the computer's own lists (protected branches, programs, allowed sites). It never sends a pattern: this module compiles the
 // workspace's choices with the same compiler `rules apply` uses, so what decides a block lives in one place.
 //
+// A workspace may also set the target rules (`cloud-destructive`, `production-deploy`, `secret-write`, `iam-change`,
+// `database-migrate`: what a coding agent reaches through cloud, Kubernetes, database, deployment and secret tools). They are
+// optional in the document: one that leaves them out keeps them recording, as a document from before they existed does.
+//
 // A workspace may also name exact targets one rule skips: paths for the secret-read and CI-configuration rules, branches for the
 // push rule. An exclusion matches exactly (same case; a trailing `/**` covers a folder), so it is never broader than what was typed,
 // and an exclusion that would touch the always-on protection of the hook's own settings is dropped when the policy is compiled.
@@ -24,7 +28,8 @@ import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { GUARDRAIL_LOOKAHEADS, ci } from "./runtime.js";
-import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES } from "./rules.js";
+import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES, SWITCHABLE_RULES } from "./rules.js";
+import { TARGET_RULES } from "./target-rules.js";
 import type { Recommended } from "./client-health.js";
 import type { SignatureState } from "./policy-signature.js";
 
@@ -34,6 +39,12 @@ export const PREVIOUS_POLICY_FILE = "policy.previous.json";
 
 export const MANAGED_RULE_IDS = ["force-push-protected", "push-protected", "destructive-shell", "secret-read", "ci-config-write", "network-egress"] as const;
 export type ManagedRuleId = (typeof MANAGED_RULE_IDS)[number];
+/** Rules a document may set and may leave out (left out, they record): the target rules. Each takes a mode (and override terms)
+ *  and no lists. */
+export const OPTIONAL_RULE_IDS = TARGET_RULES;
+export type OptionalRuleId = (typeof OPTIONAL_RULE_IDS)[number];
+/** Every rule id a workspace document may name. */
+export type AnyManagedRuleId = ManagedRuleId | OptionalRuleId;
 type ListKey = "protected_branches" | "destructive_programs" | "allowed_hosts";
 type ExclusionKey = "excluded_paths" | "excluded_branches";
 const LIST_OF: Partial<Record<ManagedRuleId, ListKey>> = {
@@ -88,9 +99,12 @@ function validTerms(t: unknown): t is OverrideTerms {
 /** Whether a person at the computer may act on a block under this rule (allow it, or ask an admin). */
 export const personMayAct = (rule: ManagedRule | undefined): boolean => rule?.mode === "override" || rule?.mode === "ask";
 /** The clause that carries each workspace rule on the computer, for naming the rule a denial came from. */
-export const RULE_OF_CLAUSE: Readonly<Record<string, ManagedRuleId>> = {
+export const RULE_OF_CLAUSE: Readonly<Record<string, AnyManagedRuleId>> = {
   "protect-branches": "push-protected", "protect-branch-history": "force-push-protected", "safe-shell": "destructive-shell",
   "protect-read": "secret-read", "protect-write": "ci-config-write", "allowed-sites": "network-egress",
+  // The target rules' clauses carry the rule's own id.
+  "cloud-destructive": "cloud-destructive", "production-deploy": "production-deploy", "secret-write": "secret-write", "iam-change": "iam-change",
+  "database-migrate": "database-migrate",
 };
 /** The same document with every rule a person may allow, and the rule being decided, recorded instead of blocked: what still
  *  denies under it is never allowed on the spot (another rule on Block, another rule a person may only ask about, or
@@ -114,7 +128,7 @@ export interface ManagedDocument {
   environment_id: string;
   agent_id: string;
   installation_id: string;
-  rules: Record<ManagedRuleId, ManagedRule>;
+  rules: Record<ManagedRuleId, ManagedRule> & Partial<Record<OptionalRuleId, ManagedRule>>;
   rules_digest: string;
   /** Whether a person may change a rule on this computer (`rules enforce|monitor`); absent means no. */
   local_changes?: boolean;
@@ -173,18 +187,19 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
     return { ok: false, reason: "wrong_computer", message: "these rules were issued for a different computer" };
   }
   const keys = Object.keys(rules);
-  if (keys.length !== MANAGED_RULE_IDS.length || !MANAGED_RULE_IDS.every((id) => keys.includes(id))) {
+  const known: readonly string[] = [...MANAGED_RULE_IDS, ...OPTIONAL_RULE_IDS];
+  if (!MANAGED_RULE_IDS.every((id) => keys.includes(id)) || !keys.every((id) => known.includes(id))) {
     return { ok: false, reason: "unsupported", message: "the rules document names rules this version does not know; update Scopebond" };
   }
-  for (const id of MANAGED_RULE_IDS) {
+  for (const id of keys as AnyManagedRuleId[]) {
     const rule = rules[id];
     if (!isObject(rule) || (rule.mode !== "monitor" && rule.mode !== "block" && rule.mode !== "override" && rule.mode !== "ask")) return bad(`rule ${id} has no valid mode`);
     const acts = rule.mode === "override" || rule.mode === "ask";
     if (acts !== ("override" in rule) || (acts && !validTerms(rule.override))) return bad(`rule ${id} has invalid override terms`);
     for (const key of Object.keys(rule)) {
       if (key === "mode" || key === "override") continue;
-      const listKey = LIST_OF[id];
-      const exclusionKey = EXCLUSIONS_OF[id];
+      const listKey = LIST_OF[id as ManagedRuleId];
+      const exclusionKey = EXCLUSIONS_OF[id as ManagedRuleId];
       const pattern = key === listKey ? LIST_PATTERN[listKey] : key === exclusionKey ? EXCLUSION_PATTERN[exclusionKey] : null;
       if (!pattern) return bad(`rule ${id} has an unknown setting`);
       const list = rule[key];
@@ -241,16 +256,18 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
       ...(r["destructive-shell"].mode !== "monitor" ? ["safe-shell"] : []),
       ...(r["ci-config-write"].mode !== "monitor" ? ["protect-write"] : []),
       ...(r["secret-read"].mode !== "monitor" ? ["protect-read"] : []),
+      // A target rule the document leaves out records.
+      ...OPTIONAL_RULE_IDS.filter((id) => r[id] !== undefined && r[id].mode !== "monitor"),
     ],
   };
   // Where the workspace allows changes on computers, a person's own choice for a rule wins on this computer.
   if (doc.local_changes === true && local.local_overrides) {
     const enforce = new Set(rules.enforce);
     for (const [id, mode] of Object.entries(local.local_overrides)) {
-      if (!(ENFORCEABLE_RULES as readonly string[]).includes(id)) continue;
+      if (!SWITCHABLE_RULES.includes(id)) continue;
       if (mode === "enforce") enforce.add(id); else if (mode === "monitor") enforce.delete(id);
     }
-    rules.enforce = ENFORCEABLE_RULES.filter((id) => enforce.has(id));
+    rules.enforce = SWITCHABLE_RULES.filter((id) => enforce.has(id));
   }
   const policy = compile(rules, agentKid) as { clauses: Clause[] } & Record<string, unknown>;
   const clauses: Clause[] = [];
@@ -362,6 +379,7 @@ export function ruleReport(dir: string): Record<string, [ "enforce" | "monitor",
     const doc = managed ? JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument : null;
     const overrides = (loadRules(dir)?.local_overrides ?? {}) as Record<string, string>;
     const report: Record<string, [ "enforce" | "monitor", RuleSource ]> = {};
+    // The report names the four rules it always named; the target rules come from the workspace document itself.
     for (const id of ENFORCEABLE_RULES) {
       const clause = policy.clauses?.find((c) => c.id === id);
       if (!clause) continue;
