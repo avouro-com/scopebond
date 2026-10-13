@@ -21,8 +21,12 @@ void (async () => {
   const args = process.argv.slice(2);
   if (args[0] === "hook") {
     process.argv.splice(2, 1);
+    // As `cli.js` does: a hook call that has not decided shortly before the coding agent's own time limit denies.
+    const { armHookDeadline } = await import("../../hook/dist/hook-deadline.js");
+    const disarm = armHookDeadline(args[1]);
     const { main } = await import("../../hook/dist/cli-main.js");
     await main(args.slice(1));
+    disarm();
     return;
   }
   const { main } = await import("../../agent/dist/cli-main.js");

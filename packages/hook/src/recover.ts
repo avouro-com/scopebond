@@ -12,6 +12,7 @@ import { SqliteCloudOutbox, SqliteReceiptStore, loadOrCreateAttester } from "@sc
 import { LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
 import { ingestUrl, type HookConnection } from "./cloud.js";
 import { textOf } from "./text.js";
+import { versionedFetch } from "./workspace-fetch.js";
 
 /** The workspace accepts at most 1 MiB and 100 receipts per request. */
 const MAX_BATCH_BYTES = 900 * 1024;
@@ -59,7 +60,7 @@ export function groupByEarlierKey(store: SqliteReceiptStore, currentKid: string)
 interface Answer { status: number; json: Record<string, unknown> }
 
 async function call(io: RecoverIo, connection: HookConnection, path: string, body?: unknown): Promise<Answer> {
-  const response = await io.fetch(new URL(path, ingestUrl(connection)), {
+  const response = await versionedFetch(io.fetch)(new URL(path, ingestUrl(connection)), {
     method: body === undefined ? "GET" : "POST",
     headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
     ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),

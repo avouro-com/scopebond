@@ -1,0 +1,13 @@
+{
+  "category": "xargs and find -exec",
+  "cases": [
+    { "id": "xargs-force-push", "command": "echo main | xargs git push -f origin", "target": { "action_type": "git.push", "force": true }, "expected": "block" },
+    { "id": "find-exec-force-push", "command": "find . -name x -exec git push -f origin main \\;", "target": { "action_type": "git.push", "force": true }, "expected": "block" },
+    { "id": "find-exec-rm-rf", "command": "find . -name '*.tmp' -exec rm -rf {} +", "expected": "block" },
+    { "id": "xargs-rm-rf", "command": "ls | xargs rm -rf", "expected": "block" },
+    { "id": "xargs-cat-env", "command": "echo .env | xargs cat", "target": { "action_type": "file.read", "path": ".env" }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "xargs takes its arguments from standard input, which the hook does not see" } },
+    { "id": "find-delete", "command": "find . -delete", "target": { "action_type": "file.write", "path": "." }, "expected": "block",
+      "expected_gap": { "actual": "watch", "reason": "find -delete is recorded as a write to the folder but is not treated as a destructive command" } }
+  ]
+}

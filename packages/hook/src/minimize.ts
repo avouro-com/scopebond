@@ -133,18 +133,35 @@ function scrubSpacedPasswords(text: string): string {
 // (a header value must follow the run directly), so it qualifies when the run holds one of the words anywhere.
 const NAME_RUN = /[\w-]+/g;
 const SECRET_HEADER_WORD = /secret|token|api[-_]?key|apikey|password|passwd|credential/i;
-const HEADER_VALUE = /(\s*:\s*)[^\s"']+/y;
+const BLANK = /\s/;
+const VALUE_END = /[\s"']/;
+/** What follows a header name that ends at `end`: blanks, ":", blanks (`separator`), then a value of characters other than
+ *  blanks and quotes; `length` runs from `end` to the value's end. Null when no value follows. Read by hand in one forward
+ *  pass: as the pattern `(\s*:\s*)[^\s"']+` it was matched after every name run and backtracked over a long run of blanks
+ *  each time. Greedy reading finds the same match: a blank given back can be neither the ":" nor part of the value. */
+function headerValueAt(text: string, end: number): { separator: string; length: number } | null {
+  let i = end;
+  while (i < text.length && BLANK.test(text[i])) i++;
+  if (text[i] !== ":") return null;
+  i++;
+  while (i < text.length && BLANK.test(text[i])) i++;
+  const start = i;
+  while (i < text.length && !VALUE_END.test(text[i])) i++;
+  return i > start ? { separator: text.slice(end, start), length: i - end } : null;
+}
 function scrubSecretHeaders(text: string): string {
   let out = "";
   let last = 0;
   NAME_RUN.lastIndex = 0;
   for (let run = NAME_RUN.exec(text); run; run = NAME_RUN.exec(text)) {
+    // The name is checked first: a value is read only after a credential-like name, and a masked value is skipped whole, so
+    // no character is read as a value twice (`a:a:a:…` once read the rest of the text after every name).
+    if (!SECRET_HEADER_WORD.test(run[0])) continue;
     const end = run.index + run[0].length;
-    HEADER_VALUE.lastIndex = end;
-    const value = HEADER_VALUE.exec(text);
-    if (!value || !SECRET_HEADER_WORD.test(run[0])) continue;
-    out += text.slice(last, end) + value[1] + MASK;
-    last = end + value[0].length;
+    const value = headerValueAt(text, end);
+    if (!value) continue;
+    out += text.slice(last, end) + value.separator + MASK;
+    last = end + value.length;
     NAME_RUN.lastIndex = last;
   }
   return out + text.slice(last);

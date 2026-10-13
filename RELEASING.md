@@ -60,7 +60,7 @@ decision, not just a documentation update.
 | `version` | every push to `main` | `npm` (automation token; no deployment) | `contents: write`, `pull-requests: write` | none |
 | `check` | every push to `main` | none | `contents: read`, `pull-requests: read` | none |
 | `pack` | a publish is due | none | `contents: read` | none |
-| `publish` | a publish is due | `npm-publish` (owner approval) | `contents: write`, `id-token: write` | OIDC; token fallback |
+| `publish` | a publish is due | `npm-publish` (owner approval) | `contents: write`, `id-token: write` | OIDC only |
 
 "A publish is due" means no changesets are pending, some public package version
 is not on npm (the `changesets/action/select-mode` publish plan), and the pushed
@@ -113,11 +113,10 @@ separate manual publish workflow, and a manual run of the Release workflow on
      npm trust list @scopebond/hook
      ```
 
-3. After the first release whose `publish` job log shows a successful trusted
-   publish (and npm shows the new versions with provenance):
-   - remove `NODE_AUTH_TOKEN` from the `publish` job in `release.yml`;
+3. The `publish` job has no npm token fallback: it publishes with trusted
+   publishing only. Remove any npm publish token left from before:
    - delete the `SCOPEBOND_NPM_TOKEN` secret (in the `npm-publish` environment);
-   - revoke those tokens on npmjs.com (**Access Tokens**);
+   - revoke that token on npmjs.com (**Access Tokens**);
    - for each package, set **Settings** → **Publishing access** to **Require
      two-factor authentication and disallow tokens**. Trusted publishing keeps
      working with this setting.
@@ -125,11 +124,9 @@ separate manual publish workflow, and a manual run of the Release workflow on
 ## Configuration and checks
 
 - Use the Node version in `.nvmrc` and pnpm 10.34.6 from `package.json`.
-- The `publish` job authenticates with npm trusted publishing. Until the first
-  trusted publish succeeds its publish step (only that step, not install or
-  build) also supplies `SCOPEBOND_NPM_TOKEN` (an `npm-publish` environment secret) as `NODE_AUTH_TOKEN` (read through
-  the `.npmrc` that `actions/setup-node` writes); npm tries the OIDC exchange
-  first and uses that token only if the exchange fails. The automation token is
+- The `publish` job authenticates with npm trusted publishing only (OIDC); no
+  long-lived npm token is supplied to it. If the OIDC exchange fails, the publish
+  fails: fix the trusted publisher settings rather than adding a token. The automation token is
   used only by the step that opens the version PR, in the `npm` environment.
   Installs run with `--ignore-scripts` and no dependency cache, and checkouts keep
   no token. Keep credentials in repository secrets; never put their values in

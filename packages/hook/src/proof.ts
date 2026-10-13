@@ -33,6 +33,7 @@ import { bindingKeyFromHex, operationsForCall, sourceReceiptHash } from "./obser
 import { callRequestOf, fixtureProbe } from "./typed-ops.js";
 import { fixtureFiles } from "./typed-infra.js";
 import { ingestUrl, type HookConnection } from "./cloud.js";
+import { versionedFetch } from "./workspace-fetch.js";
 
 export const PROOF_FILE = "capability-proof.json";
 
@@ -172,7 +173,7 @@ export async function deliverProofReceipts(connection: HookConnection, receipts:
   if (receipts.length === 0) return true;
   const exporter = createCloudExporter({
     url: ingestUrl(connection), credential: connection.credential, outbox: createMemoryCloudOutbox({ maxPending: Math.max(1000, receipts.length) }),
-    fetch: options.fetch, flushMs: 60_000,
+    fetch: versionedFetch(options.fetch), flushMs: 60_000,
   });
   try {
     for (const receipt of receipts) exporter.enqueue(receipt as SignedReceipt);

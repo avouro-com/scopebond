@@ -1,0 +1,15 @@
+{
+  "category": "renamed binaries",
+  "cases": [
+    { "id": "cp-which-git", "command": "cp $(which git) g; ./g push -f origin main", "target": { "action_type": "git.push", "force": true }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "a program copied under another name is not recognised as git: the copy is recorded as a file write and the run as an unrecognised shell command" } },
+    { "id": "ln-s-git", "command": "ln -s $(which git) g && ./g push -f origin main", "target": { "action_type": "git.push", "force": true }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "a link to git under another name is not followed to the program it names" } },
+    { "id": "cp-absolute-git", "command": "cp /usr/bin/git /tmp/g && /tmp/g push --force origin main", "target": { "action_type": "git.push", "force": true }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "a copy of git at another path is not recognised as git" } },
+    { "id": "variable-program", "command": "x=git; $x push -f origin main", "expected": "block", "note": "a program named by a variable is not resolved, and an unresolved program is denied" },
+    { "id": "substituted-program", "command": "\"$(echo git)\" push -f origin main", "expected": "block" },
+    { "id": "backtick-program", "command": "`echo git` push -f origin main", "expected": "block" },
+    { "id": "sh-c-variable-program", "command": "sh -c 'g=git; $g push -f origin main'", "expected": "block" }
+  ]
+}

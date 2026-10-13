@@ -1,0 +1,20 @@
+{
+  "category": "interpreter one-liners",
+  "cases": [
+    { "id": "python-c-writes-env", "command": "python -c \"open('.env','w').write('x')\"", "target": { "action_type": "file.write", "path": ".env" }, "expected": "block",
+      "note": "blocked because a secret file named in the code is also read as a secret read" },
+    { "id": "node-e-writes-env", "command": "node -e \"require('fs').writeFileSync('.env','x')\"", "target": { "action_type": "file.write", "path": ".env" }, "expected": "block" },
+    { "id": "perl-e-writes-env", "command": "perl -e 'open(F,\">.env\"); print F \"x\"'", "target": { "action_type": "file.write", "path": ".env" }, "expected": "block" },
+    { "id": "ruby-e-writes-env", "command": "ruby -e 'File.write(\".env\",\"x\")'", "target": { "action_type": "file.write", "path": ".env" }, "expected": "block" },
+    { "id": "python-c-writes-ci-config", "command": "python -c \"open('.github/workflows/ci.yml','w').write('x')\"", "target": { "action_type": "file.write", "path": ".github/workflows/ci.yml" }, "expected": "block" },
+    { "id": "python-c-writes-own-settings", "command": "python -c \"open('.scopebond/policy.json','w').write('{}')\"", "target": { "action_type": "file.write", "path": ".scopebond/policy.json" }, "expected": "block" },
+    { "id": "python-os-system-force-push", "command": "python3 -c \"import os; os.system('git push -f origin main')\"", "target": { "action_type": "git.push", "force": true }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "code inside an interpreter string is not parsed as a command line: paths it names are read, commands it runs through os.system are not" } },
+    { "id": "python-subprocess-force-push", "command": "python -c \"import subprocess; subprocess.run(['git','push','-f','origin','main'])\"", "target": { "action_type": "git.push", "force": true }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "an argument list passed to subprocess is not read as a command line" } },
+    { "id": "node-child-process-force-push", "command": "node -e \"require('child_process').execSync('git push -f origin main')\"", "target": { "action_type": "git.push", "force": true }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "a command run through child_process is not read as a command line" } },
+    { "id": "perl-system-force-push", "command": "perl -e 'system(\"git push -f origin main\")'", "target": { "action_type": "git.push", "force": true }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "a command run through Perl's system() is not read as a command line" } }
+  ]
+}

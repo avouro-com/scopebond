@@ -41,8 +41,12 @@ process.on("uncaughtException", failClosed);
 process.on("unhandledRejection", failClosed);
 
 try {
+  // A hook call that has not decided shortly before the coding agent's own time limit denies (hook-deadline.ts).
+  const { armHookDeadline } = await import("./hook-deadline.js");
+  const disarm = armHookDeadline(process.argv[2]);
   const { main } = await import("./cli-main.js");
   await main(process.argv.slice(2));
+  disarm();
 } catch (error) {
   failClosed(error);
 }

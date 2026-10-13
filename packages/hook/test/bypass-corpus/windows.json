@@ -1,0 +1,17 @@
+{
+  "category": "Windows cmd and PowerShell",
+  "cases": [
+    { "id": "cmd-c-force-push", "command": "cmd /c \"git push -f origin main\"", "target": { "action_type": "git.push", "force": true }, "expected": "block" },
+    { "id": "cmd-c-type-env", "command": "cmd /c type .env", "target": { "action_type": "file.read", "path": ".env" }, "expected": "block" },
+    { "id": "cmd-exe-c-redirect-env", "command": "cmd.exe /c \"echo x > .env\"", "target": { "action_type": "file.write", "path": ".env" }, "expected": "watch" },
+    { "id": "powershell-encoded-force-push", "command": "powershell -EncodedCommand {encoded}", "payload": "git push -f origin main", "target": { "action_type": "git.push", "force": true }, "expected": "block" },
+    { "id": "pwsh-enc-force-push", "command": "pwsh -enc {encoded}", "payload": "git push -f origin main", "target": { "action_type": "git.push", "force": true }, "expected": "block" },
+    { "id": "ps-encoded-force-push", "tool": "PowerShell", "command": "powershell -EncodedCommand {encoded}", "payload": "git push -f origin main", "target": { "action_type": "git.push", "force": true }, "expected": "block" },
+    { "id": "ps-set-content-ci-config", "tool": "PowerShell", "command": "Set-Content .github/workflows/ci.yml x", "target": { "action_type": "file.write", "path": ".github/workflows/ci.yml" }, "expected": "block" },
+    { "id": "ps-get-content-env", "tool": "PowerShell", "command": "Get-Content .env", "target": { "action_type": "file.read", "path": ".env" }, "expected": "block" },
+    { "id": "ps-call-operator", "tool": "PowerShell", "command": "& git push -f origin main", "target": { "action_type": "git.push", "force": true }, "expected": "block" },
+    { "id": "ps-invoke-expression", "tool": "PowerShell", "command": "iex \"git push -f origin main\"", "target": { "action_type": "git.push", "force": true }, "expected": "block" },
+    { "id": "ps-start-process", "tool": "PowerShell", "command": "Start-Process git -ArgumentList 'push','-f','origin','main'", "target": { "action_type": "git.push", "force": true }, "expected": "block",
+      "expected_gap": { "actual": "miss", "reason": "Start-Process's -ArgumentList is not read as the started program's command line" } }
+  ]
+}
