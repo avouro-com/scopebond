@@ -241,7 +241,8 @@ test("a configured key that cannot be used is left out when the list is read, an
     { ...good, key_id: "inverted", not_before: T(30), not_after: T(1) },
     { ...good, key_id: "unreadable", public_key: "bm90IGEga2V5" },
   ]) };
-  assert.deepEqual(policyKeys(env).map((k) => k.key_id), ["ok"]);
+  const pinnedIds = policyKeys({}).map((k) => k.key_id);
+  assert.deepEqual(policyKeys(env).map((k) => k.key_id), [...pinnedIds, "ok"]);
   const problems = policyKeyProblems(env);
   assert.equal(problems.length, 2);
   assert.match(problems[0], /inverted: its window closes/);
