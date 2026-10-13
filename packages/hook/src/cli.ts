@@ -33,6 +33,12 @@ function failClosed(error: unknown): never {
       process.stdout.write(JSON.stringify({ permission: "deny", agentMessage: reason }) + "\n");
       process.exit(0);
     }
+    // GitHub Copilot denies on exit 2 whatever stdout holds; the JSON carries the reason.
+    if (command === "copilot") {
+      process.stdout.write(JSON.stringify({ permissionDecision: "deny", permissionDecisionReason: reason }) + "\n");
+      process.stderr.write(`${reason}\n`);
+      process.exit(2);
+    }
     process.stderr.write(`${reason}\n`);
   } catch { /* nothing left to report with */ }
   process.exit(command === "claude" ? 2 : 1);

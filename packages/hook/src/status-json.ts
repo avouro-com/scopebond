@@ -46,7 +46,7 @@ export interface StatusJson {
   /** user_connection_shadowed: the user-level sign-in is connected, but a project setup takes
    *  precedence from here. */
   config: { active: string; others: string[]; user_connection_shadowed: boolean };
-  agents: { claude: boolean; cursor: boolean; codex: boolean };
+  agents: { claude: boolean; cursor: boolean; codex: boolean; copilot?: boolean };
 }
 
 /** A pending record older than this, with a delivery error, means the computer is not delivering. */
@@ -56,7 +56,7 @@ export function buildStatusJson(input: {
   version: string; activeDir: string; candidateDirs: string[]; hasPolicy: boolean;
   /** The user-level config dir, to report a project setup that takes precedence over its connection. */
   userDir?: string;
-  agents: { claude: boolean; cursor: boolean; codex: boolean }; now?: number;
+  agents: { claude: boolean; cursor: boolean; codex: boolean; copilot?: boolean }; now?: number;
 }): StatusJson {
   const now = input.now ?? Date.now();
   const dir = input.activeDir;
@@ -64,7 +64,7 @@ export function buildStatusJson(input: {
   const state = readDeliveryState(dir);
   const { pending, oldest, error: queueError, gapsTotal, gapsByReason } = queueStatus(dir);
   const code = /\(([a-z_]+)\)/.exec(state.last_error ?? "")?.[1] ?? (state.last_status ? `http_${state.last_status}` : null);
-  const governing = input.hasPolicy && (input.agents.claude || input.agents.cursor || input.agents.codex);
+  const governing = input.hasPolicy && (input.agents.claude || input.agents.cursor || input.agents.codex || input.agents.copilot === true);
   // Stuck with a known error for an hour, or stalled: nothing accepted since the oldest waiting
   // record was queued, error or not (an attempt cut off by its time limit used to record none).
   const stuck = (pending > 0 && oldest !== null && now - oldest > STUCK_AFTER_MS && state.last_error !== null)

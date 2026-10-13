@@ -1,7 +1,8 @@
 // The user-level installer. One install per developer machine (not per repo):
 // keys and a starter policy live in a user-level home (~/.scopebond, override
 // SCOPEBOND_HOME), and the hook is registered by absolute path in the user-level agent
-// config (~/.claude/settings.json, ~/.cursor/hooks.json, ~/.codex/hooks.json). When a
+// config (~/.claude/settings.json, ~/.cursor/hooks.json, ~/.codex/hooks.json,
+// ~/.copilot/hooks/scopebond.json). When a
 // user-level install exists, a project-local `.scopebond` is used only if the user
 // trusted that exact policy (`scopebond trust`, or `init` in the project): a cloned
 // repository, or an agent inside it, must not be able to swap in its own policy.
@@ -14,7 +15,27 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { findProgram, programPath } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 
-export type Harness = "claude" | "cursor" | "codex";
+export type Harness = "claude" | "cursor" | "codex" | "copilot";
+
+/** Every coding agent the hook can be wired into, in the order `status` and `doctor` list them. */
+export const HARNESSES: readonly Harness[] = ["claude", "cursor", "codex", "copilot"];
+
+/** GitHub Copilot reads every `*.json` file in its hooks folders, so Scopebond's entries live in a file of their own. */
+export const COPILOT_HOOK_FILE = "scopebond.json";
+
+/** The `timeoutSec` Scopebond writes on each Copilot hook entry. Copilot lets the action run when a hook times out (a
+ *  timeout fails open there), so the hook stops itself and denies well before this: see `COPILOT_DECISION_DEADLINE_MS`. */
+export const COPILOT_TIMEOUT_SEC = 60;
+
+/** How long a Copilot tool check may run before the hook gives up and denies. Shorter than `COPILOT_TIMEOUT_SEC` by a
+ *  margin for Node's start and the write to stdout, so a slow policy load or a held lock ends as a deny, never as a
+ *  timed-out hook that Copilot would wave through. */
+export const COPILOT_DECISION_DEADLINE_MS = 45_000;
+
+/** Copilot's user-level folder: `COPILOT_HOME` when set, else `~/.copilot` (`%USERPROFILE%\.copilot` on Windows). */
+export function copilotHome(): string {
+  return process.env.COPILOT_HOME || join(homedir(), ".copilot");
+}
 
 /** The user-level Scopebond home. `SCOPEBOND_HOME` overrides it (tests, CI). */
 export function userHome(): string {
@@ -26,6 +47,7 @@ export function userHome(): string {
 export function userHarnessFile(harness: Harness): string {
   if (harness === "cursor") return join(homedir(), ".cursor", "hooks.json");
   if (harness === "codex") return join(homedir(), ".codex", "hooks.json");
+  if (harness === "copilot") return join(copilotHome(), "hooks", COPILOT_HOOK_FILE);
   return join(homedir(), ".claude", "settings.json");
 }
 
@@ -34,13 +56,14 @@ export function userHarnessFile(harness: Harness): string {
 export function projectHarnessFile(harness: Harness, cwd: string = process.cwd()): string {
   if (harness === "cursor") return join(cwd, ".cursor", "hooks.json");
   if (harness === "codex") return join(cwd, ".codex", "hooks.json");
+  if (harness === "copilot") return join(cwd, ".github", "hooks", COPILOT_HOOK_FILE);
   return join(cwd, ".claude", "settings.json");
 }
 
 /** The personal, per-machine project config for a harness, or null when the harness
  *  has none. Claude Code reads `.claude/settings.local.json` beside `settings.json` and
  *  merges the hooks of both; it is the place for anything that names a path on this
- *  machine. Cursor and Codex have no such file. */
+ *  machine. Cursor, Codex and Copilot have no such file. */
 export function localHarnessFile(harness: Harness, cwd: string = process.cwd()): string | null {
   return harness === "claude" ? join(cwd, ".claude", "settings.local.json") : null;
 }
@@ -145,7 +168,8 @@ export function pruneHarnessEntries(file: string, remove: (command: string) => b
   let removed = 0;
   const commandsOf = (e: unknown): string[] => {
     if (!isRecord(e)) return [];
-    const own = isScopebond(e.command) ? [String(e.command)] : [];
+    const command = harnessEntryCommand(e);
+    const own = command !== undefined && isScopebond(command) ? [command] : [];
     const nested = Array.isArray(e.hooks) ? e.hooks.flatMap(commandsOf) : [];
     return [...own, ...nested];
   };
@@ -243,7 +267,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
  *  polynomially on a long run of `\tscopebond\t` (CodeQL js/polynomial-redos). The
  *  input is a command out of a config file rather than a request, so this was not
  *  reachable by an attacker — but a linear check is also the clearer one. */
-const HARNESS_SUBCOMMANDS = new Set(["claude", "cursor", "codex"]);
+const HARNESS_SUBCOMMANDS = new Set(["claude", "cursor", "codex", "copilot"]);
 /** Long enough for any real command; a bound keeps the work linear and small. */
 const MAX_COMMAND = 4096;
 const unquote = (token: string): string => token.replace(/^["']+|["']+$/g, "");
@@ -267,10 +291,19 @@ export const isScopebondHookCommand = (cmd: unknown): boolean => {
 };
 const isScopebond = isScopebondHookCommand;
 
+/** The command one hook entry runs. Claude Code, Cursor and Codex name it `command`; a GitHub Copilot entry names one
+ *  per shell (`bash`, `powershell`), and Scopebond writes the same command in both, so `bash` stands for the entry (the
+ *  `powershell` form only adds PowerShell's call operator in front). */
+export function harnessEntryCommand(e: unknown): string | undefined {
+  if (!isRecord(e)) return undefined;
+  for (const key of ["command", "bash", "powershell"]) { const value = e[key]; if (typeof value === "string") return value; }
+  return undefined;
+}
+
 /** Whether a harness hook entry (either shape: a bare command, or a group with a
  *  nested `hooks` array) is a Scopebond entry. */
 export const harnessEntryMatches = (e: unknown): boolean =>
-  isRecord(e) && (isScopebond(e.command) || (Array.isArray(e.hooks) && e.hooks.some((h) => isRecord(h) && isScopebond(h.command))));
+  isRecord(e) && (isScopebond(harnessEntryCommand(e)) || (Array.isArray(e.hooks) && e.hooks.some((h) => isScopebond(harnessEntryCommand(h)))));
 const entryMatches = harnessEntryMatches;
 
 /** Read an agent's JSON config for merging. A missing file is an empty config; a file
@@ -315,6 +348,40 @@ export function backupHarnessConfig(file: string): string | null {
   try { copyFileSync(file, backup, fsConstants.COPYFILE_EXCL); return backup; } catch { return null; }
 }
 
+/** The GitHub Copilot events Scopebond registers. The PascalCase names make Copilot send the VS Code-compatible payload
+ *  (`hook_event_name`, `session_id`, `tool_name`, `tool_input`), the same shape Claude Code sends. `PreToolUse` decides;
+ *  the others only feed session and after-action observations. */
+export const COPILOT_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "SessionStart", "SessionEnd"] as const;
+
+/** The PowerShell spelling of a hook command. Copilot runs an entry's `powershell` command on Windows, and PowerShell
+ *  reads a command that starts with a quoted path as a string, not a program: the call operator `&` runs it. `npx` there
+ *  resolves to `npx.ps1`, which the default script policy refuses, so the portable form names `npx.cmd`. */
+export function powershellHookCommand(command: string): string {
+  const trimmed = command.trim();
+  if (trimmed.startsWith("\"")) return `& ${trimmed}`;
+  if (/^npx\s/.test(trimmed)) return `npx.cmd ${trimmed.slice(4)}`;
+  return trimmed;
+}
+
+/** One Copilot hook entry running `command`. No matcher: an entry without one runs for every tool. */
+export function copilotHookEntry(command: string): Record<string, unknown> {
+  const cmd = command.replace(/\b(claude|cursor|codex)$/, "copilot");
+  return { type: "command", bash: cmd, powershell: powershellHookCommand(cmd), timeoutSec: COPILOT_TIMEOUT_SEC };
+}
+
+/** Put Scopebond's Copilot entries into a `version: 1` hooks document, replacing any earlier Scopebond entry and leaving
+ *  every other entry alone. */
+export function addCopilotHooks(config: Record<string, unknown>, command: string): void {
+  config.version = config.version ?? 1;
+  const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
+  for (const event of COPILOT_EVENTS) {
+    const list = Array.isArray(hooks[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
+    const at = list.findIndex(entryMatches);
+    const entry = copilotHookEntry(command);
+    if (at >= 0) list[at] = entry; else list.push(entry);
+  }
+}
+
 /** Write (idempotently) a harness hook entry pointing at an explicit command string.
  *  Shared by the project installer (npx command) and the user installer (absolute path). */
 export function writeHarnessConfig(file: string, harness: Harness, command: string): string {
@@ -322,7 +389,9 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
   const config = present ?? {};
   const before = present !== undefined ? JSON.stringify(config) : null;
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
-  if (harness === "cursor") {
+  if (harness === "copilot") {
+    addCopilotHooks(config, command);
+  } else if (harness === "cursor") {
     config.version = config.version ?? 1;
     for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
       const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
@@ -360,8 +429,22 @@ export function removeHarnessConfig(file: string): boolean {
   for (const [event, value] of Object.entries(hooks)) {
     if (Array.isArray(value)) (hooks as Record<string, unknown[]>)[event] = value.filter((e) => !entryMatches(e));
   }
+  // Copilot's `scopebond.json` is Scopebond's own file: once nothing else is in it, it goes rather than stay behind empty.
+  // A file someone added their own hooks or settings to is kept, with only Scopebond's entries removed.
+  if (basename(file) === COPILOT_HOOK_FILE && isCopilotHooksFolder(dirname(file))) {
+    const othersLeft = Object.keys(config).some((k) => k !== "version" && k !== "hooks")
+      || Object.values(hooks).some((v) => !Array.isArray(v) || v.length > 0);
+    if (!othersLeft) { rmSync(file, { force: true }); return true; }
+  }
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return true;
+}
+
+/** Whether a folder is one Copilot reads hook files from: a `hooks` folder inside `.github` or Copilot's home. */
+function isCopilotHooksFolder(dir: string): boolean {
+  if (basename(dir) !== "hooks") return false;
+  const parent = resolve(dirname(dir));
+  return basename(parent) === ".github" || basename(parent) === ".copilot" || parent === resolve(copilotHome());
 }
 
 /** Detect a Cursor install by its user config directory. */
@@ -372,6 +455,19 @@ export function cursorDetected(): boolean {
 /** Detect a Codex install by its user config directory. */
 export function codexDetected(): boolean {
   return existsSync(join(homedir(), ".codex"));
+}
+
+/** Detect a GitHub Copilot CLI install by its user config directory (`COPILOT_HOME`, else `~/.copilot`). */
+export function copilotDetected(): boolean {
+  return existsSync(copilotHome());
+}
+
+/** Whether a harness's user config directory exists (Claude Code is always offered). */
+export function harnessDetected(harness: Harness): boolean {
+  if (harness === "cursor") return cursorDetected();
+  if (harness === "codex") return codexDetected();
+  if (harness === "copilot") return copilotDetected();
+  return true;
 }
 
 /** The absolute command a harness entry runs: the current Node executable and the
@@ -396,7 +492,7 @@ export function nativeHookCommand(harness: Harness, exe: string = process.execPa
 
 /** The program a single-executable hook entry runs (`"<…\scopebond-agent.exe>" hook claude`), or null for any other form. */
 export function nativeHookProgram(command: string): string | null {
-  const m = /^"([^"]+)"\s+hook\s+(?:claude|cursor|codex)\s*$/i.exec(command.trim());
+  const m = /^"([^"]+)"\s+hook\s+(?:claude|cursor|codex|copilot)\s*$/i.exec(command.trim());
   return m && /scopebond-agent(?:\.exe)?$/i.test(m[1]) ? m[1] : null;
 }
 
@@ -425,7 +521,8 @@ export function configuredHookCommands(file: string): string[] {
   const found: string[] = [];
   const collect = (entry: unknown): void => {
     if (!isRecord(entry)) return;
-    if (isScopebond(entry.command)) found.push(String(entry.command));
+    const command = harnessEntryCommand(entry);
+    if (command !== undefined && isScopebond(command)) found.push(command);
     if (Array.isArray(entry.hooks)) for (const h of entry.hooks) collect(h);
   };
   try {

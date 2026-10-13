@@ -127,7 +127,7 @@ async function proveCell(adapter: Adapter, actionType: string, phase: "pre_actio
  *  tell Codex desktop from Codex CLI: both keys get the same fixture proof, and neither
  *  becomes verified (see `cellState`). */
 export async function runProofFixtures(adapterVersion: string, options: ProofRunOptions = {}): Promise<Record<string, ProofRecord>> {
-  const cells = computeManifest({ adapterVersion, configured: { claude: true, codex: true, cursor: true } }).cells;
+  const cells = computeManifest({ adapterVersion, configured: { claude: true, codex: true, cursor: true, copilot: true } }).cells;
   const records: Record<string, ProofRecord> = {};
   const cache = new Map<string, Omit<ProofRecord, "cell"> | null>();
   for (const cell of cells) {

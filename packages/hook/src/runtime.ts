@@ -90,7 +90,15 @@ const CI_WRITE_PREV = [
   under("\\.github/workflows"), under("\\.github/actions"), named("\\.gitlab-ci\\.yml"), named("\\.gitlab-ci\\.yaml"), under("\\.circleci"),
   named("azure-pipelines\\.yml"), named("Jenkinsfile"),
 ];
-const GUARDRAIL_WRITE = [...GUARDRAIL_WRITE_PREV, named("\\.cursor/mcp\\.json"), under("\\.githooks")];
+const GUARDRAIL_WRITE_PREV2 = [...GUARDRAIL_WRITE_PREV, named("\\.cursor/mcp\\.json"), under("\\.githooks")];
+// GitHub Copilot's hook files and the settings files whose `hooks` block it also reads: the user-level folder and settings
+// (`~/.copilot`), and a repository's `.github/hooks` and `.github/copilot` settings. `.github/hooks` holds hooks, not CI
+// configuration, so it is guardrail configuration (C02) like the other agents' hook settings.
+const COPILOT_GUARDRAIL_WRITE = [
+  under("\\.copilot/hooks"), named("\\.copilot/settings\\.json"), under("\\.github/hooks"),
+  named("\\.github/copilot/settings\\.json"), named("\\.github/copilot/settings\\.local\\.json"),
+];
+const GUARDRAIL_WRITE = [...GUARDRAIL_WRITE_PREV2, ...COPILOT_GUARDRAIL_WRITE];
 const CI_WRITE = [
   ...CI_WRITE_PREV,
   named("azure-pipelines\\.yaml"), named("bitbucket-pipelines\\.yml"), named("\\.travis\\.yml"), named("\\.drone\\.yml"),
@@ -99,6 +107,8 @@ const CI_WRITE = [
 // What 0.8 compiled, kept so an installed policy that still carries it verbatim is
 // upgraded in memory (see LEGACY_STARTER_PATTERNS).
 const PROTECTED_WRITE_PREV = "^" + [...GUARDRAIL_WRITE_PREV, ...CI_WRITE_PREV].join("") + ".+";
+/** What the starter policy's write rule compiled to before it covered GitHub Copilot's hook settings. */
+const PROTECTED_WRITE_PREV2 = "^" + [...GUARDRAIL_WRITE_PREV2, ...CI_WRITE].join("") + ".+";
 const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
 // The folder the signed Windows installer puts the program in (the Scopebond Agent, which is also the hook every coding
 // agent runs, and the tray): `%LOCALAPPDATA%\Programs\Scopebond` for one user, `%ProgramFiles%\Scopebond` for every user.
@@ -109,7 +119,11 @@ const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
 const INSTALL_PARENT = `(?:${ci("programs")}|${ci("program files")}(?: \\(${ci("x86")}\\))?|${ci("progra")}~\\d|[%$]\\{?(?:${ci("env")}:)?${ci("program")}[^/]*)`;
 export const INSTALL_FOLDER = `(?!(?:.*/)?${INSTALL_PARENT}/(?:${ci("scopebond")}|${ci("scopeb")}~\\d)(?:/|$))`;
 /** What the always-on write protection compiled to before it covered the install folder: upgraded on load. */
-const GUARDRAIL_WRITE_PATTERN_PREV = "^" + GUARDRAIL_WRITE.join("") + ".+";
+const GUARDRAIL_WRITE_PATTERN_PREV = "^" + GUARDRAIL_WRITE_PREV2.join("") + ".+";
+/** What it compiled to before it covered GitHub Copilot's hook settings: upgraded on load too. */
+const GUARDRAIL_WRITE_PATTERN_PREV2 = "^" + GUARDRAIL_WRITE_PREV2.join("") + INSTALL_FOLDER + ".+";
+/** The current agent settings without the install folder: weaker than the floor, so upgraded to it as well. */
+const GUARDRAIL_WRITE_PATTERN_NO_INSTALL = "^" + GUARDRAIL_WRITE.join("") + ".+";
 /** The write protection that is always on, whoever manages the rules: the hook's own settings and those of the agents it
  *  guards, and the installed program. A workspace can relax CI-configuration writes; it can never relax these. */
 export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER + ".+";
@@ -173,7 +187,10 @@ const SAFE_REF = `^(?!(?:${ci("main")}|${ci("master")})$)(?!${ci("release")}/)(?
 // these strings and are left untouched.
 const LEGACY_STARTER_PATTERNS: Record<string, string> = {
   [PROTECTED_WRITE_PREV]: PROTECTED_WRITE,
+  [PROTECTED_WRITE_PREV2]: PROTECTED_WRITE,
   [GUARDRAIL_WRITE_PATTERN_PREV]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_PATTERN_PREV2]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_PATTERN_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+": SAFE_SHELL,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+": SAFE_SHELL,
@@ -219,7 +236,7 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
       {
         id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],
         param_bounds: { path: { pattern: PROTECTED_WRITE } },
-        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor or Codex hook settings, .mcp.json and .cursor/mcp.json, git hooks (.git/hooks, .githooks) and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines, bitbucket-pipelines.yml, .travis.yml, .drone.yml, cloudbuild, .buildkite, Jenkinsfile). Case-insensitive.",
+        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor, Codex or GitHub Copilot hook settings, .mcp.json and .cursor/mcp.json, git hooks (.git/hooks, .githooks) and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines, bitbucket-pipelines.yml, .travis.yml, .drone.yml, cloudbuild, .buildkite, Jenkinsfile). Case-insensitive.",
       },
       {
         id: "protect-read", type: "action_allowlist", mode: mode("protect-read"), action_types: ["file.read"],

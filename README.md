@@ -10,8 +10,8 @@ As organizations adopt more AI, they need clear oversight and accountability:
 what did an agent do, how are harmful actions controlled, and what evidence can
 they provide? Scopebond's open-source components check supported actions against
 your rules and create signed records you can inspect and verify independently.
-Connect Claude Code, Cursor, Codex, MCP tools, your agent framework, or GitHub
-pull-request checks.
+Connect Claude Code, Cursor, Codex, GitHub Copilot, MCP tools, your agent framework,
+or GitHub pull-request checks.
 
 **This repository contains free, Apache-2.0 open-source software. Scopebond Cloud,
 the hosted shared workspace, is a separate proprietary service and is not open
@@ -62,7 +62,7 @@ For Claude Code, run this in your own terminal, outside the coding agent:
 npx -y @scopebond/hook@latest login https://cloud.scopebond.com
 ```
 
-Add `--cursor` or `--codex` for those tools. The command prints a short code and
+Add `--cursor`, `--codex` or `--copilot` for those tools. The command prints a short code and
 an approval link for the workspace owner. For Codex, review Scopebond in `/hooks`,
 choose **Trust**, and start a new task. See the [hook README](packages/hook) for
 connection details and tool-specific coverage.
@@ -77,11 +77,12 @@ scopebond install
 scopebond status
 ```
 
-`install` configures Claude Code and detects installed Cursor and Codex settings;
-you can choose a tool with `--cursor` or `--codex`. For one project's setup:
+`install` configures Claude Code and detects installed Cursor, Codex and GitHub
+Copilot settings; you can choose a tool with `--cursor`, `--codex` or `--copilot`.
+For one project's setup:
 
 ```bash
-npx -y @scopebond/hook@latest init          # Claude Code; add --cursor or --codex
+npx -y @scopebond/hook@latest init          # Claude Code; add --cursor, --codex or --copilot
 npx -y @scopebond/hook@latest log           # inspect recent decisions
 npx -y @scopebond/hook@latest verify        # check stored records offline
 ```
@@ -98,6 +99,7 @@ setup scope, diagnostics, and uninstall. In unattended setup, pass `--yes` to
 | Connection | What it checks | Important limit |
 |---|---|---|
 | [Claude Code, Cursor, and Codex hook](packages/hook) | Supported tool actions delivered through the configured hook. | Cursor file edits are recorded **after** writing, not prevented. Codex file reads are checked when derived from supported shell commands; reads outside that path are not seen. |
+| [GitHub Copilot hook](packages/hook#github-copilot) | Shell commands, file reads and edits, and git pushes from Copilot CLI (and VS Code agent mode), checked before they run. | Cooperative: prevents if honored, but **a hook timeout fails open in Copilot**, so the hook denies on its own shorter deadline. MCP tool calls are recorded, not evaluated. The cloud coding agent is not covered yet. |
 | [GitHub Action](packages/github-action) | Policy checks on supported agent pull requests in your own runner. | Make the check required to gate merge. It does not monitor the agent's cloud sandbox; bypass rights remain outside the gate. Signing needs your configured signing key. |
 | [MCP proxy](packages/mcp) | Each `tools/call` routed through the proxy before forwarding. | Resource reads and prompt fetches are outside the tool-call policy. |
 | [Framework integrations](packages/framework) | Guarded tools in Vercel AI SDK, LangGraph/LangChain, or your own tool loop. | The application must honor the guard; calls outside it are not covered. |

@@ -5,7 +5,7 @@
 //   ("ask"), so Cursor's own approval still decides, as Claude Code's and Codex's do when the hook stays silent.
 // - A Cursor edit reported after it was written (afterFileEdit) that breaks a rule is signed as recorded after the fact
 //   (execution state `observed_after`, executed true): it is never signed or counted as blocked.
-// - The hook program answers "deny" (Claude Code: exit 2) when it fails before it can decide.
+// - The hook program answers "deny" (Claude Code and GitHub Copilot: exit 2) when it fails before it can decide.
 // - A Codex or Cursor hook entry that cannot start is kept as a delivery gap, which the rules check reports.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -58,8 +58,8 @@ function exercise(env, dir, harness, payload, cwd) {
   let message = "";
   if (out.stdout) {
     const j = JSON.parse(out.stdout.split("\n").pop());
-    decision = j.permission ?? j.hookSpecificOutput?.permissionDecision ?? "(other)";
-    message = j.agentMessage ?? j.hookSpecificOutput?.permissionDecisionReason ?? "";
+    decision = j.permission ?? j.hookSpecificOutput?.permissionDecision ?? j.permissionDecision ?? "(other)";
+    message = j.agentMessage ?? j.hookSpecificOutput?.permissionDecisionReason ?? j.permissionDecisionReason ?? "";
   }
   return { exit: out.status, decision, message, receipts: fresh };
 }
@@ -67,6 +67,8 @@ function exercise(env, dir, harness, payload, cwd) {
 const claude = (tool_name, tool_input, cwd) => ({ hook_event_name: "PreToolUse", session_id: "s1", tool_use_id: "t-" + tool_name, tool_name, tool_input, cwd, permission_mode: "default" });
 const codex = (tool_name, tool_input, cwd) => ({ hook_event_name: "PreToolUse", session_id: "c1", tool_use_id: "c-" + tool_name, tool_name, tool_input, cwd });
 const cursorShell = (command, cwd, id) => ({ hook_event_name: "beforeShellExecution", conversation_id: "k1", generation_id: id, command, cwd });
+// GitHub Copilot with the PascalCase events Scopebond registers: Claude Code's payload shape, no tool call id.
+const copilot = (tool_name, tool_input, cwd) => ({ hook_event_name: "PreToolUse", session_id: "p1", timestamp: new Date().toISOString(), tool_name, tool_input, cwd });
 
 function home(mode) {
   const root = mkdtempSync(join(tmpdir(), `sb-parity-${mode}-`));
@@ -92,7 +94,7 @@ test("default (monitored) rules: Cursor gets no opinion for an out-of-policy act
     assert.equal(r.decision, "ask");
     assert.ok(r.receipts.some((x) => x.result === "deny"), "the violation is still recorded");
   }
-  for (const [harness, payload] of [["claude", claude("Bash", { command: "rm -rf src" }, cwd)], ["codex", codex("Bash", { command: "rm -rf src" }, cwd)]]) {
+  for (const [harness, payload] of [["claude", claude("Bash", { command: "rm -rf src" }, cwd)], ["codex", codex("Bash", { command: "rm -rf src" }, cwd)], ["copilot", copilot("Bash", { command: "rm -rf src" }, cwd)]]) {
     const r = exercise(env, dir, harness, payload, cwd);
     assert.equal(r.exit, 0);
     assert.equal(r.decision, "(silent)", `${harness} stays silent so its own approval decides`);
@@ -123,6 +125,13 @@ test("blocking rules: a Cursor afterFileEdit violation is signed as recorded aft
   const blocked = claudeRun.receipts.find((x) => x.action === "file.write");
   assert.equal(blocked.state, "denied");
   assert.equal(blocked.executed, 0);
+  // And through GitHub Copilot, before it is written (Copilot's `create` tool, reported as Write).
+  const copilotRun = exercise(env, dir, "copilot", copilot("Write", { path: join(cwd, ".github/workflows/ci.yml"), file_text: "x" }, cwd), cwd);
+  assert.equal(copilotRun.exit, 2);
+  assert.equal(copilotRun.decision, "deny");
+  const copilotBlocked = copilotRun.receipts.find((x) => x.action === "file.write");
+  assert.equal(copilotBlocked.state, "denied");
+  assert.equal(copilotBlocked.executed, 0);
 
   // `log` shows the difference, and `log --deny` (what got blocked) leaves the recorded edit out.
   const log = spawnSync(process.execPath, [cli, "log"], { env, cwd, encoding: "utf8", timeout: 60_000 });
@@ -130,11 +139,11 @@ test("blocking rules: a Cursor afterFileEdit violation is signed as recorded aft
   const denied = spawnSync(process.execPath, [cli, "log", "--deny"], { env, cwd, encoding: "utf8", timeout: 60_000 });
   assert.doesNotMatch(denied.stdout, /recorded, not prevented/);
 
-  // Today's counts: one block (Claude Code), one recorded after the fact (Cursor).
+  // Today's counts: two blocks (Claude Code, Copilot), one recorded after the fact (Cursor).
   const activity = localActivity(dir);
-  assert.equal(activity.today.blocked, 1);
+  assert.equal(activity.today.blocked, 2);
   assert.equal(activity.today.recorded_after, 1);
-  assert.equal(activity.recent_blocks.length, 1, "only the prevented write is listed as a block");
+  assert.equal(activity.recent_blocks.length, 2, "only the prevented writes are listed as blocks");
 });
 
 test("the hook answers deny when it fails before it can decide (Claude Code: exit 2)", () => {
@@ -151,6 +160,9 @@ test("the hook answers deny when it fails before it can decide (Claude Code: exi
   assert.equal(JSON.parse(cur.stdout).permission, "deny");
   const cod = run(env, "codex", codex("Bash", { command: "ls" }, cwd), cwd, undefined, broken);
   assert.equal(JSON.parse(cod.stdout).hookSpecificOutput.permissionDecision, "deny");
+  const cop = run(env, "copilot", copilot("Bash", { command: "ls" }, cwd), cwd, undefined, broken);
+  assert.equal(cop.status, 2, "Copilot denies on exit 2 whatever stdout says");
+  assert.equal(JSON.parse(cop.stdout).permissionDecision, "deny");
 });
 
 test("a Codex or Cursor hook entry that cannot start is kept as a delivery gap, once per outage", () => {

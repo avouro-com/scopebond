@@ -11,7 +11,8 @@ import { createExclusive, replaceFile } from "./safe-fs.js";
 import {
   readHarnessConfig, projectHarnessFile, localHarnessFile, harnessEntryMatches, backupHarnessConfig,
   gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
-  userHarnessFile, isNpxHookCommand, hookCommandResolves, nativeHookCommand,
+  userHarnessFile, isNpxHookCommand, hookCommandResolves, nativeHookCommand, addCopilotHooks, copilotHookEntry,
+  COPILOT_EVENTS, type Harness,
 } from "./install.js";
 import { cliCommand, hookCommand } from "./version.js";
 import { loadOrCreateDigestKey } from "./minimize.js";
@@ -94,11 +95,11 @@ export interface HookPlacement {
  *  - `shared` (or no pinned command): the portable `npx` form in the project config.
  *  - Claude Code, pinned: `.claude/settings.local.json`, kept out of git for this clone;
  *    any machine-specific entry an older `init` wrote into `settings.json` is removed.
- *  - Cursor / Codex, pinned: they have no personal file, so the project file is used
- *    only if git does not already track it (then excluded for this clone); a tracked
+ *  - Cursor / Codex / Copilot, pinned: they have no personal file, so the project file is
+ *    used only if git does not already track it (then excluded for this clone); a tracked
  *    file gets the portable form. */
 export function placeHook(
-  harness: "claude" | "cursor" | "codex",
+  harness: Harness,
   cwd: string,
   pinned: string | undefined,
   opts: { shared?: boolean } = {},
@@ -161,7 +162,7 @@ export function placeHook(
  *    which is kept out of git for this clone (were npx installed later, `status` reports the two as a duplicate);
  *  - otherwise (Cursor and Codex have no personal file), the command that adds a user-level hook is printed.
  *  Teammates keep the shared npx form, which starts on macOS, Linux and any computer with Node.js. Returns what to print. */
-export function coverWithoutNpx(harness: "claude" | "cursor" | "codex", cwd: string, opts: { label: string; command?: string }): string[] {
+export function coverWithoutNpx(harness: Harness, cwd: string, opts: { label: string; command?: string }): string[] {
   const lines = ["this computer has no npx (Node.js), so the shared command cannot start here; teammates with Node.js use it as before"];
   const user = userHarnessFile(harness);
   if (configuredHookCommands(user).some((c) => !isNpxHookCommand(c) && hookCommandResolves(c))) {
@@ -187,7 +188,7 @@ export function coverWithoutNpx(harness: "claude" | "cursor" | "codex", cwd: str
  *  `cwd` defaults to the current directory (the project root the user runs it in).
  *  Writes exactly where it is told; `placeHook` decides where a command may go. */
 export function installHarness(
-  harness: "claude" | "cursor" | "codex",
+  harness: Harness,
   cwd: string = process.cwd(),
   /** The command to run per tool call. Defaults to the portable `npx` form. */
   command?: string,
@@ -200,8 +201,8 @@ export function installHarness(
   backupHarnessConfig(file); // keep the user's original beside it before the first change
   mkdirSync(dirname(file), { recursive: true });
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
-  const forHarness = (h: "claude" | "cursor" | "codex"): string =>
-    command ? command.replace(/\b(claude|cursor|codex)$/, h) : hookCommand(h);
+  const forHarness = (h: Harness): string =>
+    command ? command.replace(/\b(claude|cursor|codex|copilot)$/, h) : hookCommand(h);
   const cursorCmd = forHarness("cursor");
   const claudeCmd = forHarness("claude");
   const codexCmd = forHarness("codex");
@@ -210,7 +211,9 @@ export function installHarness(
   // instead of appending a second one. One shared matcher with `install`: a private
   // copy here missed the pinned Windows form and duplicated the hook.
   const entryMatches = harnessEntryMatches;
-  if (harness === "cursor") {
+  if (harness === "copilot") {
+    addCopilotHooks(config, forHarness("copilot"));
+  } else if (harness === "cursor") {
     config.version = config.version ?? 1;
     for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
       const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
@@ -233,9 +236,13 @@ export function installHarness(
 /** The harness configuration snippet to install the hook by hand. Defaults to the
  *  version-pinned `npx` form; `init --no-install` passes the pinned path it chose, so
  *  the printed snippet matches what `init` would have written. */
-export function harnessSnippet(harness: "claude" | "cursor" | "codex", command?: string): string {
-  const cmdFor = (h: "claude" | "cursor" | "codex"): string =>
-    command ? command.replace(/\b(claude|cursor|codex)$/, h) : hookCommand(h);
+export function harnessSnippet(harness: Harness, command?: string): string {
+  const cmdFor = (h: Harness): string =>
+    command ? command.replace(/\b(claude|cursor|codex|copilot)$/, h) : hookCommand(h);
+  if (harness === "copilot") {
+    const entry = copilotHookEntry(cmdFor("copilot"));
+    return JSON.stringify({ version: 1, hooks: Object.fromEntries(COPILOT_EVENTS.map((event) => [event, [entry]])) }, null, 2);
+  }
   if (harness === "cursor") {
     const cmd = cmdFor("cursor");
     return JSON.stringify({

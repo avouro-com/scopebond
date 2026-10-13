@@ -22,7 +22,8 @@ import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgr
 import * as gatewayNode from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
-import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
+import { mapClaudeToolUse, mapCodexToolUse, mapCopilotCall, copilotAsClaude, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
+import { createHash } from "node:crypto";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { replaceFile } from "./safe-fs.js";
@@ -34,7 +35,8 @@ import { approvalSummary, retryAfterSeconds } from "./login-approval.js";
 import { createInterface } from "node:readline/promises";
 import {
   userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
-  cursorDetected, codexDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
+  cursorDetected, codexDetected, copilotDetected, harnessDetected, HARNESSES, COPILOT_DECISION_DEADLINE_MS,
+  absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
   localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy, isTrustedProject,
   wireLifecycleHooks, unwireLifecycleHooks, nativeHookProgram, missingHookPrograms,
@@ -65,7 +67,7 @@ import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
 import { describeDelivery } from "./delivery-report.js";
 import { buildStatusJson } from "./status-json.js";
-import { computeManifest, renderManifest } from "./capabilities.js";
+import { computeManifest, renderManifest, HOST_ENFORCEMENT } from "./capabilities.js";
 import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofReceipts } from "./proof.js";
 
 /** The current git branch in `cwd` (best-effort). A bare `git push` pushes it, so
@@ -126,8 +128,9 @@ function readStdin(): string {
 }
 
 /** How long a hook waits for a person in the Scopebond window: well inside each agent's hook timeout (Claude Code 60 s by
- *  default; the Codex entry Scopebond writes says 30 s), so the wait ends as a block, never as a timed-out hook. */
-const OVERRIDE_WAIT_MS: Record<Harness, number> = { claude: 45_000, codex: 20_000, cursor: 20_000 };
+ *  default; the Codex entry Scopebond writes says 30 s; for Copilot, inside the hook's own deadline, which is itself inside
+ *  the 60 s its entry says), so the wait ends as a block, never as a timed-out hook. */
+export const OVERRIDE_WAIT_MS: Record<Harness, number> = { claude: 45_000, codex: 20_000, cursor: 20_000, copilot: 25_000 };
 
 /** Warn mode: Claude Code shows the person its own prompt for this action (only where the workspace allows it and Claude Code
  *  really asks; see override.ts). */
@@ -148,6 +151,20 @@ function denyClaude(reason: string): never {
   process.exit(2);
 }
 
+/** GitHub Copilot: the decision on stdout, and exit 2, which Copilot treats as a deny whatever stdout says, so a deny holds
+ *  even if the JSON were lost. `permissionDecisionReason` is required with a deny; it is what the agent is told. */
+function denyCopilot(reason: string): never {
+  process.stdout.write(JSON.stringify({ permissionDecision: "deny", permissionDecisionReason: reason }) + "\n");
+  process.stderr.write(`${reason.startsWith("Scopebond") ? reason : `Scopebond: ${reason}`}\n`);
+  process.exit(2);
+}
+
+/** GitHub Copilot's "ask": the CLI asks the person; the cloud coding agent, with no one to ask, treats it as a deny. */
+function askCopilot(reason: string): never {
+  process.stdout.write(JSON.stringify({ permissionDecision: "ask", permissionDecisionReason: reason }) + "\n");
+  process.exit(0);
+}
+
 /** Codex accepts the structured deny response on a successful hook exit. Keeping
  *  exit 0 lets its UI show a completed policy check instead of a failed hook while
  *  still preventing the tool call. */
@@ -158,10 +175,22 @@ function denyCodex(reason: string): never {
   process.exit(0);
 }
 
-const harnessName = (harness: Harness): string => harness === "claude" ? "Claude Code" : harness === "cursor" ? "Cursor" : "Codex";
-const harnessFileName = (harness: Harness): string => harness === "claude" ? ".claude/settings.json" : harness === "cursor" ? ".cursor/hooks.json" : ".codex/hooks.json";
-const selectedHarness = (args: string[]): Harness => args.includes("--codex") ? "codex" : args.includes("--cursor") ? "cursor" : "claude";
+const harnessName = (harness: Harness): string => harness === "claude" ? "Claude Code" : harness === "cursor" ? "Cursor" : harness === "copilot" ? "GitHub Copilot" : "Codex";
+const harnessFileName = (harness: Harness): string => harness === "claude" ? ".claude/settings.json" : harness === "cursor" ? ".cursor/hooks.json" : harness === "copilot" ? ".github/hooks/scopebond.json" : ".codex/hooks.json";
+const selectedHarness = (args: string[]): Harness => args.includes("--codex") ? "codex" : args.includes("--cursor") ? "cursor" : args.includes("--copilot") ? "copilot" : "claude";
 const codexTrustStep = "Open Codex, run `/hooks`, review Scopebond, and choose Trust. Then start a new task.";
+/** How far Copilot's hook can be relied on, said wherever Copilot is set up or reported: never as "in the path". */
+const COPILOT_ENFORCEMENT = HOST_ENFORCEMENT.copilot_cli ?? "cooperative";
+/** What GitHub Copilot can and cannot stop, said at install time. */
+const copilotCoverageNote = [
+  `What this covers in GitHub Copilot (${COPILOT_ENFORCEMENT}):`,
+  "  checked    shell commands, file reads and edits, git pushes — before they run",
+  "  recorded   web fetches; tools Scopebond has no mapping for (MCP tools, sub-agent tasks)",
+  "Copilot runs the action anyway when a hook times out. Scopebond answers within its own",
+  "deadline (shorter than the entry's timeoutSec) and denies when it cannot decide in time.",
+  "The cloud coding agent reads only .github/hooks/*.json on the default branch and has no",
+  "Scopebond setup, so it is not covered yet; gate its pull requests with the GitHub Action.",
+].join("\n");
 /** What Cursor can and cannot stop. Cursor has before-hooks for shell commands, MCP
  *  calls and file reads, but reports file *edits* only after they are written, so an
  *  out-of-policy edit is recorded and flagged rather than prevented. Said at install
@@ -182,9 +211,9 @@ function recordObservations(dir: string, cwd: string, input: Record<string, unkn
     const { emitter } = openObservations(dir, { adapterVersion: hookVersion() });
     if (!emitter) return undefined;
     const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
-    // Session lifecycle is Claude Code only: its SessionStart/SessionEnd hooks are the ones
-    // the tested mapping covers. Other hosts still get tool intents from their PreToolUse.
-    if (harness === "claude" && sessionId) emitter.activity(sessionId, cwd);
+    // Session lifecycle is Claude Code's and GitHub Copilot's: their SessionStart/SessionEnd hooks are the ones the
+    // mapping covers. Other hosts still get tool intents from their PreToolUse.
+    if ((harness === "claude" || harness === "copilot") && sessionId) emitter.activity(sessionId, cwd);
     emitter.toolIntents({ harnessSessionId: sessionId, callId: callId(input), cwd, dispatched: decision.dispatched ?? [], request: callRequestOf(input) });
     return emitter;
   } catch { return undefined; }
@@ -219,7 +248,18 @@ function repairFor(error: unknown): string {
   return `run \`${cliCommand("init")}\``;
 }
 
-async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude, raw?: string, harness: Harness = "claude"): Promise<void> {
+/** What a Copilot check that ran out of time answers. */
+const copilotDeadlineReason = (): string =>
+  `Scopebond hook failed closed: the check did not finish within ${Math.round(copilotDeadlineMs() / 1000)} s, and GitHub Copilot would run the action unchecked if the hook timed out. Repair: run \`${cliCommand("doctor")}\`, then try the action again.`;
+const copilotDeadlineMs = (): number => {
+  const configured = Number(process.env.SCOPEBOND_COPILOT_DEADLINE_MS);
+  return Number.isFinite(configured) && configured > 0 && configured < COPILOT_DECISION_DEADLINE_MS ? configured : COPILOT_DECISION_DEADLINE_MS;
+};
+
+/** `deadlineAt`: a time after which the call is denied rather than evaluated (GitHub Copilot, whose hook timeouts fail
+ *  open). It is checked once the policy and keys are loaded, before the action is evaluated: a load held up by a busy disk
+ *  or a lock is synchronous, so a timer alone could not interrupt it. */
+async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[], deny: (reason: string) => never = denyClaude, raw?: string, harness: Harness = "claude", deadlineAt?: number): Promise<void> {
   let input: Record<string, unknown>;
   try { input = JSON.parse(raw ?? readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
@@ -234,6 +274,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
+    if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; deny(copilotDeadlineReason()); }
     const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), currentBranch(cwd)), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
     const observer = recordObservations(dir, cwd, input!, decision, harness);
     // Workspace rules: at most every five minutes, a capped check alongside the record delivery. It never fails the call.
@@ -245,8 +286,13 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     runtime = undefined;
     keepStore(dir);
     if (decision.decision === "deny") deny(decision.reason);
-    // Only Claude Code is ever offered "ask" (override.ts); any other harness treats it as a denial.
-    if (decision.decision === "ask") { if (harness === "claude") askClaude(decision.reason); deny(decision.reason); }
+    // Only Claude Code is offered "ask" by the override (override.ts); Copilot is answered "ask" if a decision ever is one
+    // (its cloud agent reads that as a deny); any other harness treats it as a denial.
+    if (decision.decision === "ask") {
+      if (harness === "claude") askClaude(decision.reason);
+      if (harness === "copilot") askCopilot(decision.reason);
+      deny(decision.reason);
+    }
     // Stay silent on allow/not_evaluated so the coding agent's normal permission
     // flow remains in charge. Scopebond blocks; it never silently approves.
     process.exit(0);
@@ -267,7 +313,7 @@ async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never
       try {
         switch (input.hook_event_name) {
           case "SessionStart": if (sessionId) emitter.sessionStart(sessionId, cwd); break;
-          case "SessionEnd": if (sessionId) emitter.sessionStop(sessionId, stopReasonFromClaude(input.reason)); break;
+          case "SessionEnd": if (sessionId) emitter.sessionStop(sessionId, stopReasonFromHost(input.reason)); break;
           case "PostToolUse": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, "ok"); break; }
           case "PostToolUseFailure": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, exitFromClaudeFailure(input.is_interrupt)); break; }
         }
@@ -279,6 +325,41 @@ async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never
 }
 
 const CLAUDE_OBSERVATION_EVENTS = new Set(["SessionStart", "SessionEnd", "PostToolUse", "PostToolUseFailure"]);
+
+/** A session's end reason as Claude Code or GitHub Copilot gives it. Copilot's `complete` and `user_exit` are an ordinary
+ *  end and `abort` a cancel; its `error` and `timeout`, like anything unrecognised, stay unknown. */
+function stopReasonFromHost(reason: unknown): ReturnType<typeof stopReasonFromClaude> {
+  if (reason === "complete" || reason === "user_exit") return "completed";
+  if (reason === "abort") return "cancelled";
+  return stopReasonFromClaude(reason);
+}
+
+/** Copilot sends no id for a tool call. The same call (session, tool and arguments) gets the same id before and after it
+ *  runs, so the after-action event finds what the before-action hook recorded. Two identical calls in one session share
+ *  one id; the first after-action event then settles both, which is the cost of having no id to read. */
+function copilotCallId(call: Record<string, unknown>): string {
+  const canonical = JSON.stringify([call.session_id ?? null, call.tool_name ?? null, call.tool_input ?? null]);
+  return `copilot-${createHash("sha256").update(canonical).digest("hex").slice(0, 32)}`;
+}
+
+/** `copilot`: one GitHub Copilot hook event, JSON on stdin. `PreToolUse` decides; the session and after-action events only
+ *  feed observations. Copilot lets the action run when a hook times out, so the decision has a deadline of its own, inside
+ *  the entry's `timeoutSec`: a check that has not finished by then is denied rather than left to time out. */
+async function runCopilot(): Promise<void> {
+  // Two guards: a timer for the waits that yield (the override window, a capped rules check, record delivery), and a check
+  // before evaluation for loading that does not (see runPreToolUse). `SCOPEBOND_COPILOT_DEADLINE_MS` can only shorten it.
+  const deadlineAt = Date.now() + copilotDeadlineMs();
+  const deadline = setTimeout(() => denyCopilot(copilotDeadlineReason()), copilotDeadlineMs());
+  const raw = readStdin();
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { clearTimeout(deadline); denyCopilot("hook received invalid JSON on stdin"); }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) { clearTimeout(deadline); denyCopilot("hook received a payload that is not a JSON object"); }
+  const call = copilotAsClaude(parsed as Record<string, unknown>);
+  if (call.tool_name !== undefined && callId(call) === undefined) call.tool_use_id = copilotCallId(call);
+  const event = typeof call.hook_event_name === "string" ? call.hook_event_name : "";
+  if (CLAUDE_OBSERVATION_EVENTS.has(event)) { clearTimeout(deadline); await runClaudeLifecycle(call); }
+  await runPreToolUse(mapCopilotCall, denyCopilot, JSON.stringify(call), "copilot", deadlineAt);
+}
 
 async function runClaude(): Promise<void> {
   const raw = readStdin();
@@ -471,6 +552,7 @@ function runInit(args: string[]): void {
     if (placed.scope === "shared" && isSingleExecutable() && !npxAvailable()) for (const line of coverWithoutNpx(harness, process.cwd(), { label: harnessName(harness) })) console.log(`  ${line}`);
     if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
+    if (harness === "copilot") console.log(`\n${copilotCoverageNote}`);
   } else {
     // The snippet is for a file the user will likely commit, so it carries the portable
     // command; the pinned one is offered separately, for a file only this machine uses.
@@ -482,6 +564,7 @@ function runInit(args: string[]): void {
       console.log(`  ${command}`);
     }
     if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
+    if (harness === "copilot") console.log(`\n${copilotCoverageNote}`);
   }
   console.log("");
   // Print the runnable `npx` form: after `npx @scopebond/hook init` there is no
@@ -1087,7 +1170,7 @@ function projectSetupNotice(cwd: string): string[] {
   if (process.env.SCOPEBOND_HOOK_DIR) return [];
   const project = join(cwd, ".scopebond");
   if (resolve(project) === resolve(userHome()) || !existsSync(join(project, "policy.json"))) return [];
-  const hookFiles = (["claude", "cursor", "codex"] as const).flatMap((h) => {
+  const hookFiles = HARNESSES.flatMap((h) => {
     const scopes = harnessScopes(h, cwd);
     return [scopes.project, scopes.local].filter((file): file is string => !!file);
   });
@@ -1386,8 +1469,9 @@ function runInstall(args: string[]): void {
   const commandFor = durableHookCommand;
   const harnessesFor = (): Harness[] => args.includes("--codex") ? ["codex"]
     : args.includes("--cursor") ? ["cursor"]
+    : args.includes("--copilot") ? ["copilot"]
     : args.includes("--claude") ? ["claude"]
-    : ["claude", ...(cursorDetected() ? ["cursor" as const] : []), ...(codexDetected() ? ["codex" as const] : [])];
+    : ["claude", ...(cursorDetected() ? ["cursor" as const] : []), ...(codexDetected() ? ["codex" as const] : []), ...(copilotDetected() ? ["copilot" as const] : [])];
   // `install` rewrites agent config files the user did not create — their theme, plugins
   // and permissions live in ~/.claude/settings.json — so there is a way to see exactly
   // what it would touch before it touches anything.
@@ -1431,6 +1515,7 @@ function runInstall(args: string[]): void {
     console.log(harnessSnippet(harnesses[0]));
   }
   if (harnesses.includes("codex")) console.log(`\nOne last step for Codex: ${codexTrustStep}`);
+  if (harnesses.includes("copilot")) console.log(`\n${copilotCoverageNote}`);
   console.log("");
   console.log(`A project's own .scopebond policy applies only after you trust it there (${cliCommand("trust")}).`);
   console.log(`Check it: ${cliCommand("doctor")} · see decisions: ${cliCommand("log")}`);
@@ -1472,7 +1557,7 @@ function runStatus(args: string[] = []): void {
       version: hookVersion(), activeDir: active, candidateDirs: [userHome(), join(cwd, ".scopebond")],
       userDir: process.env.SCOPEBOND_HOOK_DIR ? undefined : userHome(),
       hasPolicy: existsSync(join(active, "policy.json")),
-      agents: { claude: configured("claude"), cursor: configured("cursor"), codex: configured("codex") },
+      agents: { claude: configured("claude"), cursor: configured("cursor"), codex: configured("codex"), copilot: configured("copilot") },
     }), null, 2));
     return;
   }
@@ -1483,6 +1568,7 @@ function runStatus(args: string[] = []): void {
   const claude = harnessScopes("claude", process.cwd());
   const cursor = harnessScopes("cursor", process.cwd());
   const codex = harnessScopes("codex", process.cwd());
+  const copilot = harnessScopes("copilot", process.cwd());
   const connected = !!loadConnection(resolveConfigDir(process.cwd()));
   const dbPath = join(resolveConfigDir(process.cwd()), "receipts.db");
   console.log(`Scopebond hook ${hookVersion()}`);
@@ -1498,6 +1584,7 @@ function runStatus(args: string[] = []): void {
   console.log(`  Claude Code      ${harnessScopeLabel(claude) || "not configured"}`);
   console.log(`  Cursor           ${harnessScopeLabel(cursor) || (cursorDetected() ? "detected, not configured" : "not detected")}`);
   console.log(`  Codex            ${codex.project || codex.user ? `${harnessScopeLabel(codex)} — approve once with /hooks` : codexDetected() ? "detected, not configured" : "not detected"}`);
+  console.log(`  GitHub Copilot   ${harnessScopeLabel(copilot) ? `${harnessScopeLabel(copilot)} — ${COPILOT_ENFORCEMENT}` : copilotDetected() ? "detected, not configured" : "not detected"}`);
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
   {
     const activeDir = resolveConfigDir(process.cwd());
@@ -1526,7 +1613,7 @@ function runStatus(args: string[] = []): void {
   console.log(`  local receipts   ${existsSync(dbPath) ? `${dbPath} (${describeStore(dbPath)})` : "none yet"}`);
   const fileAccess = fileAccessLine(resolveConfigDir(process.cwd()));
   if (fileAccess) console.log(`  file access      ${fileAccess}`);
-  for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex]] as const) {
+  for (const [name, scopes] of [["Claude Code", claude], ["Cursor", cursor], ["Codex", codex], ["GitHub Copilot", copilot]] as const) {
     for (const file of [scopes.project, scopes.local, scopes.user]) if (file) console.log(`    ${name}: ${file}`);
   }
   for (const problem of missingProgramProblems(process.cwd())) console.log(`  MISSING PROGRAM  ${problem}`);
@@ -1544,7 +1631,7 @@ function missingProgramProblem(name: string, file: string, program: string, scop
 /** Every hook entry, in every agent and scope, that runs a single executable which is no longer there. */
 function missingProgramProblems(cwd: string): string[] {
   const out: string[] = [];
-  for (const harness of ["claude", "cursor", "codex"] as const) {
+  for (const harness of HARNESSES) {
     const scopes = harnessScopes(harness, cwd);
     for (const [file, scope] of [[scopes.project, "project"], [scopes.local, "project"], [scopes.user, "user"]] as const) {
       if (!file) continue;
@@ -1557,7 +1644,7 @@ function missingProgramProblems(cwd: string): string[] {
 /** Each agent that would ask Scopebond more than once per action, and the one command that keeps one. */
 function duplicateLines(cwd: string): string[] {
   const lines: string[] = [];
-  for (const harness of ["claude", "cursor", "codex"] as const) {
+  for (const harness of HARNESSES) {
     const dupes = duplicateHooks(harness, cwd);
     if (!dupes) continue;
     const flag = harness === "claude" ? "" : ` --${harness}`;
@@ -1568,12 +1655,12 @@ function duplicateLines(cwd: string): string[] {
   return lines;
 }
 
-/** `dedupe [--claude|--cursor|--codex] [--keep user|project|plugin]`: keep one Scopebond hook entry per agent. */
+/** `dedupe [--claude|--cursor|--codex|--copilot] [--keep user|project|plugin]`: keep one Scopebond hook entry per agent. */
 function runDedupe(args: string[]): void {
-  const harness: Harness = args.includes("--cursor") ? "cursor" : args.includes("--codex") ? "codex" : "claude";
+  const harness: Harness = selectedHarness(args);
   const at = args.indexOf("--keep");
   const keep = (at >= 0 ? args[at + 1] : "user") as HookScope;
-  if (!["user", "project", "local", "plugin"].includes(keep)) { console.error(`usage: ${cliCommand("dedupe [--claude|--cursor|--codex] [--keep user|project|plugin]")}`); process.exit(1); }
+  if (!["user", "project", "local", "plugin"].includes(keep)) { console.error(`usage: ${cliCommand("dedupe [--claude|--cursor|--codex|--copilot] [--keep user|project|plugin]")}`); process.exit(1); }
   const dupes = duplicateHooks(harness, process.cwd());
   if (!dupes) { console.log(`${harnessName(harness)} runs the Scopebond hook once per action; nothing to change.`); return; }
   const result = dedupeHooks(harness, keep, process.cwd());
@@ -1599,6 +1686,7 @@ async function runCapabilities(args: string[]): Promise<void> {
     claude: !!harnessScopeLabel(harnessScopes("claude", cwd)),
     cursor: !!harnessScopeLabel(harnessScopes("cursor", cwd)),
     codex: !!harnessScopeLabel(harnessScopes("codex", cwd)),
+    copilot: !!harnessScopeLabel(harnessScopes("copilot", cwd)),
   };
   const version = hookVersion();
   let proofs = loadProofs(dir);
@@ -1610,7 +1698,7 @@ async function runCapabilities(args: string[]): Promise<void> {
     const observed = openObservations(dir, { adapterVersion: version, spawnHeartbeat: false });
     const collected: unknown[] = [];
     const fresh = await runProofFixtures(version, observed.emitter ? { identityDir: dir, collect: collected } : {});
-    const proven = computeManifest({ adapterVersion: version, configured: { claude: true, codex: true, cursor: true }, proofs: fresh });
+    const proven = computeManifest({ adapterVersion: version, configured: { claude: true, codex: true, cursor: true, copilot: true }, proofs: fresh });
     for (const cell of proven.cells) {
       const proof = fresh[cell.key];
       if (proof && !proofPassed(proof, cell)) {
@@ -1686,12 +1774,12 @@ async function runDoctor(): Promise<void> {
   // actually start. A pinned path that has gone missing is the one failure mode of
   // the fast absolute-path install, so doctor is where it must surface.
   let anyHarness = false;
-  for (const harness of ["claude", "cursor", "codex"] as const) {
+  for (const harness of HARNESSES) {
     const scopes = harnessScopes(harness, process.cwd());
     const label = harnessScopeLabel(scopes);
     const name = harnessName(harness);
     if (!label) {
-      const detected = harness === "claude" || (harness === "cursor" ? cursorDetected() : codexDetected());
+      const detected = harnessDetected(harness);
       console.log(`  ${name.padEnd(15)} ${detected ? `not configured — run \`${cliCommand(`init${harness === "claude" ? "" : ` --${harness}`}`)}\`` : "not detected"}`);
       continue;
     }
@@ -1723,6 +1811,7 @@ async function runDoctor(): Promise<void> {
       }
     }
     if (harness === "codex") console.log(`    run /hooks in Codex and approve Scopebond once`);
+    if (harness === "copilot") console.log(`    ${COPILOT_ENFORCEMENT}`);
   }
   if (!anyHarness) problems.push(`no coding agent is configured — run \`${cliCommand("init")}\` in your project root`);
   const connection = loadConnection(active);
@@ -1767,7 +1856,7 @@ async function runDoctor(): Promise<void> {
   const duplicates = duplicateLines(process.cwd());
   for (const line of duplicates) console.log(line);
   // A duplicate only the team can remove (its project file is shared through git) is shown, not failed on.
-  const fixableHere = (["claude", "cursor", "codex"] as const).some((h) => (duplicateHooks(h, process.cwd()) ?? []).some((e) => e.scope !== "user" && e.scope !== "plugin" && gitShareState(e.file) !== "tracked")
+  const fixableHere = HARNESSES.some((h) => (duplicateHooks(h, process.cwd()) ?? []).some((e) => e.scope !== "user" && e.scope !== "plugin" && gitShareState(e.file) !== "tracked")
     || (duplicateHooks(h, process.cwd()) ?? []).filter((e) => e.scope === "user" || e.scope === "plugin").length > 1);
   if (duplicates.length && fixableHere) problems.push("the Scopebond hook runs more than once for each action (see DUPLICATE above)");
   console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
@@ -1791,7 +1880,7 @@ async function runUninstall(args: string[]): Promise<void> {
   // Both scopes. Checking only the user config meant that after a per-project `init` —
   // the install the site actually tells people to run — `uninstall` reported "no
   // user-level harness config found" and left the project hook in place.
-  for (const h of ["claude", "cursor", "codex"] as Harness[]) {
+  for (const h of HARNESSES) {
     for (const file of [projectHarnessFile(h, process.cwd()), localHarnessFile(h, process.cwd()), userHarnessFile(h)]) {
       if (file && removeHarnessConfig(file)) { console.log(`✓ removed the Scopebond hook from ${file}`); removed++; }
     }
@@ -1824,7 +1913,7 @@ function runTrust(args: string[]): void {
  *  `connect` does. Nothing secret is printed: the device code stays in memory. */
 /** The flags a login was run with, to repeat it exactly. */
 function loginFlags(args: string[]): string[] {
-  return args.filter((a) => ["--claude", "--cursor", "--codex", "--no-install", "--project", "--yes"].includes(a));
+  return args.filter((a) => ["--claude", "--cursor", "--codex", "--copilot", "--no-install", "--project", "--yes"].includes(a));
 }
 
 async function runLogin(args: string[]): Promise<void> {
@@ -1910,23 +1999,25 @@ async function runLogin(args: string[]): Promise<void> {
  *  single usage line listing 15 command names, which told a reader nothing about what any
  *  of them did or what arguments they take. */
 const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: string[] }> = [
-  { name: "init", args: "[--cursor|--codex] [--shared] [--dry-run] [--no-install] [--npx] [--force] [--yes]",
+  { name: "init", args: "[--cursor|--codex|--copilot] [--shared] [--dry-run] [--no-install] [--npx] [--force] [--yes]",
     summary: "set this project up: keys, a starter policy, and your agent wired to the hook",
     detail: [
       "Writes .scopebond/ (machine key, countersigning key, starter policy, .gitignore) and",
       "wires your agent to the hook. It pins a durable copy of this package so the hook starts",
       "fast, and because that command names paths on this machine it goes where git will not",
-      "share it: .claude/settings.local.json (kept out of git for this clone), or for Cursor",
-      "and Codex their project file only while git does not track it. --shared writes the",
-      "portable npx command to .claude/settings.json, .cursor/hooks.json or .codex/hooks.json",
-      "instead, so everyone who clones the project gets the hook. --dry-run shows what it",
+      "share it: .claude/settings.local.json (kept out of git for this clone), or for Cursor,",
+      "Codex and GitHub Copilot their project file only while git does not track it. --shared",
+      "writes the portable npx command to .claude/settings.json, .cursor/hooks.json,",
+      ".codex/hooks.json or .github/hooks/scopebond.json instead, so everyone who clones the",
+      "project gets the hook. --dry-run shows what it",
       "would write. --no-install prints the config snippet rather than writing it.",
       "Needs a terminal, or --yes in a script, because it changes what governs your agent.",
     ] },
-  { name: "install", args: "[--claude] [--cursor] [--codex] [--dry-run] [--force] [--yes]",
+  { name: "install", args: "[--claude] [--cursor] [--codex] [--copilot] [--dry-run] [--force] [--yes]",
     summary: "set up once for this user, so every project you open is governed",
     detail: [
-      "Scaffolds ~/.scopebond and registers the hook in your user-level agent config.",
+      "Scaffolds ~/.scopebond and registers the hook in your user-level agent config",
+      "(GitHub Copilot: ~/.copilot/hooks/scopebond.json, or under COPILOT_HOME when set).",
       "--dry-run prints exactly which files it would touch and changes nothing. Each config",
       "is copied to <file>.scopebond-backup before its first modification.",
     ] },
@@ -1942,7 +2033,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "  rules apply                   recompile after editing rules.json by hand",
     ] },
   { name: "status", summary: "what is configured, where, and how big the local log is" },
-  { name: "dedupe", args: "[--claude|--cursor|--codex] [--keep user|project|plugin]",
+  { name: "dedupe", args: "[--claude|--cursor|--codex|--copilot] [--keep user|project|plugin]",
     summary: "keep one Scopebond hook entry when an agent would run it more than once per action",
     detail: [
       "Status and doctor say when the hook sits in the user settings and a project's, twice in one file,",
@@ -1952,7 +2043,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
   { name: "capabilities", args: "[--prove [--save]] [--json]",
     summary: "what this hook can honestly claim, per agent host, action and phase",
     detail: [
-      "Prints the capability manifest: for Claude Code, Codex and Cursor, each action type and",
+      "Prints the capability manifest: for Claude Code, Codex, Cursor and GitHub Copilot, each action type and",
       "phase is unsupported, inactive, configured_unverified, degraded or verified_reporting.",
       "Unsupported stays unsupported. A cell is never verified from a local run alone.",
       "--prove runs safe fixtures (allow, deny, signature, action group) in temporary",
@@ -2020,7 +2111,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "anchored, because a receipt's position is its anchor leaf index. --no-archive removes without the copy;",
       "an archive stays until you delete it (the report lists them).",
     ] },
-  { name: "login", args: "<workspace-url> [--claude|--cursor|--codex] [--no-install] [--project] [--yes]",
+  { name: "login", args: "<workspace-url> [--claude|--cursor|--codex|--copilot] [--no-install] [--project] [--yes]",
     summary: "connect this computer to a Scopebond Cloud workspace by approving a short code there",
     detail: [
       "Prints a code and a link; someone who manages the workspace opens it, checks the code",
@@ -2031,7 +2122,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "Once approved it names the workspace and who approved it and asks before connecting;",
       "--yes connects without asking (scripts).",
     ] },
-  { name: "connect", args: "<workspace-url> <enrollment> [--claude|--cursor|--codex]",
+  { name: "connect", args: "<workspace-url> <enrollment> [--claude|--cursor|--codex|--copilot]",
     summary: "send receipts to a Scopebond Cloud workspace as well as keeping them locally" },
   { name: "flush", summary: "deliver any receipts still queued for the workspace now, with no time limit" },
   { name: "recover", args: "[--no-wait]", summary: "deliver records an earlier, revoked key signed, once the workspace approves",
@@ -2045,6 +2136,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
   { name: "claude", summary: "(internal) decide one Claude Code PreToolUse call, JSON on stdin" },
   { name: "cursor", summary: "(internal) decide one Cursor hook event, JSON on stdin" },
   { name: "codex", summary: "(internal) decide one Codex PreToolUse call, JSON on stdin" },
+  { name: "copilot", summary: "(internal) decide one GitHub Copilot hook event, JSON on stdin" },
 ];
 
 function printHelp(topic: string | undefined, toStderr = false): void {
@@ -2098,6 +2190,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (cmd === "claude") { await runClaude(); }
   else if (cmd === "cursor") { await runCursor(); }
   else if (cmd === "codex") { await runCodex(); }
+  else if (cmd === "copilot") { await runCopilot(); }
   else if (cmd === "init") { runInit(rest); }
   else if (cmd === "install") { runInstall(rest); }
   else if (cmd === "connect") { await runConnect(rest); }

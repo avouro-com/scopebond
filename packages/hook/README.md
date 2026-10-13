@@ -1,7 +1,7 @@
 # @scopebond/hook
 
-The free, open-source Scopebond connector for **Claude Code**, **Cursor**, and
-**OpenAI Codex**. It checks supported actions delivered through the configured
+The free, open-source Scopebond connector for **Claude Code**, **Cursor**,
+**OpenAI Codex** and **GitHub Copilot**. It checks supported actions delivered through the configured
 hook against your policy and signs decision records locally. Some actions are
 observed after they happen: Cursor file edits are recorded, not prevented. See
 the coverage table below before choosing what to protect.
@@ -210,6 +210,67 @@ Codex has no native file-read event: reads it makes through shell commands are d
 from the command (`cat .env`) and checked, but a read that never goes through a shell
 is not seen. Run `capabilities` (below) for the exact per-cell picture.
 
+### GitHub Copilot
+
+```
+npx -y @scopebond/hook@latest install --copilot      # user-level: ~/.copilot/hooks/scopebond.json
+npx -y @scopebond/hook@latest init --copilot         # this project: .github/hooks/scopebond.json
+npx -y @scopebond/hook@latest init --copilot --shared   # the portable npx form, to commit
+```
+
+`install --copilot` writes Scopebond's own hook file in Copilot's user hooks folder
+(`~/.copilot/hooks/`, `%USERPROFILE%\.copilot\hooks\` on Windows, or `$COPILOT_HOME/hooks/`
+when `COPILOT_HOME` is set); a plain `install` adds it when that folder exists. `init --copilot`
+writes `.github/hooks/scopebond.json` in the project. The file is a `version: 1` hooks
+document registering `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SessionStart` and
+`SessionEnd`, each with a `bash` and a `powershell` command and `timeoutSec: 60`, and no
+matcher (every tool). The PascalCase event names make Copilot send the same payload shape
+Claude Code does. `uninstall` removes Scopebond's entries, and the file once nothing else is
+in it.
+
+**How far it can be relied on:** cooperative · prevents if honored · a hook timeout fails
+open in Copilot. Copilot honors a hook's deny (Scopebond answers
+`{"permissionDecision":"deny","permissionDecisionReason":"…"}` and exits 2, which Copilot
+treats as a deny whatever stdout says), and treats a hook that crashes or exits non-zero as
+a deny. But a hook that runs past its `timeoutSec` is skipped and the action runs. Scopebond
+therefore gives each check its own deadline (45 s, inside the 60 s it installs) and denies
+when it cannot decide in time; a slow policy load or a held lock ends as a deny, not a
+timeout. A hook Copilot never starts at all is outside what the hook can see.
+
+| Copilot tool (reported as) | Scopebond action | Before it runs |
+|---|---|---|
+| `bash`, `powershell` (`Bash`) | `shell.exec`, plus the reads, writes and pushes derived from the command | checked |
+| `view` (`Read`), `grep`, `glob` | `file.read` | checked |
+| `create` (`Write`), `edit`, `str_replace_editor`, `apply_patch` (`Edit`) | `file.write` | checked |
+| `web_fetch` (`WebFetch`) | `net.fetch` | recorded (observed by default) |
+| MCP tools, `task`, `web_search`, anything else | `tool.<name>` | recorded, not evaluated (strict mode denies) |
+
+The tool names are those in GitHub's Copilot hooks reference. Under the PascalCase events
+Copilot reports both shells as `Bash`; on Windows its shell is PowerShell, so a Windows
+`Bash` command is read as PowerShell. The reference does not say how MCP tool names appear
+in a hook payload, so MCP coverage is not claimed for Copilot (`capabilities` lists it as
+unsupported).
+
+Scopebond's own protection covers Copilot's hook settings as it does the other agents':
+writes to `~/.copilot/hooks/`, `~/.copilot/settings.json`, `.github/hooks/`,
+`.github/copilot/settings.json` and `.github/copilot/settings.local.json` are always
+denied (guardrail configuration, not CI configuration), as is removing those folders or
+starting `copilot` with `COPILOT_HOME` pointed elsewhere.
+
+- **Copilot CLI** reads the user-level and repository-level files; this is the setup
+  Scopebond supports first.
+- **VS Code agent mode** (hooks are in preview there) reads the same `.github/hooks/*.json`
+  and `~/.copilot/hooks/*.json` files.
+- **The cloud coding agent** loads hooks only from `.github/hooks/*.json` on the repository's
+  default branch, runs only the `bash` command, and treats `ask` as deny. Scopebond does not
+  set up the cloud agent's sandbox yet: a committed hook file (`init --copilot --shared`)
+  reaches it, but without a Scopebond setup there (keys and a policy, which are never
+  committed) the hook fails closed and denies every action. Treat the cloud agent as not
+  covered for now; gate its pull requests with `@scopebond/github-action` instead.
+- Copilot also reads the `hooks` block of a project's `.claude/settings.json`. A project set
+  up for Claude Code with `init` is then checked when Copilot runs there too; with a
+  Copilot hook file as well, each action is checked twice.
+
 ### What this hook can honestly claim: `capabilities`
 
 ```
@@ -220,8 +281,9 @@ npx -y @scopebond/hook@latest capabilities --json
 ```
 
 Each cell is one connector version, agent host (Claude terminal / desktop, Codex CLI /
-desktop, Cursor), action type and phase (before or after the action), in one of these
-states:
+desktop, Cursor, Copilot CLI / VS Code / cloud agent), action type and phase (before or
+after the action), in one of these states (Copilot cells also carry `enforcement`:
+"cooperative · prevents if honored · a hook timeout fails open in Copilot"):
 
 | State | Meaning |
 |---|---|

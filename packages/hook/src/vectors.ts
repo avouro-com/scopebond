@@ -12,9 +12,9 @@
 // repeats the limit instead of hiding it.
 
 import type { CatalogId } from "./classify.js";
-import { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, type Mapped } from "./map.js";
+import { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCursorEvent, type Mapped } from "./map.js";
 
-export type VectorAgent = "claude" | "codex" | "cursor";
+export type VectorAgent = "claude" | "codex" | "cursor" | "copilot";
 export type Dialect = "posix" | "powershell";
 
 export interface Vector {
@@ -143,7 +143,8 @@ add({ rule: "R08", agent: "cursor", dialect: "posix", event: "afterFileEdit", in
 
 // C02 guardrail configuration -----------------------------------------------------------
 for (const p of [".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/pre.sh", ".claude/agents/reviewer.md", ".codex/config.toml", ".codex/hooks.json",
-  ".cursor/hooks.json", ".cursor/mcp.json", ".githooks/pre-push", ".husky/pre-commit", ".git/config", ".git/hooks/pre-commit", ".scopebond/policy.json", ".scopebond/rules.json"]) {
+  ".cursor/hooks.json", ".cursor/mcp.json", ".githooks/pre-push", ".husky/pre-commit", ".git/config", ".git/hooks/pre-commit", ".scopebond/policy.json", ".scopebond/rules.json",
+  ".github/hooks/scopebond.json", ".github/copilot/settings.json", ".github/copilot/settings.local.json", ".copilot/hooks/scopebond.json", ".copilot/settings.json"]) {
   fileBoth("C02", "Write", p, "deny", ["C02"]);
 }
 add({ rule: "C02", agent: "codex", dialect: "posix", input: { tool_name: "apply_patch", tool_input: { command: "*** Begin Patch\n*** Update File: .codex/hooks.json\n*** End Patch" }, cwd: "/w" }, expect: "deny", catalog: ["C02"] });
@@ -251,6 +252,35 @@ shell("C02", "export CLAUDE_CONFIG_DIR=/tmp/clean && claude -p x", "deny", ["C02
 shell("C02", "$env:CODEX_HOME = 'C:\\tmp\\clean'; codex exec x", "deny", ["C02"], { unknown: true }, "powershell");
 push("GIT_CONFIG_PARAMETERS=\"'alias.sync=push --force origin main'\" git sync", "deny", [], { unknown: true });
 
+// GitHub Copilot ------------------------------------------------------------------------
+// The hook registers Copilot's PascalCase events, which report Claude Code's tool names (`Bash`, `Read`, `Write`, `Edit`);
+// these vectors use Copilot's runtime names (`bash`, `view`, `create`, `edit`, `apply_patch`, `web_fetch`) so the
+// translation is pinned too, and so a shell vector reads the same on every host (`bash` is POSIX, `powershell` PowerShell).
+const copilot = (tool_name: string, tool_input: Record<string, unknown>, cwd = "/w"): Record<string, unknown> => ({ hook_event_name: "PreToolUse", session_id: "copilot-vector", tool_name, tool_input, cwd });
+add({ rule: "R04", agent: "copilot", dialect: "posix", input: copilot("view", { path: "/w/.env" }), expect: "deny", catalog: ["H02"], cell: { action_type: "file.read", role: "deny" } });
+add({ rule: "R04", agent: "copilot", dialect: "posix", input: copilot("view", { path: "/w/src/example.ts" }), expect: "allow", catalog: [], cell: { action_type: "file.read", role: "allow" } });
+add({ rule: "R04", agent: "copilot", dialect: "posix", input: copilot("Read", { file_path: "/w/.ssh/id_rsa" }), expect: "deny", catalog: ["H02"] });
+add({ rule: "R06", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "git push --force origin main" }), expect: "deny", catalog: ["C01"] });
+add({ rule: "R06", agent: "copilot", dialect: "powershell", input: copilot("powershell", { command: "git push --force origin main" }, WIN), expect: "deny", catalog: ["C01"] });
+add({ rule: "I05", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "git push origin feature/x" }), expect: "allow", catalog: [], cell: { action_type: "git.push", role: "allow" } });
+add({ rule: "I05", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "git push origin main" }), expect: "deny", catalog: ["H01"], cell: { action_type: "git.push", role: "deny" } });
+add({ rule: "R08", agent: "copilot", dialect: "posix", input: copilot("edit", { path: "/w/.github/workflows/ci.yml", old_str: "a", new_str: "b" }), expect: "deny", catalog: ["H03"], cell: { action_type: "file.write", role: "deny" } });
+add({ rule: "R08", agent: "copilot", dialect: "posix", input: copilot("create", { path: "/w/src/app.ts", file_text: "x" }), expect: "allow", catalog: [], cell: { action_type: "file.write", role: "allow" } });
+add({ rule: "R08", agent: "copilot", dialect: "posix", input: copilot("apply_patch", { input: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n*** End Patch" }), expect: "deny", catalog: ["H03"] });
+add({ rule: "C02", agent: "copilot", dialect: "posix", input: copilot("create", { path: "/w/.github/hooks/scopebond.json", file_text: "{}" }), expect: "deny", catalog: ["C02"] });
+add({ rule: "C02", agent: "copilot", dialect: "posix", input: copilot("edit", { path: "~/.copilot/hooks/scopebond.json", old_str: "a", new_str: "b" }), expect: "deny", catalog: ["C02"] });
+add({ rule: "C02", agent: "copilot", dialect: "posix", input: copilot("Write", { file_path: "/w/.github/copilot/settings.json" }), expect: "deny", catalog: ["C02"] });
+add({ rule: "C02", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "rm -rf .github/hooks" }), expect: "deny", catalog: ["H04", "C02"] });
+add({ rule: "C02", agent: "copilot", dialect: "powershell", input: copilot("powershell", { command: "Remove-Item -Recurse -Force $env:USERPROFILE\\.copilot" }, WIN), expect: "deny", catalog: ["H04", "C02"] });
+add({ rule: "C02", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "export COPILOT_HOME=/tmp/clean && copilot -p x" }), expect: "deny", catalog: ["C02"] });
+add({ rule: "R09", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "rm -rf /" }), expect: "deny", catalog: ["H04", "C02"], cell: { action_type: "shell.exec", role: "deny" } });
+add({ rule: "R09", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "ls -la" }), expect: "allow", catalog: [], cell: { action_type: "shell.exec", role: "allow" } });
+add({ rule: "R09", agent: "copilot", dialect: "powershell", input: copilot("powershell", { command: "Get-ChildItem" }, WIN), expect: "allow", catalog: [] });
+add({ rule: "R10", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "eval $CMD" }), expect: "deny", catalog: [], unknown: true });
+add({ rule: "I05", agent: "copilot", dialect: "posix", input: copilot("web_fetch", { url: "https://example.test/docs?token=abc" }), expect: "allow", catalog: [], cell: { action_type: "net.fetch", role: "allow" } });
+// A tool Scopebond has no mapping for is recorded and not evaluated (strict mode denies it).
+add({ rule: "I05", agent: "copilot", dialect: "posix", input: copilot("task", { prompt: "x" }), expect: "allow", catalog: [] });
+
 export const VECTORS: readonly Vector[] = out;
 
 const fill = (value: unknown, cwd: string): unknown => {
@@ -265,5 +295,6 @@ export function mapVector(vector: Vector, cwd?: string): Mapped[] {
   const input = (cwd === undefined ? vector.input : fill(vector.input, cwd)) as Record<string, unknown>;
   if (vector.agent === "claude") return mapClaudeToolUse(input);
   if (vector.agent === "codex") return mapCodexToolUse(input);
+  if (vector.agent === "copilot") return mapCopilotToolUse(input);
   return mapCursorEvent(vector.event ?? "", input);
 }
