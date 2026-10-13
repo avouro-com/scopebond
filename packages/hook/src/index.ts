@@ -2,16 +2,20 @@
 // the deterministic mapper and the check-only runtime; the `scopebond-hook`
 // binary is the thin harness adapter over them.
 
-export { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCopilotCall, copilotAsClaude, normalizeCopilotInput, mapCursorEvent, fillPushBranch } from "./map.js";
+export { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCopilotCall, copilotAsClaude, normalizeCopilotInput, mapCursorEvent, fillPushBranch, DERIVED_CAP } from "./map.js";
 export type { Mapped, NormalizedIntent } from "./map.js";
-export { createHookRuntime, starterPolicy, upgradeStarterPolicy } from "./runtime.js";
+export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./runtime.js";
+export type { TargetRule } from "./runtime.js";
+export { deriveTargetOperations, toolOf, envOfName, targetDigest, TARGET_TOOLS } from "./typed-targets.js";
+export type { TargetOperation, TargetProbe } from "./typed-targets.js";
+export { deriveMcpOperations, mcpProfileOf } from "./mcp-profiles.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export {
-  compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES,
+  compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES, SWITCHABLE_RULES,
 } from "./rules.js";
 export type { RuleSet, PathRule } from "./rules.js";
 export { pathRuleMatches, isDestructiveProgram, isProtectedBranch } from "./rules.js";
-export { classifyIntent, classificationBlocks, BLOCKING } from "./classify.js";
+export { classifyIntent, classificationBlocks, BLOCKING, MONITORED_HIGH } from "./classify.js";
 export type { CatalogId, Classification } from "./classify.js";
 export { classifyRoot, applyRootScope } from "./paths.js";
 export type { RootScope, RootOptions } from "./paths.js";
@@ -23,12 +27,13 @@ export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYP
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
   inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules, ruleReport,
-  MANAGED_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
+  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
   inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
   MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY,
 } from "./managed.js";
 export type {
-  ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,
+  ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnyManagedRuleId, OptionalRuleId,
+  ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,
 } from "./managed.js";
 export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked } from "./override.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";

@@ -45,7 +45,14 @@ export function describeAction(intent: ExplainIntent | undefined): string {
     : type === "file.write" || type === "file.read" ? str(p.path)
     : type === "mcp.tool.call" ? `${str(p.server)}/${str(p.tool)}`
     : type === "net.fetch" ? str(p.host)
-    : type === "db.exec" ? `${str(p.scope)} ${str(p.provider)} ${str(p.verb)}`.trim() : "";
+    : type === "db.exec" ? `${str(p.scope)} ${str(p.provider)} ${str(p.verb)}`.trim()
+    // The target actions (typed-targets.ts, mcp-profiles.ts): the tool, then what it reaches.
+    : type.startsWith("cloud.resource.") || type === "iam.change" ? `${str(p.via)} ${str(p.provider)} ${str(p.service)} ${str(p.kind)} ${str(p.env)}`.replace(/\s+/g, " ").trim()
+    : type.startsWith("k8s.") ? `${str(p.via)} ${str(p.context)} ${str(p.namespace)} ${str(p.kind)}`.replace(/\s+/g, " ").trim()
+    : type === "db.migrate" ? `${str(p.provider)} ${str(p.direction)} ${str(p.env)}`.trim()
+    : type === "deploy.release" ? `${str(p.provider) || str(p.repo)} ${str(p.environment)}`.trim()
+    : type === "secret.write" ? `${str(p.store)} ${str(p.env)}`.trim()
+    : type === "communication.send" || type.startsWith("work.item.") ? str(p.provider) : "";
   return `${type || "?"}${bits ? ` ${bits}` : ""}`;
 }
 
