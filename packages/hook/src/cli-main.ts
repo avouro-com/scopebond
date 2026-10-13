@@ -65,6 +65,7 @@ import { runDispatchCommand } from "./dispatch-cli.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
+import { withHookVersion } from "./workspace-fetch.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
 import { describeDelivery } from "./delivery-report.js";
 import { buildStatusJson } from "./status-json.js";
@@ -1855,7 +1856,7 @@ async function runDoctor(): Promise<void> {
   } else {
     let reachable: string;
     try {
-      const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET" });
+      const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET", headers: withHookVersion({}) });
       reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
     } catch (error) { reachable = `unreachable (${(error as Error).message})`; }
     console.log(`  cloud            ${connection.url} — ${reachable}`);
@@ -1967,7 +1968,8 @@ async function runLogin(args: string[]): Promise<void> {
   }
   const post = async (path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown>; retryAfter: string | null }> => {
     const response = await fetch(new URL(path, origin), {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      // Sign-in runs before enrollment; it says which hook version asks too, so the workspace can hold a version floor here.
+      method: "POST", headers: withHookVersion({ "content-type": "application/json" }), body: JSON.stringify(body),
       redirect: "error", signal: AbortSignal.timeout(15_000),
     });
     return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, unknown>, retryAfter: response.headers.get("retry-after") };

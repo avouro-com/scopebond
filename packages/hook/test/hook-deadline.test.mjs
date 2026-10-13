@@ -55,6 +55,7 @@ test("the deadline: shorter than each agent's own limit, longer than the waits t
   assert.ok(HOOK_DEADLINE_MS.claude > 45_000 && HOOK_DEADLINE_MS.claude < 60_000, "after the 45 s wait in the window, before Claude Code's 60 s");
   assert.ok(HOOK_DEADLINE_MS.codex > 20_000 && HOOK_DEADLINE_MS.codex < 30_000, "after the 20 s wait, before the 30 s the Codex entry says");
   assert.ok(HOOK_DEADLINE_MS.cursor > 20_000);
+  assert.ok(HOOK_DEADLINE_MS.copilot > 25_000 && HOOK_DEADLINE_MS.copilot < 60_000, "after the 25 s wait, before the 60 s timeoutSec the Copilot entry says");
   assert.equal(hookDeadlineMs("claude", {}), HOOK_DEADLINE_MS.claude);
   assert.equal(hookDeadlineMs("claude", { SCOPEBOND_HOOK_DEADLINE_MS: "1500" }), 1500);
   assert.equal(hookDeadlineMs("claude", { SCOPEBOND_HOOK_DEADLINE_MS: "600000" }), HOOK_DEADLINE_MS.claude, "never lengthened");
@@ -67,12 +68,14 @@ for (const [harness, denied] of [
   ["claude", (r) => r.status === 2 && JSON.parse(r.stdout).hookSpecificOutput.permissionDecision === "deny"],
   ["codex", (r) => r.status === 0 && JSON.parse(r.stdout).hookSpecificOutput.permissionDecision === "deny"],
   ["cursor", (r) => r.status === 0 && JSON.parse(r.stdout).permission === "deny"],
+  ["copilot", (r) => r.status === 2 && JSON.parse(r.stdout).permissionDecision === "deny"],
 ]) {
   test(`${harness}: a call still undecided at the deadline is denied, not left to time out`, async () => {
     const workspace = await silentWorkspace();
     try {
       const dir = connectedDir(workspace.port);
-      const event = harness === "cursor" ? { hook_event_name: "beforeShellExecution", command: "ls", cwd: process.cwd() } : allowedWrite;
+      const event = harness === "cursor" ? { hook_event_name: "beforeShellExecution", command: "ls", cwd: process.cwd() }
+        : harness === "copilot" ? { hook_event_name: "PreToolUse", session_id: "s", ...allowedWrite } : allowedWrite;
       const r = await runHook(dir, harness, event, { SCOPEBOND_HOOK_DEADLINE_MS: "1500" });
       assert.ok(denied(r), `expected a deny, got exit ${r.status}: ${r.stdout}`);
       assert.match(r.stdout, /no decision within/);

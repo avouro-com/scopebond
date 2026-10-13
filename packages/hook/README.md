@@ -504,10 +504,10 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
 
 Set `SCOPEBOND_POLICY_SYNC=off` to stop the five-minute check (the rules in force stay).
 
-Every call the hook makes to the workspace (the rules check and its confirmation, record
-delivery and summaries, observations, credential renewal, recovery, enrollment and the
-uninstall notice) carries `x-scopebond-hook-version`, so a workspace can hold a minimum
-version on every route. The browser sign-in that runs before enrollment does not.
+Every call the hook makes to the workspace (sign-in and enrollment, the rules check and its
+confirmation, record delivery and summaries, observations, credential renewal, recovery,
+`doctor`'s checks and the uninstall notice) carries `x-scopebond-hook-version`, so a
+workspace can hold a minimum version on every route.
 
 ### Signed rules
 
@@ -719,8 +719,9 @@ Unknown tools are recorded as *not evaluated* and grant nothing — they fall th
 the coding agent's own permission prompt, so the hook never turns an unrecognised
 action into an approval. Anything unexpected fails closed (deny) with a repair message.
 So does a call that has not decided shortly before the coding agent's own hook time limit
-(55 seconds for Claude Code, 28 for Codex and Cursor), since an agent runs an action unchecked
-when its hook times out; `SCOPEBOND_HOOK_DEADLINE_MS` can only shorten that deadline.
+(55 seconds for Claude Code, 45 for GitHub Copilot, 28 for Codex and Cursor), since an agent
+runs an action unchecked when its hook times out; `SCOPEBOND_HOOK_DEADLINE_MS` can only
+shorten that deadline.
 
 **Known limits.** `test/bypass-corpus/` lists indirect ways to reach a blocked action
 (interpreter one-liners, indirect writes, renamed programs, `xargs` and `find -exec`, quoting,
