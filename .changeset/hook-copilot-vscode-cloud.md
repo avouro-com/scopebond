@@ -21,3 +21,9 @@ timeout fails open", and carry the gap "verified on a live install: not yet".
 - `capabilities --prove --copilot` opens an hour's recording, on this computer, of the tool names each Copilot surface
   actually sends (`copilot-tool-names.json` beside the policy: surface, event, tool name, argument names, never values),
   and lists what was seen, so a person can confirm the names on a real install.
+- Each Copilot hook entry also carries `command` (the `bash` form) and `timeout: 60`, the fields VS Code's Local harness
+  documents; the Copilot CLI ignores `command` while `bash`/`powershell` are present and reads `timeout` only without
+  `timeoutSec`. Whether Local runs the file at all is not known until a live run records it.
+- A write that sets `chat.useHooks`, `chat.hookFilesLocations` or `chat.useClaudeHooks` in a VS Code settings file
+  (`.vscode/settings.json`, `*.code-workspace`, VS Code or VS Code Insiders user `settings.json`), through a tool Scopebond
+  maps in any coding agent, is refused like a write of a hook file; other edits of those files are untouched.

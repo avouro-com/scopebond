@@ -368,9 +368,26 @@ pages, read 2026-10-13.
   blocks or prolongs a turn. Because the Local harness's tool names are not published, a
   Local call is mapped only where its name is one Scopebond knows; any other name is recorded
   as `tool.<name>`, not evaluated, and never answered "allow" (strict mode,
-  `SCOPEBOND_HOOK_STRICT=1`, denies it). VS Code's `chat.useHooks` and `chat.hookFilesLocations`
-  settings can switch Local hooks off; Scopebond does not see or protect VS Code's own settings.
-  `install --copilot` writes the user-level file both the CLI and VS Code read.
+  `SCOPEBOND_HOOK_STRICT=1`, denies it). `install --copilot` writes the user-level file both
+  the CLI and VS Code read.
+- **Known gaps in VS Code's Local harness** (from its reference; not yet checked live):
+  - Whether Local runs Scopebond's hook file at all is unknown. Its reference recognises the
+    Copilot format by a numeric `version` with lower camelCase events; this file uses
+    PascalCase events. Each entry also carries Local's own `command` and `timeout` fields
+    (the Copilot CLI ignores `command` while `bash`/`powershell` are present, and reads
+    `timeout` only without `timeoutSec`, so nothing runs twice). The tool-name recording
+    below shows whether Local ran it.
+  - Local's default timeout is 30 s. The entry sets `timeout: 60`; if Local ignores it, a
+    check slower than 30 s fails open there (the hook's own deadline is 45 s).
+  - In Local, a hook that fails to start, or exits non-zero other than 2, is a non-blocking
+    warning: the action runs. Scopebond's own failures exit 2.
+  - Guardrail protection of hook files does not apply to Local tool names yet: a Local write
+    under a tool name Scopebond does not map is recorded, not refused.
+  - VS Code's `chat.useHooks`, `chat.hookFilesLocations` and `chat.useClaudeHooks` settings
+    can switch hooks off. A write that sets one of them in `.vscode/settings.json`, a
+    `*.code-workspace` file or VS Code's user `settings.json` through a tool Scopebond maps (in
+    any coding agent) is refused like a write of a hook file; any other edit of those files is
+    untouched. A change made in VS Code's settings screen is outside the hook.
 - **The cloud coding agent** is recognised by two things together: no user-level Scopebond
   hook file for Copilot (the sandbox has no user-level hook files at all), and the sandbox's
   own environment (`COPILOT_AGENT_PROMPT` or `GITHUB_COPILOT_API_TOKEN` present; only their
@@ -394,16 +411,19 @@ open, every Copilot hook call notes which surface sent it, the tool name exactly
 event, the argument names (never their values) and what Scopebond made of it, in
 `copilot-tool-names.json` beside the policy. Use each surface (the CLI, VS Code with the Copilot
 and with the Local session target): run `git status`, read a file, create and edit a file,
-fetch a page, and create `.github/hooks/probe.json` (always denied). Run the command again to
-list what was seen per surface; a name marked "recorded, not evaluated" or "not in GitHub's
-documented names" is one Scopebond does not check yet.
+fetch a page, and create `.github/hooks/probe.json` (denied wherever the tool name is mapped).
+Run the command again to list what was seen per surface; a name marked "recorded, not
+evaluated" or "not in GitHub's documented names" is one Scopebond does not check yet. If no
+"VS Code Local harness" section appears after using the Local session target, the hook is not
+running there.
 
 Scopebond's own protection covers Copilot's hook settings as it does the other agents':
 writes to `~/.copilot/hooks/`, `~/.copilot/settings.json`, `~/.copilot/mcp-config.json`
 (the CLI's MCP servers), `.github/hooks/`, `.github/copilot/settings.json` and
 `.github/copilot/settings.local.json` are always denied (guardrail configuration, not CI
 configuration), as is removing those folders or starting `copilot` with `COPILOT_HOME`
-pointed elsewhere. This holds in every coding agent, not only in Copilot, and it covers
+pointed elsewhere. This holds in every coding agent whose tool names Scopebond maps (not in
+VS Code's Local harness yet, whose tool names are unpublished), and it covers
 **every file** under `.github/hooks/` and `~/.copilot/hooks/`, including a project's own hook
 scripts: a coding agent cannot edit them, and a person changes them outside the agent.
 `COPILOT_HOME` itself is not followed: a Copilot folder moved there is not protected.

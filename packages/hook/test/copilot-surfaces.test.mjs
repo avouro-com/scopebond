@@ -145,11 +145,64 @@ test("a Local tool name nobody has published is recorded as tool.<name> and neve
   assert.equal(JSON.parse(strict.stdout).hookSpecificOutput.permissionDecision, "deny");
 });
 
-test("a Local call that writes Copilot's own hook settings is denied (always on)", () => {
+// The tool name `Write` is a GUESS for the Local harness (its names are unpublished); this pins only the answer shape a
+// Local-shaped payload gets when its name is one Scopebond maps. It does not show that Local protects hook files.
+test("[guessed Local tool name] a Local-shaped write of Copilot's hook settings under a mapped name is denied in Local's shape", () => {
   const g = governed("default");
   const r = g.hook(localPreToolUse(g.project, "Write", { file_path: join(g.project, ".github", "hooks", "scopebond.json"), content: "{}" }));
   assert.equal(r.status, 2, r.stdout);
   assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("each entry also carries Local's command and timeout fields, equal to bash and timeoutSec", () => {
+  const { env, home } = isolated();
+  assert.equal(run(env, ["install", "--copilot"]).status, 0);
+  const doc = JSON.parse(readFileSync(join(home, ".copilot", "hooks", "scopebond.json"), "utf8"));
+  for (const event of COPILOT_EVENTS) {
+    const [entry] = doc.hooks[event];
+    assert.equal(entry.command, entry.bash, "the CLI ignores command while bash/powershell are present");
+    assert.equal(entry.timeout, entry.timeoutSec, "the CLI reads timeout only without timeoutSec");
+    assert.equal(entry.timeout, 60);
+    assert.equal(entry.windows, undefined, "not a documented field of the Copilot file format");
+  }
+});
+
+test("a write that switches VS Code's hooks off is refused in any coding agent; other settings edits are allowed", () => {
+  const g = governed("default");
+  const claude = (tool_name, tool_input) => run(g.env, ["claude"], { cwd: g.project, input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s", cwd: g.project, tool_name, tool_input }) });
+  const settings = join(g.project, ".vscode", "settings.json");
+  const userSettings = join(g.home, "AppData", "Roaming", "Code", "User", "settings.json");
+  const denied = [
+    claude("Write", { file_path: settings, content: '{ "chat.useHooks": false }' }),
+    claude("Edit", { file_path: settings, old_string: "{", new_string: '{ "chat.hookFilesLocations": { ".github/hooks": false },' }),
+    claude("Write", { file_path: join(g.project, "app.code-workspace"), content: '{ "settings": { "chat.useClaudeHooks": false } }' }),
+    claude("Bash", { command: `echo '{"chat.useHooks": false}' > .vscode/settings.json` }),
+    g.hook(ghPreToolUse(g.project, "Write", { path: userSettings, file_text: '{ "chat.useHooks": false }' })),
+    g.hook(ghPreToolUse(g.project, "Edit", { path: settings, old_str: "{", new_str: '{ "chat.useHooks": false,' })),
+  ];
+  for (const r of denied) assert.equal(r.status, 2, r.stdout + r.stderr);
+  // A benign edit of the same files is untouched (the default rules only record).
+  const benign = [
+    claude("Write", { file_path: settings, content: '{ "editor.formatOnSave": true }' }),
+    g.hook(ghPreToolUse(g.project, "Edit", { path: settings, old_str: "{", new_str: '{ "files.eol": "\\n",' })),
+    claude("Write", { file_path: join(g.project, "notes.md"), content: "chat.useHooks is a VS Code setting" }),
+  ];
+  for (const r of benign) { assert.equal(r.status, 0, r.stdout + r.stderr); assert.equal(r.stdout, ""); }
+});
+
+test("the tool-name record is read bounded and printed without control characters", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-copilot-probe-b-"));
+  writeFileSync(join(dir, COPILOT_PROBE_FILE), JSON.stringify({ version: 1, opened_at: "x", until: "2999-01-01T00:00:00.000Z", entries: [], pad: "x".repeat(600 * 1024) }));
+  assert.equal(readCopilotProbe(dir), null, "a record over 512 KiB is no window");
+  recordCopilotProbe(dir, { payload: ghPreToolUse("/w", "Bash", {}), surface: "cli", signals: [], mapped_as: ["shell.exec"], evaluated: true });
+  assert.equal(readCopilotProbe(dir), null, "nothing recorded into it");
+  const dir2 = mkdtempSync(join(tmpdir(), "sb-copilot-probe-c-"));
+  openCopilotProbe(dir2);
+  recordCopilotProbe(dir2, { payload: ghPreToolUse("/w", "evil\u001b[31mname\u0007\u009b", {}), surface: "cli", signals: [], mapped_as: ["tool.x"], evaluated: false });
+  const probe = readCopilotProbe(dir2);
+  assert.equal(probe.entries[0].tool_name, "evil[31mname");
+  probe.entries[0].tool_name = "again\u001bX";
+  assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(renderCopilotProbe(probe, "f").replace(/\n/g, "")), "nothing printed carries a control character");
 });
 
 // --- Surfaces and the cloud agent ----------------------------------------------------------------------------------------

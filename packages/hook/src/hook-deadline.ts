@@ -18,6 +18,7 @@
 // `SCOPEBOND_HOOK_DEADLINE_MS` can only shorten the deadline (tests use it to prove the deny); it can never lengthen it.
 
 import { writeSync } from "node:fs";
+import { copilotAnswer } from "./copilot-answer.js";
 
 export const HOOK_DEADLINE_MS: Readonly<Record<string, number>> = { claude: 55_000, codex: 28_000, cursor: 28_000, copilot: 45_000 };
 export const HOOK_DEADLINE_ENV = "SCOPEBOND_HOOK_DEADLINE_MS";
@@ -69,9 +70,10 @@ export function denyHookCall(command: string | undefined, reason: string): never
     }
     // GitHub Copilot denies on exit 2 whatever stdout holds; the JSON carries the reason.
     if (command === "copilot") {
-      writeNow(1, JSON.stringify({ permissionDecision: "deny", permissionDecisionReason: reason }) + "\n");
-      writeNow(2, `${reason}\n`);
-      process.exit(2);
+      const answer = copilotAnswer("deny", reason, false);
+      writeNow(1, answer.stdout);
+      writeNow(2, answer.stderr);
+      process.exit(answer.exitCode);
     }
     writeNow(2, `${reason}\n`);
   } catch { /* nothing left to report with */ }

@@ -23,7 +23,8 @@ import * as gatewayNode from "@scopebond/gateway/node";
 import { callRequestOf, keyedIdFor, TYPED_ACTION_TYPES } from "./typed-ops.js";
 import { databaseGuardActions } from "./typed-infra.js";
 import { mapClaudeToolUse, mapCodexToolUse, mapCopilotCall, copilotAsClaude, mapCursorEvent, fillPushBranch, type Mapped } from "./map.js";
-import { copilotAnswer, copilotCloudAgent, copilotSurface, surfaceSignals, recordCopilotProbe, openCopilotProbe, readCopilotProbe, renderCopilotProbe, COPILOT_PROBE_FILE, type CopilotAnswer } from "./copilot-surface.js";
+import { copilotCloudAgent, copilotSurface, surfaceSignals, recordCopilotProbe, openCopilotProbe, readCopilotProbe, renderCopilotProbe, COPILOT_PROBE_FILE } from "./copilot-surface.js";
+import { copilotAnswer, type CopilotAnswer } from "./copilot-answer.js";
 import { createHash } from "node:crypto";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
@@ -1749,6 +1750,8 @@ const copilotProbeSteps = [
   "Surfaces: the Copilot CLI; VS Code agent mode with the Copilot session target and with the Local",
   "session target. Then run this command again: every tool name each surface sent is listed with",
   "what Scopebond made of it. A name marked \"recorded, not evaluated\" is not checked yet.",
+  "If no \"VS Code Local harness\" section appears after using the Local session target, the hook",
+  "is not running there: Local did not load this hook file.",
 ].join("\n");
 
 /** `capabilities`: the manifest of what this hook can honestly claim, cell by cell.

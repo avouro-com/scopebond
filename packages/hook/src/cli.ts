@@ -4,6 +4,7 @@
 // settings name (`.../dist/cli.js claude`); the commands themselves are in cli-main.ts.
 
 import { writeSync } from "node:fs";
+import { copilotAnswer } from "./copilot-answer.js";
 
 // `node:sqlite` (the receipt store) is still flagged experimental on Node 22, and Node
 // prints a warning on stderr the first time it loads — on every `verify`, and into the
@@ -43,9 +44,10 @@ function failClosed(error: unknown): never {
     }
     // GitHub Copilot denies on exit 2 whatever stdout holds; the JSON carries the reason.
     if (command === "copilot") {
-      writeNow(1, JSON.stringify({ permissionDecision: "deny", permissionDecisionReason: reason }) + "\n");
-      writeNow(2, `${reason}\n`);
-      process.exit(2);
+      const answer = copilotAnswer("deny", reason, false);
+      writeNow(1, answer.stdout);
+      writeNow(2, answer.stderr);
+      process.exit(answer.exitCode);
     }
     writeNow(2, `${reason}\n`);
   } catch { /* nothing left to report with */ }

@@ -23,7 +23,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { userHarnessFile } from "./install.js";
-import { readIfPresent, replaceFile } from "./safe-fs.js";
+import { errorCode, readBounded, replaceFile } from "./safe-fs.js";
 
 export type CopilotSurface = "cli" | "vscode_local" | "cloud_agent";
 
@@ -69,32 +69,7 @@ export function copilotSurface(payload: Record<string, unknown>, env: NodeJS.Pro
   return "cli";
 }
 
-/** Why an "ask" is a deny in the Copilot cloud agent, said in the deny itself. */
-export const COPILOT_CLOUD_ASK_IS_DENY = "this action needs a person's approval, and the Copilot cloud agent has no one to ask, so it is denied";
-
-export interface CopilotAnswer { stdout: string; stderr: string; exitCode: 0 | 2 }
-
-/** What the hook writes for a Copilot `deny` or `ask`.
- *
- *  The decision is written in both shapes Copilot's surfaces read: the top-level `permissionDecision` and
- *  `permissionDecisionReason` (GitHub's hooks reference, "preToolUse decision control"; the Copilot CLI and VS Code's
- *  Copilot session target) and `hookSpecificOutput` (VS Code's Local hooks reference, "PreToolUse Output"). Both say the
- *  same thing, so whichever one a surface reads, the answer is the same.
- *
- *  A deny also exits 2, which the CLI treats as a deny whatever stdout says and the Local harness treats as a blocking
- *  error with stderr given to the model, so a deny holds even if the JSON were not read. An `ask` in the cloud agent
- *  (`cloud`) is answered as a deny with the reason spelled out: the cloud agent turns every "ask" into a deny because no
- *  one can answer it, and the agent should be told why rather than see a bare refusal. */
-export function copilotAnswer(decision: "deny" | "ask", reason: string, cloud: boolean): CopilotAnswer {
-  if (decision === "ask" && cloud) return copilotAnswer("deny", `Scopebond: ${COPILOT_CLOUD_ASK_IS_DENY}. ${reason.replace(/^Scopebond:\s*/, "")}`, cloud);
-  const body = {
-    permissionDecision: decision, permissionDecisionReason: reason,
-    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: decision, permissionDecisionReason: reason },
-  };
-  const stdout = JSON.stringify(body) + "\n";
-  if (decision === "ask") return { stdout, stderr: "", exitCode: 0 };
-  return { stdout, stderr: `${reason.startsWith("Scopebond") ? reason : `Scopebond: ${reason}`}\n`, exitCode: 2 };
-}
+export { copilotAnswer, COPILOT_CLOUD_ASK_IS_DENY, type CopilotAnswer } from "./copilot-answer.js";
 
 /** The tool names GitHub's hooks reference documents ("Tool names for hook matching", and the runtime-to-Claude table the
  *  PascalCase payloads use). A name a surface sends that is not here is exactly what a live run has to confirm. */
@@ -114,6 +89,7 @@ export const COPILOT_PROBE_WINDOW_MS = 60 * 60 * 1000;
 const MAX_ENTRIES = 200;
 const MAX_KEYS = 20;
 const MAX_NAME = 120;
+const MAX_PROBE_BYTES = 512 * 1024;
 const SAFE_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
 
 export interface ProbeEntry {
@@ -145,8 +121,10 @@ const probePath = (dir: string): string => join(dir, COPILOT_PROBE_FILE);
 /** The record, or null when there is none or it does not read. */
 export function readCopilotProbe(dir: string): CopilotProbe | null {
   try {
-    const text = readIfPresent(probePath(dir));
-    if (text === undefined) return null;
+    // Bounded: a record larger than any real one (or one swapped for something large) is read as no window at all.
+    let text: string | null;
+    try { text = readBounded(probePath(dir), MAX_PROBE_BYTES); } catch (error) { if (errorCode(error) === "ENOENT") return null; throw error; }
+    if (text === null) return null;
     const parsed = JSON.parse(text) as CopilotProbe;
     return parsed && parsed.version === 1 && Array.isArray(parsed.entries) ? parsed : null;
   } catch { return null; }
@@ -165,7 +143,11 @@ export function openCopilotProbe(dir: string, now: Date = new Date()): CopilotPr
   return probe;
 }
 
-const clip = (s: string): string => s.length > MAX_NAME ? s.slice(0, MAX_NAME) : s;
+/** Control characters (C0, DEL, C1) are dropped: a tool name or event is printed to a terminal, never interpreted. */
+// eslint-disable-next-line no-control-regex -- the point is to match control characters
+const CONTROL = /[\x00-\x1f\x7f-\x9f]/g;
+const clean = (s: string): string => s.replace(CONTROL, "");
+const clip = (s: string): string => { const c = clean(s); return c.length > MAX_NAME ? c.slice(0, MAX_NAME) : c; };
 
 /** Add one hook call to the record, when a window is open. Best effort: it never throws, and with no window open it only
  *  checks that the file is absent. Only the tool's name, the event, the argument names and the signals are kept. */
@@ -210,7 +192,7 @@ export function renderCopilotProbe(probe: CopilotProbe | null, file: string, now
   lines.push("GitHub Copilot tool names seen on this computer");
   if (!probe) { lines.push(`  nothing recorded (${file})`); return lines.join("\n"); }
   const open = Date.parse(probe.until) >= now.getTime();
-  lines.push(`  ${file}: recording ${open ? `open until ${probe.until}` : `closed at ${probe.until}`}`);
+  lines.push(`  ${file}: recording ${open ? `open until ${clean(String(probe.until))}` : `closed at ${clean(String(probe.until))}`}`);
   if (probe.entries.length === 0) lines.push("  no Copilot hook call has been recorded yet");
   for (const surface of ["cli", "vscode_local", "cloud_agent"] as const) {
     const entries = probe.entries.filter((e) => e.surface === surface);
@@ -219,9 +201,9 @@ export function renderCopilotProbe(probe: CopilotProbe | null, file: string, now
     lines.push(`  ${SURFACE_LABEL[surface]}`);
     for (const e of [...entries].sort((a, b) => a.event.localeCompare(b.event) || a.tool_name.localeCompare(b.tool_name))) {
       const documented = DOCUMENTED_COPILOT_TOOL_NAMES.includes(e.tool_name);
-      lines.push(`    ${e.event.padEnd(18)} ${e.tool_name.padEnd(28)} ${String(e.count).padStart(4)}x  -> ${e.mapped_as.join(", ") || "(no action)"}${e.evaluated ? "" : " (recorded, not evaluated)"}${documented ? "" : "  [not in GitHub's documented names]"}`);
-      if (e.input_keys.length) lines.push(`        arguments: ${e.input_keys.join(", ")}`);
-      lines.push(`        signals: ${e.signals.join(", ") || "none"}`);
+      lines.push(`    ${clean(e.event).padEnd(18)} ${clean(e.tool_name).padEnd(28)} ${String(e.count).padStart(4)}x  -> ${e.mapped_as.map(clean).join(", ") || "(no action)"}${e.evaluated ? "" : " (recorded, not evaluated)"}${documented ? "" : "  [not in GitHub's documented names]"}`);
+      if (e.input_keys.length) lines.push(`        arguments: ${e.input_keys.map(clean).join(", ")}`);
+      lines.push(`        signals: ${e.signals.map(clean).join(", ") || "none"}`);
     }
   }
   const seen = new Set(probe.entries.map((e) => e.tool_name));

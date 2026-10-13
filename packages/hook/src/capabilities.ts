@@ -136,13 +136,17 @@ export const HOST_GAPS: Partial<Record<HostVariant, string[]>> = {
   copilot_vscode: [
     "verified on a live install: not yet",
     "VS Code's Copilot session target runs the Copilot CLI's hook implementation and tool names; its Local session target sends tool names that GitHub and VS Code do not publish, so until a live run records them (`capabilities --prove --copilot`) a Local call is recorded as an unevaluated tool.<name>, not checked",
-    "VS Code's chat.useHooks and chat.hookFilesLocations settings can switch Local hooks off; Scopebond does not see or protect VS Code's own settings",
+    "whether VS Code's Local harness runs Scopebond's hook file at all is unknown: its reference recognises the Copilot format by a numeric version with lower camelCase events, and this file uses PascalCase events (the entries also carry Local's own command and timeout fields)",
+    "Local's default hook timeout is 30 s; the entry sets timeout 60, but if Local ignores it, a check slower than 30 s fails open (the hook's own deadline is 45 s)",
+    "in Local, a hook that fails to start or exits non-zero other than 2 fails open (a non-blocking warning); Scopebond's own failures exit 2",
+    "guardrail protection of hook files does not apply to Local tool names yet: a Local write of a hook file under a tool name Scopebond does not map is recorded, not refused",
+    "VS Code's chat.useHooks, chat.hookFilesLocations and chat.useClaudeHooks settings can switch hooks off; a write of one of them into a VS Code settings file through a mapped tool is refused, but VS Code's settings screen is outside the hook",
   ],
   copilot_cloud: [
     "verified on a live install: not yet",
     "loads hooks only from .github/hooks/*.json on the default branch and runs only an entry's bash (or command) field",
     "an ask is a deny there (no one to answer); Scopebond says so in the deny",
-    "the sandbox needs a Scopebond setup (a repository connection); without one every action is denied",
+    "the sandbox needs the repository installation (Computers → Repositories) and its token as SCOPEBOND_REPO_TOKEN in the repository's copilot environment; without the token the committed init --repo entries check nothing (and say so), and a file written by init --copilot denies every action",
   ],
 };
 
