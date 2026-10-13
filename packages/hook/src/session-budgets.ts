@@ -144,13 +144,20 @@ const argsOf = (params: Record<string, unknown>): string[] => {
 };
 const JS_INSTALL = new Set(["install", "i", "ci", "add", "update", "up", "upgrade"]);
 
+/** A program name without its trailing version (`pip3.12` → `pip`), by a linear scan from the end. */
+function withoutVersion(program: string): string {
+  let end = program.length;
+  while (end > 0 && /[0-9.]/.test(program[end - 1])) end -= 1;
+  return program.slice(0, end);
+}
+
 /** Whether a shell command installs packages (npm, pnpm, yarn, bun, pip, uv, poetry, pipx, cargo, gem, go). */
 export function isPackageInstall(intent: BudgetIntent): boolean {
   if (intent.action_type !== "shell.exec") return false;
   const program = programOf(intent.params);
   const [a, b] = argsOf(intent.params);
   if (["npm", "pnpm", "yarn", "bun"].includes(program)) return program === "yarn" && a === undefined ? true : a !== undefined && JS_INSTALL.has(a);
-  const unversioned = program.replace(/[\d.]+$/, ""); // pip3, pip3.12, python3.11
+  const unversioned = withoutVersion(program); // pip3, pip3.12, python3.11
   if (unversioned === "pip" || program === "pipx") return a === "install";
   if (unversioned === "python" || program === "py") return a === "pip" && b === "install";
   if (program === "uv") return a === "add" || a === "sync" || (a === "pip" && b === "install") || (a === "tool" && b === "install");
