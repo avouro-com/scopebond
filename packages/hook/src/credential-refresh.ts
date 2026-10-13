@@ -26,6 +26,8 @@ export async function refreshIfDue(
   options: { fetchImpl?: typeof fetch; now?: number; timeoutMs?: number } = {},
 ): Promise<RefreshOutcome> {
   try {
+    // A repository's short-lived credential is not renewed: the hook enrols the repository again with its token.
+    if ((connection as { source?: unknown }).source === "repository") return "not_due";
     const now = options.now ?? Date.now();
     const expires = Date.parse(connection.expires_at ?? "");
     if (!Number.isFinite(expires) || expires - now > REFRESH_WINDOW_MS) return "not_due";

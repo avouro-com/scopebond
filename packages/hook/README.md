@@ -434,17 +434,98 @@ scripts: a coding agent cannot edit them, and a person changes them outside the 
   harness's tool names are not published, so its calls are recorded as unevaluated tools
   until a live run confirms them; `capabilities` lists its cells as configured and
   unverified, never verified.
-- **The cloud coding agent** loads hooks only from `.github/hooks/*.json` on the repository's
-  default branch, runs only the `bash` command, and treats `ask` as deny. Scopebond does not
-  set up the cloud agent's sandbox yet: a committed hook file (`init --copilot --shared`)
-  reaches it, but without a Scopebond setup there (keys and a policy, which are never
-  committed) the hook fails closed and denies every action. Treat the cloud agent as not
-  covered for now; gate its pull requests with `@scopebond/github-action` instead. `init
-  --copilot` says so, and there the hook's deny names the cause: "Scopebond is not set up in
-  this environment; the Copilot cloud agent is not covered".
+- **The cloud coding agent**, per GitHub's hooks documentation, loads hooks from
+  `.github/hooks/*.json` on the repository's default branch, runs only the `bash` command,
+  and treats `ask` as deny. It can run the hook
+  as a repository of your workspace with a repository token (see
+  [Cloud coding agents and CI](#cloud-coding-agents-and-ci-init---repo)); that is not
+  verified on a real run yet, so keep gating its pull requests with
+  `@scopebond/github-action`. A hook file written by `init --copilot` (no `--repo`) with no
+  token and no Scopebond setup there fails closed and denies every action, naming the cause:
+  "Scopebond is not set up in this environment; the Copilot cloud agent is not covered". The
+  `init --repo` file instead reads as not governed there (see below).
 - Copilot also reads the `hooks` block of a project's `.claude/settings.json`. A project set
   up for Claude Code with `init` is then checked when Copilot runs there too; with a
   Copilot hook file as well, each action is checked twice.
+
+### Cloud coding agents and CI: `init --repo`
+
+Some agent runs have no person signed in and no computer of their own: Claude Code on the
+web, Codex cloud tasks, the GitHub Copilot coding agent, and agent steps inside GitHub
+Actions. Each starts from a fresh checkout of the repository, so the hook has to come from
+files committed there, and its connection from a secret.
+
+```
+npx -y @scopebond/hook@latest init --repo --dry-run   # what it would write
+npx -y @scopebond/hook@latest init --repo --yes
+```
+
+`init --repo` writes, in the current repository, only the committed hook files, each with
+the version-pinned `npx -y @scopebond/hook@<version> <agent> --from-repo` command:
+
+| File | Read by |
+|---|---|
+| `.claude/settings.json` | Claude Code (on the web, and `claude` in a CI step) |
+| `.codex/hooks.json` | Codex (cloud tasks, and `codex` in a CI step) |
+| `.github/hooks/scopebond.json` | the GitHub Copilot coding agent (and the Copilot CLI) |
+
+It merges with what each file already holds: other settings and other hooks are kept (in
+Claude Code and Codex, only Scopebond's own entry leaves a matcher group; the group's other
+hooks and matcher stay), an earlier Scopebond entry is replaced rather than duplicated, and
+running it twice changes nothing. The three files are written together: each new file is
+staged beside its target and renamed into place, and a failure puts back any already
+replaced, so either all three change or none does. The Copilot entries are `bash` commands (`type: "command"`), the only form the
+cloud agent runs. It makes no keys and writes no `.scopebond` folder; a file that is not
+JSON stops it before anything is written.
+
+Then, for each place the agent runs, give it the repository's token as the secret
+`SCOPEBOND_REPO_TOKEN` (create the token in your workspace, under Computers, Repositories):
+
+- GitHub Copilot coding agent: a secret in the repository's `copilot` environment.
+- An agent step in GitHub Actions: `env: SCOPEBOND_REPO_TOKEN: ${{ secrets.SCOPEBOND_REPO_TOKEN }}`.
+- Claude Code on the web and Codex cloud tasks: the cloud environment's environment
+  variables or secrets.
+
+Set `SCOPEBOND_URL` as well when your workspace is not at `https://cloud.scopebond.com`. The
+sandbox must be allowed to run `npx` (the npm registry) and to reach the workspace.
+
+**What the hook does with the token.** On its first tool call in a sandbox with
+`SCOPEBOND_REPO_TOKEN` set and no connection of its own, the hook sets itself up in the
+sandbox's home folder (`~/.scopebond`: fresh keys and the starter rules, so the checkout
+stays clean), signs a proof with both new keys over the token's SHA-256 digest and the time,
+and sends it to `POST /v1/repository/enroll`. The workspace answers with a short-lived
+delivery credential for that one repository, kept in `cloud.json`; the hook then fetches
+the workspace's rules and decides the call, and records are delivered as that repository
+(and carry the repository's `host/owner/name` in their context, as on any computer). Until
+the workspace's rules have loaded once, every call is denied ("this repository's rules are
+not loaded yet"), and the rules check is tried again on the next call: a fresh sandbox never
+decides with only the starter rules.
+
+The connection records which token made it (a SHA-256 of the token's digest, never the
+token). It is used only while it is unexpired and was made with the token now set; a
+credential that ran out, or one made with another repository's token (a shared or
+self-hosted runner), is set aside with its whole folder, and the repository enrols again
+with fresh keys (the workspace never takes a key twice). A connection a person made on the
+same computer always wins, and is looked for before the token is read.
+
+**Where there is no token.** The committed entries carry `--from-repo`. On a computer with
+no `SCOPEBOND_REPO_TOKEN` and no Scopebond connection (a contributor's laptop, a run you did
+not give the secret), such an entry checks nothing: it prints "Scopebond: this repository's
+hook is not connected on this computer; nothing is checked" to stderr, records nothing, and
+lets the agent's own permission flow decide, as it would without Scopebond. That computer is
+simply not governed. A computer signed in to Scopebond, or a run with the token, is checked
+as usual, and fails closed as usual.
+
+The token is never written to disk, printed, or sent anywhere but that one request. When
+the workspace refuses it (revoked, unknown, or rate limited) or cannot be reached, the call
+is denied (fail closed) with the reason and the fix, never with the token.
+
+**Not a boundary on its own.** A coding agent can edit files in its own checkout, these hook
+files included, and an action that runs before the hook is loaded is not seen. The committed
+files make the agent's runs checked and recorded; the merge boundary stays the
+[`@scopebond/github-action`](../github-action) as a required check, with `.github/` and the
+default branch protected by branch protection or a ruleset. Each of these cloud runs is unverified until a real
+run's records are seen in the workspace; check one before relying on it.
 
 ### What this hook can honestly claim: `capabilities`
 
