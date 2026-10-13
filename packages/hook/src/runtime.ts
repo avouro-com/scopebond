@@ -20,6 +20,7 @@ import { isRepairableStore, noteQueueMiss, repairDelivery } from "./delivery-rep
 import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
 import { homeFolders, maskHomeInPolicy, maskHomeInValue } from "./home-mask.js";
+import type { ReceiptPayloadContext } from "@scopebond/gateway";
 
 export interface RuntimeConfig {
   policyPath: string;
@@ -46,6 +47,9 @@ export interface RuntimeConfig {
   /** The current account's home folder, in every spelling to mask (see home-mask.ts). Defaults to `os.homedir()`,
    *  `HOME` and `USERPROFILE`; tests pass their own. */
   homeFolders?: readonly string[];
+  /** Where this call's actions come from, signed into each receipt as `payload.context` (see receipt-context.ts). Absent or
+   *  null: receipts carry none. */
+  context?: ReceiptPayloadContext | null;
 }
 
 export interface Decision {
@@ -327,6 +331,8 @@ export function createHookRuntime(config: RuntimeConfig) {
     }) as OverrideHandler,
   } : null;
 
+  const contextOption: { context?: ReceiptPayloadContext } = config.context ? { context: config.context } : {};
+
   /** Close interrupted evaluations and queue what the queue never got, waiting briefly for locks. Never throws. */
   const repair = async (): Promise<void> => {
     if (!repairable) return;
@@ -379,14 +385,14 @@ export function createHookRuntime(config: RuntimeConfig) {
       if (!mapped.evaluated && !config.strict) {
         // Unknown tool or unparseable command, non-strict: observe without
         // evaluating — grants nothing.
-        const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization });
+        const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);
         return { decision: "not_evaluated", reason: `no policy applies to ${mapped.intent.action_type}`, receipt };
       }
       // Evaluated actions, and (in strict mode) unmapped tool.<name>/opaque commands,
       // go through policy — a closed allowlist denies an unlisted action.
       // An action the coding agent reported only after it ran (Cursor's afterFileEdit) is signed as recorded after the
       // fact when a rule denies it: the receipt must not claim it was prevented.
-      const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}) };
+      const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}), ...contextOption };
       const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(options).length ? options : undefined);
       const granted = (result.receipt as { payload?: { override?: { state?: string } } } | undefined)?.payload?.override;
       if (result.allowed && granted?.state === "offered") {
@@ -456,7 +462,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           try {
             const last = list[list.length - 1];
             const signed = agent.sign(last.intent);
-            const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
+            const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(contextOption).length ? contextOption : undefined);
             if (result.receipt !== undefined) receipts.push(result.receipt);
           } finally { boundaryVerdict = null; }
           return { decision: "deny", reason: `Scopebond blocked this before it ran: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`, receipts, dispatched, dispatch: verdict };

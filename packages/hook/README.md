@@ -638,6 +638,24 @@ folder is recorded relative to it, as before.
   `rules protect`, which does this for you) if you need one.
 - Receipts are signed after masking, so `verify` checks exactly what was recorded.
 
+### What a record contains
+
+Each receipt holds the normalized action (scrubbed as above), the decision, the rule set's
+digest and the signatures. It may also carry a `context` saying where it was produced, so
+a workspace can group records by session and filter them by tool, model and repository:
+`harness` (`claude`, `cursor` or `codex`), `harness_version` (Cursor reports one; Claude
+Code and Codex do not, so it is `null`), `model` (the model id when the coding agent puts it
+in the hook input, else `null`; the transcript is never read), `session_id` (the same keyed
+opaque id the observations carry, never the coding agent's own session id), `repository`
+(the git remote `origin` as `host/owner/name`: lowercase host, no credentials, no `.git`;
+`null` outside a repository or without an `origin`) and `branch`. It holds no local path, user
+name or prompt, and the signature covers it, so `verify` checks it like the rest;
+`log` shows it after the action. A computer that is not connected always records it. A
+connected computer adds it only once its workspace has said it reads it: the rules check
+(`GET /v1/policy`) or a delivery answer carries `x-scopebond-receipt-context: 1`, kept as
+`receipt_context` in the rules state beside the hook's settings. Until then, and after a
+rules check answers without it, receipts are recorded and sent without a context.
+
 **The computer name.** Signing in (`login`, and the Scopebond Agent's first sign-in)
 sends this computer's host name so the person approving it can tell which computer it
 is. Set `SCOPEBOND_HOSTNAME_MODE` to choose what is sent:

@@ -269,6 +269,9 @@ export interface ManagedMeta {
   evidence_detail?: "full" | "standard" | null;
   /** How often this computer's session heartbeat may beat, in seconds, as its workspace says on each rules check (absent: 60). */
   heartbeat_interval_s?: number | null;
+  /** Whether the workspace reads receipt context (`payload.context`): its last rules check, or a delivery answer, carried
+   *  `x-scopebond-receipt-context: 1`. Until then a connected computer sends receipts without it. */
+  receipt_context?: boolean | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 

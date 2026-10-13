@@ -129,6 +129,47 @@ export function validateOverrideRecord(o: unknown): o is OverrideRecord {
   return o.state === "offered" && o.reason_digest === null && o.reason_length === null && o.repeat_of === null;
 }
 
+/** Where a receipt was produced (`payload.context`, optional): so a workspace can group records by session and filter them by
+ *  tool, model and repository. A closed object; every member is optional and may be null when the connector does not know it.
+ *  It carries no personal data (no local paths, user names or prompts) and is covered by the signature like the rest of the
+ *  payload. (`ReceiptContext` is the older name for the reserved receipt fields; this is the payload member.) */
+export interface ReceiptPayloadContext {
+  /** The connector or coding tool: `claude`, `cursor`, `codex`, `copilot`, `gateway`, ... (`^[a-z][a-z0-9-]{0,39}$`). */
+  harness?: string | null;
+  /** The version that tool reports (at most 64 characters). */
+  harness_version?: string | null;
+  /** The model id that tool reports (at most 128 characters). */
+  model?: string | null;
+  /** An opaque session id the connector assigns (1–200 characters); never the tool's own raw session id. */
+  session_id?: string | null;
+  /** The git remote `origin` as `host/owner/name`: lowercase host, no scheme, credentials or `.git`. Never a local path. */
+  repository?: string | null;
+  /** The current branch (at most 200 characters). */
+  branch?: string | null;
+}
+export const RECEIPT_CONTEXT_KEYS = ["harness", "harness_version", "model", "session_id", "repository", "branch"] as const;
+const CONTEXT_HARNESS = /^[a-z][a-z0-9-]{0,39}$/;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and each repeated segment starts with a "/" its own class excludes, so no two quantifiers compete for a character
+const CONTEXT_REPOSITORY = /^[a-z0-9][a-z0-9.-]*(?:[/][A-Za-z0-9._~%+-]+){2,}$/;
+const CONTEXT_MAX: Record<(typeof RECEIPT_CONTEXT_KEYS)[number], number> = {
+  harness: 40, harness_version: 64, model: 128, session_id: 200, repository: 200, branch: 200,
+};
+/** The shape `payload.context` must have (the receipt schema's): a closed object of optional strings or nulls. */
+export function validateReceiptContext(value: unknown): value is ReceiptPayloadContext {
+  if (!isRecord(value) || !hasOnlyKeys(value, [...RECEIPT_CONTEXT_KEYS])) return false;
+  for (const key of RECEIPT_CONTEXT_KEYS) {
+    if (!(key in value)) continue;
+    const member = value[key];
+    if (member === null) continue;
+    if (typeof member !== "string") return false;
+    const length = [...member].length;
+    if (length < 1 || length > CONTEXT_MAX[key]) return false;
+    if (key === "harness" && !CONTEXT_HARNESS.test(member)) return false;
+    if (key === "repository" && !CONTEXT_REPOSITORY.test(member)) return false;
+  }
+  return true;
+}
+
 export interface ReceiptPayload {
   type: "scopebond:receipt";
   evidence_version: typeof EVIDENCE_VERSION;
@@ -158,6 +199,8 @@ export interface ReceiptPayload {
   boundary?: BoundaryEvidence;
   /** Present only when a person overrode a block (realtime_result "approved"). */
   override?: OverrideRecord;
+  /** Where the receipt was produced (optional; see ReceiptPayloadContext). */
+  context?: ReceiptPayloadContext;
 }
 
 export interface SignedReceipt {
@@ -380,8 +423,9 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
     "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result",
     "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp",
-    "evidence_class", "principal", "boundary", "override",
+    "evidence_class", "principal", "boundary", "override", "context",
   ]) && evidenceClassValid(payload as unknown as ReceiptPayload) &&
+    (payload.context === undefined || validateReceiptContext(payload.context)) &&
     (payload.override === undefined || (validateOverrideRecord(payload.override) && payload.realtime_result === "approved")) &&
     hasOnlyKeys(payload.action_ref, ["action_id", "authorized_intent_hash", "evidence_intent_hash"]) &&
     hasOnlyKeys(payload.policy_ref, ["id", "version", "digest"]) &&

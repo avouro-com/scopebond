@@ -12,11 +12,11 @@ import type { DispatchGuard } from "./dispatch.js";
 import {
   buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash,
   minimizeIntentForEvidence, REDACTION_PROFILE,
-  CANONICALIZATION,
+  CANONICALIZATION, validateReceiptContext,
 } from "./receipts.js";
 import type {
   Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
-  ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord,
+  ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord, ReceiptPayloadContext,
 } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleProof } from "./anchor.js";
@@ -124,6 +124,15 @@ export interface ActionOptions {
    *  written). Nothing is dispatched and no override is asked; a policy denial is signed as `observed_after`
    *  (`executed: true`): a violation recorded, not prevented. */
   observedAfter?: boolean;
+  /** Where the action was produced, signed into the receipt as `payload.context` (see ReceiptPayloadContext). Checked
+   *  before anything is decided: a context that is not a valid one is refused, never signed. */
+  context?: ReceiptPayloadContext;
+}
+
+/** Options for recording a passive observation. */
+export interface ObserveOptions {
+  /** Signed into the receipt as `payload.context`, as for ActionOptions. */
+  context?: ReceiptPayloadContext;
 }
 
 export interface Gateway {
@@ -139,7 +148,7 @@ export interface Gateway {
    * `check_only`-mode `handleAction`, but forced regardless of configured mode. */
   check(req: ActionRequest): Promise<ActionResult>;
   /** Record a passive observation without evaluating or dispatching it. */
-  observeAction(req: ActionRequest): Promise<ObservationResult>;
+  observeAction(req: ActionRequest, options?: ObserveOptions): Promise<ObservationResult>;
   /** Hot-swap the active policy (recomputes the policy hash + version). */
   setPolicy(policy: Policy): void;
   /** Compute, sign and store a v2 (RFC 9162) anchor over the receipts to date. */
@@ -248,6 +257,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     // What a denial is signed as: prevented, or (for an action reported after it ran) recorded after the fact.
     const deniedState: ExecutionState = observedAfter ? "observed_after" : "denied";
     assertValidIntent(req.intent);
+    assertValidContext(opts?.context);
     const ts = now();
     const ih = intentHash(req.intent);
     const minimized = minimizeIntentForEvidence(req.intent);
@@ -283,6 +293,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       // Tag the class explicitly when the agent signed (§15). Unsigned/dev
       // receipts stay legacy (absent) and are classified at read time.
       ...(authenticated.evidence.agent ? { evidence_class: "signed_intent" as const } : {}),
+      ...(opts?.context ? { context: opts.context } : {}),
     };
     const receiptFields = (
       realtimeResult: RealtimeResult,
@@ -539,8 +550,9 @@ export function createGateway(config: GatewayConfig): Gateway {
     policyHistory = historyNeed(snapshot);
   }
 
-  async function observeAction(req: ActionRequest): Promise<ObservationResult> {
+  async function observeAction(req: ActionRequest, options?: ObserveOptions): Promise<ObservationResult> {
     assertValidIntent(req.intent);
+    assertValidContext(options?.context);
     const ts = now();
     const ih = intentHash(req.intent);
     const minimized = minimizeIntentForEvidence(req.intent);
@@ -575,6 +587,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       authorization: authenticated.evidence,
       attester: { kind: "gateway", kid: attester.kid },
       timestamp: ts,
+      ...(options?.context ? { context: options.context } : {}),
     }, attester);
     await store.put(receipt);
     return { observed: true, receipt };
@@ -825,7 +838,7 @@ export function createGateway(config: GatewayConfig): Gateway {
   return {
     app, store, attester, state, get policyHash() { return policyHash; },
     handleAction: (req: ActionRequest, options?: ActionOptions) => handleAction(req, options), check: (req: ActionRequest) => handleAction(req, { checkOnly: true }),
-    observeAction, setPolicy, anchor, unresolvedActions, reconcileAction,
+    observeAction: (req: ActionRequest, options?: ObserveOptions) => observeAction(req, options), setPolicy, anchor, unresolvedActions, reconcileAction,
   };
 }
 
@@ -895,6 +908,10 @@ function assertValidPolicy(policy: unknown): asserts policy is Policy {
 function assertValidIntent(intent: unknown): asserts intent is Intent {
   const result = validateIntent(intent);
   if (!result.valid) throw new TypeError(`invalid action: ${result.errors.join("; ")}`);
+}
+
+function assertValidContext(context: unknown): void {
+  if (context !== undefined && !validateReceiptContext(context)) throw new TypeError("invalid receipt context: a closed object of harness, harness_version, model, session_id, repository and branch (strings or null)");
 }
 
 function deriveAttesterKid(jwk: Record<string, unknown>): string {

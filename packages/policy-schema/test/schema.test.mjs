@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import {
   policySchema, actionSchema, receiptSchema, legacyReceiptSchema, CLAUSE_TYPES, CLAUSE_MODES,
   VOCABULARY_VERSION, EVIDENCE_VERSION, CANONICALIZATION, EXECUTION_STATES, REALTIME_RESULTS,
-  canonical,
+  canonical, RECEIPT_CONTEXT_KEYS,
 } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -80,4 +80,95 @@ test("canonical serialization matches the shared vectors", () => {
   // a valid surrogate pair (an astral character) is accepted
   assert.equal(canonical("𝄞"), JSON.stringify("𝄞")); // U+1D11E 𝄞
   assert.equal(canonical("café ❤"), JSON.stringify("café ❤"));   // ordinary non-ASCII
+});
+
+// A JSON Schema (2020-12 subset) checker covering exactly the keywords the receipt schema uses, so the
+// receipt-context vectors are checked against the whole receipt schema without a validator dependency.
+const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function typeMatches(type, value) {
+  switch (type) {
+    case "string": return typeof value === "string";
+    case "integer": return Number.isInteger(value);
+    case "number": return typeof value === "number";
+    case "boolean": return typeof value === "boolean";
+    case "null": return value === null;
+    case "array": return Array.isArray(value);
+    case "object": return value !== null && typeof value === "object" && !Array.isArray(value);
+    default: throw new Error(`unsupported type ${type}`);
+  }
+}
+function conforms(schema, value, root = receiptSchema) {
+  if (schema.$ref !== undefined) {
+    const target = schema.$ref.slice(2).split("/").reduce((node, key) => node[key], root);
+    if (!conforms(target, value, root)) return false;
+  }
+  if ("const" in schema && !sameJson(value, schema.const)) return false;
+  if (schema.enum && !schema.enum.some((option) => sameJson(option, value))) return false;
+  if (schema.type !== undefined && ![schema.type].flat().some((type) => typeMatches(type, value))) return false;
+  if (typeof value === "string") {
+    const length = [...value].length;
+    if (length < (schema.minLength ?? 0) || length > (schema.maxLength ?? Infinity)) return false;
+    // eslint-disable-next-line security/detect-non-literal-regexp -- the pattern comes from the receipt schema this package exports, the thing under test
+    if (schema.pattern && !new RegExp(schema.pattern, "u").test(value)) return false;
+  }
+  if (typeof value === "number" && (value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity))) return false;
+  if (Array.isArray(value)) {
+    if (schema.items && !value.every((item) => conforms(schema.items, item, root))) return false;
+    if (schema.uniqueItems && new Set(value.map((item) => JSON.stringify(item))).size !== value.length) return false;
+  }
+  if (typeMatches("object", value)) {
+    for (const key of schema.required ?? []) if (!(key in value)) return false;
+    for (const [key, item] of Object.entries(value)) {
+      if (schema.properties?.[key]) { if (!conforms(schema.properties[key], item, root)) return false; }
+      else if (schema.additionalProperties === false) return false;
+    }
+  }
+  if (schema.allOf && !schema.allOf.every((sub) => conforms(sub, value, root))) return false;
+  if (schema.oneOf && schema.oneOf.filter((sub) => conforms(sub, value, root)).length !== 1) return false;
+  if (schema.not && conforms(schema.not, value, root)) return false;
+  if (schema.if) {
+    const branch = conforms(schema.if, value, root) ? schema.then : schema.else;
+    if (branch && !conforms(branch, value, root)) return false;
+  }
+  return true;
+}
+const withContext = (context) => {
+  const receipt = structuredClone(evidence.receipt_context.receipt);
+  receipt.payload.context = context;
+  return receipt;
+};
+
+test("receipt context is an optional, closed payload member with the documented keys", () => {
+  const payload = receiptSchema.properties.payload;
+  const context = payload.properties.context;
+  assert.ok(context, "payload.properties.context exists");
+  assert.equal(payload.required.includes("context"), false, "context is optional");
+  assert.equal(context.type, "object");
+  assert.equal(context.additionalProperties, false);
+  assert.equal(context.required, undefined, "every member is optional");
+  assert.deepEqual(Object.keys(context.properties), [...RECEIPT_CONTEXT_KEYS]);
+  for (const key of RECEIPT_CONTEXT_KEYS) assert.deepEqual(context.properties[key].type, ["string", "null"], `${key} is a nullable string`);
+});
+
+test("a receipt without context is unchanged and still valid", () => {
+  const receipt = evidence.receipt_context.receipt;
+  assert.equal("context" in receipt.payload, false);
+  assert.equal(conforms(receiptSchema, receipt), true);
+  // The checker is not vacuous: an unknown payload key is refused.
+  assert.equal(conforms(receiptSchema, { ...receipt, payload: { ...receipt.payload, extra: 1 } }), false);
+});
+
+test("receipt context vectors: valid contexts validate, invalid ones (unknown keys included) do not", () => {
+  for (const vector of evidence.receipt_context.valid) assert.equal(conforms(receiptSchema, withContext(vector.context)), true, vector.name);
+  for (const vector of evidence.receipt_context.invalid) assert.equal(conforms(receiptSchema, withContext(vector.context)), false, vector.name);
+  assert.ok(evidence.receipt_context.invalid.some((vector) => vector.name === "unknown-key"));
+});
+
+test("a context object canonicalizes like any other member (RFC 8785 key order)", () => {
+  const vector = canonicalization.cases.find((c) => c.name === "receipt-context-member-order");
+  assert.ok(vector);
+  assert.equal(canonical(vector.value), vector.canonical);
+  const receipt = withContext(evidence.receipt_context.valid[0].context);
+  const text = canonical(receipt.payload);
+  assert.ok(text.includes('"context":{"branch":"main","harness":"claude","harness_version":null,"model":"example-model-1"'), text);
 });

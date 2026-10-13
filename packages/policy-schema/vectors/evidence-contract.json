@@ -46,5 +46,161 @@
     "intent.params.headers.cookie",
     "intent.params.metadata.access_token"
   ],
-  "unsupported_versions": ["0.9", "2.0", "draft"]
+  "unsupported_versions": ["0.9", "2.0", "draft"],
+  "receipt_context": {
+    "description": "Optional payload.context (where a receipt was produced). Schema shape only: the receipt below is not signed. A receipt without context is unchanged; an unknown key inside context makes the receipt invalid.",
+    "receipt": {
+      "payload": {
+        "type": "scopebond:receipt",
+        "evidence_version": "1.0",
+        "canonicalization": "RFC8785",
+        "intent": {
+          "action_type": "shell.exec",
+          "params": {
+            "program": "git"
+          }
+        },
+        "intent_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "action_ref": {
+          "action_id": "action-0000000000000001",
+          "authorized_intent_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "evidence_intent_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "policy_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "policy_version": 1,
+        "policy_ref": {
+          "id": "coding-agent",
+          "version": 1,
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "verifier_version": "scopebond-verify@0.0.0",
+        "realtime_result": "allow",
+        "executed": false,
+        "execution_ref": null,
+        "execution": {
+          "state": "cooperative_allow",
+          "assertion": "none",
+          "reference": null,
+          "external_effect": "not_independently_verified"
+        },
+        "redaction": {
+          "profile": "scopebond:minimized-intent/v1",
+          "paths": []
+        },
+        "authorization": {
+          "mode": "insecure_development",
+          "agent": null,
+          "approval": null
+        },
+        "attester": {
+          "kind": "gateway",
+          "kid": "key:0123456789abcdef"
+        },
+        "timestamp": "2026-10-12T00:00:00.000Z"
+      },
+      "signature": {
+        "alg": "Ed25519",
+        "sig": "c2NoZW1hLXNoYXBlLW9ubHk="
+      }
+    },
+    "valid": [
+      {
+        "name": "every-member",
+        "context": {
+          "harness": "claude",
+          "harness_version": null,
+          "model": "example-model-1",
+          "session_id": "sbs_0123456789abcdef0123456789abcdef",
+          "repository": "github.com/example/app",
+          "branch": "main"
+        }
+      },
+      {
+        "name": "harness-only",
+        "context": {
+          "harness": "gateway"
+        }
+      },
+      {
+        "name": "all-null",
+        "context": {
+          "harness": null,
+          "harness_version": null,
+          "model": null,
+          "session_id": null,
+          "repository": null,
+          "branch": null
+        }
+      },
+      {
+        "name": "nested-group-repository",
+        "context": {
+          "harness": "codex",
+          "repository": "gitlab.example.test/group/subgroup/app",
+          "branch": "feature/x"
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "unknown-key",
+        "context": {
+          "harness": "claude",
+          "cwd": "/work/app"
+        }
+      },
+      {
+        "name": "uppercase-harness",
+        "context": {
+          "harness": "Claude"
+        }
+      },
+      {
+        "name": "repository-with-scheme",
+        "context": {
+          "repository": "https://github.com/example/app"
+        }
+      },
+      {
+        "name": "repository-with-credentials",
+        "context": {
+          "repository": "user:token@github.com/example/app"
+        }
+      },
+      {
+        "name": "repository-uppercase-host",
+        "context": {
+          "repository": "GitHub.com/example/app"
+        }
+      },
+      {
+        "name": "repository-without-owner",
+        "context": {
+          "repository": "github.com/app"
+        }
+      },
+      {
+        "name": "model-too-long",
+        "context": {
+          "model": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
+        }
+      },
+      {
+        "name": "empty-session-id",
+        "context": {
+          "session_id": ""
+        }
+      },
+      {
+        "name": "non-string-version",
+        "context": {
+          "harness_version": 1
+        }
+      },
+      {
+        "name": "not-an-object",
+        "context": "claude"
+      }
+    ]
+  }
 }
