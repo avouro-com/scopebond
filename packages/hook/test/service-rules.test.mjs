@@ -84,7 +84,7 @@ test("the list is optional; a valid one is accepted; a malformed or oversized on
     "a program with a space": [{ kind: "cli", key: "rm -rf" }],
     "a package without a manager": [{ kind: "package", key: "zod" }],
     "a package with a URL": [{ kind: "package", key: "npm:https://example.com/x.tgz" }],
-    "a server name of only punctuation": [{ kind: "mcp_server", key: "__" }],
+    "a server name with a space": [{ kind: "mcp_server", key: "git hub" }],
     "a dot-dot": [{ kind: "host", key: "a..b" }],
     "not a list": { kind: "cli", key: "ffmpeg" },
     "a list of strings": ["cli:ffmpeg"],
@@ -131,6 +131,20 @@ test("an absent or empty list compiles to the policy it always was; a list adds 
   assert.equal(policyBuilds(policy), true);
   for (const clause of blockedServiceClauses(SERVICES)) assert.equal(clause.mode, "enforce");
   assert.deepEqual(blockedServiceClauses([{ kind: "cli", key: "ffmpeg" }]).map((c) => c.id), ["blocked-programs"]);
+  // Each clause denies exactly the values one of its entries names.
+  const list = [...SERVICES, { kind: "mcp_server", key: "acme-tools" }, { kind: "mcp_server", key: "__" }, { kind: "cli", key: "c++" }, { kind: "package", key: "npm:@acme/x.y" }];
+  const values = ["github", "GITHUB_mcp", "githubx", "acme_tools", "acme", "__", "a__b", "", "api.example.com:8443", "api.example.com", "tracker.example.net:1",
+    "tracker.example.netx", "ffmpeg", "C:/bin/ffmpeg.exe", "ffmpeg.sh", "c++", "C++.EXE", "cxx", "npm:zod", "npm:Zod", "pnpm:zod", "npm:@acme/x.y", "npm:@acme/xxy", "pip:requests"];
+  for (const clause of blockedServiceClauses(list)) {
+    const [param, bound] = Object.entries(clause.param_bounds)[0];
+    const kind = Object.keys(BLOCKED_SERVICE_CLAUSES).find((k) => BLOCKED_SERVICE_CLAUSES[k].id === clause.id);
+    assert.equal(param, BLOCKED_SERVICE_CLAUSES[kind].param);
+    // eslint-disable-next-line security/detect-non-literal-regexp -- the clause under test
+    const allows = new RegExp(bound.pattern);
+    for (const value of values) {
+      assert.equal(!allows.test(value), list.some((e) => e.kind === kind && serviceMatches(e, value)), `${clause.id} ${value}`);
+    }
+  }
 });
 
 test("an MCP server is blocked by the word rule that recognises it, in any case; a longer word is not", async () => {
@@ -149,6 +163,12 @@ test("an MCP server is blocked by the word rule that recognises it, in any case;
   assert.equal(serviceMatches(entry, "ACME.TOOLS.v2"), true);
   assert.equal(serviceMatches(entry, "acme_other_tools"), false);
   assert.equal(serviceMatches(entry, "acmetools"), false);
+  // A name with no letter or digit has no word: it blocks only itself, never every server.
+  const bare = { kind: "mcp_server", key: "__" };
+  assert.equal(validBlockedServices([bare]), true);
+  assert.equal(serviceMatches(bare, "__"), true);
+  assert.equal(serviceMatches(bare, "a__b"), false);
+  assert.equal(serviceMatches(bare, "github"), false);
 });
 
 test("a host is blocked by name in any case; a key with a port blocks that port only, a key without one every port", async () => {

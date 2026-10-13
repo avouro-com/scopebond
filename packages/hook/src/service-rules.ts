@@ -49,7 +49,7 @@ export const blockedServiceKindOf = (clauseId: string | null | undefined): Block
 export const BLOCKED_SERVICE_LABEL: Readonly<Record<BlockedServiceKind, string>> = { mcp_server: "MCP server", host: "host", cli: "program", package: "package" };
 
 // The keys each kind accepts: the shapes a workspace's services inventory keys them by. Anything else refuses the document.
-const MCP_KEY = /^(?=[^A-Za-z0-9]*[A-Za-z0-9])[A-Za-z0-9_.:@+-]{1,200}$/;
+const MCP_KEY = /^[A-Za-z0-9_.:@+-]{1,200}$/;
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: the inner class cannot contain the final character class's boundary twice; bounded to 200 characters by the caller
 const HOST_KEY = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?$/;
 const CLI_KEY = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
@@ -66,7 +66,9 @@ export function validBlockedService(entry: unknown): entry is BlockedService {
   if (keys.length !== 2 || !keys.includes("kind") || !keys.includes("key")) return false;
   const { kind, key } = entry;
   if (typeof kind !== "string" || !(BLOCKED_SERVICE_KINDS as readonly string[]).includes(kind)) return false;
-  if (typeof key !== "string" || key.length < 1 || key.length > MAX_BLOCKED_SERVICE_KEY || key.includes("..")) return false;
+  if (typeof key !== "string" || key.length < 1 || key.length > MAX_BLOCKED_SERVICE_KEY) return false;
+  // An inventory never keys a host or a package with an empty label or path segment.
+  if ((kind === "host" || kind === "package") && key.includes("..")) return false;
   if (kind === "host" && Number(key.split(":")[1] ?? "1") > 65535) return false;
   return KEY_SHAPE[kind as BlockedServiceKind].test(key);
 }
@@ -95,8 +97,12 @@ const wordsOf = (key: string): string[] => key.toLowerCase().split(/[^a-z0-9]+/)
 /** A pattern that matches the parameter value naming this entry (unanchored for an MCP server, whole value otherwise). */
 export function servicePattern(entry: BlockedService): string {
   switch (entry.kind) {
-    case "mcp_server":
-      return `(?:^|${NOT_WORD})${wordsOf(entry.key).map(anyCase).join(`${NOT_WORD}+`)}(?:${NOT_WORD}|$)`;
+    case "mcp_server": {
+      // A name with no letter or digit has no word to match: it blocks only that exact name.
+      const words = wordsOf(entry.key);
+      if (!words.length) return `^${escapeRegex(entry.key)}$`;
+      return `(?:^|${NOT_WORD})${words.map(anyCase).join(`${NOT_WORD}+`)}(?:${NOT_WORD}|$)`;
+    }
     case "host": {
       const at = entry.key.indexOf(":");
       const host = at < 0 ? entry.key : entry.key.slice(0, at);
