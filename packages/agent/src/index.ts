@@ -28,8 +28,7 @@ export type { OverrideQuestion, OverrideAnswer, Prompter } from "./prompt.js";
 export { queueReason, flushReasons, pendingReasons, REASONS_FILE } from "./override-reasons.js";
 export type { SelfCheckItem, SelfCheckResult } from "./selfcheck.js";
 export {
-  discoverTools, toolLines, parseVersion, mcpServerName, parseLenientJson, jsonServerNames, tomlServerNames, programVersion,
-  TOOL_IDS, TOOL_LABELS, NPM_PACKAGES, VERSION_PROGRAMS, MAX_TOOLS, MAX_MCP_SERVERS, MAX_MCP_NAME,
+  discoverTools, toolLines, TOOL_IDS, TOOL_LABELS, NPM_PACKAGES, VERSION_PROGRAMS, MAX_TOOLS, MAX_MCP_SERVERS, MAX_MCP_NAME,
 } from "./tools.js";
 export type { ToolId, ToolReport, McpServerReport, ToolDiscovery, DiscoveryOptions } from "./tools.js";
 export { setupPlan, agentOnThisComputer, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";

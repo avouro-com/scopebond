@@ -64,25 +64,34 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 
 const VERSION_PATTERN = /\d{1,9}\.\d[0-9A-Za-z.+-]{0,60}/;
 
-/** The first version number in a program's output or a manifest's `version`, or null. Only digits, dots and a short
- *  pre-release tag ever leave this function: never a path or other text from the output. */
+/** The version number in a program's output or a manifest's `version`, or null: from the last line that has one (a notice
+ *  printed before it does not count), the first whitespace-separated token there that holds one. A token joined to a path
+ *  separator (`/opt/tool-1.2/bin`, or the same with backslashes) is skipped. Only digits, dots and a short pre-release
+ *  tag ever leave this function: never a path or other text from the output. */
 export function parseVersion(text: unknown): string | null {
   if (typeof text !== "string") return null;
-  const m = VERSION_PATTERN.exec(text.slice(0, 4096));
-  if (!m) return null;
-  let version = m[0];
-  while (version && ".+-".includes(version[version.length - 1])) version = version.slice(0, -1);
-  return version || null;
+  const lines = text.slice(0, 4096).split(/\r?\n/).reverse();
+  for (const line of lines) {
+    for (const token of line.split(/\s+/)) {
+      if (!token || token.includes("/") || token.includes("\\")) continue;
+      const m = VERSION_PATTERN.exec(token);
+      if (!m) continue;
+      let version = m[0];
+      while (version && ".+-".includes(version[version.length - 1])) version = version.slice(0, -1);
+      if (version) return version;
+    }
+  }
+  return null;
 }
 
 /** An MCP server name as reported: trimmed, at most 120 characters, and never anything that reads as a path or an
- *  address (an absolute path, a home-relative one, a backslash, a URL) or holds a control character. */
+ *  address (an absolute path, a home- or folder-relative one, a backslash, a URL) or holds a control character. */
 export function mcpServerName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const name = raw.trim();
   if (!name) return null;
   for (const ch of name) { const c = ch.codePointAt(0) ?? 0; if (c < 0x20 || c === 0x7f) return null; }
-  if (name.includes("\\") || name.includes("://") || name.startsWith("/") || name.startsWith("~") || /^[A-Za-z]:[\\/]/.test(name)) return null;
+  if (name.includes("\\") || name.includes("://") || name.startsWith("/") || name.startsWith("~") || name.startsWith("./") || name.startsWith("../") || /^[A-Za-z]:[\\/]/.test(name)) return null;
   return [...name].slice(0, MAX_MCP_NAME).join("");
 }
 
@@ -95,9 +104,13 @@ function readText(file: string): string | null {
   } catch { return null; }
 }
 
-/** JSON, or JSON with `//` and block comments and trailing commas (some tools write or accept that). */
+/** Above this size a file that is not plain JSON is not read again without its comments. */
+const MAX_LENIENT_CHARS = 1024 * 1024;
+
+/** JSON, or (up to 1 MiB) JSON with `//` and block comments and trailing commas, which some tools write or accept. */
 export function parseLenientJson(text: string): unknown {
   try { return JSON.parse(text); } catch { /* try without comments */ }
+  if (text.length > MAX_LENIENT_CHARS) return null;
   let out = "";
   let inString = false;
   for (let i = 0; i < text.length; i++) {
@@ -234,11 +247,13 @@ function manifestVersion(roots: string[], pkg: string): string | null {
   return null;
 }
 
-/** `<program> --version`, with no input, a 3 s limit and a neutral working folder (a project's own settings never apply). */
-export function programVersion(program: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | null> {
+/** `<program> --version`, with no input, a 3 s limit and a neutral working folder (a project's own settings never apply).
+ *  Null when it cannot start, exits with an error or runs past the limit. `args` go before `--version` (tests run a script). */
+export function programVersion(program: string, options: { timeoutMs?: number; args?: string[] } = {}): Promise<string | null> {
+  const timeoutMs = options.timeoutMs ?? VERSION_TIMEOUT_MS;
   return new Promise((resolve) => {
     try {
-      const child = execFile(program, ["--version"], { timeout: timeoutMs, windowsHide: true, encoding: "utf8", maxBuffer: 64 * 1024, cwd: tmpdir() },
+      const child = execFile(program, [...(options.args ?? []), "--version"], { timeout: timeoutMs, windowsHide: true, encoding: "utf8", maxBuffer: 64 * 1024, cwd: tmpdir() },
         (error, stdout) => resolve(error ? null : parseVersion(stdout)));
       child.stdin?.end();
     } catch { resolve(null); }
@@ -271,8 +286,8 @@ function defaultNpmRoots(home: string, platform: NodeJS.Platform, env: NodeJS.Pr
   return roots;
 }
 
-/** Which AI coding tools are on this computer: each one whose settings exist, whose version could be read, or that the
- *  hook is installed for. At most 20 tools and 100 MCP server names. Never throws. */
+/** Which AI coding tools are on this computer: each one whose user-level settings exist (the Copilot CLI: as the hook
+ *  detects it), or that the hook is installed for. A version alone never makes a tool present. At most 20 tools and 100 MCP server names. Never throws. */
 export async function discoverTools(options: DiscoveryOptions = {}): Promise<ToolDiscovery> {
   const home = homedir();
   const platform = options.platform ?? process.platform;
@@ -282,22 +297,38 @@ export async function discoverTools(options: DiscoveryOptions = {}): Promise<Too
   const programOnPath = (name: string) => (platform === "win32" ? [name, `${name}.cmd`] : [name]).some((n) => find(n) !== null);
   const runVersion = options.runVersion ?? ((program: string) => programVersion(program));
 
+  // Presence first, from settings alone (the Copilot CLI: also its program on PATH, as the hook detects it). Nothing is
+  // run, and no version looked for, for a tool that is not present: a program of the same name elsewhere on PATH is never
+  // executed and never makes a tool count as present.
+  const present = new Map<ToolId, boolean>();
+  const governed = new Map<ToolId, boolean>();
+  for (const id of TOOL_IDS) {
+    let found = false;
+    try { found = settingsPresent(id, places, programOnPath); } catch { /* not present */ }
+    present.set(id, found);
+    const harness = HOOK_HARNESSES[id];
+    let on = false;
+    try { on = harness ? isHarnessConfigured(userHarnessFile(harness)) : false; } catch { /* not governed */ }
+    governed.set(id, on);
+  }
+  const reported = TOOL_IDS.filter((id) => present.get(id) || governed.get(id));
+
   let roots = options.npmRoots ?? defaultNpmRoots(home, platform, env);
   const versions = new Map<ToolId, string | null>();
-  for (const id of TOOL_IDS) { const pkg = NPM_PACKAGES[id]; versions.set(id, pkg ? manifestVersion(roots, pkg) : null); }
-  // A tool published to npm and not in the usual folders: ask npm where its global folder is, once.
-  if (!options.npmRoots && TOOL_IDS.some((id) => NPM_PACKAGES[id] && versions.get(id) === null)) {
+  for (const id of reported) { const pkg = NPM_PACKAGES[id]; versions.set(id, pkg ? manifestVersion(roots, pkg) : null); }
+  // A present tool published to npm and not in the usual folders: ask npm where its global folder is, once.
+  if (!options.npmRoots && reported.some((id) => NPM_PACKAGES[id] && versions.get(id) === null)) {
     const root = await npmGlobalRoot();
     if (root && !roots.includes(root)) {
       roots = [root];
-      for (const id of TOOL_IDS) { const pkg = NPM_PACKAGES[id]; if (pkg && versions.get(id) === null) versions.set(id, manifestVersion(roots, pkg)); }
+      for (const id of reported) { const pkg = NPM_PACKAGES[id]; if (pkg && versions.get(id) === null) versions.set(id, manifestVersion(roots, pkg)); }
     }
   }
-  // Otherwise the programs that answer `--version` and exit. On Windows the lookup finds only real programs (.exe, .com),
-  // never a .cmd that would need a shell.
-  await Promise.all(TOOL_IDS.map(async (id) => {
+  // Otherwise the programs that answer `--version` and exit, for a tool whose settings are present only. On Windows the
+  // lookup finds only real programs (.exe, .com), never a .cmd that would need a shell.
+  await Promise.all(reported.map(async (id) => {
     const name = VERSION_PROGRAMS[id];
-    if (!name || versions.get(id) !== null) return;
+    if (!name || !present.get(id) || versions.get(id) !== null) return;
     const program = find(name);
     if (!program) return;
     try { versions.set(id, parseVersion(await runVersion(program))); } catch { /* null */ }
@@ -305,15 +336,8 @@ export async function discoverTools(options: DiscoveryOptions = {}): Promise<Too
 
   const tools: ToolReport[] = [];
   const servers: McpServerReport[] = [];
-  for (const id of TOOL_IDS) {
-    let present = false;
-    try { present = settingsPresent(id, places, programOnPath); } catch { /* not present */ }
-    const harness = HOOK_HARNESSES[id];
-    let governed = false;
-    try { governed = harness ? isHarnessConfigured(userHarnessFile(harness)) : false; } catch { /* not governed */ }
-    const version = versions.get(id) ?? null;
-    if (!present && !governed && version === null) continue;
-    if (tools.length < MAX_TOOLS) tools.push({ id, version, governed, settings_present: present });
+  for (const id of reported) {
+    if (tools.length < MAX_TOOLS) tools.push({ id, version: versions.get(id) ?? null, governed: governed.get(id) ?? false, settings_present: present.get(id) ?? false });
     let names: string[] = [];
     try { names = mcpNames(id, places); } catch { /* none */ }
     for (const raw of names) {

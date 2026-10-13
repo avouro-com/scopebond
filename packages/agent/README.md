@@ -121,12 +121,16 @@ global uninstall of `@scopebond/agent` are denied when the coding agent runs the
 
 With every self-check (once a day, and on each start) the agent adds two lists to the self-check it sends to the
 workspace, and `scopebond-agent status` shows the same (`Claude Code 2.1.4 · governed`, `Cursor · present, not
-governed`). These are exactly the facts sent, and nothing else:
+governed`). This inventory is reported by the agent over its authenticated connection to the workspace; it is not
+covered by the self-check signature (which signs the day's proof), so the workspace shows it as "as reported on <day>",
+not as verified. These are exactly the facts sent, and nothing else:
 
-- `tools`: for each AI coding tool found (at most 20), its `id` (`claude`, `cursor`, `codex`, `copilot`, `windsurf`,
-  `gemini`, `cline`, `opencode`, `aider`), its installed `version` or null, whether it is `governed` (the Scopebond hook
-  is installed in its user settings; always false for a tool the hook does not support yet), and whether its
-  user-level settings are present (`settings_present`).
+- `tools`: for each AI coding tool whose user-level settings are present (at most 20), its `id` (`claude`, `cursor`,
+  `codex`, `copilot`, `windsurf`, `gemini`, `cline`, `opencode`, `aider`), its installed `version` or null, whether it
+  is `governed`, and whether its user-level settings are present (`settings_present`). `governed` means the Scopebond
+  hook is in the tool's user-level settings file; a tool with the hook only in a project's own settings shows as not
+  governed, and a tool the hook does not support yet is never governed. A program or npm install alone, without the
+  tool's settings, does not make a tool present and is never run.
 - `mcp_servers`: the name of each MCP server in a tool's user-level MCP configuration, with the tool's id (at most 100
   names, each at most 120 characters). Never a server's command, arguments, environment, headers or address, and never
   a project's own MCP file.
@@ -146,9 +150,9 @@ No path, user name or file content beyond those names is sent. A name that reads
 | Aider | any `~/.aider*` (`~/.aider.conf.yml`, `~/.aider/`) | `aider --version` | — |
 
 npm's global folder is the usual one for the platform, else the one `npm root -g` names (asked once per run of the
-agent). `--version` runs only the programs above, found in PATH's absolute folders (on Windows only an `.exe` or
-`.com`, never a script that needs a shell), with no input, from a temporary folder, for at most 3 seconds; a tool is
-never started in a way that opens a session. Only the version number is kept from what it prints. The rows marked best
+agent). `--version` runs only the programs above, only for a tool whose settings are present, found in PATH's
+absolute folders (on Windows only an `.exe` or `.com`, never a script that needs a shell), with no input, from a
+temporary folder, for at most 3 seconds; a tool is never started in a way that opens a session. Only the version number is kept from what it prints. The rows marked best
 effort are not confirmed against the tool's current documentation: Windsurf's folder, and Cline's VS Code storage
 folder, which follows VS Code's naming for the extension's id.
 

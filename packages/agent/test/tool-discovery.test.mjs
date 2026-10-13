@@ -6,10 +6,8 @@ import { join } from "node:path";
 import { createPublicKey, verify } from "node:crypto";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { scaffold } from "@scopebond/hook";
-import {
-  discoverTools, toolLines, tomlServerNames, parseVersion, mcpServerName, parseLenientJson, jsonServerNames, runSelfCheck, selfCheckProof,
-  MAX_MCP_SERVERS, MAX_MCP_NAME,
-} from "../dist/index.js";
+import { discoverTools, toolLines, runSelfCheck, selfCheckProof, MAX_MCP_SERVERS, MAX_MCP_NAME } from "../dist/index.js";
+import { tomlServerNames, parseVersion, mcpServerName, parseLenientJson, jsonServerNames, programVersion } from "../dist/tools.js";
 
 const ENV_KEYS = ["HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME", "COPILOT_HOME"];
 
@@ -148,6 +146,37 @@ test("each tool is found by its settings, its version read cheaply, and governed
   });
 });
 
+test("a program on PATH, or an npm install, without the tool's settings is never run and never reported", async () => {
+  await inHome(async (home) => {
+    const ran = [];
+    const npmRoot = join(home, "npm-global", "node_modules");
+    put(join(npmRoot, "@anthropic-ai", "claude-code", "package.json"), { version: "2.1.4" });
+    const onPath = { gemini: join(home, "bin", "gemini"), claude: join(home, "bin", "claude"), aider: join(home, "bin", "aider"), codex: join(home, "bin", "codex") };
+    const found = await discoverTools({ npmRoots: [npmRoot], findProgram: (n) => onPath[n] ?? null, runVersion: async (p) => { ran.push(p); return "1.0.0"; } });
+    assert.deepEqual(ran, [], "nothing was executed");
+    assert.deepEqual(found, { tools: [], mcp_servers: [] });
+    // With ~/.gemini, the same program answers.
+    mkdirSync(join(home, ".gemini"), { recursive: true });
+    const withSettings = await discoverTools({ npmRoots: [npmRoot], findProgram: (n) => onPath[n] ?? null, runVersion: async (p) => { ran.push(p); return "gemini 0.12.0"; } });
+    assert.deepEqual(ran, [onPath.gemini]);
+    assert.deepEqual(withSettings.tools, [{ id: "gemini", version: "0.12.0", governed: false, settings_present: true }]);
+  });
+});
+
+test("programVersion keeps the version a program prints, and null when it fails or runs too long", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-tools-prog-"));
+  const script = (name, body) => { const file = join(dir, name); writeFileSync(file, body); return file; };
+  const prints = script("prints.mjs", "if (process.argv.includes('--version')) console.log('tool 3.4.5');\n");
+  const fails = script("fails.mjs", "console.log('tool 3.4.5'); process.exit(1);\n");
+  const hangs = script("hangs.mjs", "setTimeout(() => console.log('tool 3.4.5'), 30000);\n");
+  assert.equal(await programVersion(process.execPath, { args: [prints] }), "3.4.5");
+  assert.equal(await programVersion(process.execPath, { args: [fails] }), null, "a non-zero exit is no version");
+  const started = Date.now();
+  assert.equal(await programVersion(process.execPath, { args: [hangs], timeoutMs: 500 }), null, "past the limit is no version");
+  assert.ok(Date.now() - started < 10_000, "it does not wait for the program");
+  assert.equal(await programVersion(join(dir, "no-such-program")), null);
+});
+
 test("the Copilot folder alone (VS Code's Copilot Chat) is not the Copilot CLI; its program on PATH is", async () => {
   await inHome(async (home) => {
     mkdirSync(join(home, ".copilot"), { recursive: true });
@@ -209,6 +238,16 @@ test("the helpers: version numbers, names, JSON with comments and Codex table he
   assert.equal(parseVersion("codex-cli 0.46.0"), "0.46.0");
   assert.equal(parseVersion("/opt/tool/bin/tool has no version"), null);
   assert.equal(parseVersion(42), null);
+  // A version-looking part of a path is never taken, and the last line that has a version wins over a notice before it.
+  assert.equal(parseVersion("/opt/tool-1.2.3/bin/tool"), null);
+  assert.equal(parseVersion("D:\\tools\\tool-1.2.3\\bin"), null);
+  assert.equal(parseVersion("running /opt/tool-9.9.9/bin/tool\n2.0.1"), "2.0.1");
+  assert.equal(parseVersion("a newer version 9.0.0 is available\ntool 1.4.0\n"), "1.4.0");
+  assert.equal(mcpServerName("./local-server"), null);
+  assert.equal(mcpServerName("../up/server"), null);
+  assert.equal(mcpServerName(".hidden"), ".hidden");
+  // A big file that is not plain JSON is not read a second time without its comments.
+  assert.equal(parseLenientJson(`{ // c\n "a": "${"x".repeat(1024 * 1024)}" }`), null);
   assert.equal(mcpServerName("D:/data/x"), null);
   assert.equal(mcpServerName("\\\\server\\share"), null);
   assert.equal(mcpServerName("/usr/local/bin/x"), null);
