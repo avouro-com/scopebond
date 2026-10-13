@@ -16,6 +16,7 @@ import { autostartHealth } from "./autostart.js";
 import { installKind } from "./native-update.js";
 import { hookCli } from "./commands.js";
 import { missingPrograms } from "./hook-entries.js";
+import { discoverTools, type ToolDiscovery } from "./tools.js";
 
 export interface SelfCheckItem { id: string; ok: boolean; detail?: string }
 
@@ -47,14 +48,24 @@ export function localChecks(dir: string, connection: HookConnection, harnesses: 
   return checks;
 }
 
+export interface SelfCheckResult extends ToolDiscovery { ok: boolean; signature_verified: boolean; failed: string[]; checks: SelfCheckItem[] }
+
+/** Which coding tools this computer has, for the self-check; an empty report when finding out fails. */
+async function toolReport(discover: () => Promise<ToolDiscovery>): Promise<ToolDiscovery> {
+  try { return await discover(); } catch { return { tools: [], mcp_servers: [] }; }
+}
+
 export async function runSelfCheck(
   dir: string, connection: HookConnection, harnesses: Harness[], agentVersion: string,
-  options: { fetchImpl?: typeof fetch; now?: number; timeoutMs?: number } = {},
-): Promise<{ ok: boolean; signature_verified: boolean; failed: string[]; checks: SelfCheckItem[] } | null> {
+  options: { fetchImpl?: typeof fetch; now?: number; timeoutMs?: number; discover?: () => Promise<ToolDiscovery> } = {},
+): Promise<SelfCheckResult | null> {
   const now = options.now ?? Date.now();
   const checks = localChecks(dir, connection, harnesses, now);
+  // The AI coding tools on this computer and whether the hook checks them, with the names of their MCP servers: sent with
+  // every self-check, so the workspace shows what the computer last reported (see tools.ts for exactly what is read).
+  const { tools, mcp_servers } = await toolReport(options.discover ?? (() => discoverTools()));
   const keyFile = join(dir, "attester.key");
-  if (!existsSync(keyFile)) return { ok: false, signature_verified: false, failed: ["signing_key"], checks };
+  if (!existsSync(keyFile)) return { ok: false, signature_verified: false, failed: ["signing_key"], checks, tools, mcp_servers };
   const day = new Date(now).toISOString().slice(0, 10);
   const { attester } = loadOrCreateAttester({ file: keyFile });
   const signature = await attester.sign(selfCheckProof(connection.credential_id, connection.gateway_id, day));
@@ -64,15 +75,15 @@ export async function runSelfCheck(
       headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
       // install_kind: how this agent was installed (npm, per-user or per-machine signed installer), so the workspace can say
       // how the computer updates and is removed. A workspace that does not read it ignores it.
-      body: JSON.stringify({ signature, day, checks, hook_version: hookVersion(), agent_version: agentVersion, install_kind: installKind() }),
+      body: JSON.stringify({ signature, day, checks, hook_version: hookVersion(), agent_version: agentVersion, install_kind: installKind(), tools, mcp_servers }),
     });
     // A workspace that does not offer the self-check yet answers 404: the computer's own checks still count; the signed
     // workspace part is simply not available there.
-    if (res.status === 404) { const failed = checks.filter((c) => !c.ok).map((c) => c.id); return { ok: failed.length === 0, signature_verified: false, failed, checks }; }
-    if (!res.ok) return { ok: false, signature_verified: false, failed: [`workspace_http_${res.status}`], checks };
+    if (res.status === 404) { const failed = checks.filter((c) => !c.ok).map((c) => c.id); return { ok: failed.length === 0, signature_verified: false, failed, checks, tools, mcp_servers }; }
+    if (!res.ok) return { ok: false, signature_verified: false, failed: [`workspace_http_${res.status}`], checks, tools, mcp_servers };
     const body = await res.json() as { ok?: boolean; signature_verified?: boolean; failed?: string[] };
-    return { ok: !!body.ok, signature_verified: !!body.signature_verified, failed: Array.isArray(body.failed) ? body.failed : [], checks };
+    return { ok: !!body.ok, signature_verified: !!body.signature_verified, failed: Array.isArray(body.failed) ? body.failed : [], checks, tools, mcp_servers };
   } catch (error) {
-    return { ok: false, signature_verified: false, failed: [`workspace_unreachable: ${(error as Error).message.slice(0, 80)}`], checks };
+    return { ok: false, signature_verified: false, failed: [`workspace_unreachable: ${(error as Error).message.slice(0, 80)}`], checks, tools, mcp_servers };
   }
 }
