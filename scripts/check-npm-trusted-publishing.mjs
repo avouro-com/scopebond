@@ -73,7 +73,14 @@ async function main() {
 
   const failures = [];
   for (const name of publicPackages(process.cwd())) {
-    const escaped = name.replace("/", "%2f");
+    // Only this repository's scope, in npm's escaped form for a scoped name (`@scope%2fname`).
+    const match = /^@scopebond\/([a-z0-9][a-z0-9._-]*)$/.exec(name);
+    if (!match) {
+      failures.push(name);
+      console.log(`FAIL  ${name}: not an @scopebond package name`);
+      continue;
+    }
+    const escaped = `@scopebond%2f${encodeURIComponent(match[1])}`;
     const response = await fetch(`${REGISTRY}/-/npm/v1/oidc/token/exchange/package/${escaped}`, {
       method: "POST",
       headers: { Accept: "application/json", Authorization: `Bearer ${idToken}` },
