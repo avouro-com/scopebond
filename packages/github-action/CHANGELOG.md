@@ -1,5 +1,20 @@
 # @scopebond/github-action
 
+## 0.5.13
+
+### Patch Changes
+
+- 9c70fd6: Remove internal reference identifiers from comments and fixtures.
+- Updated dependencies [d401d09]
+- Updated dependencies [d401d09]
+- Updated dependencies [9c70fd6]
+- Updated dependencies [6797bbd]
+- Updated dependencies [6797bbd]
+- Updated dependencies [ad9512d]
+  - @scopebond/gateway@0.19.0
+  - @scopebond/policy-schema@0.8.0
+  - @scopebond/verify@0.6.6
+
 ## 0.5.12
 
 ### Patch Changes

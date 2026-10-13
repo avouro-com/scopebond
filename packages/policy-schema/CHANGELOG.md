@@ -1,5 +1,35 @@
 # @scopebond/policy-schema
 
+## 0.8.0
+
+### Minor Changes
+
+- d401d09: Records now carry an optional `context` saying where they were produced, so a workspace can group them by session and
+  filter them by tool, model and repository. `schema/receipt.schema.json` adds `payload.context`: a closed object of
+  `harness`, `harness_version`, `model`, `session_id`, `repository` (the git remote `origin` as `host/owner/name`) and
+  `branch`, each optional and nullable. It carries no local paths, no credentials and no prompts, and the signature covers it. A
+  receipt without it is unchanged; an unknown key inside it makes the receipt invalid. New: `RECEIPT_CONTEXT_KEYS`, the
+  `receipt_context` cases in `vectors/evidence-contract.json` and a canonicalization vector for a context member.
+  
+  Compatibility: A receipt check older than this release (`@scopebond/gateway` `verifyReceipt` and `validateEvidencePayload` before this version, `npx @scopebond/gateway verify`, or an earlier hook's `scopebond verify`) reports a receipt that carries `context` as invalid, because the payload's key list is closed; `evidence_version` stays `1.0`. Verify such receipts with a release that knows `context`. (`@scopebond/verify`'s `verifyReceiptSignature` checks only the signature and key binding, so it verifies them in any version.)
+- 6797bbd: Session budgets: limits on what one coding-agent session may do. New `schema/session-budgets.schema.json` describes the
+  optional `session_budgets` member of a workspace rules document: closed budgets with `budget_id`, `scope: "session"`,
+  `session_id` (the id receipts carry as `context.session_id`), `limits` (`{ operations, max }`, `0` for none), `mode`
+  (`enforce` or `monitor`), `version`, `expires_at` and an optional `source`, in the gateway's action-budget words.
+  `schema/receipt.schema.json` adds the optional, closed `payload.budget` (the budget, the action type counted, the count,
+  the limit and the state). New exports: `sessionBudgetsSchema`, `SESSION_BUDGET_SCOPE`, `SESSION_BUDGET_DEFAULT_SECONDS`
+  (two hours), `SESSION_BUDGET_MODES`, `SESSION_BUDGET_LIMITS`, `RECEIPT_BUDGET_STATES`, the `SessionBudget` types and
+  `vectors/session-budgets.json`.
+  
+  Compatibility: a document without `session_budgets` and a receipt without `budget` are unchanged. A receipt check older
+  than this release reports a receipt carrying `budget` as invalid (the payload's key list is closed); `evidence_version`
+  stays `1.0`.
+- ad9512d: Action Taxonomy 1.1 (`TAXONOMY_VERSION` is now `1.1`). New types for what a coding agent reaches through cloud, Kubernetes, database, deployment, secret, messaging and tracker tools: `cloud.resource.create`, `cloud.resource.modify` and `cloud.resource.delete` (`provider` aws, gcp, azure, cloudflare, vercel, fly, heroku, github or unknown; `service`, `kind`, `region`, `env`, `resource_digest`, `auto_approve`, `targeted`), `k8s.apply`, `k8s.delete` and `k8s.exec` (`context`, `namespace`, `kind`, `name_digest`, `all`), `db.migrate` (`provider`, `direction` up, down or reset, `env`, `migration_set_digest`), `db.exec` (`provider`, `verb`, `scope`, `risk`, `predicate_class`), `secret.write` (`store`, `name_digest`, `env`), `iam.change` (`provider`, `kind` role, policy, user, key, group or other, `name_digest`, `env`), `communication.send` (`provider`, `channel_digest`) and `work.item.create` / `work.item.update` (`provider`, `project_digest`). Every new type also takes `via`, `derived_from` and `risk_class`. Risk classes: deletes, `k8s.delete`, `k8s.exec` and `db.migrate` destructive, `iam.change` identity, `work.item.*` routine, the rest sensitive. The 1.0 types are unchanged; each action now carries the taxonomy version that introduced it (`1.0` or `1.1`). `vectors/action-taxonomy.json` has valid and invalid cases for every new type.
+
+### Patch Changes
+
+- 9c70fd6: Remove internal reference identifiers from comments and fixtures.
+
 ## 0.7.2
 
 ### Patch Changes

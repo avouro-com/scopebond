@@ -1,5 +1,29 @@
 # @scopebond/gateway
 
+## 0.19.0
+
+### Minor Changes
+
+- d401d09: Records now carry an optional `context` saying where they were produced. `handleAction(req, { context })` and
+  `observeAction(req, { context })` sign it into the receipt as `payload.context` (harness, harness version, model, session
+  id, repository and branch; each a string or null). `verifyReceipt` and `validateEvidencePayload` accept it, and an
+  unknown key inside it makes the receipt invalid like any other unknown key; the gateway refuses to sign a context that is
+  not valid. Receipts made without one are unchanged. New exports: `ReceiptPayloadContext`, `validateReceiptContext`,
+  `RECEIPT_CONTEXT_KEYS` and `ObserveOptions`.
+- 6797bbd: `handleAction(req, { budget })` signs a session budget's decision into the receipt as the optional `payload.budget`
+  (`ReceiptBudget`), checked by the new `validateReceiptBudget` (`RECEIPT_BUDGET_KEYS`); the gateway refuses to sign an
+  invalid one, and `verifyReceipt` / `validateEvidencePayload` accept a valid one. Receipts made without one are unchanged.
+
+### Patch Changes
+
+- 9c70fd6: Remove internal reference identifiers from comments and fixtures.
+- Updated dependencies [d401d09]
+- Updated dependencies [9c70fd6]
+- Updated dependencies [6797bbd]
+- Updated dependencies [ad9512d]
+  - @scopebond/policy-schema@0.8.0
+  - @scopebond/verify@0.6.6
+
 ## 0.18.0
 
 ### Minor Changes
