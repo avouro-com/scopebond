@@ -174,7 +174,7 @@
         },
         "budget": {
           "type": "object",
-          "description": "Optional. A session budget counted or refused this action (session-budgets.schema.json): which budget, the action type counted, the count with this action and the limit, and the state. within / at_limit: counted and allowed. over: beyond the limit (denied under enforce, recorded under monitor). expired: the budget had ended. unavailable: the hook could not read or write its count, so it denied. A receipt check that predates this member reports a receipt carrying it as invalid (the payload is closed).",
+          "description": "Optional. A session budget counted or refused this action (session-budgets.schema.json): which budget, the action type counted, the count with this action and the limit, and the state. within / at_limit: counted and allowed. over: beyond the limit (denied under enforce, recorded under monitor). unavailable: the hook could not read or write its count, so it denied. A receipt check that predates this member reports a receipt carrying it as invalid (the payload is closed).",
           "additionalProperties": false,
           "required": ["version", "scope", "budget_id", "budget_version", "mode", "operation", "count", "max", "state"],
           "properties": {
@@ -186,7 +186,7 @@
             "operation": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$", "maxLength": 64 },
             "count": { "type": "integer", "minimum": 0, "maximum": 1000001 },
             "max": { "type": "integer", "minimum": 0, "maximum": 1000000 },
-            "state": { "enum": ["within", "at_limit", "over", "expired", "unavailable"] }
+            "state": { "enum": ["within", "at_limit", "over", "unavailable"] }
           }
         },
         "override": {

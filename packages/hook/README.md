@@ -675,9 +675,18 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   `session-budgets.schema.json`), naming the session by the same keyed id receipts carry as
   `context.session_id`. The hook counts each tool call once per limit before it runs (a retry of
   the same call is not counted twice; a call a rule denies gives its count back) and keeps the
-  counts in its own folder (`session-budgets.json`, bounded, written atomically). Beyond a limit,
-  or once an `enforce` budget has expired, the call is denied with the reason **session budget**;
-  a `monitor` budget records it and allows. Every receipt a budget counted or refused carries
+  counts in its own folder (`session-budgets.json`, bounded, written atomically). It counts tool
+  calls, not files: one Write is one file write, and a shell command that writes ten files is one
+  shell command. A shell command that installs packages (`npm install`, `pnpm add`, `pip install`,
+  `uv add` and the like) counts as `package.install`; a push in a shell command is its own
+  `git.push`. A budget may set `count_shell_as_write` to count every other shell command as a
+  file write (off by default). Beyond a limit the call is denied with the reason **session
+  budget**; a `monitor` budget records it and allows. While an `enforce` budget is in force the
+  session may not start another coding agent (`claude`, `codex`, `cursor-agent`, `copilot`,
+  `gh copilot` and the like), whose actions it would not count; a person can still start a new
+  session (`/clear`), which is not under the budget, by design. An edit Cursor reports only
+  after it ran is counted but never refused; the calls after it are refused once over. When a
+  budget expires it ends: the session's rules alone decide again. Every receipt a budget counted or refused carries
   `payload.budget` (the budget, the action type, the count, the limit and the state). If the
   count cannot be read or written for a session that has a budget, the limited actions are
   denied, never let through without a limit. A malformed `session_budgets` list refuses the whole

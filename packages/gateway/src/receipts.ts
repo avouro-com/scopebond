@@ -176,8 +176,7 @@ export function validateReceiptContext(value: unknown): value is ReceiptPayloadC
 /** A session budget counted or refused this action (`payload.budget`, optional): which budget, the action type counted, the
  *  count with this action and the limit, and the state. Session budgets limit what one coding-agent session may do (at most so
  *  many file writes, pushes or package installs, until the budget expires); a workspace sends them to the hook. within and
- *  at_limit: counted and allowed. over: beyond the limit (denied under enforce, recorded under monitor). expired: the
- *  budget had ended. unavailable: the count could not be read or written, so the action was denied. */
+ *  at_limit: counted and allowed. over: beyond the limit (denied under enforce, recorded under monitor). unavailable: the count could not be read or written, so the action was denied. */
 export interface ReceiptBudget {
   version: 1;
   scope: "session";
@@ -189,13 +188,13 @@ export interface ReceiptBudget {
   /** The count including this action. */
   count: number;
   max: number;
-  state: "within" | "at_limit" | "over" | "expired" | "unavailable";
+  state: "within" | "at_limit" | "over" | "unavailable";
 }
 export const RECEIPT_BUDGET_KEYS = ["version", "scope", "budget_id", "budget_version", "mode", "operation", "count", "max", "state"] as const;
 const BUDGET_ID = /^[A-Za-z0-9._:-]{8,128}$/;
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: each repeated group starts with a "." its own class excludes
 const BUDGET_OPERATION = /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$/;
-const BUDGET_STATES = new Set(["within", "at_limit", "over", "expired", "unavailable"]);
+const BUDGET_STATES = new Set(["within", "at_limit", "over", "unavailable"]);
 /** The shape payload.budget must have (the receipt schema's): a closed object with every member present. */
 export function validateReceiptBudget(value: unknown): value is ReceiptBudget {
   if (!isRecord(value) || !hasOnlyKeys(value, [...RECEIPT_BUDGET_KEYS]) || Object.keys(value).length !== RECEIPT_BUDGET_KEYS.length) return false;

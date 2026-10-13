@@ -1,56 +1,328 @@
 {
   "description": "Session budgets (session-budgets.schema.json): valid and invalid session_budgets lists, and payload.budget objects for the receipt schema. Schema shape only.",
   "valid": [
-    { "name": "overnight-no-push", "session_budgets": [
-      { "budget_id": "sbud_overnight01", "scope": "session", "session_id": "sbs_0123456789abcdef0123456789abcdef", "mode": "enforce", "version": 1,
-        "expires_at": "2026-10-14T06:00:00Z", "source": "admin",
-        "limits": [ { "operations": ["file.write"], "max": 50 }, { "operations": ["git.push"], "max": 0 }, { "operations": ["package.install"], "max": 0 } ] }
-    ] },
-    { "name": "monitor-without-source", "session_budgets": [
-      { "budget_id": "sbud_monitor0001", "scope": "session", "session_id": "s", "mode": "monitor", "version": 3,
-        "expires_at": "2026-10-14T06:00:00Z", "limits": [ { "operations": ["file.write", "shell.exec"], "max": 1000 } ] }
-    ] },
-    { "name": "empty-list", "session_budgets": [] }
+    {
+      "name": "overnight-no-push",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_overnight01",
+          "scope": "session",
+          "session_id": "sbs_0123456789abcdef0123456789abcdef",
+          "mode": "enforce",
+          "version": 1,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "source": "admin",
+          "limits": [
+            {
+              "operations": [
+                "file.write"
+              ],
+              "max": 50
+            },
+            {
+              "operations": [
+                "git.push"
+              ],
+              "max": 0
+            },
+            {
+              "operations": [
+                "package.install"
+              ],
+              "max": 0
+            }
+          ],
+          "count_shell_as_write": false
+        }
+      ]
+    },
+    {
+      "name": "monitor-without-source",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_monitor0001",
+          "scope": "session",
+          "session_id": "s",
+          "mode": "monitor",
+          "version": 3,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": [
+            {
+              "operations": [
+                "file.write",
+                "shell.exec"
+              ],
+              "max": 1000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "empty-list",
+      "session_budgets": []
+    }
   ],
   "invalid": [
-    { "name": "unknown-key", "session_budgets": [
-      { "budget_id": "sbud_overnight01", "scope": "session", "session_id": "s", "mode": "enforce", "version": 1, "expires_at": "2026-10-14T06:00:00Z",
-        "limits": [ { "operations": ["git.push"], "max": 0 } ], "window_seconds": 60 }
-    ] },
-    { "name": "unknown-limit-key", "session_budgets": [
-      { "budget_id": "sbud_overnight01", "scope": "session", "session_id": "s", "mode": "enforce", "version": 1, "expires_at": "2026-10-14T06:00:00Z",
-        "limits": [ { "operations": ["git.push"], "max": 0, "per": "day" } ] }
-    ] },
-    { "name": "installation-scope", "session_budgets": [
-      { "budget_id": "sbud_overnight01", "scope": "installation", "session_id": "s", "mode": "enforce", "version": 1, "expires_at": "2026-10-14T06:00:00Z",
-        "limits": [ { "operations": ["git.push"], "max": 0 } ] }
-    ] },
-    { "name": "no-session", "session_budgets": [
-      { "budget_id": "sbud_overnight01", "scope": "session", "mode": "enforce", "version": 1, "expires_at": "2026-10-14T06:00:00Z",
-        "limits": [ { "operations": ["git.push"], "max": 0 } ] }
-    ] },
-    { "name": "negative-max", "session_budgets": [
-      { "budget_id": "sbud_overnight01", "scope": "session", "session_id": "s", "mode": "enforce", "version": 1, "expires_at": "2026-10-14T06:00:00Z",
-        "limits": [ { "operations": ["git.push"], "max": -1 } ] }
-    ] },
-    { "name": "no-limits", "session_budgets": [
-      { "budget_id": "sbud_overnight01", "scope": "session", "session_id": "s", "mode": "enforce", "version": 1, "expires_at": "2026-10-14T06:00:00Z", "limits": [] }
-    ] },
-    { "name": "bad-operation", "session_budgets": [
-      { "budget_id": "sbud_overnight01", "scope": "session", "session_id": "s", "mode": "enforce", "version": 1, "expires_at": "2026-10-14T06:00:00Z",
-        "limits": [ { "operations": ["push"], "max": 0 } ] }
-    ] },
-    { "name": "not-a-list", "session_budgets": { "budget_id": "sbud_overnight01" } }
+    {
+      "name": "unknown-key",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_overnight01",
+          "scope": "session",
+          "session_id": "s",
+          "mode": "enforce",
+          "version": 1,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": [
+            {
+              "operations": [
+                "git.push"
+              ],
+              "max": 0
+            }
+          ],
+          "window_seconds": 60
+        }
+      ]
+    },
+    {
+      "name": "unknown-limit-key",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_overnight01",
+          "scope": "session",
+          "session_id": "s",
+          "mode": "enforce",
+          "version": 1,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": [
+            {
+              "operations": [
+                "git.push"
+              ],
+              "max": 0,
+              "per": "day"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "installation-scope",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_overnight01",
+          "scope": "installation",
+          "session_id": "s",
+          "mode": "enforce",
+          "version": 1,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": [
+            {
+              "operations": [
+                "git.push"
+              ],
+              "max": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "no-session",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_overnight01",
+          "scope": "session",
+          "mode": "enforce",
+          "version": 1,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": [
+            {
+              "operations": [
+                "git.push"
+              ],
+              "max": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "negative-max",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_overnight01",
+          "scope": "session",
+          "session_id": "s",
+          "mode": "enforce",
+          "version": 1,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": [
+            {
+              "operations": [
+                "git.push"
+              ],
+              "max": -1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "no-limits",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_overnight01",
+          "scope": "session",
+          "session_id": "s",
+          "mode": "enforce",
+          "version": 1,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": []
+        }
+      ]
+    },
+    {
+      "name": "bad-operation",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_overnight01",
+          "scope": "session",
+          "session_id": "s",
+          "mode": "enforce",
+          "version": 1,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": [
+            {
+              "operations": [
+                "push"
+              ],
+              "max": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "not-a-list",
+      "session_budgets": {
+        "budget_id": "sbud_overnight01"
+      }
+    },
+    {
+      "name": "shell-as-write-not-boolean",
+      "session_budgets": [
+        {
+          "budget_id": "sbud_monitor0001",
+          "scope": "session",
+          "session_id": "s",
+          "mode": "monitor",
+          "version": 3,
+          "expires_at": "2026-10-14T06:00:00Z",
+          "limits": [
+            {
+              "operations": [
+                "file.write",
+                "shell.exec"
+              ],
+              "max": 1000
+            }
+          ],
+          "count_shell_as_write": "yes"
+        }
+      ]
+    }
   ],
   "receipt_budget": {
     "valid": [
-      { "name": "denied-push", "budget": { "version": 1, "scope": "session", "budget_id": "sbud_overnight01", "budget_version": 1, "mode": "enforce", "operation": "git.push", "count": 1, "max": 0, "state": "over" } },
-      { "name": "counted-write", "budget": { "version": 1, "scope": "session", "budget_id": "sbud_overnight01", "budget_version": 1, "mode": "enforce", "operation": "file.write", "count": 50, "max": 50, "state": "at_limit" } }
+      {
+        "name": "denied-push",
+        "budget": {
+          "version": 1,
+          "scope": "session",
+          "budget_id": "sbud_overnight01",
+          "budget_version": 1,
+          "mode": "enforce",
+          "operation": "git.push",
+          "count": 1,
+          "max": 0,
+          "state": "over"
+        }
+      },
+      {
+        "name": "counted-write",
+        "budget": {
+          "version": 1,
+          "scope": "session",
+          "budget_id": "sbud_overnight01",
+          "budget_version": 1,
+          "mode": "enforce",
+          "operation": "file.write",
+          "count": 50,
+          "max": 50,
+          "state": "at_limit"
+        }
+      }
     ],
     "invalid": [
-      { "name": "unknown-key", "budget": { "version": 1, "scope": "session", "budget_id": "sbud_overnight01", "budget_version": 1, "mode": "enforce", "operation": "git.push", "count": 1, "max": 0, "state": "over", "reason": "x" } },
-      { "name": "missing-state", "budget": { "version": 1, "scope": "session", "budget_id": "sbud_overnight01", "budget_version": 1, "mode": "enforce", "operation": "git.push", "count": 1, "max": 0 } },
-      { "name": "unknown-state", "budget": { "version": 1, "scope": "session", "budget_id": "sbud_overnight01", "budget_version": 1, "mode": "enforce", "operation": "git.push", "count": 1, "max": 0, "state": "fine" } }
+      {
+        "name": "unknown-key",
+        "budget": {
+          "version": 1,
+          "scope": "session",
+          "budget_id": "sbud_overnight01",
+          "budget_version": 1,
+          "mode": "enforce",
+          "operation": "git.push",
+          "count": 1,
+          "max": 0,
+          "state": "over",
+          "reason": "x"
+        }
+      },
+      {
+        "name": "missing-state",
+        "budget": {
+          "version": 1,
+          "scope": "session",
+          "budget_id": "sbud_overnight01",
+          "budget_version": 1,
+          "mode": "enforce",
+          "operation": "git.push",
+          "count": 1,
+          "max": 0
+        }
+      },
+      {
+        "name": "unknown-state",
+        "budget": {
+          "version": 1,
+          "scope": "session",
+          "budget_id": "sbud_overnight01",
+          "budget_version": 1,
+          "mode": "enforce",
+          "operation": "git.push",
+          "count": 1,
+          "max": 0,
+          "state": "fine"
+        }
+      },
+      {
+        "name": "expired-state",
+        "budget": {
+          "version": 1,
+          "scope": "session",
+          "budget_id": "sbud_overnight01",
+          "budget_version": 1,
+          "mode": "enforce",
+          "operation": "git.push",
+          "count": 1,
+          "max": 0,
+          "state": "expired"
+        }
+      }
     ]
   }
 }

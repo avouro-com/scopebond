@@ -488,12 +488,13 @@ export function createHookRuntime(config: RuntimeConfig) {
       let allow: Decision | null = null;
       let ask: Decision | null = null;
       let notEvaluated: Decision | null = null;
-      // Session budgets: the whole tool call is counted once, before any of it runs. Beyond a limit (or once the budget has
-      // expired, or when the count cannot be checked) the call is denied and its refusal is recorded as a denied receipt.
-      // An action reported only after it ran (Cursor's after-edit event) cannot be prevented, so it is not counted here.
-      const reservation = config.sessionBudgets && !list.some((m) => m.postHoc) ? config.sessionBudgets.reserve(String(list[0].intent.params[ACTION_GROUP_PARAM]), list.map((m) => m.intent.action_type)) : null;
+      // Session budgets: the whole tool call is counted once, before any of it runs. Beyond a limit (or when the count cannot be
+      // checked, or when it starts another coding agent) the call is denied and its refusal is recorded as a denied receipt. An
+      // action reported only after it ran (Cursor's after-edit event) cannot be prevented: it is counted, never refused.
+      const intents = list.map((m) => ({ action_type: m.intent.action_type, params: m.intent.params }));
+      const reservation = config.sessionBudgets ? config.sessionBudgets.reserve(String(list[0].intent.params[ACTION_GROUP_PARAM]), intents, { postHoc: list.some((m) => m.postHoc) }) : null;
       if (reservation && !reservation.allow) {
-        const target = list.find((m) => m.intent.action_type === reservation.actionType) ?? list[0];
+        const target = list[reservation.index] ?? list[0];
         boundaryVerdict = { allow: false, reason: "budget_exceeded", detail: "session budget", consumed_approvals: [], budgets: [] };
         try {
           const signed = agent.sign(target.intent);
@@ -505,7 +506,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       }
       const release = (): void => { if (reservation?.allow) reservation.release(); };
       for (const m of list) {
-        const d = await this.evaluateOne(m, reservation?.allow ? reservation.budgetFor(m.intent.action_type) : undefined);
+        const d = await this.evaluateOne(m, reservation?.allow ? reservation.budgetFor({ action_type: m.intent.action_type, params: m.intent.params }) : undefined);
         if (d.receipt !== undefined) receipts.push(d.receipt);
         dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
         if (d.decision === "deny") { release(); return { ...d, receipts, dispatched }; }            // any deny denies the call

@@ -12,12 +12,15 @@ export interface SessionBudget {
   version: number;
   expires_at: string;
   source?: "request" | "admin";
+  /** Count a command the hook cannot classify (a shell command that is not a package install) as a file write, for a budget
+   *  that limits file writes. Off by default: a shell command can write files the hook does not see as writes. */
+  count_shell_as_write?: boolean;
 }
 
 const BUDGET_ID = /^[A-Za-z0-9._:-]{8,128}$/;
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: each repeated group starts with a "." its own class excludes
 const OPERATION = /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$/;
-const BUDGET_KEYS = new Set(["budget_id", "scope", "session_id", "limits", "mode", "version", "expires_at", "source"]);
+const BUDGET_KEYS = new Set(["budget_id", "scope", "session_id", "limits", "mode", "version", "expires_at", "source", "count_shell_as_write"]);
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 
@@ -35,7 +38,8 @@ export function validSessionBudget(b: unknown): b is SessionBudget {
     && Array.isArray(b.limits) && b.limits.length >= 1 && b.limits.length <= 10 && b.limits.every(validLimit)
     && (b.mode === "enforce" || b.mode === "monitor") && intIn(b.version, 1, 2_147_483_647)
     && typeof b.expires_at === "string" && Number.isFinite(Date.parse(b.expires_at))
-    && (b.source === undefined || b.source === "request" || b.source === "admin");
+    && (b.source === undefined || b.source === "request" || b.source === "admin")
+    && (b.count_shell_as_write === undefined || typeof b.count_shell_as_write === "boolean");
 }
 
 /** Whether a rules document's `session_budgets` is a valid list (at most 50, each valid, budget ids unique). */

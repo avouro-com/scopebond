@@ -27,9 +27,9 @@ test("the budget members match the receipt schema", () => {
 
 test("validateReceiptBudget accepts the documented shape and refuses anything else", () => {
   assert.equal(validateReceiptBudget(budget), true);
-  for (const state of ["within", "at_limit", "over", "expired", "unavailable"]) assert.equal(validateReceiptBudget({ ...budget, state }), true, state);
+  for (const state of ["within", "at_limit", "over", "unavailable"]) assert.equal(validateReceiptBudget({ ...budget, state }), true, state);
   const bad = [
-    { ...budget, state: "fine" }, { ...budget, scope: "installation" }, { ...budget, extra: 1 }, { ...budget, max: -1 },
+    { ...budget, state: "fine" }, { ...budget, state: "expired" }, { ...budget, scope: "installation" }, { ...budget, extra: 1 }, { ...budget, max: -1 },
     { ...budget, budget_id: "short" }, { ...budget, operation: "Push" }, { ...budget, mode: "warn" }, { ...budget, version: 2 },
     (() => { const b = { ...budget }; delete b.count; return b; })(), null, "budget",
   ];

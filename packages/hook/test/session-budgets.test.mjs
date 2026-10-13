@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, inspectManaged, compileManaged, digestRules, defaultRules, MANAGED_DOC_FILE,
-  sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, validSessionBudgets, SESSION_BUDGETS_FILE, matchAllowance, makeAllowance,
+  sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, validSessionBudgets, SESSION_BUDGETS_FILE, matchAllowance, makeAllowance, isPackageInstall, isAgentLaunch,
 } from "../dist/index.js";
 import { validateEvidencePayload } from "@scopebond/gateway";
 
@@ -117,7 +117,7 @@ test("a tool call a rule denies gives its count back", async () => {
   assert.equal(budgetsOf(next)[0].count, 1);
 });
 
-test("monitor records over the limit and allows; an expired enforce budget denies with 'session budget'", async () => {
+test("monitor records over the limit and allows; an expired budget ends and the rules alone decide again", async () => {
   const monitored = setup([budget({ mode: "monitor" })]);
   const pushed = await run(monitored, bash("git push origin feature/night"));
   assert.notEqual(pushed.decision, "deny");
@@ -126,10 +126,11 @@ test("monitor records over the limit and allows; an expired enforce budget denie
 
   const expired = setup([budget({ expires_at: new Date(Date.now() - 1000).toISOString(), limits: [{ operations: ["file.write"], max: 100 }] })]);
   const d = await run(expired, write("/repo/src/a.ts"));
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /session budget/);
-  assert.match(d.reason, /ended at/);
-  assert.equal(budgetsOf(d)[0].state, "expired");
+  assert.equal(d.decision, "allow", "after its expiry the budget no longer applies");
+  assert.deepEqual(budgetsOf(d), []);
+  const ended = setup([budget({ expires_at: new Date(Date.now() - 1000).toISOString() })]);
+  assert.notEqual((await run(ended, bash("git push origin feature/night"))).decision, "deny", "a zero-push budget that ended no longer refuses");
+  assert.notEqual((await run(ended, bash("claude -p 'carry on'"))).decision, "deny", "nor starting another agent");
 });
 
 test("fail closed: an unreadable count for a budgeted session denies, never 'no limit'", async () => {
@@ -146,10 +147,10 @@ test("fail closed: an unreadable count for a budgeted session denies, never 'no 
   assert.equal((await run(dir, write("/repo/src/a.ts"))).decision, "deny");
   // A session id that cannot be worked out while budgets exist: the limited actions are refused.
   const guard = sessionBudgetGuard(dir, new Error("no key"));
-  const r = guard.reserve("g1", ["file.write"]);
+  const r = guard.reserve("g1", [{ action_type: "file.write", params: { path: "a" } }]);
   assert.equal(r.allow, false);
   assert.match(r.reason, /session budget/);
-  assert.equal(guard.reserve("g2", ["file.read"]).allow, true);
+  assert.equal(guard.reserve("g2", [{ action_type: "file.read", params: { path: "a" } }]).allow, true);
 });
 
 test("the count file is bounded and written whole", async () => {
@@ -160,6 +161,8 @@ test("the count file is bounded and written whole", async () => {
   assert.equal(Object.values(file.sessions[SESSION].counts)[0], 60);
   assert.equal(file.sessions[SESSION].groups.length, 50, "only the last tool calls are kept");
   assert.equal(existsSync(join(dir, "session-budgets.lock")), false, "the lock is released");
+  // Counts are kept at least a day past the budget's expiry, however long it lasts.
+  assert.ok(file.sessions[SESSION].keep_until >= Date.parse(budget().expires_at) + 23 * HOUR);
 });
 
 test("the hook input's session id is keyed the way receipts carry it; no budgets or no session means no guard", () => {
@@ -183,4 +186,64 @@ test("a session-scoped allowance applies only in its session", () => {
   assert.equal(matchAllowance([session], { ...query, sessionId: SESSION })?.id, made.id);
   assert.equal(matchAllowance([session], { ...query, sessionId: OTHER }), null);
   assert.equal(matchAllowance([session], query), null, "no session: no match");
+});
+
+test("package installs in shell commands count as package.install: npm install x is denied under no installs", async () => {
+  const dir = setup([budget()]);
+  for (const command of ["npm install left-pad", "pnpm add zod", "yarn add react", "pip install requests", "python -m pip install -r requirements.txt", "npm ci", "uv add httpx"]) {
+    const d = await run(dir, bash(command));
+    assert.equal(d.decision, "deny", command);
+    assert.match(d.reason, /session budget/, command);
+    assert.match(d.reason, /may install packages no times/, command);
+    assert.equal(budgetsOf(d)[0].operation, "package.install", command);
+  }
+  for (const command of ["npm test", "npm run build", "pip list", "ls -la"]) assert.equal(isPackageInstall({ action_type: "shell.exec", params: { program: command.split(" ")[0], command } }), false, command);
+  assert.notEqual((await run(dir, bash("npm test"))).decision, "deny");
+});
+
+test("a push in a shell command is its own git.push and is counted", async () => {
+  const dir = setup([budget({ limits: [{ operations: ["git.push"], max: 1 }] })]);
+  const first = await run(dir, bash("git push origin feature/a"));
+  assert.notEqual(first.decision, "deny");
+  assert.deepEqual(budgetsOf(first).map((b) => [b.operation, b.count, b.state]), [["git.push", 1, "at_limit"]]);
+  const second = await run(dir, bash("git push origin feature/b"));
+  assert.equal(second.decision, "deny");
+  assert.match(second.reason, /session budget/);
+});
+
+test("a budgeted session may not start another coding agent; a monitor-only one, or none, may", async () => {
+  const dir = setup([budget()]);
+  for (const command of ["claude -p 'keep going'", "codex exec 'fix it'", "cursor-agent -p go", "copilot -p go", "gh copilot suggest 'x'", "npx @anthropic-ai/claude-code -p go"]) {
+    const d = await run(dir, bash(command));
+    assert.equal(d.decision, "deny", command);
+    assert.match(d.reason, /session budget: starting another coding agent is not allowed in a budgeted session/, command);
+  }
+  assert.equal(isAgentLaunch({ action_type: "shell.exec", params: { program: "gh", command: "gh pr list" } }), false);
+  const monitored = setup([budget({ mode: "monitor" })]);
+  assert.notEqual((await run(monitored, bash("claude -p 'keep going'"))).decision, "deny");
+  assert.notEqual((await run(dir, bash("claude -p 'keep going'"), { session: OTHER })).decision, "deny", "another session has no budget");
+});
+
+test("count_shell_as_write: off by default; on, any other shell command counts against the file-write limit", async () => {
+  const off = setup([budget({ limits: [{ operations: ["file.write"], max: 1 }] })]);
+  assert.deepEqual(budgetsOf(await run(off, bash("ls -la"))), []);
+  const on = setup([budget({ count_shell_as_write: true, limits: [{ operations: ["file.write"], max: 1 }] })]);
+  const first = await run(on, bash("sed -i s/a/b/ notes.txt"));
+  assert.equal(budgetsOf(first)[0].operation, "file.write");
+  const second = await run(on, bash("touch b.txt"));
+  assert.equal(second.decision, "deny");
+  assert.match(second.reason, /may write files once/);
+});
+
+test("an action reported after it ran (Cursor's after-edit) is counted, never refused; later calls are refused once over", () => {
+  const dir = setup([budget({ limits: [{ operations: ["file.write"], max: 1 }] })]);
+  const guard = sessionBudgetGuard(dir, SESSION);
+  const edit = (path) => [{ action_type: "file.write", params: { path } }];
+  assert.equal(guard.reserve("p1", edit("a"), { postHoc: true }).allow, true);
+  const over = guard.reserve("p2", edit("b"), { postHoc: true });
+  assert.equal(over.allow, true, "already happened: not refused");
+  assert.equal(over.budgetFor(edit("b")[0]).state, "over");
+  const next = guard.reserve("p3", edit("c"));
+  assert.equal(next.allow, false);
+  assert.match(next.reason, /session budget/);
 });

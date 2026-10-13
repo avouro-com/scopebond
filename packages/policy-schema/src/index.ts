@@ -104,7 +104,7 @@ export const SESSION_BUDGET_SCOPE = "session";
 export const SESSION_BUDGET_DEFAULT_SECONDS = 7_200;
 export const SESSION_BUDGET_MODES = ["enforce", "monitor"] as const;
 export const SESSION_BUDGET_LIMITS = { maxBudgets: 50, maxLimits: 10, maxOperations: 20, maxCount: 1_000_000 } as const;
-export const RECEIPT_BUDGET_STATES = ["within", "at_limit", "over", "expired", "unavailable"] as const;
+export const RECEIPT_BUDGET_STATES = ["within", "at_limit", "over", "unavailable"] as const;
 export type SessionBudgetMode = (typeof SESSION_BUDGET_MODES)[number];
 export type ReceiptBudgetState = (typeof RECEIPT_BUDGET_STATES)[number];
 export interface SessionBudgetLimit { operations: string[]; max: number }
@@ -117,6 +117,7 @@ export interface SessionBudget {
   version: number;
   expires_at: string;
   source?: "request" | "admin";
+  count_shell_as_write?: boolean;
 }
 
 // The coverage buckets a policy resolves into (POLICY_VOCABULARY.md §4).
