@@ -161,27 +161,35 @@ folder, which follows VS Code's naming for the extension's id.
 A workspace can keep lists in the user-level settings of the AI coding tools on a computer: permission rules to allow
 and to deny, and MCP servers a tool may or may not start. Nothing else: never prompts, instruction files or a model
 choice. The lists arrive inside the workspace's rules document as a `tool_settings` section that is signed on its own,
-with the same key and the same check as the rules (`checkToolSettingsSignature` in `@scopebond/hook`). The agent applies
+with the same key and the same check as the rules (`checkToolSettingsSignature` in `@scopebond/hook`; its signed payload
+also carries `kind: "tool_settings"`, so a rules signature never passes for tool settings, nor the reverse). The agent applies
 a section only when it is signed by a key this release trusts; an unsigned section, or one signed by a key it does not
 trust, is never applied, in any mode, and is reported as `refused: unsigned`.
 
 | Tool | File | What the agent sets |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `permissions.allow`, `permissions.deny`, `allowedMcpServers` and `deniedMcpServers` (`{ "serverName": … }` entries) |
-| Cursor CLI | `~/.cursor/cli-config.json` | `permissions.allow`, `permissions.deny`; a denied MCP server is the deny entry `Mcp(<name>:*)`. Cursor documents no list of permitted MCP servers, so that list is refused as unsupported |
-| Codex, GitHub Copilot CLI | — | Nothing: refused as unsupported. Codex keeps its MCP servers in TOML, which the agent does not rewrite, and documents no permission lists; Copilot CLI takes tool permissions as command-line flags only |
+| Claude Code | `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when the agent's environment sets it) | `permissions.allow`, `permissions.deny`, `allowedMcpServers` and `deniedMcpServers` (`{ "serverName": … }` entries) |
+| Cursor CLI | `~/.cursor/cli-config.json` | `permissions.allow`, `permissions.deny`; a denied MCP server is the deny entry `Mcp(<name>:*)`. A deny entry refuses the server's tool calls; Cursor still starts the server. Cursor documents no list of permitted MCP servers, so that list is refused as unsupported |
+| Codex, GitHub Copilot CLI | — | Nothing: refused as unsupported. Codex has per-server settings in `~/.codex/config.toml`, but Scopebond does not rewrite TOML yet; Copilot CLI takes tool permissions as command-line flags only |
 
-The workspace's entries are added to those lists, and entries the agent placed earlier that the workspace no longer
-sets are taken out; every other key and entry in the file stays, in the file's own indentation and line endings. The
-first change keeps a copy (`<file>.scopebond-backup`; an existing copy is never replaced), every write replaces the
-file through a temporary file, and a file that does not parse as JSON, or whose lists are not lists, is never written
-(`refused: unparseable`). A tool whose folder does not exist is reported as `refused: not_installed` and nothing is
-created.
+The workspace's entries are added to those lists. An entry the agent itself added (not one that was already in the file)
+is taken out again when the workspace no longer sets it, and a list the agent created is removed once it is empty (an
+empty `allowedMcpServers` would stop every MCP server); a person's own entries and lists stay. Every other key stays,
+in the file's own indentation and line endings. The first change keeps a copy (`<file>.scopebond-backup`; an existing
+copy is never replaced), every write replaces the file through a temporary file, and a file that does not parse as JSON,
+or whose lists are not lists, is never written (`refused: unparseable`). A settings file that is a symbolic link (a
+dotfiles checkout, say) is never replaced (`refused: symlink`). A tool whose folder does not exist is reported as
+`refused: not_installed` and nothing is created.
+
+A changed file is written back from its parsed form: `\u` escapes become the characters they stand for, a key that
+appears twice keeps only its last value, and on macOS and Linux the file becomes readable by its owner only (0600).
 
 Each rules check reports, per tool, `applied`, `drifted` (with the names of the settings that no longer hold the
 workspace's entries, for example `permissions.deny`, never their values) or `refused` and why
 (`x-scopebond-tool-settings`). When the section says `mode: "enforce"`, a drift is put back and reported as restored;
-with `mode: "report"` it is reported and left alone. The state is kept in `tool-settings.json` in the Scopebond folder.
+with `mode: "report"` it is reported and left alone. Rules without a section, after a computer had one, are reported
+as `not_delivered`, and nothing is changed. The state is kept in `tool-settings.json` in the Scopebond folder, with
+the newest section's time per workspace, so an older section is refused as a replay.
 
 ## Local control channel
 

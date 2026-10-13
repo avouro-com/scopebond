@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { digestToolSettings, signedPolicyBytes, MANAGED_DOC_FILE } from "@scopebond/hook";
@@ -17,7 +17,7 @@ const NOW = new Date("2026-10-20T00:00:00Z");
 const pair = generateKeyPairSync("ed25519");
 const stranger = generateKeyPairSync("ed25519");
 const KEYS = [{ key_id: "ws-1", public_key: pair.publicKey.export({ type: "spki", format: "pem" }), not_before: "2026-10-01T00:00:00Z", not_after: "2027-10-01T00:00:00Z" }];
-const ENV_KEYS = ["HOME", "USERPROFILE", "SCOPEBOND_POLICY_KEYS_JSON"];
+const ENV_KEYS = ["HOME", "USERPROFILE", "SCOPEBOND_POLICY_KEYS_JSON", "CLAUDE_CONFIG_DIR"];
 
 /** Run `fn` with a fresh fixture home as this process's home, and a Scopebond folder connected to a workspace. */
 async function inHome(fn) {
@@ -25,6 +25,7 @@ async function inHome(fn) {
   const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
   process.env.HOME = home; process.env.USERPROFILE = home;
   delete process.env.SCOPEBOND_POLICY_KEYS_JSON;
+  delete process.env.CLAUDE_CONFIG_DIR;
   try {
     // The guard this file exists for: nothing below may touch the real home.
     assert.equal(homedir(), home);
@@ -41,8 +42,8 @@ function section(harnesses, { revision = 1, mode = "enforce" } = {}) {
   const s = { type: "scopebond:tool-settings", version: 1, revision, mode, harnesses };
   return { ...s, settings_digest: digestToolSettings(s) };
 }
-function signed(s, { key = pair.privateKey, keyId = "ws-1", issuedAt = "2026-10-15T00:00:00Z", computer = INSTALLATION, workspace = WORKSPACE } = {}) {
-  const payload = { v: 1, workspace, computer, revision: s.revision, rules_digest: s.settings_digest, local_changes: false, managed: true, issued_at: issuedAt };
+function signed(s, { key = pair.privateKey, keyId = "ws-1", issuedAt = "2026-10-15T00:00:00Z", computer = INSTALLATION, workspace = WORKSPACE, kind = "tool_settings" } = {}) {
+  const payload = { v: 1, workspace, computer, revision: s.revision, rules_digest: s.settings_digest, local_changes: false, managed: true, issued_at: issuedAt, ...(kind ? { kind } : {}) };
   return { ...s, workspace_id: workspace, issued_at: issuedAt, key_id: keyId, signature: cryptoSign(null, signedPolicyBytes(payload), key).toString("base64") };
 }
 /** The workspace document in force, as the hook installs it, carrying `tool_settings`. */
@@ -127,10 +128,8 @@ test("a section signed by another key, for another computer, or altered after si
   tampered.harnesses = { claude: { permissions_allow: ["Bash(*)"] } };
   install(dir, tampered);
   assert.equal(apply(dir).reason, "invalid");
-  // A rules signature cannot pass for tool settings: the same key, the same digest field, but over a rules object.
-  const s = section({ claude: CLAUDE });
-  const asRules = signed({ ...s, settings_digest: "a".repeat(64) });
-  install(dir, { ...asRules, settings_digest: s.settings_digest });
+  // A rules signature cannot pass for tool settings, even over the very same revision and digest: its payload has no kind.
+  install(dir, signed(section({ claude: CLAUDE }), { kind: null }));
   assert.equal(apply(dir).reason, "bad_signature");
   assert.deepEqual(read(claudeFile(home)), { theme: "dark" });
 }));
@@ -233,6 +232,85 @@ test("a document without tool settings changes nothing and reports nothing", () 
   assert.equal(apply(dir), null);
   assert.equal(existsSync(join(dir, TOOL_SETTINGS_STATE_FILE)), false);
   assert.equal(toolSettingsReport(dir), null);
+}));
+
+test("once a computer had tool settings, a document without them is reported as not delivered, and the file is left alone", () => inHome(({ home, dir }) => {
+  put(claudeFile(home), {});
+  install(dir, signed(section({ claude: CLAUDE })));
+  apply(dir);
+  const text = readFileSync(claudeFile(home), "utf8");
+  writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ type: "scopebond:managed-rules", version: 1 }));
+  const report = apply(dir);
+  assert.equal(report.result, "not_delivered");
+  assert.deepEqual(report.harnesses, {});
+  assert.equal(JSON.parse(toolSettingsReport(dir)).result, "not_delivered");
+  assert.equal(readFileSync(claudeFile(home), "utf8"), text);
+}));
+
+test("a list Scopebond created is removed when it ends empty: no empty permitted-server list is left to stop every server", () => inHome(({ home, dir }) => {
+  put(claudeFile(home), { theme: "dark" });
+  install(dir, signed(section({ claude: { mcp_allowed: ["github"], permissions_deny: ["Bash(rm:*)"] } })));
+  apply(dir);
+  assert.deepEqual(read(claudeFile(home)).allowedMcpServers, [{ serverName: "github" }]);
+  install(dir, signed(section({ claude: { permissions_deny: ["Bash(rm:*)"] } }, { revision: 2 }), { issuedAt: "2026-10-16T00:00:00Z" }));
+  apply(dir);
+  assert.equal("allowedMcpServers" in read(claudeFile(home)), false);
+  // The workspace stops naming Claude Code: the permissions object Scopebond created goes too.
+  install(dir, signed(section({}, { revision: 3 }), { issuedAt: "2026-10-17T00:00:00Z" }));
+  apply(dir);
+  assert.deepEqual(read(claudeFile(home)), { theme: "dark" });
+}));
+
+test("a person's own permitted-server list stays even when Scopebond's entries leave it", () => inHome(({ home, dir }) => {
+  put(claudeFile(home), { allowedMcpServers: [{ serverName: "mine" }] });
+  install(dir, signed(section({ claude: { mcp_allowed: ["github"] } })));
+  apply(dir);
+  install(dir, signed(section({}, { revision: 2 }), { issuedAt: "2026-10-16T00:00:00Z" }));
+  apply(dir);
+  assert.deepEqual(read(claudeFile(home)).allowedMcpServers, [{ serverName: "mine" }]);
+}));
+
+test("an entry a person already had is never taken out when the workspace stops listing it", () => inHome(({ home, dir }) => {
+  put(claudeFile(home), { permissions: { deny: ["Bash(rm:*)"] } });
+  install(dir, signed(section({ claude: { permissions_deny: ["Bash(rm:*)", "Bash(curl:*)"] } })));
+  apply(dir);
+  assert.deepEqual(read(claudeFile(home)).permissions.deny, ["Bash(rm:*)", "Bash(curl:*)"]);
+  install(dir, signed(section({}, { revision: 2 }), { issuedAt: "2026-10-16T00:00:00Z" }));
+  apply(dir);
+  assert.deepEqual(read(claudeFile(home)).permissions.deny, ["Bash(rm:*)"]);
+}));
+
+test("a settings file that is a link is refused, never replaced", (t) => inHome(({ home, dir }) => {
+  const real = join(home, "dotfiles", "settings.json");
+  put(real, { theme: "dark" });
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  try { symlinkSync(real, claudeFile(home), "file"); } catch { t.skip("this system does not let the test create a link"); return; }
+  install(dir, signed(section({ claude: CLAUDE })));
+  assert.equal(apply(dir).harnesses.claude.reason, "symlink");
+  assert.equal(lstatSync(claudeFile(home)).isSymbolicLink(), true);
+  assert.deepEqual(read(real), { theme: "dark" });
+}));
+
+test("CLAUDE_CONFIG_DIR moves Claude Code's settings file, as Claude Code reads it", () => inHome(({ home, dir }) => {
+  const config = join(home, "claude-config");
+  put(join(config, "settings.json"), {});
+  process.env.CLAUDE_CONFIG_DIR = config;
+  install(dir, signed(section({ claude: { permissions_deny: ["Bash(rm:*)"] } })));
+  assert.equal(apply(dir).harnesses.claude.state, "applied");
+  assert.deepEqual(read(join(config, "settings.json")).permissions.deny, ["Bash(rm:*)"]);
+  assert.equal(existsSync(join(home, ".claude")), false);
+}));
+
+test("the replay mark is kept per workspace: moving to another workspace and back does not reopen older sections", () => inHome(({ dir }) => {
+  const connect = (workspace) => writeFileSync(join(dir, "cloud.json"), JSON.stringify({ url: "https://cloud.example.test", credential: "sbm_x", credential_id: "c", organization_id: workspace, environment_id: "env-1", gateway_id: INSTALLATION, attester_kid: "k", scopes: [], expires_at: "2099-01-01T00:00:00Z" }));
+  install(dir, signed(section({ claude: CLAUDE }, { revision: 5 }), { issuedAt: "2026-10-16T00:00:00Z" }));
+  assert.equal(apply(dir).result, "applied");
+  connect("org-ts-2");
+  install(dir, signed(section({ claude: CLAUDE }), { workspace: "org-ts-2", issuedAt: "2026-10-10T00:00:00Z" }));
+  assert.equal(apply(dir).result, "applied");
+  connect(WORKSPACE);
+  install(dir, signed(section({ claude: CLAUDE }, { revision: 4 }), { issuedAt: "2026-10-15T00:00:00Z" }));
+  assert.equal(apply(dir).reason, "bad_signature");
 }));
 
 test("a newer section version is refused as unsupported", () => inHome(({ dir }) => {

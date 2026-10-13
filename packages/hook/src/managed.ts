@@ -420,7 +420,13 @@ export const digestToolSettings = (s: Pick<ToolSettingsSection, "type" | "versio
 
 // eslint-disable-next-line no-control-regex -- refusing control characters is the point
 const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/;
-const validEntry = (v: unknown): v is string => typeof v === "string" && v.length >= 1 && v.length <= MAX_TOOL_SETTINGS_ENTRY && v.trim() === v && !CONTROL.test(v);
+/** Bidirectional and invisible formatting characters (U+200B–200F, U+202A–202E, U+2060–2069, U+FEFF): an entry carrying one can
+ *  read as something other than what it is. */
+export const hasFormatCharacter = (v: string): boolean => [...v].some((ch) => {
+  const c = ch.codePointAt(0)!;
+  return (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2060 && c <= 0x2069) || c === 0xfeff;
+});
+const validEntry = (v: unknown): v is string => typeof v === "string" && v.length >= 1 && v.length <= MAX_TOOL_SETTINGS_ENTRY && v.trim() === v && !CONTROL.test(v) && !hasFormatCharacter(v);
 
 /** Check a `tool_settings` section's shape and digest. Pure; the signature is checked separately. A tool this version does not
  *  know, or a list it does not know, is not an error here: the agent reports that tool as unsupported. */

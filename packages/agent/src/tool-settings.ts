@@ -8,14 +8,19 @@
 // Where each list goes, only where the tool documents a user-level setting for it:
 //   Claude Code  ~/.claude/settings.json      permissions.allow, permissions.deny, allowedMcpServers and deniedMcpServers
 //                                              ({ "serverName": <name> } entries)
+//                (CLAUDE_CONFIG_DIR/settings.json when that is set in the agent's environment)
 //   Cursor CLI   ~/.cursor/cli-config.json    permissions.allow, permissions.deny; a denied MCP server is the deny entry
-//                                              `Mcp(<name>:*)`. Cursor documents no list of permitted MCP servers.
-//   Codex, GitHub Copilot                     no list is applied (reported `refused: unsupported`): Codex keeps its MCP servers
-//                                              in TOML, which this agent does not rewrite, and documents no permission lists;
-//                                              Copilot CLI takes its tool permissions as command-line flags only.
+//                                              `Mcp(<name>:*)` (its tool calls are refused; Cursor still starts it). Cursor
+//                                              documents no list of permitted MCP servers.
+//   Codex, GitHub Copilot                     no list is applied (reported `refused: unsupported`): Codex has per-server
+//                                              settings in config.toml, but Scopebond does not rewrite TOML yet; Copilot CLI
+//                                              takes its tool permissions as command-line flags only.
 //
-// How a file is changed: the entries the workspace sets are added to the lists in place, and entries Scopebond placed earlier
-// that the workspace no longer sets are taken out; every other key and entry stays as it was. A file that does not parse, or
+// How a file is changed: the entries the workspace sets are added to the lists in place. An entry Scopebond itself added is
+// taken out again when the workspace no longer sets it (an entry that was already there is never recorded as Scopebond's), and
+// a list Scopebond created is removed once it is empty; every other key and entry stays. A symbolic link is never replaced
+// (`refused: symlink`). The file is written back from its parsed form (escapes resolved, a repeated key keeps its last value,
+// owner-only on POSIX). A file that does not parse, or
 // whose lists are not lists, is never written (`refused: unparseable`). The first change keeps a copy of the file
 // (`<file>.scopebond-backup`, the one the hook installer keeps; an existing backup is never replaced), and every write is a temp
 // file renamed over the original. A file changed between reading and writing is left for the next cycle. Nothing is written
@@ -25,7 +30,7 @@
 // (never their values); or `refused` and why. A drift is put back only when the section says `mode: "enforce"`; with
 // `mode: "report"` it is reported and left alone. A new section is applied in both modes.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -35,7 +40,7 @@ import {
 
 export const TOOL_SETTINGS_STATE_FILE = "tool-settings.json";
 
-export type ToolSettingsRefusal = "unsigned" | "bad_signature" | "invalid" | "unsupported" | "unparseable" | "not_installed" | "write_failed";
+export type ToolSettingsRefusal = "unsigned" | "bad_signature" | "invalid" | "unsupported" | "unparseable" | "not_installed" | "write_failed" | "symlink";
 export interface HarnessReport {
   state: "applied" | "drifted" | "refused";
   /** The settings (for example `permissions.deny`) that no longer hold the workspace's entries. Names only, never values. */
@@ -50,8 +55,9 @@ export interface ToolSettingsReport {
   revision: number | null;
   settings_digest: string | null;
   mode: "enforce" | "report" | null;
-  /** The section as a whole: applied (checked and signed; see each tool) or refused and why. */
-  result: "applied" | "refused";
+  /** The section as a whole: applied (checked and signed; see each tool), refused and why, or not_delivered (the rules in force
+   *  carry no section, or this computer has no workspace rules): nothing was changed. */
+  result: "applied" | "refused" | "not_delivered";
   reason: ToolSettingsRefusal | null;
   harnesses: Record<string, HarnessReport>;
   at: string;
@@ -59,16 +65,17 @@ export interface ToolSettingsReport {
 interface ToolSettingsState {
   version: 1;
   report: ToolSettingsReport | null;
-  /** The `issued_at` of the last section applied, and its workspace: an older one is a replay. */
-  issued_at: string | null;
-  workspace: string | null;
-  /** Per tool: the digest of the section last applied there, and the entries Scopebond placed, by setting. */
-  applied: Record<string, { digest: string; placed: Record<string, string[]> }>;
+  /** Per workspace id: the `issued_at` of the newest section applied; an older one is a replay. Kept for every workspace this
+   *  computer was connected to, so moving to another workspace and back does not reopen the older sections. */
+  issued: Record<string, string>;
+  /** Per tool: the digest of the section last applied there, the entries Scopebond itself added (by setting), and the settings
+   *  whose list Scopebond created (removed again when they end empty: an empty `allowedMcpServers` would stop every server). */
+  applied: Record<string, { digest: string; placed: Record<string, string[]>; created?: string[] }>;
 }
 /** The UTF-8 byte-order mark Windows PowerShell 5.1 writes at the start of a file; JSON.parse refuses it. */
 const BOM = String.fromCharCode(0xfeff);
 const withoutBom = (text: string): string => (text.startsWith(BOM) ? text.slice(1) : text);
-const EMPTY_STATE: ToolSettingsState = { version: 1, report: null, issued_at: null, workspace: null, applied: {} };
+const EMPTY_STATE: ToolSettingsState = { version: 1, report: null, issued: {}, applied: {} };
 
 /** A setting's place in a tool's file and how one list entry is written there. */
 interface Placement { path: readonly string[]; entry: (value: string) => unknown }
@@ -76,7 +83,8 @@ interface Target { file: () => string; lists: Partial<Record<ToolSettingsList, P
 const asIs = (value: string): unknown => value;
 const TARGETS: Record<string, Target> = {
   claude: {
-    file: () => userHarnessFile("claude"),
+    // Claude Code reads its settings from CLAUDE_CONFIG_DIR when that is set (in the agent's own environment).
+    file: () => (process.env.CLAUDE_CONFIG_DIR ? join(process.env.CLAUDE_CONFIG_DIR, "settings.json") : userHarnessFile("claude")),
     lists: {
       permissions_allow: { path: ["permissions", "allow"], entry: asIs },
       permissions_deny: { path: ["permissions", "deny"], entry: asIs },
@@ -103,8 +111,9 @@ const keyOf = (value: unknown): string => JSON.stringify(isObject(value) ? Objec
 export function readToolSettingsState(dir: string): ToolSettingsState {
   try {
     const parsed = JSON.parse(readFileSync(join(dir, TOOL_SETTINGS_STATE_FILE), "utf8")) as Partial<ToolSettingsState>;
-    return { ...EMPTY_STATE, ...parsed, applied: isObject(parsed.applied) ? parsed.applied : {} };
-  } catch { return { ...EMPTY_STATE, applied: {} }; }
+    const issued = isObject(parsed.issued) ? Object.fromEntries(Object.entries(parsed.issued).filter((e): e is [string, string] => typeof e[1] === "string")) : {};
+    return { version: 1, report: parsed.report ?? null, issued, applied: isObject(parsed.applied) ? parsed.applied : {} };
+  } catch { return { ...EMPTY_STATE, issued: {}, applied: {} }; }
 }
 function writeState(dir: string, state: ToolSettingsState): void {
   try { writeAtomic(join(dir, TOOL_SETTINGS_STATE_FILE), `${JSON.stringify(state, null, 2)}\n`); } catch { /* reported again next cycle */ }
@@ -120,7 +129,9 @@ const refusedHarness = (reason: ToolSettingsRefusal): HarnessReport => ({ state:
 
 /** A tool's settings file, read for changing: its parsed object and its text, `{}` when there is none, or null when it cannot be
  *  read as a JSON object whose lists are lists (then it is never written). */
-function readTarget(file: string, paths: (readonly string[])[]): { config: Record<string, unknown>; text: string | null } | null {
+function readTarget(file: string, paths: (readonly string[])[]): { config: Record<string, unknown>; text: string | null } | "symlink" | null {
+  // A settings file that is a link (a dotfiles checkout, say) is never replaced by a plain file.
+  try { if (lstatSync(file).isSymbolicLink()) return "symlink"; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null; }
   let text: string | null;
   try { text = readFileSync(file, "utf8"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") text = null; else return null; }
   let config: unknown = {};
@@ -150,6 +161,14 @@ function listAt(config: Record<string, unknown>, path: readonly string[], create
   const last = path[path.length - 1];
   if (!Array.isArray(at[last])) { if (!create) return undefined; at[last] = []; }
   return at[last] as unknown[];
+}
+
+/** Remove the list at `path`, and an object on the way that is left empty because of it. */
+function removeList(config: Record<string, unknown>, path: readonly string[]): void {
+  const parents: Record<string, unknown>[] = [config];
+  for (const key of path.slice(0, -1)) { const next = parents[parents.length - 1][key]; if (!isObject(next)) return; parents.push(next); }
+  delete parents[parents.length - 1][path[path.length - 1]];
+  for (let i = parents.length - 1; i > 0; i--) { if (Object.keys(parents[i]).length > 0) break; delete parents[i - 1][path[i - 1]]; }
 }
 
 /** The file's text with `config` in it, in the file's own indentation and line ending, and its byte-order mark if it had one. */
@@ -191,6 +210,7 @@ function applyHarness(harness: string, settings: Record<string, string[]> | unde
   if (paths.size === 0 && !before) return null;
   if (!existsSync(dirname(file))) return settings ? refusedHarness("not_installed") : null;
   const read = readTarget(file, [...paths.values()]);
+  if (read === "symlink") return refusedHarness("symlink");
   if (!read) return refusedHarness("unparseable");
 
   // What is missing (the workspace's entries not in the file) and what is stale (entries Scopebond placed that it no longer sets).
@@ -207,16 +227,31 @@ function applyHarness(harness: string, settings: Record<string, string[]> | unde
   const keep = { restored_at: previous?.restored_at ?? null, restored_keys: previous?.restored_keys ?? [] };
   if (!isNew && drifted && section.mode !== "enforce") return { state: "drifted", keys: missingIn.sort(), reason: null, ...keep };
 
+  // What Scopebond placed after this pass: the entries it placed before that are still wanted and still there, and the ones it
+  // adds now. An entry that was already in the file (a person's own) is never recorded, so it is never taken out later.
+  const placedNow: Record<string, string[]> = {};
+  const created = new Set(before?.created ?? []);
+  for (const [name, path] of paths) {
+    const current = (listAt(read.config, path, false) ?? []).map(keyOf);
+    const wantKeys = (desired.get(name)?.values ?? []).map(keyOf);
+    placedNow[name] = (placedBefore[name] ?? []).filter((k) => wantKeys.includes(k) && current.includes(k));
+  }
   if (missingIn.length > 0 || staleAny) {
     for (const [name, path] of paths) {
       const want = desired.get(name)?.values ?? [];
       const wantKeys = want.map(keyOf);
       const stale = new Set((placedBefore[name] ?? []).filter((k) => !wantKeys.includes(k)));
+      if (want.length > 0 && !listAt(read.config, path, false)) created.add(name);
       const list = listAt(read.config, path, want.length > 0);
       if (!list) continue;
       const kept = list.filter((v) => !stale.has(keyOf(v)));
-      for (const value of want) if (!kept.some((v) => keyOf(v) === keyOf(value))) kept.push(value);
+      for (const value of want) {
+        if (!kept.some((v) => keyOf(v) === keyOf(value))) { kept.push(value); placedNow[name] = [...(placedNow[name] ?? []), keyOf(value)]; }
+      }
       list.splice(0, list.length, ...kept);
+      // A list Scopebond created that ends empty goes, so the file says what it said before: for Claude Code an empty
+      // `allowedMcpServers` would mean no MCP server may start.
+      if (kept.length === 0 && created.has(name)) { removeList(read.config, path); created.delete(name); }
     }
     // Only the file as it was read is replaced: a change made since then is read again next cycle.
     let now: string | null;
@@ -228,7 +263,8 @@ function applyHarness(harness: string, settings: Record<string, string[]> | unde
     } catch { return refusedHarness("write_failed"); }
   }
   if (settings) {
-    state.applied[harness] = { digest: section.settings_digest, placed: Object.fromEntries([...desired].map(([name, d]) => [name, d.values.map(keyOf)])) };
+    const placed = Object.fromEntries(Object.entries(placedNow).filter(([, v]) => v.length > 0));
+    state.applied[harness] = { digest: section.settings_digest, placed, ...(created.size ? { created: [...created].sort() } : {}) };
   } else {
     delete state.applied[harness];
     return null;
@@ -241,12 +277,19 @@ function applyHarness(harness: string, settings: Record<string, string[]> | unde
 export function applyToolSettings(dir: string, options: ApplyOptions = {}): ToolSettingsReport | null {
   try {
     let doc: Record<string, unknown>;
-    try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as Record<string, unknown>; } catch { return null; }
-    const raw = doc.tool_settings;
-    if (raw === undefined) return null;
     const now = options.now ?? new Date();
     const at = now.toISOString();
     const state = readToolSettingsState(dir);
+    try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as Record<string, unknown>; } catch { doc = {}; }
+    const raw = doc.tool_settings;
+    if (raw === undefined) {
+      // Nothing to apply, and nothing changed on the computer. A computer that had tool settings says so instead of repeating
+      // its last report; one that never had any reports nothing.
+      if (!state.report) return null;
+      const report: ToolSettingsReport = { v: 1, revision: null, settings_digest: null, mode: null, result: "not_delivered", reason: null, harnesses: {}, at };
+      if (state.report.result !== "not_delivered") writeState(dir, { ...state, report });
+      return report;
+    }
     const named = isObject(raw) && isObject(raw.harnesses) ? Object.keys(raw.harnesses).slice(0, 16) : [];
     const refuse = (reason: ToolSettingsRefusal, section: Partial<ToolSettingsSection> = {}): ToolSettingsReport => {
       const report: ToolSettingsReport = {
@@ -266,7 +309,7 @@ export function applyToolSettings(dir: string, options: ApplyOptions = {}): Tool
     const workspace = workspaceIdOf(connection);
     const computer = (connection as { installation_id?: string }).installation_id ?? connection.gateway_id;
     const check = checkToolSettingsSignature(section as unknown as Record<string, unknown>, {
-      workspace, computer, lastIssuedAt: state.workspace === workspace ? state.issued_at : null, keys: options.keys, now,
+      workspace, computer, lastIssuedAt: workspace ? state.issued[workspace] ?? null : null, keys: options.keys, now,
     });
     if (check.result !== "verified") {
       // Not signed, or signed by no key this release trusts: nothing is applied.
@@ -281,7 +324,7 @@ export function applyToolSettings(dir: string, options: ApplyOptions = {}): Tool
       if (result) harnesses[harness] = result;
     }
     const report: ToolSettingsReport = { v: 1, revision: section.revision, settings_digest: section.settings_digest, mode: section.mode, result: "applied", reason: null, harnesses, at };
-    writeState(dir, { ...state, report, issued_at: check.issuedAt, workspace });
+    writeState(dir, { ...state, report, issued: workspace ? { ...state.issued, [workspace]: check.issuedAt } : state.issued });
     return report;
   } catch { return null; }
 }

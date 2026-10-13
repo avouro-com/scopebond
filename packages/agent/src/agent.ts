@@ -45,8 +45,8 @@ export interface CycleResult {
   requested: "flush" | "self_check" | null;
   /** Records still waiting because this cycle's sending time ran out (not because the workspace refused them). */
   more: boolean;
-  /** The workspace's tool settings this cycle: applied, refused, or null when the rules in force carry none. */
-  toolSettings?: "applied" | "refused" | null;
+  /** The workspace's tool settings this cycle: applied, refused, not_delivered, or null when this computer never had any. */
+  toolSettings?: "applied" | "refused" | "not_delivered" | null;
 }
 
 /** The agents on this computer whose user-level settings should hold the Scopebond hook. */

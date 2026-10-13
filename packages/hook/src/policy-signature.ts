@@ -43,6 +43,8 @@ export interface SignedPolicyPayload {
   local_changes: boolean;
   managed: boolean;
   issued_at: string;
+  /** Only on a tool settings section's payload ("tool_settings"); a rules payload never carries it. */
+  kind?: "tool_settings";
 }
 
 export type SignatureCheck =
@@ -99,6 +101,8 @@ export interface SignatureContext {
   lastIssuedAt: string | null;
   keys?: PolicyKey[];
   now?: Date;
+  /** Set only by `checkToolSettingsSignature`: the payload then carries `kind: "tool_settings"`. */
+  domain?: "tool_settings";
 }
 
 /** Check a document's signature. Pure apart from reading the trusted keys (`keys` overrides them). */
@@ -132,6 +136,7 @@ export function checkPolicySignature(doc: Record<string, unknown>, context: Sign
   const payload: SignedPolicyPayload = {
     v: 1, workspace: context.workspace, computer: context.computer, revision: doc.revision as number,
     rules_digest: doc.rules_digest, local_changes: doc.local_changes === true, managed: context.managed, issued_at: issuedAt,
+    ...(context.domain ? { kind: context.domain } : {}),
   };
   let ok: boolean;
   try { ok = verify(null, signedPolicyBytes(payload), publicKey, Buffer.from(signature, "base64")); } catch { ok = false; }
@@ -175,12 +180,13 @@ export interface ToolSettingsSignatureContext {
 
 /** Check the signature of a rules document's `tool_settings` section with the rules check itself: the same payload
  *  (`{ v: 1, workspace, computer, revision, rules_digest, local_changes, managed, issued_at }`), with the section's revision,
- *  its `settings_digest` as the digest, `local_changes` false and `managed` true. The section's digest covers its own `type`,
- *  so it never equals the digest of a rules object: a rules signature cannot pass for tool settings, nor the reverse.
+ *  its `settings_digest` as the digest, `local_changes` false and `managed` true, plus `kind: "tool_settings"`, which no
+ *  rules payload carries: a rules signature never verifies as tool settings, nor the reverse. (The section's digest also covers
+ *  its own `type`, so it never equals a rules digest.)
  *  There is no dual mode here: anything but `verified` means the section is not applied. */
 export function checkToolSettingsSignature(section: Record<string, unknown>, context: ToolSettingsSignatureContext): SignatureCheck {
   return checkPolicySignature({
     revision: section.revision, rules_digest: section.settings_digest, local_changes: false, installation_id: context.computer,
     workspace_id: section.workspace_id, issued_at: section.issued_at, key_id: section.key_id, signature: section.signature,
-  }, { workspace: context.workspace, computer: context.computer, managed: true, lastIssuedAt: context.lastIssuedAt, keys: context.keys, now: context.now });
+  }, { workspace: context.workspace, computer: context.computer, managed: true, lastIssuedAt: context.lastIssuedAt, keys: context.keys, now: context.now, domain: "tool_settings" });
 }

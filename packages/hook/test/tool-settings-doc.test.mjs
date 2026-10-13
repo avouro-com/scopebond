@@ -23,9 +23,9 @@ function section(harnesses, { revision = 1, mode = "enforce" } = {}) {
   const s = { type: "scopebond:tool-settings", version: 1, revision, mode, harnesses };
   return { ...s, settings_digest: digestToolSettings(s) };
 }
-const payloadFor = (revision, digest, issuedAt) => ({ v: 1, workspace: WORKSPACE, computer: INSTALLATION, revision, rules_digest: digest, local_changes: false, managed: true, issued_at: issuedAt });
-function sign(s, issuedAt = "2026-10-15T00:00:00Z") {
-  return { ...s, workspace_id: WORKSPACE, issued_at: issuedAt, key_id: "ws-1", signature: cryptoSign(null, signedPolicyBytes(payloadFor(s.revision, s.settings_digest, issuedAt)), pair.privateKey).toString("base64") };
+const payloadFor = (revision, digest, issuedAt, kind) => ({ v: 1, workspace: WORKSPACE, computer: INSTALLATION, revision, rules_digest: digest, local_changes: false, managed: true, issued_at: issuedAt, ...(kind ? { kind } : {}) });
+function sign(s, issuedAt = "2026-10-15T00:00:00Z", kind = "tool_settings") {
+  return { ...s, workspace_id: WORKSPACE, issued_at: issuedAt, key_id: "ws-1", signature: cryptoSign(null, signedPolicyBytes(payloadFor(s.revision, s.settings_digest, issuedAt, kind)), pair.privateKey).toString("base64") };
 }
 const context = { workspace: WORKSPACE, computer: INSTALLATION, lastIssuedAt: null, keys: KEYS, now: NOW };
 
@@ -36,6 +36,10 @@ test("a well-formed section passes; a bad list, a bad server name or a changed l
   assert.equal(inspectToolSettings({ ...s, mode: "sometimes" }).ok, false);
   assert.equal(inspectToolSettings(section({ claude: { mcp_denied: ["evil server"] } })).ok, false);
   assert.equal(inspectToolSettings(section({ claude: { permissions_deny: ["a\nb"] } })).ok, false);
+  // Bidirectional and invisible formatting characters are refused (right-to-left override, zero-width space).
+  for (const code of [0x202e, 0x2066, 0x200b, 0xfeff]) {
+    assert.equal(inspectToolSettings(section({ claude: { permissions_deny: [`Bash(rm${String.fromCharCode(code)}x)`] } })).ok, false);
+  }
   assert.equal(inspectToolSettings(section({ claude: { permissions_deny: Array.from({ length: 101 }, (_, i) => `Bash(${i})`) } })).ok, false);
   assert.equal(inspectToolSettings({ ...s, harnesses: { claude: { permissions_deny: [] } } }).ok, false);
 });
@@ -50,11 +54,13 @@ test("the section's signature is checked with the rules check: signed verifies, 
   const rules = { "secret-read": { mode: "block" } };
   const rulesSig = cryptoSign(null, signedPolicyBytes(payloadFor(1, digestRules(rules), "2026-10-15T00:00:00Z")), pair.privateKey).toString("base64");
   assert.equal(checkToolSettingsSignature({ ...s, workspace_id: WORKSPACE, issued_at: "2026-10-15T00:00:00Z", key_id: "ws-1", signature: rulesSig }, context).reason, "bad_signature");
-  // And the reverse: a section's signature carried onto a rules document verifies only with the section's digest as
-  // `rules_digest`, and no rules object hashes to that digest (its `type` is part of it), so the document is refused.
+  // The same revision and digest signed as rules (no kind) does not verify as tool settings: the domain is in the signed bytes.
+  assert.equal(checkToolSettingsSignature(sign(s, "2026-10-15T00:00:00Z", null), context).reason, "bad_signature");
+  // And the reverse: a section's signature carried onto a rules document with the section's digest fails cryptographically,
+  // before the rules digest check would refuse it too.
   const signedSection = sign(s);
   const forged = doc({ revision: 1, export_id: `rev-1-${INSTALLATION}`, rules_digest: s.settings_digest, workspace_id: WORKSPACE, issued_at: signedSection.issued_at, key_id: "ws-1", signature: signedSection.signature });
-  assert.equal(checkPolicySignature(forged, { ...context, managed: true }).result, "verified");
+  assert.equal(checkPolicySignature(forged, { ...context, managed: true }).reason, "bad_signature");
   assert.equal(inspectManaged(forged, { installationId: INSTALLATION, currentRevision: null }).ok, false);
 });
 
