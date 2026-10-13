@@ -1,5 +1,139 @@
 # @scopebond/hook
 
+## 0.23.0
+
+### Minor Changes
+
+- fef136d: GitHub Copilot's other surfaces: VS Code agent mode and the Copilot cloud coding agent. Neither is verified on a live
+  install yet, and nothing claims more: their capability cells are now computed like the CLI's (configured and unverified
+  until a real run proves them, never verified from a local run), labelled "cooperative · prevents if honored · a hook
+  timeout fails open", and carry the gap "verified on a live install: not yet".
+  
+  - The Copilot hook file also registers `Stop`, which VS Code sends at the end of a turn. It marks the session active and
+    prints nothing, so it never blocks or prolongs a turn.
+  - A Copilot deny or ask is written in both shapes Copilot's surfaces read: the top-level `permissionDecision` and
+    `permissionDecisionReason` (Copilot CLI, VS Code's Copilot session target) and `hookSpecificOutput` (VS Code's Local
+    harness). A deny still exits 2 with the reason on stderr.
+  - The cloud agent is recognised by no user-level Scopebond hook file for Copilot together with the sandbox's own
+    environment (`COPILOT_AGENT_PROMPT` or `GITHUB_COPILOT_API_TOKEN` present, by presence only) or `GITHUB_ACTIONS=true`.
+    There an "ask" is answered as a deny that says why ("this action needs a person's approval, and the Copilot cloud agent
+    has no one to ask, so it is denied"). Both ways the heuristic can be wrong end in a deny.
+  - VS Code's Local harness sends tool names that GitHub and VS Code do not publish; such a name is recorded as an
+    unevaluated `tool.<name>` and never answered "allow" (strict mode denies it).
+  - `capabilities --prove --copilot` opens an hour's recording, on this computer, of the tool names each Copilot surface
+    actually sends (`copilot-tool-names.json` beside the policy: surface, event, tool name, argument names, never values),
+    and lists what was seen, so a person can confirm the names on a real install.
+  - Each Copilot hook entry also carries `command` (the `bash` form) and `timeout: 60`, the fields VS Code's Local harness
+    documents; the Copilot CLI ignores `command` while `bash`/`powershell` are present and reads `timeout` only without
+    `timeoutSec`. Whether Local runs the file at all is not known until a live run records it.
+  - A write that sets `chat.useHooks`, `chat.hookFilesLocations` or `chat.useClaudeHooks` in a VS Code settings file
+    (`.vscode/settings.json`, `*.code-workspace`, VS Code or VS Code Insiders user `settings.json`), through a tool Scopebond
+    maps in any coding agent, is refused like a write of a hook file; other edits of those files are untouched.
+- 4bad113: GitHub Copilot CLI is now a supported coding tool. `install --copilot` writes Scopebond's own hook file to
+  `~/.copilot/hooks/scopebond.json` (under `COPILOT_HOME` when it is set), and `init --copilot` writes
+  `.github/hooks/scopebond.json` in a project; a plain `install` adds Copilot when it finds the Copilot CLI (the `copilot`
+  program on PATH, or the CLI's `settings.json` or `logs`). The file registers `PreToolUse`, `PostToolUse`,
+  `PostToolUseFailure`, `SessionStart` and `SessionEnd` with a `bash` and a `powershell` command (which passes the hook's
+  exit code on) and `timeoutSec: 60`. Copilot's tools are checked as their Claude Code counterparts: `bash`/`powershell` and
+  what `write_bash` types as shell commands, `view`/`grep`/`glob` as reads, `create`/`edit`/`str_replace_editor`/`apply_patch`
+  as writes, `web_fetch` as a recorded fetch; any other tool is recorded and not evaluated. A deny answers
+  `permissionDecision: "deny"` with the reason and exits 2. Session and after-action events feed observations as they do for
+  Claude Code.
+  
+  Copilot is described as it is: cooperative, prevents if honored, and a hook timeout fails open in Copilot. Each check
+  therefore has its own 45 s deadline, inside the 60 s it installs, and denies when it cannot decide in time. `status`,
+  `doctor` and the capability manifest (new host variants `copilot_cli`, `copilot_vscode`, `copilot_cloud`) say so. VS Code
+  agent mode and the cloud coding agent are not covered yet: their manifest cells are unsupported, and where Scopebond is not
+  set up (the cloud agent's sandbox) the deny says so.
+  
+  Scopebond's always-on protection now covers Copilot's hook settings in every coding agent: writes to `~/.copilot/hooks/`,
+  `~/.copilot/settings.json`, `~/.copilot/mcp-config.json`, `.github/hooks/` (every file in it),
+  `.github/copilot/settings.json` and `.github/copilot/settings.local.json`, removing those folders, and starting `copilot`
+  with `COPILOT_HOME` moved are denied. An installed policy is upgraded in memory; `rules.json` written by an earlier version
+  keeps its own list for the recording rule.
+- bf5be26: Records no longer name your account. Before an action is signed, the hook writes your home folder as `~` in the working
+  folder, file paths and the command line (a project in your home folder is recorded as `~/repo`), and the account name
+  in any other home-folder path as `~other`. The home folder is the one the system reports plus `HOME` and `USERPROFILE`;
+  a Windows home matches in any case and with either separator. Rules keep matching: rules written relative or with `~`
+  match as they are, and a rule that names your home folder by its full path is read as `~/…` when the rules load
+  (`rules protect <path>` now stores it that way).
+  
+  New: `SCOPEBOND_HOSTNAME_MODE` chooses the computer name a sign-in sends (`login`, and the Scopebond Agent's first
+  sign-in): `full` (the default, unchanged), `hash` (the first 12 hex characters of the SHA-256 of the host name) or `off`
+  (none).
+- c652c9e: Repository enrolment for runs with no person signed in: Claude Code on the web, Codex cloud tasks, the GitHub Copilot
+  coding agent and agent steps in GitHub Actions.
+  
+  `init --repo` writes only the committed hook files, `.claude/settings.json`, `.codex/hooks.json` and
+  `.github/hooks/scopebond.json`, each with the version-pinned `npx -y @scopebond/hook@<version> <agent> --from-repo`
+  command (the Copilot entries as `bash` commands, the only form its cloud agent runs). It merges with what each file holds
+  (in Claude Code and Codex only Scopebond's own entry leaves a matcher group), replaces an earlier Scopebond entry instead
+  of adding a second, writes no backups, keys or `.scopebond` folder, and writes the three files together: all change or
+  none does, and a file that is not JSON stops it first. `--dry-run` shows what it would write.
+  
+  A hook with `SCOPEBOND_REPO_TOKEN` set and no connection of its own sets itself up in the home folder, proves possession
+  of its fresh keys over the token's digest and the time, exchanges the token at `POST /v1/repository/enroll` for a
+  short-lived delivery credential for that one repository (`cloud.json`, marked `"source": "repository"` with a fingerprint
+  of the token, never the token), and denies every call until the workspace's rules have loaded once. A credential that ran
+  out, or one made with another repository's token, is set aside with its folder and the repository enrols again with fresh
+  keys. A person's own connection always wins and is looked for before the token is read. `SCOPEBOND_URL` names a workspace
+  other than `https://cloud.scopebond.com`. The token is never written, printed or sent anywhere else; a refused or
+  unreachable enrolment denies the call with the reason.
+  
+  A committed (`--from-repo`) entry on a computer with no repository token and no Scopebond connection checks nothing: it
+  says so once on stderr, records nothing and leaves the decision to the agent. A token or a person's connection keeps the
+  usual checks. The GitHub Copilot "not set up" deny and the Copilot coverage note name the repository token. These cloud
+  runs are not verified yet, and the committed files are not a boundary on their own: keep the GitHub Action as the merge
+  check.
+- 7687816: Robustness. Secret scrubbing reads a header value once: a 100 kB run of `name:name:…` took seconds and now takes milliseconds. A hook call that has not decided shortly before the coding agent's own hook time limit (55 s for Claude Code, 45 s for GitHub Copilot, 28 s for Codex and Cursor) now denies instead of being left to time out, which an agent treats as "run it"; `SCOPEBOND_HOOK_DEADLINE_MS` can only shorten the deadline. The person's wait in the Scopebond window shrinks to what the deadline leaves, a hook call waits at most 8 s for the local log's lock (2 s for the observation log), and the single executable now fails closed on a crash too. Trusted projects are keyed by their canonical path, so a project reached through a link (or macOS's `/var` and `/private/var`) is one project; pins written before are still read. A bypass corpus (`test/bypass-corpus/`) records what the hook blocks or names for indirect forms of blocked actions, and its known gaps. Every call to the workspace (sign-in and enrollment, rules check and confirmation, record delivery and summaries, observations, credential renewal, recovery, `doctor` checks, uninstall notice) now carries `x-scopebond-hook-version`.
+- 0b1a503: Signed workspace rules, dual mode. A rules document, and the workspace's new signed "no rules for this computer" answer (`{ type: "scopebond:managed-rules", managed: false, … }` with status 200), may carry an Ed25519 `signature` and `key_id` over the RFC 8785 canonical JSON of `{ v: 1, workspace, computer, revision, rules_digest, local_changes, managed, issued_at }`, built from this installation's own workspace and computer ids. Trusted keys are pinned in the release (`src/policy-keys.ts`, none yet; `SCOPEBOND_POLICY_KEYS_JSON` adds keys; an entry with an inverted window or an unreadable key is left out and `doctor` says why). In `dual` mode (the default) a signed answer must verify, with a known key inside its validity window, for this computer and workspace, not older than the one in force and not more than an hour ahead of this computer's clock, under a key whose window holds both the answer's `issued_at` and the present moment; the version in force served again is checked too; an unsigned answer is accepted and recorded as `unsigned_policy`. In `enforce` mode (`SCOPEBOND_POLICY_SIGNATURE_MODE=enforce` or `policy_signature_mode` in `cloud.json`) an unsigned answer, a 204 or a 401 is refused and the policy in force stays. `status --json` reports `policy_signature: { mode, last, reason }`, `status` and `doctor` show it, and each rules check sends it (`x-scopebond-policy-signature`).
+- ad9512d: Target profiles: the hook now understands what a coding agent reaches through cloud, Kubernetes, database, deployment and secret tools, and records it as Action Taxonomy 1.1 actions beside the command or MCP call itself.
+  
+  - **Command-line tools** (`src/typed-targets.ts`): `aws`, `gcloud`, `az`, `kubectl`, `helm`, `terraform`/`tofu`/`terragrunt`, `pulumi`, `cdk`, `sst`, `wrangler`, `vercel`, `fly`, `gh`, the migration tools (prisma, drizzle-kit, rails/rake, alembic, flyway, knex, sequelize) and `eb`, `serverless`, `heroku`, `vault`, `doppler` and `op`, directly or through `npx`, `pnpm exec`, `npm exec`, `uv run`, `python -m` or `bundle exec` (past the runner's own options, such as `pnpm --filter db` or `uv run --env-file .env`). A known subcommand becomes `cloud.resource.create|modify|delete`, `k8s.apply|delete|exec`, `db.migrate`, `deploy.release`, `secret.write`, `iam.change` or (for a `gh api` call that changes something) `net.fetch`. An option the reader does not know does not hide a destructive command: when one of the tool's destructive words is among the command's words, the action is still recorded with its names left out (a deployment's environment `unknown`). Deterministic and pure; fixtures for every tool in `test/profiles/`.
+  - **MCP servers** (`src/mcp-profiles.ts`): `github` (pull requests, pushes, file writes), `filesystem`, `postgres`/`sqlite`/`mysql` (SQL classified, never recorded), `slack`, `playwright`/`puppeteer`, `fetch`, `linear` and `jira`. Cursor's `beforeMCPExecution` is read as Cursor sends it (`mcp_server_name`, `tool_input` as JSON text, the server's `url` or launch `command` naming the server when its configured name does not). Any other server or tool stays the plain `mcp.tool.call` it was.
+  - **Wiring.** A derived action rides as its own intent (`derived: true` on the mapped action, `derived_from` in its params) beside the unchanged `shell.exec` or `mcp.tool.call`, in the same action group, so the call's own intent is unchanged and rules bind on the derived action type directly. At most 20 derived intents per call are recorded one by one; beyond that, those of a type are folded into one with `count` and `members_digest` (a file read or written on this computer is never folded). Derived intents get no observation operation of their own.
+  - **Opt-in.** The runtime decides a derived intent only under a policy that opts in: one of its clauses names an action type Action Taxonomy 1.1 introduced, other than `db.exec` (which policies named before 1.1). Every policy this version compiles opts in through the target-rule clauses. Under any other policy (one an earlier version compiled, or a workspace policy carrying none of those types) every derived intent is recorded (`not_evaluated`) and every call is decided exactly as before.
+  - **Rules.** Five new rules, all recording by default and never blocking until a person (`rules enforce <rule>`) or the workspace turns them on: `cloud-destructive` (cloud deletes, `k8s.delete`, `k8s.exec`, and applying a saved infrastructure plan), `production-deploy` (deployments to production, or whose environment the command does not show), `secret-write`, `iam-change` and `database-migrate` (migrations that go down or reset, except against a development database the command names). Catalog classes H06–H10 (`MONITORED_HIGH`) name what each blocks; `classificationBlocks` is unchanged. A workspace rules document may set these rules and may leave them out (left out, they record); a document naming any other rule is still refused. `observe-targets` records cloud creates and changes, `k8s.apply`, `db.exec`, messages, work items and pull requests.
+  - **Behavior to know, under a policy that opts in.** An MCP `push_files`, `create_or_update_file` or `delete_file` to a branch is also a `git.push` to that branch, so `protect-branches` applies to it; the files it writes are in that repository, so they are recorded with `repo` and are not decided by this computer's file rules (Scopebond's own protection, the allowed folders). A `filesystem` MCP read or write is a `file.read`/`file.write`, so `protect-write`, `protect-read` and Scopebond's own protection apply to it. A `gh api` call that changes something (`POST`, `PUT`, `PATCH`, `DELETE`) is a `net.fetch` to `api.github.com` (or `--hostname`), and a `fetch` or browser MCP call is a `net.fetch` to its host, so an allowed-sites rule covers them; the list is matched exactly (`*.github.com` covers `api.github.com`, `github.com` does not). An MCP database query is a `db.exec`, which `protect-remote-database` (when on) checks like a remote one.
+- c9165a0: Managed tool settings. A workspace rules document may carry a `tool_settings` section, signed on its own with the workspace key and checked with the rules check itself (`checkToolSettingsSignature`; its signed payload adds `kind: "tool_settings"`, which a rules payload never carries, so a rules signature never passes for it, nor the reverse): for each AI coding tool, permission rules to allow and to deny and MCP servers it may or may not start, and `mode: "enforce" | "report"`. The hook carries it (a changed section at the same rules version is installed; an answer without one leaves the installed section), and sends the agent's version (`x-scopebond-agent-version`) and report (`x-scopebond-tool-settings`) on the agent's rules check. The Scopebond Agent applies a section only when a trusted key signed it (otherwise `refused: unsigned`, nothing written): to Claude Code's `~/.claude/settings.json` (`permissions.allow`/`deny`, `allowedMcpServers`/`deniedMcpServers`) and the Cursor CLI's `~/.cursor/cli-config.json` (`permissions.allow`/`deny`, denied servers as `Mcp(<name>:*)`); Codex (per-server settings in TOML, which Scopebond does not rewrite yet) and GitHub Copilot are reported as unsupported. Only entries Scopebond added are ever removed, a list it created goes once empty, other keys and entries stay, the file is backed up once and replaced atomically, a file that does not parse or is a symbolic link is never written, `CLAUDE_CONFIG_DIR` is honoured, rules without a section report `not_delivered`, replay marks are kept per workspace, entries with bidirectional or invisible formatting characters are refused, and each tool is reported as applied, drifted (setting names only, never values) or refused; a drift is put back only in enforce mode.
+- d401d09: Records now carry an optional `context` saying where they were produced: the coding agent (`claude`, `cursor` or
+  `codex`), its version when it reports one (Cursor), the model when the hook input names it, the same keyed session id
+  the observations carry (never the agent's own session id), the git remote `origin` as `host/owner/name` (no credentials,
+  no `.git`, never a local path, a machine name, an IP address or a server folder) and the branch. `log` shows it after each action, and `verify` checks it with the rest of
+  the receipt.
+  
+  A computer that is not connected always records it. A connected computer adds it only once its workspace says it reads
+  it: the rules check or a delivery answer carries the header `x-scopebond-receipt-context: 1`, kept as `receipt_context`
+  in the rules state. A full rules check answer without the header turns it off again, so a workspace that does not read
+  the context is never sent it. Signing in to a workspace forgets what the previous one said and checks the rules at once;
+  only an accepted delivery answer counts.
+  
+  Compatibility: A receipt check older than this release (`@scopebond/gateway` `verifyReceipt` and `validateEvidencePayload` before this version, `npx @scopebond/gateway verify`, or an earlier hook's `scopebond verify`) reports a receipt that carries `context` as invalid, because the payload's key list is closed; `evidence_version` stays `1.0`. Verify such receipts with a release that knows `context`. (`@scopebond/verify`'s `verifyReceiptSignature` checks only the signature and key binding, so it verifies them in any version.)
+- 6797bbd: Session budgets. A workspace may limit what one coding-agent session may do (for example an overnight run: at most 50
+  file writes, no pushes, no package installs, for two hours), set by an admin or approved from an "Ask an admin" request.
+  The hook reads `session_budgets` from the rules document, counts each tool call once per limit and per session before it
+  runs (a retry is not counted twice; a call a rule denies gives its count back), and denies a call beyond a limit, or once
+  starting another coding agent in a session with an enforce budget, with the reason "session budget". Package installs
+  in shell commands count as `package.install`; calls counted per tool call; a budget ends at its expiry and the rules alone
+  decide again; Cursor's after-edit events are counted, never refused; `count_shell_as_write` (off by default) counts other
+  shell commands as file writes. Receipts it counted or refused carry `payload.budget`.
+  The counts live in `session-budgets.json` in the hook's folder (bounded, written atomically under a lock); when they
+  cannot be read or written for a budgeted session, the limited actions are denied. A malformed list refuses the rules
+  document. Allowances may now be scoped to one session (`scope: "session"`, `session_id`); older hooks ignore them. The
+  rules check says `x-scopebond-hook-capabilities: allowances,session_budgets`.
+
+### Patch Changes
+
+- Updated dependencies [d401d09]
+- Updated dependencies [d401d09]
+- Updated dependencies [9c70fd6]
+- Updated dependencies [6797bbd]
+- Updated dependencies [6797bbd]
+- Updated dependencies [ad9512d]
+  - @scopebond/gateway@0.19.0
+  - @scopebond/policy-schema@0.8.0
+  - @scopebond/sdk@0.1.8
+
 ## 0.22.0
 
 ### Minor Changes

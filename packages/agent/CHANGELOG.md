@@ -1,5 +1,51 @@
 # @scopebond/agent
 
+## 0.8.0
+
+### Minor Changes
+
+- 8b9b474: The agent reports which AI coding tools are present on this computer and whether the Scopebond hook checks them. Every
+  self-check (daily, and on each start) now sends two optional lists: `tools` (Claude Code, Cursor, Codex, GitHub Copilot
+  CLI, Windsurf, Gemini CLI, Cline, OpenCode, Aider: id, installed version or null, `governed`, `settings_present`; at most
+  20) and `mcp_servers` (the names, only, of the MCP servers in each tool's user-level MCP configuration; at most 100, each
+  at most 120 characters). The inventory is reported by the agent over its authenticated connection and is not covered by
+  the self-check signature, so the workspace labels it "as reported on <day>". A tool counts as present only when its
+  user-level settings exist; `governed` means the hook is in the tool's user-level settings file (a project-only install
+  shows as not governed). A version is read from the global npm install's package manifest, or from `--version` for a
+  present tool whose program is known to answer it and exit (3 s limit); no tool is started in a way that opens a session.
+  No path, command, argument, environment value or address is sent. `scopebond-agent status` and `status --json` show the
+  tools.
+- c9165a0: Managed tool settings. A workspace rules document may carry a `tool_settings` section, signed on its own with the workspace key and checked with the rules check itself (`checkToolSettingsSignature`; its signed payload adds `kind: "tool_settings"`, which a rules payload never carries, so a rules signature never passes for it, nor the reverse): for each AI coding tool, permission rules to allow and to deny and MCP servers it may or may not start, and `mode: "enforce" | "report"`. The hook carries it (a changed section at the same rules version is installed; an answer without one leaves the installed section), and sends the agent's version (`x-scopebond-agent-version`) and report (`x-scopebond-tool-settings`) on the agent's rules check. The Scopebond Agent applies a section only when a trusted key signed it (otherwise `refused: unsigned`, nothing written): to Claude Code's `~/.claude/settings.json` (`permissions.allow`/`deny`, `allowedMcpServers`/`deniedMcpServers`) and the Cursor CLI's `~/.cursor/cli-config.json` (`permissions.allow`/`deny`, denied servers as `Mcp(<name>:*)`); Codex (per-server settings in TOML, which Scopebond does not rewrite yet) and GitHub Copilot are reported as unsupported. Only entries Scopebond added are ever removed, a list it created goes once empty, other keys and entries stay, the file is backed up once and replaced atomically, a file that does not parse or is a symbolic link is never written, `CLAUDE_CONFIG_DIR` is honoured, rules without a section report `not_delivered`, replay marks are kept per workspace, entries with bidirectional or invisible formatting characters are refused, and each tool is reported as applied, drifted (setting names only, never values) or refused; a drift is put back only in enforce mode.
+
+### Patch Changes
+
+- bf5be26: Records no longer name your account. Before an action is signed, the hook writes your home folder as `~` in the working
+  folder, file paths and the command line (a project in your home folder is recorded as `~/repo`), and the account name
+  in any other home-folder path as `~other`. The home folder is the one the system reports plus `HOME` and `USERPROFILE`;
+  a Windows home matches in any case and with either separator. Rules keep matching: rules written relative or with `~`
+  match as they are, and a rule that names your home folder by its full path is read as `~/…` when the rules load
+  (`rules protect <path>` now stores it that way).
+  
+  New: `SCOPEBOND_HOSTNAME_MODE` chooses the computer name a sign-in sends (`login`, and the Scopebond Agent's first
+  sign-in): `full` (the default, unchanged), `hash` (the first 12 hex characters of the SHA-256 of the host name) or `off`
+  (none).
+- Updated dependencies [fef136d]
+- Updated dependencies [4bad113]
+- Updated dependencies [bf5be26]
+- Updated dependencies [c652c9e]
+- Updated dependencies [7687816]
+- Updated dependencies [0b1a503]
+- Updated dependencies [ad9512d]
+- Updated dependencies [c9165a0]
+- Updated dependencies [d401d09]
+- Updated dependencies [d401d09]
+- Updated dependencies [9c70fd6]
+- Updated dependencies [6797bbd]
+- Updated dependencies [6797bbd]
+  - @scopebond/hook@0.23.0
+  - @scopebond/gateway@0.19.0
+  - @scopebond/sdk@0.1.8
+
 ## 0.7.0
 
 ### Minor Changes

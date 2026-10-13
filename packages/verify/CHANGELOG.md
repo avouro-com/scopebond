@@ -1,5 +1,16 @@
 # @scopebond/verify
 
+## 0.6.6
+
+### Patch Changes
+
+- 9c70fd6: Remove internal reference identifiers from comments and fixtures.
+- Updated dependencies [d401d09]
+- Updated dependencies [9c70fd6]
+- Updated dependencies [6797bbd]
+- Updated dependencies [ad9512d]
+  - @scopebond/policy-schema@0.8.0
+
 ## 0.6.5
 
 ### Patch Changes
