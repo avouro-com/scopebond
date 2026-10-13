@@ -162,3 +162,25 @@ export function admitSigned(check: SignatureCheck, mode: SignatureMode, at: stri
   }
   return { ok: false, state: { mode, last: "refused", reason: check.reason, at }, reason: check.reason, message: `${check.message}; the rules in force stay` };
 }
+
+/** What `checkToolSettingsSignature` needs: this computer's workspace and installation ids, and the `issued_at` of the tool
+ *  settings last applied (an older section is a replay). */
+export interface ToolSettingsSignatureContext {
+  workspace: string | null;
+  computer: string;
+  lastIssuedAt: string | null;
+  keys?: PolicyKey[];
+  now?: Date;
+}
+
+/** Check the signature of a rules document's `tool_settings` section with the rules check itself: the same payload
+ *  (`{ v: 1, workspace, computer, revision, rules_digest, local_changes, managed, issued_at }`), with the section's revision,
+ *  its `settings_digest` as the digest, `local_changes` false and `managed` true. The section's digest covers its own `type`,
+ *  so it never equals the digest of a rules object: a rules signature cannot pass for tool settings, nor the reverse.
+ *  There is no dual mode here: anything but `verified` means the section is not applied. */
+export function checkToolSettingsSignature(section: Record<string, unknown>, context: ToolSettingsSignatureContext): SignatureCheck {
+  return checkPolicySignature({
+    revision: section.revision, rules_digest: section.settings_digest, local_changes: false, installation_id: context.computer,
+    workspace_id: section.workspace_id, issued_at: section.issued_at, key_id: section.key_id, signature: section.signature,
+  }, { workspace: context.workspace, computer: context.computer, managed: true, lastIssuedAt: context.lastIssuedAt, keys: context.keys, now: context.now });
+}

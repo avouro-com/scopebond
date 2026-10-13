@@ -156,6 +156,33 @@ temporary folder, for at most 3 seconds; a tool is never started in a way that o
 effort are not confirmed against the tool's current documentation: Windsurf's folder, and Cline's VS Code storage
 folder, which follows VS Code's naming for the extension's id.
 
+## Tool settings from the workspace
+
+A workspace can keep lists in the user-level settings of the AI coding tools on a computer: permission rules to allow
+and to deny, and MCP servers a tool may or may not start. Nothing else: never prompts, instruction files or a model
+choice. The lists arrive inside the workspace's rules document as a `tool_settings` section that is signed on its own,
+with the same key and the same check as the rules (`checkToolSettingsSignature` in `@scopebond/hook`). The agent applies
+a section only when it is signed by a key this release trusts; an unsigned section, or one signed by a key it does not
+trust, is never applied, in any mode, and is reported as `refused: unsigned`.
+
+| Tool | File | What the agent sets |
+|---|---|---|
+| Claude Code | `~/.claude/settings.json` | `permissions.allow`, `permissions.deny`, `allowedMcpServers` and `deniedMcpServers` (`{ "serverName": … }` entries) |
+| Cursor CLI | `~/.cursor/cli-config.json` | `permissions.allow`, `permissions.deny`; a denied MCP server is the deny entry `Mcp(<name>:*)`. Cursor documents no list of permitted MCP servers, so that list is refused as unsupported |
+| Codex, GitHub Copilot CLI | — | Nothing: refused as unsupported. Codex keeps its MCP servers in TOML, which the agent does not rewrite, and documents no permission lists; Copilot CLI takes tool permissions as command-line flags only |
+
+The workspace's entries are added to those lists, and entries the agent placed earlier that the workspace no longer
+sets are taken out; every other key and entry in the file stays, in the file's own indentation and line endings. The
+first change keeps a copy (`<file>.scopebond-backup`; an existing copy is never replaced), every write replaces the
+file through a temporary file, and a file that does not parse as JSON, or whose lists are not lists, is never written
+(`refused: unparseable`). A tool whose folder does not exist is reported as `refused: not_installed` and nothing is
+created.
+
+Each rules check reports, per tool, `applied`, `drifted` (with the names of the settings that no longer hold the
+workspace's entries, for example `permissions.deny`, never their values) or `refused` and why
+(`x-scopebond-tool-settings`). When the section says `mode: "enforce"`, a drift is put back and reported as restored;
+with `mode: "report"` it is reported and left alone. The state is kept in `tool-settings.json` in the Scopebond folder.
+
 ## Local control channel
 
 The agent listens on `127.0.0.1` only, on a random port, and every request must carry a random token. Port, token and
