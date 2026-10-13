@@ -384,8 +384,10 @@ export function backupHarnessConfig(file: string): string | null {
 
 /** The GitHub Copilot events Scopebond registers. The PascalCase names make Copilot send the VS Code-compatible payload
  *  (`hook_event_name`, `session_id`, `tool_name`, `tool_input`), the same shape Claude Code sends. `PreToolUse` decides;
- *  the others only feed session and after-action observations. */
-export const COPILOT_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "SessionStart", "SessionEnd"] as const;
+ *  the others only feed session and after-action observations. `Stop` (the agent finished a turn) is the one event VS
+ *  Code's Local harness sends at the end of a turn, since it has no `SessionEnd`; it marks the session active and prints
+ *  nothing, so it never blocks or prolongs a turn. */
+export const COPILOT_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "SessionStart", "SessionEnd", "Stop"] as const;
 
 /** The PowerShell spelling of a hook command. Copilot runs an entry's `powershell` command on Windows, and PowerShell
  *  reads a command that starts with a quoted path as a string, not a program: the call operator `&` runs it. `npx` there

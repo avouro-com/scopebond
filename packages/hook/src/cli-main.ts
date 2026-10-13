@@ -27,6 +27,7 @@ import { createHash } from "node:crypto";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { replaceFile } from "./safe-fs.js";
+import { copilotAnswer, copilotCloudAgent, copilotSurface, surfaceSignals, recordCopilotProbe, openCopilotProbe, readCopilotProbe, renderCopilotProbe, COPILOT_PROBE_FILE, type CopilotAnswer } from "./copilot-surface.js";
 import { scaffold, harnessSnippet, placeHook, coverWithoutNpx, migrateToMonitorDefault, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
@@ -158,15 +159,19 @@ function denyClaude(reason: string): never {
 /** GitHub Copilot: the decision on stdout, and exit 2, which Copilot treats as a deny whatever stdout says, so a deny holds
  *  even if the JSON were lost. `permissionDecisionReason` is required with a deny; it is what the agent is told. */
 function denyCopilot(reason: string): never {
-  process.stdout.write(JSON.stringify({ permissionDecision: "deny", permissionDecisionReason: reason }) + "\n");
-  process.stderr.write(`${reason.startsWith("Scopebond") ? reason : `Scopebond: ${reason}`}\n`);
-  process.exit(2);
+  answerCopilot(copilotAnswer("deny", reason, false));
 }
 
-/** GitHub Copilot's "ask": the CLI asks the person; the cloud coding agent, with no one to ask, treats it as a deny. */
+/** GitHub Copilot's "ask": the CLI asks the person. The cloud coding agent, with no one to ask, treats "ask" as a deny
+ *  anyway; there Scopebond answers the deny itself, with the reason (see `copilotAnswer`). */
 function askCopilot(reason: string): never {
-  process.stdout.write(JSON.stringify({ permissionDecision: "ask", permissionDecisionReason: reason }) + "\n");
-  process.exit(0);
+  answerCopilot(copilotAnswer("ask", reason, copilotCloudAgent()));
+}
+
+function answerCopilot(answer: CopilotAnswer): never {
+  process.stdout.write(answer.stdout);
+  if (answer.stderr) process.stderr.write(answer.stderr);
+  process.exit(answer.exitCode);
 }
 
 /** Codex accepts the structured deny response on a successful hook exit. Keeping
@@ -337,6 +342,7 @@ async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never
         switch (input.hook_event_name) {
           case "SessionStart": if (sessionId) emitter.sessionStart(sessionId, cwd); break;
           case "SessionEnd": if (sessionId) emitter.sessionStop(sessionId, stopReasonFromHost(input.reason)); break;
+          case "Stop": if (sessionId) emitter.activity(sessionId, cwd); break;
           case "PostToolUse": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, "ok"); break; }
           case "PostToolUseFailure": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, exitFromClaudeFailure(input.is_interrupt)); break; }
         }
@@ -365,6 +371,25 @@ function copilotCallId(call: Record<string, unknown>): string {
   return `copilot-${createHash("sha256").update(canonical).digest("hex").slice(0, 32)}`;
 }
 
+/** Copilot's observation-only events: Claude Code's, and `Stop` (the agent finished a turn), which only marks the session
+ *  active. None of them prints anything, so a `Stop` is never blocked and never forced to continue. */
+const COPILOT_OBSERVATION_EVENTS = new Set([...CLAUDE_OBSERVATION_EVENTS, "Stop"]);
+
+/** While a person has a tool-name recording window open (`capabilities --prove --copilot`), note which surface sent this
+ *  call, the tool's name exactly as sent, and what Scopebond made of it. Nothing at all happens with no window open. */
+function noteCopilotToolName(raw: Record<string, unknown>, call: Record<string, unknown>): void {
+  try {
+    if (call.tool_name === undefined) return;
+    const dir = resolveConfigDir(typeof raw.cwd === "string" ? raw.cwd : undefined);
+    if (!existsSync(join(dir, COPILOT_PROBE_FILE))) return;
+    const mapped = mapCopilotCall(call);
+    recordCopilotProbe(dir, {
+      payload: raw, surface: copilotSurface(raw), signals: surfaceSignals(raw),
+      mapped_as: [...new Set(mapped.map((m) => m.intent.action_type))], evaluated: mapped.length > 0 && mapped.every((m) => m.evaluated),
+    });
+  } catch { /* a diagnostic only */ }
+}
+
 /** `copilot`: one GitHub Copilot hook event, JSON on stdin. `PreToolUse` decides; the session and after-action events only
  *  feed observations. Copilot lets the action run when a hook times out, so the decision has a deadline of its own, inside
  *  the entry's `timeoutSec`: a check that has not finished by then is denied rather than left to time out. */
@@ -379,9 +404,10 @@ async function runCopilot(): Promise<void> {
   try { parsed = JSON.parse(raw); } catch { clearTimeout(deadline); denyCopilot("hook received invalid JSON on stdin"); }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) { clearTimeout(deadline); denyCopilot("hook received a payload that is not a JSON object"); }
   const call = copilotAsClaude(parsed as Record<string, unknown>);
+  noteCopilotToolName(parsed as Record<string, unknown>, call);
   if (call.tool_name !== undefined && callId(call) === undefined) call.tool_use_id = copilotCallId(call);
   const event = typeof call.hook_event_name === "string" ? call.hook_event_name : "";
-  if (CLAUDE_OBSERVATION_EVENTS.has(event)) { clearTimeout(deadline); await runClaudeLifecycle(call); }
+  if (COPILOT_OBSERVATION_EVENTS.has(event)) { clearTimeout(deadline); await runClaudeLifecycle(call); }
   await runPreToolUse(mapCopilotCall, denyCopilot, JSON.stringify(call), "copilot", deadlineAt);
 }
 
@@ -1715,6 +1741,16 @@ function runDedupe(args: string[]): void {
   for (const e of result.shared) console.log(`Left alone: ${describeEntry(e)} is shared with the team through git; actions in this project are recorded twice until the team removes that entry.`);
 }
 
+/** What a person does after `capabilities --prove --copilot` to confirm Copilot's tool names on a real install. */
+const copilotProbeSteps = [
+  "Now, in each Copilot surface you use, start a new session and ask the agent to:",
+  "  1. run `git status`   2. read a file   3. create a file and then edit it   4. fetch https://example.com",
+  "  5. create the file .github/hooks/probe.json (Scopebond always denies this, saying why)",
+  "Surfaces: the Copilot CLI; VS Code agent mode with the Copilot session target and with the Local",
+  "session target. Then run this command again: every tool name each surface sent is listed with",
+  "what Scopebond made of it. A name marked \"recorded, not evaluated\" is not checked yet.",
+].join("\n");
+
 /** `capabilities`: the manifest of what this hook can honestly claim, cell by cell.
  *  `--prove` runs the safe fixtures in temp directories (never touching agent settings);
  *  `--save` records the result beside the policy; `--json` prints the manifest. */
@@ -1772,6 +1808,22 @@ async function runCapabilities(args: string[]): Promise<void> {
   else {
     console.log(renderManifest(manifest));
     if (args.includes("--prove")) console.log(`\nFixture run ${failed ? "FAILED - see degraded cells" : "passed"}. It used temporary directories only; no agent setting or policy was changed and no key was modified.`);
+  }
+  // `--prove --copilot`: the live half. Fixtures cannot say which tool names a real Copilot surface sends, so this opens
+  // (or extends) a recording window on this computer and shows what the surfaces have sent so far. Text goes to stderr
+  // with --json, so the manifest on stdout stays one JSON document.
+  if (args.includes("--prove") && args.includes("--copilot")) {
+    const out = args.includes("--json") ? console.error : console.log;
+    if (!existsSync(join(dir, "policy.json"))) { out(`\nno Scopebond setup in ${dir} to record Copilot's tool names into - run \`${cliCommand("install --copilot")}\` first.`); }
+    else {
+      const before = readCopilotProbe(dir);
+      const probe = openCopilotProbe(dir);
+      out("");
+      out(renderCopilotProbe(probe, join(dir, COPILOT_PROBE_FILE)));
+      out("");
+      out(before ? "Recording extended by an hour." : "Recording is now open for an hour.");
+      out(copilotProbeSteps);
+    }
   }
   process.exitCode = failed ? 1 : 0;
 }
@@ -2085,7 +2137,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "or in an enabled Claude Code plugin beside a settings entry. dedupe keeps the user-level entry",
       "(or the scope you name) and removes the others; other tools' hooks are left alone.",
     ] },
-  { name: "capabilities", args: "[--prove [--save]] [--json]",
+  { name: "capabilities", args: "[--prove [--save] [--copilot]] [--json]",
     summary: "what this hook can honestly claim, per agent host, action and phase",
     detail: [
       "Prints the capability manifest: for Claude Code, Codex, Cursor and GitHub Copilot, each action type and",
@@ -2093,6 +2145,9 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "Unsupported stays unsupported. A cell is never verified from a local run alone.",
       "--prove runs safe fixtures (allow, deny, signature, action group) in temporary",
       "directories; it does not read or change any agent settings. --save records the result.",
+      "--prove --copilot also opens an hour's recording of the tool names GitHub Copilot actually",
+      "sends from each surface (CLI, VS Code, cloud agent) on this computer, and lists what it has",
+      "seen so far: names, events and argument names only, never their values.",
     ] },
   { name: "policy", args: "load <export.json> [--yes]",
     summary: "check a policy exported from your workspace and make it the active policy here",
