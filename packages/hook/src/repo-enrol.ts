@@ -8,7 +8,7 @@
 // user credential exists.
 
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
@@ -86,6 +86,27 @@ function expired(connection: HookConnection, now: number): boolean {
   return !Number.isFinite(at) || at - now < 60_000;
 }
 
+/** Which token a repository connection was made with, without keeping the token: SHA-256 of the token's SHA-256. */
+export function tokenFingerprint(token: string): string {
+  return createHash("sha256").update(createHash("sha256").update(token).digest("hex")).digest("hex");
+}
+
+/** A repository connection this token may keep using: made with this same token, and not expired. */
+function usable(connection: HookConnection | null, fingerprint: string, now: number): connection is HookConnection {
+  return !!connection && isRepositoryConnection(connection) && (connection as { token_fingerprint?: unknown }).token_fingerprint === fingerprint
+    && !expired(connection, now);
+}
+
+/** Move a repository connection's whole folder aside (keys, connection, rules), so the next enrolment starts with fresh keys:
+ *  the workspace never takes a key twice. Records in the old folder stay there. */
+function setAside(dir: string, now: number): void {
+  try { renameSync(dir, `${dir}.retired-${now}`); }
+  catch (error) {
+    throw new RepositoryEnrollmentError(`could not set aside the previous repository connection in ${dir} (${error instanceof Error ? error.message : String(error)})`,
+      { repair: `remove ${dir} in this environment, then try the action again` });
+  }
+}
+
 const RESPONSE_LIMIT = 65_536;
 
 /** Exchange the repository token for a delivery credential and keep it as this folder's connection (cloud.json). The
@@ -136,7 +157,7 @@ export async function enrollRepository(
   }
   const { ingest_url: offered, ...enrolled } = body;
   const ingest = safeOrigin(offered);
-  const connection = { url: options.url, ...enrolled, ...(ingest ? { ingest_url: ingest } : {}), source: "repository" } as unknown as HookConnection;
+  const connection = { url: options.url, ...enrolled, ...(ingest ? { ingest_url: ingest } : {}), source: "repository", token_fingerprint: tokenFingerprint(options.token) } as unknown as HookConnection;
   forgetCached(connectionPath(dir));
   replaceFile(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n");
   forgetWorkspaceAnnouncements(dir);
@@ -162,33 +183,39 @@ function safeOrigin(value: unknown): string | null {
   } catch { return null; }
 }
 
-/** Where a tool call's records go when a repository token is set: the folder the hook already uses when it has a
- *  connection (a person's sign-in wins), else that folder when it is set up or named by SCOPEBOND_HOOK_DIR, else the user
- *  home (a sandbox: the repository checkout stays clean). Enrols the repository when there is no connection yet, or when
- *  the repository's own connection has expired. Returns `dir` unchanged when no token is set. */
+/** Where a tool call's records go when a repository token is set. A person's own connection always wins, and is looked for
+ *  before the token is even read. Otherwise: the folder the hook already uses when it holds a repository connection or is
+ *  set up (or is named by SCOPEBOND_HOOK_DIR), else the user home (a sandbox: the repository checkout stays clean).
+ *  A repository connection is kept only while it is unexpired and was made with this same token; otherwise its folder is
+ *  set aside and the repository enrols again with fresh keys. Returns `dir` unchanged when no token is set. */
 export async function repositoryConnectionDir(
   dir: string,
-  options: { home: string; repository?: () => string | null; fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv; now?: () => number; afterEnroll?: (dir: string) => Promise<void> },
+  options: { home: string; repository?: () => string | null; fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv; now?: () => number },
 ): Promise<string> {
   const env = options.env ?? process.env;
-  const token = repositoryToken(env);
-  if (!token) return dir;
-  const now = (options.now ?? Date.now)();
   const existing = loadConnection(dir);
-  if (existing && !(isRepositoryConnection(existing) && expired(existing, now))) return dir;
+  if (existing && !isRepositoryConnection(existing)) return dir;
+  if (!env[REPO_TOKEN_ENV]?.trim()) return dir;
+  const token = repositoryToken(env) ?? "";
+  const fingerprint = tokenFingerprint(token);
+  const now = (options.now ?? Date.now)();
   const target = existing || existsSync(join(dir, "policy.json")) || env.SCOPEBOND_HOOK_DIR ? dir : options.home;
-  if (target !== dir) {
-    // Another call in this sandbox may have enrolled already.
-    const there = loadConnection(target);
-    if (there && !(isRepositoryConnection(there) && expired(there, now))) return target;
-  }
+  const there = target === dir ? existing : loadConnection(target);
+  if (there && !isRepositoryConnection(there)) return target;
+  if (usable(there, fingerprint, now)) return target;
+  // Expired, or made with another repository's token: fresh keys in a fresh folder.
+  if (there) setAside(target, now);
   try {
     await enrollRepository(target, { token, url: repositoryWorkspaceUrl(env), repository: options.repository?.() ?? null, fetchImpl: options.fetchImpl, now: options.now });
   } catch (error) {
-    // Two tool calls at once: the other one enrolled these keys first and its connection is on disk now.
-    if (error instanceof RepositoryEnrollmentError && error.code === "gateway_key_conflict" && loadConnection(target)) return target;
+    // Two tool calls at once: the other one enrolled these same keys first. Only its connection, for this token, unexpired
+    // and naming the key on disk, is taken; anything else is the refusal it is.
+    if (error instanceof RepositoryEnrollmentError && error.code === "gateway_key_conflict") {
+      const landed = loadConnection(target);
+      const keyFile = join(target, "attester.key");
+      if (usable(landed, fingerprint, now) && existsSync(keyFile) && landed.attester_kid === loadOrCreateAttester({ file: keyFile }).attester.kid) return target;
+    }
     throw error;
   }
-  if (options.afterEnroll) { try { await options.afterEnroll(target); } catch { /* the rules check runs again on the next call */ } }
   return target;
 }

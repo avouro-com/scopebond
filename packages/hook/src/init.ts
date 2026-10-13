@@ -2,7 +2,8 @@
 // gateway countersigning key and a starter policy. Keys and receipts stay on the
 // machine; no credentials are handled.
 
-import { copyFileSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync, existsSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ensurePrivateDir, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
@@ -12,7 +13,7 @@ import {
   readHarnessConfig, projectHarnessFile, localHarnessFile, harnessEntryMatches, backupHarnessConfig,
   gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
   userHarnessFile, isNpxHookCommand, hookCommandResolves, nativeHookCommand, addCopilotHooks, copilotHookEntry,
-  COPILOT_EVENTS, type Harness,
+  COPILOT_EVENTS, harnessEntryCommand, isScopebondHookCommand, type Harness,
 } from "./install.js";
 import { cliCommand, hookCommand } from "./version.js";
 import { loadOrCreateDigestKey } from "./minimize.js";
@@ -197,11 +198,18 @@ export function installHarness(
   /** `backup: false`: no `.scopebond-backup` copy beside the file (a committed repository file has git for that). */
   options: { backup?: boolean } = {},
 ): string {
-  const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
   const file = target ?? projectHarnessFile(harness, cwd);
   const config = readHarnessConfig(file); // throws, leaving the file intact, if it is not a JSON object
   if (options.backup !== false) backupHarnessConfig(file); // keep the user's original beside it before the first change
   mkdirSync(dirname(file), { recursive: true });
+  mergeHarnessConfig(harness, config, command);
+  writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+  return file;
+}
+
+/** Put Scopebond's entry for `harness` into a parsed config (in place), replacing an earlier Scopebond entry. */
+function mergeHarnessConfig(harness: Harness, config: Record<string, unknown>, command?: string): void {
+  const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   const forHarness = (h: Harness): string =>
     command ? command.replace(/\b(claude|cursor|codex|copilot)$/, h) : hookCommand(h);
@@ -229,15 +237,30 @@ export function installHarness(
     const entry = harness === "codex"
       ? { hooks: [{ type: "command", command: codexCmd, timeout: 30, statusMessage: "Checking this action with Scopebond" }] }
       : { matcher: "*", hooks: [{ type: "command", command: claudeCmd }] };
-    if (existing >= 0) list[existing] = entry; else list.push(entry);
+    // Only Scopebond's own hook leaves a group: other hooks in the same group, and that group's matcher, stay as they are.
+    const ours = (h: unknown): boolean => isScopebondHookCommand(harnessEntryCommand(h));
+    const kept: unknown[] = [];
+    for (const group of list) {
+      if (isRecord(group) && Array.isArray(group.hooks) && group.hooks.some(ours)) {
+        const others = group.hooks.filter((h) => !ours(h));
+        if (others.length) kept.push({ ...group, hooks: others });
+      } else if (!entryMatches(group)) kept.push(group);
+    }
+    kept.splice(existing >= 0 ? Math.min(existing, kept.length) : kept.length, 0, entry);
+    list.splice(0, list.length, ...kept);
   }
-  writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-  return file;
 }
 
 /** The coding agents `init --repo` writes a committed hook file for: the ones whose cloud or CI runs read a project file
  *  (Claude Code on the web and in GitHub Actions, Codex cloud tasks, the Copilot coding agent). Cursor has no such run. */
 export const REPO_HARNESSES: readonly Harness[] = ["claude", "codex", "copilot"];
+
+/** The argument the committed (repository) hook entries carry: a run with no repository token and no person's connection
+ *  is "not governed here" rather than refused (see cli-main.ts). */
+export const REPO_HOOK_MARKER = "--from-repo";
+
+/** The committed hook command for one agent. */
+export const repositoryHookCommand = (harness: Harness): string => `${hookCommand(harness)} ${REPO_HOOK_MARKER}`;
 
 /** One file `init --repo` wrote. */
 export interface RepoHookFile { harness: Harness; file: string; command: string; changed: boolean }
@@ -246,16 +269,38 @@ export interface RepoHookFile { harness: Harness; file: string; command: string;
  *  of REPO_HARNESSES, merging with what each file already holds (other hooks and settings are kept; an earlier Scopebond
  *  entry is replaced, never duplicated). Nothing machine-specific is written and no keys are made: in a sandbox the hook
  *  sets itself up on its first call, from the repository token. A file that is not a JSON object throws, untouched. */
-export function installRepositoryHooks(cwd: string): RepoHookFile[] {
-  // Every file is read first, so one that is not JSON stops the command before any file is written.
-  for (const harness of REPO_HARNESSES) readHarnessConfig(projectHarnessFile(harness, cwd));
-  return REPO_HARNESSES.map((harness) => {
+export function installRepositoryHooks(cwd: string, fsOps: { rename?: (from: string, to: string) => void } = {}): RepoHookFile[] {
+  const rename = fsOps.rename ?? renameSync;
+  // Every file is read and merged in memory first, so one that is not JSON stops the command before any file is written.
+  const plans = REPO_HARNESSES.map((harness) => {
     const file = projectHarnessFile(harness, cwd);
     const before = existsSync(file) ? readFileSync(file, "utf8") : null;
-    const command = hookCommand(harness);
-    installHarness(harness, cwd, command, file, { backup: false });
-    return { harness, file, command, changed: readFileSync(file, "utf8") !== before };
+    const config = readHarnessConfig(file);
+    const command = repositoryHookCommand(harness);
+    mergeHarnessConfig(harness, config, command);
+    return { harness, file, before, command, text: JSON.stringify(config, null, 2) + "\n" };
   });
+  const changed = plans.filter((p) => p.text !== p.before);
+  // All or nothing: each new file is written beside its target, then each is renamed into place; a failure puts back
+  // every file already replaced and removes the temporary ones.
+  const staged: Array<{ temp: string; plan: (typeof plans)[number] }> = [];
+  const placed: Array<(typeof plans)[number]> = [];
+  try {
+    for (const plan of changed) {
+      mkdirSync(dirname(plan.file), { recursive: true });
+      const temp = `${plan.file}.${randomBytes(6).toString("hex")}.tmp`;
+      writeFileSync(temp, plan.text);
+      staged.push({ temp, plan });
+    }
+    for (const { temp, plan } of staged) { rename(temp, plan.file); placed.push(plan); }
+  } catch (error) {
+    for (const plan of placed) {
+      try { if (plan.before === null) rmSync(plan.file, { force: true }); else writeFileSync(plan.file, plan.before); } catch { /* reported below */ }
+    }
+    for (const { temp } of staged) { try { rmSync(temp, { force: true }); } catch { /* already gone */ } }
+    throw new Error(`could not write the hook files (${error instanceof Error ? error.message : String(error)}); none were changed`, { cause: error });
+  }
+  return plans.map((p) => ({ harness: p.harness, file: p.file, command: p.command, changed: p.text !== p.before }));
 }
 
 /** The harness configuration snippet to install the hook by hand. Defaults to the

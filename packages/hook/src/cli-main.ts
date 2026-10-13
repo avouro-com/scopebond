@@ -52,14 +52,15 @@ import { uploadPending } from "./obs-upload.js";
 import { connectCloud, ingestUrl, loadConnection, reportUninstall } from "./cloud.js";
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
-import { compileManaged, isManaged, readMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
+import { compileManaged, isManaged, readMeta, writeMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
 import { agentPresence, healthLines, recommendedFrom, NATIVE_DOWNLOAD_URL } from "./client-health.js";
 import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.js";
 import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor, repositoryFacts } from "./receipt-context.js";
-import { RepositoryEnrollmentError, repositoryConnectionDir } from "./repo-enrol.js";
+import { RepositoryEnrollmentError, isRepositoryConnection, repositoryConnectionDir, REPO_TOKEN_ENV } from "./repo-enrol.js";
+import { REPO_HOOK_MARKER } from "./init.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, ENFORCEABLE_RULES } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { runDispatchCommand } from "./dispatch-cli.js";
@@ -283,9 +284,11 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const cwd = input?.cwd ? textOf(input.cwd) : process.cwd();
     configFolder = resolveConfigDir(cwd);
     // A repository token (a cloud agent's sandbox, a CI job) connects this hook as that repository when no one signed in here.
-    const dir = await repositoryConnectionDir(configFolder, { home: userHome(), repository: () => repositoryFacts(cwd).repository,
-      afterEnroll: async (enrolled) => { await syncPolicy(enrolled, { ...syncOptionsFor(enrolled), timeoutMs: 3000 }); } });
+    const dir = await repositoryConnectionDir(configFolder, { home: userHome(), repository: () => repositoryFacts(cwd).repository });
     configFolder = dir;
+    // A repository run decides nothing before its workspace's rules are loaded once: in a fresh sandbox the starter rules
+    // would let through what the workspace blocks. Tried again on every call until it succeeds.
+    await requireRepositoryRules(dir);
     const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
@@ -333,6 +336,36 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
 
 /** Claude Code events other than PreToolUse: session start and end, and the after-action
  *  events. They only feed observations; they never print a decision and always exit 0. */
+/** For a repository connection: the workspace's rules must have loaded once (a rules check that succeeded) before any call is
+ *  decided. Throws a RepositoryEnrollmentError (a deny with the reason) until then. */
+async function requireRepositoryRules(dir: string): Promise<void> {
+  if (!isRepositoryConnection(loadConnection(dir))) return;
+  const meta = readMeta(dir);
+  if (meta.repository_rules_at) return;
+  let outcome: SyncOutcome;
+  try { outcome = await syncPolicy(dir, { ...syncOptionsFor(dir), timeoutMs: 3000 }); }
+  catch (error) { outcome = { state: "unavailable", message: error instanceof Error ? error.message : String(error) }; }
+  if (outcome.state === "applied" || outcome.state === "unchanged" || outcome.state === "own_rules") {
+    writeMeta(dir, { ...readMeta(dir), repository_rules_at: new Date().toISOString() });
+    return;
+  }
+  const why = "message" in outcome ? outcome.message : outcome.state;
+  throw new RepositoryEnrollmentError(`this repository's rules are not loaded yet (${why})`,
+    { repair: "try the action again; the rules are checked again on every call until they load" });
+}
+
+/** A hook entry committed to a repository (`init --repo`, marked `--from-repo`) runs on every computer that opens the
+ *  repository. Where there is neither a repository token nor a person's own connection, nothing governs this computer:
+ *  it says so once on stderr, records nothing and lets the agent's own permission flow decide. A token or a person's
+ *  connection keeps the usual checks (and their fail-closed answers). */
+function repositoryHookNotGovernedHere(args: string[]): boolean {
+  if (!args.includes(REPO_HOOK_MARKER)) return false;
+  if (process.env[REPO_TOKEN_ENV]?.trim()) return false;
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  for (const dir of [resolveConfigDir(projectDir), userHome()]) if (loadConnection(dir)) return false;
+  return true;
+}
+
 async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never> {
   try {
     const cwd = input.cwd ? textOf(input.cwd) : process.cwd();
@@ -518,7 +551,8 @@ function requireInteractive(command: string, args: string[]): void {
 /** What `init --repo` says after writing the files: where the token goes for each kind of run, and what it is not. */
 const REPO_NEXT_STEPS = [
   "Next:",
-  "  1. Commit these files to the default branch (the Copilot coding agent reads hooks only from there).",
+  "  1. Commit these files to the default branch (GitHub's hooks documentation says the Copilot coding",
+  "     agent loads hooks from there).",
   "  2. In your Scopebond workspace, create a token for this repository (Computers, Repositories).",
   "  3. Give it to the agent as the secret SCOPEBOND_REPO_TOKEN wherever it runs:",
   "       GitHub Copilot coding agent   the repository's \"copilot\" environment secrets",
@@ -528,9 +562,14 @@ const REPO_NEXT_STEPS = [
   "     Set SCOPEBOND_URL too if your workspace is not at https://cloud.scopebond.com.",
   "  4. Allow the sandbox to run npx and reach your workspace (npm registry and the workspace address).",
   "",
-  "With the token the hook connects as this repository on its first action; without it, the run is not",
-  "covered (GitHub Copilot's cloud agent then denies every action, saying why). Each of these cloud",
-  "runs is not verified yet: check one run's records in your workspace before relying on it.",
+  "With the token the hook connects as this repository on its first action and decides nothing until the",
+  "workspace's rules have loaded. Each of these cloud runs is not verified yet: check one run's records in",
+  "your workspace before relying on it.",
+  "",
+  "Where there is no token and no Scopebond connection (a contributor's computer, a run you did not give",
+  "the secret), the committed hook checks nothing: it prints \"this repository's hook is not connected on",
+  "this computer; nothing is checked\", records nothing and lets the agent run as it would without Scopebond.",
+  "A computer signed in to Scopebond, or a run with the token, is checked as usual.",
   "",
   "The agent can edit files in its own checkout, these included, so they are not a boundary on their own.",
   "Keep the Scopebond GitHub Action as a required check on pull requests, and protect .github/ and the",
@@ -2110,8 +2149,9 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "--repo writes only the committed hook files for runs with no person signed in (Claude Code on",
       "the web, Codex cloud tasks, the GitHub Copilot coding agent, agent steps in GitHub Actions):",
       ".claude/settings.json, .codex/hooks.json and .github/hooks/scopebond.json, with the pinned npx",
-      "command. No keys are made here; in the sandbox the hook connects as the repository with the",
-      "SCOPEBOND_REPO_TOKEN secret (and SCOPEBOND_URL for a workspace of your own address).",
+      "command and --from-repo. No keys are made here; in the sandbox the hook connects as the",
+      "repository with the SCOPEBOND_REPO_TOKEN secret (and SCOPEBOND_URL for a workspace of your own",
+      "address). Where there is no token and no Scopebond connection, those entries check nothing.",
       "Needs a terminal, or --yes in a script, because it changes what governs your agent.",
     ] },
   { name: "install", args: "[--claude] [--cursor] [--codex] [--copilot] [--dry-run] [--force] [--yes]",
@@ -2287,6 +2327,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (["init", "install", "connect", "login"].includes(cmd ?? "") && !nodeSupported()) {
     for (const line of nodeTooOldLines(process.versions.node)) console.error(line);
     process.exit(1);
+  }
+  if ((cmd === "claude" || cmd === "codex" || cmd === "copilot") && repositoryHookNotGovernedHere(rest)) {
+    process.stderr.write("Scopebond: this repository's hook is not connected on this computer; nothing is checked\n");
+    process.exit(0);
   }
   if (cmd === "claude") { await runClaude(); }
   else if (cmd === "cursor") { await runCursor(); }

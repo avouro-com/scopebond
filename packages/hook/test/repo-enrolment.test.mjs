@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
   repositoryEnrollmentProof, RepositoryEnrollmentError, DEFAULT_WORKSPACE_URL,
 } from "../dist/index.js";
 import { refreshIfDue } from "../dist/credential-refresh.js";
+import { installRepositoryHooks, repositoryConnectionDir, tokenFingerprint } from "../dist/index.js";
 import { hookVersion } from "../dist/version.js";
 import { startFakeCloud } from "./fake-cloud.mjs";
 
@@ -52,6 +53,7 @@ function runAsync(env, args, { cwd, input } = {}) {
   });
 }
 
+const REPO = ["claude", "--from-repo"];
 const claudeCall = (cwd, command = "ls") => JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s-repo", cwd, tool_name: "Bash", tool_input: { command }, tool_use_id: `t-${Math.random()}` });
 
 const filesUnder = (dir) => existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String) : [];
@@ -73,10 +75,10 @@ test("init --repo writes the three committed hook files, keeps other settings, a
   assert.deepEqual(claude.permissions, other.permissions, "unrelated settings are kept");
   assert.deepEqual(claude.hooks.PostToolUse, other.hooks.PostToolUse, "other hooks are kept");
   assert.equal(claude.hooks.PreToolUse.length, 1);
-  assert.equal(claude.hooks.PreToolUse[0].hooks[0].command, `npx -y @scopebond/hook@${hookVersion()} claude`, "the pinned portable command");
+  assert.equal(claude.hooks.PreToolUse[0].hooks[0].command, `npx -y @scopebond/hook@${hookVersion()} claude --from-repo`, "the pinned portable command, marked as committed");
 
   const codex = JSON.parse(snapshot[1]);
-  assert.equal(codex.hooks.PreToolUse[0].hooks[0].command, `npx -y @scopebond/hook@${hookVersion()} codex`);
+  assert.equal(codex.hooks.PreToolUse[0].hooks[0].command, `npx -y @scopebond/hook@${hookVersion()} codex --from-repo`);
 
   const copilot = JSON.parse(snapshot[2]);
   assert.equal(copilot.version, 1);
@@ -85,7 +87,7 @@ test("init --repo writes the three committed hook files, keeps other settings, a
     assert.equal(ours.length, 1, `one Scopebond entry for ${event}`);
     // The cloud agent honours only bash/command entries.
     assert.equal(ours[0].type, "command");
-    assert.equal(ours[0].bash, `npx -y @scopebond/hook@${hookVersion()} copilot`);
+    assert.equal(ours[0].bash, `npx -y @scopebond/hook@${hookVersion()} copilot --from-repo`);
   }
   assert.ok(copilot.hooks.PreToolUse.some((e) => e.bash === "echo team-check"), "the team's own Copilot hook is kept");
 
@@ -131,7 +133,7 @@ test("with SCOPEBOND_REPO_TOKEN and no connection, the first call enrols the rep
   const cloud = await startFakeCloud();
   try {
     const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
-    const first = await runAsync(ctx.env, ["claude"], { cwd: ctx.project, input: claudeCall(ctx.project) });
+    const first = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
     assert.equal(first.status, 0, first.stderr);
     assert.equal(cloud.state().repository_enrollments.length, 1);
     assert.equal(cloud.state().repository_enrollments[0].proofs_verified, true, "both keys proved possession");
@@ -151,7 +153,7 @@ test("with SCOPEBOND_REPO_TOKEN and no connection, the first call enrols the rep
 
     // A notable record (a force push the starter rules monitor) is sent with the repository's credential; routine ones go
     // as summaries later.
-    const second = await runAsync(ctx.env, ["claude"], { cwd: ctx.project, input: claudeCall(ctx.project, "git push --force origin main") });
+    const second = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project, "git push --force origin main") });
     assert.equal(second.status, 0, second.stderr);
     assert.equal(cloud.state().repository_enrollments.length, 1, "the connection is reused");
     await runAsync(ctx.env, ["flush"], { cwd: ctx.project });
@@ -165,7 +167,7 @@ test("a GitHub Copilot call with the token enrols and is decided (no 'not set up
   try {
     const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
     const payload = JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s-cp", cwd: ctx.project, tool_name: "bash", tool_input: { command: "ls" } });
-    const r = await runAsync(ctx.env, ["copilot"], { cwd: ctx.project, input: payload });
+    const r = await runAsync(ctx.env, ["copilot", "--from-repo"], { cwd: ctx.project, input: payload });
     assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
     assert.equal(cloud.state().repository_enrollments.length, 1);
   } finally { await cloud.close(); }
@@ -175,7 +177,7 @@ test("a revoked token fails closed, saying why, without the token", async () => 
   const cloud = await startFakeCloud();
   try {
     const ctx = isolated({ SCOPEBOND_REPO_TOKEN: REVOKED, SCOPEBOND_URL: cloud.url });
-    const r = await runAsync(ctx.env, ["claude"], { cwd: ctx.project, input: claudeCall(ctx.project) });
+    const r = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
     assert.equal(r.status, 2);
     const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
     assert.match(reason, /refused this repository's token/);
@@ -187,7 +189,7 @@ test("a revoked token fails closed, saying why, without the token", async () => 
 
 test("a malformed token or workspace address fails closed before anything is sent", () => {
   const ctx = isolated({ SCOPEBOND_REPO_TOKEN: "not-a-token", SCOPEBOND_URL: "http://127.0.0.1:9" });
-  const r = run(ctx.env, ["claude"], { cwd: ctx.project, input: claudeCall(ctx.project) });
+  const r = run(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
   assert.equal(r.status, 2);
   assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /is not a Scopebond repository token/);
   assert.ok(!r.stdout.includes("not-a-token"));
@@ -206,26 +208,119 @@ test("a person's own connection wins over the repository token", async () => {
     const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
     scaffold(ctx.scopebond);
     writeFileSync(join(ctx.scopebond, "cloud.json"), JSON.stringify({ url: cloud.url, credential: "sbm_person", credential_id: "c1", gateway_id: "gw-person", expires_at: new Date(Date.now() + 86_400_000 * 60).toISOString() }));
-    const r = await runAsync(ctx.env, ["claude"], { cwd: ctx.project, input: claudeCall(ctx.project) });
+    const r = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(cloud.state().repository_enrollments.length, 0);
     assert.equal(JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8")).gateway_id, "gw-person");
   } finally { await cloud.close(); }
 });
 
-test("an expired repository connection is enrolled again; a repository credential is never 'renewed'", async () => {
+test("an expired repository connection enrols again with fresh keys in a fresh folder; it is never 'renewed'", async () => {
   const cloud = await startFakeCloud();
   try {
     const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
-    scaffold(ctx.scopebond);
-    const stale = { url: cloud.url, credential: "sbm_old", credential_id: "c-old", gateway_id: "gw-repo", source: "repository", expires_at: new Date(Date.now() - 1000).toISOString() };
-    writeFileSync(join(ctx.scopebond, "cloud.json"), JSON.stringify(stale));
-    const r = await runAsync(ctx.env, ["claude"], { cwd: ctx.project, input: claudeCall(ctx.project) });
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(cloud.state().repository_enrollments.length, 1);
-    assert.notEqual(JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8")).credential, "sbm_old");
-    assert.equal(await refreshIfDue(ctx.scopebond, { ...stale, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, { fetchImpl: () => { throw new Error("must not be called"); } }), "not_due");
+    assert.equal((await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) })).status, 0);
+    const first = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    assert.equal(first.token_fingerprint, tokenFingerprint(TOKEN), "the connection records which token made it, not the token");
+    // A day later: the credential ran out. The fake workspace, like the real one, refuses a key it already enrolled.
+    writeFileSync(join(ctx.scopebond, "cloud.json"), JSON.stringify({ ...first, expires_at: new Date(Date.now() - 1000).toISOString() }));
+    const r = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(cloud.state().repository_enrollments.length, 2);
+    const second = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    assert.notEqual(second.attester_kid, first.attester_kid, "fresh keys");
+    assert.ok(readdirSync(ctx.home).some((f) => f.startsWith(".scopebond.retired-")), "the old folder is set aside, not reused");
+    assert.equal(await refreshIfDue(ctx.scopebond, second, { fetchImpl: () => { throw new Error("must not be called"); } }), "not_due");
   } finally { await cloud.close(); }
+});
+
+test("a 409 for keys already enrolled is never taken as success unless this token's live connection holds those keys", async () => {
+  const ctx = isolated();
+  const refused = async () => new Response(JSON.stringify({ error: "keys already registered", code: "gateway_key_conflict" }), { status: 409, headers: { "content-type": "application/json" } });
+  await assert.rejects(repositoryConnectionDir(ctx.scopebond, { home: ctx.scopebond, env: { SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: "http://127.0.0.1:9", SCOPEBOND_HOOK_DIR: ctx.scopebond }, fetchImpl: refused }),
+    (error) => error instanceof RepositoryEnrollmentError && error.code === "gateway_key_conflict");
+});
+
+test("another repository's live connection on a shared runner is set aside; this repository enrols with its own keys", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const other = "sbr_fake_" + "otherrepository".repeat(2);
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: other, SCOPEBOND_URL: cloud.url });
+    assert.equal((await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) })).status, 0);
+    const before = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    const mine = await runAsync({ ...ctx.env, SCOPEBOND_REPO_TOKEN: TOKEN }, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(mine.status, 0, mine.stdout + mine.stderr);
+    const after = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    assert.equal(after.token_fingerprint, tokenFingerprint(TOKEN));
+    assert.notEqual(after.attester_kid, before.attester_kid);
+    assert.equal(cloud.state().repository_enrollments.length, 2);
+  } finally { await cloud.close(); }
+});
+
+test("until the workspace's rules load once, a repository run is denied; the next call tries again", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
+    cloud.fault("policy", { status: 503, times: 5 });
+    const denied = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(denied.status, 2);
+    assert.match(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /rules are not loaded yet/);
+    cloud.clearFaults();
+    const allowed = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(allowed.status, 0, allowed.stdout + allowed.stderr);
+    assert.equal(cloud.state().repository_enrollments.length, 1);
+  } finally { await cloud.close(); }
+});
+
+test("a committed entry with no token and no connection checks nothing, says so once, and records nothing", () => {
+  const ctx = isolated();
+  for (const agent of ["claude", "codex", "copilot"]) {
+    const r = run(ctx.env, [agent, "--from-repo"], { cwd: ctx.project, input: claudeCall(ctx.project, "git push --force origin main") });
+    assert.equal(r.status, 0, agent);
+    assert.equal(r.stdout, "", "no decision: the agent's own permission flow decides");
+    assert.equal(r.stderr, "Scopebond: this repository's hook is not connected on this computer; nothing is checked");
+  }
+  assert.ok(!existsSync(ctx.scopebond) && !existsSync(join(ctx.project, ".scopebond")), "nothing set up, nothing recorded");
+  // Without the marker (a hook a person installed), the usual fail-closed answer stands.
+  const unmarked = run(ctx.env, ["claude"], { cwd: ctx.project, input: claudeCall(ctx.project) });
+  assert.equal(unmarked.status, 2);
+});
+
+test("a person's connection is found before the token is read: a malformed token beside it changes nothing", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: "not-a-token", SCOPEBOND_URL: cloud.url });
+    scaffold(ctx.scopebond);
+    writeFileSync(join(ctx.scopebond, "cloud.json"), JSON.stringify({ url: cloud.url, credential: "sbm_person", credential_id: "c1", gateway_id: "gw-person", expires_at: new Date(Date.now() + 86_400_000 * 60).toISOString() }));
+    const r = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  } finally { await cloud.close(); }
+});
+
+test("init --repo moves only Scopebond's entry out of a shared Claude Code matcher group", () => {
+  const ctx = isolated();
+  mkdirSync(join(ctx.project, ".claude"), { recursive: true });
+  const old = "npx -y @scopebond/hook@0.1.0 claude";
+  writeFileSync(join(ctx.project, ".claude", "settings.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo team-lint" }, { type: "command", command: old }] }] } }));
+  installRepositoryHooks(ctx.project);
+  const groups = JSON.parse(readFileSync(join(ctx.project, ".claude", "settings.json"), "utf8")).hooks.PreToolUse;
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.find((g) => g.matcher === "Bash"), { matcher: "Bash", hooks: [{ type: "command", command: "echo team-lint" }] }, "the team's hook and its matcher stay");
+  const ours = groups.find((g) => g.matcher === "*");
+  assert.equal(ours.hooks.length, 1);
+  assert.equal(ours.hooks[0].command, `npx -y @scopebond/hook@${hookVersion()} claude --from-repo`);
+});
+
+test("init --repo writes the three files together: a failure part-way puts back what it replaced", () => {
+  const ctx = isolated();
+  mkdirSync(join(ctx.project, ".claude"), { recursive: true });
+  const original = JSON.stringify({ permissions: { allow: ["Bash(ls)"] } });
+  writeFileSync(join(ctx.project, ".claude", "settings.json"), original);
+  let renames = 0;
+  assert.throws(() => installRepositoryHooks(ctx.project, { rename: (from, to) => { if (++renames === 2) throw new Error("disk full"); renameSync(from, to); } }), /none were changed/);
+  assert.equal(readFileSync(join(ctx.project, ".claude", "settings.json"), "utf8"), original);
+  assert.ok(!existsSync(join(ctx.project, ".codex", "hooks.json")) && !existsSync(join(ctx.project, ".github", "hooks", "scopebond.json")));
+  assert.deepEqual(filesUnder(ctx.project).filter((f) => f.endsWith(".tmp")), []);
 });
 
 test("the enrolment proof binds the token digest, the time and both keys", () => {

@@ -63,6 +63,8 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
   const { host = "127.0.0.1", port = 0, autoApprove = false } = options;
   const codes = new Map<string, Code>();
   const credentials = new Set<string>();
+  /** Keys a repository run enrolled with. */
+  const enrolledKids = new Set<string>();
   const faults = new Map<FakeRoute, Fault>();
   let clientVersion: { policy: "recommended" | "hold"; hook: string | null; agent: string | null } | null = null;
   const seen = {
@@ -175,6 +177,10 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
       const proofsVerified = verified(pem, body.signature) && verified(agentPem, body.agent_signature);
       seen.repositoryEnrollments.push({ repository: typeof body.repository === "string" ? body.repository : null, proofs_verified: proofsVerified });
       if (!proofsVerified) return json(400, { error: "invalid possession proof" });
+      // Like the workspace, a key is enrolled once: a run reusing one is told to make new keys.
+      const runKids = [kidForPem(pem), kidForPem(agentPem)];
+      if (runKids.some((kid) => enrolledKids.has(kid))) return json(409, { error: "these keys are already registered in this workspace; generate new keys and enroll again", code: "gateway_key_conflict" });
+      for (const kid of runKids) enrolledKids.add(kid);
       const credential = "sbm_" + randomBytes(16).toString("hex");
       credentials.add(credential);
       const n = seen.repositoryEnrollments.length;
