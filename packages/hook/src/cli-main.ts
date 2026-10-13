@@ -60,7 +60,7 @@ import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./pol
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor } from "./receipt-context.js";
 import { keyedSessionId, sessionBudgetGuardFor } from "./session-budgets.js";
-import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, ENFORCEABLE_RULES } from "./rules.js";
+import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, SWITCHABLE_RULES } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { runDispatchCommand } from "./dispatch-cli.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
@@ -794,8 +794,8 @@ async function runRules(args: string[]): Promise<void> {
     case "monitor": {
       // Monitor is the default: a rule records what it would have stopped. "enforce" makes it block.
       const id = String(value ?? "");
-      if (!(ENFORCEABLE_RULES as readonly string[]).includes(id)) {
-        console.error(`rules ${verb} <rule>: one of ${ENFORCEABLE_RULES.join(", ")}`);
+      if (!SWITCHABLE_RULES.includes(id)) {
+        console.error(`rules ${verb} <rule>: one of ${SWITCHABLE_RULES.join(", ")}`);
         process.exit(1);
       }
       if (isManaged(dir)) {
@@ -818,7 +818,7 @@ async function runRules(args: string[]): Promise<void> {
       }
       const set = new Set(rules.enforce ?? []);
       if (verb === "enforce") set.add(id); else set.delete(id);
-      rules.enforce = ENFORCEABLE_RULES.filter((r) => set.has(r));
+      rules.enforce = SWITCHABLE_RULES.filter((r) => set.has(r));
       changed = verb === "enforce" ? `${id} now blocks` : `${id} now records, without blocking`;
       break;
     }

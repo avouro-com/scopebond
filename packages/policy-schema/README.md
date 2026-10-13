@@ -26,7 +26,12 @@ evidence, and coverage all share.
 - `src/index.ts` — loads the schemas and exports the policy and evidence constants.
 - `registry/actions-1.0.json` — Action Taxonomy v1: the coding, GitHub, MCP and HTTP
   action types and their parameter bounds (machine source; the human index lives in
-  the product docs). Exposed at the `./registry` subpath, which also exports
+  the product docs). Taxonomy 1.1 (`TAXONOMY_VERSION`) adds the types a coding agent
+  reaches through cloud, Kubernetes, database, deployment, secret, messaging and tracker
+  tools: `cloud.resource.create|modify|delete`, `k8s.apply|delete|exec`, `db.migrate`,
+  `db.exec`, `secret.write`, `iam.change`, `communication.send` and
+  `work.item.create|update`. Each action carries the taxonomy version that introduced it;
+  the 1.0 types are unchanged. Exposed at the `./registry` subpath, which also exports
   `actionRegistry`, `TAXONOMY_VERSION`, `getActionType(id)` and
   `validateActionParams(type, params)`. Parameters are carried under `intent.params`;
   bound-able ones are constrained by an `action_allowlist` clause's `param_bounds`.

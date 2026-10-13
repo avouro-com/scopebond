@@ -24,7 +24,8 @@ agent never takes part in a decision. It only keeps everything around the decisi
   acknowledged; a store written by an older hook is rewritten once so it keeps each policy and receipt only once.
 - **Self-check.** Once a day it checks this computer's side (hook entry present and able to start, autostart on,
   nothing stuck in the queue, connection not about to lapse) and sends the result, signed with the key the computer
-  enrolled with, so the workspace can show that the whole path works end to end, or what broke.
+  enrolled with, so the workspace can show that the whole path works end to end, or what broke. With it, and once on
+  each start, it reports which AI coding tools this computer has and whether the hook checks them (see below).
 - **Overrides.** When the workspace sets a rule to *Block, user may override*, the hook asks the agent, and the agent
   shows its own window (Windows PowerShell with Windows Forms, macOS `osascript`, Linux `zenity`): the rule, the action and a
   reason field. Only the window answers; whatever calls the local channel can open a window but never decide it. One window
@@ -106,7 +107,7 @@ For `npx` commands, use `npx.cmd`; no execution-policy change is needed.
 |---|---|
 | `scopebond-agent setup <workspace-url>` | Sign in, install for this user, start with sign-in, show status; safe to run again |
 | `scopebond-agent run` | Run in the foreground (what autostart starts) |
-| `scopebond-agent status [--json]` | Delivery state, records waiting and the last problem |
+| `scopebond-agent status [--json]` | Delivery state, records waiting, the last problem, and the coding tools on this computer |
 | `scopebond-agent flush` | Deliver waiting records now |
 | `scopebond-agent repair` | Put the Scopebond hook back into agent settings that lost it |
 | `scopebond-agent check` | Check for updates and run the self-check now |
@@ -115,6 +116,45 @@ For `npx` commands, use `npx.cmd`; no execution-policy change is needed.
 
 The Scopebond hook stops a coding agent from switching the agent off: `autostart off`, stopping it by name and a
 global uninstall of `@scopebond/agent` are denied when the coding agent runs them. Run them from your own terminal.
+
+## What the agent reports about this computer
+
+With every self-check (once a day, and on each start) the agent adds two lists to the self-check it sends to the
+workspace, and `scopebond-agent status` shows the same (`Claude Code 2.1.4 · governed`, `Cursor · present, not
+governed`). This inventory is reported by the agent over its authenticated connection to the workspace; it is not
+covered by the self-check signature (which signs the day's proof), so the workspace shows it as "as reported on <day>",
+not as verified. These are exactly the facts sent, and nothing else:
+
+- `tools`: for each AI coding tool whose user-level settings are present (at most 20), its `id` (`claude`, `cursor`,
+  `codex`, `copilot`, `windsurf`, `gemini`, `cline`, `opencode`, `aider`), its installed `version` or null, whether it
+  is `governed`, and whether its user-level settings are present (`settings_present`). `governed` means the Scopebond
+  hook is in the tool's user-level settings file; a tool with the hook only in a project's own settings shows as not
+  governed, and a tool the hook does not support yet is never governed. A program or npm install alone, without the
+  tool's settings, does not make a tool present and is never run.
+- `mcp_servers`: the name of each MCP server in a tool's user-level MCP configuration, with the tool's id (at most 100
+  names, each at most 120 characters). Never a server's command, arguments, environment, headers or address, and never
+  a project's own MCP file.
+
+No path, user name or file content beyond those names is sent. A name that reads as a path or an address is left out.
+
+| Tool | Present when | Version from | MCP server names from |
+|---|---|---|---|
+| Claude Code | `~/.claude/settings.json` or `~/.claude/` | `@anthropic-ai/claude-code` in npm's global folder, else `claude --version` | `~/.claude.json` (`mcpServers`) |
+| Cursor | `~/.cursor/` | — | `~/.cursor/mcp.json` (`mcpServers`) |
+| Codex | `~/.codex/` | `@openai/codex`, else `codex --version` | `~/.codex/config.toml` (`[mcp_servers.<name>]` table headers) |
+| GitHub Copilot CLI | the CLI's `settings.json` or `logs` in `~/.copilot/` (`COPILOT_HOME`), or `copilot` on PATH, as the hook detects it | `@github/copilot`, else `copilot --version` | `~/.copilot/mcp-config.json` (`mcpServers`) |
+| Windsurf (best effort) | `~/.codeium/windsurf/` | — | `~/.codeium/windsurf/mcp_config.json` (`mcpServers`) |
+| Gemini CLI | `~/.gemini/` | `@google/gemini-cli`, else `gemini --version` | `~/.gemini/settings.json` (`mcpServers`) |
+| Cline (best effort) | VS Code's `User/globalStorage/saoudrizwan.claude-dev` (stable or Insiders), or the Cline CLI's `~/.cline/` | — | — |
+| OpenCode | `~/.config/opencode/` (or under `XDG_CONFIG_HOME`) or `~/.opencode/` | `opencode-ai` | — |
+| Aider | any `~/.aider*` (`~/.aider.conf.yml`, `~/.aider/`) | `aider --version` | — |
+
+npm's global folder is the usual one for the platform, else the one `npm root -g` names (asked once per run of the
+agent). `--version` runs only the programs above, only for a tool whose settings are present, found in PATH's
+absolute folders (on Windows only an `.exe` or `.com`, never a script that needs a shell), with no input, from a
+temporary folder, for at most 3 seconds; a tool is never started in a way that opens a session. Only the version number is kept from what it prints. The rows marked best
+effort are not confirmed against the tool's current documentation: Windsurf's folder, and Cline's VS Code storage
+folder, which follows VS Code's naming for the extension's id.
 
 ## Local control channel
 

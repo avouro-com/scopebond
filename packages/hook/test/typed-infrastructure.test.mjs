@@ -336,7 +336,9 @@ test("operationsForCall gives the typed operation for the shell item and keeps p
   const mapped = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command }, cwd: work });
   const dispatched = mapped.map((m) => ({ action: { action_type: m.intent.action_type, params: m.intent.params } }));
   const ops = operationsForCall({ dispatched, request: callRequestOf({ tool_name: "Bash", tool_input: { command } }) }, { key: KEY, cwd: work, repositoryId: "sbr_repo", env: () => undefined });
-  assert.deepEqual(ops.map((o) => o?.type), ["cloudflare_resource", "shell"]);
+  // The derived `cloud.resource.delete` beside the command re-describes it: it gets no operation of its own.
+  assert.deepEqual(mapped.map((m) => m.intent.action_type), ["shell.exec", "cloud.resource.delete", "shell.exec"]);
+  assert.deepEqual(ops.map((o) => o?.type ?? null), ["cloudflare_resource", null, "shell"]);
   assert.equal(ops[0].request_digest, KEY.requestDigest({ action_type: "shell.exec", params: { command: "wrangler r2 bucket delete backups", cwd: work } }), "the digest covers the actual command");
 });
 

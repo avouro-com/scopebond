@@ -140,7 +140,8 @@ list, not a 700-character lookahead:
 
 ```
 npx -y @scopebond/hook@latest rules                      # what blocks and what records, in plain English
-npx -y @scopebond/hook@latest rules enforce safe-shell   # make a rule block (protect-branches, safe-shell, protect-write, protect-read)
+npx -y @scopebond/hook@latest rules enforce safe-shell   # make a rule block (protect-branches, safe-shell, protect-write, protect-read,
+                                                         #   cloud-destructive, production-deploy, secret-write, iam-change, database-migrate)
 npx -y @scopebond/hook@latest rules monitor safe-shell   # back to recording only
 npx -y @scopebond/hook@latest rules allow dd             # stop blocking a program
 npx -y @scopebond/hook@latest rules protect infra/       # never write there
@@ -209,6 +210,93 @@ rules check reports to the workspace; `doctor` reports it on any computer.
 Codex has no native file-read event: reads it makes through shell commands are derived
 from the command (`cat .env`) and checked, but a read that never goes through a shell
 is not seen. Run `capabilities` (below) for the exact per-cell picture.
+
+### What the hook understands about cloud, Kubernetes, databases, deployments and secrets
+
+A coding agent reaches production through command-line tools and MCP servers. When it runs a known tool, the hook reads
+the actual command line (or MCP tool call) and records the operation as an Action Taxonomy 1.1 action **beside** the
+command's own `shell.exec` (or `mcp.tool.call`), in the same action group. So one rule set governs `aws s3 rb`,
+`kubectl delete`, `vercel --prod` or `gh secret set` the same way whether Claude Code, Cursor, Codex or GitHub Copilot
+ran it. The reading is deterministic: no model, no network, no heuristics beyond the words of a name, and no content.
+
+| Tool | Subcommands read | Action |
+|---|---|---|
+| `aws` | `s3 rm`, `s3 rb`, `s3 sync` to a bucket (`--delete` deletes), `s3 mb`; `ec2 terminate/run/stop/start/reboot-instances`; `iam` (any change); `ssm put-parameter`; `secretsmanager create-secret/put-secret-value/update-secret`; `cloudformation deploy`, `deploy create-deployment`; any other `delete-*`, `terminate-*`, `deregister-*`, `create-*`, `update-*`/`put-*`/`modify-*`/… operation | `cloud.resource.delete/create/modify`, `iam.change`, `secret.write`, `deploy.release` |
+| `gcloud` | `… create/delete/update/patch/stop/start/reset/resize` (not the local groups `config`, `auth`, `components`), `storage rm`, `iam …`, `… add/remove-iam-policy-binding`, `set-iam-policy`, `run/functions/app deploy`, `secrets create`, `secrets versions add` | the same, and `deploy.release` |
+| `az` | `… create/delete/delete-batch/purge/update/stop/start/restart/deallocate/resize`, `role assignment/definition`, `ad sp create-for-rbac`, `ad … credential reset`, `ad user/group`, `keyvault secret set`, `webapp deploy/up`, `webapp/functionapp deployment source config-zip` | the same; a web app without `--slot` deploys to its production slot |
+| `kubectl` | `apply`, `create`, `replace`, `patch`, `scale`, `set`, `rollout restart/undo/pause/resume`, `label`, `annotate`, `autoscale`, `expose`, `edit`, `drain`, `cordon`, `uncordon`, `taint`; `delete`; `exec`, `attach`, `debug` | `k8s.apply`, `k8s.delete`, `k8s.exec` |
+| `helm` | `install`, `upgrade`, `rollback`; `uninstall` | `k8s.apply`, `k8s.delete` (kind `helm-release`) |
+| `terraform`, `tofu`, `terragrunt` | `apply` (with `-auto-approve`, `-target`), `apply` of a saved plan (`saved_plan`, risk class destructive: the command does not show whether it destroys), `apply -destroy`, `destroy`; Terragrunt's `run-all` | `cloud.resource.modify`, `cloud.resource.delete` (provider `unknown`) |
+| `pulumi`, `cdk`, `sst` | `pulumi destroy`, `cdk destroy`, `sst remove` | `cloud.resource.delete` |
+| `wrangler` | `deploy`, `versions deploy`, `pages deploy`; `secret put/bulk/delete`; `delete`, `d1/r2/kv/pages project/queues create/delete`; `d1 migrations apply` | `deploy.release`, `secret.write`, `cloud.resource.*`, `db.migrate` |
+| `vercel` | a deployment (`vercel`, `deploy`, `redeploy`; production with `--prod` or `--target production`, else preview), `promote`, `rollback`; `env add`, `env rm`; `remove`, `project rm` | `deploy.release`, `secret.write`, `cloud.resource.delete` |
+| `fly`, `flyctl` | `deploy`; `secrets set` (one per name), `secrets import`; `destroy`, `apps destroy`, `machine destroy`, `volumes destroy` | `deploy.release`, `secret.write`, `cloud.resource.delete` |
+| `gh` | `secret set`; `repo delete`; `api` with a method that changes something (`POST`, `PUT`, `PATCH`, `DELETE`; a read is not a fetch here) | `secret.write`, `cloud.resource.delete` (provider `github`), `net.fetch` |
+| migrations | `prisma migrate deploy/dev/reset`, `prisma db push`; `drizzle-kit push/migrate/drop`; `rails`/`rake db:migrate` (with `VERSION=`, down), `db:rollback`, `db:reset`, `db:migrate:reset`, `db:drop`, …; `alembic upgrade/downgrade`; `flyway migrate/undo/clean`; `knex migrate:latest/rollback`; `sequelize db:migrate[:undo]` | `db.migrate` (`up`, `down`, `reset`) |
+| more | `eb deploy/terminate`, `serverless deploy/remove` (no `--stage`: the default `dev` stage), `heroku config:set`, `heroku apps:destroy`, `vault kv put`, `vault write` (not a login, transit or PKI path), `doppler secrets set/upload`, `op item create/edit` | `deploy.release`, `cloud.resource.delete`, `secret.write` |
+
+The tools are found directly or through `npx`, `pnpm`/`yarn`/`bun` (`exec`, `dlx`), `npm exec`, `uv`/`poetry`/`pipenv run`,
+`python -m` and `bundle exec`, past the runner's own options that take a value (`pnpm --filter db exec`, `uv run --env-file .env`).
+
+| MCP server (by a word of its configured name; in Cursor, also of its URL or launch command) | Tools read | Action |
+|---|---|---|
+| `github` | `create_pull_request`, `merge_pull_request`, `push_files`, `create_or_update_file`, `delete_file` | `pr.open`, `pr.merge`, `git.push` to the named branch, `file.write` per path (with `repo`; a file in that repository, recorded and not decided by this computer's file rules) |
+| `filesystem` | `write_file`, `edit_file`, `create_directory`, `move_file`; `read_file`, `read_text_file`, `read_media_file`, `read_multiple_files`, `list_directory`, `directory_tree`, `search_files`, `get_file_info` | `file.write`, `file.read` (paths resolved like any other) |
+| `postgres`, `sqlite`, `mysql` | `query`, `read_query`, `write_query`, `execute_sql`, … | `db.exec`: verb, predicate class and risk from the SQL classifier; the SQL itself is never recorded |
+| `slack` | `slack_post_message`, `slack_reply_to_thread`, `post_message`, `send_message` | `communication.send` |
+| `playwright`, `puppeteer` | `browser_navigate`, `puppeteer_navigate` | `net.fetch` (host only) |
+| `fetch` | `fetch` | `net.fetch` (host, `GET`) |
+| `linear`, `jira` | `create_issue`, `update_issue`, `createJiraIssue`, `editJiraIssue` | `work.item.create`, `work.item.update` |
+
+**What an action carries.** Identifiers and closed values only: provider, service, kind, region, Kubernetes context and
+namespace, a migration's direction, a secret store, and `env` or `environment` when the command names one (an AWS
+profile, a GCP project, a Terraform folder or var file, `--env`, a slot or stage whose words say prod, staging or dev).
+Names are keyed digests (`resource_digest`, `name_digest`, `target_digest`, `channel_digest`, `project_digest`) under
+this computer's digest key. Never a secret's value, a file's contents, SQL or message text, or a URL's path and query.
+Every action also carries `via` (the tool or server), `derived_from` (`shell.exec` or `mcp.tool.call`) and, for the
+1.1 types and `deploy.release`, `risk_class`.
+
+**What the rules do with them.** Five rules, all recording by default and never blocking until a person
+(`rules enforce <rule>`) or the workspace turns them on:
+
+| Rule | Blocks | Catalog class |
+|---|---|---|
+| `cloud-destructive` | `cloud.resource.delete`, `k8s.delete`, `k8s.exec`, and `cloud.resource.modify` of a saved plan | H06 |
+| `production-deploy` | `deploy.release` to production, or whose environment the command does not show | H07 |
+| `secret-write` | `secret.write` | H08 |
+| `iam-change` | `iam.change` | H09 |
+| `database-migrate` | `db.migrate` going `down` or `reset`, except against a development database the command names (`up` is recorded) | H10 |
+
+Cloud creates and changes, `k8s.apply`, `db.exec`, messages, work items and pull requests are recorded
+(`observe-targets`). A rule of your own can bound any parameter, for example
+`{ "action_types": ["cloud.resource.delete"], "param_bounds": { "env": { "pattern": "^(?!production$).+" } } }`.
+**Which policies decide them.** A policy decides derived actions only when it opts in: one of its clauses names an
+action type Action Taxonomy 1.1 introduced, other than `db.exec` (which policies named before 1.1). Every policy this
+version compiles opts in, through the target-rule clauses above. Under a policy that does not (one an earlier hook
+compiled, or a workspace policy that carries none of those types), the derived actions are recorded and never
+decided, so that policy decides every call exactly as it did before they existed: a `gh api` call, a GitHub MCP push
+or a fetch MCP call is not newly checked by a push, file, site or database rule it already has. Under a policy that
+opts in, a push or a file read or write read from an MCP call is decided by the rules for those types (a `push_files`
+to `main` is a push to `main`; a `filesystem` write to `.scopebond/` is refused like any other), and a `fetch` or
+browser MCP call by a site rule. A site rule's list is matched exactly: `github.com` does not cover `api.github.com`
+(write `*.github.com` for that). Derived actions have no observation operation of their own: the closed observation
+schema has no type for them yet, and the command's own operation is still recorded.
+
+**At most 20 per call.** Beyond 20 derived actions in one call, those of each type are recorded as one, with `count`
+and `members_digest` and the parameters they all share; a parameter they do not share is left out, so a rule that
+bounds it refuses the call. A file read or written on this computer is never folded: each path is checked.
+
+**Honest limits.** Only the subcommands above are read. A tool or subcommand not listed, a help (`--help`, or `help`
+in the subcommand slot), list or describe command, or a dry run (`--dry-run`, `--dryrun`, `-refresh-only`,
+`terraform plan`) derives nothing: the command stays the plain `shell.exec` it always was, still checked by
+`safe-shell`. An option the reader does not know does not hide a command: when it stops the reader but one of the
+tool's destructive words (`delete`, `destroy`, `uninstall`, `rb`, `rm`, `exec`, `deploy`, `reset`, `downgrade`,
+`drop`, `remove`, …) is among the command's words, the action is still recorded with its names left out and a
+deployment's environment `unknown` (`kubectl --warnings-as-errors delete ns prod` is a `k8s.delete`). A name read
+after such an option is left out (the action keeps its type). A name
+known only at run time (`$FN`, `$(…)`) is never digested as a name. `terraform`'s provider is the configuration's, so
+it is `unknown`; the environment of a command comes only from words it shows, never from a profile file, the current
+kube context or environment variables the command does not set itself.
 
 ### GitHub Copilot
 

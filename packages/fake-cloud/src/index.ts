@@ -27,7 +27,7 @@ export interface FakeCloudState {
   ingested: number;
   ingested_results: Array<string | null>;
   observations: number;
-  self_checks: Array<{ failed: string[]; hook_version: string | null; agent_version: string | null }>;
+  self_checks: Array<{ failed: string[]; hook_version: string | null; agent_version: string | null; tools?: unknown[] | null; mcp_servers?: unknown[] | null }>;
   policy_polls: number;
   version_polls: number;
   approved_codes: string[];
@@ -176,7 +176,8 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
       if (!authed()) return json(401, { error: "unauthorized" });
       const checks = Array.isArray(body.checks) ? body.checks as Array<{ id?: unknown; ok?: unknown }> : [];
       const failed = checks.filter((c) => c.ok !== true).map((c) => String(c.id));
-      seen.selfChecks.push({ failed, hook_version: typeof body.hook_version === "string" ? body.hook_version : null, agent_version: typeof body.agent_version === "string" ? body.agent_version : null });
+      seen.selfChecks.push({ failed, hook_version: typeof body.hook_version === "string" ? body.hook_version : null, agent_version: typeof body.agent_version === "string" ? body.agent_version : null,
+        tools: Array.isArray(body.tools) ? body.tools : null, mcp_servers: Array.isArray(body.mcp_servers) ? body.mcp_servers : null });
       return json(200, { ok: failed.length === 0, signature_verified: true, failed });
     }
     // The optional summary a workspace gives a computer's tray (names, links, Review count); links stay on this origin.
