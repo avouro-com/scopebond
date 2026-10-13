@@ -105,7 +105,7 @@ export function buildStatusJson(input: {
     },
     config: {
       active: dir,
-      others: input.candidateDirs.filter((d) => d !== dir && existsSync(join(d, "policy.json"))),
+      others: input.candidateDirs.filter((d) => !samePath(d, dir) && existsSync(join(d, "policy.json"))),
       user_connection_shadowed: !!input.userDir && !samePath(input.userDir, dir) && !!loadConnection(input.userDir),
     },
     agents: input.agents,
