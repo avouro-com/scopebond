@@ -9,7 +9,7 @@
 // install, or from `<program> --version` for the programs known to answer it and exit (with a 3 s limit), else null.
 
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { isHarnessConfigured, userHarnessFile, type Harness } from "@scopebond/hook";
@@ -96,12 +96,29 @@ export function mcpServerName(raw: unknown): string | null {
 }
 
 function readText(file: string): string | null {
+  let fd: number | undefined;
   try {
-    if (statSync(file).size > MAX_CONFIG_BYTES) return null;
-    const text = readFileSync(file, "utf8");
+    // One handle for the size check and the read, so the file checked is the file read. The read itself stops one byte
+    // past the bound, so a file that grows past it after the check is refused too.
+    fd = openSync(file, "r");
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_CONFIG_BYTES) return null;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const chunk = Buffer.alloc(Math.min(64 * 1024, MAX_CONFIG_BYTES + 1 - total));
+      const n = readSync(fd, chunk, 0, chunk.length, null);
+      if (n <= 0) break;
+      chunks.push(n === chunk.length ? chunk : chunk.subarray(0, n));
+      total += n;
+      if (total > MAX_CONFIG_BYTES) return null;
+    }
+    const text = Buffer.concat(chunks, total).toString("utf8");
     // A byte-order mark (Windows PowerShell 5.1 writes one) would make JSON.parse refuse the whole file.
     return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-  } catch { return null; }
+  } catch { return null; } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* nothing to release */ } }
+  }
 }
 
 /** Above this size a file that is not plain JSON is not read again without its comments. */
