@@ -27,8 +27,8 @@ name: Release
 # confirmation.
 #
 # Credentials stay with the step that needs them: no stored token opens the Version
-# pull request (the job's own token does), the npm fallback token only in the
-# publish step. Every job that reads a secret is bound to an environment. Installs
+# pull request (the job's own token does), and npm publishing uses no stored token
+# at all (trusted publishing, OIDC). Every job that reads a secret is bound to an environment. Installs
 # run no dependency scripts and restore no shared cache, and checkouts keep no
 # token in the git config.
 
@@ -175,13 +175,13 @@ jobs:
     needs: [version, check, pack]
     if: needs.version.outputs.mode == 'publish' && (needs.check.outputs.versionMerge == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    # Owner approval is required to deploy to this environment, and the npm token
-    # is read only in it. npm's trusted publisher for each package names this
-    # repository, release.yml and this environment, so no other workflow or job can
-    # publish with OIDC.
+    # Owner approval is required to deploy to this environment. npm's trusted
+    # publisher for each package names this repository, release.yml and this
+    # environment, so no other workflow or job can publish with OIDC. npm matches
+    # the OIDC token's `environment` claim, so this job uses a plain environment
+    # (no `deployment: false` opt-out): a standard deployment-backed token.
     environment:
       name: npm-publish
-      deployment: false
     permissions:
       contents: write # push the release tags and create the GitHub releases
       id-token: write # npm trusted publishing (OIDC) and provenance
@@ -198,9 +198,9 @@ jobs:
           node-version: 22.20.0
           # No dependency cache in the job that holds publishing rights.
           package-manager-cache: false
-          # Writes an .npmrc for the npm registry. No token is set: the publish step
-          # authenticates with npm trusted publishing (OIDC) only.
-          registry-url: "https://registry.npmjs.org"
+          # No `registry-url`: it writes an .npmrc whose `_authToken` is an unset
+          # ${NODE_AUTH_TOKEN}. npm's default registry is registry.npmjs.org, where
+          # npm authenticates with trusted publishing (OIDC) only.
       # Trusted publishing needs npm >= 11.5.1; Node 22.20.0 bundles npm 10. pnpm 10
       # publishes a tarball by running `npm publish` from PATH, so this npm is used.
       - name: Install npm with trusted publishing support
@@ -209,6 +209,12 @@ jobs:
           npm --version
       # Installs @changesets/cli for the publish step; nothing is built here.
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      # npm's own OIDC exchange fails quietly (verbose log only) and the publish then
+      # reports a misleading E404. Make the same exchange first, for every public
+      # package, and stop with the registry's reason and the token's claims if npm
+      # would refuse it. Prints and keeps no token; publishes nothing.
+      - name: Check npm trusted publishing (OIDC) for every package
+        run: node scripts/check-npm-trusted-publishing.mjs
       - name: Configure company commit identity (release tags)
         run: |
           git config user.name "avourohq"

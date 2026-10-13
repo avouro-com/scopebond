@@ -152,6 +152,11 @@ test("npm trusted publishing: only the publish job can ask for an OIDC token, wi
   assert.ok(npm, "release.yml: the publish job pins its npm version");
   const [major, minor, patch] = npm.slice(1).map(Number);
   assert.ok(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))), "trusted publishing needs npm 11.5.1 or later");
+  // setup-node's `registry-url` writes an .npmrc whose auth token is an unset ${NODE_AUTH_TOKEN}; OIDC needs none of it.
+  for (const step of publishJob.steps) assert.doesNotMatch(step, /registry-url:/, "release.yml: the publish job writes no token .npmrc");
+  // npm's own OIDC failure is silent (it surfaces as E404), so the exchange is checked, with its reason, before publishing.
+  const check = publishJob.steps.findIndex((step) => /node scripts\/check-npm-trusted-publishing\.mjs/.test(step));
+  assert.ok(check !== -1 && check < publishJob.steps.findIndex(isPublish), "release.yml: trusted publishing is checked before the publish step");
   const build = release.jobs.filter((job) => job.steps.some((step) => /-r build/.test(step)));
   for (const job of build) assert.doesNotMatch(job.header + job.steps.join("\n"), /secrets\.|^ {4}environment:/m, `release.yml ${job.name}: the build has no secrets`);
 });
