@@ -198,8 +198,8 @@ jobs:
           node-version: 22.20.0
           # No dependency cache in the job that holds publishing rights.
           package-manager-cache: false
-          # Writes an .npmrc for the npm registry that reads NODE_AUTH_TOKEN (the
-          # fallback token, set only on the publish step below).
+          # Writes an .npmrc for the npm registry. No token is set: the publish step
+          # authenticates with npm trusted publishing (OIDC) only.
           registry-url: "https://registry.npmjs.org"
       # Trusted publishing needs npm >= 11.5.1; Node 22.20.0 bundles npm 10. pnpm 10
       # publishes a tarball by running `npm publish` from PATH, so this npm is used.
@@ -224,11 +224,8 @@ jobs:
           github-token: ${{ github.token }}
           pack-dir-artifact-id: ${{ needs.pack.outputs.pack-dir-artifact-id }}
         env:
-          # Fallback only: npm exchanges the OIDC token for a short-lived publish token
-          # first and uses this long-lived token only if that exchange fails. Remove
-          # this line (and the SCOPEBOND_NPM_TOKEN secret) after the first successful
-          # trusted publish; see RELEASING.md.
-          NODE_AUTH_TOKEN: ${{ secrets.SCOPEBOND_NPM_TOKEN }}
+          # Trusted publishing only: npm exchanges the job's OIDC token for a short-lived
+          # publish token. There is no long-lived npm token fallback.
           NPM_CONFIG_PROVENANCE: "true"
           npm_config_ignore_scripts: "true"
 

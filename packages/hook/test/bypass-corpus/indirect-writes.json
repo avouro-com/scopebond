@@ -1,0 +1,16 @@
+{
+  "category": "indirect writes",
+  "cases": [
+    { "id": "tee-env", "command": "echo x | tee .env", "target": { "action_type": "file.write", "path": ".env" }, "expected": "watch",
+      "note": "writing .env is recorded; no default rule blocks writes to it" },
+    { "id": "tee-ci-config", "command": "echo x | tee .github/workflows/ci.yml", "target": { "action_type": "file.write", "path": ".github/workflows/ci.yml" }, "expected": "block" },
+    { "id": "dd-ci-config", "command": "dd if=/dev/zero of=.github/workflows/ci.yml", "target": { "action_type": "file.write", "path": ".github/workflows/ci.yml" }, "expected": "block" },
+    { "id": "dd-env", "command": "dd if=/dev/zero of=.env count=1", "target": { "action_type": "file.write", "path": ".env" }, "expected": "block" },
+    { "id": "append-env", "command": "echo x >> .env", "target": { "action_type": "file.write", "path": ".env" }, "expected": "watch" },
+    { "id": "sh-c-redirect-env", "command": "sh -c \"echo x > .env\"", "target": { "action_type": "file.write", "path": ".env" }, "expected": "watch" },
+    { "id": "sh-c-redirect-ci-config", "command": "sh -c \"echo x > .github/workflows/ci.yml\"", "target": { "action_type": "file.write", "path": ".github/workflows/ci.yml" }, "expected": "block" },
+    { "id": "redirect-own-settings", "command": "echo x > .scopebond/policy.json", "target": { "action_type": "file.write", "path": ".scopebond/policy.json" }, "expected": "block" },
+    { "id": "bash-c-reads-env", "command": "bash -c 'cat .env'", "target": { "action_type": "file.read", "path": ".env" }, "expected": "block" },
+    { "id": "bash-c-force-push", "command": "bash -c \"git push -f origin main\"", "target": { "action_type": "git.push", "force": true }, "expected": "block" }
+  ]
+}

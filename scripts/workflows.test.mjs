@@ -1,4 +1,4 @@
-// The release workflows hold the publishing credentials (the npm token, the automation token, the signing session), so
+// The release workflows hold the publishing credentials (npm trusted publishing, the automation token, the signing session), so
 // their shape is locked here: credentials only in the step that uses them, publishing only from the merged
 // "Version packages" pull request, and no build-time or tool-restore code running beside a credential it does not need.
 //
@@ -79,6 +79,9 @@ function onTriggers(top) {
 }
 
 const isCheckout = (step) => /uses:\s*actions\/checkout@/.test(step);
+/** The step that publishes to npm, and the one job that holds it. */
+const isPublish = (step) => /changesets\/action\/publish@/.test(step);
+const publishJobOf = (release) => release.jobs.find((job) => job.steps.some(isPublish));
 const workflowNames = () => readdirSync(workflowsDir).filter((name) => /\.ya?ml$/.test(name));
 
 test("the release workflow grants nothing at the top and checks out without keeping a token", () => {
@@ -90,25 +93,26 @@ test("the release workflow grants nothing at the top and checks out without keep
   for (const step of checkouts) assert.match(step, /persist-credentials: false/, "release.yml: checkout keeps no token in the git config");
 });
 
-test("the npm token reaches only the publish step, never install, build or the job's environment", () => {
+test("npm publishing holds no npm token: trusted publishing (OIDC) only, in one job and one environment", () => {
   const release = readWorkflow("release.yml");
   assert.doesNotMatch(release.top, NPM_SECRET, "release.yml: no workflow-level npm token");
-  const holders = release.jobs.flatMap((job) => job.steps.filter((step) => NPM_SECRET.test(step)).map((step) => ({ job, step })));
-  assert.equal(holders.length, 1, "release.yml: exactly one step has the npm token");
-  const [{ job, step }] = holders;
-  assert.doesNotMatch(job.header, NPM_SECRET, `release.yml ${job.name}: no job-level npm token`);
-  assert.match(section(step, "env"), NPM_SECRET, "release.yml: the npm token is in the publish step's env");
-  assert.doesNotMatch(step, /pnpm install|-r build|pnpm release|version:packages/, "release.yml: the publish step does not install or build");
-  assert.doesNotMatch(job.header + job.steps.join("\n"), AUTOMATION_SECRET, "release.yml: the publish job has no automation token");
-  for (const other of job.steps) {
-    if (other !== step) assert.doesNotMatch(other, /secrets\./, "release.yml: the publish job's other steps have no secrets");
+  for (const job of release.jobs) {
+    const text = job.header + job.steps.join("\n");
+    assert.doesNotMatch(text, NPM_SECRET, `release.yml ${job.name}: no npm token (trusted publishing only)`);
+    assert.doesNotMatch(text, /NODE_AUTH_TOKEN/, `release.yml ${job.name}: no NODE_AUTH_TOKEN fallback`);
   }
+  const job = publishJobOf(release);
+  const publishSteps = job.steps.filter(isPublish);
+  assert.equal(publishSteps.length, 1, "release.yml: exactly one step publishes");
+  assert.doesNotMatch(publishSteps[0], /pnpm install|-r build|pnpm release|version:packages/, "release.yml: the publish step does not install or build");
+  assert.doesNotMatch(job.header + job.steps.join("\n"), AUTOMATION_SECRET, "release.yml: the publish job has no automation token");
+  for (const step of job.steps) assert.doesNotMatch(step, /secrets\./, "release.yml: the publish job's steps have no secrets");
   assert.match(job.header, /^ {4}environment:/m, "release.yml: the publish job runs in a named environment");
 });
 
 test("publishing runs only for the merged Version packages pull request with no changesets left", () => {
   const release = readWorkflow("release.yml");
-  const publishJob = release.jobs.find((job) => job.steps.some((step) => NPM_SECRET.test(step)));
+  const publishJob = publishJobOf(release);
   const condition = publishJob.header.match(/^ {4}if: (.*)$/m)?.[1] ?? "";
   // select-mode answers "publish" only when no changesets are pending and some version is missing from npm.
   assert.match(condition, /needs\.version\.outputs\.mode == 'publish' && /, "release.yml: no publish while changesets are pending");
@@ -138,7 +142,7 @@ test("publishing runs only for the merged Version packages pull request with no 
 
 test("npm trusted publishing: only the publish job can ask for an OIDC token, with an npm that supports it", () => {
   const release = readWorkflow("release.yml");
-  const publishJob = release.jobs.find((job) => job.steps.some((step) => NPM_SECRET.test(step)));
+  const publishJob = publishJobOf(release);
   for (const job of release.jobs) {
     if (job === publishJob) assert.match(job.header, /id-token: write/, "release.yml: the publish job can use OIDC");
     else assert.doesNotMatch(job.header, /id-token: write/, `release.yml ${job.name}: no OIDC token outside the publish job`);
@@ -245,7 +249,7 @@ test("a new agent on npm starts the signed Windows build on main, and that job c
   const release = readWorkflow("release.yml");
   const native = release.jobs.find((job) => job.steps.some((step) => /gh workflow run native-release\.yml/.test(step)));
   assert.ok(native, "release.yml: a job starts native-release.yml");
-  const publishJob = release.jobs.find((job) => job.steps.some((step) => NPM_SECRET.test(step)));
+  const publishJob = publishJobOf(release);
   assert.ok(native.header.split("\n").some((line) => line.trim() === `needs: ${publishJob.name}`), "only after the publish");
   assert.match(native.header, /if: contains\(needs\.publish\.outputs\.published-packages, '"@scopebond\/agent"'\)/, "only when the agent was published");
   assert.match(publishJob.header, /published-packages: \$\{\{ steps\.publish\.outputs\.published-packages \}\}/);

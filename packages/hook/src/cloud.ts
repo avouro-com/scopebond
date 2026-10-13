@@ -17,6 +17,7 @@ import { forgetCached, readTextCached } from "./config-cache.js";
 import { summaryOptions } from "./evidence-detail.js";
 import { replaceFile } from "./safe-fs.js";
 import { forgetWorkspaceAnnouncements, noteReceiptContext, receiptContextFrom } from "./receipt-context.js";
+import { versionedFetch, withHookVersion } from "./workspace-fetch.js";
 
 /** The persisted connection between this machine and a Cloud workspace. Holds the
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
@@ -87,13 +88,13 @@ export async function connectCloud(
   let rotatedFrom: string | undefined;
   let result;
   try {
-    result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: fetchImpl });
+    result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: versionedFetch(fetchImpl) });
   } catch (error) {
     if (!(error instanceof CloudEnrollmentError) || error.code !== "gateway_key_conflict") throw error;
     rotatedFrom = attester.kid;
     retireAttesterKey(dir, attester.kid);
     attester = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
-    result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: fetchImpl });
+    result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: versionedFetch(fetchImpl) });
   }
   const { ingest_url: offered, ...enrolled } = result as typeof result & { ingest_url?: unknown };
   const ingest = safeIngestOrigin(offered);
@@ -172,7 +173,7 @@ export function attachExporter(
   // Only an accepted answer counts: a refusal, a server error or a proxy's page says nothing about the workspace.
   const dir = dirname(outboxDbPath);
   const deliver = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-    const res = await (fetchImpl ?? globalThis.fetch)(input, init);
+    const res = await versionedFetch(fetchImpl)(input, init);
     if (res?.ok && receiptContextFrom(res.headers)) noteReceiptContext(dir);
     return res;
   }) as typeof fetch;
@@ -208,7 +209,7 @@ export async function reportUninstall(connection: HookConnection, details: { pur
   try {
     const res = await fetchImpl(`${ingestUrl(connection)}/v1/uninstall`, {
       method: "POST",
-      headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
+      headers: withHookVersion({ authorization: `Bearer ${connection.credential}`, "content-type": "application/json" }, details.hookVersion),
       body: JSON.stringify({ purge: details.purge, hook_version: details.hookVersion }),
       signal: AbortSignal.timeout(timeoutMs),
     });

@@ -3,10 +3,12 @@
 // desktop agent and the workspace read. Additive only: fields are added, never renamed.
 
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { loadConnection } from "./cloud.js";
 import { readDeliveryState, waitingUntil } from "./delivery-state.js";
 import { deliveryStalled, queueStatus } from "./delivery-report.js";
+import { readSignatureState, signatureMode, type SignatureMode, type SignatureState } from "./policy-signature.js";
+import { samePath } from "./install.js";
 
 export const STATUS_SCHEMA = "scopebond.status.v1";
 
@@ -46,7 +48,11 @@ export interface StatusJson {
   /** user_connection_shadowed: the user-level sign-in is connected, but a project setup takes
    *  precedence from here. */
   config: { active: string; others: string[]; user_connection_shadowed: boolean };
-  agents: { claude: boolean; cursor: boolean; codex: boolean };
+  agents: { claude: boolean; cursor: boolean; codex: boolean; copilot?: boolean };
+  /** Signed workspace rules: the mode in force (dual or enforce) and how the last workspace answer's signature was
+   *  checked: verified, unsigned (accepted in dual mode, reason `unsigned_policy`) or refused (and why). `last` and
+   *  `reason` are null until a rules check has run. */
+  policy_signature: { mode: SignatureMode; last: SignatureState["last"] | null; reason: SignatureState["reason"] };
 }
 
 /** A pending record older than this, with a delivery error, means the computer is not delivering. */
@@ -56,7 +62,7 @@ export function buildStatusJson(input: {
   version: string; activeDir: string; candidateDirs: string[]; hasPolicy: boolean;
   /** The user-level config dir, to report a project setup that takes precedence over its connection. */
   userDir?: string;
-  agents: { claude: boolean; cursor: boolean; codex: boolean }; now?: number;
+  agents: { claude: boolean; cursor: boolean; codex: boolean; copilot?: boolean }; now?: number;
 }): StatusJson {
   const now = input.now ?? Date.now();
   const dir = input.activeDir;
@@ -64,7 +70,7 @@ export function buildStatusJson(input: {
   const state = readDeliveryState(dir);
   const { pending, oldest, error: queueError, gapsTotal, gapsByReason } = queueStatus(dir);
   const code = /\(([a-z_]+)\)/.exec(state.last_error ?? "")?.[1] ?? (state.last_status ? `http_${state.last_status}` : null);
-  const governing = input.hasPolicy && (input.agents.claude || input.agents.cursor || input.agents.codex);
+  const governing = input.hasPolicy && (input.agents.claude || input.agents.cursor || input.agents.codex || input.agents.copilot === true);
   // Stuck with a known error for an hour, or stalled: nothing accepted since the oldest waiting
   // record was queued, error or not (an attempt cut off by its time limit used to record none).
   const stuck = (pending > 0 && oldest !== null && now - oldest > STUCK_AFTER_MS && state.last_error !== null)
@@ -99,9 +105,15 @@ export function buildStatusJson(input: {
     },
     config: {
       active: dir,
-      others: input.candidateDirs.filter((d) => d !== dir && existsSync(join(d, "policy.json"))),
-      user_connection_shadowed: !!input.userDir && resolve(input.userDir) !== resolve(dir) && !!loadConnection(input.userDir),
+      others: input.candidateDirs.filter((d) => !samePath(d, dir) && existsSync(join(d, "policy.json"))),
+      user_connection_shadowed: !!input.userDir && !samePath(input.userDir, dir) && !!loadConnection(input.userDir),
     },
     agents: input.agents,
+    policy_signature: policySignature(dir, connection),
   };
+}
+
+function policySignature(dir: string, connection: ReturnType<typeof loadConnection>): StatusJson["policy_signature"] {
+  const last = connection ? readSignatureState(dir) : null;
+  return { mode: signatureMode(connection), last: last?.last ?? null, reason: last?.reason ?? null };
 }

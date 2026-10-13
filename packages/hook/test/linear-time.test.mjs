@@ -53,6 +53,28 @@ test("secret scrubbing is linear in the command's length", () => {
   assert.equal(scrubSecrets("curl -H \"My-Token:  zzz\""), "curl -H \"My-Token:  ***\"");
 });
 
+test("a 100 kB run of header-like names is scrubbed in well under 250 ms (the header value is read once)", () => {
+  // `a:a:a:…` read the rest of the text as a header value after every name: 100 kB took seconds. Best of three runs, so a
+  // busy machine's pause is not counted as the pattern's.
+  const within = (label, input, budgetMs = 250) => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const started = performance.now();
+      scrubSecrets(input);
+      best = Math.min(best, performance.now() - started);
+    }
+    assert.ok(best < budgetMs, `${label} took ${best.toFixed(1)} ms`);
+  };
+  within("name:name:… (100 kB)", "a:".repeat(50_000));
+  within("a credential name before 100 kB of name:", `token:${"a:".repeat(50_000)}`);
+  within("a name, then 100 kB of blanks", `x${" ".repeat(100_000)}`);
+  within("a credential name, then 100 kB of blanks", `token${" ".repeat(100_000)}`);
+  within("a credential name and colon, then 100 kB of blanks and a quote", `token:${" ".repeat(100_000)}"`);
+  // The scrub itself is unchanged.
+  assert.equal(scrubSecrets("a:b My-Token:\tzz:yy next"), "a:b My-Token:\t*** next");
+  assert.equal(scrubSecrets("token:\"quoted\""), "token:\"quoted\"");
+});
+
 test("typed operations read a long package spec and packageManager field in linear time", () => {
   const key = bindingKeyFromHex("11".repeat(32));
   const cwd = mkdtempSync(join(tmpdir(), "sb-linear-"));

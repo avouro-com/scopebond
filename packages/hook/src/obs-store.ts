@@ -102,12 +102,12 @@ export type EnqueueResult =
   | { queued: true; duplicate: boolean; sequence: number; observation_id: string }
   | { queued: false; reason: "unsupported" | "blocked" | "capacity" | "oversize" | "generation_mismatch" | "session_ended"; detail?: string };
 
-function open(path: string): SqliteDb {
+function open(path: string, busyMs = 15_000): SqliteDb {
   mkdirSync(dirname(path), { recursive: true });
   const { DatabaseSync } = nodeSqlite<{ DatabaseSync: new (p: string) => SqliteDb }>();
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 15000;");
-  whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"));
+  db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyMs))};`);
+  whileBusy(() => db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;"), busyMs);
   return db;
 }
 
@@ -126,8 +126,9 @@ function whileBusy<T>(step: () => T, limitMs = 15_000): T {
 export class ObservationStore {
   private readonly db: SqliteDb;
 
-  constructor(path: string, private readonly now: () => number = Date.now) {
-    this.db = open(path);
+  /** `busyTimeoutMs`: how long to wait for another process's lock (15 s by default; a hook call waits less). */
+  constructor(path: string, private readonly now: () => number = Date.now, options: { busyTimeoutMs?: number } = {}) {
+    this.db = open(path, options.busyTimeoutMs);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS state (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

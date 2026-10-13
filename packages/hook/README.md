@@ -1,7 +1,7 @@
 # @scopebond/hook
 
-The free, open-source Scopebond connector for **Claude Code**, **Cursor**, and
-**OpenAI Codex**. It checks supported actions delivered through the configured
+The free, open-source Scopebond connector for **Claude Code**, **Cursor**,
+**OpenAI Codex** and **GitHub Copilot**. It checks supported actions delivered through the configured
 hook against your policy and signs decision records locally. Some actions are
 observed after they happen: Cursor file edits are recorded, not prevented. See
 the coverage table below before choosing what to protect.
@@ -210,6 +210,81 @@ Codex has no native file-read event: reads it makes through shell commands are d
 from the command (`cat .env`) and checked, but a read that never goes through a shell
 is not seen. Run `capabilities` (below) for the exact per-cell picture.
 
+### GitHub Copilot
+
+```
+npx -y @scopebond/hook@latest install --copilot      # user-level: ~/.copilot/hooks/scopebond.json
+npx -y @scopebond/hook@latest init --copilot         # this project: .github/hooks/scopebond.json
+npx -y @scopebond/hook@latest init --copilot --shared   # the portable npx form, to commit
+```
+
+`install --copilot` writes Scopebond's own hook file in Copilot's user hooks folder
+(`~/.copilot/hooks/`, `%USERPROFILE%\.copilot\hooks\` on Windows, or `$COPILOT_HOME/hooks/`
+when `COPILOT_HOME` is set); a plain `install` adds it when it finds the Copilot CLI (the
+`copilot` program on PATH, or the CLI's `settings.json` or `logs` in that folder; the folder
+alone is not enough, because VS Code's Copilot Chat creates it too). `init --copilot`
+writes `.github/hooks/scopebond.json` in the project. The file is a `version: 1` hooks
+document registering `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SessionStart` and
+`SessionEnd`, each with a `bash` and a `powershell` command and `timeoutSec: 60`, and no
+matcher (every tool). The `powershell` command ends with `; exit $LASTEXITCODE`, so a deny
+(exit 2) reaches Copilot as a deny with its reason rather than as PowerShell's generic
+exit 1. The PascalCase event names make Copilot send the same payload shape Claude Code
+does. `uninstall` removes Scopebond's entries, and the file once nothing else is in it.
+
+**How far it can be relied on:** cooperative · prevents if honored · a hook timeout fails
+open in Copilot. Copilot honors a hook's deny (Scopebond answers
+`{"permissionDecision":"deny","permissionDecisionReason":"…"}` and exits 2, which Copilot
+treats as a deny whatever stdout says), and treats a hook that crashes or exits non-zero as
+a deny. But a hook that runs past its `timeoutSec` is skipped and the action runs. Scopebond
+therefore gives each check its own deadline (45 s, inside the 60 s it installs) and denies
+when it cannot decide in time; a slow policy load or a held lock ends as a deny, not a
+timeout. A hook Copilot never starts at all is outside what the hook can see.
+
+| Copilot tool (reported as) | Scopebond action | Before it runs |
+|---|---|---|
+| `bash`, `powershell` (`Bash`), including `mode: "async"` / `"detached"` sessions | `shell.exec`, plus the reads, writes and pushes derived from the command | checked |
+| `write_bash` (what it types into a running shell session) | `shell.exec`, read as a command in that shell | checked |
+| `read_bash`, `stop_bash`, `list_bash` | `tool.<name>` | recorded, not evaluated (they run nothing new) |
+| `view` (`Read`), `grep`, `glob` | `file.read` | checked |
+| `create` (`Write`), `edit`, `str_replace_editor`, `apply_patch` (`Edit`) | `file.write` | checked |
+| `web_fetch` (`WebFetch`) | `net.fetch` | recorded (observed by default) |
+| MCP tools, `task`, `web_search`, anything else | `tool.<name>` | recorded, not evaluated (strict mode denies) |
+
+The tool names are those in GitHub's Copilot hooks reference. Under the PascalCase events
+Copilot reports both shells as `Bash`; on Windows its shell is PowerShell, so a Windows
+`Bash` command is read as PowerShell. The reference does not say how MCP tool names appear
+in a hook payload, so MCP coverage is not claimed for Copilot (`capabilities` lists it as
+unsupported).
+
+Scopebond's own protection covers Copilot's hook settings as it does the other agents':
+writes to `~/.copilot/hooks/`, `~/.copilot/settings.json`, `~/.copilot/mcp-config.json`
+(the CLI's MCP servers), `.github/hooks/`, `.github/copilot/settings.json` and
+`.github/copilot/settings.local.json` are always denied (guardrail configuration, not CI
+configuration), as is removing those folders or starting `copilot` with `COPILOT_HOME`
+pointed elsewhere. This holds in every coding agent, not only in Copilot, and it covers
+**every file** under `.github/hooks/` and `~/.copilot/hooks/`, including a project's own hook
+scripts: a coding agent cannot edit them, and a person changes them outside the agent.
+`COPILOT_HOME` itself is not followed: a Copilot folder moved there is not protected.
+
+- **Copilot CLI** reads the user-level and repository-level files. It is the only Copilot
+  host covered.
+- **VS Code agent mode** is **not covered yet**. It reads the same `.github/hooks/*.json` and
+  `~/.copilot/hooks/*.json` files, so the hook runs there, but VS Code sends its own tool
+  names (`run_in_terminal` and others), reads a different entry and answer shape, and those
+  calls are recorded as unevaluated tools, not checked. `capabilities` lists every
+  `copilot_vscode` cell as unsupported.
+- **The cloud coding agent** loads hooks only from `.github/hooks/*.json` on the repository's
+  default branch, runs only the `bash` command, and treats `ask` as deny. Scopebond does not
+  set up the cloud agent's sandbox yet: a committed hook file (`init --copilot --shared`)
+  reaches it, but without a Scopebond setup there (keys and a policy, which are never
+  committed) the hook fails closed and denies every action. Treat the cloud agent as not
+  covered for now; gate its pull requests with `@scopebond/github-action` instead. `init
+  --copilot` says so, and there the hook's deny names the cause: "Scopebond is not set up in
+  this environment; the Copilot cloud agent is not covered".
+- Copilot also reads the `hooks` block of a project's `.claude/settings.json`. A project set
+  up for Claude Code with `init` is then checked when Copilot runs there too; with a
+  Copilot hook file as well, each action is checked twice.
+
 ### What this hook can honestly claim: `capabilities`
 
 ```
@@ -220,8 +295,10 @@ npx -y @scopebond/hook@latest capabilities --json
 ```
 
 Each cell is one connector version, agent host (Claude terminal / desktop, Codex CLI /
-desktop, Cursor), action type and phase (before or after the action), in one of these
-states:
+desktop, Cursor, Copilot CLI / VS Code / cloud agent), action type and phase (before or
+after the action), in one of these states (Copilot CLI cells also carry `enforcement`:
+"cooperative · prevents if honored · a hook timeout fails open in Copilot"; the VS Code and
+cloud agent cells are all unsupported, "not covered yet"):
 
 | State | Meaning |
 |---|---|
@@ -427,6 +504,56 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
 
 Set `SCOPEBOND_POLICY_SYNC=off` to stop the five-minute check (the rules in force stay).
 
+Every call the hook makes to the workspace (sign-in and enrollment, the rules check and its
+confirmation, record delivery and summaries, observations, credential renewal, recovery,
+`doctor`'s checks and the uninstall notice) carries `x-scopebond-hook-version`, so a
+workspace can hold a minimum version on every route.
+
+### Signed rules
+
+A workspace can sign its rules, so a computer installs only rules its workspace issued for it,
+even if the answer passed through something that could change it.
+
+- **What is signed.** A rules document, and the workspace's answer that it sets no rules for
+  this computer, may carry `signature` (Ed25519, base64) and `key_id`. The signature covers the
+  [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON of
+  `{ v: 1, workspace, computer, revision, rules_digest, local_changes, managed, issued_at }`.
+  The hook builds that object from its own connection: `workspace` is the workspace id in
+  `cloud.json` (`organization_id`) and `computer` this installation's id, so an answer signed for
+  another computer or workspace never verifies here. `revision`, `rules_digest`, `issued_at`
+  (RFC 3339) and `local_changes` (absent means `false`) are the document's; `managed` is `true`
+  for a rules document and `false` for the "no rules" answer, which is sent with status 200 as
+  `{ "type": "scopebond:managed-rules", "version": 1, "managed": false, "installation_id": …,
+  "revision": 0, "rules_digest": "000…0" (64 zeros), "local_changes": false, "issued_at": …,
+  "key_id": …, "signature": … }` (a 204 is the unsigned form of the same answer).
+- **What is refused.** A signature that does not verify (a changed digest or switch, a forged
+  answer), a `key_id` this release does not trust, a key whose validity window does not hold
+  both the answer's `issued_at` and the present moment, an answer for another computer or
+  workspace, an answer issued before the signed one in force (a replay), and an answer issued
+  more than an hour ahead of this computer's clock. A refusal keeps the rules in force, is
+  confirmed to the workspace and shows in `status` and `doctor`. The version in force served
+  again is checked the same way. To go back to earlier rules, the workspace issues them as a
+  new, higher revision: an older revision is never installed.
+- **Modes.** `dual` (the default): a signed answer must verify; an unsigned one is still accepted
+  and recorded as `unsigned_policy`. `enforce`: an unsigned answer is refused too, and so are a
+  204 and a 401, which cannot be signed; the computer keeps the policy it has and never falls
+  back to no rules. Set `SCOPEBOND_POLICY_SIGNATURE_MODE=enforce`, or `"policy_signature_mode":
+  "enforce"` in `cloud.json`; when either says `enforce`, `enforce` applies. Dual mode is a
+  step towards enforce, not a protection by itself: whoever can change the answer on its way can
+  also remove its signature, and it is then accepted as unsigned. In either mode a stale answer
+  is not detected: a replayed "nothing changed" (304), or the signed document in force served
+  again after the workspace has issued a newer one, keeps the rules as they are.
+- **Keys.** The trusted keys are pinned in the release (`src/policy-keys.ts`: `key_id`,
+  `public_key` as SPKI PEM or the raw 32-byte key in base64, `not_before`, `not_after`). This
+  release pins none yet, because the workspace's signing key does not exist yet: a later release
+  pins it. Rotation is a release too: the next key ships ahead of time with a future
+  `not_before`. `SCOPEBOND_POLICY_KEYS_JSON` (a JSON array of the same entries) adds keys, for
+  tests and for trying a key before it is pinned. An entry whose window closes before it opens,
+  or whose `public_key` does not read as an Ed25519 key, is left out, and `doctor` says why.
+- **What is reported.** `status --json` has `policy_signature: { mode, last, reason }`, where
+  `last` is `verified`, `unsigned` or `refused`; each rules check tells the workspace the same
+  (`x-scopebond-policy-signature`).
+
 ### Session, health and action observations (opt-in)
 
 Beyond receipts, the hook can send a second kind of signed record, an *observation*,
@@ -599,6 +726,18 @@ An allowed action is recorded and the agent proceeds. A denied action is blocked
 Unknown tools are recorded as *not evaluated* and grant nothing — they fall through to
 the coding agent's own permission prompt, so the hook never turns an unrecognised
 action into an approval. Anything unexpected fails closed (deny) with a repair message.
+So does a call that has not decided shortly before the coding agent's own hook time limit
+(55 seconds for Claude Code, 45 for GitHub Copilot, 28 for Codex and Cursor), since an agent
+runs an action unchecked when its hook times out; `SCOPEBOND_HOOK_DEADLINE_MS` can only
+shorten that deadline. The waits a call takes on purpose fit inside it: the person's answer in
+the Scopebond window waits at most what the deadline leaves, and a hook call waits at most 8
+seconds for another process's lock on the local log. A lock wait cannot be interrupted while it
+lasts, so several in one call on a heavily contended log can still outlast the agent's limit.
+
+**Known limits.** `test/bypass-corpus/` lists indirect ways to reach a blocked action
+(interpreter one-liners, indirect writes, renamed programs, `xargs` and `find -exec`, quoting,
+`cmd /c` and PowerShell `-EncodedCommand`) with the outcome the hook gives each: blocked, or
+recorded by name. The ones it does not meet yet are marked `expected_gap`, with the reason.
 
 **What a block says.** A denial names the action, the rule that decided, why that rule
 exists (the clause's own description), the engine's technical detail and where to change

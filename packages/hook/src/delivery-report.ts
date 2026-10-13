@@ -7,6 +7,7 @@ import { SqliteCloudOutbox } from "@scopebond/gateway/node";
 import type { HookConnection } from "./cloud.js";
 import { ago, readDeliveryState, waitingUntil, type DeliveryState } from "./delivery-state.js";
 import { cliCommand } from "./version.js";
+import { readSignatureState, signatureMode } from "./policy-signature.js";
 
 export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
 
@@ -118,5 +119,20 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
       problems.push(`${pending} record(s) are not reaching the workspace: ${since} (${why}); they stay queued — run ${flush} to send them now and see the answer`);
     }
   }
+  signatureLines(dir, connection, lines, problems);
   return { lines, problems, fix };
+}
+
+/** How the workspace's last rules answer was signed: verified, accepted unsigned (`unsigned_policy`, dual mode only) or
+ *  refused (a refusal keeps the rules in force and is a problem for `doctor`). Nothing until a rules check has run. */
+function signatureLines(dir: string, connection: Pick<HookConnection, "url">, lines: string[], problems: string[]): void {
+  const state = readSignatureState(dir);
+  if (!state) return;
+  const mode = signatureMode(connection);
+  if (state.last === "verified") lines.push(`rules signature  verified (${mode} mode)`);
+  else if (state.last === "unsigned") lines.push(`rules signature  unsigned_policy: the workspace's last rules answer was not signed; accepted (${mode} mode)`);
+  else {
+    lines.push(`rules signature  REFUSED (${state.reason ?? "unknown"}, ${mode} mode): the rules in force stay`);
+    problems.push(`the workspace's last rules answer was refused (${state.reason ?? "unknown"}); the rules in force stay until a correctly signed answer arrives`);
+  }
 }

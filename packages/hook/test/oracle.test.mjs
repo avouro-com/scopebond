@@ -55,6 +55,15 @@ test("bash oracle: the hook denies everything bash would run harmfully", { skip 
   const stats = {};
   try {
     for (const { command, category } of corpus) {
+      // A command this host's bash cannot run as written (no `timeout` on macOS, no `|&` in bash 3.2) is checked against its
+      // label alone: a harmful one must still be denied, whatever this host could show.
+      if (oracle.unsupported(command)) {
+        const d = await rt.evaluate(fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command } }), BRANCH));
+        const s = (stats[category] ??= { total: 0, misses: 0, fps: 0 });
+        s.total++;
+        if (category !== "benign" && d.decision !== "deny") { s.misses++; misses.push(`[${category}] ${JSON.stringify(command)} -> ${d.decision} (by label: ${oracle.unsupported(command)})`); }
+        continue;
+      }
       const truth = oracle.run(command, { branch: BRANCH });
       const harm = {
         "destructive-shell": truth.destructive.length > 0,

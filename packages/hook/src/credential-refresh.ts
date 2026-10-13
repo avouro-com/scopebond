@@ -10,6 +10,7 @@ import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { connectionPath, type HookConnection } from "./cloud.js";
 import { forgetCached } from "./config-cache.js";
 import { replaceFile } from "./safe-fs.js";
+import { versionedFetch } from "./workspace-fetch.js";
 
 export const REFRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -32,7 +33,7 @@ export async function refreshIfDue(
     if (!existsSync(keyFile)) return "refused";
     const { attester } = loadOrCreateAttester({ file: keyFile });
     const signature = await attester.sign(refreshProof(connection.credential_id, connection.gateway_id));
-    const response = await (options.fetchImpl ?? fetch)(new URL("/v1/credential/refresh", connection.url).toString(), {
+    const response = await versionedFetch(options.fetchImpl)(new URL("/v1/credential/refresh", connection.url).toString(), {
       method: "POST",
       headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
       body: JSON.stringify({ signature }),

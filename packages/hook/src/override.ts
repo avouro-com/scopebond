@@ -148,12 +148,13 @@ export interface OverrideContext {
   /** The Scopebond home, where the resident agent publishes its local channel. */
   home: string;
   agentKid: string;
-  harness: "claude" | "codex" | "cursor";
+  harness: "claude" | "codex" | "cursor" | "copilot";
   /** Claude Code's permission_mode from the hook payload, when it sent one. */
   permissionMode?: string | null;
   now?: () => number;
-  /** How long to wait for the person; the agent's own hook timeout must be longer. */
-  waitMs?: number;
+  /** How long to wait for the person; the agent's own hook timeout must be longer. A function is read when the person is
+   *  asked, so the wait can shrink to what is left of the hook call's deadline (hook-deadline.ts). */
+  waitMs?: number | (() => number);
   ask?: typeof askAgent;
 }
 
@@ -217,10 +218,11 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     }
     if (offers.allow && state.entries.filter((e) => e.rule === rule && e.at >= dayStart).length >= terms.daily_limit) { last = { rule, title, outcome: "limit" }; blocked(); return null; }
 
+    const waitMs = typeof ctx.waitMs === "function" ? ctx.waitMs() : ctx.waitMs ?? 45_000;
     let answer = await (ctx.ask ?? askAgent)(ctx.home, {
       action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting.mode, offers,
-      lasts: terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only", timeout_ms: ctx.waitMs ?? 45_000,
-    }, (ctx.waitMs ?? 45_000) + 2_000);
+      lasts: terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only", timeout_ms: waitMs,
+    }, waitMs + 2_000);
     // Ask an admin: the action stays blocked; the request waits for the agent to send it.
     // An older Scopebond Agent shows only "Allow once"; where only asking is offered, its answer is a request to an admin.
     if (answer.decision === "allow" && !offers.allow && offers.ask) answer = { ...answer, decision: "ask" };

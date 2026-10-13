@@ -13,6 +13,11 @@
 //   304  nothing changed since the last check
 //   200  a rules document: checked, installed if newer, confirmed
 //   401  the connection is no longer valid (revoked, expired, removed): go back to this computer's own rules
+//
+// A signed answer (a rules document, or `{ type: "scopebond:managed-rules", managed: false, … }` with 200 for "no rules")
+// must verify against a pinned workspace key (policy-signature.ts). In the default `dual` mode an unsigned answer is still
+// accepted and recorded as `unsigned_policy`; in `enforce` mode it is refused, and so are a 204 and a 401, which carry no
+// signature: the rules in force stay, and the computer never falls back to no rules on an answer it cannot verify.
 
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -24,6 +29,8 @@ import { recommendedFrom } from "./client-health.js";
 import { retentionDaysFrom } from "./store-upkeep.js";
 import { evidenceDetailFrom } from "./evidence-detail.js";
 import { receiptContextFrom } from "./receipt-context.js";
+import { admitSigned, checkPolicySignature, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
+import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
  *  the portal can say "checking in but not delivering" instead of "reporting". Counts and one
@@ -47,6 +54,8 @@ function deliveryHeaders(dir: string): Record<string, string> {
       ...(state.last_error ? { "x-scopebond-last-error": state.last_error.replace(/[^\x20-\x7e]/g, " ").slice(0, 200) } : {}),
       // The rule settings this computer runs and who set each, so the workspace shows what is true here.
       ...rulesHeader(dir),
+      // How the last answer's signature was checked (verified, unsigned and accepted, or refused, and why).
+      ...signatureHeader(dir),
     };
   } catch { return {}; }
 }
@@ -58,8 +67,15 @@ function rulesHeader(dir: string): Record<string, string> {
   const report = ruleReport(dir);
   return report ? { "x-scopebond-rules": JSON.stringify(report) } : {};
 }
+function signatureHeader(dir: string): Record<string, string> {
+  const state = readSignatureState(dir);
+  return state ? { "x-scopebond-policy-signature": JSON.stringify({ mode: state.mode, last: state.last, reason: state.reason }) } : {};
+}
+/** The refusal reason the confirmation carries for a signature refusal, in the words the workspace already reads. */
+const ackReasonFor = (reason: SignatureReason): RefusalReason =>
+  reason === "wrong_computer" ? "wrong_computer" : reason === "replayed" ? "stale_revision" : "invalid_document";
 import {
-  ruleReport, inspectManaged, installManaged, isManaged, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
+  ruleReport, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -75,7 +91,7 @@ export type SyncOutcome =
   | { state: "own_rules"; changed: boolean }
   | { state: "unchanged"; revision: number }
   | { state: "applied"; revision: number }
-  | { state: "refused"; revision: number | null; reason: RefusalReason; message: string }
+  | { state: "refused"; revision: number | null; reason: RefusalReason; message: string; signature?: SignatureReason }
   | { state: "disconnected" }
   | { state: "unavailable"; message: string };
 
@@ -97,9 +113,11 @@ export interface SyncOptions {
 export async function syncPolicy(dir: string, options: SyncOptions): Promise<SyncOutcome> {
   const connection = loadConnection(dir);
   if (!connection) return { state: "not_connected" };
-  const fetchImpl = options.fetchImpl ?? fetch;
+  // Every call to the workspace says which hook version makes it (the rules check below sets it itself).
+  const fetchImpl = versionedFetch(options.fetchImpl ?? fetch, options.hookVersion);
   const now = (options.now ?? (() => new Date()))();
   const installationId = (connection as { installation_id?: string }).installation_id ?? connection.gateway_id;
+  const mode = signatureMode(connection);
   const base = connection.url.replace(/\/+$/, "");
   const auth = { authorization: `Bearer ${connection.credential}` };
   const meta = readMeta(dir);
@@ -142,7 +160,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // and the always/requests terms only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
-      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances", "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { "x-scopebond-hook-version": options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
+      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances", "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -161,19 +179,43 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   recordRulesCredential(dir, res.status !== 401, now.getTime());
   // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
   if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
+  const at = now.toISOString();
+  // Replay protection holds per workspace: a computer connected to another workspace starts again (an answer from the old
+  // one can never verify here, since the signature binds the workspace id).
+  const workspaceId = workspaceIdOf(connection);
+  const lastIssuedAt = (): string | null => (meta.policy_issued_workspace ?? null) === workspaceId ? meta.policy_issued_at ?? null : null;
+  const issued = (issuedAt: string | null) => (issuedAt ? { policy_issued_at: issuedAt, policy_issued_workspace: workspaceId } : {});
+  const signed = (raw: Record<string, unknown>, managed: boolean) => {
+    const check = checkPolicySignature(raw, { workspace: workspaceId, computer: installationId, managed, lastIssuedAt: lastIssuedAt(), now });
+    return { issuedAt: check.result === "verified" ? check.issuedAt : null, admitted: admitSigned(check, mode, at) };
+  };
   if (res.status === 401) {
+    // A 401 carries no signature. In enforce mode it is not reason enough to drop the workspace's rules: they stay in
+    // force until the person signs in again (or disconnects this computer), so a forged 401 never relaxes them.
+    if (mode === "enforce" && isManaged(dir)) {
+      const state: SignatureState = { mode, last: "refused", reason: "unsigned_policy", at };
+      save({ policy_signature: state, last_error: "the workspace connection is no longer valid; in enforce mode the workspace rules in force stay until this computer signs in again or is disconnected" });
+      return { state: "disconnected" };
+    }
     backToOwnRules();
     save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules" });
     return { state: "disconnected" };
   }
-  if (res.status === 204) {
+  /** The workspace sets no rules for this computer (a 204, or its signed 200 form): back to its own rules, once admitted. */
+  const toOwnRules = async (admitted: ReturnType<typeof admitSigned>, issuedAt: string | null): Promise<SyncOutcome> => {
+    if (!admitted.ok) {
+      const confirmed = await ack({ export_id: `rev-0-${installationId}`, revision: 0, rules_digest: UNMANAGED_DIGEST, result: "rejected", reason: ackReasonFor(admitted.reason) });
+      save({ last_ack: confirmed, policy_signature: admitted.state, last_error: admitted.message });
+      return { state: "refused", revision: null, reason: ackReasonFor(admitted.reason), message: admitted.message, signature: admitted.reason };
+    }
     const changed = backToOwnRules();
     const last = meta.last_ack;
-    const confirmed = changed || !last || last.revision !== 0
+    const confirmed = changed || !last || last.revision !== 0 || last.result !== "loaded"
       ? await ack({ export_id: `rev-0-${installationId}`, revision: 0, rules_digest: UNMANAGED_DIGEST, result: "loaded" }) : last;
-    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null });
+    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...issued(issuedAt) });
     return { state: "own_rules", changed };
-  }
+  };
+  if (res.status === 204) return toOwnRules(admitSigned({ result: "unsigned" }, mode, at), null);
   if (res.status === 304 && isManaged(dir) && meta.revision !== null) {
     const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision, rules_digest: meta.rules_digest!, result: "loaded" });
@@ -189,15 +231,35 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   try { raw = await res.json(); } catch { raw = null; }
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const etag = res.headers.get("etag");
+  // "No rules for this computer" as a (signed) body: the same as a 204 once its signature is admitted.
+  if (isUnmanagedAnswer(raw)) {
+    if (r.installation_id !== installationId) {
+      const state: SignatureState = { mode, last: "refused", reason: "wrong_computer", at };
+      const message = "the workspace's answer was issued for a different computer; the rules in force stay";
+      save({ policy_signature: state, last_error: message });
+      return { state: "refused", revision: null, reason: "wrong_computer", message, signature: "wrong_computer" };
+    }
+    const { issuedAt, admitted } = signed(r, false);
+    return toOwnRules(admitted, issuedAt);
+  }
   // Whether people may change rules on this computer is outside the rules digest, so the same version can arrive
   // with only that switch changed; it is a change to install, not "unchanged".
   const sameVersion = isManaged(dir) && r.revision === meta.revision && r.rules_digest === meta.rules_digest && meta.revision !== null;
   const switchChanged = sameVersion && (r.local_changes === true) !== installedLocalChanges(dir);
   // The same version already in force: confirm it again if the last confirmation did not land.
   if (sameVersion && !switchChanged) {
-    const confirmed = meta.last_ack?.revision === meta.revision ? meta.last_ack
+    // Checked like a new answer: the version in force served again without its signature (or with a bad one) is not
+    // confirmed as loaded, and what `status` says about the last answer stays true.
+    const again = signed(r, true);
+    if (!again.admitted.ok) {
+      const reason = ackReasonFor(again.admitted.reason);
+      const confirmed = await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "rejected", reason });
+      save({ last_ack: confirmed, policy_signature: again.admitted.state, last_error: again.admitted.message });
+      return { state: "refused", revision: meta.revision, reason, message: again.admitted.message, signature: again.admitted.reason };
+    }
+    const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "loaded" });
-    save({ etag, last_ack: confirmed, last_error: null });
+    save({ etag, last_ack: confirmed, last_error: null, policy_signature: again.admitted.state, ...issued(again.issuedAt) });
     return { state: "unchanged", revision: meta.revision! };
   }
   const inspected = inspectManaged(raw, switchChanged ? { installationId, currentRevision: null }
@@ -210,6 +272,14 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     return { state: "refused", revision: echo?.revision ?? null, reason: inspected.reason, message: inspected.message };
   }
   const doc = inspected.doc;
+  // A well-formed document must also pass its signature check before anything changes.
+  const { issuedAt, admitted } = signed(r, true);
+  if (!admitted.ok) {
+    const reason = ackReasonFor(admitted.reason);
+    const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "rejected", reason });
+    save({ last_ack: confirmed, policy_signature: admitted.state, last_error: admitted.message });
+    return { state: "refused", revision: doc.revision, reason, message: admitted.message, signature: admitted.reason };
+  }
   const installed = installManaged(dir, doc, options.agentKid, options.policyBuilds);
   if (!installed.ok) {
     const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "rejected", reason: installed.reason });
@@ -218,7 +288,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   }
   options.afterPolicyWrite?.(dir);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
-  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, last_ack: confirmed, last_error: null });
+  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, last_ack: confirmed, last_error: null,
+    policy_signature: admitted.state, ...issued(issuedAt) });
   return { state: "applied", revision: doc.revision };
 }
 

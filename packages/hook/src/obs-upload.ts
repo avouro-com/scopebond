@@ -25,6 +25,7 @@
 
 import { MAX_BATCH_BODY_BYTES, MAX_BATCH_ITEMS } from "./observation.js";
 import type { ObservationStore, PendingRow } from "./obs-store.js";
+import { versionedFetch } from "./workspace-fetch.js";
 
 export const OBSERVATIONS_PATH = "/v1/observations";
 export const BATCH_VERSION = "1.0";
@@ -93,7 +94,7 @@ function parseResults(body: unknown, sent: PendingRow[]): { results: Map<number,
 
 export async function uploadPending(store: ObservationStore, options: UploadOptions): Promise<UploadOutcome> {
   const now = options.now ?? Date.now;
-  const doFetch = options.fetch ?? fetch;
+  const doFetch = versionedFetch(options.fetch);
   const outcome: UploadOutcome = { result: "empty", acknowledged: 0, deferred: 0, rejected: 0 };
   const endpoint = new URL(OBSERVATIONS_PATH, options.url);
   if (endpoint.protocol !== "https:" && endpoint.hostname !== "localhost" && endpoint.hostname !== "127.0.0.1") {

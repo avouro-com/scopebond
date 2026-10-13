@@ -97,6 +97,8 @@ export function observationStatus(input: HookConnection | null, keyKid?: string)
 export interface EmitterOptions {
   fetch?: typeof fetch;
   now?: () => number;
+  /** How long the observation log waits for another process's lock (15 s by default; a hook call passes less). */
+  busyTimeoutMs?: number;
   adapterVersion?: string;
   /** Tests: do not start the heartbeat helper process. */
   spawnHeartbeat?: boolean;
@@ -122,7 +124,7 @@ export function openObservations(dir: string, options: EmitterOptions = {}): Ope
   try {
     const keyPem = readFileSync(join(dir, "agent.key"), "utf8");
     const signer = observationSigner(keyPem, connection.agent_kid as string);
-    store = new ObservationStore(join(dir, OBSERVATION_DB), options.now);
+    store = new ObservationStore(join(dir, OBSERVATION_DB), options.now, { busyTimeoutMs: options.busyTimeoutMs });
     const bound = store.bindGeneration(connection.installation_generation as number);
     if (!bound.ok) { store.close(); return { status: { state: "unsupported", reason: bound.reason } }; }
     const emitter = new ObservationEmitter(dir, connection, store, signer, loadOrCreateBindingKey(dir), options);

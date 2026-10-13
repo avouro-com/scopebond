@@ -1,0 +1,17 @@
+{
+  "category": "quoted and escaped variants",
+  "cases": [
+    { "id": "double-quoted-flag", "command": "git push \"--force\" origin main", "expected": "block" },
+    { "id": "single-quoted-flag", "command": "git push '-f' origin main", "expected": "block" },
+    { "id": "escaped-program", "command": "g\\it push -f origin main", "expected": "block" },
+    { "id": "quoted-program", "command": "\"git\" push -f origin main", "expected": "block" },
+    { "id": "plus-refspec", "command": "git push origin +main", "expected": "block" },
+    { "id": "abbreviated-flag", "command": "git push --forc origin main", "expected": "block" },
+    { "id": "env-prefix", "command": "env git push -f origin main", "expected": "block" },
+    { "id": "assignment-prefix", "command": "GIT_DIR=.git git push -f origin main", "expected": "block" },
+    { "id": "alias-from-config-flag", "command": "git -c alias.p='push -f' p origin main", "expected": "block" },
+    { "id": "eval", "command": "eval \"git push -f origin main\"", "expected": "block" },
+    { "id": "base64-piped-to-sh", "command": "echo {base64} | base64 -d | sh", "payload": "git push -f origin main", "expected": "block",
+      "note": "a shell reading its commands from a pipe is not read, and is denied" }
+  ]
+}

@@ -85,11 +85,11 @@ const rel = (value: unknown, cwd?: string): string => {
 // eslint-disable-next-line security/detect-unsafe-regex -- bounded: every repeat has a small fixed maximum
 const SHORT_SEGMENT = /^([^.~\s/]{1,6})~\d{1,6}(?:\.([^.\s/]{1,3}))?$/;
 const SHORT_TARGETS = [
-  ".scopebond", ".claude", ".cursor", ".codex", ".github", ".git", ".husky", ".circleci", ".gitlab-ci.yml", ".gitlab-ci.yaml",
+  ".scopebond", ".claude", ".cursor", ".codex", ".copilot", ".github", ".git", ".husky", ".circleci", ".gitlab-ci.yml", ".gitlab-ci.yaml",
   ".mcp.json", "azure-pipelines.yml", "Jenkinsfile", "workflows", "actions", "settings.json", "settings.local.json", "hooks.json",
   "config.toml", "agents", ".ssh", ".aws", ".kube", ".docker", ".azure", ".gnupg", ".config", ".env", ".env.local", ".env.production",
   ".envrc", ".npmrc", ".pypirc", ".netrc", ".git-credentials", "credentials", ".credentials.json", "id_ed25519", "config.json",
-  "accessTokens.json", "credentials.db", "attester.key", "policy.json", "cloud.json",
+  "accessTokens.json", "credentials.db", "attester.key", "policy.json", "cloud.json", "scopebond.json",
   // the signed installer's folder (`C:\PROGRA~1\SCOPEB~1`)
   "Scopebond", "Program Files",
 ];
@@ -137,6 +137,8 @@ const PROTECTED_SAMPLES = [
   ".config/gh/hosts.yml", ".claude/.credentials.json",
   ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/hook.sh", ".claude/agents/agent.md",
   ".cursor/hooks.json", ".codex/hooks.json", ".codex/config.toml", ".mcp.json",
+  ".copilot/hooks/scopebond.json", ".copilot/settings.json", ".copilot/mcp-config.json", ".github/hooks/scopebond.json",
+  ".github/copilot/settings.json", ".github/copilot/settings.local.json",
   ".git/hooks/pre-commit", ".git/config", ".husky/pre-commit", ".github/workflows/ci.yml", ".github/actions/a/action.yml",
   ".gitlab-ci.yml", ".gitlab-ci.yaml", ".circleci/config.yml", "azure-pipelines.yml", "Jenkinsfile",
   // the protected directories themselves (a recursive reader or copier given the directory)
@@ -295,27 +297,28 @@ const VALUE_PARAMETER = new Set(["-va", "-val", "-valu", "-value"]);
 // agent removing Scopebond's files and their evidence. Any other delete stays a plain shell.exec, as before.
 const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri", "trash", "trash-put"]);
 // The signed installer's folder (`%LOCALAPPDATA%\Programs\Scopebond`, `%ProgramFiles%\Scopebond`) holds the hook's program.
-const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks|(?:programs|program files(?: \(x86\))?|progra~\d|[%$]\{?(?:env:)?program[^\\/]*)[\\/](?:scopebond|scopeb~\d))(?:$|[\\/:])/i;
+const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.copilot[\\/](?:hooks|settings\.json|mcp-config\.json)|\.github[\\/](?:hooks|copilot[\\/]settings(?:\.local)?\.json)|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks|(?:programs|program files(?: \(x86\))?|progra~\d|[%$]\{?(?:env:)?program[^\\/]*)[\\/](?:scopebond|scopeb~\d))(?:$|[\\/:])/i;
 // Removing or renaming a folder takes everything inside it. A folder that holds an always-protected place is recorded as a
 // write of that place, so the always-on floor stops the removal as it would a change to the place itself. Each entry is a folder
 // and the protected place inside it (empty when the folder itself is protected): this project's (in its working folder or above)
 // and this person's (in the home folder). See removedPlaces.
 const PROJECT_HOLDERS: ReadonlyArray<readonly [string, string]> = [
   [".scopebond", ""], [".claude", "/settings.json"], [".cursor", "/hooks.json"], [".codex", "/hooks.json"], [".git", "/hooks"],
-  [".husky", ""], [".githooks", ""], [".mcp.json", ""],
+  [".husky", ""], [".githooks", ""], [".mcp.json", ""], [".github", "/hooks"],
 ];
 const HOME_HOLDERS: ReadonlyArray<readonly [string, string]> = [
   [".scopebond", ""], [".claude", "/settings.json"], [".cursor", "/hooks.json"], [".codex", "/hooks.json"],
+  [".copilot", "/hooks"], [".copilot", "/settings.json"], [".copilot", "/mcp-config.json"],
 ];
 // The file names a protected place holds, for a `find -name` filter (by the place's ending).
 const PROTECTED_NAMES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["/settings.json", ["settings.json", "settings.local.json"]],
   ["/hooks.json", ["hooks.json"]],
-  ["/hooks", ["hooks", "pre-commit", "pre-push", "commit-msg", "prepare-commit-msg", "post-checkout", "post-merge", "pre-rebase"]],
+  ["/hooks", ["hooks", "pre-commit", "pre-push", "commit-msg", "prepare-commit-msg", "post-checkout", "post-merge", "pre-rebase", "scopebond.json"]],
   [".scopebond", [".scopebond", "policy.json", "rules.json", "agent.key", "attester.key", "receipts.db", "cloud.json", ".gitignore"]],
 ];
 // What a project keeps out of git that this protects: Scopebond's own folder and the agents' personal hook settings.
-const IGNORED_PROTECTED = [".scopebond", ".claude/settings.local.json", ".cursor/hooks.json", ".codex/hooks.json"];
+const IGNORED_PROTECTED = [".scopebond", ".claude/settings.local.json", ".cursor/hooks.json", ".codex/hooks.json", ".github/hooks/scopebond.json"];
 // A variable that names the working folder.
 const WORKING_FOLDER_VAR = /^(?:\$PWD|\$\{PWD\}|\$CLAUDE_PROJECT_DIR|\$\{CLAUDE_PROJECT_DIR\}|%CD%)[\\/]?$/i;
 // Programs that send what they are given elsewhere (network, clipboard, mail): an
@@ -531,7 +534,7 @@ const SCOPEBOND_GLOB = /(?<![\w-])\.sc(?:o(?:p(?:e(?:b(?:o(?:n(?:d)?)?)?)?)?)?)?
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: a fixed prefix, then one repeat whose greedy end is always a character the lookahead accepts
 const SCOPEBOND_IN_TEXT = /(?<![\w-])\.scopebond(?:[\\/][\w.-]*)?(?![\w-])/gi;
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: each alternative is a fixed prefix and one repeat, and the lookbehinds keep a run from being re-entered part-way
-const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
+const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.copilot[\\/](?:hooks[\\/][\w.-]*|settings\.json|mcp-config\.json)|\.github[\\/](?:hooks[\\/][\w.-]*|copilot[\\/]settings[\w.-]*)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
 // A file or process API in the same inline snippet, required in call or member form
 // (not a bare English word — "your .env file" must not read like `File`). Without one,
 // a protected path in a string literal opens nothing. Covers Node (fs/child_process/
@@ -1014,11 +1017,11 @@ function uninstallsScopebond(prog: string, args: string[]): boolean {
 }
 // Coding agents a session can start, and the ways to start one without this computer's hooks: a settings override, a
 // config folder of its own, permission checks skipped, or (Codex) a config override that touches hooks or notify.
-const HARNESSES = new Set(["claude", "codex", "cursor-agent", "cursor", "gemini", "opencode", "aider"]);
+const HARNESSES = new Set(["claude", "codex", "cursor-agent", "cursor", "gemini", "opencode", "aider", "copilot"]);
 // The agents' packages, as `npx` and the like start them, and the scripts those packages run (`node …/claude-code/cli.js`).
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored package names, one optional version, then the end
-const HARNESS_PACKAGE = /^@(?:anthropic-ai\/claude-code|openai\/codex|google\/gemini-cli)(?:@[^/\s]*)?$/i;
-const HARNESS_SCRIPT = /@(?:anthropic-ai[\\/]claude-code|openai[\\/]codex|google[\\/]gemini-cli)[\\/]/i;
+const HARNESS_PACKAGE = /^@(?:anthropic-ai\/claude-code|openai\/codex|google\/gemini-cli|github\/copilot)(?:@[^/\s]*)?$/i;
+const HARNESS_SCRIPT = /@(?:anthropic-ai[\\/]claude-code|openai[\\/]codex|google[\\/]gemini-cli|github[\\/]copilot)[\\/]/i;
 const isHarnessWord = (w: string): boolean => HARNESSES.has(canonProgram(w)) || HARNESS_PACKAGE.test(w);
 const PACKAGE_RUNNERS = new Set(["npx", "pnpx", "bunx"]);
 const SCRIPT_RUNNERS = new Set(["node", "bun", "deno"]);
@@ -1036,8 +1039,8 @@ function launchesHarness(sc: SimpleCommand): boolean {
   return false;
 }
 // The variables that move a coding agent's config folder, and with it the hooks it loads: its own, the XDG base folder, and the
-// home folder (`~/.claude`, `~/.codex` and `~/.cursor` sit there).
-const HARNESS_CONFIG_VARS = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME", "HOME", "USERPROFILE"];
+// home folder (`~/.claude`, `~/.codex`, `~/.cursor` and `~/.copilot` sit there).
+const HARNESS_CONFIG_VARS = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "CURSOR_CONFIG_DIR", "COPILOT_HOME", "XDG_CONFIG_HOME", "HOME", "USERPROFILE"];
 // Commands that set the variables they are given for the commands after them.
 const EXPORTERS = new Set(["export", "declare", "typeset", "local", "readonly"]);
 const POWERSHELL_ENV_SETTERS = new Set(["set-item", "si", "new-item", "ni", "set-content", "sc", "add-content", "ac"]);
@@ -1688,6 +1691,94 @@ export function mapCodexToolUse(input: Record<string, unknown>): Mapped[] {
   const mcp = parseMcpName(name);
   if (mcp) return one({ action_type: "mcp.tool.call", params: { server: mcp.server, tool: mcp.tool, args_digest: digest(ti) } }, true, name);
   return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
+}
+
+/** GitHub Copilot's own tool names, and the Claude Code tool each one stands for. With the PascalCase event names
+ *  Scopebond registers, Copilot already reports the Claude name (`Bash`, `Read`, `Write`, `Edit`, ...) in `tool_name`;
+ *  the camelCase form (`toolName`) carries the runtime name, translated here. Source: the GitHub Copilot hooks reference,
+ *  "Tool names" and the runtime-to-Claude name table. A name not listed keeps its own name and is recorded unevaluated. */
+const COPILOT_TOOLS: Readonly<Record<string, string>> = {
+  bash: "Bash", powershell: "PowerShell", view: "Read", create: "Write", edit: "Edit", str_replace_editor: "Edit",
+  apply_patch: "Edit", grep: "Grep", rg: "Grep", glob: "Glob", web_fetch: "WebFetch", web_search: "WebSearch",
+  task: "Agent", ask_user: "AskUserQuestion", update_todo: "TodoWrite",
+};
+
+const isPlainRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const COPILOT_SHELLS = new Set(["bash", "powershell", "Bash", "PowerShell", "Shell"]);
+
+/** A Copilot hook payload in Claude Code's shape. The PascalCase events send `hook_event_name`, `session_id`, `cwd`,
+ *  `tool_name` and `tool_input`; the camelCase ones send `sessionId`, `cwd`, `toolName` and `toolArgs` (a JSON string).
+ *  Both read the same here, with the arguments parsed when they arrive as a string. */
+export function normalizeCopilotInput(input: Record<string, unknown>): Record<string, unknown> {
+  const p = isPlainRecord(input) ? input : {};
+  const raw = p.tool_input ?? p.toolArgs;
+  const tool = textOf(p.tool_name ?? p.toolName);
+  let args: unknown = raw;
+  // Arguments that are not JSON are a shell tool's command (or what `write_bash` types); for any other tool they say nothing.
+  const asText = (text: string): Record<string, unknown> =>
+    tool === "write_bash" ? { input: text } : COPILOT_SHELLS.has(tool) ? { command: text } : {};
+  if (typeof raw === "string") { try { args = JSON.parse(raw); } catch { args = asText(raw); } }
+  const out: Record<string, unknown> = { ...p };
+  if (p.session_id === undefined && typeof p.sessionId === "string") out.session_id = p.sessionId;
+  if (p.tool_name === undefined && p.toolName !== undefined) out.tool_name = p.toolName;
+  if (out.tool_name !== undefined || raw !== undefined) out.tool_input = isPlainRecord(args) ? args : {};
+  return out;
+}
+
+/** A Copilot tool call as the Claude Code call it stands for: the Claude tool name, and the arguments under Claude Code's
+ *  names (`file_path`, `command`, `url`, ...), with Copilot's own names (`path`, `filePath`, `cmd`) read too. Copilot
+ *  reports both of its shells as `Bash` under the PascalCase events; on Windows its shell tool is PowerShell, so a Windows
+ *  `Bash` command is read as PowerShell (the runtime names `bash` and `powershell` say which one exactly). An `apply_patch`
+ *  call, which sends a patch instead of a path, becomes an `Edit` carrying `patch`. Everything else in the payload is kept.
+ *  Apply it once: the result is what the hook evaluates, records and observes. */
+export function copilotAsClaude(input: Record<string, unknown>): Record<string, unknown> {
+  const p = normalizeCopilotInput(input);
+  const raw = textOf(p.tool_name);
+  const name = COPILOT_TOOLS[raw] ?? raw;
+  const ti = (p.tool_input ?? {}) as Record<string, unknown>;
+  const path = ti.file_path ?? ti.path ?? ti.filePath;
+  const as = (tool_name: string, tool_input: Record<string, unknown>): Record<string, unknown> => ({ ...p, tool_name, tool_input });
+  if (name === "Bash" || name === "Shell" || name === "PowerShell") {
+    // `bash` with `mode: "async"` or `"detached"` starts a session; its command is checked the same way.
+    const command = ti.command ?? ti.cmd ?? ti.script;
+    const powershell = name === "PowerShell" || (raw !== "bash" && process.platform === "win32");
+    return as(powershell ? "PowerShell" : "Bash", { command });
+  }
+  // `write_bash` types into a running shell session: what it types runs as a command in that shell, so it is checked as
+  // one (PowerShell on Windows, like the session it writes to). `read_bash`, `stop_bash` and `list_bash` run nothing new
+  // and stay unevaluated tools.
+  if (raw === "write_bash") {
+    return as(process.platform === "win32" ? "PowerShell" : "Bash", { command: ti.input ?? ti.text ?? ti.command });
+  }
+  if (name === "Edit" || name === "Write") {
+    const patch = [ti.input, ti.patch, ti.command].find((v): v is string => typeof v === "string" && v.includes("*** Begin Patch"));
+    if (path === undefined && patch !== undefined) return as("Edit", { patch });
+    // `str_replace_editor` names its operation; only `view` leaves the file as it was.
+    if (name === "Edit" && ti.command === "view") return as("Read", { file_path: path });
+    return as(name, { file_path: path });
+  }
+  if (name === "Read") return as("Read", { file_path: path });
+  if (name === "Grep") return as("Grep", { path: ti.path, glob: ti.glob ?? ti.include });
+  if (name === "Glob") return as("Glob", { path: ti.path, pattern: ti.pattern });
+  if (name === "WebFetch") return as("WebFetch", { url: ti.url });
+  return as(name, ti);
+}
+
+/** Map a Copilot call already in Claude Code's shape (`copilotAsClaude`): exactly as a Claude Code call, plus the patch an
+ *  `apply_patch` sends, of which every file it names is a write. */
+export function mapCopilotCall(call: Record<string, unknown>): Mapped[] {
+  const ti = (call?.tool_input ?? {}) as Record<string, unknown>;
+  if (call?.tool_name === "Edit" && ti.file_path === undefined && typeof ti.patch === "string") {
+    return mapApplyPatch(ti.patch, call.cwd ? textOf(call.cwd) : undefined);
+  }
+  return mapClaudeToolUse(call);
+}
+
+/** Map a GitHub Copilot `PreToolUse` payload (CLI, VS Code agent mode or the cloud coding agent) to the normalized
+ *  actions it represents: each Copilot tool is translated into the Claude Code tool family it belongs to and mapped
+ *  exactly as a Claude Code call is. A tool with no mapping stays `tool.<name>`, recorded and not evaluated. */
+export function mapCopilotToolUse(input: Record<string, unknown>): Mapped[] {
+  return mapCopilotCall(copilotAsClaude(input));
 }
 
 /** Map a Cursor hook event to the normalized actions it represents. */

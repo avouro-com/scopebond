@@ -41,6 +41,9 @@ export interface RuntimeConfig {
    *  (`HOT_PATH_QUEUE_BUSY_MS`), so an override wait plus a lock wait stays inside the coding agent's hook time limit; a write
    *  that fails then is kept as a gap and queued on the next flush. `flush` (no time limit) passes a longer one. */
   queueBusyTimeoutMs?: number;
+  /** How long a local-log statement waits for another process's write lock (15 s by default). A hook call passes less
+   *  (`HOT_PATH_STORE_BUSY_MS`, hook-deadline.ts), so a lock wait cannot by itself carry the call past its deadline. */
+  storeBusyTimeoutMs?: number;
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
    *  (see override.ts). `hint` explains, in a denial, how an override would have been possible. */
   override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null } | null;
@@ -94,7 +97,15 @@ const CI_WRITE_PREV = [
   under("\\.github/workflows"), under("\\.github/actions"), named("\\.gitlab-ci\\.yml"), named("\\.gitlab-ci\\.yaml"), under("\\.circleci"),
   named("azure-pipelines\\.yml"), named("Jenkinsfile"),
 ];
-const GUARDRAIL_WRITE = [...GUARDRAIL_WRITE_PREV, named("\\.cursor/mcp\\.json"), under("\\.githooks")];
+const GUARDRAIL_WRITE_PREV2 = [...GUARDRAIL_WRITE_PREV, named("\\.cursor/mcp\\.json"), under("\\.githooks")];
+// GitHub Copilot's hook files and the settings files whose `hooks` block it also reads: the user-level folder and settings
+// (`~/.copilot`, with the CLI's MCP servers in `mcp-config.json`, as `.cursor/mcp.json` is protected), and a repository's `.github/hooks` and `.github/copilot` settings. `.github/hooks` holds hooks, not CI
+// configuration, so it is guardrail configuration (C02) like the other agents' hook settings.
+const COPILOT_GUARDRAIL_WRITE = [
+  under("\\.copilot/hooks"), named("\\.copilot/settings\\.json"), named("\\.copilot/mcp-config\\.json"), under("\\.github/hooks"),
+  named("\\.github/copilot/settings\\.json"), named("\\.github/copilot/settings\\.local\\.json"),
+];
+const GUARDRAIL_WRITE = [...GUARDRAIL_WRITE_PREV2, ...COPILOT_GUARDRAIL_WRITE];
 const CI_WRITE = [
   ...CI_WRITE_PREV,
   named("azure-pipelines\\.yaml"), named("bitbucket-pipelines\\.yml"), named("\\.travis\\.yml"), named("\\.drone\\.yml"),
@@ -103,6 +114,8 @@ const CI_WRITE = [
 // What 0.8 compiled, kept so an installed policy that still carries it verbatim is
 // upgraded in memory (see LEGACY_STARTER_PATTERNS).
 const PROTECTED_WRITE_PREV = "^" + [...GUARDRAIL_WRITE_PREV, ...CI_WRITE_PREV].join("") + ".+";
+/** What the starter policy's write rule compiled to before it covered GitHub Copilot's hook settings. */
+const PROTECTED_WRITE_PREV2 = "^" + [...GUARDRAIL_WRITE_PREV2, ...CI_WRITE].join("") + ".+";
 const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
 // The folder the signed Windows installer puts the program in (the Scopebond Agent, which is also the hook every coding
 // agent runs, and the tray): `%LOCALAPPDATA%\Programs\Scopebond` for one user, `%ProgramFiles%\Scopebond` for every user.
@@ -113,7 +126,11 @@ const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
 const INSTALL_PARENT = `(?:${ci("programs")}|${ci("program files")}(?: \\(${ci("x86")}\\))?|${ci("progra")}~\\d|[%$]\\{?(?:${ci("env")}:)?${ci("program")}[^/]*)`;
 export const INSTALL_FOLDER = `(?!(?:.*/)?${INSTALL_PARENT}/(?:${ci("scopebond")}|${ci("scopeb")}~\\d)(?:/|$))`;
 /** What the always-on write protection compiled to before it covered the install folder: upgraded on load. */
-const GUARDRAIL_WRITE_PATTERN_PREV = "^" + GUARDRAIL_WRITE.join("") + ".+";
+const GUARDRAIL_WRITE_PATTERN_PREV = "^" + GUARDRAIL_WRITE_PREV2.join("") + ".+";
+/** What it compiled to before it covered GitHub Copilot's hook settings: upgraded on load too. */
+const GUARDRAIL_WRITE_PATTERN_PREV2 = "^" + GUARDRAIL_WRITE_PREV2.join("") + INSTALL_FOLDER + ".+";
+/** The current agent settings without the install folder: weaker than the floor, so upgraded to it as well. */
+const GUARDRAIL_WRITE_PATTERN_NO_INSTALL = "^" + GUARDRAIL_WRITE.join("") + ".+";
 /** The write protection that is always on, whoever manages the rules: the hook's own settings and those of the agents it
  *  guards, and the installed program. A workspace can relax CI-configuration writes; it can never relax these. */
 export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER + ".+";
@@ -177,7 +194,10 @@ const SAFE_REF = `^(?!(?:${ci("main")}|${ci("master")})$)(?!${ci("release")}/)(?
 // these strings and are left untouched.
 const LEGACY_STARTER_PATTERNS: Record<string, string> = {
   [PROTECTED_WRITE_PREV]: PROTECTED_WRITE,
+  [PROTECTED_WRITE_PREV2]: PROTECTED_WRITE,
   [GUARDRAIL_WRITE_PATTERN_PREV]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_PATTERN_PREV2]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_PATTERN_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+": SAFE_SHELL,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+": SAFE_SHELL,
@@ -223,7 +243,7 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
       {
         id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],
         param_bounds: { path: { pattern: PROTECTED_WRITE } },
-        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor or Codex hook settings, .mcp.json and .cursor/mcp.json, git hooks (.git/hooks, .githooks) and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines, bitbucket-pipelines.yml, .travis.yml, .drone.yml, cloudbuild, .buildkite, Jenkinsfile). Case-insensitive.",
+        description: "Allow workspace writes, but never to the hook's policy/keys, Claude Code settings, hooks and agents, Cursor, Codex or GitHub Copilot hook settings, .mcp.json and .cursor/mcp.json, git hooks (.git/hooks, .githooks) and git config, Husky hooks, or CI config (.github/workflows, .github/actions, .gitlab-ci.yml/.yaml, .circleci, azure-pipelines, bitbucket-pipelines.yml, .travis.yml, .drone.yml, cloudbuild, .buildkite, Jenkinsfile). Case-insensitive.",
       },
       {
         id: "protect-read", type: "action_allowlist", mode: mode("protect-read"), action_types: ["file.read"],
@@ -278,6 +298,8 @@ export function createHookRuntime(config: RuntimeConfig) {
     ? `run \`${cliCommand("rules")}\` to see the limits in plain terms, or edit ${join(dirname(config.policyPath), RULES_FILE)}`
     : undefined;
   const { store: baseStore } = openReceiptStore({ db: config.dbPath });
+  const storeBusyMs = config.storeBusyTimeoutMs ?? STORE_BUSY_MS;
+  if (config.storeBusyTimeoutMs !== undefined) { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(storeBusyMs); } catch { /* keeps its wait */ } }
   // When connected, mirror every stored receipt to the hosted portal through a
   // durable outbox. The wrapped store's decision is unchanged; export is best-effort.
   let store = baseStore;
@@ -327,7 +349,7 @@ export function createHookRuntime(config: RuntimeConfig) {
     hint: () => made.hint(),
     handler: (async (ctx) => {
       try { return await made.handler(ctx); }
-      finally { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(AFTER_OVERRIDE_STORE_BUSY_MS); } catch { /* keeps its wait */ } }
+      finally { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(Math.min(AFTER_OVERRIDE_STORE_BUSY_MS, storeBusyMs)); } catch { /* keeps its wait */ } }
     }) as OverrideHandler,
   } : null;
 
@@ -342,7 +364,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       if ((baseStore as { layoutCurrent?: () => boolean }).layoutCurrent?.() === false) return; // an older file: the agent or upkeep migrates it first
       await repairDelivery({ dir, store: repairable, queue: outbox ?? null, attester, connected: !!config.cloud });
     } catch { /* the next flush tries again */ }
-    finally { set(STORE_BUSY_MS); }
+    finally { set(storeBusyMs); }
   };
 
   return {

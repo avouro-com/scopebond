@@ -33,6 +33,7 @@ import { bindingKeyFromHex, operationsForCall, sourceReceiptHash } from "./obser
 import { callRequestOf, fixtureProbe } from "./typed-ops.js";
 import { fixtureFiles } from "./typed-infra.js";
 import { ingestUrl, type HookConnection } from "./cloud.js";
+import { versionedFetch } from "./workspace-fetch.js";
 
 export const PROOF_FILE = "capability-proof.json";
 
@@ -127,7 +128,7 @@ async function proveCell(adapter: Adapter, actionType: string, phase: "pre_actio
  *  tell Codex desktop from Codex CLI: both keys get the same fixture proof, and neither
  *  becomes verified (see `cellState`). */
 export async function runProofFixtures(adapterVersion: string, options: ProofRunOptions = {}): Promise<Record<string, ProofRecord>> {
-  const cells = computeManifest({ adapterVersion, configured: { claude: true, codex: true, cursor: true } }).cells;
+  const cells = computeManifest({ adapterVersion, configured: { claude: true, codex: true, cursor: true, copilot: true } }).cells;
   const records: Record<string, ProofRecord> = {};
   const cache = new Map<string, Omit<ProofRecord, "cell"> | null>();
   for (const cell of cells) {
@@ -172,7 +173,7 @@ export async function deliverProofReceipts(connection: HookConnection, receipts:
   if (receipts.length === 0) return true;
   const exporter = createCloudExporter({
     url: ingestUrl(connection), credential: connection.credential, outbox: createMemoryCloudOutbox({ maxPending: Math.max(1000, receipts.length) }),
-    fetch: options.fetch, flushMs: 60_000,
+    fetch: versionedFetch(options.fetch), flushMs: 60_000,
   });
   try {
     for (const receipt of receipts) exporter.enqueue(receipt as SignedReceipt);
