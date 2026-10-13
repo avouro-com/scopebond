@@ -137,7 +137,7 @@ const PROTECTED_SAMPLES = [
   ".config/gh/hosts.yml", ".claude/.credentials.json",
   ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/hook.sh", ".claude/agents/agent.md",
   ".cursor/hooks.json", ".codex/hooks.json", ".codex/config.toml", ".mcp.json",
-  ".copilot/hooks/scopebond.json", ".copilot/settings.json", ".github/hooks/scopebond.json",
+  ".copilot/hooks/scopebond.json", ".copilot/settings.json", ".copilot/mcp-config.json", ".github/hooks/scopebond.json",
   ".github/copilot/settings.json", ".github/copilot/settings.local.json",
   ".git/hooks/pre-commit", ".git/config", ".husky/pre-commit", ".github/workflows/ci.yml", ".github/actions/a/action.yml",
   ".gitlab-ci.yml", ".gitlab-ci.yaml", ".circleci/config.yml", "azure-pipelines.yml", "Jenkinsfile",
@@ -297,7 +297,7 @@ const VALUE_PARAMETER = new Set(["-va", "-val", "-valu", "-value"]);
 // agent removing Scopebond's files and their evidence. Any other delete stays a plain shell.exec, as before.
 const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri", "trash", "trash-put"]);
 // The signed installer's folder (`%LOCALAPPDATA%\Programs\Scopebond`, `%ProgramFiles%\Scopebond`) holds the hook's program.
-const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.copilot[\\/](?:hooks|settings\.json)|\.github[\\/](?:hooks|copilot[\\/]settings(?:\.local)?\.json)|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks|(?:programs|program files(?: \(x86\))?|progra~\d|[%$]\{?(?:env:)?program[^\\/]*)[\\/](?:scopebond|scopeb~\d))(?:$|[\\/:])/i;
+const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.copilot[\\/](?:hooks|settings\.json|mcp-config\.json)|\.github[\\/](?:hooks|copilot[\\/]settings(?:\.local)?\.json)|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks|(?:programs|program files(?: \(x86\))?|progra~\d|[%$]\{?(?:env:)?program[^\\/]*)[\\/](?:scopebond|scopeb~\d))(?:$|[\\/:])/i;
 // Removing or renaming a folder takes everything inside it. A folder that holds an always-protected place is recorded as a
 // write of that place, so the always-on floor stops the removal as it would a change to the place itself. Each entry is a folder
 // and the protected place inside it (empty when the folder itself is protected): this project's (in its working folder or above)
@@ -308,7 +308,7 @@ const PROJECT_HOLDERS: ReadonlyArray<readonly [string, string]> = [
 ];
 const HOME_HOLDERS: ReadonlyArray<readonly [string, string]> = [
   [".scopebond", ""], [".claude", "/settings.json"], [".cursor", "/hooks.json"], [".codex", "/hooks.json"],
-  [".copilot", "/hooks"], [".copilot", "/settings.json"],
+  [".copilot", "/hooks"], [".copilot", "/settings.json"], [".copilot", "/mcp-config.json"],
 ];
 // The file names a protected place holds, for a `find -name` filter (by the place's ending).
 const PROTECTED_NAMES: ReadonlyArray<readonly [string, readonly string[]]> = [
@@ -534,7 +534,7 @@ const SCOPEBOND_GLOB = /(?<![\w-])\.sc(?:o(?:p(?:e(?:b(?:o(?:n(?:d)?)?)?)?)?)?)?
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: a fixed prefix, then one repeat whose greedy end is always a character the lookahead accepts
 const SCOPEBOND_IN_TEXT = /(?<![\w-])\.scopebond(?:[\\/][\w.-]*)?(?![\w-])/gi;
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: each alternative is a fixed prefix and one repeat, and the lookbehinds keep a run from being re-entered part-way
-const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.copilot[\\/](?:hooks[\\/][\w.-]*|settings\.json)|\.github[\\/](?:hooks[\\/][\w.-]*|copilot[\\/]settings[\w.-]*)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
+const SENSITIVE_IN_CODE = /(?<![\w$])(?:\.scopebond[\\/][\w.-]*|\.env(?:\.[\w-]+)?(?![\w.-])|\.envrc|\.ssh[\\/][\w.-]+|\.aws[\\/]credentials|\.claude[\\/]settings[\w.-]*|\.cursor[\\/]hooks\.json|\.codex[\\/](?:hooks\.json|config\.toml)|\.copilot[\\/](?:hooks[\\/][\w.-]*|settings\.json|mcp-config\.json)|\.github[\\/](?:hooks[\\/][\w.-]*|copilot[\\/]settings[\w.-]*)|\.git[\\/](?:hooks[\\/][\w.-]*|config)|\.github[\\/](?:workflows|actions)[\\/][\w./-]*|\.npmrc|\.git-credentials)|(?<![\w.-])[\w-]+\.(?:key|pem|p12|pfx)(?![\w])/gi;
 // A file or process API in the same inline snippet, required in call or member form
 // (not a bare English word — "your .env file" must not read like `File`). Without one,
 // a protected path in a string literal opens nothing. Covers Node (fs/child_process/
@@ -1704,6 +1704,7 @@ const COPILOT_TOOLS: Readonly<Record<string, string>> = {
 };
 
 const isPlainRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const COPILOT_SHELLS = new Set(["bash", "powershell", "Bash", "PowerShell", "Shell"]);
 
 /** A Copilot hook payload in Claude Code's shape. The PascalCase events send `hook_event_name`, `session_id`, `cwd`,
  *  `tool_name` and `tool_input`; the camelCase ones send `sessionId`, `cwd`, `toolName` and `toolArgs` (a JSON string).
@@ -1711,8 +1712,12 @@ const isPlainRecord = (v: unknown): v is Record<string, unknown> => typeof v ===
 export function normalizeCopilotInput(input: Record<string, unknown>): Record<string, unknown> {
   const p = isPlainRecord(input) ? input : {};
   const raw = p.tool_input ?? p.toolArgs;
+  const tool = textOf(p.tool_name ?? p.toolName);
   let args: unknown = raw;
-  if (typeof raw === "string") { try { args = JSON.parse(raw); } catch { args = { command: raw }; } }
+  // Arguments that are not JSON are a shell tool's command (or what `write_bash` types); for any other tool they say nothing.
+  const asText = (text: string): Record<string, unknown> =>
+    tool === "write_bash" ? { input: text } : COPILOT_SHELLS.has(tool) ? { command: text } : {};
+  if (typeof raw === "string") { try { args = JSON.parse(raw); } catch { args = asText(raw); } }
   const out: Record<string, unknown> = { ...p };
   if (p.session_id === undefined && typeof p.sessionId === "string") out.session_id = p.sessionId;
   if (p.tool_name === undefined && p.toolName !== undefined) out.tool_name = p.toolName;
@@ -1734,9 +1739,16 @@ export function copilotAsClaude(input: Record<string, unknown>): Record<string, 
   const path = ti.file_path ?? ti.path ?? ti.filePath;
   const as = (tool_name: string, tool_input: Record<string, unknown>): Record<string, unknown> => ({ ...p, tool_name, tool_input });
   if (name === "Bash" || name === "Shell" || name === "PowerShell") {
+    // `bash` with `mode: "async"` or `"detached"` starts a session; its command is checked the same way.
     const command = ti.command ?? ti.cmd ?? ti.script;
     const powershell = name === "PowerShell" || (raw !== "bash" && process.platform === "win32");
     return as(powershell ? "PowerShell" : "Bash", { command });
+  }
+  // `write_bash` types into a running shell session: what it types runs as a command in that shell, so it is checked as
+  // one (PowerShell on Windows, like the session it writes to). `read_bash`, `stop_bash` and `list_bash` run nothing new
+  // and stay unevaluated tools.
+  if (raw === "write_bash") {
+    return as(process.platform === "win32" ? "PowerShell" : "Bash", { command: ti.input ?? ti.text ?? ti.command });
   }
   if (name === "Edit" || name === "Write") {
     const patch = [ti.input, ti.patch, ti.command].find((v): v is string => typeof v === "string" && v.includes("*** Begin Patch"));

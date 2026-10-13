@@ -272,8 +272,16 @@ const HARNESS_SUBCOMMANDS = new Set(["claude", "cursor", "codex", "copilot"]);
 const MAX_COMMAND = 4096;
 const unquote = (token: string): string => token.replace(/^["']+|["']+$/g, "");
 
-export const isScopebondHookCommand = (cmd: unknown): boolean => {
-  if (typeof cmd !== "string" || cmd.length === 0 || cmd.length > MAX_COMMAND) return false;
+/** The tail Scopebond adds to a Copilot `powershell` command (see `powershellHookCommand`), removed before matching. */
+const PASS_EXIT_CODE = "; exit $LASTEXITCODE";
+const withoutPassExitCode = (cmd: string): string => {
+  const trimmed = cmd.trimEnd();
+  return trimmed.toLowerCase().endsWith(PASS_EXIT_CODE.toLowerCase()) ? trimmed.slice(0, -PASS_EXIT_CODE.length) : cmd;
+};
+
+export const isScopebondHookCommand = (input: unknown): boolean => {
+  if (typeof input !== "string" || input.length === 0 || input.length > MAX_COMMAND) return false;
+  const cmd = withoutPassExitCode(input);
   const lower = cmd.toLowerCase();
   // The package itself, in either path spelling (`@scopebond/hook`, `@scopebond\hook`).
   if (lower.includes("@scopebond/hook") || lower.includes("@scopebond\\hook")) return true;
@@ -355,11 +363,13 @@ export const COPILOT_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure"
 
 /** The PowerShell spelling of a hook command. Copilot runs an entry's `powershell` command on Windows, and PowerShell
  *  reads a command that starts with a quoted path as a string, not a program: the call operator `&` runs it. `npx` there
- *  resolves to `npx.ps1`, which the default script policy refuses, so the portable form names `npx.cmd`. */
+ *  resolves to `npx.ps1`, which the default script policy refuses, so the portable form names `npx.cmd`. PowerShell ends
+ *  with exit 1 whenever the last program failed, which would turn the hook's deny (exit 2) into "hook errored" and lose
+ *  its reason, so the command passes the program's own exit code on (`; exit $LASTEXITCODE`). */
 export function powershellHookCommand(command: string): string {
   const trimmed = command.trim();
-  if (trimmed.startsWith("\"")) return `& ${trimmed}`;
-  if (/^npx\s/.test(trimmed)) return `npx.cmd ${trimmed.slice(4)}`;
+  if (trimmed.startsWith("\"")) return `& ${trimmed}${PASS_EXIT_CODE}`;
+  if (/^npx\s/.test(trimmed)) return `npx.cmd ${trimmed.slice(4)}${PASS_EXIT_CODE}`;
   return trimmed;
 }
 
@@ -457,9 +467,14 @@ export function codexDetected(): boolean {
   return existsSync(join(homedir(), ".codex"));
 }
 
-/** Detect a GitHub Copilot CLI install by its user config directory (`COPILOT_HOME`, else `~/.copilot`). */
-export function copilotDetected(): boolean {
-  return existsSync(copilotHome());
+/** Detect the GitHub Copilot CLI: its program on PATH, or what only the CLI leaves in its folder (`settings.json`, `logs`).
+ *  The folder alone is not enough: VS Code's Copilot Chat creates `~/.copilot` too, and VS Code's agent mode is not covered
+ *  yet, so a VS Code-only computer is not set up for Copilot by a plain `install`. */
+export function copilotDetected(platform: NodeJS.Platform = process.platform): boolean {
+  const home = copilotHome();
+  if (existsSync(join(home, "settings.json")) || existsSync(join(home, "logs"))) return true;
+  const names = platform === "win32" ? ["copilot", "copilot.cmd"] : ["copilot"];
+  return names.some((name) => { try { return findProgram(name, { platform }) !== null; } catch { return false; } });
 }
 
 /** Whether a harness's user config directory exists (Claude Code is always offered). */

@@ -92,10 +92,10 @@ const CI_WRITE_PREV = [
 ];
 const GUARDRAIL_WRITE_PREV2 = [...GUARDRAIL_WRITE_PREV, named("\\.cursor/mcp\\.json"), under("\\.githooks")];
 // GitHub Copilot's hook files and the settings files whose `hooks` block it also reads: the user-level folder and settings
-// (`~/.copilot`), and a repository's `.github/hooks` and `.github/copilot` settings. `.github/hooks` holds hooks, not CI
+// (`~/.copilot`, with the CLI's MCP servers in `mcp-config.json`, as `.cursor/mcp.json` is protected), and a repository's `.github/hooks` and `.github/copilot` settings. `.github/hooks` holds hooks, not CI
 // configuration, so it is guardrail configuration (C02) like the other agents' hook settings.
 const COPILOT_GUARDRAIL_WRITE = [
-  under("\\.copilot/hooks"), named("\\.copilot/settings\\.json"), under("\\.github/hooks"),
+  under("\\.copilot/hooks"), named("\\.copilot/settings\\.json"), named("\\.copilot/mcp-config\\.json"), under("\\.github/hooks"),
   named("\\.github/copilot/settings\\.json"), named("\\.github/copilot/settings\\.local\\.json"),
 ];
 const GUARDRAIL_WRITE = [...GUARDRAIL_WRITE_PREV2, ...COPILOT_GUARDRAIL_WRITE];

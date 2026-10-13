@@ -144,7 +144,8 @@ add({ rule: "R08", agent: "cursor", dialect: "posix", event: "afterFileEdit", in
 // C02 guardrail configuration -----------------------------------------------------------
 for (const p of [".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/pre.sh", ".claude/agents/reviewer.md", ".codex/config.toml", ".codex/hooks.json",
   ".cursor/hooks.json", ".cursor/mcp.json", ".githooks/pre-push", ".husky/pre-commit", ".git/config", ".git/hooks/pre-commit", ".scopebond/policy.json", ".scopebond/rules.json",
-  ".github/hooks/scopebond.json", ".github/copilot/settings.json", ".github/copilot/settings.local.json", ".copilot/hooks/scopebond.json", ".copilot/settings.json"]) {
+  ".github/hooks/scopebond.json", ".github/copilot/settings.json", ".github/copilot/settings.local.json", ".copilot/hooks/scopebond.json", ".copilot/settings.json",
+  ".copilot/mcp-config.json"]) {
   fileBoth("C02", "Write", p, "deny", ["C02"]);
 }
 add({ rule: "C02", agent: "codex", dialect: "posix", input: { tool_name: "apply_patch", tool_input: { command: "*** Begin Patch\n*** Update File: .codex/hooks.json\n*** End Patch" }, cwd: "/w" }, expect: "deny", catalog: ["C02"] });

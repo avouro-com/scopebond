@@ -206,6 +206,7 @@ export function defaultRules(): RuleSet {
       { kind: "under", value: "\\.githooks", label: "git hooks (.githooks)" },
       { kind: "under", value: "\\.copilot/hooks", label: "GitHub Copilot user hooks (~/.copilot/hooks)" },
       { kind: "named", value: "\\.copilot/settings\\.json", label: "GitHub Copilot user settings" },
+      { kind: "named", value: "\\.copilot/mcp-config\\.json", label: "GitHub Copilot MCP config" },
       { kind: "under", value: "\\.github/hooks", label: "GitHub Copilot repository hooks (.github/hooks)" },
       { kind: "named", value: "\\.github/copilot/settings\\.json", label: "GitHub Copilot repository settings" },
       { kind: "named", value: "\\.github/copilot/settings\\.local\\.json", label: "GitHub Copilot local repository settings" },

@@ -112,7 +112,10 @@ interface CellSpec {
 const GROUP_FIELDS = ["action_group", "action_group_size", "action_group_seq"];
 const CLAUDE_HOSTS: HostVariant[] = ["claude_terminal", "claude_desktop"];
 const CODEX_HOSTS: HostVariant[] = ["codex_cli", "codex_desktop"];
-const COPILOT_HOSTS: HostVariant[] = ["copilot_cli", "copilot_vscode", "copilot_cloud"];
+/** Only the Copilot CLI is covered: it sends the payload and reads the answer this adapter is built and tested for. */
+const COPILOT_HOSTS: HostVariant[] = ["copilot_cli"];
+const COPILOT_VSCODE_REASON = "VS Code agent mode sends its own tool names and reads a different entry and output shape; not yet verified";
+const COPILOT_CLOUD_REASON = "the cloud coding agent's sandbox has no Scopebond setup (keys and a policy), so the hook would deny every action there; not covered yet";
 
 /** GitHub Copilot runs the hook cooperatively: a deny is honored, but a hook that runs past its `timeoutSec` is skipped
  *  and the action runs (Copilot's timeouts fail open, even for `preToolUse`). The hook denies on its own deadline before
@@ -121,11 +124,18 @@ const COPILOT_HOSTS: HostVariant[] = ["copilot_cli", "copilot_vscode", "copilot_
 const COPILOT_ENFORCEMENT = "cooperative · prevents if honored · a hook timeout fails open in Copilot";
 export const HOST_ENFORCEMENT: Partial<Record<HostVariant, string>> = {
   copilot_cli: COPILOT_ENFORCEMENT,
-  copilot_vscode: `${COPILOT_ENFORCEMENT} · VS Code agent hooks are in preview`,
-  copilot_cloud: `${COPILOT_ENFORCEMENT} · reads only .github/hooks on the default branch; ask is treated as deny; its sandbox has no Scopebond setup, so it is not covered yet`,
+  copilot_vscode: `not covered yet · ${COPILOT_VSCODE_REASON}`,
+  copilot_cloud: `not covered yet · reads only .github/hooks on the default branch and treats ask as deny; ${COPILOT_CLOUD_REASON}`,
 };
 
+/** The Copilot hosts this adapter does not cover yet: every action is listed, as unsupported, with the reason. */
+const COPILOT_UNCOVERED: Array<[HostVariant, string]> = [["copilot_vscode", COPILOT_VSCODE_REASON], ["copilot_cloud", COPILOT_CLOUD_REASON]];
+const COPILOT_ACTIONS = ["shell.exec", "file.write", "file.read", "git.push", "net.fetch", "mcp.tool.call", "nested_orchestration"];
+
 const NESTED = "nested_orchestration";
+
+const COPILOT_UNCOVERED_SPECS: CellSpec[] = COPILOT_UNCOVERED.flatMap(([host, reason]) => COPILOT_ACTIONS.map((action_type): CellSpec => (
+  { adapter: "copilot", host_variants: [host], action_type, phase: "pre_action", via: "(not covered yet)", supported: false, unsupported_reason: reason, fields: [], operations: [] })));
 
 const SPECS: CellSpec[] = [
   // Claude Code ---------------------------------------------------------------------
@@ -154,13 +164,14 @@ const SPECS: CellSpec[] = [
   { adapter: "cursor", host_variants: ["cursor"], action_type: "mcp.tool.call", phase: "pre_action", via: "beforeMCPExecution", supported: true, observation_only: true, fields: ["server", "tool", "args_digest", ...GROUP_FIELDS], operations: ["tool_call"] },
   { adapter: "cursor", host_variants: ["cursor"], action_type: NESTED, phase: "pre_action", via: "nested tool wrappers", supported: false, unsupported_reason: "nested calls made inside a tool are not shown to this adapter and are not claimed", fields: [], operations: [] },
   // GitHub Copilot (CLI, VS Code agent mode, cloud coding agent) -----------------------------
-  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "shell.exec", phase: "pre_action", via: "PreToolUse bash/powershell (reported as Bash)", supported: true, fields: ["program", "command", ...GROUP_FIELDS], operations: ["program", "destructive_program", "opaque_program", "derived_file_read", "derived_file_write", "derived_git_push"] },
+  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "shell.exec", phase: "pre_action", via: "PreToolUse bash/powershell (reported as Bash) and write_bash", supported: true, fields: ["program", "command", ...GROUP_FIELDS], operations: ["program", "destructive_program", "opaque_program", "derived_file_read", "derived_file_write", "derived_git_push"] },
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "file.write", phase: "pre_action", via: "PreToolUse create/edit/str_replace_editor/apply_patch (Write/Edit)", supported: true, fields: ["path", ...GROUP_FIELDS], operations: ["write", "protected_path", "ci_path", "root_scope_when_configured"] },
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "file.read", phase: "pre_action", via: "PreToolUse view/grep/glob (Read/Grep/Glob)", supported: true, fields: ["path", ...GROUP_FIELDS], operations: ["read", "credential_path"] },
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "git.push", phase: "pre_action", via: "PreToolUse bash/powershell (parsed git push)", supported: true, fields: ["ref", "force", ...GROUP_FIELDS], operations: ["push", "force", "delete", "refspec", "mirror_all", "unresolved_destination"] },
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "net.fetch", phase: "pre_action", via: "PreToolUse web_fetch (WebFetch)", supported: true, observation_only: true, fields: ["host", "path", "method", ...GROUP_FIELDS], operations: ["fetch_get"] },
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "mcp.tool.call", phase: "pre_action", via: "(MCP tool names not documented)", supported: false, unsupported_reason: "Copilot's hooks reference does not say how MCP tool names appear in a hook payload; an MCP call that does not use the mcp__server__tool form is recorded as an unevaluated tool, so MCP coverage is not claimed", fields: [], operations: [] },
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: NESTED, phase: "pre_action", via: "task (sub-agent)", supported: false, unsupported_reason: "a sub-agent task is recorded as one unevaluated action; calls it makes inside are not claimed", fields: [], operations: [] },
+  ...COPILOT_UNCOVERED_SPECS,
   // Typed operations (observations, not receipts): the closed git, package and github_resource
   // operations derived from the actual command before it runs. They are observation-only:
   // they describe what was dispatched and never gate it. A fixture proves the derivation on

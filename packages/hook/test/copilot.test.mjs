@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   scaffold, mapCopilotToolUse, classifyIntent, defaultRules, computeManifest, renderManifest, writeHarnessConfig, upgradeStarterPolicy, compile,
   removeHarnessConfig, isHarnessConfigured, configuredHookCommands, isScopebondHookCommand, copilotHookEntry,
-  COPILOT_EVENTS, COPILOT_TIMEOUT_SEC, COPILOT_DECISION_DEADLINE_MS,
+  COPILOT_EVENTS, COPILOT_TIMEOUT_SEC, COPILOT_DECISION_DEADLINE_MS, copilotDetected, powershellHookCommand,
 } from "../dist/index.js";
 import { ENFORCE } from "./enforce-all.mjs";
 import { GUARDRAIL_WRITE_PATTERN, under, named } from "../dist/runtime.js";
@@ -71,7 +71,7 @@ function assertCopilotFile(file) {
     assert.equal(entry.timeoutSec, COPILOT_TIMEOUT_SEC);
     assert.equal(entry.matcher, undefined, "no matcher: every tool");
     assert.match(entry.bash, /\scopilot$/, `bash runs the copilot subcommand: ${entry.bash}`);
-    assert.match(entry.powershell, /\scopilot$/);
+    assert.match(entry.powershell, /\scopilot; exit \$LASTEXITCODE$/, "PowerShell passes the hook's exit code on");
     assert.ok(isScopebondHookCommand(entry.bash) && isScopebondHookCommand(entry.powershell));
   }
   return doc;
@@ -104,25 +104,49 @@ test("install --copilot respects COPILOT_HOME", () => {
   assert.equal(existsSync(join(ctx.home, ".copilot", "hooks", "scopebond.json")), false);
 });
 
-test("install with no flag adds Copilot when its user folder exists", () => {
+test("install with no flag adds Copilot when it finds the Copilot CLI, and says VS Code reads the file too", () => {
   const { env, home } = isolated();
   mkdirSync(join(home, ".copilot"), { recursive: true });
+  writeFileSync(join(home, ".copilot", "settings.json"), "{}");
   const install = run(env, ["install"]);
   assert.equal(install.status, 0, install.stdout + install.stderr);
   assert.ok(existsSync(join(home, ".copilot", "hooks", "scopebond.json")), "detected and configured");
+  assert.match(install.stdout, /VS Code's agent mode reads this file too/);
+});
+
+test("a ~/.copilot folder from VS Code's Copilot Chat alone is not the Copilot CLI", () => {
+  const { home } = isolated();
+  mkdirSync(join(home, ".copilot"), { recursive: true });
+  writeFileSync(join(home, ".copilot", "config.json"), "{}");
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, COPILOT_HOME: process.env.COPILOT_HOME, PATH: process.env.PATH, Path: process.env.Path };
+  try {
+    process.env.HOME = home; process.env.USERPROFILE = home; delete process.env.COPILOT_HOME;
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    process.env.PATH = bin; if (process.platform === "win32") process.env.Path = bin;
+    assert.equal(copilotDetected(), false, "VS Code's folder only");
+    writeFileSync(join(home, ".copilot", "settings.json"), "{}");
+    assert.equal(copilotDetected(), true, "the CLI's settings");
+    rmSync(join(home, ".copilot", "settings.json"));
+    writeFileSync(join(bin, process.platform === "win32" ? "copilot.cmd" : "copilot"), "", { mode: 0o755 });
+    assert.equal(copilotDetected(), true, "the copilot program on PATH");
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 });
 
 test("init --copilot writes .github/hooks/scopebond.json in the project; uninstall removes it", () => {
   const { env, project } = isolated();
   const init = run(env, ["init", "--copilot", "--yes"], { cwd: project });
   assert.equal(init.status, 0, init.stdout + init.stderr);
+  assert.match(init.stdout, /Committing \.github\/hooks\/scopebond\.json makes the Copilot cloud agent deny every action until Scopebond is set up there/);
   const file = join(project, ".github", "hooks", "scopebond.json");
   assertCopilotFile(file);
   const shared = run(env, ["init", "--copilot", "--shared", "--yes", "--force"], { cwd: project });
   assert.equal(shared.status, 0, shared.stdout + shared.stderr);
   const doc = assertCopilotFile(file);
   assert.match(doc.hooks.PreToolUse[0].bash, /^npx -y @scopebond\/hook@\S+ copilot$/, "--shared writes the portable form");
-  assert.match(doc.hooks.PreToolUse[0].powershell, /^npx\.cmd -y @scopebond\/hook@\S+ copilot$/);
+  assert.match(doc.hooks.PreToolUse[0].powershell, /^npx\.cmd -y @scopebond\/hook@\S+ copilot; exit \$LASTEXITCODE$/);
   const uninstall = run(env, ["uninstall", "--yes"], { cwd: project });
   assert.equal(uninstall.status, 0, uninstall.stdout);
   assert.equal(existsSync(file), false);
@@ -147,6 +171,30 @@ test("uninstall keeps other hooks in a shared Copilot file and removes only Scop
   const after = JSON.parse(readFileSync(file, "utf8"));
   assert.deepEqual(after.hooks.PreToolUse, [{ type: "command", bash: "./audit.sh" }], "the person's hook is kept");
   assert.equal(isHarnessConfigured(file), false);
+});
+
+test("the PowerShell command keeps the hook's own entries recognisable and its exit code", () => {
+  const pinned = `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\x\\.scopebond\\runtime\\1.0.0\\node_modules\\@scopebond\\hook\\dist\\cli.js" copilot`;
+  const ps = powershellHookCommand(pinned);
+  assert.equal(ps, `& ${pinned}; exit $LASTEXITCODE`);
+  assert.equal(isScopebondHookCommand(ps), true);
+  assert.equal(isScopebondHookCommand(`& "C:\\node.exe" "C:\\x\\cli.js" copilot; exit $LASTEXITCODE`), true, "the suffix is not a harness name");
+  assert.equal(isScopebondHookCommand(powershellHookCommand("npx -y @scopebond/hook@1.0.0 copilot")), true);
+  // A Copilot entry written with only a PowerShell command is still found and removed.
+  const dir = mkdtempSync(join(tmpdir(), "sb-copilot-ps-"));
+  const file = join(dir, "hooks.json");
+  writeFileSync(file, JSON.stringify({ version: 1, hooks: { PreToolUse: [{ type: "command", powershell: `& "C:\\node.exe" "C:\\x\\cli.js" copilot; exit $LASTEXITCODE` }] } }));
+  assert.equal(isHarnessConfigured(file), true);
+});
+
+test("on Windows, a deny run through the PowerShell command still exits 2 with its reason", { skip: process.platform !== "win32" ? "Windows only" : false }, () => {
+  const g = governed("enforce");
+  const command = powershellHookCommand(`"${process.execPath}" "${cli}" copilot`);
+  const payload = JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s", cwd: g.project, tool_name: "Bash", tool_input: { command: "git push --force origin main" } });
+  const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { env: g.env, cwd: g.project, input: payload, encoding: "utf8", timeout: 120_000 });
+  assert.equal(r.status, 2, `exit code passed on: ${r.stderr}`);
+  assert.equal(JSON.parse(r.stdout.trim()).permissionDecision, "deny");
+  assert.match(JSON.parse(r.stdout.trim()).permissionDecisionReason, /protect-branches/);
 });
 
 test("the hook's own deadline is inside the timeoutSec it installs (a Copilot timeout fails open)", () => {
@@ -174,6 +222,33 @@ test("a force push to a protected branch is denied with permissionDecision deny 
   const camel = run(g.env, ["copilot"], { cwd: g.project, input: JSON.stringify({ sessionId: "s2", cwd: g.project, toolName: "bash", toolArgs: JSON.stringify({ command: "git push --force origin main" }) }) });
   assert.equal(camel.status, 2);
   assert.equal(JSON.parse(camel.stdout).permissionDecision, "deny");
+});
+
+test("what write_bash types into a shell session is checked as a command", () => {
+  const mapped = mapCopilotToolUse({ tool_name: "write_bash", tool_input: { input: "git push --force origin main\n" }, cwd: "/w" });
+  assert.ok(mapped.some((m) => m.intent.action_type === "git.push" && m.intent.params.force === true), JSON.stringify(mapped));
+  for (const name of ["read_bash", "stop_bash", "list_bash"]) {
+    const other = mapCopilotToolUse({ tool_name: name, tool_input: {}, cwd: "/w" });
+    assert.equal(other[0].intent.action_type, `tool.${name}`);
+    assert.equal(other[0].evaluated, false);
+  }
+  // An async session started by `bash` is checked like any other command.
+  assert.ok(mapCopilotToolUse({ tool_name: "bash", tool_input: { command: "git push --force origin main", mode: "async" }, cwd: "/w" }).some((m) => m.intent.action_type === "git.push"));
+  const g = governed("enforce");
+  const r = g.decide("write_bash", { input: "git push --force origin main\n" });
+  assert.equal(r.status, 2, r.stdout);
+  assert.equal(JSON.parse(r.stdout).permissionDecision, "deny");
+  // Arguments that are not JSON say nothing for a tool that is not a shell.
+  const camel = mapCopilotToolUse({ toolName: "view", toolArgs: "rm -rf /", cwd: "/w" });
+  assert.equal(camel[0].intent.action_type, "file.read");
+  assert.equal(camel[0].intent.params.path, "");
+});
+
+test("where Scopebond is not set up (the cloud agent's sandbox), the deny says so", () => {
+  const { env, project } = isolated();
+  const r = run(env, ["copilot"], { cwd: project, input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s", cwd: project, tool_name: "Bash", tool_input: { command: "ls" } }) });
+  assert.equal(r.status, 2);
+  assert.equal(JSON.parse(r.stdout).permissionDecisionReason, "Scopebond is not set up in this environment; the Copilot cloud agent is not covered: remove .github/hooks/scopebond.json from the default branch or set Scopebond up here");
 });
 
 test("a routine read is allowed silently, so Copilot's own permission flow stays in charge", () => {
@@ -216,7 +291,7 @@ test("Copilot's tool names map to the Claude Code tool families", () => {
 
 test("Copilot's hook settings are guardrail configuration (C02, always on), not CI configuration", () => {
   const rules = defaultRules();
-  for (const path of [".github/hooks/scopebond.json", ".github/hooks/other.json", ".github/copilot/settings.json", ".github/copilot/settings.local.json", "~/.copilot/hooks/scopebond.json", "~/.copilot/settings.json"]) {
+  for (const path of [".github/hooks/scopebond.json", ".github/hooks/other.json", ".github/hooks/scripts/audit.sh", ".github/copilot/settings.json", ".github/copilot/settings.local.json", "~/.copilot/hooks/scopebond.json", "~/.copilot/settings.json", "~/.copilot/mcp-config.json"]) {
     const c = classifyIntent({ action_type: "file.write", params: { path } }, rules);
     assert.deepEqual(c.ids, ["C02"], `${path}: ${c.ids}`);
   }
@@ -238,7 +313,7 @@ test("Copilot's hook settings are guardrail configuration (C02, always on), not 
 });
 
 test("a policy written before Copilot was covered gets Copilot's hook settings on load", () => {
-  const copilotPart = under("\\.copilot/hooks") + named("\\.copilot/settings\\.json") + under("\\.github/hooks")
+  const copilotPart = under("\\.copilot/hooks") + named("\\.copilot/settings\\.json") + named("\\.copilot/mcp-config\\.json") + under("\\.github/hooks")
     + named("\\.github/copilot/settings\\.json") + named("\\.github/copilot/settings\\.local\\.json");
   assert.ok(GUARDRAIL_WRITE_PATTERN.includes(copilotPart), "the always-on floor covers them");
   const before = GUARDRAIL_WRITE_PATTERN.replace(copilotPart, "");
@@ -268,18 +343,26 @@ test("malformed input fails closed", () => {
   assert.equal(JSON.parse(r.stdout).permissionDecision, "deny");
 });
 
-test("the capability manifest labels every Copilot host cooperative, never in-path", () => {
+test("the capability manifest labels Copilot CLI cooperative, never in-path, and claims nothing for VS Code or the cloud agent", () => {
   const manifest = computeManifest({ adapterVersion: "test", configured: { claude: false, codex: false, cursor: false, copilot: true } });
   const cells = manifest.cells.filter((c) => c.host_variant.startsWith("copilot_"));
   assert.deepEqual([...new Set(cells.map((c) => c.host_variant))].sort(), ["copilot_cli", "copilot_cloud", "copilot_vscode"]);
-  for (const cell of cells) {
-    assert.ok(cell.enforcement?.startsWith(LABEL), `${cell.key}: ${cell.enforcement}`);
-    assert.doesNotMatch(JSON.stringify(cell), /in-path|in_path/i);
+  for (const cell of cells) assert.doesNotMatch(JSON.stringify(cell), /in-path|in_path/i);
+  for (const cell of cells.filter((c) => c.host_variant === "copilot_cli")) assert.equal(cell.enforcement, LABEL, cell.key);
+  for (const host of ["copilot_vscode", "copilot_cloud"]) {
+    const hostCells = cells.filter((c) => c.host_variant === host);
+    assert.ok(hostCells.length >= 7);
+    for (const cell of hostCells) {
+      assert.equal(cell.state, "unsupported", cell.key);
+      assert.equal(cell.boundary, "none");
+      assert.match(cell.enforcement, /^not covered yet/);
+    }
   }
-  assert.match(cells.find((c) => c.host_variant === "copilot_cloud").enforcement, /ask is treated as deny/);
+  assert.match(cells.find((c) => c.host_variant === "copilot_vscode").reason, /VS Code agent mode sends its own tool names and reads a different entry and output shape; not yet verified/);
+  assert.match(cells.find((c) => c.host_variant === "copilot_cloud").enforcement, /treats ask as deny/);
   const shell = cells.find((c) => c.host_variant === "copilot_cli" && c.action_type === "shell.exec");
   assert.equal(shell.state, "configured_unverified", "never verified from a local run");
-  assert.equal(cells.find((c) => c.action_type === "mcp.tool.call").state, "unsupported", "MCP naming is not documented, so not claimed");
+  assert.equal(cells.find((c) => c.host_variant === "copilot_cli" && c.action_type === "mcp.tool.call").state, "unsupported", "MCP naming is not documented, so not claimed");
   const text = renderManifest(manifest);
   assert.match(text, new RegExp(`copilot_cli\\n  enforcement: ${LABEL}`));
   // Other hosts carry no such label.

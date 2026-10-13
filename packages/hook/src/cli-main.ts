@@ -184,13 +184,21 @@ const COPILOT_ENFORCEMENT = HOST_ENFORCEMENT.copilot_cli ?? "cooperative";
 /** What GitHub Copilot can and cannot stop, said at install time. */
 const copilotCoverageNote = [
   `What this covers in GitHub Copilot (${COPILOT_ENFORCEMENT}):`,
-  "  checked    shell commands, file reads and edits, git pushes — before they run",
+  "  checked    shell commands (and what write_bash types), file reads and edits, git pushes",
+  "             — before they run",
   "  recorded   web fetches; tools Scopebond has no mapping for (MCP tools, sub-agent tasks)",
   "Copilot runs the action anyway when a hook times out. Scopebond answers within its own",
   "deadline (shorter than the entry's timeoutSec) and denies when it cannot decide in time.",
-  "The cloud coding agent reads only .github/hooks/*.json on the default branch and has no",
-  "Scopebond setup, so it is not covered yet; gate its pull requests with the GitHub Action.",
+  "This covers the Copilot CLI. VS Code's agent mode reads this file too, but it sends its own",
+  "tool names, so its actions are not covered yet. The cloud coding agent has no Scopebond",
+  "setup, so it is not covered yet; gate its pull requests with the GitHub Action.",
 ].join("\n");
+/** Said after `init --copilot` writes the project file: the cloud agent reads it from the default branch. */
+const COPILOT_CLOUD_COMMIT_WARNING = "Committing .github/hooks/scopebond.json makes the Copilot cloud agent deny every action until Scopebond is set up there";
+/** The deny a Copilot call gets where Scopebond has no setup at all (typically the cloud agent's sandbox). */
+const COPILOT_NOT_SET_UP = "Scopebond is not set up in this environment; the Copilot cloud agent is not covered: remove .github/hooks/scopebond.json from the default branch or set Scopebond up here";
+/** The deadline timer of the Copilot call in progress, cleared once the call is allowed (the rest is record delivery). */
+let copilotDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
 /** What Cursor can and cannot stop. Cursor has before-hooks for shell commands, MCP
  *  calls and file reads, but reports file *edits* only after they are written, so an
  *  out-of-policy edit is recorded and flagged rather than prevented. Said at install
@@ -263,9 +271,11 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
   let input: Record<string, unknown>;
   try { input = JSON.parse(raw ?? readStdin()); } catch { deny("hook received invalid JSON on stdin"); }
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
+  let configFolder: string | undefined;
   try {
     const cwd = input?.cwd ? textOf(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
+    configFolder = dir;
     const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
@@ -276,6 +286,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     useDigestKey(loadOrCreateDigestKey(dir));
     if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; deny(copilotDeadlineReason()); }
     const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), currentBranch(cwd)), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
+    // Allowed: what is left is record delivery, which must not turn an allowed call into a "did not finish" deny.
+    if (decision.decision === "allow" && copilotDeadlineTimer !== undefined) { clearTimeout(copilotDeadlineTimer); copilotDeadlineTimer = undefined; }
     const observer = recordObservations(dir, cwd, input!, decision, harness);
     // Workspace rules: at most every five minutes, a capped check alongside the record delivery. It never fails the call.
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
@@ -298,6 +310,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     process.exit(0);
   } catch (error) {
     try { runtime?.close(); } catch { /* already failing; the deny below is what matters */ }
+    // No Scopebond setup here at all (no policy): for Copilot that is the cloud agent's sandbox, so say what to do about it.
+    if (harness === "copilot" && configFolder !== undefined && !existsSync(join(configFolder, "policy.json"))) deny(COPILOT_NOT_SET_UP);
     deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`);
   }
 }
@@ -350,6 +364,7 @@ async function runCopilot(): Promise<void> {
   // before evaluation for loading that does not (see runPreToolUse). `SCOPEBOND_COPILOT_DEADLINE_MS` can only shorten it.
   const deadlineAt = Date.now() + copilotDeadlineMs();
   const deadline = setTimeout(() => denyCopilot(copilotDeadlineReason()), copilotDeadlineMs());
+  copilotDeadlineTimer = deadline;
   const raw = readStdin();
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { clearTimeout(deadline); denyCopilot("hook received invalid JSON on stdin"); }
@@ -552,7 +567,7 @@ function runInit(args: string[]): void {
     if (placed.scope === "shared" && isSingleExecutable() && !npxAvailable()) for (const line of coverWithoutNpx(harness, process.cwd(), { label: harnessName(harness) })) console.log(`  ${line}`);
     if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
-    if (harness === "copilot") console.log(`\n${copilotCoverageNote}`);
+    if (harness === "copilot") console.log(`\n${copilotCoverageNote}\n\n${COPILOT_CLOUD_COMMIT_WARNING}.`);
   } else {
     // The snippet is for a file the user will likely commit, so it carries the portable
     // command; the pinned one is offered separately, for a file only this machine uses.
@@ -564,7 +579,7 @@ function runInit(args: string[]): void {
       console.log(`  ${command}`);
     }
     if (harness === "cursor") console.log(`\n${cursorCoverageNote}`);
-    if (harness === "copilot") console.log(`\n${copilotCoverageNote}`);
+    if (harness === "copilot") console.log(`\n${copilotCoverageNote}\n\n${COPILOT_CLOUD_COMMIT_WARNING}.`);
   }
   console.log("");
   // Print the runnable `npx` form: after `npx @scopebond/hook init` there is no
