@@ -27,7 +27,7 @@ import { createHash } from "node:crypto";
 import { createHookRuntime, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { replaceFile } from "./safe-fs.js";
-import { scaffold, harnessSnippet, placeHook, coverWithoutNpx, migrateToMonitorDefault, type HookPlacement } from "./init.js";
+import { scaffold, harnessSnippet, placeHook, coverWithoutNpx, migrateToMonitorDefault, installRepositoryHooks, REPO_HARNESSES, type HookPlacement } from "./init.js";
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
 import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand, unreachableHint } from "./windows-hints.js";
@@ -58,7 +58,8 @@ import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.
 import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
-import { receiptContextFor } from "./receipt-context.js";
+import { receiptContextFor, repositoryFacts } from "./receipt-context.js";
+import { RepositoryEnrollmentError, repositoryConnectionDir } from "./repo-enrol.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, ENFORCEABLE_RULES } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { runDispatchCommand } from "./dispatch-cli.js";
@@ -194,13 +195,14 @@ const copilotCoverageNote = [
   "Copilot runs the action anyway when a hook times out. Scopebond answers within its own",
   "deadline (shorter than the entry's timeoutSec) and denies when it cannot decide in time.",
   "This covers the Copilot CLI. VS Code's agent mode reads this file too, but it sends its own",
-  "tool names, so its actions are not covered yet. The cloud coding agent has no Scopebond",
-  "setup, so it is not covered yet; gate its pull requests with the GitHub Action.",
+  "tool names, so its actions are not covered yet. The cloud coding agent can run it with a",
+  "repository token (`init --repo`); that is not verified yet, so gate its pull requests with",
+  "the GitHub Action.",
 ].join("\n");
 /** Said after `init --copilot` writes the project file: the cloud agent reads it from the default branch. */
 const COPILOT_CLOUD_COMMIT_WARNING = "Committing .github/hooks/scopebond.json makes the Copilot cloud agent deny every action until Scopebond is set up there";
 /** The deny a Copilot call gets where Scopebond has no setup at all (typically the cloud agent's sandbox). */
-const COPILOT_NOT_SET_UP = "Scopebond is not set up in this environment; the Copilot cloud agent is not covered: remove .github/hooks/scopebond.json from the default branch or set Scopebond up here";
+const COPILOT_NOT_SET_UP = "Scopebond is not set up in this environment; the Copilot cloud agent is not covered: give it a SCOPEBOND_REPO_TOKEN secret (see `scopebond init --repo`), or remove .github/hooks/scopebond.json from the default branch";
 /** The deadline timer of the Copilot call in progress, cleared once the call is allowed (the rest is record delivery). */
 let copilotDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
 /** What Cursor can and cannot stop. Cursor has before-hooks for shell commands, MCP
@@ -279,7 +281,10 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
   let configFolder: string | undefined;
   try {
     const cwd = input?.cwd ? textOf(input.cwd) : process.cwd();
-    const dir = resolveConfigDir(cwd);
+    configFolder = resolveConfigDir(cwd);
+    // A repository token (a cloud agent's sandbox, a CI job) connects this hook as that repository when no one signed in here.
+    const dir = await repositoryConnectionDir(configFolder, { home: userHome(), repository: () => repositoryFacts(cwd).repository,
+      afterEnroll: async (enrolled) => { await syncPolicy(enrolled, { ...syncOptionsFor(enrolled), timeoutMs: 3000 }); } });
     configFolder = dir;
     const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
     // Rules written before monitor became the default move to it once (never fails the call).
@@ -319,6 +324,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     process.exit(0);
   } catch (error) {
     try { runtime?.close(); } catch { /* already failing; the deny below is what matters */ }
+    if (error instanceof RepositoryEnrollmentError) deny(`Scopebond hook failed closed: ${error.message}. Repair: ${error.repair}.`);
     // No Scopebond setup here at all (no policy): for Copilot that is the cloud agent's sandbox, so say what to do about it.
     if (harness === "copilot" && configFolder !== undefined && !existsSync(join(configFolder, "policy.json"))) deny(COPILOT_NOT_SET_UP);
     deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`);
@@ -509,7 +515,52 @@ function requireInteractive(command: string, args: string[]): void {
   process.exit(1);
 }
 
+/** What `init --repo` says after writing the files: where the token goes for each kind of run, and what it is not. */
+const REPO_NEXT_STEPS = [
+  "Next:",
+  "  1. Commit these files to the default branch (the Copilot coding agent reads hooks only from there).",
+  "  2. In your Scopebond workspace, create a token for this repository (Computers, Repositories).",
+  "  3. Give it to the agent as the secret SCOPEBOND_REPO_TOKEN wherever it runs:",
+  "       GitHub Copilot coding agent   the repository's \"copilot\" environment secrets",
+  "       GitHub Actions agent steps    env: SCOPEBOND_REPO_TOKEN: ${{ secrets.SCOPEBOND_REPO_TOKEN }}",
+  "       Claude Code on the web        the cloud environment's environment variables",
+  "       Codex cloud tasks             the Codex environment's secrets",
+  "     Set SCOPEBOND_URL too if your workspace is not at https://cloud.scopebond.com.",
+  "  4. Allow the sandbox to run npx and reach your workspace (npm registry and the workspace address).",
+  "",
+  "With the token the hook connects as this repository on its first action; without it, the run is not",
+  "covered (GitHub Copilot's cloud agent then denies every action, saying why). Each of these cloud",
+  "runs is not verified yet: check one run's records in your workspace before relying on it.",
+  "",
+  "The agent can edit files in its own checkout, these included, so they are not a boundary on their own.",
+  "Keep the Scopebond GitHub Action as a required check on pull requests, and protect .github/ and the",
+  "default branch with branch protection or a ruleset.",
+].join("\n");
+
+/** `init --repo`: the committed hook files for the runs of this repository where no person signs in (cloud coding agents,
+ *  agent steps in CI). Writes those files only: no keys and no .scopebond folder on this computer. */
+function runInitRepo(args: string[]): void {
+  const cwd = process.cwd();
+  if (args.includes("--dry-run")) {
+    console.log(`Dry run — nothing is written.\n`);
+    for (const harness of REPO_HARNESSES) {
+      console.log(`Would configure     ${projectHarnessFile(harness, cwd)} (${harnessName(harness)}; committed with the repository)`);
+      console.log(`  adding hook       ${hookCommand(harness)}`);
+    }
+    console.log(`\nNothing else in those files is changed, and no keys are made here. Run without --dry-run to apply.`);
+    process.exit(0);
+  }
+  requireInteractive("init --repo", args);
+  let written;
+  try { written = installRepositoryHooks(cwd); } catch (error) { console.error((error as Error).message); process.exit(1); }
+  for (const w of written) console.log(`${w.changed ? "✓" : "="} ${harnessName(w.harness)} ${w.changed ? "configured in" : "already configured in"} ${w.file}`);
+  console.log(`  hook command   ${hookCommand("claude").replace(/ claude$/, " <agent>")} (pinned; starts on any machine with Node.js)`);
+  console.log("");
+  console.log(REPO_NEXT_STEPS);
+}
+
 function runInit(args: string[]): void {
+  if (args.includes("--repo")) { runInitRepo(args); return; }
   const harness = selectedHarness(args);
   const dir = configDir();
   // A dry run changes nothing, so it needs no terminal and no --yes.
@@ -2044,7 +2095,7 @@ async function runLogin(args: string[]): Promise<void> {
  *  single usage line listing 15 command names, which told a reader nothing about what any
  *  of them did or what arguments they take. */
 const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: string[] }> = [
-  { name: "init", args: "[--cursor|--codex|--copilot] [--shared] [--dry-run] [--no-install] [--npx] [--force] [--yes]",
+  { name: "init", args: "[--cursor|--codex|--copilot] [--shared] [--dry-run] [--no-install] [--npx] [--force] [--yes] | --repo [--dry-run] [--yes]",
     summary: "set this project up: keys, a starter policy, and your agent wired to the hook",
     detail: [
       "Writes .scopebond/ (machine key, countersigning key, starter policy, .gitignore) and",
@@ -2056,6 +2107,11 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       ".codex/hooks.json or .github/hooks/scopebond.json instead, so everyone who clones the",
       "project gets the hook. --dry-run shows what it",
       "would write. --no-install prints the config snippet rather than writing it.",
+      "--repo writes only the committed hook files for runs with no person signed in (Claude Code on",
+      "the web, Codex cloud tasks, the GitHub Copilot coding agent, agent steps in GitHub Actions):",
+      ".claude/settings.json, .codex/hooks.json and .github/hooks/scopebond.json, with the pinned npx",
+      "command. No keys are made here; in the sandbox the hook connects as the repository with the",
+      "SCOPEBOND_REPO_TOKEN secret (and SCOPEBOND_URL for a workspace of your own address).",
       "Needs a terminal, or --yes in a script, because it changes what governs your agent.",
     ] },
   { name: "install", args: "[--claude] [--cursor] [--codex] [--copilot] [--dry-run] [--force] [--yes]",

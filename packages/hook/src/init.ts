@@ -194,11 +194,13 @@ export function installHarness(
   command?: string,
   /** The file to write; defaults to the shared project config. */
   target?: string,
+  /** `backup: false`: no `.scopebond-backup` copy beside the file (a committed repository file has git for that). */
+  options: { backup?: boolean } = {},
 ): string {
   const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
   const file = target ?? projectHarnessFile(harness, cwd);
   const config = readHarnessConfig(file); // throws, leaving the file intact, if it is not a JSON object
-  backupHarnessConfig(file); // keep the user's original beside it before the first change
+  if (options.backup !== false) backupHarnessConfig(file); // keep the user's original beside it before the first change
   mkdirSync(dirname(file), { recursive: true });
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   const forHarness = (h: Harness): string =>
@@ -231,6 +233,29 @@ export function installHarness(
   }
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return file;
+}
+
+/** The coding agents `init --repo` writes a committed hook file for: the ones whose cloud or CI runs read a project file
+ *  (Claude Code on the web and in GitHub Actions, Codex cloud tasks, the Copilot coding agent). Cursor has no such run. */
+export const REPO_HARNESSES: readonly Harness[] = ["claude", "codex", "copilot"];
+
+/** One file `init --repo` wrote. */
+export interface RepoHookFile { harness: Harness; file: string; command: string; changed: boolean }
+
+/** `init --repo`: write (idempotently) the committed hook configuration that runs the version-pinned `npx` hook in each
+ *  of REPO_HARNESSES, merging with what each file already holds (other hooks and settings are kept; an earlier Scopebond
+ *  entry is replaced, never duplicated). Nothing machine-specific is written and no keys are made: in a sandbox the hook
+ *  sets itself up on its first call, from the repository token. A file that is not a JSON object throws, untouched. */
+export function installRepositoryHooks(cwd: string): RepoHookFile[] {
+  // Every file is read first, so one that is not JSON stops the command before any file is written.
+  for (const harness of REPO_HARNESSES) readHarnessConfig(projectHarnessFile(harness, cwd));
+  return REPO_HARNESSES.map((harness) => {
+    const file = projectHarnessFile(harness, cwd);
+    const before = existsSync(file) ? readFileSync(file, "utf8") : null;
+    const command = hookCommand(harness);
+    installHarness(harness, cwd, command, file, { backup: false });
+    return { harness, file, command, changed: readFileSync(file, "utf8") !== before };
+  });
 }
 
 /** The harness configuration snippet to install the hook by hand. Defaults to the

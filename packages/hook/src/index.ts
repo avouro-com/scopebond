@@ -40,8 +40,12 @@ export type { ContextInput } from "./receipt-context.js";
 export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";
 export type { Vector, VectorAgent, Dialect } from "./vectors.js";
-export { scaffold, harnessSnippet, installHarness, placeHook, coverWithoutNpx } from "./init.js";
-export type { HookPlacement } from "./init.js";
+export { scaffold, harnessSnippet, installHarness, placeHook, coverWithoutNpx, installRepositoryHooks, REPO_HARNESSES } from "./init.js";
+export type { HookPlacement, RepoHookFile } from "./init.js";
+export {
+  enrollRepository, repositoryConnectionDir, repositoryToken, repositoryWorkspaceUrl, repositoryEnrollmentProof, isRepositoryConnection,
+  RepositoryEnrollmentError, REPO_TOKEN_ENV, WORKSPACE_URL_ENV, DEFAULT_WORKSPACE_URL,
+} from "./repo-enrol.js";
 export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, copilotDetected, copilotHome, harnessDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
