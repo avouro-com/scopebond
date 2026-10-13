@@ -325,15 +325,18 @@ test("the hook says it reads service rules, and a synced list is enforced; a tam
     const { agentKid } = scaffold(dir, ENFORCE);
     writeFileSync(join(dir, "cloud.json"), JSON.stringify({ url: "https://cloud.example.test", credential: "sbm_x", credential_id: "c", organization_id: "o", environment_id: "env-1", gateway_id: INSTALLATION, attester_kid: "k", scopes: [], expires_at: "2099-01-01T00:00:00Z" }));
     const seen = [];
+    const acks = [];
     let answer = doc(3, { services: SERVICES });
     const workspace = async (url, init) => {
-      if (String(url).endsWith("/v1/policy/ack")) return new Response("{}", { status: 200 });
+      if (String(url).endsWith("/v1/policy/ack")) { acks.push({ capabilities: init.headers["x-scopebond-hook-capabilities"], body: JSON.parse(init.body) }); return new Response("{}", { status: 200 }); }
       seen.push(init.headers["x-scopebond-hook-capabilities"]);
       return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json", etag: `"${answer.revision}"` } });
     };
     const applied = await syncPolicy(dir, { agentKid, hookVersion: "0.24.0", policyBuilds, fetchImpl: workspace });
     assert.equal(applied.state, "applied", JSON.stringify(applied));
     assert.deepEqual(seen, ["allowances,session_budgets,service_rules"]);
+    // The confirmation carries the same capabilities, so the workspace compares the digest of the document it sent this hook.
+    assert.deepEqual(acks.map((a) => [a.capabilities, a.body.result, a.body.rules_digest]), [["allowances,session_budgets,service_rules", "loaded", answer.rules_digest]]);
     assert.ok(isManaged(dir));
     const installed = JSON.parse(readFileSync(join(dir, "policy.json"), "utf8"));
     assert.ok(installed.clauses.some((c) => c.id === "blocked-programs"));

@@ -166,7 +166,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
       const res = await fetchImpl(`${base}/v1/policy/ack`, {
-        method: "POST", headers: { ...auth, "content-type": "application/json" }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        // The same capabilities as the rules check: the workspace rebuilds the document it expects from them to compare the
+        // digest this confirms (with blocked services, the digest covers the list).
+        method: "POST", headers: { ...auth, "content-type": "application/json", "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(",") }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
         body: JSON.stringify({ ...body, reason: body.reason ?? null, hook_version: options.hookVersion }),
       });
       return res.ok ? { revision: body.revision, result: body.result, at: now.toISOString() } : meta.last_ack;
