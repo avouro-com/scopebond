@@ -30,7 +30,7 @@
 // (never their values); or `refused` and why. A drift is put back only when the section says `mode: "enforce"`; with
 // `mode: "report"` it is reported and left alone. A new section is applied in both modes.
 
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -129,11 +129,25 @@ const refusedHarness = (reason: ToolSettingsRefusal): HarnessReport => ({ state:
 
 /** A tool's settings file, read for changing: its parsed object and its text, `{}` when there is none, or null when it cannot be
  *  read as a JSON object whose lists are lists (then it is never written). */
+/** Whether `file` is a symbolic link (false when it is missing or cannot be read). */
+const isLink = (file: string): boolean => { try { return lstatSync(file).isSymbolicLink(); } catch { return false; } };
+
 function readTarget(file: string, paths: (readonly string[])[]): { config: Record<string, unknown>; text: string | null } | "symlink" | null {
-  // A settings file that is a link (a dotfiles checkout, say) is never replaced by a plain file.
-  try { if (lstatSync(file).isSymbolicLink()) return "symlink"; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null; }
+  // A settings file that is a link (a dotfiles checkout, say) is never replaced by a plain file. The file is opened once, without
+  // following a link where the system can refuse one (O_NOFOLLOW), and read through that handle; elsewhere the link is noticed
+  // after the read, from the path itself.
   let text: string | null;
-  try { text = readFileSync(file, "utf8"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") text = null; else return null; }
+  let fd: number | null = null;
+  try { fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)); } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") return "symlink";
+    if (code !== "ENOENT") return null;
+  }
+  if (fd === null) text = null;
+  else {
+    try { text = readFileSync(fd, "utf8"); } catch { return null; } finally { closeSync(fd); }
+  }
+  if (isLink(file)) return "symlink";
   let config: unknown = {};
   if (text !== null && withoutBom(text).trim() !== "") {
     try { config = JSON.parse(withoutBom(text)); } catch { return null; }
