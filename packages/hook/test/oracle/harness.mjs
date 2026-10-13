@@ -218,7 +218,17 @@ export function createOracle() {
     return { execs, destructive, pushes, leaks: [...new Set(leaks)], secretRead: leaks.length > 0, exit: r.status };
   }
 
-  return { run, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  // What this host's bash cannot run as the corpus means it: a passthrough tool it does not have (macOS ships no `timeout`),
+  // or `|&`, which needs bash 4 (macOS ships bash 3.2). The test checks such an entry against its label only.
+  const missing = PASSTHROUGH.filter((_, i) => !reals[i] || reals[i] === "-");
+  const major = Number(spawnSync(bash, ["--norc", "--noprofile", "-c", "echo $BASH_VERSINFO"], { encoding: "utf8" }).stdout?.trim()) || 0;
+  const unsupported = (command) => {
+    const words = command.split(/[\s;&|()`]+/);
+    const tool = missing.find((name) => words.includes(name));
+    if (tool) return `this host has no ${tool}`;
+    return major < 4 && command.includes("|&") ? `bash ${major} has no |&` : null;
+  };
+  return { run, unsupported, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 // The protected files themselves (they hold a marker from the start).

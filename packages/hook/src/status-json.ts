@@ -3,11 +3,12 @@
 // desktop agent and the workspace read. Additive only: fields are added, never renamed.
 
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { loadConnection } from "./cloud.js";
 import { readDeliveryState, waitingUntil } from "./delivery-state.js";
 import { deliveryStalled, queueStatus } from "./delivery-report.js";
 import { readSignatureState, signatureMode, type SignatureMode, type SignatureState } from "./policy-signature.js";
+import { samePath } from "./install.js";
 
 export const STATUS_SCHEMA = "scopebond.status.v1";
 
@@ -105,7 +106,7 @@ export function buildStatusJson(input: {
     config: {
       active: dir,
       others: input.candidateDirs.filter((d) => d !== dir && existsSync(join(d, "policy.json"))),
-      user_connection_shadowed: !!input.userDir && resolve(input.userDir) !== resolve(dir) && !!loadConnection(input.userDir),
+      user_connection_shadowed: !!input.userDir && !samePath(input.userDir, dir) && !!loadConnection(input.userDir),
     },
     agents: input.agents,
     policy_signature: policySignature(dir, connection),

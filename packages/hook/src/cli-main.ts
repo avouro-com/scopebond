@@ -40,7 +40,7 @@ import {
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
   localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy, isTrustedProject,
   wireLifecycleHooks, unwireLifecycleHooks, nativeHookProgram, missingHookPrograms,
-  npxAvailable,
+  npxAvailable, samePath,
 } from "./install.js";
 import {
   openObservations, describeObservations, observationStatus, stopReasonFromClaude, exitFromClaudeFailure,
@@ -413,7 +413,7 @@ function cleanAllow(decision: { decision: string; receipt?: unknown; receipts?: 
 /** Keep the local store small when the Scopebond Agent does not (it keeps the user home while it runs). */
 function keepStore(dir: string): void {
   const home = userHome();
-  if (resolve(dir) === resolve(home) && agentPresence(home).state === "running") return;
+  if (samePath(dir, home) && agentPresence(home).state === "running") return;
   upkeepIfDue(dir);
 }
 
@@ -1110,7 +1110,7 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     // trusted, and would fall back to the user home, which holds no cloud.json: the agent
     // stays governed, but nothing reaches the workspace. Connecting this project is the
     // user's decision to use it, exactly as running `init` here is, so pin it the same way.
-    if (!process.env.SCOPEBOND_HOOK_DIR && resolve(dir) !== resolve(userHome()) && existsSync(join(userHome(), "policy.json"))) {
+    if (!process.env.SCOPEBOND_HOOK_DIR && !samePath(dir, userHome()) && existsSync(join(userHome(), "policy.json"))) {
       trustProjectPolicy(dir);
       console.log(`✓ This project's rules are trusted (they override ${userHome()} here)`);
     }
@@ -1121,7 +1121,7 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     // A user-level connection looks only at the user-level settings: a project's own hook
     // entry in the folder this ran from used to count as "already configured", so a sign-in
     // from such a folder never set up the user at all.
-    const forUser = resolve(dir) === resolve(userHome());
+    const forUser = samePath(dir, userHome());
     const scopes = harnessScopes(harness, process.cwd());
     const existing = forUser ? scopes.user : scopes.local ?? scopes.project ?? scopes.user;
     if (existing && !args.includes("--no-install")) {
@@ -1205,13 +1205,13 @@ function loginDir(args: string[]): string {
 function projectSetupNotice(cwd: string): string[] {
   if (process.env.SCOPEBOND_HOOK_DIR) return [];
   const project = join(cwd, ".scopebond");
-  if (resolve(project) === resolve(userHome()) || !existsSync(join(project, "policy.json"))) return [];
+  if (samePath(project, userHome()) || !existsSync(join(project, "policy.json"))) return [];
   const hookFiles = HARNESSES.flatMap((h) => {
     const scopes = harnessScopes(h, cwd);
     return [scopes.project, scopes.local].filter((file): file is string => !!file);
   });
   const remove = [`delete the folder ${project}`, ...hookFiles.map((file) => `remove the Scopebond hook entry from ${file}`)].join(", and ");
-  if (resolve(resolveConfigDir(cwd)) === resolve(project)) {
+  if (samePath(resolveConfigDir(cwd), project)) {
     const own = loadConnection(project);
     const records = own ? `go to the workspace its own connection names (${own.url})` : "stay on this computer: it is not connected";
     return [
@@ -1232,7 +1232,7 @@ function projectSetupNotice(cwd: string): string[] {
  *  (for `status` and `doctor`): the hook would otherwise route this folder's records past it
  *  without a word. */
 function shadowedUserConnection(active: string): string | null {
-  if (process.env.SCOPEBOND_HOOK_DIR || resolve(active) === resolve(userHome())) return null;
+  if (process.env.SCOPEBOND_HOOK_DIR || samePath(active, userHome())) return null;
   return loadConnection(userHome())?.url ?? null;
 }
 

@@ -9,7 +9,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync } from "node:fs";
+import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFileSync, realpathSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { findProgram, programPath } from "@scopebond/gateway/node";
@@ -198,7 +198,31 @@ function readTrusted(): Record<string, string> {
   try { const p = JSON.parse(readFileSync(trustedProjectsFile(), "utf8")); return isRecord(p) ? (p as Record<string, string>) : {}; } catch { return {}; }
 }
 
-const trustKey = (dir: string): string => resolve(dir).replace(/\\/g, "/").toLowerCase();
+/** A path as the file system names it: absolute, with every link, junction and alias of its nearest existing ancestor
+ *  resolved (macOS's /var is /private/var; a temp folder may sit behind a junction), and the missing rest appended as
+ *  written. The same folder reached two ways gives one answer; a path that cannot be read stays as resolve() gives it. */
+export function canonicalPath(path: string): string {
+  const absolute = resolve(path);
+  const rest: string[] = [];
+  for (let at = absolute; ;) {
+    try { return rest.length ? join(realpathSync.native(at), ...rest) : realpathSync.native(at); } catch { /* not there (yet): try its parent */ }
+    const parent = dirname(at);
+    if (parent === at) return absolute;
+    rest.unshift(basename(at));
+    at = parent;
+  }
+}
+
+/** Whether two paths name the same folder or file (case-insensitively on Windows and macOS, whose volumes usually are). */
+export function samePath(a: string, b: string): boolean {
+  const fold = (p: string): string => (process.platform === "win32" || process.platform === "darwin" ? canonicalPath(p).toLowerCase() : canonicalPath(p));
+  return fold(a) === fold(b);
+}
+
+/** The key a project is trusted under: its canonical path, so a project reached through a link (or through macOS's /var
+ *  and /private/var) is one project. Keys written before used resolve() only; they are still read. */
+const trustKey = (dir: string): string => canonicalPath(dir).replace(/\\/g, "/").toLowerCase();
+const legacyTrustKey = (dir: string): string => resolve(dir).replace(/\\/g, "/").toLowerCase();
 
 /** Pin the project's current policy as trusted. Editing the policy afterwards un-trusts
  *  it until the user trusts it again, so a rewrite by the agent never takes effect. */
@@ -206,6 +230,7 @@ export function trustProjectPolicy(dir: string): string {
   const digest = policyDigest(dir);
   if (!digest) throw new Error(`no policy at ${join(dir, "policy.json")}`);
   const trusted = readTrusted();
+  if (legacyTrustKey(dir) !== trustKey(dir)) delete trusted[legacyTrustKey(dir)];
   trusted[trustKey(dir)] = digest;
   mkdirSync(userHome(), { recursive: true });
   replaceFile(trustedProjectsFile(), JSON.stringify(trusted, null, 2) + "\n");
@@ -215,7 +240,9 @@ export function trustProjectPolicy(dir: string): string {
 /** Whether the project's policy is exactly the one the user trusted. */
 export function isTrustedProject(dir: string): boolean {
   const digest = policyDigest(dir);
-  return !!digest && readTrusted()[trustKey(dir)] === digest;
+  if (!digest) return false;
+  const trusted = readTrusted();
+  return trusted[trustKey(dir)] === digest || trusted[legacyTrustKey(dir)] === digest;
 }
 
 /** Resolve the config dir for a hook event, most specific first:
@@ -243,10 +270,9 @@ export function resolveConfigDir(payloadCwd: string | undefined): string {
 export function untrustedProjectPolicy(payloadCwd: string | undefined): string | null {
   if (process.env.SCOPEBOND_HOOK_DIR || !existsSync(join(userHome(), "policy.json"))) return null;
   // Run from the user's home folder, `<cwd>/.scopebond` is the user-level home itself, not a project setup.
-  const fold = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
-  const home = fold(userHome());
+  const home = userHome();
   const dirs = [payloadCwd, process.env.CLAUDE_PROJECT_DIR].filter(Boolean).map((d) => join(d as string, ".scopebond"));
-  return dirs.find((d) => fold(d) !== home && existsSync(join(d, "policy.json")) && !isTrustedProject(d)) ?? null;
+  return dirs.find((d) => !samePath(d, home) && existsSync(join(d, "policy.json")) && !isTrustedProject(d)) ?? null;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
