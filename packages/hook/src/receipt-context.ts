@@ -1,8 +1,8 @@
 // Receipt context (`payload.context`): where a receipt was produced, so a workspace can group
-// records by session and filter them by tool, model and repository. Nothing personal: the
-// repository is the git remote `origin` as `host/owner/name` (never a local path), the session
-// id is the same keyed opaque id the observations carry (never the harness's raw id), and no
-// prompt, transcript, user name or path is read.
+// records by session and filter them by tool, model and repository. No local paths, credentials
+// or prompts: the repository is the git remote `origin` as `host/owner/name` (never a local path,
+// a machine name or a server folder), the session id is the same keyed opaque id the observations
+// carry (never the harness's raw id), and no prompt, transcript or path is read.
 //
 // A connected hook includes it only once its workspace has said it reads it: the rules check
 // (`GET /v1/policy`) or a delivery answer carries `x-scopebond-receipt-context: 1`, which is kept
@@ -32,6 +32,15 @@ export function noteReceiptContext(dir: string): void {
   } catch { /* the next rules check says it again */ }
 }
 
+/** After a new connection: forget whether the workspace reads receipt context (it may be a different workspace), and make the
+ *  next tool call run the rules check, which says it again. Never throws. */
+export function forgetWorkspaceAnnouncements(dir: string): void {
+  try {
+    const meta = readMeta(dir);
+    writeMeta(dir, { ...meta, receipt_context: null, checked_at: null });
+  } catch { /* nothing recorded yet */ }
+}
+
 /** Whether receipts built now may carry a context: always when not connected, else only once the workspace said it reads it. */
 export function receiptContextAllowed(dir: string, connected: boolean): boolean {
   if (!connected) return true;
@@ -39,16 +48,29 @@ export function receiptContextAllowed(dir: string, connected: boolean): boolean 
 }
 
 const HOST = /^[a-z0-9][a-z0-9.-]*$/;
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, bounded repeats, and each group starts with a "." the digits cannot match
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 const SEGMENT = /^[A-Za-z0-9._~%+-]+$/;
+/** First path segments that name a folder on the server rather than an owner (a remote whose path starts in the server's home,
+ *  users or srv folder, say). */
+const SERVER_FOLDERS = new Set(["home", "users", "root", "srv", "var", "opt", "mnt", "tmp"]);
+
+/** A path segment that is a dot segment, written as one (`.`, `..`) or encoded (`%2e…`). */
+const isDotSegment = (segment: string): boolean => segment === "." || segment === ".." || /^%2e/i.test(segment);
 
 /** A git remote as `host/owner/name`: lowercase host, no scheme, credentials, port, query or `.git`, and the path lowercased on
- *  github.com (where it is not case-sensitive). Null for a local path, an unreadable remote, or one longer than 200 characters. */
+ *  github.com (where it is not case-sensitive). Null for anything that could name a person or a machine rather than a hosted
+ *  repository: a local path, a host without a dot (a machine name or ssh alias), an IP address, a path that starts in a server
+ *  folder (home, users, root, srv, var, opt, mnt, tmp) or has a `~user` segment, a dot segment, an unreadable remote, or one longer than
+ *  200 characters. */
 export function canonicalRepository(url: string | null | undefined): string | null {
   if (typeof url !== "string") return null;
   const remote = normalizeRemote(url);
   if (!remote || remote.host === "local" || !HOST.test(remote.host)) return null;
+  if (!remote.host.includes(".") || IPV4.test(remote.host)) return null;
   const segments = remote.path.split("/");
-  if (segments.length < 2 || segments.some((s) => !SEGMENT.test(s) || s === "." || s === "..")) return null;
+  if (segments.length < 2 || segments.some((s) => !SEGMENT.test(s) || isDotSegment(s) || s.startsWith("~"))) return null;
+  if (SERVER_FOLDERS.has(segments[0].toLowerCase())) return null;
   const path = remote.host === "github.com" ? remote.path.toLowerCase() : remote.path;
   const repository = `${remote.host}/${path}`;
   return repository.length <= 200 ? repository : null;
@@ -82,7 +104,8 @@ export function repositoryFacts(cwd: string, probe: GitProbe = systemGit, branch
   let facts: { repository: string | null; branch: string | null };
   try {
     facts = {
-      repository: canonicalRepository(probe.remoteUrl(cwd, "origin")),
+      // The fetch URL names the repository; a push URL may point at a mirror on this computer.
+      repository: canonicalRepository(probe.fetchUrl ? probe.fetchUrl(cwd, "origin") : probe.remoteUrl(cwd, "origin")),
       branch: printable(branch === undefined ? probe.branch(cwd) : branch, 200),
     };
   } catch { facts = { repository: null, branch: null }; }

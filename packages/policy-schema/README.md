@@ -58,13 +58,21 @@ like an unknown key anywhere else in the payload. Every member is optional and m
 | `harness_version` | string, at most 64 | The version that tool reports, when it reports one. |
 | `model` | string, at most 128 | The model id that tool reports, when it reports one. |
 | `session_id` | string, 1–200 | An opaque session id the connector assigns. Never the tool's own raw session id. |
-| `repository` | string, at most 200 | The git remote `origin` as `host/owner/name`: lowercase host, no scheme, no credentials, no `.git`. Never a local path. |
+| `repository` | string, at most 200 | The git remote `origin` as `host/owner/name`: lowercase host, no scheme, no credentials, no `.git`, no dot segments (`.`, `..`, `%2e…`). Never a local path. |
 | `branch` | string, at most 200 | The current branch, when known. |
 
-`context` carries no personal data (no local paths, user names or prompts) and is
-covered by the signature like the rest of the payload: it sorts under RFC 8785 like
+`context` carries no local paths, no credentials and no prompts (`branch` is the name a
+person chose for it) and is covered by the signature like the rest of the payload: it sorts under RFC 8785 like
 any other member (`vectors/canonicalization.json`, `receipt-context-member-order`).
 `RECEIPT_CONTEXT_KEYS` lists the members.
+
+A receipt check older than this release (`@scopebond/gateway` `verifyReceipt` and
+`validateEvidencePayload` before this version, `npx @scopebond/gateway verify`, or an
+earlier hook's `scopebond verify`) reports a receipt that carries `context` as invalid,
+because the payload's key list is closed; `evidence_version` stays `1.0`. Verify such
+receipts with a release that knows `context`. (`@scopebond/verify`'s
+`verifyReceiptSignature` checks only the signature and key binding, so it verifies them
+in any version.)
 
 ## Observation envelope
 

@@ -16,7 +16,7 @@ import { LOSSLESS_OUTBOX } from "./delivery-report.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { summaryOptions } from "./evidence-detail.js";
 import { replaceFile } from "./safe-fs.js";
-import { noteReceiptContext, receiptContextFrom } from "./receipt-context.js";
+import { forgetWorkspaceAnnouncements, noteReceiptContext, receiptContextFrom } from "./receipt-context.js";
 
 /** The persisted connection between this machine and a Cloud workspace. Holds the
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
@@ -101,6 +101,9 @@ export async function connectCloud(
   forgetCached(connectionPath(dir));
   // A new file renamed into place: a file or link already at cloud.json is replaced, never written through.
   replaceFile(connectionPath(dir), JSON.stringify(connection, null, 2) + "\n");
+  // A new connection may be a different workspace: what the last one said it reads (receipt context) no longer holds, and the
+  // next tool call checks the rules at once (the caller may check them right away too).
+  forgetWorkspaceAnnouncements(dir);
   let setAside = 0;
   const outboxPath = join(dir, "receipts.db.cloud-outbox.db");
   if (existsSync(outboxPath)) {
@@ -166,10 +169,11 @@ export function attachExporter(
   // The chain head each delivery answer carries is kept beside the receipts (chain-heads.json), for `verify --anchor`.
   // `backoff`: a wait the workspace asked for that an earlier call recorded (delivery.json); nothing is sent before it.
   // A delivery answer may say the workspace reads receipt context (`x-scopebond-receipt-context: 1`); kept for later calls.
+  // Only an accepted answer counts: a refusal, a server error or a proxy's page says nothing about the workspace.
   const dir = dirname(outboxDbPath);
   const deliver = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const res = await (fetchImpl ?? globalThis.fetch)(input, init);
-    if (receiptContextFrom(res?.headers)) noteReceiptContext(dir);
+    if (res?.ok && receiptContextFrom(res.headers)) noteReceiptContext(dir);
     return res;
   }) as typeof fetch;
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: deliver,

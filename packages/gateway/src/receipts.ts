@@ -131,8 +131,8 @@ export function validateOverrideRecord(o: unknown): o is OverrideRecord {
 
 /** Where a receipt was produced (`payload.context`, optional): so a workspace can group records by session and filter them by
  *  tool, model and repository. A closed object; every member is optional and may be null when the connector does not know it.
- *  It carries no personal data (no local paths, user names or prompts) and is covered by the signature like the rest of the
- *  payload. (`ReceiptContext` is the older name for the reserved receipt fields; this is the payload member.) */
+ *  It carries no local paths, no credentials and no prompts, and is covered by the signature like the rest of the payload.
+ *  (`ReceiptContext` is the older name for the reserved receipt fields; this is the payload member.) */
 export interface ReceiptPayloadContext {
   /** The connector or coding tool: `claude`, `cursor`, `codex`, `copilot`, `gateway`, ... (`^[a-z][a-z0-9-]{0,39}$`). */
   harness?: string | null;
@@ -142,7 +142,8 @@ export interface ReceiptPayloadContext {
   model?: string | null;
   /** An opaque session id the connector assigns (1–200 characters); never the tool's own raw session id. */
   session_id?: string | null;
-  /** The git remote `origin` as `host/owner/name`: lowercase host, no scheme, credentials or `.git`. Never a local path. */
+  /** The git remote `origin` as `host/owner/name`: lowercase host, no scheme, credentials, `.git` or dot segments. Never a
+   *  local path. */
   repository?: string | null;
   /** The current branch (at most 200 characters). */
   branch?: string | null;
@@ -154,6 +155,8 @@ const CONTEXT_REPOSITORY = /^[a-z0-9][a-z0-9.-]*(?:[/][A-Za-z0-9._~%+-]+){2,}$/;
 const CONTEXT_MAX: Record<(typeof RECEIPT_CONTEXT_KEYS)[number], number> = {
   harness: 40, harness_version: 64, model: 128, session_id: 200, repository: 200, branch: 200,
 };
+/** A repository path segment that is a dot segment, plain (`.`, `..`) or percent-encoded (`%2e…`). */
+const isDotSegment = (segment: string): boolean => segment === "." || segment === ".." || /^%2e/i.test(segment);
 /** The shape `payload.context` must have (the receipt schema's): a closed object of optional strings or nulls. */
 export function validateReceiptContext(value: unknown): value is ReceiptPayloadContext {
   if (!isRecord(value) || !hasOnlyKeys(value, [...RECEIPT_CONTEXT_KEYS])) return false;
@@ -165,7 +168,7 @@ export function validateReceiptContext(value: unknown): value is ReceiptPayloadC
     const length = [...member].length;
     if (length < 1 || length > CONTEXT_MAX[key]) return false;
     if (key === "harness" && !CONTEXT_HARNESS.test(member)) return false;
-    if (key === "repository" && !CONTEXT_REPOSITORY.test(member)) return false;
+    if (key === "repository" && (!CONTEXT_REPOSITORY.test(member) || member.split("/").slice(1).some(isDotSegment))) return false;
   }
   return true;
 }

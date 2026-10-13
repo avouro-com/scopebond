@@ -180,6 +180,30 @@
         }
       },
       {
+        "name": "repository-dot-segment",
+        "context": {
+          "repository": "github.com/../app"
+        }
+      },
+      {
+        "name": "repository-trailing-dot-segment",
+        "context": {
+          "repository": "github.com/example/."
+        }
+      },
+      {
+        "name": "repository-encoded-dot-segment",
+        "context": {
+          "repository": "github.com/%2e%2e/r"
+        }
+      },
+      {
+        "name": "repository-encoded-dot-segment-uppercase",
+        "context": {
+          "repository": "github.com/example/%2Eapp"
+        }
+      },
+      {
         "name": "model-too-long",
         "context": {
           "model": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
