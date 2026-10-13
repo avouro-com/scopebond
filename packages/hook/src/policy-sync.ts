@@ -81,6 +81,11 @@ const ackReasonFor = (reason: SignatureReason): RefusalReason =>
 import {
   ruleReport, toolSettingsMark, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
+import { SERVICE_RULES_CAPABILITY } from "./service-rules.js";
+
+/** What this hook reads in a workspace's rules document beyond what its version implies, as `x-scopebond-hook-capabilities`
+ *  says it: allowances (and "Block, person may ask"), session budgets, and blocked services (service-rules.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY] as const;
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";
@@ -161,7 +166,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
       const res = await fetchImpl(`${base}/v1/policy/ack`, {
-        method: "POST", headers: { ...auth, "content-type": "application/json" }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        // The same capabilities as the rules check: the workspace rebuilds the document it expects from them to compare the
+        // digest this confirms (with blocked services, the digest covers the list).
+        method: "POST", headers: { ...auth, "content-type": "application/json", "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(",") }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
         body: JSON.stringify({ ...body, reason: body.reason ?? null, hook_version: options.hookVersion }),
       });
       return res.ok ? { revision: body.revision, result: body.result, at: now.toISOString() } : meta.last_ack;
@@ -180,10 +187,10 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // The hook's version tells the workspace which settings this computer understands (for example exact-target
       // exclusions), so it is never sent a document an older hook would refuse.
       // The settings this hook understands beyond its version (the workspace sends allowances, "Block, person may ask"
-      // and the always/requests terms only to a hook that says so).
+      // and the always/requests terms, session budgets and blocked services only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
-      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances,session_budgets", "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
+      headers: { ...auth, "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(","), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {

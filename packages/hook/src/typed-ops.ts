@@ -428,13 +428,54 @@ function managerCommand(sc: SimpleCommand): { manager: Manager; argv: string[] }
  *  `pip install -r …`, `uv sync`) has no package operation: its package set is not in the
  *  request, and an empty or guessed list would read as a complete one. */
 export function packageOperation(sc: SimpleCommand, ctx: TypedContext, request: unknown): Operation | null {
+  const install = namedInstall(sc);
+  if (!install) return null;
+  const { manager, verb, registry, lifecycle } = install;
+  const packages = install.packages.map((parsed) => {
+    const host = parsed.host ?? (parsed.name.startsWith("local:") || parsed.name.startsWith("git:") ? undefined : registry);
+    return { name: parsed.name, integrity_status: "unknown", ...(parsed.version ? { resolved_version: parsed.version } : {}), ...(host ? { registry_host: host } : {}) };
+  });
+  const names = packages.map((p) => p.name).sort();
+  const versionOf = ctx.packageManagerVersion ?? readPackageManager;
+  return {
+    type: "package", resource_id: ctx.key.resourceId("package-set", names.join("\0")), ...common(ctx, request),
+    manager, manager_version: versionOf(ctx.cwd, manager) ?? "unknown", verb, packages, lifecycle_scripts: lifecycle,
+  };
+}
+
+/** Every package an install, add or update names, for matching against a workspace's blocked packages (service-rules.ts).
+ *  Stricter than the `package` operation, which describes only an install it can read whole: every named spec is read (no
+ *  limit on how many), packages named beside a requirements file or an editable path still count, and a spec that cannot be
+ *  read is skipped. `unreadable` is set when the command names specs and none of them can be read. Null where the command is
+ *  not an install, add or update, or names no package at all (`npm ci`, `pip install -r requirements.txt`). */
+export function packagesToCheck(sc: SimpleCommand): { manager: Manager; names: string[]; unreadable?: true } | null {
+  const request = installRequest(sc);
+  if (!request || request.specs.length === 0) return null;
+  const names: string[] = [];
+  for (const spec of request.specs) {
+    const parsed = request.js ? jsPackage(spec) : pyPackage(spec);
+    if (parsed && scrubParam(parsed.name) === parsed.name) names.push(parsed.name);
+  }
+  return names.length ? { manager: request.manager, names } : { manager: request.manager, names, unreadable: true };
+}
+
+interface NamedInstall {
+  manager: Manager;
+  verb: "install" | "add" | "update";
+  packages: Array<{ name: string; version?: string; host?: string }>;
+  registry: string | undefined;
+  lifecycle: "blocked" | "unknown" | "not_supported";
+}
+
+/** The manager, verb and package specs of an install, add or update, read from the command alone. */
+function installRequest(sc: SimpleCommand): { manager: Manager; js: boolean; s: ReturnType<typeof scan>; verb: NamedInstall["verb"]; specs: string[] } | null {
   const found = managerCommand(sc);
   if (!found) return null;
   const { manager } = found;
   const js = manager === "npm" || manager === "pnpm" || manager === "yarn";
   const s = scan(found.argv, js ? (manager === "npm" ? [...JS_VALUED, "-w"] : JS_VALUED) : PY_VALUED);
   const [sub, second, ...others] = s.positionals;
-  let verb: "install" | "add" | "update";
+  let verb: NamedInstall["verb"];
   let specs: string[];
   if (js) {
     const map: Record<string, "install" | "add" | "update"> = { install: "install", i: "install", add: "add", update: "update", up: "update", upgrade: "update" };
@@ -452,6 +493,14 @@ export function packageOperation(sc: SimpleCommand, ctx: TypedContext, request: 
     verb = s.flags.has("-U") || s.flags.has("--upgrade") ? "update" : "install";
     specs = others;
   } else return null;
+  return { manager, js, s, verb, specs };
+}
+
+/** What an install, add or update names (the part of its `package` operation read from the command alone). */
+function namedInstall(sc: SimpleCommand): NamedInstall | null {
+  const request = installRequest(sc);
+  if (!request) return null;
+  const { manager, js, s, verb, specs } = request;
   // Packages taken from a file or an editable path are not named in the request.
   if (!js && ["-r", "--requirement", "--requirements", "-e", "--editable"].some((f) => s.flags.has(f))) return null;
   if (specs.length === 0) return null;
@@ -459,20 +508,14 @@ export function packageOperation(sc: SimpleCommand, ctx: TypedContext, request: 
   const ignore = s.flags.get("--ignore-scripts");
   const noScripts = ignore === true || ignore === "true";
   const lifecycle = js ? (noScripts ? "blocked" : "unknown") : "not_supported";
-  const packages: Array<Record<string, unknown>> = [];
+  const packages: NamedInstall["packages"] = [];
   for (const spec of specs.slice(0, 100)) {
     const parsed = js ? jsPackage(spec) : pyPackage(spec);
     if (!parsed || scrubParam(parsed.name) !== parsed.name) return null;
-    const host = parsed.host ?? (parsed.name.startsWith("local:") || parsed.name.startsWith("git:") ? undefined : registry);
-    packages.push({ name: parsed.name, integrity_status: "unknown", ...(parsed.version ? { resolved_version: parsed.version } : {}), ...(host ? { registry_host: host } : {}) });
+    packages.push(parsed);
   }
   if (specs.length > 100) return null; // a larger install is not truncated; it stays a shell action
-  const names = packages.map((p) => String(p.name)).sort();
-  const versionOf = ctx.packageManagerVersion ?? readPackageManager;
-  return {
-    type: "package", resource_id: ctx.key.resourceId("package-set", names.join("\0")), ...common(ctx, request),
-    manager, manager_version: versionOf(ctx.cwd, manager) ?? "unknown", verb, packages, lifecycle_scripts: lifecycle,
-  };
+  return { manager, verb, packages, registry, lifecycle };
 }
 
 // ---- deriving operations for one dispatched call ----------------------------------------------------------------------

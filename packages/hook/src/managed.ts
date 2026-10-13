@@ -33,6 +33,7 @@ import { TARGET_RULES } from "./target-rules.js";
 import type { Recommended } from "./client-health.js";
 import type { SignatureState } from "./policy-signature.js";
 import { validSessionBudgets } from "./session-budget-shape.js";
+import { blockedServiceClauses, validBlockedServices, type BlockedService } from "./service-rules.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
 export const MANAGED_META_FILE = "managed-meta.json";
@@ -139,6 +140,9 @@ export interface ManagedDocument {
   /** Limits on what named sessions may do (session-budgets.ts), sent only to a hook that understands them. A hook that predates
    *  them ignores the member: this check reads only the members it knows. */
   session_budgets?: unknown[];
+  /** MCP servers, hosts, programs and packages the workspace blocks by name (service-rules.ts), sent only to a hook that reports
+   *  the `service_rules` capability. Digested with the rules (`digestManaged`): a changed list is refused like changed rules. */
+  blocked_services?: BlockedService[];
   /** Signed rules (policy-signature.ts): `true` on a rules document when present; the workspace's id; when it was issued
    *  (RFC 3339); the signing key's id and the base64 Ed25519 signature. All optional while unsigned documents are accepted. */
   managed?: true;
@@ -174,6 +178,10 @@ export type RefusalReason = "invalid_document" | "stale_revision" | "wrong_compu
 export type Inspection = { ok: true; doc: ManagedDocument } | { ok: false; reason: RefusalReason; message: string };
 
 export const digestRules = (rules: unknown): string => createHash("sha256").update(canonical(rules)).digest("hex");
+/** A document's `rules_digest`: the digest of its rules, or, when it carries `blocked_services`, of `{ rules, blocked_services }`
+ *  (canonical JSON, so the members' order in the document does not matter; the list's own order does). */
+export const digestManaged = (rules: unknown, blockedServices?: unknown): string =>
+  blockedServices === undefined ? digestRules(rules) : createHash("sha256").update(canonical({ rules, blocked_services: blockedServices })).digest("hex");
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -216,7 +224,10 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   }
   const network = rules["network-egress"] as ManagedRule;
   if (network.mode !== "monitor" && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
-  if (digestRules(rules) !== rulesDigest) return bad("the rules do not match their digest; the document was changed or damaged");
+  // Blocked services are checked whole, like session budgets, and are digested with the rules: a malformed or changed list
+  // refuses the document (the rules in force stay), so a bad delivery never reads as "nothing blocked".
+  if (raw.blocked_services !== undefined && !validBlockedServices(raw.blocked_services)) return bad("the blocked services are malformed");
+  if (digestManaged(rules, raw.blocked_services) !== rulesDigest) return bad("the rules do not match their digest; the document was changed or damaged");
   // Session budgets are checked whole: a malformed list refuses the document (the rules and budgets in force stay), so a bad
   // delivery never reads as "no limit".
   if (raw.session_budgets !== undefined && !validSessionBudgets(raw.session_budgets)) return bad("the session budgets are malformed");
@@ -302,6 +313,13 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
       param_bounds: { host: { pattern: hostPattern(r["network-egress"].allowed_hosts ?? []) } },
       description: `Deny web requests to sites other than ${r["network-egress"].allowed_hosts!.join(", ")}. Set by your workspace.`,
     });
+  }
+  // Blocked services come after every ordinary rule (an action an ordinary rule blocks is explained by that rule) and before
+  // the key policy.
+  const services = blockedServiceClauses(doc.blocked_services);
+  if (services.length) {
+    const keysAt = clauses.findIndex((c) => c.id === "keys");
+    clauses.splice(keysAt < 0 ? clauses.length : keysAt, 0, ...(services as Clause[]));
   }
   return { ...policy, policy_id: "coding-agent", version: doc.revision, clauses };
 }

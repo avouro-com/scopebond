@@ -23,6 +23,7 @@ import { homeFolders, maskHomeInPolicy, maskHomeInValue } from "./home-mask.js";
 import type { ReceiptBudget, ReceiptPayloadContext } from "@scopebond/gateway";
 import type { SessionBudgetGuard } from "./session-budgets.js";
 import { policyOptsIntoTargets, targetRuleClauses } from "./target-rules.js";
+import { blockedPackagePattern, blockedServiceKindOf, readBlockedServices, unreadablePackageKey, BLOCKED_SERVICE_REASON, type BlockedService } from "./service-rules.js";
 export { targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
@@ -68,6 +69,9 @@ export interface Decision {
   reason: string;
   /** The clause that decided a deny, when the verdict named one. */
   clauseId?: string | null;
+  /** Why a deny was made, where a reason beyond the clause applies: `blocked_service` when the workspace blocks the MCP server,
+   *  host, program or package the action names (service-rules.ts). */
+  code?: typeof BLOCKED_SERVICE_REASON;
   /** The deciding receipt (the denied one, or the first allow). */
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
@@ -379,6 +383,25 @@ export function createHookRuntime(config: RuntimeConfig) {
   const named = namedActionTypes(policy);
   // A policy decides derived actions only when it opts in (target-rules.ts): it names a type Action Taxonomy 1.1 introduced.
   const optedIn = policyOptsIntoTargets(policy);
+  // Packages the workspace blocks (service-rules.ts): an install that names one is also evaluated as that package's
+  // `package.install`, which the policy's blocked-packages clause denies. Every other install is recorded as before.
+  // Records and the workspace know a blocked service by the clause id (`blocked-*`); `code` is this decision's own label.
+  const blockedPackage = blockedPackagePattern(policy);
+  const withBlockedPackages = (m: Mapped): Mapped[] => {
+    if (!blockedPackage || !m.packages || m.intent.action_type !== "shell.exec" || !m.evaluated) return [m];
+    const { manager, names, unreadable } = m.packages;
+    // An install whose named packages none can be read is evaluated as `<manager>:`, which the clause denies (fail closed).
+    const blocked = unreadable ? [{ name: "", key: unreadablePackageKey(manager) }]
+      : names.map((name) => ({ name, key: `${manager}:${name}` })).filter(({ key }) => blockedPackage.test(key) === false);
+    // Before the command: a blocked package decides first, before a rule a person may allow or ask about could ask them.
+    return [...blocked.map(({ name, key }): Mapped => ({
+      intent: { action_type: "package.install", params: { manager, name, package_key: key } },
+      evaluated: true, source: m.source, ...(m.postHoc ? { postHoc: true } : {}),
+    })), m];
+  };
+  /** The workspace's blocked services, read only to explain a denial one of them made. */
+  let services: BlockedService[] | null = null;
+  const blockedServices = (): BlockedService[] => (services ??= readBlockedServices(dirname(config.policyPath)));
 
   /** Close interrupted evaluations and queue what the queue never got, waiting briefly for locks. Never throws. */
   const repair = async (): Promise<void> => {
@@ -461,6 +484,7 @@ export function createHookRuntime(config: RuntimeConfig) {
         decision: "deny",
         reason: explainDeny({
           policy, clauseId, detail: result.reason,
+          ...(blockedServiceKindOf(clauseId) ? { services: blockedServices() } : {}),
           intent: signed.intent, policyPath: config.policyPath,
           postHoc: mapped.postHoc,
           // Point at the editable surface when there is one. `policy.json` is compiled
@@ -469,6 +493,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           remedy: rulesRemedy,
         }) + (override?.hint() ? ` ${override.hint()}` : ""),
         clauseId,
+        ...(blockedServiceKindOf(clauseId) ? { code: BLOCKED_SERVICE_REASON } : {}),
         receipt: result.receipt,
       };
     },
@@ -481,7 +506,8 @@ export function createHookRuntime(config: RuntimeConfig) {
       // decomposed call (a command, its file reads and writes, a rename destination)
       // link to each other and count once as an action. It is part of the signed
       // intent, so it is authenticated by the same signature as the rest.
-      const scoped = scopeRoots.length ? applyRootScope(raw, { cwd: config.cwd ?? process.cwd(), roots: scopeRoots }) : raw;
+      const rooted = scopeRoots.length ? applyRootScope(raw, { cwd: config.cwd ?? process.cwd(), roots: scopeRoots }) : raw;
+      const scoped = blockedPackage ? rooted.flatMap(withBlockedPackages) : rooted;
       const list = withActionGroup(scoped.map(masked), actionGroupId(options.groupKey));
       const receipts: unknown[] = [];
       const dispatched: NonNullable<Decision["dispatched"]> = [];
