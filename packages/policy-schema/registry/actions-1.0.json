@@ -1,6 +1,6 @@
 {
-  "taxonomy_version": "1.0",
-  "description": "Scopebond Action Taxonomy v1 — the coding, GitHub, MCP and HTTP action types and their parameter bounds, an extension of the policy vocabulary. Parameters are carried under intent.params; bound-able parameters (boundable: true) may be constrained by an action_allowlist clause's param_bounds. This JSON is the machine source; the @scopebond/policy-schema README describes it. Money/commerce action types keep their existing gateway/demo shapes and are not redefined here.",
+  "taxonomy_version": "1.1",
+  "description": "Scopebond Action Taxonomy v1 — the coding, GitHub, MCP and HTTP action types and their parameter bounds, an extension of the policy vocabulary. Version 1.1 adds the cloud, Kubernetes, database, secret, identity, messaging and work-item types a coding agent reaches through command-line tools and MCP servers; each action carries the taxonomy version that introduced it, and 1.0 types are unchanged. Parameters are carried under intent.params; bound-able parameters (boundable: true) may be constrained by an action_allowlist clause's param_bounds. This JSON is the machine source; the @scopebond/policy-schema README describes it. Money/commerce action types keep their existing gateway/demo shapes and are not redefined here.",
   "actions": [
     {
       "id": "shell.exec",
@@ -178,6 +178,275 @@
       ],
       "examples": [
         { "repo": "acme/app", "environment": "production", "sha": "0f1e2d…" }
+      ]
+    },
+    {
+      "id": "cloud.resource.create",
+      "taxonomy_version": "1.1",
+      "summary": "A cloud resource created by a command-line tool a coding agent ran.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "provider", "type": "enum", "required": true, "boundable": true, "description": "The cloud or platform the command reaches; unknown when the tool decides (terraform, serverless).", "enum": ["aws", "gcp", "azure", "cloudflare", "vercel", "fly", "heroku", "github", "unknown"] },
+        { "name": "service", "type": "string", "required": false, "boundable": true, "description": "The provider's service (s3, ec2, iam, rds, lambda, compute, sql, run, workers, d1, r2, repo, terraform)." },
+        { "name": "kind", "type": "string", "required": false, "boundable": true, "description": "The kind of resource (bucket, object, instance, function, stack, resource-group, vm, app, repo)." },
+        { "name": "region", "type": "string", "required": false, "boundable": true, "description": "The region or zone named on the command line (--region, --zone, --location)." },
+        { "name": "env", "type": "enum", "required": false, "boundable": true, "description": "The environment the command names (an AWS profile, a GCP project, a Terraform folder or var file whose name says prod, staging or dev); omitted when nothing names one.", "enum": ["production", "staging", "development", "unknown"] },
+        { "name": "resource_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the resource the command names (bucket, instance ids, stack, project); never the name itself." },
+        { "name": "auto_approve", "type": "boolean", "required": false, "boundable": true, "description": "Whether the command skips the tool's own confirmation (-auto-approve, --yes, --force, --quiet)." },
+        { "name": "targeted", "type": "boolean", "required": false, "boundable": true, "description": "For an infrastructure-as-code apply or destroy: whether it is limited to named resources (-target)." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (sensitive); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "provider": "aws", "service": "s3", "kind": "bucket", "via": "aws" }
+      ]
+    },
+    {
+      "id": "cloud.resource.modify",
+      "taxonomy_version": "1.1",
+      "summary": "A cloud resource changed in place (an infrastructure-as-code apply, an update, a stop or start).",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "provider", "type": "enum", "required": true, "boundable": true, "description": "The cloud or platform the command reaches; unknown when the tool decides (terraform, serverless).", "enum": ["aws", "gcp", "azure", "cloudflare", "vercel", "fly", "heroku", "github", "unknown"] },
+        { "name": "service", "type": "string", "required": false, "boundable": true, "description": "The provider's service (s3, ec2, iam, rds, lambda, compute, sql, run, workers, d1, r2, repo, terraform)." },
+        { "name": "kind", "type": "string", "required": false, "boundable": true, "description": "The kind of resource (bucket, object, instance, function, stack, resource-group, vm, app, repo)." },
+        { "name": "region", "type": "string", "required": false, "boundable": true, "description": "The region or zone named on the command line (--region, --zone, --location)." },
+        { "name": "env", "type": "enum", "required": false, "boundable": true, "description": "The environment the command names (an AWS profile, a GCP project, a Terraform folder or var file whose name says prod, staging or dev); omitted when nothing names one.", "enum": ["production", "staging", "development", "unknown"] },
+        { "name": "resource_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the resource the command names (bucket, instance ids, stack, project); never the name itself." },
+        { "name": "auto_approve", "type": "boolean", "required": false, "boundable": true, "description": "Whether the command skips the tool's own confirmation (-auto-approve, --yes, --force, --quiet)." },
+        { "name": "targeted", "type": "boolean", "required": false, "boundable": true, "description": "For an infrastructure-as-code apply or destroy: whether it is limited to named resources (-target)." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (sensitive); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "provider": "unknown", "service": "terraform", "auto_approve": true, "targeted": false, "via": "terraform" }
+      ]
+    },
+    {
+      "id": "cloud.resource.delete",
+      "taxonomy_version": "1.1",
+      "summary": "A cloud resource deleted or terminated (a bucket, an instance, a stack, a repository, an app).",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "provider", "type": "enum", "required": true, "boundable": true, "description": "The cloud or platform the command reaches; unknown when the tool decides (terraform, serverless).", "enum": ["aws", "gcp", "azure", "cloudflare", "vercel", "fly", "heroku", "github", "unknown"] },
+        { "name": "service", "type": "string", "required": false, "boundable": true, "description": "The provider's service (s3, ec2, iam, rds, lambda, compute, sql, run, workers, d1, r2, repo, terraform)." },
+        { "name": "kind", "type": "string", "required": false, "boundable": true, "description": "The kind of resource (bucket, object, instance, function, stack, resource-group, vm, app, repo)." },
+        { "name": "region", "type": "string", "required": false, "boundable": true, "description": "The region or zone named on the command line (--region, --zone, --location)." },
+        { "name": "env", "type": "enum", "required": false, "boundable": true, "description": "The environment the command names (an AWS profile, a GCP project, a Terraform folder or var file whose name says prod, staging or dev); omitted when nothing names one.", "enum": ["production", "staging", "development", "unknown"] },
+        { "name": "resource_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the resource the command names (bucket, instance ids, stack, project); never the name itself." },
+        { "name": "auto_approve", "type": "boolean", "required": false, "boundable": true, "description": "Whether the command skips the tool's own confirmation (-auto-approve, --yes, --force, --quiet)." },
+        { "name": "targeted", "type": "boolean", "required": false, "boundable": true, "description": "For an infrastructure-as-code apply or destroy: whether it is limited to named resources (-target)." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (destructive); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "provider": "aws", "service": "ec2", "kind": "instance", "region": "us-east-1", "env": "production", "via": "aws" },
+        { "provider": "github", "service": "repo", "kind": "repo", "via": "gh" }
+      ]
+    },
+    {
+      "id": "k8s.apply",
+      "taxonomy_version": "1.1",
+      "summary": "Kubernetes objects created or changed (kubectl apply, create, replace, patch, scale, rollout; helm install, upgrade, rollback).",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "context", "type": "string", "required": false, "boundable": true, "description": "The kubeconfig context named with --context or --kube-context; omitted when the current context is used." },
+        { "name": "namespace", "type": "string", "required": false, "boundable": true, "description": "The namespace named with -n or --namespace; omitted when the context default is used." },
+        { "name": "kind", "type": "string", "required": false, "boundable": true, "description": "The resource kind (pod, deployment, namespace, helm-release); omitted when it comes from a file." },
+        { "name": "name_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the resource names; never the names." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (sensitive); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "context": "prod-cluster", "namespace": "payments", "kind": "deployment", "via": "kubectl" }
+      ]
+    },
+    {
+      "id": "k8s.delete",
+      "taxonomy_version": "1.1",
+      "summary": "Kubernetes objects deleted (kubectl delete, helm uninstall).",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "context", "type": "string", "required": false, "boundable": true, "description": "The kubeconfig context named with --context or --kube-context; omitted when the current context is used." },
+        { "name": "namespace", "type": "string", "required": false, "boundable": true, "description": "The namespace named with -n or --namespace; omitted when the context default is used." },
+        { "name": "kind", "type": "string", "required": false, "boundable": true, "description": "The resource kind (pod, deployment, namespace, helm-release); omitted when it comes from a file." },
+        { "name": "name_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the resource names; never the names." },
+        { "name": "all", "type": "boolean", "required": false, "boundable": true, "description": "Whether the command deletes every resource of the kind or across every namespace (--all, -A)." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (destructive); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "namespace": "default", "kind": "pod", "all": true, "via": "kubectl" }
+      ]
+    },
+    {
+      "id": "k8s.exec",
+      "taxonomy_version": "1.1",
+      "summary": "A command run inside a container (kubectl exec, attach).",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "context", "type": "string", "required": false, "boundable": true, "description": "The kubeconfig context named with --context or --kube-context; omitted when the current context is used." },
+        { "name": "namespace", "type": "string", "required": false, "boundable": true, "description": "The namespace named with -n or --namespace; omitted when the context default is used." },
+        { "name": "kind", "type": "string", "required": false, "boundable": true, "description": "The resource kind (pod, deployment, namespace, helm-release); omitted when it comes from a file." },
+        { "name": "name_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the resource names; never the names." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (destructive); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "namespace": "payments", "kind": "pod", "via": "kubectl" }
+      ]
+    },
+    {
+      "id": "db.migrate",
+      "taxonomy_version": "1.1",
+      "summary": "A database schema migration run by a migration tool (prisma, drizzle-kit, rails, alembic, flyway, knex, sequelize, wrangler d1).",
+      "risk_class": "destructive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "provider", "type": "string", "required": true, "boundable": true, "description": "The migration tool (prisma, drizzle, rails, alembic, flyway, knex, sequelize, cloudflare_d1)." },
+        { "name": "direction", "type": "enum", "required": true, "boundable": true, "description": "up applies migrations; down reverts them or applies changes that lose data; reset drops and recreates.", "enum": ["up", "down", "reset"] },
+        { "name": "env", "type": "enum", "required": false, "boundable": true, "description": "The environment the command names (RAILS_ENV, --env, a development-only command); omitted when nothing names one.", "enum": ["production", "staging", "development", "unknown"] },
+        { "name": "migration_set_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the local migration set, when it was read." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (destructive for down and reset, sensitive for up); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "provider": "prisma", "direction": "reset", "via": "prisma" },
+        { "provider": "rails", "direction": "up", "env": "production", "via": "rails" }
+      ]
+    },
+    {
+      "id": "db.exec",
+      "taxonomy_version": "1.1",
+      "summary": "SQL run against a database by a database command-line tool or MCP server, classified without its text.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "mcp_proxy"],
+      "parameters": [
+        { "name": "provider", "type": "string", "required": true, "boundable": true, "description": "The database (postgres, sqlite, mysql, cloudflare_d1)." },
+        { "name": "verb", "type": "string", "required": true, "boundable": true, "description": "The statement class (read, insert, update, delete, delete_all, create, alter, drop, migrate, unknown)." },
+        { "name": "scope", "type": "enum", "required": false, "boundable": true, "description": "Whether the database is on this machine.", "enum": ["remote", "local", "unknown"] },
+        { "name": "risk", "type": "enum", "required": false, "boundable": true, "description": "destructive for a drop, a delete or update of every row, or an ALTER that drops; unknown when the SQL could not be read.", "enum": ["ordinary", "destructive", "unknown"] },
+        { "name": "predicate_class", "type": "enum", "required": false, "boundable": true, "description": "Whether the statement is bounded by a WHERE clause.", "enum": ["bounded", "all", "not_applicable"] },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] }
+      ],
+      "examples": [
+        { "provider": "postgres", "verb": "delete_all", "scope": "unknown", "risk": "destructive", "predicate_class": "all", "via": "postgres" }
+      ]
+    },
+    {
+      "id": "secret.write",
+      "taxonomy_version": "1.1",
+      "summary": "A secret stored or changed in a secret store; the value is never read or recorded.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "store", "type": "enum", "required": true, "boundable": true, "description": "The secret store.", "enum": ["aws-ssm", "aws-secretsmanager", "gcp-secret-manager", "azure-keyvault", "vault", "github", "wrangler", "vercel", "fly", "heroku", "doppler", "1password"] },
+        { "name": "name_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the secret's name (with its vault, repository or app); omitted for a bulk write." },
+        { "name": "env", "type": "enum", "required": false, "boundable": true, "description": "The environment the command names; omitted when nothing names one.", "enum": ["production", "staging", "development", "unknown"] },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (sensitive); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "store": "github", "via": "gh" },
+        { "store": "aws-ssm", "via": "aws" }
+      ]
+    },
+    {
+      "id": "iam.change",
+      "taxonomy_version": "1.1",
+      "summary": "An identity or access change: a role, policy, user, group or key created, changed or removed.",
+      "risk_class": "identity",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "host_agent"],
+      "parameters": [
+        { "name": "provider", "type": "enum", "required": true, "boundable": true, "description": "The cloud whose identities change.", "enum": ["aws", "gcp", "azure", "cloudflare", "vercel", "fly", "heroku", "github", "unknown"] },
+        { "name": "kind", "type": "enum", "required": true, "boundable": true, "description": "What changes.", "enum": ["role", "policy", "user", "key", "group", "other"] },
+        { "name": "name_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the role, policy, user or key named; never the name." },
+        { "name": "env", "type": "enum", "required": false, "boundable": true, "description": "The environment the command names; omitted when nothing names one.", "enum": ["production", "staging", "development", "unknown"] },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (identity); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "provider": "aws", "kind": "policy", "via": "aws" }
+      ]
+    },
+    {
+      "id": "communication.send",
+      "taxonomy_version": "1.1",
+      "summary": "A message sent to people through a messaging service an agent's tool reaches.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "mcp_proxy"],
+      "parameters": [
+        { "name": "provider", "type": "string", "required": true, "boundable": true, "description": "The messaging service (slack)." },
+        { "name": "channel_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the channel or conversation; never its id or name." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (sensitive); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "provider": "slack", "via": "slack" }
+      ]
+    },
+    {
+      "id": "work.item.create",
+      "taxonomy_version": "1.1",
+      "summary": "A work item (an issue or ticket) created in a tracker an agent's tool reaches.",
+      "risk_class": "routine",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "mcp_proxy"],
+      "parameters": [
+        { "name": "provider", "type": "string", "required": true, "boundable": true, "description": "The tracker (linear, jira)." },
+        { "name": "project_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the project, team or issue key; never the name." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (routine); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "provider": "linear", "via": "linear" }
+      ]
+    },
+    {
+      "id": "work.item.update",
+      "taxonomy_version": "1.1",
+      "summary": "A work item (an issue or ticket) changed in a tracker an agent's tool reaches.",
+      "risk_class": "routine",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex", "mcp_proxy"],
+      "parameters": [
+        { "name": "provider", "type": "string", "required": true, "boundable": true, "description": "The tracker (linear, jira)." },
+        { "name": "project_digest", "type": "string", "required": false, "boundable": false, "description": "A keyed digest of the project, team or issue key; never the name." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The command-line tool or MCP server the action was read from (aws, kubectl, terraform, github), for bounds that trust one tool and not another." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes: the shell command or MCP tool call it was read from, recorded beside it in the same action group.", "enum": ["shell.exec", "mcp.tool.call"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (routine); the managed rules bound it.", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "provider": "linear", "via": "linear" }
       ]
     }
   ]

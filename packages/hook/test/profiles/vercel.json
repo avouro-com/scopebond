@@ -1,0 +1,51 @@
+{
+  "tool": "vercel",
+  "description": "Vercel CLI: a deployment (plain vercel, vercel deploy, redeploy) is production with --prod or --target production and a preview otherwise; promote and rollback are production; env add is a secret write; remove and project rm are deletes.",
+  "cases": [
+    {
+      "name": "vercel --prod",
+      "command": "vercel --prod",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "vercel", "environment": "production", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "vercel deploy with a token is production; the token is never read",
+      "command": "vercel deploy --prod --yes --token {{SECRET}} --scope acme",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "vercel", "environment": "production", "target_digest": { "$digest": ["vercel", "acme"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "a plain vercel is a preview",
+      "command": "vercel",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "vercel", "environment": "preview", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "a project folder argument is still a deployment",
+      "command": "npx vercel ./apps/web --target=production",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "vercel", "environment": "production", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "promote goes to production",
+      "command": "vercel promote https://acme-web-abc123.vercel.app",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "vercel", "environment": "production", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "env add names the variable and environment, never the value",
+      "command": "vercel env add DATABASE_URL production",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "vercel", "name_digest": { "$digest": ["vercel", "DATABASE_URL"] }, "env": "production", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "remove deployments",
+      "command": "vercel remove acme-web-old --yes",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "vercel", "service": "deployments", "kind": "deployment", "resource_digest": { "$digest": ["vercel", "acme-web-old"] }, "auto_approve": true, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "project rm",
+      "command": "vercel project rm acme-web",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "vercel", "service": "projects", "kind": "project", "resource_digest": { "$digest": ["vercel", "project", "acme-web"] }, "risk_class": "destructive" } }]
+    },
+    { "name": "dev derives nothing", "command": "vercel dev", "expect": [] },
+    { "name": "env pull derives nothing", "command": "vercel env pull .env.local", "expect": [] },
+    { "name": "link derives nothing", "command": "vercel link --yes", "expect": [] },
+    { "name": "version derives nothing", "command": "vercel --version", "expect": [] },
+    { "name": "ls derives nothing", "command": "vercel ls", "expect": [] }
+  ]
+}

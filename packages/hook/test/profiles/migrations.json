@@ -1,0 +1,94 @@
+{
+  "tool": "migrations",
+  "description": "Database migration tools, directly or through npx, pnpm, bundle exec, python -m or uv run: prisma, drizzle-kit, rails/rake, alembic, flyway, knex and sequelize. up is sensitive; down (a rollback, or a push that accepts data loss) and reset (drop and recreate) are destructive. The environment comes from RAILS_ENV, --env or -environment when they name one.",
+  "cases": [
+    {
+      "name": "prisma migrate deploy",
+      "via": "prisma",
+      "command": "npx prisma migrate deploy",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "prisma", "direction": "up", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "prisma migrate dev is a development migration",
+      "via": "prisma",
+      "command": "pnpm prisma migrate dev --name add-orders",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "prisma", "direction": "up", "env": "development", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "prisma migrate reset",
+      "via": "prisma",
+      "command": "npx prisma migrate reset --force",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "prisma", "direction": "reset", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "prisma db push --accept-data-loss",
+      "via": "prisma",
+      "command": "npx prisma db push --accept-data-loss",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "prisma", "direction": "down", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "drizzle-kit push",
+      "via": "drizzle-kit",
+      "command": "npx drizzle-kit push",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "drizzle", "direction": "up", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "rails db:migrate in production",
+      "via": "rails",
+      "command": "RAILS_ENV=production bin/rails db:migrate",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "rails", "direction": "up", "env": "production", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "rake db:rollback through bundle exec",
+      "via": "rails",
+      "command": "bundle exec rake db:rollback RAILS_ENV=staging",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "rails", "direction": "down", "env": "staging", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "rails db:drop db:create db:migrate is a reset, then an up",
+      "via": "rails",
+      "command": "rails db:drop db:create db:migrate",
+      "expect": [
+        { "action_type": "db.migrate", "params": { "provider": "rails", "direction": "reset", "risk_class": "destructive" } },
+        { "action_type": "db.migrate", "params": { "provider": "rails", "direction": "up", "risk_class": "sensitive" } }
+      ]
+    },
+    {
+      "name": "alembic upgrade",
+      "via": "alembic",
+      "command": "uv run alembic upgrade head",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "alembic", "direction": "up", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "alembic downgrade through python -m",
+      "via": "alembic",
+      "command": "python -m alembic -c alembic.ini downgrade -1",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "alembic", "direction": "down", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "flyway clean; the connection options are never recorded",
+      "via": "flyway",
+      "command": "flyway -url=jdbc:postgresql://db.internal/orders -user=app -password={{SECRET}} -environment=prod clean",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "flyway", "direction": "reset", "env": "production", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "knex migrate:rollback",
+      "via": "knex",
+      "command": "npx knex migrate:rollback --env production",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "knex", "direction": "down", "env": "production", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "sequelize-cli db:migrate",
+      "via": "sequelize",
+      "command": "npx sequelize-cli db:migrate --env development",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "sequelize", "direction": "up", "env": "development", "risk_class": "sensitive" } }]
+    },
+    { "name": "prisma generate derives nothing", "command": "npx prisma generate", "expect": [] },
+    { "name": "prisma migrate status derives nothing", "command": "npx prisma migrate status", "expect": [] },
+    { "name": "rails server derives nothing", "command": "bin/rails server", "expect": [] },
+    { "name": "alembic offline SQL derives nothing", "command": "alembic upgrade head --sql", "expect": [] },
+    { "name": "alembic history derives nothing", "command": "alembic history", "expect": [] },
+    { "name": "flyway info derives nothing", "command": "flyway info", "expect": [] },
+    { "name": "a package script named like a tool's command is not the tool", "command": "pnpm run migrate", "expect": [] }
+  ]
+}

@@ -106,8 +106,8 @@ pin the exact bytes for nested key order, number formatting and Unicode.
 
 ## Action taxonomy v1
 
-`intent.action_type` is one of the registered types (`taxonomy_version` 1.0). Bounds in a
-policy apply to the `boundable` parameters of each action.
+`intent.action_type` is one of the registered types (`taxonomy_version` 1.1; each type carries the version that
+introduced it, and the 1.0 types are unchanged). Bounds in a policy apply to the `boundable` parameters of each action.
 
 | `action_type` | Risk class | Summary |
 |---|---|---|
@@ -121,7 +121,28 @@ policy apply to the `boundable` parameters of each action.
 | `mcp.tool.call` | sensitive | A Model Context Protocol tool invocation routed through a proxy or client. |
 | `pr.open` | sensitive | A pull request opened by an agent. |
 | `pr.merge` | destructive | A pull request merge, gated before it can land. |
-| `deploy.release` | destructive | A deployment or release to an environment, gated via OIDC. |
+| `deploy.release` | destructive | A deployment or release to an environment, gated via OIDC; the hook also derives it from a deployment command (`wrangler deploy`, `vercel --prod`, `fly deploy`, `gcloud run deploy`, `aws cloudformation deploy`, `eb deploy`, `serverless deploy`), with `provider`, `target_digest` and `environment` `unknown` when the command does not show it. |
+| `cloud.resource.create` | sensitive | 1.1. A cloud resource created through a command-line tool: `provider`, `service`, `kind`, `region`, `env`, `resource_digest`. |
+| `cloud.resource.modify` | sensitive | 1.1. A cloud resource changed in place (an update, a stop or start, an infrastructure-as-code apply with `auto_approve` and `targeted`). |
+| `cloud.resource.delete` | destructive | 1.1. A cloud resource deleted or terminated (a bucket, instance, stack, app or repository). |
+| `k8s.apply` | sensitive | 1.1. Kubernetes objects created or changed: `context`, `namespace`, `kind`, `name_digest`. |
+| `k8s.delete` | destructive | 1.1. Kubernetes objects deleted (`all` for `--all` or every namespace). |
+| `k8s.exec` | destructive | 1.1. A command run inside a container. |
+| `db.migrate` | destructive | 1.1. A schema migration: `provider` (the tool), `direction` `up`, `down` or `reset`, `env`, `migration_set_digest`. |
+| `db.exec` | sensitive | 1.1. SQL run through a database tool or MCP server, classified without its text: `provider`, `verb`, `scope`, `risk`, `predicate_class`. |
+| `secret.write` | sensitive | 1.1. A secret stored or changed: `store` (aws-ssm, aws-secretsmanager, gcp-secret-manager, azure-keyvault, vault, github, wrangler, vercel, fly, heroku, doppler, 1password), `name_digest`. Never the value. |
+| `iam.change` | identity | 1.1. An identity or access change: `provider`, `kind` (role, policy, user, key, group, other), `name_digest`. |
+| `communication.send` | sensitive | 1.1. A message sent through a messaging service: `provider`, `channel_digest`. |
+| `work.item.create` | routine | 1.1. A work item created in a tracker: `provider`, `project_digest`. |
+| `work.item.update` | routine | 1.1. A work item changed in a tracker. |
+
+The 1.1 types also take `via` (the tool or MCP server the action was read from), `derived_from` (`shell.exec` or
+`mcp.tool.call`: the action re-describes that call, recorded beside it in the same action group) and `risk_class` (the
+instance's risk: `db.migrate` `up` is `sensitive`, `down` and `reset` are `destructive`). Providers are `aws`, `gcp`,
+`azure`, `cloudflare`, `vercel`, `fly`, `heroku`, `github` and `unknown` (a tool such as `terraform` whose provider is its
+configuration's). Names are keyed digests; no 1.1 parameter carries a resource name, a secret value, file contents, SQL
+or a URL's path or query. A receipt whose intent uses a 1.1 type verifies like any other: `intent.action_type` and
+`intent.params` are open in the receipt schema.
 
 ## Verifying a receipt
 

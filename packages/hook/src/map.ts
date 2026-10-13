@@ -13,6 +13,8 @@ import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from ".
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf } from "./text.js";
+import { deriveTargetOperations, type TargetOperation } from "./typed-targets.js";
+import { deriveMcpOperations } from "./mcp-profiles.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -35,6 +37,12 @@ export interface Mapped {
    *  so a file write there is observed, not stopped. Callers must not describe such a
    *  decision as prevention. */
   postHoc?: boolean;
+  /** Set on an intent that re-describes the call's own shell command or MCP tool call as the taxonomy action it performs
+   *  (`aws s3 rb` as `cloud.resource.delete`, a GitHub MCP `push_files` as `git.push`): typed-targets.ts and
+   *  mcp-profiles.ts. It rides beside the `shell.exec` or `mcp.tool.call` intent in the same action group, which stays as
+   *  it always was. The runtime evaluates it only under a policy that has a clause for its action type, and records it
+   *  otherwise, so a policy written before these types existed decides exactly what it decided before. */
+  derived?: true;
 }
 
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
@@ -1447,12 +1455,15 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
     },
     evaluated: true, source: "shell",
   };
+  // What the command reaches through a known command-line tool (a cloud, a cluster, a database migration, a deployment, a
+  // secret store), as taxonomy actions beside the command itself. Nothing when the tool or its words are not known.
+  const targets: Mapped[] = deriveTargetOperations(sc).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
   // A command that writes files its text does not name (`patch`, `git apply`, `tar x`)
   // cannot be judged here: its writes are recorded as a file.write with no path, not
   // evaluated — observed in normal mode, denied by strict mode (like an apply_patch
   // with no recognizable path).
   if (unknownTarget) files.push({ intent: { action_type: "file.write", params: { path: "" } }, evaluated: false, source: "shell" });
-  return [exec, ...files];
+  return [exec, ...targets, ...files];
 }
 
 const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
@@ -1610,6 +1621,20 @@ function mapApplyPatch(command: string, cwd?: string): Mapped[] {
 
 const one = (intent: NormalizedIntent, evaluated: boolean, source: string): Mapped[] => [{ intent, evaluated, source }];
 
+/** An MCP tool call: the `mcp.tool.call` intent it always was, then the taxonomy actions a known server's tool performs
+ *  (mcp-profiles.ts). A path the call names is resolved against the working folder like any other. */
+function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | undefined, source: string): Mapped[] {
+  const call = one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(args ?? {}) } }, true, source);
+  const derived = (op: TargetOperation): Mapped[] => {
+    if (op.action_type === "file.read" || op.action_type === "file.write") {
+      const { path, ...extra } = op.params;
+      return pathIntents(op.action_type, rel(path, cwd), source, extra).map((m) => ({ ...m, derived: true as const }));
+    }
+    return [{ intent: op, evaluated: true, derived: true, source }];
+  };
+  return [...call, ...deriveMcpOperations(server, tool, args).flatMap(derived)];
+}
+
 /** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,
  *  so the runtime resolves it and fills it in here, before evaluation — otherwise the
  *  starter policy's ref bound would fail-closed on every plain push. Only git.push
@@ -1671,7 +1696,7 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
     return one({ action_type: "net.fetch", params: { host, path, method: "GET" } }, true, name);
   }
   const mcp = parseMcpName(name);
-  if (mcp) return one({ action_type: "mcp.tool.call", params: { server: mcp.server, tool: mcp.tool, args_digest: digest(ti) } }, true, name);
+  if (mcp) return mapMcpCall(mcp.server, mcp.tool, ti, cwd, name);
   return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
 }
 
@@ -1689,7 +1714,7 @@ export function mapCodexToolUse(input: Record<string, unknown>): Mapped[] {
   if (name === "apply_patch" || name === "Edit" || name === "Write")
     return mapApplyPatch(textOf(ti.command ?? ti.patch), cwd);
   const mcp = parseMcpName(name);
-  if (mcp) return one({ action_type: "mcp.tool.call", params: { server: mcp.server, tool: mcp.tool, args_digest: digest(ti) } }, true, name);
+  if (mcp) return mapMcpCall(mcp.server, mcp.tool, ti, cwd, name);
   return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
 }
 
@@ -1798,7 +1823,12 @@ export function mapCursorEvent(event: string, payload: Record<string, unknown>):
     case "beforeMCPExecution": {
       const server = textOf(p.server ?? p.server_name);
       const tool = textOf(p.tool ?? p.tool_name);
-      return one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(p.args ?? p.arguments ?? {}) } }, true, event);
+      const raw = p.args ?? p.arguments ?? {};
+      // Cursor may send the arguments as JSON text; only an object is read for a profile (the digest is of what was sent).
+      let args: unknown = raw;
+      if (typeof raw === "string") { try { args = JSON.parse(raw); } catch { args = {}; } }
+      return [...one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(raw) } }, true, event),
+        ...mapMcpCall(server, tool, args, cwd, event).slice(1)];
     }
     default:
       return one({ action_type: `tool.${event.toLowerCase()}`, params: {} }, false, event);

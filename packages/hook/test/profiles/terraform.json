@@ -1,0 +1,42 @@
+{
+  "tool": "terraform",
+  "description": "Terraform and OpenTofu: apply (cloud.resource.modify) and destroy or apply -destroy (cloud.resource.delete), with -auto-approve, -target and the environment a -chdir folder, a -var-file or TF_WORKSPACE names. plan, refresh-only and other commands derive nothing. The provider is the configuration's, so it is unknown.",
+  "cases": [
+    {
+      "name": "apply -auto-approve in a production folder",
+      "command": "terraform -chdir=infra/envs/prod apply -auto-approve",
+      "expect": [{ "action_type": "cloud.resource.modify", "params": { "provider": "unknown", "service": "terraform", "env": "production", "auto_approve": true, "targeted": false, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "apply limited to targets (digested, sorted)",
+      "command": "terraform apply -target=module.db -target aws_instance.web -var-file=staging.tfvars",
+      "expect": [{ "action_type": "cloud.resource.modify", "params": { "provider": "unknown", "service": "terraform", "env": "staging", "auto_approve": false, "targeted": true, "resource_digest": { "$digest": ["terraform", "aws_instance.web", "module.db"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "applying a saved plan does not ask",
+      "command": "terraform apply tfplan",
+      "expect": [{ "action_type": "cloud.resource.modify", "params": { "provider": "unknown", "service": "terraform", "auto_approve": true, "targeted": false, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "destroy",
+      "command": "TF_WORKSPACE=dev terraform destroy -auto-approve",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "unknown", "service": "terraform", "env": "development", "auto_approve": true, "targeted": false, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "apply -destroy is a destroy",
+      "command": "terraform apply -destroy",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "unknown", "service": "terraform", "auto_approve": false, "targeted": false, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "OpenTofu reads the same, via tofu",
+      "via": "tofu",
+      "command": "tofu destroy -target=aws_s3_bucket.logs",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "unknown", "service": "terraform", "auto_approve": false, "targeted": true, "resource_digest": { "$digest": ["tofu", "aws_s3_bucket.logs"] }, "risk_class": "destructive" } }]
+    },
+    { "name": "plan derives nothing", "command": "terraform plan -out tfplan", "expect": [] },
+    { "name": "plan -destroy derives nothing", "command": "terraform plan -destroy", "expect": [] },
+    { "name": "refresh-only derives nothing", "command": "terraform apply -refresh-only -auto-approve", "expect": [] },
+    { "name": "init derives nothing", "command": "terraform init -upgrade", "expect": [] },
+    { "name": "help derives nothing", "command": "terraform -help", "expect": [] }
+  ]
+}

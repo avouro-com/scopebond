@@ -4,7 +4,13 @@
 // Detector ids follow the monitoring catalog: I03 ordinary read, I04 ordinary write,
 // I05 shell inventory; H01 protected push, H02 credential read, H03 CI write,
 // H04 destructive shell, H05 root-escape mutation; C01 protected history rewrite,
-// C02 guardrail modification. `compile()` decides enforcement from the rule set;
+// C02 guardrail modification. The target classes (typed-targets.ts, mcp-profiles.ts): H06 cloud or
+// Kubernetes destructive (cloud.resource.delete, k8s.delete, k8s.exec), H07 production deployment
+// (deploy.release whose environment is production or not shown), H08 secret write, H09 identity or
+// access change, H10 destructive database migration (db.migrate down or reset). The default policy
+// records the target classes (monitor) and never blocks them; a workspace or a person turns each
+// rule on (`cloud-destructive`, `production-deploy`, `secret-write`, `iam-change`,
+// `database-migrate`), and the compiled policy then blocks exactly what the class names. `compile()` decides enforcement from the rule set;
 // `classifyIntent()` names what an intent is. `test/vectors.test.mjs` asserts that an
 // intent is classified high/critical exactly when the compiled policy denies it.
 //
@@ -15,7 +21,7 @@ import type { NormalizedIntent } from "./map.js";
 import { UNKNOWN_REF } from "./shell.js";
 import { isDestructiveProgram, isProtectedBranch, pathRuleMatches, type RuleSet } from "./rules.js";
 
-export type CatalogId = "I03" | "I04" | "I05" | "H01" | "H02" | "H03" | "H04" | "H05" | "C01" | "C02";
+export type CatalogId = "I03" | "I04" | "I05" | "H01" | "H02" | "H03" | "H04" | "H05" | "H06" | "H07" | "H08" | "H09" | "H10" | "C01" | "C02";
 
 export interface Classification {
   ids: CatalogId[];
@@ -30,6 +36,11 @@ const CI_LOCATION = /github\/(?:workflows|actions)|gitlab-ci|circleci|azure-pipe
 
 /** Ids whose match the default policy blocks. I-classes are inventory only. */
 export const BLOCKING: readonly CatalogId[] = ["H01", "H02", "H03", "H04", "H05", "C01", "C02"];
+
+/** High-severity target classes the default policy records without blocking, and the rule that blocks each one. */
+export const MONITORED_HIGH: Readonly<Record<"H06" | "H07" | "H08" | "H09" | "H10", string>> = {
+  H06: "cloud-destructive", H07: "production-deploy", H08: "secret-write", H09: "iam-change", H10: "database-migrate",
+};
 
 export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classification {
   const ids: CatalogId[] = [];
@@ -57,6 +68,18 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
       if (hit) ids.push(CI_LOCATION.test(hit.kind === "raw" ? hit.pattern : hit.value) ? "H03" : "C02");
       else if (ids.length === 0) ids.push("I04");
     }
+  } else if (intent.action_type === "cloud.resource.delete" || intent.action_type === "k8s.delete" || intent.action_type === "k8s.exec") {
+    ids.push("H06");
+  } else if (intent.action_type === "deploy.release") {
+    // A deployment whose environment the command does not show counts as production.
+    const env = typeof params.environment === "string" ? params.environment : "unknown";
+    if (env === "production" || env === "unknown") ids.push("H07");
+  } else if (intent.action_type === "secret.write") {
+    ids.push("H08");
+  } else if (intent.action_type === "iam.change") {
+    ids.push("H09");
+  } else if (intent.action_type === "db.migrate") {
+    if (params.direction !== "up") ids.push("H10");
   } else if (intent.action_type === "shell.exec") {
     const program = typeof params.program === "string" ? params.program : "";
     if (program === "") unknown.push("program not resolved");

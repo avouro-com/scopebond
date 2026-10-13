@@ -1,0 +1,100 @@
+{
+  "tool": "aws",
+  "description": "AWS CLI: S3 high-level commands, EC2 instances, IAM, RDS, Lambda, CloudFormation, SSM and Secrets Manager, and the generic delete/create/update operation names. --region is recorded; --profile (or AWS_PROFILE) sets env only when its words say prod, staging or dev.",
+  "cases": [
+    {
+      "name": "s3 rm of an object, profile names production",
+      "command": "AWS_PROFILE=prod-admin aws s3 rm s3://acme-logs/2026/10/app.log --recursive",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "s3", "kind": "object", "env": "production", "resource_digest": { "$digest": ["aws", "s3", "acme-logs"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "s3 rb with --force skips the confirmation",
+      "command": "aws s3 rb s3://acme-old --force --region eu-west-1",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "s3", "kind": "bucket", "region": "eu-west-1", "resource_digest": { "$digest": ["aws", "s3", "acme-old"] }, "auto_approve": true, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "s3 sync --delete to a bucket deletes objects there",
+      "command": "aws s3 sync ./dist s3://acme-site --delete --profile staging",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "s3", "kind": "object", "env": "staging", "resource_digest": { "$digest": ["aws", "s3", "acme-site"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "s3 sync without --delete writes objects",
+      "command": "aws s3 sync ./dist s3://acme-site",
+      "expect": [{ "action_type": "cloud.resource.modify", "params": { "provider": "aws", "service": "s3", "kind": "object", "resource_digest": { "$digest": ["aws", "s3", "acme-site"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "s3 mb creates a bucket",
+      "command": "aws s3 mb s3://acme-new",
+      "expect": [{ "action_type": "cloud.resource.create", "params": { "provider": "aws", "service": "s3", "kind": "bucket", "resource_digest": { "$digest": ["aws", "s3", "acme-new"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "ec2 terminate-instances names the instance ids (digested, sorted)",
+      "command": "aws --profile staging ec2 terminate-instances --instance-ids i-0bbb i-0aaa --region us-east-1",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "ec2", "kind": "instance", "region": "us-east-1", "env": "staging", "resource_digest": { "$digest": ["aws", "ec2", "i-0aaa,i-0bbb"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "iam attach-role-policy is a policy change",
+      "command": "aws iam attach-role-policy --role-name deployer --policy-arn arn:aws:iam::aws:policy/AdministratorAccess",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "aws", "kind": "policy", "name_digest": { "$digest": ["aws", "iam", "policy", "deployer"] }, "risk_class": "identity" } }]
+    },
+    {
+      "name": "iam create-access-key is a key change",
+      "command": "aws iam create-access-key --user-name ci-bot",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "aws", "kind": "key", "name_digest": { "$digest": ["aws", "iam", "key", "ci-bot"] }, "risk_class": "identity" } }]
+    },
+    {
+      "name": "iam delete-role",
+      "command": "aws iam delete-role --role-name old-role",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "aws", "kind": "role", "name_digest": { "$digest": ["aws", "iam", "role", "old-role"] }, "risk_class": "identity" } }]
+    },
+    {
+      "name": "rds delete-db-instance",
+      "command": "aws rds delete-db-instance --db-instance-identifier orders-prod --skip-final-snapshot",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "rds", "kind": "db-instance", "resource_digest": { "$digest": ["aws", "rds", "orders-prod"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "lambda delete-function",
+      "command": "aws lambda delete-function --function-name resize-images --region us-west-2",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "lambda", "kind": "function", "region": "us-west-2", "resource_digest": { "$digest": ["aws", "lambda", "resize-images"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "lambda update-function-code changes a function",
+      "command": "aws lambda update-function-code --function-name resize-images --zip-file fileb://fn.zip",
+      "expect": [{ "action_type": "cloud.resource.modify", "params": { "provider": "aws", "service": "lambda", "kind": "function-code", "resource_digest": { "$digest": ["aws", "lambda", "resize-images"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "cloudformation delete-stack",
+      "command": "aws cloudformation delete-stack --stack-name web-prod",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "cloudformation", "kind": "stack", "resource_digest": { "$digest": ["aws", "cloudformation", "web-prod"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "cloudformation deploy is a release; the stack name says production",
+      "command": "aws cloudformation deploy --stack-name web-prod --template-file stack.yml",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "aws", "environment": "production", "target_digest": { "$digest": ["aws", "cloudformation", "web-prod"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "ssm put-parameter is a secret write; the value is never read",
+      "command": "aws ssm put-parameter --name /app/db-password --value {{SECRET}} --type SecureString --overwrite --region eu-west-1",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "aws-ssm", "name_digest": { "$digest": ["aws-ssm", "eu-west-1", "/app/db-password"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "secretsmanager put-secret-value",
+      "command": "aws secretsmanager put-secret-value --secret-id prod/api --secret-string {{SECRET}} --profile production",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "aws-secretsmanager", "name_digest": { "$digest": ["aws-secretsmanager", "", "prod/api"] }, "env": "production", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "a profile whose words do not say an environment sets none",
+      "command": "aws dynamodb delete-table --table-name sessions --profile devops",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "dynamodb", "kind": "table", "resource_digest": { "$digest": ["aws", "dynamodb", "sessions"] }, "risk_class": "destructive" } }]
+    },
+    { "name": "listing derives nothing", "command": "aws s3 ls s3://acme-logs", "expect": [] },
+    { "name": "describe derives nothing", "command": "aws ec2 describe-instances --region us-east-1", "expect": [] },
+    { "name": "get-caller-identity derives nothing", "command": "aws sts get-caller-identity", "expect": [] },
+    { "name": "an EC2 dry run derives nothing", "command": "aws ec2 terminate-instances --instance-ids i-0aaa --dry-run", "expect": [] },
+    { "name": "iam reads derive nothing", "command": "aws iam list-roles", "expect": [] },
+    { "name": "help derives nothing", "command": "aws s3 rm help", "expect": [] },
+    { "name": "an unknown global option before the service derives nothing", "command": "aws --mystery-option x s3 rm s3://acme-logs/a", "expect": [] },
+    { "name": "s3 sync to a local folder is not a cloud change", "command": "aws s3 sync s3://acme-site ./backup --delete", "expect": [] },
+    { "name": "a local configure command derives nothing", "command": "aws configure set region us-east-1", "expect": [] }
+  ]
+}

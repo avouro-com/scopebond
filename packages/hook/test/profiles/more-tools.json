@@ -1,0 +1,65 @@
+{
+  "tool": "more-tools",
+  "description": "Other deployment and secret tools: Elastic Beanstalk (eb), the Serverless Framework, Heroku, HashiCorp Vault, Doppler and the 1Password CLI. Secret values are never read; only the names before them.",
+  "cases": [
+    {
+      "name": "eb deploy to a production environment",
+      "via": "eb",
+      "command": "eb deploy acme-web-prod --staged",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "aws", "environment": "production", "target_digest": { "$digest": ["aws", "elasticbeanstalk", "acme-web-prod"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "eb terminate",
+      "via": "eb",
+      "command": "eb terminate acme-web-dev --force",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "aws", "service": "elasticbeanstalk", "kind": "environment", "env": "development", "resource_digest": { "$digest": ["aws", "elasticbeanstalk", "acme-web-dev"] }, "auto_approve": true, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "serverless deploy to a stage",
+      "via": "serverless",
+      "command": "npx serverless deploy --stage staging",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "unknown", "environment": "staging", "target_digest": { "$digest": ["serverless", "", "staging"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "sls remove",
+      "via": "serverless",
+      "command": "sls remove -s prod -r eu-west-1",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "unknown", "service": "serverless", "kind": "service", "region": "eu-west-1", "env": "production", "resource_digest": { "$digest": ["serverless", "", "prod"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "heroku config:set writes each name once",
+      "via": "heroku",
+      "command": "heroku config:set STRIPE_KEY={{SECRET}} -a acme-prod",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "heroku", "name_digest": { "$digest": ["heroku", "acme-prod", "STRIPE_KEY"] }, "env": "production", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "heroku apps:destroy",
+      "via": "heroku",
+      "command": "heroku apps:destroy -a acme-old --confirm acme-old",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "heroku", "service": "apps", "kind": "app", "resource_digest": { "$digest": ["heroku", "acme-old"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "vault kv put",
+      "via": "vault",
+      "command": "vault kv put -mount=secret app/db password={{SECRET}}",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "vault", "name_digest": { "$digest": ["vault", "secret", "app/db"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "doppler secrets set",
+      "via": "doppler",
+      "command": "doppler secrets set API_KEY={{SECRET}} -p acme -c prd",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "doppler", "name_digest": { "$digest": ["doppler", "acme", "prd", "API_KEY"] }, "env": "production", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "1Password item edit",
+      "via": "op",
+      "command": "op item edit db-admin --vault Infra password={{SECRET}}",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "1password", "name_digest": { "$digest": ["1password", "Infra", "db-admin"] }, "risk_class": "sensitive" } }]
+    },
+    { "name": "eb status derives nothing", "command": "eb status", "expect": [] },
+    { "name": "heroku logs derive nothing", "command": "heroku logs --tail -a acme-prod", "expect": [] },
+    { "name": "vault kv get derives nothing", "command": "vault kv get -mount=secret app/db", "expect": [] },
+    { "name": "doppler run derives nothing", "command": "doppler run -- node server.js", "expect": [] },
+    { "name": "op read derives nothing", "command": "op read op://Infra/db-admin/password", "expect": [] }
+  ]
+}
