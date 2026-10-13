@@ -180,6 +180,11 @@ test("the PowerShell command keeps the hook's own entries recognisable and its e
   assert.equal(isScopebondHookCommand(ps), true);
   assert.equal(isScopebondHookCommand(`& "C:\\node.exe" "C:\\x\\cli.js" copilot; exit $LASTEXITCODE`), true, "the suffix is not a harness name");
   assert.equal(isScopebondHookCommand(powershellHookCommand("npx -y @scopebond/hook@1.0.0 copilot")), true);
+  // The unquoted form `install` writes on macOS and Linux gets the same tail, and the tail is never doubled.
+  const posix = "/usr/local/bin/node /opt/sb/.scopebond/runtime/1.0.0/node_modules/@scopebond/hook/dist/cli.js copilot";
+  assert.equal(powershellHookCommand(posix), `${posix}; exit $LASTEXITCODE`);
+  assert.equal(isScopebondHookCommand(powershellHookCommand(posix)), true);
+  assert.equal(powershellHookCommand(powershellHookCommand(pinned)), ps);
   // A Copilot entry written with only a PowerShell command is still found and removed.
   const dir = mkdtempSync(join(tmpdir(), "sb-copilot-ps-"));
   const file = join(dir, "hooks.json");

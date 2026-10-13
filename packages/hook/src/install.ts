@@ -365,12 +365,13 @@ export const COPILOT_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure"
  *  reads a command that starts with a quoted path as a string, not a program: the call operator `&` runs it. `npx` there
  *  resolves to `npx.ps1`, which the default script policy refuses, so the portable form names `npx.cmd`. PowerShell ends
  *  with exit 1 whenever the last program failed, which would turn the hook's deny (exit 2) into "hook errored" and lose
- *  its reason, so the command passes the program's own exit code on (`; exit $LASTEXITCODE`). */
+ *  its reason, so every form passes the program's own exit code on (`; exit $LASTEXITCODE`), an unquoted path included
+ *  (the form `absoluteHookCommand` writes on macOS and Linux when no path has a space). */
 export function powershellHookCommand(command: string): string {
-  const trimmed = command.trim();
+  const trimmed = withoutPassExitCode(command).trim();
   if (trimmed.startsWith("\"")) return `& ${trimmed}${PASS_EXIT_CODE}`;
   if (/^npx\s/.test(trimmed)) return `npx.cmd ${trimmed.slice(4)}${PASS_EXIT_CODE}`;
-  return trimmed;
+  return `${trimmed}${PASS_EXIT_CODE}`;
 }
 
 /** One Copilot hook entry running `command`. No matcher: an entry without one runs for every tool. */
