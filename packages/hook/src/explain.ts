@@ -12,7 +12,7 @@
 // `permissionDecisionReason`, Cursor's `agentMessage`), so a clear one lets the
 // agent pick a different approach instead of retrying the same blocked call.
 
-import { BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, blockedServiceKindOf, blockedServiceOf, type BlockedService } from "./service-rules.js";
+import { BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, blockedServiceKindOf, blockedServiceOf, isUnreadablePackageKey, type BlockedService } from "./service-rules.js";
 
 /** A policy clause, as much of it as the message needs. */
 export interface ExplainClause {
@@ -121,8 +121,11 @@ export function explainDeny(input: ExplainDenyInput): string {
   if (kind) {
     const params = (input.intent?.params ?? {}) as Record<string, unknown>;
     const key = blockedServiceOf(kind, params, input.services ?? [])?.key ?? str(params[BLOCKED_SERVICE_CLAUSES[kind].param]);
+    const what = kind === "package" && isUnreadablePackageKey(params.package_key)
+      ? `Your workspace blocks some ${str(params.manager)} packages, and the packages this install names could not be read.`
+      : `Your workspace blocks the ${BLOCKED_SERVICE_LABEL[kind]} ${key}.`;
     return [
-      `Scopebond ${verb} ${action || "action"}: Your workspace blocks the ${BLOCKED_SERVICE_LABEL[kind]} ${key}.`,
+      `Scopebond ${verb} ${action || "action"}: ${what}`,
       "Use another way, or ask an admin of your Scopebond workspace to change the block.",
     ].join("\n");
   }

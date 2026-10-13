@@ -766,7 +766,8 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   count cannot be read or written for a session that has a budget, the limited actions are
   denied, never let through without a limit. A malformed `session_budgets` list refuses the whole
   rules document (the rules in force stay); a hook older than this ignores the member. The hook
-  says it understands budgets (`x-scopebond-hook-capabilities: allowances,session_budgets`).
+  says it understands budgets (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules`;
+  `service_rules` is the blocked services below).
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left
@@ -786,19 +787,26 @@ computer like any other rule set to Block:
 
 - **MCP server**: a call to a server whose configured name contains the blocked name as a word,
   in any case (`github` blocks `github`, `github-mcp` and `plugin_github_github`, not `githubx`).
-- **Host**: a web request to that host, in any case. `host:port` blocks that port only; a host
-  without a port is blocked on every port.
+- **Host**: a fetch by the coding agent's web-fetch tool (and a `gh api` call that changes
+  something) to that host, in any case; `curl`, `wget` and similar are recorded, not blocked.
+  `host:port` blocks that port only; a host without a port is blocked on every port. A key with
+  the default port (`:80`, `:443`) is refused, since a request's host never shows it.
 - **Program**: a shell command whose program is that name, with or without a path or `.exe`
   (`ffmpeg` blocks `/usr/bin/ffmpeg` and `FFMPEG.EXE`, not `ffprobe`).
 - **Package**: an install that names the package for that manager, as `manager:name`
-  (`npm:zod`, `pip:requests`); `pnpm add zod` is not blocked by `npm:zod`. The blocked install is
-  recorded as that package's `package.install`, beside the command; any other install is recorded
-  exactly as before.
+  (`npm:zod`, `pip:requests`); `pnpm add zod` is not blocked by `npm:zod`. Every package the
+  command names is checked, however many, also beside `-r requirements.txt` or `-e .`; a spec that
+  cannot be read is skipped, and an install whose named packages none can be read is blocked while
+  the workspace blocks any package. The blocked install is recorded as that package's
+  `package.install`, before the command; any other install is recorded exactly as before.
 
 The agent is told plainly: *Your workspace blocks the program ffmpeg.* The block is recorded like
 any rule block (a denied receipt), appears among the recent blocks on this computer and reaches
-the workspace with the next delivery. Ordinary rules decide first. A blocked service cannot be
-allowed at the computer, and an allowance made under another rule does not carry it through.
+the workspace with the next delivery. The deciding rule is one of the policy clauses
+`blocked-mcp-servers`, `blocked-hosts`, `blocked-programs` and `blocked-packages`. For an MCP server, a host or a program,
+an ordinary rule that blocks the same action decides first and is the one named; a blocked
+package decides before its install command. A blocked service cannot be allowed at the computer,
+and an allowance made under another rule does not carry it through.
 
 The workspace sends the list as `blocked_services` in its rules document (at most 500 entries,
 each `{ "kind": "mcp_server" | "host" | "cli" | "package", "key": "…" }`), only to a hook that

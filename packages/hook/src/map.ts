@@ -16,7 +16,7 @@ import { textOf } from "./text.js";
 import { deriveTargetOperations, type TargetOperation } from "./typed-targets.js";
 import { deriveMcpOperations } from "./mcp-profiles.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
-import { namedPackages } from "./typed-ops.js";
+import { packagesToCheck } from "./typed-ops.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -48,9 +48,10 @@ export interface Mapped {
   derived?: true;
   /** On a folded derived intent (`capDerived`): how many derived intents of its type it stands for. */
   count?: number;
-  /** On a shell command that installs named packages: the manager and the names its package record reports. Not part of the
-   *  signed intent; the runtime reads it only to evaluate a package a workspace blocks (service-rules.ts). */
-  packages?: { manager: string; names: string[] };
+  /** On a shell command that installs named packages: the manager and every package name it names (`unreadable` when it names
+   *  some and none can be read). Not part of the signed intent; the runtime reads it only to evaluate a package a workspace
+   *  blocks (service-rules.ts). */
+  packages?: { manager: string; names: string[]; unreadable?: true };
 }
 
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
@@ -1463,7 +1464,7 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
     },
     evaluated: true, source: "shell",
   };
-  const installs = namedPackages(sc);
+  const installs = packagesToCheck(sc);
   if (installs) exec.packages = installs;
   // What the command reaches through a known command-line tool (a cloud, a cluster, a database migration, a deployment, a
   // secret store), as taxonomy actions beside the command itself. Nothing when the tool or its words are not known.

@@ -443,11 +443,20 @@ export function packageOperation(sc: SimpleCommand, ctx: TypedContext, request: 
   };
 }
 
-/** The packages an install, add or update names, as its `package` operation reports them (the manager and each package's
- *  name): what a workspace's blocked packages are matched against. Null where there is no package operation. */
-export function namedPackages(sc: SimpleCommand): { manager: Manager; names: string[] } | null {
-  const install = namedInstall(sc);
-  return install ? { manager: install.manager, names: install.packages.map((p) => p.name) } : null;
+/** Every package an install, add or update names, for matching against a workspace's blocked packages (service-rules.ts).
+ *  Stricter than the `package` operation, which describes only an install it can read whole: every named spec is read (no
+ *  limit on how many), packages named beside a requirements file or an editable path still count, and a spec that cannot be
+ *  read is skipped. `unreadable` is set when the command names specs and none of them can be read. Null where the command is
+ *  not an install, add or update, or names no package at all (`npm ci`, `pip install -r requirements.txt`). */
+export function packagesToCheck(sc: SimpleCommand): { manager: Manager; names: string[]; unreadable?: true } | null {
+  const request = installRequest(sc);
+  if (!request || request.specs.length === 0) return null;
+  const names: string[] = [];
+  for (const spec of request.specs) {
+    const parsed = request.js ? jsPackage(spec) : pyPackage(spec);
+    if (parsed && scrubParam(parsed.name) === parsed.name) names.push(parsed.name);
+  }
+  return names.length ? { manager: request.manager, names } : { manager: request.manager, names, unreadable: true };
 }
 
 interface NamedInstall {
@@ -458,15 +467,15 @@ interface NamedInstall {
   lifecycle: "blocked" | "unknown" | "not_supported";
 }
 
-/** What an install, add or update names (the part of its `package` operation read from the command alone). */
-function namedInstall(sc: SimpleCommand): NamedInstall | null {
+/** The manager, verb and package specs of an install, add or update, read from the command alone. */
+function installRequest(sc: SimpleCommand): { manager: Manager; js: boolean; s: ReturnType<typeof scan>; verb: NamedInstall["verb"]; specs: string[] } | null {
   const found = managerCommand(sc);
   if (!found) return null;
   const { manager } = found;
   const js = manager === "npm" || manager === "pnpm" || manager === "yarn";
   const s = scan(found.argv, js ? (manager === "npm" ? [...JS_VALUED, "-w"] : JS_VALUED) : PY_VALUED);
   const [sub, second, ...others] = s.positionals;
-  let verb: "install" | "add" | "update";
+  let verb: NamedInstall["verb"];
   let specs: string[];
   if (js) {
     const map: Record<string, "install" | "add" | "update"> = { install: "install", i: "install", add: "add", update: "update", up: "update", upgrade: "update" };
@@ -484,6 +493,14 @@ function namedInstall(sc: SimpleCommand): NamedInstall | null {
     verb = s.flags.has("-U") || s.flags.has("--upgrade") ? "update" : "install";
     specs = others;
   } else return null;
+  return { manager, js, s, verb, specs };
+}
+
+/** What an install, add or update names (the part of its `package` operation read from the command alone). */
+function namedInstall(sc: SimpleCommand): NamedInstall | null {
+  const request = installRequest(sc);
+  if (!request) return null;
+  const { manager, js, s, verb, specs } = request;
   // Packages taken from a file or an editable path are not named in the request.
   if (!js && ["-r", "--requirement", "--requirements", "-e", "--editable"].some((f) => s.flags.has(f))) return null;
   if (specs.length === 0) return null;

@@ -11,14 +11,18 @@
 //   mcp_server  an `mcp.tool.call` whose server's configured name contains the key as a word (or a run of words): the word
 //               rule that recognises a server (mcp-profiles.ts): the name is split at every character that is not a letter or
 //               a digit, case-insensitively. `github` blocks `github`, `github-mcp` and `plugin_github_github`, not `githubx`.
-//   host        a `net.fetch` whose host is the key, case-insensitively. A key with a port (`host:port`) blocks that port
-//               only; a key without one blocks the host on every port.
+//   host        a `net.fetch` whose host is the key, case-insensitively: a fetch by the coding agent's web-fetch tool (and a
+//               `gh api` call that changes something). `curl`, `wget` and similar are recorded, not blocked. A key with a
+//               port (`host:port`) blocks that port only (never :80 or :443, which a request's host never shows; such a key
+//               is refused); a key without one blocks the host on every port.
 //   cli         a `shell.exec` whose program is the key, case-insensitively, with or without a path or an executable suffix
 //               (.exe, .cmd, .bat, .com, .ps1): `terraform` blocks `terraform`, `/usr/bin/terraform` and `Terraform.exe`.
 //   package     an install that names the package: the key is `<manager>:<name>` (`npm:zod`, `pip:requests`), matched exactly
-//               on the manager and the package name the hook reports for the install. Such an install is evaluated as a
-//               `package.install` action beside its command (`{ manager, name, package_key }`), only when its package is
-//               blocked, so every other install is recorded exactly as before.
+//               on the manager and each package name the install names (every spec, however many, also beside a
+//               requirements file or an editable path; a spec that cannot be read is skipped). Such an install is evaluated
+//               as a `package.install` action before its command (`{ manager, name, package_key }`), only when its package
+//               is blocked, so every other install is recorded exactly as before. An install that names packages none of
+//               which can be read is evaluated as `package_key: "<manager>:"` and denied (fail closed).
 //
 // A leaf module (no local imports): managed.ts, runtime.ts and explain.ts all read it.
 
@@ -28,6 +32,7 @@ import { join } from "node:path";
 export const BLOCKED_SERVICE_KINDS = ["mcp_server", "host", "cli", "package"] as const;
 export type BlockedServiceKind = (typeof BLOCKED_SERVICE_KINDS)[number];
 export interface BlockedService { kind: BlockedServiceKind; key: string }
+/** At 500 keys of 200 characters the compiled patterns reach about 1 MB and the first match about 200 ms; within bounds. */
 export const MAX_BLOCKED_SERVICES = 500;
 export const MAX_BLOCKED_SERVICE_KEY = 200;
 /** The capability a hook reports so its workspace sends `blocked_services`. */
@@ -69,7 +74,12 @@ export function validBlockedService(entry: unknown): entry is BlockedService {
   if (typeof key !== "string" || key.length < 1 || key.length > MAX_BLOCKED_SERVICE_KEY) return false;
   // An inventory never keys a host or a package with an empty label or path segment.
   if ((kind === "host" || kind === "package") && key.includes("..")) return false;
-  if (kind === "host" && Number(key.split(":")[1] ?? "1") > 65535) return false;
+  // A host key names a port only when it is not the scheme's default, as an inventory keys it: a request's host never shows
+  // :80 or :443, so such a key could never match, and it is refused rather than left to block nothing.
+  if (kind === "host" && key.includes(":")) {
+    const port = Number(key.slice(key.indexOf(":") + 1));
+    if (port < 1 || port > 65535 || port === 80 || port === 443) return false;
+  }
   return KEY_SHAPE[kind as BlockedServiceKind].test(key);
 }
 
@@ -122,6 +132,8 @@ export function serviceMatches(entry: BlockedService, value: unknown): boolean {
   return typeof value === "string" && new RegExp(servicePattern(entry)).test(value);
 }
 
+const UNREADABLE_PACKAGE = "^[a-z0-9-]{1,20}:$";
+
 const listed = (keys: readonly string[]): string => keys.length <= 10 ? keys.join(", ") : `${keys.slice(0, 10).join(", ")} and ${keys.length - 10} more`;
 
 /** The policy clauses for a list: one per kind that has entries, each allowing every value except the ones it names. A value
@@ -133,13 +145,14 @@ export function blockedServiceClauses(list: readonly BlockedService[] | undefine
     const entries = list.filter((e) => e.kind === kind);
     if (!entries.length) continue;
     const { id, action, param } = BLOCKED_SERVICE_CLAUSES[kind];
-    const any = entries.map(servicePattern).join("|");
+    // A package install whose named packages could not be read at all is evaluated as `<manager>:` and denied too.
+    const any = [...entries.map(servicePattern), ...(kind === "package" ? [UNREADABLE_PACKAGE] : [])].join("|");
     const keys = entries.map((e) => e.key);
     const label = BLOCKED_SERVICE_LABEL[kind];
     clauses.push({
       id, type: "action_allowlist", mode: "enforce", action_types: [action],
       param_bounds: { [param]: { pattern: kind === "mcp_server" ? `^(?![\\s\\S]*?(?:${any}))[\\s\\S]*$` : `^(?!(?:${any}))[\\s\\S]*$` } },
-      description: `Deny ${kind === "mcp_server" ? "calls to the" : kind === "host" ? "web requests to the" : kind === "cli" ? "running the" : "installing the"} ${label}${keys.length > 1 ? "s" : ""} your workspace blocks: ${listed(keys)}. Set by your workspace.`,
+      description: `Deny ${kind === "mcp_server" ? "calls to the" : kind === "host" ? "web-fetch requests to the" : kind === "cli" ? "running the" : "installing the"} ${label}${keys.length > 1 ? "s" : ""} your workspace blocks: ${listed(keys)}.${kind === "package" ? " An install whose packages cannot be read is denied too." : ""} Set by your workspace.`,
     });
   }
   return clauses;
@@ -157,6 +170,11 @@ export function blockedPackagePattern(policy: unknown): RegExp | null {
   }
   return null;
 }
+
+/** The `package_key` of an install that names packages none of which could be read. */
+export const unreadablePackageKey = (manager: string): string => `${manager}:`;
+/** Whether a `package_key` is that of an install whose packages could not be read. */
+export const isUnreadablePackageKey = (key: unknown): boolean => typeof key === "string" && /^[a-z0-9-]{1,20}:$/.test(key);
 
 /** The entry a denied action names, from the list in force: what an explanation shows. Null when none does. */
 export function blockedServiceOf(kind: BlockedServiceKind, params: Record<string, unknown> | undefined, list: readonly BlockedService[]): BlockedService | null {

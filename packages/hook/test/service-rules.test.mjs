@@ -81,6 +81,9 @@ test("the list is optional; a valid one is accepted; a malformed or oversized on
     "an empty key": [{ kind: "host", key: "" }],
     "a host with a path": [{ kind: "host", key: "example.com/admin" }],
     "a host with a port out of range": [{ kind: "host", key: "example.com:70000" }],
+    "a host with port 0": [{ kind: "host", key: "example.com:0" }],
+    "a host with the https default port, which a request's host never shows": [{ kind: "host", key: "api.example.com:443" }],
+    "a host with the http default port": [{ kind: "host", key: "api.example.com:80" }],
     "a program with a space": [{ kind: "cli", key: "rm -rf" }],
     "a package without a manager": [{ kind: "package", key: "zod" }],
     "a package with a URL": [{ kind: "package", key: "npm:https://example.com/x.tgz" }],
@@ -231,6 +234,43 @@ test("a package is blocked on its manager and exact name; the denial is recorded
   }
   // Several packages in one install: the blocked one denies the call.
   assert.equal((await run(dir, bash("npm install react zod"))).decision, "deny");
+});
+
+test("every named package is checked: beside a requirements file or an editable path, past 100 specs, past an unreadable spec", async () => {
+  const { dir } = setup();
+  const many = (n) => Array.from({ length: n }, (_, i) => `p${i}`).join(" ");
+  for (const command of ["pip install requests -r /dev/null", "pip install -r requirements.txt requests", "pip install requests -e .",
+    `npm install ${many(99)} zod`, `npm install ${many(100)} zod`, `npm install ${many(300)} zod`, "npm install @@@ zod", "npm install 'bad spec!' zod"]) {
+    const d = await run(dir, bash(command));
+    assert.equal(d.decision, "deny", command.slice(0, 60));
+    assert.equal(d.code, "blocked_service", command.slice(0, 60));
+    assert.match(d.reason, /Your workspace blocks the package (npm:zod|pip:requests)\./, command.slice(0, 60));
+  }
+  for (const command of ["npm install @@@ react", "pip install -r requirements.txt", "pip install -e .", `npm install ${many(150)}`]) {
+    assert.equal((await run(dir, bash(command))).decision, "allow", command.slice(0, 60));
+  }
+});
+
+test("an install whose named packages none can be read is denied while the workspace blocks packages (fail closed)", async () => {
+  const { dir } = setup();
+  for (const command of ["npm install @@@", "npm install '$PKG'", "pip install '!!!'"]) {
+    const d = await run(dir, bash(command));
+    assert.equal(d.decision, "deny", command);
+    assert.equal(d.clauseId, BLOCKED_SERVICE_CLAUSES.package.id, command);
+    assert.equal(d.code, "blocked_service", command);
+    assert.match(d.reason, /packages this install names could not be read/, command);
+    assert.match(denied(d).intent.params.package_key, /^(npm|pip):$/);
+  }
+  // Without a package block, the same command is recorded as it always was.
+  const { dir: other } = setup([{ kind: "cli", key: "ffmpeg" }]);
+  assert.equal((await run(other, bash("npm install @@@"))).decision, "allow");
+});
+
+test("a blocked package decides before its command: the package is the denied action and the command is never evaluated", async () => {
+  const { dir } = setup();
+  const d = await run(dir, bash("npm install zod"));
+  assert.equal(d.decision, "deny");
+  assert.deepEqual(d.receipts.map((r) => r.payload.intent.action_type), ["package.install"]);
 });
 
 test("without blocked services nothing changes: an install is recorded as the same single command", async () => {
