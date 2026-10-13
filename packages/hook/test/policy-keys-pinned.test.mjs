@@ -7,6 +7,7 @@ import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto
 import {
   PINNED_POLICY_KEYS, policyKeys, policyKeyProblems, publicKeyFrom, checkPolicySignature, signedPolicyBytes, signatureMode, digestRules,
 } from "../dist/index.js";
+import { admitSigned } from "../dist/policy-signature.js";
 
 const CLOUD_KEY_ID = "pol_088707688c36e0f6";
 const pinned = () => PINNED_POLICY_KEYS.find((k) => k.key_id === CLOUD_KEY_ID);
@@ -49,6 +50,29 @@ test("a document naming the pinned key is checked against it: a forgery under it
   // Before the key's window opens, the same document is refused for the window, so the pinned dates are the ones applied.
   const early = checkPolicySignature({ ...doc, issued_at: "2026-10-01T00:00:00Z" }, { ...context, now: new Date("2026-10-02T00:00:00Z") });
   assert.equal(early.reason, "key_not_valid");
+});
+
+test("a document signed with a key id that is not pinned is refused as unknown_key, in dual and in enforce mode", () => {
+  const other = generateKeyPairSync("ed25519");
+  const issuedAt = "2026-10-20T00:00:00Z";
+  const rulesDigest = digestRules({ "destructive-shell": { mode: "block" } });
+  const unpinnedId = "pol_0000000000000000";
+  assert.ok(!policyKeys({}).some((k) => k.key_id === unpinnedId));
+  const payload = { v: 1, workspace: "org-pin-1", computer: "gw-pin-1", revision: 1, rules_digest: rulesDigest, local_changes: false, managed: true, issued_at: issuedAt };
+  const doc = {
+    revision: 1, rules_digest: rulesDigest, installation_id: "gw-pin-1", issued_at: issuedAt, key_id: unpinnedId,
+    signature: cryptoSign(null, signedPolicyBytes(payload), other.privateKey).toString("base64"),
+  };
+  // No `keys` override: the check uses the keys this release trusts by default.
+  const check = checkPolicySignature(doc, { workspace: "org-pin-1", computer: "gw-pin-1", managed: true, lastIssuedAt: null, now: new Date("2026-10-21T00:00:00Z") });
+  assert.equal(check.result, "refused");
+  assert.equal(check.reason, "unknown_key");
+  for (const mode of ["dual", "enforce"]) {
+    const admitted = admitSigned(check, mode, "2026-10-21T00:00:00Z");
+    assert.equal(admitted.ok, false, `${mode} refuses it`);
+    assert.equal(admitted.reason, "unknown_key");
+    assert.deepEqual(admitted.state, { mode, last: "refused", reason: "unknown_key", at: "2026-10-21T00:00:00Z" });
+  }
 });
 
 test("pinning a key does not change the default mode: dual unless enforce is asked for", () => {

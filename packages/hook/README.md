@@ -819,9 +819,10 @@ even if the answer passed through something that could change it.
   2026-10-13T21:00:18Z to 2027-10-13T21:00:18Z), which Scopebond Cloud also publishes at
   `https://cloud.scopebond.com/.well-known/scopebond-policy-keys.json`. Its id is `pol_` and the
   first 16 hex digits of the SHA-256 of the key's SPKI DER in base64. Rotation is a release
-  too: the next key ships ahead of time with a future `not_before`. `SCOPEBOND_POLICY_KEYS_JSON` (a JSON array of the same entries) adds keys, for
-  tests and for trying a key before it is pinned. An entry whose window closes before it opens,
-  or whose `public_key` does not read as an Ed25519 key, is left out, and `doctor` says why.
+  too: the next key ships ahead of time with a future `not_before`.
+  `SCOPEBOND_POLICY_KEYS_JSON` (a JSON array of the same entries) adds keys, for tests and for
+  trying a key before it is pinned. An entry whose window closes before it opens, or whose
+  `public_key` does not read as an Ed25519 key, is left out, and `doctor` says why.
 - **What is reported.** `status --json` has `policy_signature: { mode, last, reason }`, where
   `last` is `verified`, `unsigned` or `refused`; each rules check tells the workspace the same
   (`x-scopebond-policy-signature`).
