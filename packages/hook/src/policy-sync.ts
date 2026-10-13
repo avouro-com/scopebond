@@ -81,6 +81,11 @@ const ackReasonFor = (reason: SignatureReason): RefusalReason =>
 import {
   ruleReport, toolSettingsMark, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
+import { SERVICE_RULES_CAPABILITY } from "./service-rules.js";
+
+/** What this hook reads in a workspace's rules document beyond what its version implies, as `x-scopebond-hook-capabilities`
+ *  says it: allowances (and "Block, person may ask"), session budgets, and blocked services (service-rules.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY] as const;
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";
@@ -180,10 +185,10 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // The hook's version tells the workspace which settings this computer understands (for example exact-target
       // exclusions), so it is never sent a document an older hook would refuse.
       // The settings this hook understands beyond its version (the workspace sends allowances, "Block, person may ask"
-      // and the always/requests terms only to a hook that says so).
+      // and the always/requests terms, session budgets and blocked services only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
-      headers: { ...auth, "x-scopebond-hook-capabilities": "allowances,session_budgets", "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
+      headers: { ...auth, "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(","), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {

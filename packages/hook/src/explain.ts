@@ -12,6 +12,8 @@
 // `permissionDecisionReason`, Cursor's `agentMessage`), so a clear one lets the
 // agent pick a different approach instead of retrying the same blocked call.
 
+import { BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, blockedServiceKindOf, blockedServiceOf, type BlockedService } from "./service-rules.js";
+
 /** A policy clause, as much of it as the message needs. */
 export interface ExplainClause {
   id?: unknown;
@@ -52,7 +54,8 @@ export function describeAction(intent: ExplainIntent | undefined): string {
     : type === "db.migrate" ? `${str(p.provider)} ${str(p.direction)} ${str(p.env)}`.trim()
     : type === "deploy.release" ? `${str(p.provider) || str(p.repo)} ${str(p.environment)}`.trim()
     : type === "secret.write" ? `${str(p.store)} ${str(p.env)}`.trim()
-    : type === "communication.send" || type.startsWith("work.item.") ? str(p.provider) : "";
+    : type === "communication.send" || type.startsWith("work.item.") ? str(p.provider)
+    : type === "package.install" ? str(p.package_key) || `${str(p.manager)} ${str(p.name)}`.trim() : "";
   return `${type || "?"}${bits ? ` ${bits}` : ""}`;
 }
 
@@ -94,6 +97,8 @@ export interface ExplainDenyInput {
   /** The harness reported this action only after it happened, so the decision records
    *  and flags it but did not prevent it. The wording must not claim otherwise. */
   postHoc?: boolean;
+  /** The workspace's blocked services (service-rules.ts), to name the one a blocked-service clause denied. */
+  services?: readonly BlockedService[];
 }
 
 /** Compose the block message. Degrades in order: with a clause and a description
@@ -110,6 +115,16 @@ export function explainDeny(input: ExplainDenyInput): string {
   const verb = input.postHoc ? "recorded an out-of-policy" : "blocked";
   if (!clauseId) {
     return action ? `Scopebond ${verb} ${action}: ${detail}` : `Scopebond ${verb} action: ${detail}`;
+  }
+  // A blocked service is the workspace's own choice, said plainly: which service, and that the workspace blocks it.
+  const kind = blockedServiceKindOf(clauseId);
+  if (kind) {
+    const params = (input.intent?.params ?? {}) as Record<string, unknown>;
+    const key = blockedServiceOf(kind, params, input.services ?? [])?.key ?? str(params[BLOCKED_SERVICE_CLAUSES[kind].param]);
+    return [
+      `Scopebond ${verb} ${action || "action"}: Your workspace blocks the ${BLOCKED_SERVICE_LABEL[kind]} ${key}.`,
+      "Use another way, or ask an admin of your Scopebond workspace to change the block.",
+    ].join("\n");
   }
   const mode = str(clause?.mode) || "enforce";
   const why = shorten(str(clause?.description));

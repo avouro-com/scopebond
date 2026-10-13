@@ -1,0 +1,5 @@
+---
+"@scopebond/hook": minor
+---
+
+Block named MCP servers, hosts, programs and packages from the workspace's rules document. A workspace may send `blocked_services` (at most 500 entries of `{ kind: "mcp_server" | "host" | "cli" | "package", key }`); the hook now says it reads them (`x-scopebond-hook-capabilities` gains `service_rules`). The list is digested with the rules (`rules_digest` is the SHA-256 of the canonical JSON of `{ rules, blocked_services }` when the list is present), so a changed or malformed list refuses the document and the rules in force stay. Each kind compiles into a policy clause after the ordinary rules: an MCP call whose server name contains the blocked name as a word, a web request to the blocked host (a port in the key must match), a shell command running the blocked program, or an install of the blocked `manager:name` package is denied with the reason `blocked_service` and the message "Your workspace blocks the <kind> <key>", and recorded like any rule block. A blocked package install is recorded as that package's `package.install` beside its command. Without the list nothing changes.
