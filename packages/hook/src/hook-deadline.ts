@@ -54,8 +54,8 @@ function writeNow(fd: 1 | 2, text: string): void {
   try { writeSync(fd, text); } catch { (fd === 1 ? process.stdout : process.stderr).write(text); }
 }
 
-/** Each agent's "deny" for a hook call that cannot decide (a crash, a missed deadline), then exit. The one fail-closed
- *  answer: cli.js, the single executable and the deadline all use it. */
+/** Each agent's "deny" for a hook call that cannot decide (a crash, a missed deadline), then exit. The deadline and the
+ *  single executable use it; cli.js keeps its own copy, because it must answer even when no file beside it can load. */
 export function denyHookCall(command: string | undefined, reason: string): never {
   try {
     if (command === "claude" || command === "codex") {
