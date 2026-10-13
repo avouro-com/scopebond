@@ -1,0 +1,83 @@
+{
+  "tool": "wrangler",
+  "description": "Cloudflare Wrangler, directly or through npx/pnpm exec: deploy and versions deploy and pages deploy (deploy.release), secret put/bulk (secret.write), deletes and creates of Workers, D1, R2, KV, Pages projects and queues, and d1 migrations apply (db.migrate). d1 execute stays the typed database operation it already was. An option this reader does not know derives nothing.",
+  "cases": [
+    {
+      "name": "deploy to the production environment",
+      "command": "npx wrangler deploy --env production",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "cloudflare", "environment": "production", "risk_class": "destructive" } }]
+    },
+    {
+      "name": "deploy with no environment counts as unknown",
+      "command": "wrangler deploy --name api-worker",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "cloudflare", "environment": "unknown", "target_digest": { "$digest": ["cloudflare", "worker", "", "api-worker"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "deploy to staging",
+      "command": "pnpm exec wrangler deploy -e staging",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "cloudflare", "environment": "staging", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "pages deploy of the main branch",
+      "command": "wrangler pages deploy dist --project-name acme-site --branch main",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "cloudflare", "environment": "production", "target_digest": { "$digest": ["cloudflare", "pages", "acme-site"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "pages deploy of a feature branch is a preview",
+      "command": "wrangler pages deploy dist --project-name acme-site --branch feature-x",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "cloudflare", "environment": "preview", "target_digest": { "$digest": ["cloudflare", "pages", "acme-site"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "secret put names the secret, never its value",
+      "command": "echo {{SECRET}} | wrangler secret put API_KEY --env production",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "wrangler", "name_digest": { "$digest": ["wrangler", "", "production", "API_KEY"] }, "env": "production", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "secret bulk",
+      "command": "wrangler secret bulk secrets.json",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "wrangler", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "delete a Worker",
+      "command": "wrangler delete old-worker",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "cloudflare", "service": "workers", "kind": "worker", "resource_digest": { "$digest": ["cloudflare", "workers", "worker", "old-worker"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "delete a D1 database",
+      "command": "wrangler d1 delete orders-db --skip-confirmation",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "cloudflare", "service": "d1", "kind": "database", "resource_digest": { "$digest": ["cloudflare", "d1", "database", "orders-db"] }, "auto_approve": true, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "delete an R2 bucket",
+      "command": "wrangler r2 bucket delete backups",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "cloudflare", "service": "r2", "kind": "bucket", "resource_digest": { "$digest": ["cloudflare", "r2", "bucket", "backups"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "delete an R2 object digests only its bucket",
+      "command": "wrangler r2 object delete backups/2026/db.sql",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "cloudflare", "service": "r2", "kind": "object", "resource_digest": { "$digest": ["cloudflare", "r2", "object", "backups"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "create an R2 bucket",
+      "command": "wrangler r2 bucket create uploads",
+      "expect": [{ "action_type": "cloud.resource.create", "params": { "provider": "cloudflare", "service": "r2", "kind": "bucket", "resource_digest": { "$digest": ["cloudflare", "r2", "bucket", "uploads"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "apply D1 migrations remotely",
+      "command": "wrangler d1 migrations apply orders-db --remote",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "cloudflare_d1", "direction": "up", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "apply D1 migrations locally",
+      "command": "wrangler d1 migrations apply orders-db --local",
+      "expect": [{ "action_type": "db.migrate", "params": { "provider": "cloudflare_d1", "direction": "up", "env": "development", "risk_class": "sensitive" } }]
+    },
+    { "name": "a dry run derives nothing", "command": "wrangler deploy --dry-run", "expect": [] },
+    { "name": "d1 execute stays the database operation", "command": "wrangler d1 execute orders-db --remote --command \"DELETE FROM sessions\"", "expect": [] },
+    { "name": "dev derives nothing", "command": "wrangler dev", "expect": [] },
+    { "name": "tail derives nothing", "command": "wrangler tail api-worker", "expect": [] },
+    { "name": "an unknown option still derives the deployment, environment unknown", "command": "wrangler deploy --mystery-option x", "expect": [{ "action_type": "deploy.release", "params": { "provider": "cloudflare", "environment": "unknown", "risk_class": "destructive" } }] },
+    { "name": "an unknown option on a listing derives nothing", "command": "wrangler tail api-worker --mystery-option x", "expect": [] },
+    { "name": "secret delete", "command": "wrangler secret delete API_KEY", "expect": [{"action_type": "secret.write", "params": {"store": "wrangler", "name_digest": {"$digest": ["wrangler", "", "", "API_KEY"]}, "delete": true, "risk_class": "sensitive"}}] }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "tool": "helm",
+  "description": "Helm: install, upgrade and rollback (k8s.apply) and uninstall (k8s.delete) of a release; --kube-context and -n are recorded, the release name digested; a dry run, template or list derives nothing.",
+  "cases": [
+    {
+      "name": "upgrade --install into a namespace",
+      "command": "helm upgrade --install web ./charts/web -n prod --kube-context prod-cluster -f values-prod.yaml --set image.tag=1.2.3",
+      "expect": [{ "action_type": "k8s.apply", "params": { "context": "prod-cluster", "namespace": "prod", "kind": "helm-release", "name_digest": { "$digest": ["k8s", "prod-cluster", "prod", "helm-release", "web"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "install with a generated name names no release",
+      "command": "helm install ./charts/web --generate-name",
+      "expect": [{ "action_type": "k8s.apply", "params": { "kind": "helm-release", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "rollback",
+      "command": "helm rollback web 3 -n prod",
+      "expect": [{ "action_type": "k8s.apply", "params": { "namespace": "prod", "kind": "helm-release", "name_digest": { "$digest": ["k8s", "", "prod", "helm-release", "web"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "uninstall",
+      "command": "helm uninstall web -n prod",
+      "expect": [{ "action_type": "k8s.delete", "params": { "namespace": "prod", "kind": "helm-release", "name_digest": { "$digest": ["k8s", "", "prod", "helm-release", "web"] }, "risk_class": "destructive" } }]
+    },
+    { "name": "a dry run derives nothing", "command": "helm upgrade --install web ./charts/web --dry-run", "expect": [] },
+    { "name": "template derives nothing", "command": "helm template web ./charts/web", "expect": [] },
+    { "name": "list derives nothing", "command": "helm list -A", "expect": [] },
+    { "name": "repo add derives nothing", "command": "helm repo add bitnami https://charts.bitnami.com/bitnami", "expect": [] }
+  ]
+}

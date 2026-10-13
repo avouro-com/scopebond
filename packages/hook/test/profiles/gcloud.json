@@ -1,0 +1,68 @@
+{
+  "tool": "gcloud",
+  "description": "Google Cloud CLI: compute and sql deletes, IAM and IAM policy bindings, run/functions/app deploy, Secret Manager, storage rm, and the generic create/delete/update verbs. --project sets env when its words say prod, staging or dev.",
+  "cases": [
+    {
+      "name": "compute instances delete with a zone and --quiet",
+      "command": "gcloud compute instances delete web-1 --zone us-east1-b --project acme-prod --quiet",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "gcp", "service": "compute", "kind": "instance", "region": "us-east1-b", "env": "production", "resource_digest": { "$digest": ["gcp", "compute", "instances", "acme-prod", "web-1"] }, "auto_approve": true, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "sql instances delete",
+      "command": "gcloud sql instances delete orders-db --project=acme-staging",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "gcp", "service": "sql", "kind": "instance", "env": "staging", "resource_digest": { "$digest": ["gcp", "sql", "instances", "acme-staging", "orders-db"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "a beta command reads the same",
+      "command": "gcloud beta compute instances create web-2 --zone=us-east1-b",
+      "expect": [{ "action_type": "cloud.resource.create", "params": { "provider": "gcp", "service": "compute", "kind": "instance", "region": "us-east1-b", "resource_digest": { "$digest": ["gcp", "compute", "instances", "", "web-2"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "projects add-iam-policy-binding is a policy change",
+      "command": "gcloud projects add-iam-policy-binding acme-prod --member=user:dev@example.com --role=roles/owner",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "gcp", "kind": "policy", "name_digest": { "$digest": ["gcp", "projects", "projects", "", "acme-prod"] }, "env": "production", "risk_class": "identity" } }]
+    },
+    {
+      "name": "iam service-accounts keys create is a key change",
+      "command": "gcloud iam service-accounts keys create key.json --iam-account ci@acme.iam.gserviceaccount.com",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "gcp", "kind": "key", "name_digest": { "$digest": ["gcp", "iam", "key", "", "key.json"] }, "risk_class": "identity" } }]
+    },
+    {
+      "name": "iam roles delete",
+      "command": "gcloud iam roles delete customDeployer --project acme-dev",
+      "expect": [{ "action_type": "iam.change", "params": { "provider": "gcp", "kind": "role", "name_digest": { "$digest": ["gcp", "iam", "role", "acme-dev", "customDeployer"] }, "env": "development", "risk_class": "identity" } }]
+    },
+    {
+      "name": "run deploy to a production project",
+      "command": "gcloud run deploy api --image gcr.io/acme/api:1.2 --region us-central1 --project acme-prod",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "gcp", "environment": "production", "target_digest": { "$digest": ["gcp", "run", "acme-prod", "us-central1", "api"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "functions deploy whose environment nothing names",
+      "command": "gcloud functions deploy resize --runtime nodejs20 --trigger-http",
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "gcp", "environment": "unknown", "target_digest": { "$digest": ["gcp", "functions", "", "", "resize"] }, "risk_class": "destructive" } }]
+    },
+    {
+      "name": "secrets versions add is a secret write; the data file is never read",
+      "command": "gcloud secrets versions add db-password --data-file=secret.txt --project acme-prod",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "gcp-secret-manager", "name_digest": { "$digest": ["gcp-secret-manager", "acme-prod", "db-password"] }, "env": "production", "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "secrets create",
+      "command": "gcloud secrets create api-key --replication-policy=automatic",
+      "expect": [{ "action_type": "secret.write", "params": { "store": "gcp-secret-manager", "name_digest": { "$digest": ["gcp-secret-manager", "", "api-key"] }, "risk_class": "sensitive" } }]
+    },
+    {
+      "name": "storage rm of an object",
+      "command": "gcloud storage rm gs://acme-backups/2026/db.sql.gz",
+      "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "gcp", "service": "storage", "kind": "object", "resource_digest": { "$digest": ["gcp", "storage", "acme-backups"] }, "risk_class": "destructive" } }]
+    },
+    { "name": "a list derives nothing", "command": "gcloud compute instances list --project acme-prod", "expect": [] },
+    { "name": "describe derives nothing", "command": "gcloud run services describe api --region us-central1", "expect": [] },
+    { "name": "local configuration derives nothing", "command": "gcloud config set project acme-prod", "expect": [] },
+    { "name": "credentials for kubectl derive nothing", "command": "gcloud container clusters get-credentials prod --region us-central1", "expect": [] },
+    { "name": "help derives nothing", "command": "gcloud compute instances delete --help", "expect": [] },
+    { "name": "an unknown option before the verb hides the command path, but not the delete", "command": "gcloud compute --mystery x instances delete web-1", "expect": [{ "action_type": "cloud.resource.delete", "params": { "provider": "gcp", "risk_class": "destructive" } }] },
+    { "name": "deleting a local CLI configuration is not a resource", "command": "gcloud config configurations delete old-profile", "expect": [] }
+  ]
+}

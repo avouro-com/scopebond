@@ -334,9 +334,20 @@ function wranglerArgv(sc: SimpleCommand): string[] | null {
 
 const WR_VALUED = ["--env", "-e", "--config", "-c", "--name", "--command", "--file", "--project-name", "--branch", "--commit-hash", "--commit-message", "--compatibility-date", "--compatibility-flags",
   "--var", "--define", "--route", "--routes", "--outdir", "--tag", "--message", "--content-type", "--content-disposition", "--cache-control", "--expires", "--content-language", "--storage-class", "--jurisdiction", "-J",
-  "--persist-to", "--database", "--binding", "--format", "--limit", "--location", "--account-id", "--production-branch", "--assets", "--site", "--cwd"];
+  "--persist-to", "--database", "--binding", "--format", "--limit", "--location", "--account-id", "--production-branch", "--assets", "--site", "--cwd", "--namespace-id"];
 const WR_FLAGS = new Set([...WR_VALUED, "--remote", "--local", "--preview", "--dry-run", "--json", "--yes", "-y", "--help", "-h", "--version", "-v", "--skip-confirmation", "--keep-vars", "--no-bundle", "--node-compat",
   "--experimental-json-config", "--persist", "--no-minify", "--latest", "--strict", "--force", "-f", "--no-x-remote-bindings", "--x-remote-bindings", "--experimental-provision", "--x-provision", "--unsafe", "--include-secrets", "--dev-url", "--minify", "--workers-dev", "--triggers", "--legacy-env"]);
+
+/** A Wrangler invocation reduced to its positionals and options without reading any file (typed-targets.ts): null when it is
+ *  not Wrangler, or names an option this reader does not know, which might take a value and shift the positionals. */
+export function readWrangler(sc: SimpleCommand): { pos: string[]; s: Scanned } | null {
+  if (sc.opaque) return null;
+  const argv = wranglerArgv(sc);
+  if (!argv) return null;
+  const s = scan(argv, WR_VALUED);
+  for (const f of s.flags.keys()) if (!WR_FLAGS.has(f)) return null;
+  return s.positionals.length ? { pos: s.positionals, s } : null;
+}
 
 interface WranglerConfig { name?: string; account_id?: string; migrationsDir?: string; envName?: string }
 
