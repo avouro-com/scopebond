@@ -38,6 +38,8 @@ export interface GitProbe {
   branch(cwd: string): string | null;
   /** The URL a remote name resolves to for pushing, or null. */
   remoteUrl(cwd: string, remote: string): string | null;
+  /** The URL a remote name fetches from (the repository it names), or null. Optional: a probe without it falls back to the push URL. */
+  fetchUrl?(cwd: string, remote: string): string | null;
   /** The remote a plain push from this branch uses (`origin` unless configured). */
   defaultRemote(cwd: string, branch: string | null): string;
   /** Commit id a revision resolves to locally, or null. */
@@ -60,6 +62,7 @@ export const systemGit: GitProbe = {
   head: (cwd) => { const s = git(cwd, ["rev-parse", "HEAD"]); return s && SHA.test(s) ? s : null; },
   branch: (cwd) => git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
   remoteUrl: (cwd, remote) => git(cwd, ["remote", "get-url", "--push", remote]),
+  fetchUrl: (cwd, remote) => git(cwd, ["remote", "get-url", remote]),
   defaultRemote: (cwd, branch) => (branch && git(cwd, ["config", "--get", `branch.${branch}.pushRemote`])) || (branch && git(cwd, ["config", "--get", `branch.${branch}.remote`])) || "origin",
   revParse: (cwd, rev) => { if (rev.startsWith("-")) return null; const s = git(cwd, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]); return s && SHA.test(s) ? s : null; },
 };

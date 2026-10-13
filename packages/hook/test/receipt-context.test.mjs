@@ -7,11 +7,12 @@ import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import http from "node:http";
 import { openReceiptStore, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { verifyReceipt } from "@scopebond/gateway";
 import {
   scaffold, canonicalRepository, receiptContextFor, receiptContextAllowed, receiptContextFrom, clearRepositoryFacts,
-  loadOrCreateBindingKey, syncPolicy, readMeta, createHookRuntime, mapClaudeToolUse, MANAGED_META_FILE, RECEIPT_CONTEXT_HEADER,
+  loadOrCreateBindingKey, syncPolicy, readMeta, createHookRuntime, mapClaudeToolUse, MANAGED_META_FILE, RECEIPT_CONTEXT_HEADER, connectCloud,
 } from "../dist/index.js";
 import { ENFORCE } from "./enforce-all.mjs";
 import { makeHome, readPending } from "./observation-helpers.mjs";
@@ -206,4 +207,108 @@ test("observations and receipts carry the same keyed session id", async () => {
   for (const intent of intents) assert.equal(intent.payload.session_id, receipt.payload.context.session_id);
   assert.equal(JSON.stringify(receipt).includes("sess-shared"), false);
   assert.equal(readFileSync(join(dir, "receipts.db")).includes("sess-shared"), false);
+});
+
+// ---- review follow-ups: remotes that could name a person or machine, fetch URL, re-connect, accepted answers only ----
+
+test("repository: machine names, IP addresses, server folders, ~user and dot segments are never recorded", () => {
+  for (const url of [
+    "git@dev-box:/" + "home/alice/work/repo.git",
+    "ssh://host/~alice/repo.git",
+    "ssh://git@git.example.test/~alice/repo.git",
+    "johns-macbook:repos/foo",
+    "ssh://192.168.1.10/alice/repo.git",
+    "https://10.0.0.7/group/repo.git",
+    "ssh://git@[fe80::1]/alice/repo.git",
+    "https://[2001:db8::1]/alice/repo.git",
+    "git@git.example.test:/" + "home/alice/repo.git",
+    "ssh://git@git.example.test/" + "Users/alice/repo.git",
+    "https://git.example.test/srv/git/repo.git",
+    "https://git.example.test/var/repos/app",
+    "https://git.example.test/ROOT/app",
+    "https://git.example.test/opt/app/x",
+    "https://git.example.test/mnt/data/app",
+    "https://git.example.test/tmp/a/b",
+    "https://github.com/%2e%2e/r",
+    "https://github.com/example/%2Eapp",
+    "https://github.com/example/./app",
+  ]) assert.equal(canonicalRepository(url), null, url);
+  // Hosted repositories keep working, a nested group included.
+  assert.equal(canonicalRepository("git@gitlab.example.test:group/sub/app.git"), "gitlab.example.test/group/sub/app");
+  assert.equal(canonicalRepository("https://dev.azure.example.test/org/project/_git/app"), "dev.azure.example.test/org/project/_git/app");
+});
+
+test("repository comes from the fetch URL, not a push URL pointing at a mirror", () => {
+  clearRepositoryFacts();
+  const repo = gitRepo("https://github.com/example/app.git", "main");
+  execFileSync("git", ["-C", repo, "remote", "set-url", "--push", "origin", "/srv/mirror/app.git"], { stdio: "ignore" });
+  const context = receiptContextFor({ harness: "claude", input: {}, dir: hookDir(), cwd: repo, connected: false });
+  assert.equal(context.repository, "github.com/example/app");
+});
+
+test("a delivery answer that is not accepted does not turn receipt context on", async () => {
+  for (const status of [401, 500, 503]) {
+    const { dir, connection } = makeHome({ scopes: ["receipts:write"] });
+    const fetchImpl = async () => new Response("<html>proxy</html>", { status, headers: { [RECEIPT_CONTEXT_HEADER]: "1" } });
+    const runtime = createHookRuntime({
+      policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"),
+      cloud: { connection, fetch: fetchImpl, flushTimeoutMs: 3000 },
+    });
+    try {
+      await runtime.evaluate(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "git push origin main" } }));
+      await runtime.flush();
+    } finally { runtime.close(); }
+    assert.notEqual(readMeta(dir).receipt_context, true, `status ${status}`);
+  }
+});
+
+const enrollProof = JSON.stringify({ challenge: "c1", enrollment_id: "e1", type: "scopebond:gateway-enrollment", version: 1 });
+const enrollBundle = { enrollment_token: "sbe_ctx_test", proof_canonical: enrollProof, expires_at: "2099-01-01T00:00:00.000Z" };
+function enrollAnswer(dir) {
+  const { attester } = loadOrCreateAttester({ file: join(dir, "attester.key") });
+  const { attester: agent } = loadOrCreateAttester({ file: join(dir, "agent.key") });
+  return {
+    credential_id: "cred-2", credential: "sbm_ctx_credential", organization_id: "org-2", environment_id: "env-2", gateway_id: "gw-2",
+    attester_kid: attester.kid, agent_kid: agent.kid, scopes: ["receipt:ingest"], expires_at: "2099-01-01T00:00:00.000Z",
+  };
+}
+
+test("connecting to a workspace forgets what the previous one said it reads", async () => {
+  const dir = hookDir();
+  writeFileSync(join(dir, MANAGED_META_FILE), JSON.stringify({ receipt_context: true, checked_at: new Date().toISOString(), evidence_detail: "full" }));
+  const answer = enrollAnswer(dir);
+  const fetchImpl = async (url) => (String(url).endsWith("/v1/enroll")
+    ? new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } })
+    : new Response("{}", { status: 404 }));
+  await connectCloud(dir, "http://127.0.0.1:9", enrollBundle, fetchImpl);
+  const meta = readMeta(dir);
+  assert.equal(meta.receipt_context, null, "the new workspace has not said it reads receipt context");
+  assert.equal(meta.checked_at, null, "the next tool call checks the rules at once");
+  assert.equal(meta.evidence_detail, "full", "everything else is kept");
+  assert.equal(receiptContextAllowed(dir, true), false);
+});
+
+test("connect runs one rules check right away, which can turn receipt context on", async () => {
+  const dir = hookDir();
+  writeFileSync(join(dir, MANAGED_META_FILE), JSON.stringify({ receipt_context: true }));
+  const answer = enrollAnswer(dir);
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      seen.push(`${req.method} ${req.url}`);
+      if (req.url === "/v1/enroll") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(answer)); return; }
+      if (req.url === "/v1/policy" && req.method === "GET") { res.writeHead(204, { [RECEIPT_CONTEXT_HEADER]: "1" }); res.end(); return; }
+      res.writeHead(200, { "content-type": "application/json" }); res.end("{}");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const blob = Buffer.from(JSON.stringify(enrollBundle)).toString("base64");
+    const r = await run(dir, ["connect", url, blob, "--no-install"], undefined, { SCOPEBOND_POLICY_SYNC: "" });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  } finally { server.closeAllConnections?.(); await new Promise((resolve) => server.close(resolve)); }
+  assert.ok(seen.includes("GET /v1/policy"), `requests: ${seen.join(", ")}`);
+  assert.equal(readMeta(dir).receipt_context, true);
 });

@@ -1004,6 +1004,9 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     console.log(`✓ Connected to ${c.url}`);
     if (c.rotatedFrom) console.log(`✓ This computer's earlier key (${c.rotatedFrom}) was no longer accepted, so it was replaced; the old key is kept in ${join(dir, "retired-keys")}`);
     if (c.setAside) console.log(`  ${c.setAside.toLocaleString()} queued record(s) signed by an earlier key cannot go through this connection. To deliver them, run: ${cliCommand("recover")}`);
+    // One rules check now, bounded: the new workspace says what it reads (receipt context) and sends its rules before the first
+    // tool call. It never fails the sign-in; the first tool call checks again if this one could not.
+    try { await syncPolicy(dir, { ...syncOptionsFor(dir), timeoutMs: 3000 }); } catch { /* checked on the next tool call */ }
     // With a user-level install present, the hook ignores a project policy until it is
     // trusted, and would fall back to the user home, which holds no cloud.json: the agent
     // stays governed, but nothing reaches the workspace. Connecting this project is the

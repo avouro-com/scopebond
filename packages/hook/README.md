@@ -697,14 +697,21 @@ a workspace can group records by session and filter them by tool, model and repo
 Code and Codex do not, so it is `null`), `model` (the model id when the coding agent puts it
 in the hook input, else `null`; the transcript is never read), `session_id` (the same keyed
 opaque id the observations carry, never the coding agent's own session id), `repository`
-(the git remote `origin` as `host/owner/name`: lowercase host, no credentials, no `.git`;
-`null` outside a repository or without an `origin`) and `branch`. It holds no local path, user
-name or prompt, and the signature covers it, so `verify` checks it like the rest;
-`log` shows it after the action. A computer that is not connected always records it. A
+(the git remote `origin`'s fetch URL as `host/owner/name`: lowercase host, no credentials, no
+`.git`; `null` outside a repository, without an `origin`, or when the remote could name a
+person or a machine rather than a hosted repository: a host without a dot, an IP address, a
+path that starts in a server folder such as home, users or srv, or a `~user` segment) and `branch`
+(the name someone chose for it). It holds no local path, no credential and no prompt, and the
+signature covers it, so `verify` checks it like the rest; `log` shows it after the action.
+Verify these receipts with this release or later: an earlier `scopebond verify` (or
+`@scopebond/gateway` `verifyReceipt`) reports a receipt carrying `context` as invalid, because
+the payload's key list is closed (`evidence_version` stays `1.0`). A computer that is not connected always records it. A
 connected computer adds it only once its workspace has said it reads it: the rules check
 (`GET /v1/policy`) or a delivery answer carries `x-scopebond-receipt-context: 1`, kept as
 `receipt_context` in the rules state beside the hook's settings. Until then, and after a
-rules check answers without it, receipts are recorded and sent without a context.
+rules check answers without it, receipts are recorded and sent without a context. Signing
+in to a workspace (`login`, `connect`) forgets what the previous one said and checks the
+rules at once, and only an accepted delivery answer counts.
 
 **The computer name.** Signing in (`login`, and the Scopebond Agent's first sign-in)
 sends this computer's host name so the person approving it can tell which computer it
