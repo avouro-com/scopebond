@@ -312,8 +312,8 @@ when `COPILOT_HOME` is set); a plain `install` adds it when it finds the Copilot
 `copilot` program on PATH, or the CLI's `settings.json` or `logs` in that folder; the folder
 alone is not enough, because VS Code's Copilot Chat creates it too). `init --copilot`
 writes `.github/hooks/scopebond.json` in the project. The file is a `version: 1` hooks
-document registering `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SessionStart` and
-`SessionEnd`, each with a `bash` and a `powershell` command and `timeoutSec: 60`, and no
+document registering `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SessionStart`,
+`SessionEnd` and `Stop`, each with a `bash` and a `powershell` command and `timeoutSec: 60`, and no
 matcher (every tool). The `powershell` command ends with `; exit $LASTEXITCODE`, so a deny
 (exit 2) reaches Copilot as a deny with its reason rather than as PowerShell's generic
 exit 1. The PascalCase event names make Copilot send the same payload shape Claude Code
@@ -344,23 +344,96 @@ Copilot reports both shells as `Bash`; on Windows its shell is PowerShell, so a 
 in a hook payload, so MCP coverage is not claimed for Copilot (`capabilities` lists it as
 unsupported).
 
+#### Copilot surfaces: CLI, VS Code agent mode, cloud coding agent
+
+The same hook file runs in three places. **Verified on a live install: not yet** for VS Code
+agent mode and the cloud coding agent; their `capabilities` cells are configured and
+unverified, labelled `cooperative · prevents if honored · a hook timeout fails open`, and
+nothing in this package claims more until a real run is recorded (see "Checking the tool
+names on a real install" below). What follows is from GitHub's
+[Copilot hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference) and
+VS Code's [agent hooks](https://code.visualstudio.com/docs/agent-customization/hooks) and
+[Local hooks reference](https://code.visualstudio.com/docs/agents/reference/hooks-reference)
+pages, read 2026-10-13.
+
+| Surface | Hook files it reads | Payload and tool names | Scopebond's answer |
+|---|---|---|---|
+| Copilot CLI | `~/.copilot/hooks/*.json`, `.github/hooks/*.json`, the `hooks` block of `.github/copilot/settings*.json`, `~/.copilot/settings.json` and `.claude/settings*.json` | GitHub's (table above) | `permissionDecision`; deny exits 2 |
+| VS Code, **Copilot** session target (Agent Host) | the Copilot CLI's: VS Code runs the same SDK hook implementation | GitHub's | as the CLI |
+| VS Code, **Local** session target (extension host) | `.github/hooks/*.json`, `~/.copilot/hooks/*.json`; `.claude/settings*.json` and `~/.claude/settings.json` only with `chat.useClaudeHooks` on (off by default) | VS Code's own: the payload adds `tool_use_id`; the tool names are not published | `hookSpecificOutput.permissionDecision` (written beside the top-level fields); deny exits 2 with the reason on stderr |
+| Copilot cloud coding agent | only `.github/hooks/*.json` in the cloned repository (the default branch); only an entry's `bash` (or `command`) runs | GitHub's, Linux only (no `powershell`) | an `ask` becomes a deny (below); deny exits 2 |
+
+- **VS Code** registers `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop` through the same
+  PascalCase entries. `Stop` only marks the session active; it prints nothing, so it never
+  blocks or prolongs a turn. Because the Local harness's tool names are not published, a
+  Local call is mapped only where its name is one Scopebond knows; any other name is recorded
+  as `tool.<name>`, not evaluated, and never answered "allow" (strict mode,
+  `SCOPEBOND_HOOK_STRICT=1`, denies it). `install --copilot` writes the user-level file both
+  the CLI and VS Code read.
+- **Known gaps in VS Code's Local harness** (from its reference; not yet checked live):
+  - Whether Local runs Scopebond's hook file at all is unknown. Its reference recognises the
+    Copilot format by a numeric `version` with lower camelCase events; this file uses
+    PascalCase events. Each entry also carries Local's own `command` and `timeout` fields
+    (the Copilot CLI ignores `command` while `bash`/`powershell` are present, and reads
+    `timeout` only without `timeoutSec`, so nothing runs twice). The tool-name recording
+    below shows whether Local ran it.
+  - Local's default timeout is 30 s. The entry sets `timeout: 60`; if Local ignores it, a
+    check slower than 30 s fails open there (the hook's own deadline is 45 s).
+  - In Local, a hook that fails to start, or exits non-zero other than 2, is a non-blocking
+    warning: the action runs. Scopebond's own failures exit 2.
+  - Guardrail protection of hook files does not apply to Local tool names yet: a Local write
+    under a tool name Scopebond does not map is recorded, not refused.
+  - VS Code's `chat.useHooks`, `chat.hookFilesLocations` and `chat.useClaudeHooks` settings
+    can switch hooks off. A write that sets one of them in `.vscode/settings.json`, a
+    `*.code-workspace` file or VS Code's user `settings.json` through a tool Scopebond maps (in
+    any coding agent) is refused like a write of a hook file; any other edit of those files is
+    untouched. A change made in VS Code's settings screen is outside the hook.
+- **The cloud coding agent** is recognised by two things together: no user-level Scopebond
+  hook file for Copilot (the sandbox has no user-level hook files at all), and the sandbox's
+  own environment (`COPILOT_AGENT_PROMPT` or `GITHUB_COPILOT_API_TOKEN` present; only their
+  presence is read, never a value) or a GitHub Actions run (`GITHUB_ACTIONS=true`). There an
+  answer that would be "ask" is a deny that says why: "this action needs a person's approval,
+  and the Copilot cloud agent has no one to ask, so it is denied" (the cloud agent turns every
+  "ask" into a deny anyway). How the heuristic can be wrong, and why that is safe: the Copilot
+  CLI in a GitHub Actions step with no user-level install is read as the cloud agent, so its
+  "ask" is a deny (no one is there to answer it either); a sandbox that stops setting those
+  variables is read as the CLI and answered "ask", which the cloud agent reads as a deny.
+  `init --copilot --shared` writes the repository file with a `bash` command on every entry.
+
+#### Checking the tool names on a real install
+
+```
+npx -y @scopebond/hook@latest capabilities --prove --copilot
+```
+
+This runs the usual fixtures, then opens an hour's recording on this computer: while it is
+open, every Copilot hook call notes which surface sent it, the tool name exactly as sent, the
+event, the argument names (never their values) and what Scopebond made of it, in
+`copilot-tool-names.json` beside the policy. Use each surface (the CLI, VS Code with the Copilot
+and with the Local session target): run `git status`, read a file, create and edit a file,
+fetch a page, and create `.github/hooks/probe.json` (denied wherever the tool name is mapped).
+Run the command again to list what was seen per surface; a name marked "recorded, not
+evaluated" or "not in GitHub's documented names" is one Scopebond does not check yet. If no
+"VS Code Local harness" section appears after using the Local session target, the hook is not
+running there.
+
 Scopebond's own protection covers Copilot's hook settings as it does the other agents':
 writes to `~/.copilot/hooks/`, `~/.copilot/settings.json`, `~/.copilot/mcp-config.json`
 (the CLI's MCP servers), `.github/hooks/`, `.github/copilot/settings.json` and
 `.github/copilot/settings.local.json` are always denied (guardrail configuration, not CI
 configuration), as is removing those folders or starting `copilot` with `COPILOT_HOME`
-pointed elsewhere. This holds in every coding agent, not only in Copilot, and it covers
+pointed elsewhere. This holds in every coding agent whose tool names Scopebond maps (not in
+VS Code's Local harness yet, whose tool names are unpublished), and it covers
 **every file** under `.github/hooks/` and `~/.copilot/hooks/`, including a project's own hook
 scripts: a coding agent cannot edit them, and a person changes them outside the agent.
 `COPILOT_HOME` itself is not followed: a Copilot folder moved there is not protected.
 
-- **Copilot CLI** reads the user-level and repository-level files. It is the only Copilot
-  host covered.
-- **VS Code agent mode** is **not covered yet**. It reads the same `.github/hooks/*.json` and
-  `~/.copilot/hooks/*.json` files, so the hook runs there, but VS Code sends its own tool
-  names (`run_in_terminal` and others), reads a different entry and answer shape, and those
-  calls are recorded as unevaluated tools, not checked. `capabilities` lists every
-  `copilot_vscode` cell as unsupported.
+- **Copilot CLI** reads the user-level and repository-level files.
+- **VS Code agent mode** reads the same `.github/hooks/*.json` and `~/.copilot/hooks/*.json`
+  files (see "Copilot surfaces" above). Verified on a live install: not yet. Its Local
+  harness's tool names are not published, so its calls are recorded as unevaluated tools
+  until a live run confirms them; `capabilities` lists its cells as configured and
+  unverified, never verified.
 - **The cloud coding agent**, per GitHub's hooks documentation, loads hooks from
   `.github/hooks/*.json` on the repository's default branch, runs only the `bash` command,
   and treats `ask` as deny. It can run the hook
@@ -460,6 +533,7 @@ run's records are seen in the workspace; check one before relying on it.
 npx -y @scopebond/hook@latest capabilities            # the manifest, per agent host / action / phase
 npx -y @scopebond/hook@latest capabilities --prove    # run the safe fixtures in temp directories
 npx -y @scopebond/hook@latest capabilities --prove --save   # and record the result beside the policy
+npx -y @scopebond/hook@latest capabilities --prove --copilot  # and record the tool names Copilot really sends
 npx -y @scopebond/hook@latest capabilities --json
 ```
 
@@ -467,7 +541,8 @@ Each cell is one connector version, agent host (Claude terminal / desktop, Codex
 desktop, Cursor, Copilot CLI / VS Code / cloud agent), action type and phase (before or
 after the action), in one of these states (Copilot CLI cells also carry `enforcement`:
 "cooperative · prevents if honored · a hook timeout fails open in Copilot"; the VS Code and
-cloud agent cells are all unsupported, "not covered yet"):
+cloud agent cells carry "cooperative · prevents if honored · a hook timeout fails open" and a
+"verified on a live install: not yet" gap):
 
 | State | Meaning |
 |---|---|

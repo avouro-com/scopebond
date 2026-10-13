@@ -1692,8 +1692,36 @@ export function fillPushBranch(mapped: Mapped[], branch: string | null | undefin
       : m);
 }
 
-/** Map a Claude Code PreToolUse payload to the normalized actions it represents. */
+// VS Code's own settings can switch hooks off: `chat.useHooks` (Local hooks at all), `chat.hookFilesLocations` (which hook
+// files load; a built-in location can be set to false) and `chat.useClaudeHooks` (the Claude-format files). A coding agent
+// that writes one of those keys into a VS Code settings file (the workspace's `.vscode/settings.json`, a `*.code-workspace`
+// file, or the user settings of VS Code or VS Code Insiders) could stop its own hook. Such a write is also recorded as a
+// write of Copilot's user-level hook file, which the always-on floor refuses, as a switch-off of Scopebond is recorded as a
+// write of its policy. Any other edit of those files is untouched. (VS Code Local hooks reference and agent hooks page,
+// read 2026-10-13.)
+const VSCODE_SETTINGS_FILE = /(?:^|[\\/])(?:\.vscode[\\/]settings\.json|Code(?: - Insiders)?[\\/]User[\\/]settings\.json|[^\\/]*\.code-workspace)$/i;
+const HOOK_SWITCH_SETTING = /chat\.(?:useHooks|hookFilesLocations|useClaudeHooks)\b/;
+/** Where a hook-switching VS Code settings write is recorded as well: Copilot's user-level hook file. */
+export const HOOK_SWITCH_GUARD_PATH = ".copilot/hooks/scopebond.json";
+function withHookSwitchGuard(out: Mapped[], toolInput: unknown, source: string): Mapped[] {
+  const writesSettings = out.some((m) => m.intent.action_type === "file.write" && VSCODE_SETTINGS_FILE.test(textOf(m.intent.params.path)));
+  if (!writesSettings) return out;
+  let text: string;
+  try { text = typeof toolInput === "string" ? toolInput : JSON.stringify(toolInput ?? {}); } catch { text = ""; }
+  return HOOK_SWITCH_SETTING.test(text) ? [...out, ...pathIntents("file.write", HOOK_SWITCH_GUARD_PATH, source)] : out;
+}
+
+/** Map a Claude Code tool call to the normalized actions it represents (see mapClaudeToolUseRaw), plus the hook-switch guard. */
 export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
+  return withHookSwitchGuard(mapClaudeToolUseRaw(input), input?.tool_input, textOf(input?.tool_name));
+}
+
+/** Map a Codex tool call (see mapCodexToolUseRaw), plus the hook-switch guard. */
+export function mapCodexToolUse(input: Record<string, unknown>): Mapped[] {
+  return withHookSwitchGuard(mapCodexToolUseRaw(input), input?.tool_input, textOf(input?.tool_name));
+}
+
+function mapClaudeToolUseRaw(input: Record<string, unknown>): Mapped[] {
   const name = textOf(input?.tool_name);
   const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
   const cwd = input?.cwd ? textOf(input.cwd) : undefined;
@@ -1748,7 +1776,7 @@ export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
 /** Map an OpenAI Codex PreToolUse payload. Codex reports shell and unified-exec
  *  calls as `Bash`, file patches as `apply_patch`, and MCP calls by their native
  *  `mcp__server__tool` name. Other local tools remain visible but unevaluated. */
-export function mapCodexToolUse(input: Record<string, unknown>): Mapped[] {
+function mapCodexToolUseRaw(input: Record<string, unknown>): Mapped[] {
   const name = textOf(input?.tool_name);
   const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
   const cwd = input?.cwd ? textOf(input.cwd) : undefined;
@@ -1825,7 +1853,12 @@ export function copilotAsClaude(input: Record<string, unknown>): Record<string, 
     if (path === undefined && patch !== undefined) return as("Edit", { patch });
     // `str_replace_editor` names its operation; only `view` leaves the file as it was.
     if (name === "Edit" && ti.command === "view") return as("Read", { file_path: path });
-    return as(name, { file_path: path });
+    // The new text is kept under Claude Code's names, as a Claude Code call carries it: the hook-switch guard reads it
+    // (a VS Code settings write that turns hooks off). Nothing else in the mapping uses it.
+    const text = (v: unknown): string | undefined => typeof v === "string" ? v : undefined;
+    const content = text(ti.content) ?? text(ti.file_text);
+    const newString = text(ti.new_string) ?? text(ti.new_str);
+    return as(name, { file_path: path, ...(content !== undefined ? { content } : {}), ...(newString !== undefined ? { new_string: newString } : {}) });
   }
   if (name === "Read") return as("Read", { file_path: path });
   if (name === "Grep") return as("Grep", { path: ti.path, glob: ti.glob ?? ti.include });
@@ -1839,7 +1872,7 @@ export function copilotAsClaude(input: Record<string, unknown>): Record<string, 
 export function mapCopilotCall(call: Record<string, unknown>): Mapped[] {
   const ti = (call?.tool_input ?? {}) as Record<string, unknown>;
   if (call?.tool_name === "Edit" && ti.file_path === undefined && typeof ti.patch === "string") {
-    return mapApplyPatch(ti.patch, call.cwd ? textOf(call.cwd) : undefined);
+    return withHookSwitchGuard(mapApplyPatch(ti.patch, call.cwd ? textOf(call.cwd) : undefined), ti, "apply_patch");
   }
   return mapClaudeToolUse(call);
 }

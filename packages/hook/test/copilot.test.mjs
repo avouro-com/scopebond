@@ -334,7 +334,7 @@ test("a policy written before Copilot was covered gets Copilot's hook settings o
 
 test("session and after-action events never print a decision", () => {
   const g = governed("default");
-  for (const event of ["SessionStart", "PostToolUse", "SessionEnd"]) {
+  for (const event of ["SessionStart", "PostToolUse", "SessionEnd", "Stop"]) {
     const r = run(g.env, ["copilot"], { cwd: g.project, input: JSON.stringify({ hook_event_name: event, session_id: "s", cwd: g.project, tool_name: "Bash", tool_input: { command: "ls" }, reason: "complete" }) });
     assert.equal(r.status, 0, `${event}: ${r.stderr}`);
     assert.equal(r.stdout, "");
@@ -348,7 +348,7 @@ test("malformed input fails closed", () => {
   assert.equal(JSON.parse(r.stdout).permissionDecision, "deny");
 });
 
-test("the capability manifest labels Copilot CLI cooperative, never in-path, and claims nothing for VS Code or the cloud agent", () => {
+test("the capability manifest labels every Copilot surface cooperative, never in-path, and verifies none from a local run", () => {
   const manifest = computeManifest({ adapterVersion: "test", configured: { claude: false, codex: false, cursor: false, copilot: true } });
   const cells = manifest.cells.filter((c) => c.host_variant.startsWith("copilot_"));
   assert.deepEqual([...new Set(cells.map((c) => c.host_variant))].sort(), ["copilot_cli", "copilot_cloud", "copilot_vscode"]);
@@ -358,13 +358,19 @@ test("the capability manifest labels Copilot CLI cooperative, never in-path, and
     const hostCells = cells.filter((c) => c.host_variant === host);
     assert.ok(hostCells.length >= 7);
     for (const cell of hostCells) {
-      assert.equal(cell.state, "unsupported", cell.key);
-      assert.equal(cell.boundary, "none");
-      assert.match(cell.enforcement, /^not covered yet/);
+      assert.notEqual(cell.state, "verified_reporting", cell.key);
+      assert.equal(cell.enforcement, "cooperative · prevents if honored · a hook timeout fails open", cell.key);
+      assert.ok(cell.known_gaps.includes("verified on a live install: not yet"), cell.key);
     }
+    assert.equal(hostCells.find((c) => c.action_type === "shell.exec").state, "configured_unverified");
+    assert.equal(hostCells.find((c) => c.action_type === "mcp.tool.call").state, "unsupported", "MCP naming is not documented");
+    assert.equal(hostCells.find((c) => c.action_type === "nested_orchestration").state, "unsupported");
   }
-  assert.match(cells.find((c) => c.host_variant === "copilot_vscode").reason, /VS Code agent mode sends its own tool names and reads a different entry and output shape; not yet verified/);
-  assert.match(cells.find((c) => c.host_variant === "copilot_cloud").enforcement, /treats ask as deny/);
+  assert.ok(cells.find((c) => c.host_variant === "copilot_vscode").known_gaps.some((g) => /Local session target sends tool names that GitHub and VS Code do not publish/.test(g)));
+  assert.ok(cells.find((c) => c.host_variant === "copilot_cloud").known_gaps.some((g) => /an ask is a deny there/.test(g)));
+  // Not configured: inactive, never claimed.
+  const off = computeManifest({ adapterVersion: "test", configured: { claude: false, codex: false, cursor: false, copilot: false } });
+  assert.equal(off.cells.find((c) => c.host_variant === "copilot_cloud" && c.action_type === "shell.exec").state, "inactive");
   const shell = cells.find((c) => c.host_variant === "copilot_cli" && c.action_type === "shell.exec");
   assert.equal(shell.state, "configured_unverified", "never verified from a local run");
   assert.equal(cells.find((c) => c.host_variant === "copilot_cli" && c.action_type === "mcp.tool.call").state, "unsupported", "MCP naming is not documented, so not claimed");

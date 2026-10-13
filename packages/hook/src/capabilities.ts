@@ -112,30 +112,45 @@ interface CellSpec {
 const GROUP_FIELDS = ["action_group", "action_group_size", "action_group_seq"];
 const CLAUDE_HOSTS: HostVariant[] = ["claude_terminal", "claude_desktop"];
 const CODEX_HOSTS: HostVariant[] = ["codex_cli", "codex_desktop"];
-/** Only the Copilot CLI is covered: it sends the payload and reads the answer this adapter is built and tested for. */
-const COPILOT_HOSTS: HostVariant[] = ["copilot_cli"];
-const COPILOT_VSCODE_REASON = "VS Code agent mode sends its own tool names and reads a different entry and output shape; not yet verified";
-const COPILOT_CLOUD_REASON = "the cloud coding agent's sandbox has no Scopebond setup (keys and a policy), so the hook would deny every action there; not covered yet";
+/** The Copilot hosts. The CLI sends the payload and reads the answer this adapter is built and tested for; VS Code agent
+ *  mode and the cloud coding agent run the same hook file (GitHub Copilot hooks reference and VS Code's agent hooks pages,
+ *  read 2026-10-13), and their cells are computed like any other: configured and unverified until a real run proves them.
+ *  Nothing here is verified on a live install. */
+const COPILOT_HOSTS: HostVariant[] = ["copilot_cli", "copilot_vscode", "copilot_cloud"];
 
 /** GitHub Copilot runs the hook cooperatively: a deny is honored, but a hook that runs past its `timeoutSec` is skipped
  *  and the action runs (Copilot's timeouts fail open, even for `preToolUse`). The hook denies on its own deadline before
  *  that, so a slow check ends as a deny; a host that never starts the hook at all is not something the hook can see. It is
  *  never described as in the path of the action. */
 const COPILOT_ENFORCEMENT = "cooperative · prevents if honored · a hook timeout fails open in Copilot";
+/** The same label for VS Code and the cloud agent, which run the hook the same cooperative way. */
+const COPILOT_SURFACE_ENFORCEMENT = "cooperative · prevents if honored · a hook timeout fails open";
 export const HOST_ENFORCEMENT: Partial<Record<HostVariant, string>> = {
   copilot_cli: COPILOT_ENFORCEMENT,
-  copilot_vscode: `not covered yet · ${COPILOT_VSCODE_REASON}`,
-  copilot_cloud: `not covered yet · reads only .github/hooks on the default branch and treats ask as deny; ${COPILOT_CLOUD_REASON}`,
+  copilot_vscode: COPILOT_SURFACE_ENFORCEMENT,
+  copilot_cloud: COPILOT_SURFACE_ENFORCEMENT,
 };
 
-/** The Copilot hosts this adapter does not cover yet: every action is listed, as unsupported, with the reason. */
-const COPILOT_UNCOVERED: Array<[HostVariant, string]> = [["copilot_vscode", COPILOT_VSCODE_REASON], ["copilot_cloud", COPILOT_CLOUD_REASON]];
-const COPILOT_ACTIONS = ["shell.exec", "file.write", "file.read", "git.push", "net.fetch", "mcp.tool.call", "nested_orchestration"];
+/** What a host's cells cannot promise, said on every one of its cells (beside the gaps its vectors document). */
+export const HOST_GAPS: Partial<Record<HostVariant, string[]>> = {
+  copilot_vscode: [
+    "verified on a live install: not yet",
+    "VS Code's Copilot session target runs the Copilot CLI's hook implementation and tool names; its Local session target sends tool names that GitHub and VS Code do not publish, so until a live run records them (`capabilities --prove --copilot`) a Local call is recorded as an unevaluated tool.<name>, not checked",
+    "whether VS Code's Local harness runs Scopebond's hook file at all is unknown: its reference recognises the Copilot format by a numeric version with lower camelCase events, and this file uses PascalCase events (the entries also carry Local's own command and timeout fields)",
+    "Local's default hook timeout is 30 s; the entry sets timeout 60, but if Local ignores it, a check slower than 30 s fails open (the hook's own deadline is 45 s)",
+    "in Local, a hook that fails to start or exits non-zero other than 2 fails open (a non-blocking warning); Scopebond's own failures exit 2",
+    "guardrail protection of hook files does not apply to Local tool names yet: a Local write of a hook file under a tool name Scopebond does not map is recorded, not refused",
+    "VS Code's chat.useHooks, chat.hookFilesLocations and chat.useClaudeHooks settings can switch hooks off; a write of one of them into a VS Code settings file through a mapped tool is refused, but VS Code's settings screen is outside the hook",
+  ],
+  copilot_cloud: [
+    "verified on a live install: not yet",
+    "loads hooks only from .github/hooks/*.json on the default branch and runs only an entry's bash (or command) field",
+    "an ask is a deny there (no one to answer); Scopebond says so in the deny",
+    "the sandbox needs the repository installation (Computers → Repositories) and its token as SCOPEBOND_REPO_TOKEN in the repository's copilot environment; without the token the committed init --repo entries check nothing (and say so), and a file written by init --copilot denies every action",
+  ],
+};
 
 const NESTED = "nested_orchestration";
-
-const COPILOT_UNCOVERED_SPECS: CellSpec[] = COPILOT_UNCOVERED.flatMap(([host, reason]) => COPILOT_ACTIONS.map((action_type): CellSpec => (
-  { adapter: "copilot", host_variants: [host], action_type, phase: "pre_action", via: "(not covered yet)", supported: false, unsupported_reason: reason, fields: [], operations: [] })));
 
 const SPECS: CellSpec[] = [
   // Claude Code ---------------------------------------------------------------------
@@ -171,7 +186,6 @@ const SPECS: CellSpec[] = [
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "net.fetch", phase: "pre_action", via: "PreToolUse web_fetch (WebFetch)", supported: true, observation_only: true, fields: ["host", "path", "method", ...GROUP_FIELDS], operations: ["fetch_get"] },
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "mcp.tool.call", phase: "pre_action", via: "(MCP tool names not documented)", supported: false, unsupported_reason: "Copilot's hooks reference does not say how MCP tool names appear in a hook payload; an MCP call that does not use the mcp__server__tool form is recorded as an unevaluated tool, so MCP coverage is not claimed", fields: [], operations: [] },
   { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: NESTED, phase: "pre_action", via: "task (sub-agent)", supported: false, unsupported_reason: "a sub-agent task is recorded as one unevaluated action; calls it makes inside are not claimed", fields: [], operations: [] },
-  ...COPILOT_UNCOVERED_SPECS,
   // Typed operations (observations, not receipts): the closed git, package and github_resource
   // operations derived from the actual command before it runs. They are observation-only:
   // they describe what was dispatched and never gate it. A fixture proves the derivation on
@@ -301,7 +315,7 @@ export function computeManifest(input: ManifestInput): Manifest {
         ...(HOST_ENFORCEMENT[host] ? { enforcement: HOST_ENFORCEMENT[host] } : {}),
         observation_only: observationOnly,
         emitted_required_fields: spec.fields, supported_operations: spec.operations,
-        known_gaps: spec.supported ? gapsFor(spec.adapter, spec.action_type) : [],
+        known_gaps: [...(spec.supported ? gapsFor(spec.adapter, spec.action_type) : []), ...(HOST_GAPS[host] ?? [])],
         min_runtime: { node: ">=22.13" },
         test_vector_digest: digest, last_proof: proof,
       });

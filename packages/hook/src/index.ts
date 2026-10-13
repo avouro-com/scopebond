@@ -3,6 +3,11 @@
 // binary is the thin harness adapter over them.
 
 export { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCopilotCall, copilotAsClaude, normalizeCopilotInput, mapCursorEvent, fillPushBranch, DERIVED_CAP } from "./map.js";
+export {
+  copilotAnswer, copilotCloudAgent, copilotSurface, surfaceSignals, readCopilotProbe, openCopilotProbe, recordCopilotProbe, renderCopilotProbe,
+  COPILOT_CLOUD_ASK_IS_DENY, DOCUMENTED_COPILOT_TOOL_NAMES, COPILOT_PROBE_FILE, COPILOT_PROBE_WINDOW_MS,
+  type CopilotSurface, type CopilotAnswer, type CopilotProbe, type ProbeEntry,
+} from "./copilot-surface.js";
 export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./runtime.js";
 export type { TargetRule } from "./runtime.js";
