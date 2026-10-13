@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import { backupHarnessConfig, gitShareState, harnessEntryMatches, localHarnessFile, projectHarnessFile, readHarnessConfig, userHarnessFile, type Harness } from "./install.js";
+import { backupHarnessConfig, gitShareState, harnessEntryCommand, harnessEntryMatches, localHarnessFile, projectHarnessFile, readHarnessConfig, userHarnessFile, type Harness } from "./install.js";
 
 export type HookScope = "user" | "project" | "local" | "plugin";
 export interface HookEntry { scope: HookScope; file: string; command: string }
@@ -26,10 +26,11 @@ export function decisionEntries(file: string, harness: Harness): string[] {
     const list = isRecord(config) && isRecord(config.hooks) ? config.hooks[decisionEvent(harness)] : undefined;
     if (!Array.isArray(list)) return [];
     return list.filter(harnessEntryMatches).map((e) => {
-      const entry = e as Record<string, unknown>;
-      if (typeof entry.command === "string") return entry.command;
-      const inner = (entry.hooks as unknown[]).find((h) => isRecord(h) && typeof h.command === "string") as Record<string, unknown> | undefined;
-      return typeof inner?.command === "string" ? inner.command : "";
+      const own = harnessEntryCommand(e);
+      if (own !== undefined) return own;
+      const hooks = (e as Record<string, unknown>).hooks;
+      const inner = Array.isArray(hooks) ? hooks.map(harnessEntryCommand).find((c) => c !== undefined) : undefined;
+      return inner ?? "";
     });
   } catch { return []; }
 }

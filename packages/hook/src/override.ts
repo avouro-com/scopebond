@@ -148,7 +148,7 @@ export interface OverrideContext {
   /** The Scopebond home, where the resident agent publishes its local channel. */
   home: string;
   agentKid: string;
-  harness: "claude" | "codex" | "cursor";
+  harness: "claude" | "codex" | "cursor" | "copilot";
   /** Claude Code's permission_mode from the hook payload, when it sent one. */
   permissionMode?: string | null;
   now?: () => number;

@@ -1,8 +1,8 @@
-// @scopebond/hook — the Claude Code, Cursor + Codex connector. The library surface is
+// @scopebond/hook — the Claude Code, Cursor, Codex + GitHub Copilot connector. The library surface is
 // the deterministic mapper and the check-only runtime; the `scopebond-hook`
 // binary is the thin harness adapter over them.
 
-export { mapClaudeToolUse, mapCodexToolUse, mapCursorEvent, fillPushBranch } from "./map.js";
+export { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCopilotCall, copilotAsClaude, normalizeCopilotInput, mapCursorEvent, fillPushBranch } from "./map.js";
 export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy, upgradeStarterPolicy } from "./runtime.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
@@ -16,7 +16,7 @@ export type { CatalogId, Classification } from "./classify.js";
 export { classifyRoot, applyRootScope } from "./paths.js";
 export type { RootScope, RootOptions } from "./paths.js";
 export { actionGroupId, withActionGroup, distinctTargets, ACTION_GROUP_PARAM, ACTION_GROUP_SIZE_PARAM, ACTION_GROUP_SEQ_PARAM } from "./group.js";
-export { computeManifest, renderManifest, cellState, cellKey, vectorsForCell, vectorDigest } from "./capabilities.js";
+export { computeManifest, renderManifest, cellState, cellKey, vectorsForCell, vectorDigest, HOST_ENFORCEMENT } from "./capabilities.js";
 export type { Manifest, CapabilityCell, CapabilityState, ProofRecord, HostVariant, EventPhase, ManifestInput } from "./capabilities.js";
 export { runProofFixtures, deliverProofReceipts, loadProofs, saveProofs, PROOF_FILE } from "./proof.js";
 export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYPE } from "./budget-load.js";
@@ -44,7 +44,8 @@ export { scaffold, harnessSnippet, installHarness, placeHook, coverWithoutNpx } 
 export type { HookPlacement } from "./init.js";
 export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
-  cursorDetected, codexDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
+  cursorDetected, codexDetected, copilotDetected, copilotHome, harnessDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
+  HARNESSES, COPILOT_EVENTS, COPILOT_HOOK_FILE, COPILOT_TIMEOUT_SEC, COPILOT_DECISION_DEADLINE_MS, copilotHookEntry, powershellHookCommand, harnessEntryCommand,
   readHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
   isScopebondHookCommand, harnessEntryMatches, nativeHookProgram, missingHookPrograms, npxAvailable, isNpxHookCommand,

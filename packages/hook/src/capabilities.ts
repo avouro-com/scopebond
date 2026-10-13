@@ -30,7 +30,8 @@ import { VECTORS, type Vector, type VectorAgent } from "./vectors.js";
 export type CapabilityState =
   | "unsupported" | "configured_unverified" | "verified_reporting" | "degraded" | "inactive" | "retired";
 
-export type HostVariant = "claude_terminal" | "claude_desktop" | "codex_cli" | "codex_desktop" | "cursor";
+export type HostVariant = "claude_terminal" | "claude_desktop" | "codex_cli" | "codex_desktop" | "cursor"
+  | "copilot_cli" | "copilot_vscode" | "copilot_cloud";
 export type EventPhase = "pre_action" | "after_action";
 export type Adapter = VectorAgent;
 
@@ -74,6 +75,9 @@ export interface CapabilityCell {
   after_action: boolean;
   /** Where enforcement happens: the harness's own hook, or nowhere. */
   boundary: "harness_hook" | "none";
+  /** How far the host's hook can be relied on, in plain words, where that differs from "the check runs before the action
+   *  and its deny is final" (GitHub Copilot: a hook that times out is skipped). */
+  enforcement?: string;
   observation_only: boolean;
   emitted_required_fields: string[];
   supported_operations: string[];
@@ -108,8 +112,30 @@ interface CellSpec {
 const GROUP_FIELDS = ["action_group", "action_group_size", "action_group_seq"];
 const CLAUDE_HOSTS: HostVariant[] = ["claude_terminal", "claude_desktop"];
 const CODEX_HOSTS: HostVariant[] = ["codex_cli", "codex_desktop"];
+/** Only the Copilot CLI is covered: it sends the payload and reads the answer this adapter is built and tested for. */
+const COPILOT_HOSTS: HostVariant[] = ["copilot_cli"];
+const COPILOT_VSCODE_REASON = "VS Code agent mode sends its own tool names and reads a different entry and output shape; not yet verified";
+const COPILOT_CLOUD_REASON = "the cloud coding agent's sandbox has no Scopebond setup (keys and a policy), so the hook would deny every action there; not covered yet";
+
+/** GitHub Copilot runs the hook cooperatively: a deny is honored, but a hook that runs past its `timeoutSec` is skipped
+ *  and the action runs (Copilot's timeouts fail open, even for `preToolUse`). The hook denies on its own deadline before
+ *  that, so a slow check ends as a deny; a host that never starts the hook at all is not something the hook can see. It is
+ *  never described as in the path of the action. */
+const COPILOT_ENFORCEMENT = "cooperative · prevents if honored · a hook timeout fails open in Copilot";
+export const HOST_ENFORCEMENT: Partial<Record<HostVariant, string>> = {
+  copilot_cli: COPILOT_ENFORCEMENT,
+  copilot_vscode: `not covered yet · ${COPILOT_VSCODE_REASON}`,
+  copilot_cloud: `not covered yet · reads only .github/hooks on the default branch and treats ask as deny; ${COPILOT_CLOUD_REASON}`,
+};
+
+/** The Copilot hosts this adapter does not cover yet: every action is listed, as unsupported, with the reason. */
+const COPILOT_UNCOVERED: Array<[HostVariant, string]> = [["copilot_vscode", COPILOT_VSCODE_REASON], ["copilot_cloud", COPILOT_CLOUD_REASON]];
+const COPILOT_ACTIONS = ["shell.exec", "file.write", "file.read", "git.push", "net.fetch", "mcp.tool.call", "nested_orchestration"];
 
 const NESTED = "nested_orchestration";
+
+const COPILOT_UNCOVERED_SPECS: CellSpec[] = COPILOT_UNCOVERED.flatMap(([host, reason]) => COPILOT_ACTIONS.map((action_type): CellSpec => (
+  { adapter: "copilot", host_variants: [host], action_type, phase: "pre_action", via: "(not covered yet)", supported: false, unsupported_reason: reason, fields: [], operations: [] })));
 
 const SPECS: CellSpec[] = [
   // Claude Code ---------------------------------------------------------------------
@@ -137,6 +163,15 @@ const SPECS: CellSpec[] = [
   { adapter: "cursor", host_variants: ["cursor"], action_type: "net.fetch", phase: "pre_action", via: "(no fetch hook)", supported: false, unsupported_reason: "Cursor sends no network-fetch event to this adapter", fields: [], operations: [] },
   { adapter: "cursor", host_variants: ["cursor"], action_type: "mcp.tool.call", phase: "pre_action", via: "beforeMCPExecution", supported: true, observation_only: true, fields: ["server", "tool", "args_digest", ...GROUP_FIELDS], operations: ["tool_call"] },
   { adapter: "cursor", host_variants: ["cursor"], action_type: NESTED, phase: "pre_action", via: "nested tool wrappers", supported: false, unsupported_reason: "nested calls made inside a tool are not shown to this adapter and are not claimed", fields: [], operations: [] },
+  // GitHub Copilot (CLI, VS Code agent mode, cloud coding agent) -----------------------------
+  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "shell.exec", phase: "pre_action", via: "PreToolUse bash/powershell (reported as Bash) and write_bash", supported: true, fields: ["program", "command", ...GROUP_FIELDS], operations: ["program", "destructive_program", "opaque_program", "derived_file_read", "derived_file_write", "derived_git_push"] },
+  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "file.write", phase: "pre_action", via: "PreToolUse create/edit/str_replace_editor/apply_patch (Write/Edit)", supported: true, fields: ["path", ...GROUP_FIELDS], operations: ["write", "protected_path", "ci_path", "root_scope_when_configured"] },
+  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "file.read", phase: "pre_action", via: "PreToolUse view/grep/glob (Read/Grep/Glob)", supported: true, fields: ["path", ...GROUP_FIELDS], operations: ["read", "credential_path"] },
+  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "git.push", phase: "pre_action", via: "PreToolUse bash/powershell (parsed git push)", supported: true, fields: ["ref", "force", ...GROUP_FIELDS], operations: ["push", "force", "delete", "refspec", "mirror_all", "unresolved_destination"] },
+  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "net.fetch", phase: "pre_action", via: "PreToolUse web_fetch (WebFetch)", supported: true, observation_only: true, fields: ["host", "path", "method", ...GROUP_FIELDS], operations: ["fetch_get"] },
+  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: "mcp.tool.call", phase: "pre_action", via: "(MCP tool names not documented)", supported: false, unsupported_reason: "Copilot's hooks reference does not say how MCP tool names appear in a hook payload; an MCP call that does not use the mcp__server__tool form is recorded as an unevaluated tool, so MCP coverage is not claimed", fields: [], operations: [] },
+  { adapter: "copilot", host_variants: COPILOT_HOSTS, action_type: NESTED, phase: "pre_action", via: "task (sub-agent)", supported: false, unsupported_reason: "a sub-agent task is recorded as one unevaluated action; calls it makes inside are not claimed", fields: [], operations: [] },
+  ...COPILOT_UNCOVERED_SPECS,
   // Typed operations (observations, not receipts): the closed git, package and github_resource
   // operations derived from the actual command before it runs. They are observation-only:
   // they describe what was dispatched and never gate it. A fixture proves the derivation on
@@ -263,6 +298,7 @@ export function computeManifest(input: ManifestInput): Manifest {
         pre_action: spec.supported && spec.phase === "pre_action",
         after_action: spec.supported && spec.phase === "after_action",
         boundary: spec.supported && spec.phase === "pre_action" && !observationOnly ? "harness_hook" : "none",
+        ...(HOST_ENFORCEMENT[host] ? { enforcement: HOST_ENFORCEMENT[host] } : {}),
         observation_only: observationOnly,
         emitted_required_fields: spec.fields, supported_operations: spec.operations,
         known_gaps: spec.supported ? gapsFor(spec.adapter, spec.action_type) : [],
@@ -291,6 +327,8 @@ export function renderManifest(manifest: Manifest): string {
   for (const host of hosts) {
     lines.push("");
     lines.push(host);
+    const enforcement = HOST_ENFORCEMENT[host];
+    if (enforcement) lines.push(`  enforcement: ${enforcement}`);
     for (const cell of manifest.cells.filter((c) => c.host_variant === host)) {
       const phase = cell.event_phase === "after_action" ? "after action" : "before action";
       const via = VIA.get(`${host}/${cell.action_type}/${cell.event_phase}`);

@@ -20,7 +20,7 @@ const temps = [];
 after(() => { for (const dir of temps) { try { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); } catch { /* handle still open on Windows */ } } });
 const temp = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); temps.push(dir); return dir; };
 
-const ALL = { claude: true, codex: true, cursor: true };
+const ALL = { claude: true, codex: true, cursor: true, copilot: true };
 const NONE = { claude: false, codex: false, cursor: false };
 const VERSION = "9.9.9";
 
@@ -55,7 +55,7 @@ test("unsupported cells stay unsupported however they are configured or proven",
 test("nested tool orchestration that escapes interception stays unsupported in every host", () => {
   const { cells } = computeManifest({ adapterVersion: VERSION, configured: ALL });
   const nested = cells.filter((c) => c.action_type === "nested_orchestration");
-  assert.equal(nested.length, 5, "one per host variant");
+  assert.equal(nested.length, 8, "one per host variant");
   assert.ok(nested.every((c) => c.state === "unsupported" && !c.pre_action && c.boundary === "none"));
   // The mapper shows why: a sub-agent tool is one unevaluated action; what runs inside it
   // is never shown to the hook, so no shell.exec or file.write appears to be checked.
