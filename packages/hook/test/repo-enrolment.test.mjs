@@ -1,0 +1,332 @@
+// Repository enrolment: `init --repo` writes the committed hook files for runs where no person signs in (cloud coding
+// agents, agent steps in CI), and a hook with SCOPEBOND_REPO_TOKEN and no connection enrols as the repository and delivers.
+// Runs the real dist/cli.js with HOME/USERPROFILE/SCOPEBOND_HOME in temp dirs, against the in-process fake workspace.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  scaffold, isScopebondHookCommand, COPILOT_EVENTS, REPO_HARNESSES, repositoryToken, repositoryWorkspaceUrl,
+  repositoryEnrollmentProof, RepositoryEnrollmentError, DEFAULT_WORKSPACE_URL,
+} from "../dist/index.js";
+import { refreshIfDue } from "../dist/credential-refresh.js";
+import { installRepositoryHooks, repositoryConnectionDir, tokenFingerprint } from "../dist/index.js";
+import { hookVersion } from "../dist/version.js";
+import { startFakeCloud } from "./fake-cloud.mjs";
+
+const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+const TOKEN = "sbr_fake_us_0123456789abcdefABCDEF";
+const REVOKED = "sbr_fake_revoked_0123456789abcdef";
+
+function isolated(extra = {}) {
+  const root = mkdtempSync(join(tmpdir(), "sb-repo-"));
+  const home = join(root, "home");
+  mkdirSync(home, { recursive: true });
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (/^(SCOPEBOND_|CLAUDE_|COPILOT_|CODEX_)/.test(k)) delete env[k];
+  Object.assign(env, {
+    HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"),
+    SCOPEBOND_HOME: join(home, ".scopebond"), SCOPEBOND_HOOK_FLUSH_MS: "3000", ...extra,
+  });
+  const project = join(root, "proj");
+  mkdirSync(project, { recursive: true });
+  return { root, home, env, project, scopebond: join(home, ".scopebond") };
+}
+
+function run(env, args, { cwd, input } = {}) {
+  const r = spawnSync(process.execPath, [cli, ...args], { env, cwd, input, encoding: "utf8", timeout: 120_000 });
+  return { status: r.status, stdout: (r.stdout || "").trim(), stderr: (r.stderr || "").trim() };
+}
+
+/** The hook as a child process, so the fake workspace in this process can answer it. */
+function runAsync(env, args, { cwd, input } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, ...args], { env, cwd });
+    let stdout = ""; let stderr = "";
+    child.stdout.on("data", (d) => { stdout += d; });
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("close", (status) => resolve({ status, stdout: stdout.trim(), stderr: stderr.trim() }));
+    child.stdin.end(input ?? "");
+  });
+}
+
+const REPO = ["claude", "--from-repo"];
+const claudeCall = (cwd, command = "ls") => JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s-repo", cwd, tool_name: "Bash", tool_input: { command }, tool_use_id: `t-${Math.random()}` });
+
+const filesUnder = (dir) => existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String) : [];
+
+test("init --repo writes the three committed hook files, keeps other settings, and is idempotent", () => {
+  const ctx = isolated();
+  mkdirSync(join(ctx.project, ".claude"), { recursive: true });
+  const other = { permissions: { allow: ["Bash(ls)"] }, hooks: { PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "echo other" }] }] } };
+  writeFileSync(join(ctx.project, ".claude", "settings.json"), JSON.stringify(other, null, 2));
+  mkdirSync(join(ctx.project, ".github", "hooks"), { recursive: true });
+  writeFileSync(join(ctx.project, ".github", "hooks", "scopebond.json"), JSON.stringify({ version: 1, hooks: { PreToolUse: [{ type: "command", bash: "echo team-check" }] } }));
+
+  const first = run(ctx.env, ["init", "--repo", "--yes"], { cwd: ctx.project });
+  assert.equal(first.status, 0, first.stderr);
+  const files = REPO_HARNESSES.map((h) => join(ctx.project, ...(h === "claude" ? [".claude", "settings.json"] : h === "codex" ? [".codex", "hooks.json"] : [".github", "hooks", "scopebond.json"])));
+  const snapshot = files.map((f) => readFileSync(f, "utf8"));
+
+  const claude = JSON.parse(snapshot[0]);
+  assert.deepEqual(claude.permissions, other.permissions, "unrelated settings are kept");
+  assert.deepEqual(claude.hooks.PostToolUse, other.hooks.PostToolUse, "other hooks are kept");
+  assert.equal(claude.hooks.PreToolUse.length, 1);
+  assert.equal(claude.hooks.PreToolUse[0].hooks[0].command, `npx -y @scopebond/hook@${hookVersion()} claude --from-repo`, "the pinned portable command, marked as committed");
+
+  const codex = JSON.parse(snapshot[1]);
+  assert.equal(codex.hooks.PreToolUse[0].hooks[0].command, `npx -y @scopebond/hook@${hookVersion()} codex --from-repo`);
+
+  const copilot = JSON.parse(snapshot[2]);
+  assert.equal(copilot.version, 1);
+  for (const event of COPILOT_EVENTS) {
+    const ours = copilot.hooks[event].filter((e) => isScopebondHookCommand(e.bash ?? ""));
+    assert.equal(ours.length, 1, `one Scopebond entry for ${event}`);
+    // The cloud agent honours only bash/command entries.
+    assert.equal(ours[0].type, "command");
+    assert.equal(ours[0].bash, `npx -y @scopebond/hook@${hookVersion()} copilot --from-repo`);
+  }
+  assert.ok(copilot.hooks.PreToolUse.some((e) => e.bash === "echo team-check"), "the team's own Copilot hook is kept");
+
+  const again = run(ctx.env, ["init", "--repo", "--yes"], { cwd: ctx.project });
+  assert.equal(again.status, 0, again.stderr);
+  assert.deepEqual(files.map((f) => readFileSync(f, "utf8")), snapshot, "a second run changes nothing");
+  assert.match(again.stdout, /already configured in/);
+
+  // Nothing machine-specific: no keys, no .scopebond folder here or in the home, no backup files to commit by mistake.
+  assert.ok(!existsSync(join(ctx.project, ".scopebond")));
+  assert.ok(!existsSync(ctx.scopebond));
+  assert.deepEqual(filesUnder(ctx.project).filter((f) => f.endsWith(".scopebond-backup")), []);
+  // It says where the token goes, and that the files are not a boundary on their own.
+  assert.match(first.stdout, /SCOPEBOND_REPO_TOKEN/);
+  assert.match(first.stdout, /not a boundary on their own/);
+  assert.match(first.stdout, /not verified yet/);
+});
+
+test("init --repo --dry-run writes nothing; a file that is not JSON stops it before any file is written", () => {
+  const ctx = isolated();
+  const dry = run(ctx.env, ["init", "--repo", "--dry-run"], { cwd: ctx.project });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /Would configure/);
+  assert.deepEqual(filesUnder(ctx.project), []);
+
+  mkdirSync(join(ctx.project, ".codex"), { recursive: true });
+  writeFileSync(join(ctx.project, ".codex", "hooks.json"), "{ not json");
+  const bad = run(ctx.env, ["init", "--repo", "--yes"], { cwd: ctx.project });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /not valid JSON/);
+  assert.ok(!existsSync(join(ctx.project, ".claude", "settings.json")), "no file written");
+  assert.equal(readFileSync(join(ctx.project, ".codex", "hooks.json"), "utf8"), "{ not json");
+});
+
+test("init --repo without a terminal or --yes is refused", () => {
+  const ctx = isolated();
+  const r = run(ctx.env, ["init", "--repo"], { cwd: ctx.project });
+  assert.equal(r.status, 1);
+  assert.deepEqual(filesUnder(ctx.project), []);
+});
+
+test("with SCOPEBOND_REPO_TOKEN and no connection, the first call enrols the repository in the user home and delivers", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
+    const first = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(cloud.state().repository_enrollments.length, 1);
+    assert.equal(cloud.state().repository_enrollments[0].proofs_verified, true, "both keys proved possession");
+
+    const connection = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    assert.equal(connection.source, "repository");
+    assert.equal(connection.gateway_id, "gw-repo");
+    assert.match(connection.credential, /^sbm_/);
+    // The token is never kept or printed.
+    for (const f of filesUnder(ctx.root)) {
+      const full = join(ctx.root, f);
+      try { assert.ok(!readFileSync(full, "latin1").includes(TOKEN), `token written to ${f}`); } catch (error) { if (error.code !== "EISDIR") throw error; }
+    }
+    assert.ok(!first.stdout.includes(TOKEN) && !first.stderr.includes(TOKEN));
+    // The checkout stays clean: the hook set itself up in the sandbox's home.
+    assert.ok(!existsSync(join(ctx.project, ".scopebond")));
+
+    // A notable record (a force push the starter rules monitor) is sent with the repository's credential; routine ones go
+    // as summaries later.
+    const second = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project, "git push --force origin main") });
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(cloud.state().repository_enrollments.length, 1, "the connection is reused");
+    await runAsync(ctx.env, ["flush"], { cwd: ctx.project });
+    assert.ok(cloud.state().ingested >= 1, "records were delivered as the repository");
+    assert.ok(cloud.state().ingested_results.includes("deny"), "the monitored force push arrived");
+  } finally { await cloud.close(); }
+});
+
+test("a GitHub Copilot call with the token enrols and is decided (no 'not set up' deny)", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
+    const payload = JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s-cp", cwd: ctx.project, tool_name: "bash", tool_input: { command: "ls" } });
+    const r = await runAsync(ctx.env, ["copilot", "--from-repo"], { cwd: ctx.project, input: payload });
+    assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+    assert.equal(cloud.state().repository_enrollments.length, 1);
+  } finally { await cloud.close(); }
+});
+
+test("a revoked token fails closed, saying why, without the token", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: REVOKED, SCOPEBOND_URL: cloud.url });
+    const r = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(r.status, 2);
+    const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
+    assert.match(reason, /refused this repository's token/);
+    assert.match(reason, /SCOPEBOND_REPO_TOKEN/);
+    assert.ok(!r.stdout.includes(REVOKED) && !r.stderr.includes(REVOKED));
+    assert.ok(!existsSync(join(ctx.scopebond, "cloud.json")));
+  } finally { await cloud.close(); }
+});
+
+test("a malformed token or workspace address fails closed before anything is sent", () => {
+  const ctx = isolated({ SCOPEBOND_REPO_TOKEN: "not-a-token", SCOPEBOND_URL: "http://127.0.0.1:9" });
+  const r = run(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+  assert.equal(r.status, 2);
+  assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /is not a Scopebond repository token/);
+  assert.ok(!r.stdout.includes("not-a-token"));
+
+  assert.equal(repositoryToken({}), null);
+  assert.throws(() => repositoryToken({ SCOPEBOND_REPO_TOKEN: ["sbm", "wrongkind", "0123456789abcdef"].join("_") }), RepositoryEnrollmentError);
+  assert.equal(repositoryWorkspaceUrl({}), DEFAULT_WORKSPACE_URL);
+  assert.equal(repositoryWorkspaceUrl({ SCOPEBOND_URL: "https://ws.example.com/app" }), "https://ws.example.com");
+  assert.throws(() => repositoryWorkspaceUrl({ SCOPEBOND_URL: "http://ws.example.com" }), RepositoryEnrollmentError);
+  assert.throws(() => repositoryWorkspaceUrl({ SCOPEBOND_URL: "https://user:pw@ws.example.com" }), RepositoryEnrollmentError);
+});
+
+test("a person's own connection wins over the repository token", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
+    scaffold(ctx.scopebond);
+    writeFileSync(join(ctx.scopebond, "cloud.json"), JSON.stringify({ url: cloud.url, credential: "sbm_person", credential_id: "c1", gateway_id: "gw-person", expires_at: new Date(Date.now() + 86_400_000 * 60).toISOString() }));
+    const r = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(cloud.state().repository_enrollments.length, 0);
+    assert.equal(JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8")).gateway_id, "gw-person");
+  } finally { await cloud.close(); }
+});
+
+test("an expired repository connection enrols again with fresh keys in a fresh folder; it is never 'renewed'", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
+    assert.equal((await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) })).status, 0);
+    const first = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    assert.equal(first.token_fingerprint, tokenFingerprint(TOKEN), "the connection records which token made it, not the token");
+    // A day later: the credential ran out. The fake workspace, like the real one, refuses a key it already enrolled.
+    writeFileSync(join(ctx.scopebond, "cloud.json"), JSON.stringify({ ...first, expires_at: new Date(Date.now() - 1000).toISOString() }));
+    const r = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(cloud.state().repository_enrollments.length, 2);
+    const second = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    assert.notEqual(second.attester_kid, first.attester_kid, "fresh keys");
+    assert.ok(readdirSync(ctx.home).some((f) => f.startsWith(".scopebond.retired-")), "the old folder is set aside, not reused");
+    assert.equal(await refreshIfDue(ctx.scopebond, second, { fetchImpl: () => { throw new Error("must not be called"); } }), "not_due");
+  } finally { await cloud.close(); }
+});
+
+test("a 409 for keys already enrolled is never taken as success unless this token's live connection holds those keys", async () => {
+  const ctx = isolated();
+  const refused = async () => new Response(JSON.stringify({ error: "keys already registered", code: "gateway_key_conflict" }), { status: 409, headers: { "content-type": "application/json" } });
+  await assert.rejects(repositoryConnectionDir(ctx.scopebond, { home: ctx.scopebond, env: { SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: "http://127.0.0.1:9", SCOPEBOND_HOOK_DIR: ctx.scopebond }, fetchImpl: refused }),
+    (error) => error instanceof RepositoryEnrollmentError && error.code === "gateway_key_conflict");
+});
+
+test("another repository's live connection on a shared runner is set aside; this repository enrols with its own keys", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const other = "sbr_fake_" + "otherrepository".repeat(2);
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: other, SCOPEBOND_URL: cloud.url });
+    assert.equal((await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) })).status, 0);
+    const before = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    const mine = await runAsync({ ...ctx.env, SCOPEBOND_REPO_TOKEN: TOKEN }, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(mine.status, 0, mine.stdout + mine.stderr);
+    const after = JSON.parse(readFileSync(join(ctx.scopebond, "cloud.json"), "utf8"));
+    assert.equal(after.token_fingerprint, tokenFingerprint(TOKEN));
+    assert.notEqual(after.attester_kid, before.attester_kid);
+    assert.equal(cloud.state().repository_enrollments.length, 2);
+  } finally { await cloud.close(); }
+});
+
+test("until the workspace's rules load once, a repository run is denied; the next call tries again", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: TOKEN, SCOPEBOND_URL: cloud.url });
+    cloud.fault("policy", { status: 503, times: 5 });
+    const denied = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(denied.status, 2);
+    assert.match(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /rules are not loaded yet/);
+    cloud.clearFaults();
+    const allowed = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(allowed.status, 0, allowed.stdout + allowed.stderr);
+    assert.equal(cloud.state().repository_enrollments.length, 1);
+  } finally { await cloud.close(); }
+});
+
+test("a committed entry with no token and no connection checks nothing, says so once, and records nothing", () => {
+  const ctx = isolated();
+  for (const agent of ["claude", "codex", "copilot"]) {
+    const r = run(ctx.env, [agent, "--from-repo"], { cwd: ctx.project, input: claudeCall(ctx.project, "git push --force origin main") });
+    assert.equal(r.status, 0, agent);
+    assert.equal(r.stdout, "", "no decision: the agent's own permission flow decides");
+    assert.equal(r.stderr, "Scopebond: this repository's hook is not connected on this computer; nothing is checked");
+  }
+  assert.ok(!existsSync(ctx.scopebond) && !existsSync(join(ctx.project, ".scopebond")), "nothing set up, nothing recorded");
+  // Without the marker (a hook a person installed), the usual fail-closed answer stands.
+  const unmarked = run(ctx.env, ["claude"], { cwd: ctx.project, input: claudeCall(ctx.project) });
+  assert.equal(unmarked.status, 2);
+});
+
+test("a person's connection is found before the token is read: a malformed token beside it changes nothing", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const ctx = isolated({ SCOPEBOND_REPO_TOKEN: "not-a-token", SCOPEBOND_URL: cloud.url });
+    scaffold(ctx.scopebond);
+    writeFileSync(join(ctx.scopebond, "cloud.json"), JSON.stringify({ url: cloud.url, credential: "sbm_person", credential_id: "c1", gateway_id: "gw-person", expires_at: new Date(Date.now() + 86_400_000 * 60).toISOString() }));
+    const r = await runAsync(ctx.env, REPO, { cwd: ctx.project, input: claudeCall(ctx.project) });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  } finally { await cloud.close(); }
+});
+
+test("init --repo moves only Scopebond's entry out of a shared Claude Code matcher group", () => {
+  const ctx = isolated();
+  mkdirSync(join(ctx.project, ".claude"), { recursive: true });
+  const old = "npx -y @scopebond/hook@0.1.0 claude";
+  writeFileSync(join(ctx.project, ".claude", "settings.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo team-lint" }, { type: "command", command: old }] }] } }));
+  installRepositoryHooks(ctx.project);
+  const groups = JSON.parse(readFileSync(join(ctx.project, ".claude", "settings.json"), "utf8")).hooks.PreToolUse;
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.find((g) => g.matcher === "Bash"), { matcher: "Bash", hooks: [{ type: "command", command: "echo team-lint" }] }, "the team's hook and its matcher stay");
+  const ours = groups.find((g) => g.matcher === "*");
+  assert.equal(ours.hooks.length, 1);
+  assert.equal(ours.hooks[0].command, `npx -y @scopebond/hook@${hookVersion()} claude --from-repo`);
+});
+
+test("init --repo writes the three files together: a failure part-way puts back what it replaced", () => {
+  const ctx = isolated();
+  mkdirSync(join(ctx.project, ".claude"), { recursive: true });
+  const original = JSON.stringify({ permissions: { allow: ["Bash(ls)"] } });
+  writeFileSync(join(ctx.project, ".claude", "settings.json"), original);
+  let renames = 0;
+  assert.throws(() => installRepositoryHooks(ctx.project, { rename: (from, to) => { if (++renames === 2) throw new Error("disk full"); renameSync(from, to); } }), /none were changed/);
+  assert.equal(readFileSync(join(ctx.project, ".claude", "settings.json"), "utf8"), original);
+  assert.ok(!existsSync(join(ctx.project, ".codex", "hooks.json")) && !existsSync(join(ctx.project, ".github", "hooks", "scopebond.json")));
+  assert.deepEqual(filesUnder(ctx.project).filter((f) => f.endsWith(".tmp")), []);
+});
+
+test("the enrolment proof binds the token digest, the time and both keys", () => {
+  const a = repositoryEnrollmentProof({ token: TOKEN, issuedAt: "2026-10-13T00:00:00.000Z", publicKeyPem: "A\n", agentPublicKeyPem: "B" });
+  assert.ok(!a.includes(TOKEN), "the proof carries the token's digest, not the token");
+  assert.match(a, /"type":"scopebond:repository-enrollment"/);
+  assert.notEqual(a, repositoryEnrollmentProof({ token: REVOKED, issuedAt: "2026-10-13T00:00:00.000Z", publicKeyPem: "A", agentPublicKeyPem: "B" }));
+  assert.equal(a, repositoryEnrollmentProof({ token: TOKEN, issuedAt: "2026-10-13T00:00:00.000Z", publicKeyPem: "A", agentPublicKeyPem: "B" }), "keys are trimmed");
+});

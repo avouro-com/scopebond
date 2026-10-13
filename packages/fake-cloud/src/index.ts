@@ -5,7 +5,7 @@
 // Dependency-free: node built-ins only.
 
 import http from "node:http";
-import { createHash, createPublicKey, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify as edVerify } from "node:crypto";
 
 /** The workspace's key id for an Ed25519 public key: the derivation the gateway uses. */
 export function kidForPem(pem: string): string {
@@ -19,11 +19,13 @@ export function kidForPem(pem: string): string {
  *  `times` limits how many requests it applies to (default: every request until cleared). */
 export interface Fault { status?: number; code?: string; delayMs?: number; drop?: boolean; times?: number; retryAfter?: number }
 
-export type FakeRoute = "device/code" | "device/token" | "enroll" | "ingest" | "observations" | "policy" | "self-check" | "client-version";
+export type FakeRoute = "device/code" | "device/token" | "enroll" | "repository/enroll" | "ingest" | "observations" | "policy" | "self-check" | "client-version";
 
 export interface FakeCloudState {
   code_requests: Array<{ client_name: string | null; harness: string | null }>;
   enrolled: number;
+  /** Repository enrolments (`/v1/repository/enroll`): the repository the hook reported and whether both possession proofs verified. */
+  repository_enrollments: Array<{ repository: string | null; proofs_verified: boolean }>;
   ingested: number;
   ingested_results: Array<string | null>;
   observations: number;
@@ -61,17 +63,19 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
   const { host = "127.0.0.1", port = 0, autoApprove = false } = options;
   const codes = new Map<string, Code>();
   const credentials = new Set<string>();
+  /** Keys a repository run enrolled with. */
+  const enrolledKids = new Set<string>();
   const faults = new Map<FakeRoute, Fault>();
   let clientVersion: { policy: "recommended" | "hold"; hook: string | null; agent: string | null } | null = null;
   const seen = {
-    codeRequests: [] as FakeCloudState["code_requests"], enrolled: 0, ingested: [] as unknown[], observations: 0,
+    codeRequests: [] as FakeCloudState["code_requests"], enrolled: 0, repositoryEnrollments: [] as FakeCloudState["repository_enrollments"], ingested: [] as unknown[], observations: 0,
     selfChecks: [] as FakeCloudState["self_checks"], policyPolls: 0, versionPolls: 0, approved: [] as string[],
     faultsApplied: [] as FakeCloudState["faults_applied"],
   };
 
   const routeOf = (path: string): FakeRoute | null => {
     const name = path.replace(/^\/v1\//, "");
-    return (["device/code", "device/token", "enroll", "ingest", "observations", "policy", "self-check", "client-version"] as const).find((r) => r === name) ?? null;
+    return (["device/code", "device/token", "enroll", "repository/enroll", "ingest", "observations", "policy", "self-check", "client-version"] as const).find((r) => r === name) ?? null;
   };
 
   const server = http.createServer((req, res) => {
@@ -155,6 +159,38 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
         scopes: ["receipt:ingest"], expires_at: new Date(Date.now() + 90 * 86_400_000).toISOString(),
       });
     }
+    // A repository token: `sbr_fake…` is known, `sbr_fake_revoked…` was revoked. Both keys prove possession over the
+    // canonical proof (sorted keys) the hook signs; the answer is a short-lived machine credential.
+    if (path === "/v1/repository/enroll" && req.method === "POST") {
+      const token = typeof body.repository_token === "string" ? body.repository_token : "";
+      if (!token.startsWith("sbr_fake") || token.startsWith("sbr_fake_revoked")) return json(401, { error: "unauthorized", code: "credential_refused" });
+      const pem = typeof body.public_key_pem === "string" ? body.public_key_pem : "";
+      const agentPem = typeof body.agent_public_key_pem === "string" ? body.agent_public_key_pem : "";
+      if (!pem || !agentPem || typeof body.issued_at !== "string") return json(400, { error: "invalid_request" });
+      const proof = JSON.stringify(Object.fromEntries(Object.entries({
+        type: "scopebond:repository-enrollment", version: 1, token_sha256: createHash("sha256").update(token).digest("hex"),
+        issued_at: body.issued_at, public_key_pem: pem, agent_public_key_pem: agentPem,
+      }).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
+      const verified = (key: string, signature: unknown) => {
+        try { return typeof signature === "string" && edVerify(null, Buffer.from(proof), createPublicKey(key), Buffer.from(signature, "base64")); } catch { return false; }
+      };
+      const proofsVerified = verified(pem, body.signature) && verified(agentPem, body.agent_signature);
+      seen.repositoryEnrollments.push({ repository: typeof body.repository === "string" ? body.repository : null, proofs_verified: proofsVerified });
+      if (!proofsVerified) return json(400, { error: "invalid possession proof" });
+      // Like the workspace, a key is enrolled once: a run reusing one is told to make new keys.
+      const runKids = [kidForPem(pem), kidForPem(agentPem)];
+      if (runKids.some((kid) => enrolledKids.has(kid))) return json(409, { error: "these keys are already registered in this workspace; generate new keys and enroll again", code: "gateway_key_conflict" });
+      for (const kid of runKids) enrolledKids.add(kid);
+      const credential = "sbm_" + randomBytes(16).toString("hex");
+      credentials.add(credential);
+      const n = seen.repositoryEnrollments.length;
+      return json(201, {
+        credential_id: `repo-cred-${n}`, credential, organization_id: "org-fake", environment_id: "env-fake",
+        gateway_id: "gw-repo", installation_id: "gw-repo", installation_generation: 1, agent_id: "agent-fake",
+        attester_kid: kidForPem(pem), agent_kid: kidForPem(agentPem), scopes: ["receipt:ingest", "gateway:heartbeat"],
+        expires_at: new Date(Date.now() + 86_400_000).toISOString(), repository: "github.com/fake/repo",
+      });
+    }
     if (path === "/v1/ingest" && req.method === "POST") {
       if (!authed()) return json(401, { error: "unauthorized", code: "credential_unknown" });
       const receipts = Array.isArray(body.receipts) ? body.receipts : [];
@@ -206,7 +242,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
   }
 
   const state = (): FakeCloudState => ({
-    code_requests: seen.codeRequests, enrolled: seen.enrolled, ingested: seen.ingested.length,
+    code_requests: seen.codeRequests, enrolled: seen.enrolled, repository_enrollments: seen.repositoryEnrollments, ingested: seen.ingested.length,
     ingested_results: seen.ingested.map((r) => ((r as { payload?: { realtime_result?: string } })?.payload?.realtime_result ?? null)),
     observations: seen.observations, self_checks: seen.selfChecks, policy_polls: seen.policyPolls, version_polls: seen.versionPolls,
     approved_codes: seen.approved, pending_codes: [...codes.values()].filter((c) => !c.approved && !c.consumed).map((c) => c.user_code),

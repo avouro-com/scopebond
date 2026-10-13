@@ -331,6 +331,8 @@ export interface ManagedMeta {
   policy_issued_at?: string | null;
   /** The workspace id `policy_issued_at` belongs to. */
   policy_issued_workspace?: string | null;
+  /** A repository connection: when the workspace's rules first loaded (a rules check succeeded); calls are denied before. */
+  repository_rules_at?: string | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 
