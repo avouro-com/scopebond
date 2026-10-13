@@ -427,6 +427,48 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
 
 Set `SCOPEBOND_POLICY_SYNC=off` to stop the five-minute check (the rules in force stay).
 
+Every call the hook makes to the workspace (the rules check and its confirmation, record
+delivery and summaries, observations, credential renewal, recovery, enrollment and the
+uninstall notice) carries `x-scopebond-hook-version`, so a workspace can hold a minimum
+version on every route. The browser sign-in that runs before enrollment does not.
+
+### Signed rules
+
+A workspace can sign its rules, so a computer installs only rules its workspace issued for it,
+even if the answer passed through something that could change it.
+
+- **What is signed.** A rules document, and the workspace's answer that it sets no rules for
+  this computer, may carry `signature` (Ed25519, base64) and `key_id`. The signature covers the
+  [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON of
+  `{ v: 1, workspace, computer, revision, rules_digest, local_changes, managed, issued_at }`.
+  The hook builds that object from its own connection: `workspace` is the workspace id in
+  `cloud.json` (`organization_id`) and `computer` this installation's id, so an answer signed for
+  another computer or workspace never verifies here. `revision`, `rules_digest`, `issued_at`
+  (RFC 3339) and `local_changes` (absent means `false`) are the document's; `managed` is `true`
+  for a rules document and `false` for the "no rules" answer, which is sent with status 200 as
+  `{ "type": "scopebond:managed-rules", "version": 1, "managed": false, "installation_id": …,
+  "revision": 0, "rules_digest": "000…0" (64 zeros), "local_changes": false, "issued_at": …,
+  "key_id": …, "signature": … }` (a 204 is the unsigned form of the same answer).
+- **What is refused.** A signature that does not verify (a changed digest or switch, a forged
+  answer), a `key_id` this release does not trust, a key outside its validity window, an answer
+  for another computer or workspace, and an answer issued before the signed one in force (a
+  replay). A refusal keeps the rules in force, is confirmed to the workspace and shows in
+  `status` and `doctor`.
+- **Modes.** `dual` (the default): a signed answer must verify; an unsigned one is still accepted
+  and recorded as `unsigned_policy`. `enforce`: an unsigned answer is refused too, and so are a
+  204 and a 401, which cannot be signed; the computer keeps the policy it has and never falls
+  back to no rules. Set `SCOPEBOND_POLICY_SIGNATURE_MODE=enforce`, or `"policy_signature_mode":
+  "enforce"` in `cloud.json`; when either says `enforce`, `enforce` applies.
+- **Keys.** The trusted keys are pinned in the release (`src/policy-keys.ts`: `key_id`,
+  `public_key` as SPKI PEM or the raw 32-byte key in base64, `not_before`, `not_after`). This
+  release pins none yet, because the workspace's signing key does not exist yet: a later release
+  pins it. Rotation is a release too: the next key ships ahead of time with a future
+  `not_before`. `SCOPEBOND_POLICY_KEYS_JSON` (a JSON array of the same entries) adds keys, for
+  tests and for trying a key before it is pinned.
+- **What is reported.** `status --json` has `policy_signature: { mode, last, reason }`, where
+  `last` is `verified`, `unsigned` or `refused`; each rules check tells the workspace the same
+  (`x-scopebond-policy-signature`).
+
 ### Session, health and action observations (opt-in)
 
 Beyond receipts, the hook can send a second kind of signed record, an *observation*,
@@ -599,6 +641,14 @@ An allowed action is recorded and the agent proceeds. A denied action is blocked
 Unknown tools are recorded as *not evaluated* and grant nothing — they fall through to
 the coding agent's own permission prompt, so the hook never turns an unrecognised
 action into an approval. Anything unexpected fails closed (deny) with a repair message.
+So does a call that has not decided shortly before the coding agent's own hook time limit
+(55 seconds for Claude Code, 28 for Codex and Cursor), since an agent runs an action unchecked
+when its hook times out; `SCOPEBOND_HOOK_DEADLINE_MS` can only shorten that deadline.
+
+**Known limits.** `test/bypass-corpus/` lists indirect ways to reach a blocked action
+(interpreter one-liners, indirect writes, renamed programs, `xargs` and `find -exec`, quoting,
+`cmd /c` and PowerShell `-EncodedCommand`) with the outcome the hook gives each: blocked, or
+recorded by name. The ones it does not meet yet are marked `expected_gap`, with the reason.
 
 **What a block says.** A denial names the action, the rule that decided, why that rule
 exists (the clause's own description), the engine's technical detail and where to change

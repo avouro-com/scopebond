@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { loadConnection } from "./cloud.js";
 import { readDeliveryState, waitingUntil } from "./delivery-state.js";
 import { deliveryStalled, queueStatus } from "./delivery-report.js";
+import { readSignatureState, signatureMode, type SignatureMode, type SignatureState } from "./policy-signature.js";
 
 export const STATUS_SCHEMA = "scopebond.status.v1";
 
@@ -47,6 +48,10 @@ export interface StatusJson {
    *  precedence from here. */
   config: { active: string; others: string[]; user_connection_shadowed: boolean };
   agents: { claude: boolean; cursor: boolean; codex: boolean };
+  /** Signed workspace rules: the mode in force (dual or enforce) and how the last workspace answer's signature was
+   *  checked: verified, unsigned (accepted in dual mode, reason `unsigned_policy`) or refused (and why). `last` and
+   *  `reason` are null until a rules check has run. */
+  policy_signature: { mode: SignatureMode; last: SignatureState["last"] | null; reason: SignatureState["reason"] };
 }
 
 /** A pending record older than this, with a delivery error, means the computer is not delivering. */
@@ -103,5 +108,11 @@ export function buildStatusJson(input: {
       user_connection_shadowed: !!input.userDir && resolve(input.userDir) !== resolve(dir) && !!loadConnection(input.userDir),
     },
     agents: input.agents,
+    policy_signature: policySignature(dir, connection),
   };
+}
+
+function policySignature(dir: string, connection: ReturnType<typeof loadConnection>): StatusJson["policy_signature"] {
+  const last = connection ? readSignatureState(dir) : null;
+  return { mode: signatureMode(connection), last: last?.last ?? null, reason: last?.reason ?? null };
 }

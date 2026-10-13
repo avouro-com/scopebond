@@ -16,7 +16,8 @@
 //
 // Loading is checked and atomic: the document must be well formed, name this computer, carry a matching digest and be newer
 // than the one in force; the merged policy must build; policy.json is written through a temp file and a rename, the previous
-// one kept. Disconnecting, or a workspace that stops managing this computer, restores the computer's own rules.
+// one kept. Disconnecting, or a workspace that stops managing this computer, restores the computer's own rules. A signed
+// document must also carry a valid signature from a pinned workspace key (policy-signature.ts); policy-sync.ts checks it.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,6 +26,7 @@ import { canonical } from "@scopebond/policy-schema/canonical";
 import { GUARDRAIL_LOOKAHEADS, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES } from "./rules.js";
 import type { Recommended } from "./client-health.js";
+import type { SignatureState } from "./policy-signature.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
 export const MANAGED_META_FILE = "managed-meta.json";
@@ -119,7 +121,34 @@ export interface ManagedDocument {
   /** Allowances the workspace holds for this computer (approved requests, confirmed ones), and the ones it revoked. */
   allowances?: unknown[];
   revoked_allowances?: string[];
+  /** Signed rules (policy-signature.ts): `true` on a rules document when present; the workspace's id; when it was issued
+   *  (RFC 3339); the signing key's id and the base64 Ed25519 signature. All optional while unsigned documents are accepted. */
+  managed?: true;
+  workspace_id?: string;
+  issued_at?: string;
+  key_id?: string;
+  signature?: string;
 }
+
+/** The workspace's signed answer that it sets no rules for this computer (the signed form of a 204):
+ *  `{ type: "scopebond:managed-rules", version: 1, managed: false, installation_id, revision: 0, rules_digest: "0"×64,
+ *  local_changes: false, issued_at, key_id, signature }`, optionally with `workspace_id`. */
+export interface UnmanagedAnswer {
+  type: "scopebond:managed-rules";
+  version: 1;
+  managed: false;
+  installation_id: string;
+  revision: number;
+  rules_digest: string;
+  local_changes?: boolean;
+  workspace_id?: string;
+  issued_at?: string;
+  key_id?: string;
+  signature?: string;
+}
+/** Whether a 200 answer is the "no rules for this computer" form rather than a rules document. */
+export const isUnmanagedAnswer = (raw: unknown): raw is UnmanagedAnswer =>
+  isObject(raw) && raw.type === "scopebond:managed-rules" && raw.managed === false;
 
 export type RefusalReason = "invalid_document" | "stale_revision" | "wrong_computer" | "unsupported" | "write_failed";
 export type Inspection = { ok: true; doc: ManagedDocument } | { ok: false; reason: RefusalReason; message: string };
@@ -272,6 +301,10 @@ export interface ManagedMeta {
   /** Whether the workspace reads receipt context (`payload.context`): its last rules check, or a delivery answer, carried
    *  `x-scopebond-receipt-context: 1`. Until then a connected computer sends receipts without it. */
   receipt_context?: boolean | null;
+  /** The last workspace answer's signature check: the mode, verified / unsigned / refused, and why (policy-signature.ts). */
+  policy_signature?: SignatureState | null;
+  /** `issued_at` of the newest signed answer this computer accepted; an older signed answer is refused as a replay. */
+  policy_issued_at?: string | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 
