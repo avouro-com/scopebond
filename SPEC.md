@@ -76,6 +76,7 @@ pin the exact bytes for nested key order, number formatting and Unicode.
 | `evidence_class` | `signed_intent`, `pep_authorized` or `boundary` (see below). Absent on legacy receipts; inferred at read time, never upgraded. |
 | `principal` | Required for `pep_authorized`: the validated `{ subject, issuer }`. |
 | `boundary` | Required for `boundary`: `{ gate, outcome_ref, attribution }`. |
+| `context` | Optional. Where the receipt was produced, so records can be grouped by session and filtered by tool, model and repository: a closed object of `harness` (the connector or coding tool, `^[a-z][a-z0-9-]{0,39}$`: `claude`, `cursor`, `codex`, `copilot`, `gateway`, …), `harness_version` (at most 64), `model` (the model id the tool reports, at most 128), `session_id` (an opaque id the connector assigns, 1–200; never the tool's raw session id), `repository` (the git remote `origin` as `host/owner/name`: lowercase host, no scheme, credentials, `.git` or dot segments, at most 200) and `branch` (at most 200). Every member is optional and may be `null` when unknown; an unknown member makes the receipt invalid. It carries no local paths, no credentials and no prompts (`branch` is the name a person chose for it), and is covered by the signature like every other payload field. A receipt without it is unchanged. Verify with a release that knows `context`: an older receipt check (`@scopebond/gateway` `verifyReceipt`, an earlier hook's `scopebond verify`) reports a receipt carrying it as invalid, because the payload's key list is closed (`evidence_version` stays `1.0`); signature verification alone (`verifyReceiptSignature`) is unaffected. |
 
 ### Execution states (`execution.state`)
 
@@ -244,7 +245,7 @@ Vectors: [`vectors/merkle-rfc9162.json`](packages/verify/vectors/merkle-rfc9162.
 Implementations should pass the shared vectors, which define the exact bytes and behavior:
 
 - [`vectors/canonicalization.json`](packages/policy-schema/vectors/canonicalization.json) — canonical serialization.
-- [`vectors/evidence-contract.json`](packages/policy-schema/vectors/evidence-contract.json) — realtime results, execution states, redaction, unsupported versions.
+- [`vectors/evidence-contract.json`](packages/policy-schema/vectors/evidence-contract.json) — realtime results, execution states, redaction, unsupported versions, receipt context.
 - [`vectors/action-taxonomy.json`](packages/policy-schema/vectors/action-taxonomy.json) — taxonomy verdicts.
 - [`vectors/merkle-rfc9162.json`](packages/verify/vectors/merkle-rfc9162.json) — v2 anchor Merkle roots, inclusion and consistency proofs.
 

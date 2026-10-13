@@ -29,6 +29,11 @@ export type { ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, Override
 export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked } from "./override.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS } from "./policy-sync.js";
+export {
+  receiptContextFor, receiptContextAllowed, receiptContextFrom, noteReceiptContext, canonicalRepository, repositoryFacts,
+  clearRepositoryFacts, harnessModel, harnessVersion, RECEIPT_CONTEXT_HEADER,
+} from "./receipt-context.js";
+export type { ContextInput } from "./receipt-context.js";
 export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";
 export type { Vector, VectorAgent, Dialect } from "./vectors.js";

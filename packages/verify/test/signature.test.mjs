@@ -62,3 +62,15 @@ test("malformed receipts and keys never throw", async () => {
     assert.equal(out.valid, false);
   }
 });
+
+test("a receipt carrying the optional context verifies; the context is covered by the signature", async () => {
+  const context = { harness: "claude", harness_version: null, model: "example-model-1", session_id: "sbs_0123456789abcdef", repository: "github.com/example/app", branch: "main" };
+  const { receipt, pem } = signed({ context });
+  assert.equal((await verifyReceiptSignature(receipt, pem)).valid, true);
+  const changed = structuredClone(receipt);
+  changed.payload.context.branch = "release";
+  assert.equal((await verifyReceiptSignature(changed, pem)).signature_valid, false);
+  const removed = structuredClone(receipt);
+  delete removed.payload.context;
+  assert.equal((await verifyReceiptSignature(removed, pem)).signature_valid, false);
+});

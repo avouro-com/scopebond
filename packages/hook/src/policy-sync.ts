@@ -23,6 +23,7 @@ import { refreshIfDue } from "./credential-refresh.js";
 import { recommendedFrom } from "./client-health.js";
 import { retentionDaysFrom } from "./store-upkeep.js";
 import { evidenceDetailFrom } from "./evidence-detail.js";
+import { receiptContextFrom } from "./receipt-context.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
  *  the portal can say "checking in but not delivering" instead of "reporting". Counts and one
@@ -110,7 +111,11 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let detail = meta.evidence_detail ?? null;
   // A workspace that reads a heartbeat's interval says so; until then heartbeats stay every 60 s.
   let heartbeatInterval = meta.heartbeat_interval_s ?? null;
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, ...patch, checked_at: now.toISOString() });
+  // Whether the workspace reads receipt context: each full rules check answer says it (`x-scopebond-receipt-context: 1`), and a
+  // full answer (200 or 204) without it turns it off again, so a workspace that stops reading it is not sent a key it would
+  // refuse. A 304 or an error answer leaves it as it was.
+  let receiptContext = meta.receipt_context ?? null;
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, ...patch, checked_at: now.toISOString() });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
@@ -151,6 +156,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   retention = retentionDaysFrom(res.headers) ?? retention;
   detail = evidenceDetailFrom(res.headers) ?? detail;
   heartbeatInterval = heartbeatIntervalFrom(res.headers) ?? heartbeatInterval;
+  if (receiptContextFrom(res.headers)) receiptContext = true;
+  else if (res.status === 200 || res.status === 204) receiptContext = false;
   recordRulesCredential(dir, res.status !== 401, now.getTime());
   // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
   if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });

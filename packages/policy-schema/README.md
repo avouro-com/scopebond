@@ -35,13 +35,44 @@ evidence, and coverage all share.
 - `vectors/action-taxonomy.json` — schema conformance (valid/invalid parameter
   payloads per action type) for `validateActionParams`.
 - `vectors/evidence-contract.json` — shared execution-state, legacy/unknown-version
-  and synthetic-secret cases used by Node, WebCrypto and offline verification tests.
+  and synthetic-secret cases used by Node, WebCrypto and offline verification tests,
+  and the receipt-context cases (valid and invalid `payload.context` objects).
 - `vectors/canonicalization.json` — shared canonical-byte vectors used across packages.
 - `vectors/observation-contract.json` — deterministic observation vectors: canonical
   bytes, `observation_hash`, Ed25519 signatures under a test-only public key, and
   negative cases (changed payload, wrong signer, missing domain, unknown field, unknown
   version, unknown event). No private key is published.
 - `vectors/example-policy.json` — example policy input.
+
+## Receipt context
+
+A receipt's payload may carry an optional `context` object describing where the receipt
+was produced, so a workspace can group records by session and filter them by tool, model
+and repository. It is a closed object: an unknown key inside it makes the receipt invalid,
+like an unknown key anywhere else in the payload. Every member is optional and may be
+`null` when the connector does not know it. A receipt without `context` is unchanged.
+
+| Member | Type | Meaning |
+|---|---|---|
+| `harness` | string, `^[a-z][a-z0-9-]{0,39}$` | The connector or coding tool that produced the receipt, for example `claude`, `cursor`, `codex`, `copilot` or `gateway`. |
+| `harness_version` | string, at most 64 | The version that tool reports, when it reports one. |
+| `model` | string, at most 128 | The model id that tool reports, when it reports one. |
+| `session_id` | string, 1–200 | An opaque session id the connector assigns. Never the tool's own raw session id. |
+| `repository` | string, at most 200 | The git remote `origin` as `host/owner/name`: lowercase host, no scheme, no credentials, no `.git`, no dot segments (`.`, `..`, `%2e…`). Never a local path. |
+| `branch` | string, at most 200 | The current branch, when known. |
+
+`context` carries no local paths, no credentials and no prompts (`branch` is the name a
+person chose for it) and is covered by the signature like the rest of the payload: it sorts under RFC 8785 like
+any other member (`vectors/canonicalization.json`, `receipt-context-member-order`).
+`RECEIPT_CONTEXT_KEYS` lists the members.
+
+A receipt check older than this release (`@scopebond/gateway` `verifyReceipt` and
+`validateEvidencePayload` before this version, `npx @scopebond/gateway verify`, or an
+earlier hook's `scopebond verify`) reports a receipt that carries `context` as invalid,
+because the payload's key list is closed; `evidence_version` stays `1.0`. Verify such
+receipts with a release that knows `context`. (`@scopebond/verify`'s
+`verifyReceiptSignature` checks only the signature and key binding, so it verifies them
+in any version.)
 
 ## Observation envelope
 

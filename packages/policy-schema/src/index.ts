@@ -87,6 +87,13 @@ export const EVIDENCE_CLASSES = ["signed_intent", "pep_authorized", "boundary"] 
 export const BOUNDARY_GATES = ["merge", "deploy", "egress", "platform_event"] as const;
 export const ATTRIBUTION_KINDS = ["asserted", "inferred"] as const;
 
+// Optional receipt context (payload.context): where a receipt was produced, so records can be grouped by session and
+// filtered by tool, model and repository. A closed object; every member is optional and may be null. It carries no
+// local paths, no credentials and no prompts. Covered by the signature like the rest of the payload.
+export const RECEIPT_CONTEXT_KEYS = ["harness", "harness_version", "model", "session_id", "repository", "branch"] as const;
+export type ReceiptContextKey = (typeof RECEIPT_CONTEXT_KEYS)[number];
+export type ReceiptContext = Partial<Record<ReceiptContextKey, string | null>>;
+
 // The coverage buckets a policy resolves into (POLICY_VOCABULARY.md §4).
 export const COVERAGE_BUCKETS = ["prevented", "covered", "refused"] as const;
 

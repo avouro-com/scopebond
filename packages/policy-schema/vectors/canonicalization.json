@@ -15,6 +15,11 @@
       "name": "strings-and-unicode-keys",
       "value": { "é": "accent", "a": "line\nbreak", "quote": "\"" },
       "canonical": "{\"a\":\"line\\nbreak\",\"quote\":\"\\\"\",\"é\":\"accent\"}"
+    },
+    {
+      "name": "receipt-context-member-order",
+      "value": { "type": "scopebond:receipt", "context": { "session_id": "sbs_1", "harness": "claude", "repository": "github.com/example/app", "branch": null } },
+      "canonical": "{\"context\":{\"branch\":null,\"harness\":\"claude\",\"repository\":\"github.com/example/app\",\"session_id\":\"sbs_1\"},\"type\":\"scopebond:receipt\"}"
     }
   ]
 }

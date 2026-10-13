@@ -259,6 +259,14 @@ const { app, handleAction } = createGateway({ policy, authentication: { keys } }
 // app is a Hono app (serve it anywhere); handleAction(req) evaluates directly.
 ```
 
+A connector that knows where an action came from can say so: `handleAction(req, { context })`
+and `observeAction(req, { context })` sign it into the receipt as the optional
+`payload.context` (`ReceiptPayloadContext`: `harness`, `harness_version`, `model`,
+`session_id`, `repository`, `branch`, each a string or null). It is a closed object
+checked by `validateReceiptContext`; the gateway refuses to sign one that is not valid, and
+`verifyReceipt` treats an unknown key inside it like any other unknown key. Receipts the
+gateway makes without one are unchanged. See [SPEC.md](../../SPEC.md#payload-fields).
+
 Swappable interfaces (each an interface with a local implementation):
 `ReceiptStore` and `Executor`. Node-only durable stores and the key loader live
 under the `@scopebond/gateway/node` subpath (they use `node:fs` / `node:sqlite`):

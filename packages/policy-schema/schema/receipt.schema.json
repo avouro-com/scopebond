@@ -159,6 +159,19 @@
             }
           }
         },
+        "context": {
+          "type": "object",
+          "description": "Optional. Where the receipt was produced, so records can be grouped by session and filtered by tool, model and repository. Carries no local paths, no credentials and no prompts. Covered by the signature like every other payload field. A receipt check that predates this member reports a receipt carrying it as invalid (the payload is closed); verify with a release that knows context.",
+          "additionalProperties": false,
+          "properties": {
+            "harness": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]{0,39}$", "description": "The connector or coding tool that produced the receipt: claude, cursor, codex, copilot, gateway, ..." },
+            "harness_version": { "type": ["string", "null"], "minLength": 1, "maxLength": 64, "description": "The version that tool reports, when it reports one." },
+            "model": { "type": ["string", "null"], "minLength": 1, "maxLength": 128, "description": "The model id the tool reports, when it reports one." },
+            "session_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 200, "description": "An opaque session id the connector assigns (never the tool's raw session id)." },
+            "repository": { "type": ["string", "null"], "minLength": 1, "maxLength": 200, "pattern": "^[a-z0-9][a-z0-9.-]*(/(?![.]{1,2}(/|$))(?!%2[eE])[A-Za-z0-9._~%+-]+){2,}$", "description": "The git remote origin as host/owner/name: lowercase host, no scheme, credentials, query, .git suffix or dot segments (., .., %2e...). Null when unknown; never a local path." },
+            "branch": { "type": ["string", "null"], "minLength": 1, "maxLength": 200, "description": "The current branch, when known." }
+          }
+        },
         "override": {
           "type": "object",
           "description": "A person at the computer allowed an action a rule blocked (agent_dialog, with a reason whose SHA-256 is reason_digest), the coding agent's own permission prompt was offered for it (harness_prompt), or it matched a standing allowance (allowance: repeat_of names the allowance and reason_digest is the SHA-256 of the reason it was made with). Present only with realtime_result \"approved\".",

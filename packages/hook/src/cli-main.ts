@@ -56,6 +56,7 @@ import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.
 import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
+import { receiptContextFor } from "./receipt-context.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, ENFORCEABLE_RULES } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { runDispatchCommand } from "./dispatch-cli.js";
@@ -229,12 +230,16 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const permissionMode = typeof input!.permission_mode === "string" ? input!.permission_mode : null;
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), override: (agentKid) => {
+    const branch = currentBranch(cwd);
+    // Where these receipts come from (harness, model, keyed session id, repository, branch); null while a connected
+    // workspace has not said it reads it. Never fails the call.
+    const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, override: (agentKid) => {
       const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, waitMs: OVERRIDE_WAIT_MS[harness] });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
-    const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), currentBranch(cwd)), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
+    const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
     const observer = recordObservations(dir, cwd, input!, decision, harness);
     // Workspace rules: at most every five minutes, a capped check alongside the record delivery. It never fails the call.
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
@@ -335,12 +340,14 @@ async function runCursor(): Promise<void> {
     const cwd = input?.cwd ? textOf(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
     const permissionMode = typeof input.permission_mode === "string" ? input.permission_mode : null;
-    const mapped = fillPushBranch(mapCursorEvent(event, input), currentBranch(cwd));
+    const branch = currentBranch(cwd);
+    const mapped = fillPushBranch(mapCursorEvent(event, input), branch);
     // An edit Cursor reports after saving it cannot be overridden: it already happened.
     const overridable = !mapped.some((m) => m.postHoc);
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), override: (agentKid) => {
+    const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, override: (agentKid) => {
       const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, waitMs: OVERRIDE_WAIT_MS.cursor }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
@@ -501,6 +508,16 @@ function decisionOf(payload: Record<string, unknown>): string {
   return "allow";
 }
 
+/** The receipt's context in brief (harness, model, repository and branch), or nothing when it has none. */
+function contextNote(context: unknown): string {
+  if (!context || typeof context !== "object") return "";
+  const c = context as Record<string, unknown>;
+  const text = (v: unknown): string => (typeof v === "string" ? v : "");
+  const where = text(c.repository) && text(c.branch) ? `${text(c.repository)}@${text(c.branch)}` : text(c.repository) || text(c.branch);
+  const parts = [text(c.harness), text(c.model), where].filter(Boolean);
+  return parts.length ? `  [${parts.join(" · ")}]` : "";
+}
+
 function describeIntent(payload: Record<string, unknown>): string {
   return describeAction(payload.intent as ExplainIntent | undefined);
 }
@@ -549,7 +566,7 @@ async function runLog(args: string[]): Promise<void> {
     }
     for (const r of shown) {
       const p = r.payload as unknown as Record<string, unknown>;
-      console.log(`${textOf(p.timestamp)}  ${decisionOf(p).padEnd(13)}  ${describeIntent(p)}`);
+      console.log(`${textOf(p.timestamp)}  ${decisionOf(p).padEnd(13)}  ${describeIntent(p)}${contextNote(p.context)}`);
     }
     const filters = [denyOnly ? "denied" : "", since ? `since ${new Date(since).toISOString()}` : ""].filter(Boolean).join(", ");
     const scope = filters ? ` matching ${filters}` : "";
@@ -987,6 +1004,9 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     console.log(`✓ Connected to ${c.url}`);
     if (c.rotatedFrom) console.log(`✓ This computer's earlier key (${c.rotatedFrom}) was no longer accepted, so it was replaced; the old key is kept in ${join(dir, "retired-keys")}`);
     if (c.setAside) console.log(`  ${c.setAside.toLocaleString()} queued record(s) signed by an earlier key cannot go through this connection. To deliver them, run: ${cliCommand("recover")}`);
+    // One rules check now, bounded: the new workspace says what it reads (receipt context) and sends its rules before the first
+    // tool call. It never fails the sign-in; the first tool call checks again if this one could not.
+    try { await syncPolicy(dir, { ...syncOptionsFor(dir), timeoutMs: 3000 }); } catch { /* checked on the next tool call */ }
     // With a user-level install present, the hook ignores a project policy until it is
     // trusted, and would fall back to the user home, which holds no cloud.json: the agent
     // stays governed, but nothing reaches the workspace. Connecting this project is the
