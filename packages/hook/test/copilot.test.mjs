@@ -253,7 +253,7 @@ test("where Scopebond is not set up (the cloud agent's sandbox), the deny says s
   const { env, project } = isolated();
   const r = run(env, ["copilot"], { cwd: project, input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s", cwd: project, tool_name: "Bash", tool_input: { command: "ls" } }) });
   assert.equal(r.status, 2);
-  assert.equal(JSON.parse(r.stdout).permissionDecisionReason, "Scopebond is not set up in this environment; the Copilot cloud agent is not covered: remove .github/hooks/scopebond.json from the default branch or set Scopebond up here");
+  assert.equal(JSON.parse(r.stdout).permissionDecisionReason, "Scopebond is not set up in this environment; the Copilot cloud agent is not covered: give it a SCOPEBOND_REPO_TOKEN secret (see `scopebond init --repo`), or remove .github/hooks/scopebond.json from the default branch");
 });
 
 test("a routine read is allowed silently, so Copilot's own permission flow stays in charge", () => {
