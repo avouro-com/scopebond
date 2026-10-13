@@ -28,8 +28,12 @@ export interface Allowance {
   rule: string;
   /** The exact action (see `actionKey`): the same action type and parameters. */
   action_key: string;
-  /** computer: anyone on this computer. person: only the operating-system account it was made by. */
-  scope: "computer" | "person";
+  /** computer: anyone on this computer. person: only the operating-system account it was made by. session: only the coding-agent
+   *  session it names (`session_id`, the keyed id receipts carry), approved by an admin with a session budget. A hook that
+   *  predates session scope finds such an allowance invalid and ignores it, so it can only allow less. */
+  scope: "computer" | "person" | "session";
+  /** The session a session-scoped allowance applies to. */
+  session_id?: string;
   os_user_digest: string | null;
   /** active: in force. proposed: waiting for an admin (not in force). revoked: an admin took it back. */
   state: "active" | "proposed" | "revoked";
@@ -76,20 +80,22 @@ export function validAllowance(a: unknown): a is Allowance {
   const x = a as Record<string, unknown>;
   return typeof x.id === "string" && ID.test(x.id) && typeof x.rule === "string" && /^[a-z0-9-]{1,64}$/.test(x.rule)
     && typeof x.action_key === "string" && HEX64.test(x.action_key)
-    && (x.scope === "computer" || x.scope === "person") && (x.os_user_digest === null || (typeof x.os_user_digest === "string" && HEX64.test(x.os_user_digest)))
+    && (x.scope === "computer" || x.scope === "person" || x.scope === "session") && (x.os_user_digest === null || (typeof x.os_user_digest === "string" && HEX64.test(x.os_user_digest)))
     && (x.state === "active" || x.state === "proposed" || x.state === "revoked") && typeof x.once === "boolean"
     && typeof x.reason_digest === "string" && HEX64.test(x.reason_digest) && Number.isInteger(x.reason_length) && (x.reason_length as number) >= 1 && (x.reason_length as number) <= 500
     && (x.created_by === "person" || x.created_by === "workspace") && typeof x.created_at === "string" && Number.isFinite(Date.parse(x.created_at))
     && typeof x.expires_at === "string" && Number.isFinite(Date.parse(x.expires_at)) && Number.isInteger(x.uses) && (x.uses as number) >= 0
-    && (x.scope !== "person" || typeof x.os_user_digest === "string");
+    && (x.scope !== "person" || typeof x.os_user_digest === "string")
+    && (x.scope === "session" ? typeof x.session_id === "string" && x.session_id.length >= 1 && x.session_id.length <= 200 : x.session_id === undefined);
 }
 
 /** The allowance in force for this rule and action, for this person, now; or null. Revoked, proposed, expired and used
  *  one-time allowances never match. */
-export function matchAllowance(items: Allowance[], query: { rule: string; actionKey: string; osUserDigest: string | null; now: number }): Allowance | null {
+export function matchAllowance(items: Allowance[], query: { rule: string; actionKey: string; osUserDigest: string | null; now: number; sessionId?: string | null }): Allowance | null {
   return items.find((a) => a.state === "active" && a.rule === query.rule && a.action_key === query.actionKey
     && Date.parse(a.expires_at) > query.now && !(a.once && a.uses > 0)
-    && (a.scope === "computer" || (a.os_user_digest !== null && a.os_user_digest === query.osUserDigest))) ?? null;
+    && (a.scope === "computer" || (a.scope === "session" ? !!query.sessionId && a.session_id === query.sessionId
+      : a.os_user_digest !== null && a.os_user_digest === query.osUserDigest))) ?? null;
 }
 
 /** Make an allowance on this computer. `lasts`: once (the next try), 15 minutes, or `always` (the workspace's default expiry;

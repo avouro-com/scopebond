@@ -8,6 +8,7 @@ import receiptSchemaDocument from "../schema/receipt.schema.json" with { type: "
 import legacyReceiptSchemaDocument from "../schema/receipt-legacy.schema.json" with { type: "json" };
 import observationSchemaDocument from "../schema/observation.schema.json" with { type: "json" };
 import summarySchemaDocument from "../schema/summary.schema.json" with { type: "json" };
+import sessionBudgetsSchemaDocument from "../schema/session-budgets.schema.json" with { type: "json" };
 import { canonical } from "./canonical.js";
 export { canonical } from "./canonical.js";
 export {
@@ -23,6 +24,7 @@ export const receiptSchema = receiptSchemaDocument as Record<string, unknown>;
 export const legacyReceiptSchema = legacyReceiptSchemaDocument as Record<string, unknown>;
 export const observationSchema = observationSchemaDocument as Record<string, unknown>;
 export const summarySchema = summarySchemaDocument as Record<string, unknown>;
+export const sessionBudgetsSchema = sessionBudgetsSchemaDocument as Record<string, unknown>;
 
 // Summary record (scopebond:summary v1, evidence class "summary"): a signed stand-in for routine receipts when they are
 // sent, with an RFC 9162 root over the receipts it covers. Receipts are unchanged and every action keeps its own. The
@@ -93,6 +95,30 @@ export const ATTRIBUTION_KINDS = ["asserted", "inferred"] as const;
 export const RECEIPT_CONTEXT_KEYS = ["harness", "harness_version", "model", "session_id", "repository", "branch"] as const;
 export type ReceiptContextKey = (typeof RECEIPT_CONTEXT_KEYS)[number];
 export type ReceiptContext = Partial<Record<ReceiptContextKey, string | null>>;
+
+// Session budgets (session-budgets.schema.json): limits on what one coding-agent session may do, sent by a workspace in its
+// rules document as `session_budgets` (at most so many actions of the listed types, 0 = none, until the budget expires). The
+// words follow the gateway's action budgets. A receipt an action budget counted or refused carries `payload.budget`.
+export const SESSION_BUDGET_SCOPE = "session";
+/** How long a session budget lasts when whoever sets it does not say: two hours. */
+export const SESSION_BUDGET_DEFAULT_SECONDS = 7_200;
+export const SESSION_BUDGET_MODES = ["enforce", "monitor"] as const;
+export const SESSION_BUDGET_LIMITS = { maxBudgets: 50, maxLimits: 10, maxOperations: 20, maxCount: 1_000_000 } as const;
+export const RECEIPT_BUDGET_STATES = ["within", "at_limit", "over", "unavailable"] as const;
+export type SessionBudgetMode = (typeof SESSION_BUDGET_MODES)[number];
+export type ReceiptBudgetState = (typeof RECEIPT_BUDGET_STATES)[number];
+export interface SessionBudgetLimit { operations: string[]; max: number }
+export interface SessionBudget {
+  budget_id: string;
+  scope: typeof SESSION_BUDGET_SCOPE;
+  session_id: string;
+  limits: SessionBudgetLimit[];
+  mode: SessionBudgetMode;
+  version: number;
+  expires_at: string;
+  source?: "request" | "admin";
+  count_shell_as_write?: boolean;
+}
 
 // The coverage buckets a policy resolves into (POLICY_VOCABULARY.md §4).
 export const COVERAGE_BUCKETS = ["prevented", "covered", "refused"] as const;

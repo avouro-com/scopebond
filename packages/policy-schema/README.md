@@ -79,6 +79,26 @@ receipts with a release that knows `context`. (`@scopebond/verify`'s
 `verifyReceiptSignature` checks only the signature and key binding, so it verifies them
 in any version.)
 
+## Session budgets
+
+`schema/session-budgets.schema.json` is the `session_budgets` member a workspace may add to the
+rules document it sends a hook: limits on what one coding-agent session may do, in the gateway's
+action-budget words. Each budget is a closed object: `budget_id`, `scope` (`"session"`),
+`session_id` (the opaque id receipts carry as `context.session_id`), `limits` (each
+`{ operations, max }`: at most `max` tool calls with an action of those types, `0` for none),
+`mode` (`enforce` or `monitor`), `version`, `expires_at` (two hours after it is set by
+default, `SESSION_BUDGET_DEFAULT_SECONDS`; after it the budget no longer applies) and optionally `source` (`request` or
+`admin`) and `count_shell_as_write` (count other shell commands as file writes; off by default).
+The rules-document check reads only the members it knows, so a hook that predates session
+budgets ignores the member; a hook that knows it refuses a document whose list is malformed.
+`vectors/session-budgets.json` holds valid and invalid lists.
+
+A receipt a session budget counted or refused carries the optional, closed `payload.budget`:
+`version`, `scope`, `budget_id`, `budget_version`, `mode`, `operation`, `count` (with this
+action), `max` and `state` (`within`, `at_limit`, `over` or `unavailable`,
+`RECEIPT_BUDGET_STATES`). As with `context`, a receipt check older than this release reports a
+receipt carrying it as invalid.
+
 ## Observation envelope
 
 An observation is signed as Ed25519 over the UTF-8 bytes of the literal domain

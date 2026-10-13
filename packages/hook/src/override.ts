@@ -156,6 +156,8 @@ export interface OverrideContext {
   harness: "claude" | "codex" | "cursor" | "copilot";
   /** Claude Code's permission_mode from the hook payload, when it sent one. */
   permissionMode?: string | null;
+  /** The keyed id of this coding-agent session, for allowances an admin approved for one session. */
+  sessionId?: string | null;
   now?: () => number;
   /** How long to wait for the person; the agent's own hook timeout must be longer. A function is read when the person is
    *  asked, so the wait can shrink to what is left of the hook call's deadline (hook-deadline.ts). */
@@ -193,7 +195,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, doc.allowances, doc.revoked_allowances);
     // An allowance made before records masked the home folder is keyed on the action as it was then: try those keys too.
     const standing = [key, ...legacyActionKeys(intent)].reduce<ReturnType<typeof matchAllowance>>(
-      (found, k) => found ?? matchAllowance(allowances, { rule, actionKey: k, osUserDigest: osDigest, now: t }), null);
+      (found, k) => found ?? matchAllowance(allowances, { rule, actionKey: k, osUserDigest: osDigest, now: t, sessionId: ctx.sessionId ?? null }), null);
     if (standing) {
       standing.uses += 1;
       try { writeAllowances(ctx.dir, allowances, t); } catch { /* the receipt records the use; a one-time allowance may be used again */ }

@@ -20,7 +20,8 @@ import { isRepairableStore, noteQueueMiss, repairDelivery } from "./delivery-rep
 import { openDispatchGuard, DELEGATION_ENV } from "@scopebond/gateway/node";
 import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type OverrideHandler } from "@scopebond/gateway";
 import { homeFolders, maskHomeInPolicy, maskHomeInValue } from "./home-mask.js";
-import type { ReceiptPayloadContext } from "@scopebond/gateway";
+import type { ReceiptBudget, ReceiptPayloadContext } from "@scopebond/gateway";
+import type { SessionBudgetGuard } from "./session-budgets.js";
 import { policyOptsIntoTargets, targetRuleClauses } from "./target-rules.js";
 export { targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
@@ -56,6 +57,9 @@ export interface RuntimeConfig {
   /** Where this call's actions come from, signed into each receipt as `payload.context` (see receipt-context.ts). Absent or
    *  null: receipts carry none. */
   context?: ReceiptPayloadContext | null;
+  /** This session's budgets (session-budgets.ts): each tool call is counted before it runs, and one beyond a limit is denied
+   *  with the reason "session budget". Absent or null: no budget applies. */
+  sessionBudgets?: SessionBudgetGuard | null;
 }
 
 export interface Decision {
@@ -422,7 +426,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       try { boundary?.close(); } catch { /* best effort */ }
     },
     /** Decide one mapped action, recording a receipt either way. */
-    async evaluateOne(input: Mapped): Promise<Decision> {
+    async evaluateOne(input: Mapped, budget?: ReceiptBudget): Promise<Decision> {
       const mapped = masked(input);
       const signed = agent.sign(mapped.intent);
       // A derived intent (the taxonomy action a shell command or MCP call performs, beside the call itself) is evaluated only
@@ -442,7 +446,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       // go through policy — a closed allowlist denies an unlisted action.
       // An action the coding agent reported only after it ran (Cursor's afterFileEdit) is signed as recorded after the
       // fact when a rule denies it: the receipt must not claim it was prevented.
-      const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}), ...contextOption };
+      const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}), ...contextOption, ...(budget ? { budget } : {}) };
       const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(options).length ? options : undefined);
       const granted = (result.receipt as { payload?: { override?: { state?: string } } } | undefined)?.payload?.override;
       if (result.allowed && granted?.state === "offered") {
@@ -484,11 +488,28 @@ export function createHookRuntime(config: RuntimeConfig) {
       let allow: Decision | null = null;
       let ask: Decision | null = null;
       let notEvaluated: Decision | null = null;
+      // Session budgets: the whole tool call is counted once, before any of it runs. Beyond a limit (or when the count cannot be
+      // checked, or when it starts another coding agent) the call is denied and its refusal is recorded as a denied receipt. An
+      // action reported only after it ran (Cursor's after-edit event) cannot be prevented: it is counted, never refused.
+      const intents = list.map((m) => ({ action_type: m.intent.action_type, params: m.intent.params }));
+      const reservation = config.sessionBudgets ? config.sessionBudgets.reserve(String(list[0].intent.params[ACTION_GROUP_PARAM]), intents, { postHoc: list.some((m) => m.postHoc) }) : null;
+      if (reservation && !reservation.allow) {
+        const target = list[reservation.index] ?? list[0];
+        boundaryVerdict = { allow: false, reason: "budget_exceeded", detail: "session budget", consumed_approvals: [], budgets: [] };
+        try {
+          const signed = agent.sign(target.intent);
+          const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, { ...contextOption, budget: reservation.budget });
+          if (result.receipt !== undefined) receipts.push(result.receipt);
+          dispatched.push({ action: { action_type: target.intent.action_type, params: target.intent.params }, ...(result.receipt !== undefined ? { receipt: result.receipt } : {}) });
+        } finally { boundaryVerdict = null; }
+        return { decision: "deny", reason: reservation.reason, receipts, dispatched };
+      }
+      const release = (): void => { if (reservation?.allow) reservation.release(); };
       for (const m of list) {
-        const d = await this.evaluateOne(m);
+        const d = await this.evaluateOne(m, reservation?.allow ? reservation.budgetFor({ action_type: m.intent.action_type, params: m.intent.params }) : undefined);
         if (d.receipt !== undefined) receipts.push(d.receipt);
         dispatched.push({ action: { action_type: m.intent.action_type, params: m.intent.params }, ...(d.receipt !== undefined ? { receipt: d.receipt } : {}) });
-        if (d.decision === "deny") return { ...d, receipts, dispatched };            // any deny denies the call
+        if (d.decision === "deny") { release(); return { ...d, receipts, dispatched }; }            // any deny denies the call
         if (d.decision === "allow" && !allow) allow = d;
         if (d.decision === "ask" && !ask) ask = d;
         if (d.decision === "not_evaluated" && !notEvaluated) notEvaluated = d;
@@ -515,6 +536,7 @@ export function createHookRuntime(config: RuntimeConfig) {
             const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(contextOption).length ? contextOption : undefined);
             if (result.receipt !== undefined) receipts.push(result.receipt);
           } finally { boundaryVerdict = null; }
+          release();
           return { decision: "deny", reason: `Scopebond blocked this before it ran: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`, receipts, dispatched, dispatch: verdict };
         }
         return { ...chosen, receipts, dispatched, dispatch: verdict };
