@@ -147,12 +147,13 @@ test("hookCommandResolves: npx always starts; a pinned path only while it exists
 });
 
 test("the pinned command survives a shell that treats backslash as an escape", () => {
-  // A harness runs the command through a shell that may be bash even on Windows. Both
-  // paths must be quoted there, or a Windows path loses its separators.
+  // A harness runs the command through a shell that may be bash even on Windows. A Windows
+  // path there must be quoted or use forward slashes, or it loses its separators.
   const command = absoluteHookCommand(join("C:", "tools", "sb", "cli.js"), "claude");
   if (process.platform === "win32") {
-    const quoted = command.match(/"/g) ?? [];
-    assert.equal(quoted.length, 4, `both paths quoted on Windows: ${command}`);
+    const outsideQuotes = command.replace(/"[^"]*"/g, "");
+    assert.doesNotMatch(outsideQuotes, /\\/, `no bare backslash on Windows: ${command}`);
+    assert.match(command, /C:\/tools\/sb\/cli\.js claude$/, `the shell-plain spelling every hook shell runs: ${command}`);
   }
   assert.match(command, /\sclaude$/);
 });

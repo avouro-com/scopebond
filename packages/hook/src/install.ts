@@ -7,12 +7,12 @@
 // trusted that exact policy (`scopebond trust`, or `init` in the project): a cloned
 // repository, or an agent inside it, must not be able to swap in its own policy.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFileSync, realpathSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { findProgram, programPath } from "@scopebond/gateway/node";
+import { findProgram, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 
 export type Harness = "claude" | "cursor" | "codex" | "copilot";
@@ -325,19 +325,26 @@ export const isScopebondHookCommand = (input: unknown): boolean => {
 };
 const isScopebond = isScopebondHookCommand;
 
+/** The fields a hook entry names a command in: `command` (Claude Code, Cursor, Codex), Codex's Windows override
+ *  `commandWindows`, and a GitHub Copilot entry's one per shell (`bash`, `powershell`). */
+const ENTRY_COMMAND_KEYS = ["command", "commandWindows", "bash", "powershell"] as const;
+
 /** The command one hook entry runs. Claude Code, Cursor and Codex name it `command`; a GitHub Copilot entry names one
  *  per shell (`bash`, `powershell`), and Scopebond writes the same command in both, so `bash` stands for the entry (the
  *  `powershell` form only adds PowerShell's call operator in front). */
 export function harnessEntryCommand(e: unknown): string | undefined {
   if (!isRecord(e)) return undefined;
-  for (const key of ["command", "bash", "powershell"]) { const value = e[key]; if (typeof value === "string") return value; }
+  for (const key of ENTRY_COMMAND_KEYS) { const value = e[key]; if (typeof value === "string") return value; }
   return undefined;
 }
+
+/** Whether any command field of one hook entry is Scopebond's (a Codex entry may name it only in `commandWindows`). */
+const commandIsOurs = (e: unknown): boolean => isRecord(e) && ENTRY_COMMAND_KEYS.some((key) => isScopebond(e[key]));
 
 /** Whether a harness hook entry (either shape: a bare command, or a group with a
  *  nested `hooks` array) is a Scopebond entry. */
 export const harnessEntryMatches = (e: unknown): boolean =>
-  isRecord(e) && (isScopebond(harnessEntryCommand(e)) || (Array.isArray(e.hooks) && e.hooks.some((h) => isScopebond(harnessEntryCommand(h)))));
+  isRecord(e) && (commandIsOurs(e) || (Array.isArray(e.hooks) && e.hooks.some(commandIsOurs)));
 const entryMatches = harnessEntryMatches;
 
 /** Read an agent's JSON config for merging. A missing file is an empty config; a file
@@ -453,9 +460,7 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
     const at = list.findIndex(entryMatches);
     // Codex matchers are regular expressions; omitting the matcher means every tool.
     // A literal "*" is not a valid regular expression and causes Codex to skip the group.
-    const entry = harness === "codex"
-      ? { hooks: [{ type: "command", command, timeout: 30, statusMessage: "Checking this action with Scopebond" }] }
-      : { matcher: "*", hooks: [{ type: "command", command }] };
+    const entry = harness === "codex" ? { hooks: [codexHookEntry(command)] } : { matcher: "*", hooks: [{ type: "command", command }] };
     if (at >= 0) list[at] = entry; else list.push(entry);
   }
   // A settings file that already holds exactly this entry is left byte-for-byte
@@ -524,30 +529,114 @@ export function harnessDetected(harness: Harness): boolean {
   return true;
 }
 
+/** A path component that cmd.exe, Windows PowerShell, PowerShell 7 and Git Bash all read as plain text: no space, quote,
+ *  `&`, `(`, `$`, `;`, `%`, backtick or other character any of them treats specially. */
+const SHELL_PLAIN_COMPONENT = /^[A-Za-z0-9._@~-]+$/;
+
+/** Finds a Windows path's short (8.3) spelling, or null when there is none to find. */
+export type ShortPathFinder = (path: string) => string | null;
+
+const shortPaths = new Map<string, string | null>();
+
+/** The short (8.3) spelling of an existing Windows path (`C:\PROGRA~1\nodejs`), from cmd.exe's `%~s`. Without a short
+ *  name on that volume (8.3 names can be switched off), or for a path that does not exist, cmd prints the path unchanged;
+ *  the caller checks the result. Null off Windows, or for a path cmd itself could misread. */
+export function windowsShortPath(path: string): string | null {
+  if (process.platform !== "win32" || /["%^!&\r\n]/.test(path)) return null;
+  const known = shortPaths.get(path);
+  if (known !== undefined) return known;
+  // cmd.exe's own quoting: /s takes the outer quotes off and leaves the quoted path inside, so the arguments go verbatim.
+  const run = spawnSync(windowsSystemProgram("cmd"), ["/d", "/s", "/c", `"for %I in ("${path}") do @echo %~sI"`], {
+    encoding: "utf8", windowsVerbatimArguments: true, windowsHide: true, timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
+  });
+  const found = run.status === 0 ? (run.stdout ?? "").trim() || null : null;
+  shortPaths.set(path, found);
+  return found;
+}
+
+/** A Windows path spelled so that every shell a coding agent may run a hook command under reads it the same way, with no
+ *  quotes: forward slashes, and the short (8.3) name of any folder whose name has a space or another character a shell
+ *  treats specially (`C:\Program Files\nodejs\node.exe` → `C:/PROGRA~1/nodejs/node.exe`). Only the folders up to the
+ *  last such name are shortened, so the file name itself (`cli.js`, `scopebond-agent.exe`) stays as it is. Null when
+ *  there is no such spelling (not a drive path, or no short name for a folder that needs one).
+ *
+ *  Why not quotes: PowerShell reads a command that starts with a quoted path as a string, not a program, and stops at the
+ *  next word ("Unexpected token"); cmd.exe refuses PowerShell's call operator `&`; and Git Bash drops the backslashes of
+ *  an unquoted Windows path. A plain forward-slash path starts the program in all of them. */
+export function shellPlainWindowsPath(path: string, shorten: ShortPathFinder = windowsShortPath): string | null {
+  const m = /^([A-Za-z]:)[\\/](.*)$/.exec(path);
+  if (!m) return null;
+  const parts = m[2].split(/[\\/]+/).filter(Boolean);
+  let last = -1;
+  parts.forEach((part, i) => { if (!SHELL_PLAIN_COMPONENT.test(part)) last = i; });
+  let plain = parts;
+  if (last >= 0) {
+    const short = shorten(`${m[1]}\\${parts.slice(0, last + 1).join("\\")}`);
+    const sm = short ? /^([A-Za-z]:)[\\/](.*)$/.exec(short) : null;
+    if (!sm || sm[1].toLowerCase() !== m[1].toLowerCase()) return null;
+    const shortParts = sm[2].split(/[\\/]+/).filter(Boolean);
+    if (shortParts.length !== last + 1 || !shortParts.every((part) => SHELL_PLAIN_COMPONENT.test(part))) return null;
+    plain = [...shortParts, ...parts.slice(last + 1)];
+  }
+  return `${m[1]}/${plain.join("/")}`;
+}
+
+/** The Windows hook command line running `program` with `args` (plain words) after it: every path in the shell-plain
+ *  spelling, or null when a path has none (the caller then falls back to quoted paths, which cmd.exe and Git Bash run). */
+export function windowsHookCommandLine(paths: string[], args: string, shorten: ShortPathFinder = windowsShortPath): string | null {
+  const plain = paths.map((p) => shellPlainWindowsPath(p, shorten));
+  return plain.every((p): p is string => p !== null) ? `${plain.join(" ")} ${args}` : null;
+}
+
 /** The absolute command a harness entry runs: the current Node executable and the
  *  absolute path to this CLI, so it does not depend on PATH.
  *
- *  Both paths are always quoted on Windows, even without a space in them. A harness
- *  runs this string through a shell, and that shell may be bash (Git Bash, WSL, a
- *  dev container), where an unquoted Windows path loses every backslash and the
- *  hook dies with MODULE_NOT_FOUND. Inside double quotes bash leaves a backslash
- *  alone unless it precedes $ ` " \ or a newline — none of which occur in a Windows
- *  path — and cmd.exe and PowerShell accept quoted paths too. */
-export function absoluteHookCommand(cliPath: string, harness: Harness): string {
+ *  On Windows the harness runs this string through whichever shell it (or the user) chose: cmd.exe, PowerShell, or Git
+ *  Bash. Each reads quotes differently, so both paths are written in the shell-plain spelling (`shellPlainWindowsPath`),
+ *  which all of them start the same way. Only when a path has no such spelling are both paths quoted — the form cmd.exe
+ *  and Git Bash run (inside double quotes bash leaves a Windows path's backslashes alone); PowerShell cannot run it. */
+export function absoluteHookCommand(cliPath: string, harness: Harness, shorten: ShortPathFinder = windowsShortPath): string {
+  if (process.platform === "win32") {
+    const plain = windowsHookCommandLine([process.execPath, cliPath], harness, shorten);
+    if (plain) return plain;
+  }
   const quote = (s: string) => (process.platform === "win32" || /\s/.test(s) ? `"${s}"` : s);
   return `${quote(process.execPath)} ${quote(cliPath)} ${harness}`;
 }
 
-/** The command a coding agent's settings run when Scopebond is installed as the single executable: the executable itself,
- *  quoted, with `hook` and the harness. It needs neither Node nor npm, and the installer keeps its path stable. */
-export function nativeHookCommand(harness: Harness, exe: string = process.execPath): string {
+/** The command a coding agent's settings run when Scopebond is installed as the single executable: the executable itself
+ *  with `hook` and the harness. It needs neither Node nor npm, and the installer keeps its path stable. On Windows the
+ *  path is in the shell-plain spelling every hook shell runs (see `absoluteHookCommand`); quoted only when it has none. */
+export function nativeHookCommand(harness: Harness, exe: string = process.execPath, shorten: ShortPathFinder = windowsShortPath): string {
+  if (process.platform === "win32") {
+    const plain = windowsHookCommandLine([exe], `hook ${harness}`, shorten);
+    if (plain) return plain;
+  }
   return `"${exe}" hook ${harness}`;
 }
 
-/** The program a single-executable hook entry runs (`"<…\scopebond-agent.exe>" hook claude`), or null for any other form. */
+/** The program a single-executable hook entry runs (`"<…\scopebond-agent.exe>" hook claude`, or the shell-plain
+ *  `C:/…/scopebond-agent.exe hook claude`, given back with backslashes), or null for any other form. */
 export function nativeHookProgram(command: string): string | null {
-  const m = /^"([^"]+)"\s+hook\s+(?:claude|cursor|codex|copilot)\s*$/i.exec(command.trim());
-  return m && /scopebond-agent(?:\.exe)?$/i.test(m[1]) ? m[1] : null;
+  const m = /^(?:"([^"]+)"|([A-Za-z]:\/\S+))\s+hook\s+(?:claude|cursor|codex|copilot)\s*$/i.exec(command.trim());
+  const program = m ? (m[1] ?? m[2].replace(/\//g, "\\")) : null;
+  return program && /scopebond-agent(?:\.exe)?$/i.test(program) ? program : null;
+}
+
+/** The Windows spelling of a Codex hook command (Codex runs `commandWindows` instead of `command` on Windows, through the
+ *  session's shell: cmd.exe, PowerShell or Git Bash). The portable `npx` form names `npx.cmd`, which every one of those
+ *  shells starts (PowerShell would pick `npx.ps1`, which the default script policy refuses). A command written on Windows
+ *  is already in a form every hook shell runs. Otherwise none: a POSIX path means nothing on Windows. */
+export function codexWindowsCommand(command: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  const trimmed = command.trim();
+  if (/^npx\s/.test(trimmed)) return `npx.cmd ${trimmed.slice(4)}`;
+  return platform === "win32" ? trimmed : undefined;
+}
+
+/** One Codex hook handler running `command`, with its Windows spelling when there is one. */
+export function codexHookEntry(command: string, platform: NodeJS.Platform = process.platform): Record<string, unknown> {
+  const commandWindows = codexWindowsCommand(command, platform);
+  return { type: "command", command, ...(commandWindows ? { commandWindows } : {}), timeout: 30, statusMessage: "Checking this action with Scopebond" };
 }
 
 /** Each hook entry in `file` that runs a single executable which is no longer there: an administrator removed an install

@@ -72,6 +72,7 @@ export {
   readHarnessConfig, backupHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile, canonicalPath, samePath,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
   isScopebondHookCommand, harnessEntryMatches, nativeHookProgram, missingHookPrograms, npxAvailable, isNpxHookCommand,
+  codexHookEntry, codexWindowsCommand, shellPlainWindowsPath, windowsHookCommandLine, windowsShortPath, type ShortPathFinder,
   localHarnessFile, isMachineSpecificCommand, gitShareState, excludeFromGit, pruneHarnessEntries,
 } from "./install.js";
 export type { Harness, HarnessScopes, GitShare } from "./install.js";

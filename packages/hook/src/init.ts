@@ -12,7 +12,7 @@ import { createExclusive, replaceFile } from "./safe-fs.js";
 import {
   readHarnessConfig, projectHarnessFile, localHarnessFile, harnessEntryMatches, backupHarnessConfig,
   gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
-  userHarnessFile, isNpxHookCommand, hookCommandResolves, nativeHookCommand, addCopilotHooks, copilotHookEntry,
+  userHarnessFile, isNpxHookCommand, hookCommandResolves, nativeHookCommand, addCopilotHooks, copilotHookEntry, codexHookEntry,
   COPILOT_EVENTS, harnessEntryCommand, isScopebondHookCommand, type Harness,
 } from "./install.js";
 import { cliCommand, hookCommand } from "./version.js";
@@ -235,7 +235,7 @@ function mergeHarnessConfig(harness: Harness, config: Record<string, unknown>, c
     const existing = list.findIndex(entryMatches);
     // Codex matchers are regular expressions. No matcher means all supported tools.
     const entry = harness === "codex"
-      ? { hooks: [{ type: "command", command: codexCmd, timeout: 30, statusMessage: "Checking this action with Scopebond" }] }
+      ? { hooks: [codexHookEntry(codexCmd)] }
       : { matcher: "*", hooks: [{ type: "command", command: claudeCmd }] };
     // Only Scopebond's own hook leaves a group: other hooks in the same group, and that group's matcher, stay as they are.
     const ours = (h: unknown): boolean => isScopebondHookCommand(harnessEntryCommand(h));
@@ -329,7 +329,7 @@ export function harnessSnippet(harness: Harness, command?: string): string {
     return JSON.stringify({
       hooks: {
         PreToolUse: [{
-          hooks: [{ type: "command", command: cmdFor("codex"), timeout: 30, statusMessage: "Checking this action with Scopebond" }],
+          hooks: [codexHookEntry(cmdFor("codex"))],
         }],
       },
     }, null, 2);
