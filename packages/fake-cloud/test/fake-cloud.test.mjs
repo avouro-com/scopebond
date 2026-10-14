@@ -85,12 +85,13 @@ test("the CLI's fault syntax", () => {
 });
 
 const HEX = "a".repeat(64);
+const SUMMARY_KID = kidForPem(pem());
 /** A well-formed summary item, as the workspace checks it (the signature is not verified by the fake). */
 const summaryItem = (id, count, { seq = { ranges: [[1, count]], unnumbered: 0 }, payload = {} } = {}) => ({
   summary: {
     payload: {
       type: "scopebond:summary", version: "1.0", canonicalization: "RFC8785", evidence_class: "summary",
-      summary_id: id, attester: { kind: "gateway", kid: "key:0123456789abcdef" }, harness: "claude-code",
+      summary_id: id, attester: { kind: "gateway", kid: SUMMARY_KID }, harness: "claude-code",
       window: { kind: "interval", start: "2026-10-07T10:00:00Z", end: "2026-10-07T10:05:00Z" },
       receipt_count: count, receipts_root: HEX, notable_count: 0,
       counts: [{ action_type: "shell.exec", result: "allow", program: "pnpm", cwd_digest: null, count }],
