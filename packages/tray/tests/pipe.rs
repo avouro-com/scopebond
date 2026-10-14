@@ -87,7 +87,7 @@ fn reads_the_tray_model_over_the_pipe() {
     assert_eq!(answer.tray.state, "attention");
     assert_eq!(answer.tray.headline, "3 records waiting to send · café", "UTF-8 reads as written");
     assert_eq!(answer.tray.fix.as_ref().map(|f| f.route.as_str()), Some("/flush"));
-    assert_eq!(answer.settings.notifications, Notifications::All);
+    assert_eq!(answer.settings.notifications, Notifications::Blocks, "an older agent's all reads as blocks and problems");
 }
 
 #[test]
