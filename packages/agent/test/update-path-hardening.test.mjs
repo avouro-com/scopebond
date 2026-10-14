@@ -144,7 +144,9 @@ test("a workspace-named hook version never turns a settings entry into a run-tim
   claudeSettings(`"${process.execPath}" "${pinned}" claude`);
   const { result } = await maintainWith(cloud({ policy: "recommended", hook: "999.0.0", agent: null }));
   assert.doesNotMatch(claudeCommand(), /npx/, `hookEntries=${JSON.stringify(result.hookEntries)}`);
-  assert.ok(claudeCommand().includes(hookCliPath()) || claudeCommand().includes(`${hookVersion()}`), `pinned to the carried hook: ${claudeCommand()}`);
+  // On Windows the entry names the path with forward slashes (the spelling every hook shell runs).
+  const slashes = (s) => s.replace(/\\/g, "/");
+  assert.ok(slashes(claudeCommand()).includes(slashes(hookCliPath())) || claudeCommand().includes(`${hookVersion()}`), `pinned to the carried hook: ${claudeCommand()}`);
   // A higher hook named by a well-formed answer is not followed either: the entry stays on the hook the agent carries.
   const [a, b] = hookVersion().split(".").map(Number);
   await maintainWith(cloud({ policy: "recommended", hook: `${a}.${b + 1}.0`, agent: null }));

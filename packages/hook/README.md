@@ -72,6 +72,18 @@ in that project (`scopebond trust`, or `init` there), pinned to its exact conten
 repository you clone, or an agent working in it, cannot swap in a weaker policy, and any
 later edit to that file stops it applying until you trust it again.
 
+On Windows a coding agent may run the hook command under cmd.exe, PowerShell or Git Bash
+(Codex runs it through the session's shell, which can be PowerShell), and they read quoted
+paths differently: PowerShell takes a command that starts with a quoted path as a string and
+fails with "Unexpected token". So the hook entry names each path unquoted, with forward
+slashes, and with the short (8.3) name of any folder whose name has a space or another
+character a shell treats specially — for example
+`C:/PROGRA~1/nodejs/node.exe C:/…/.scopebond/runtime/…/cli.js codex` — a form
+every one of those shells starts the same way. Codex entries also carry `commandWindows`
+(the portable `npx` form becomes `npx.cmd` there). Where a volume has short names switched off,
+the paths are quoted instead, which cmd.exe and Git Bash run but PowerShell does not;
+`uninstall` and upgrades recognise both forms.
+
 ```
 scopebond status                    # home, which agents are configured, cloud, receipts
 scopebond doctor                    # node version, config location, cloud reachability

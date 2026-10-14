@@ -62,7 +62,9 @@ test("status and doctor health lines: an update and a stopped agent are fixed wi
 
 test("a hook entry's single executable is read from the entry, and only from that form", () => {
   const exe = "C:\\Program Files\\Scopebond\\scopebond-agent.exe";
-  assert.equal(nativeHookProgram(nativeHookCommand("claude", exe)), exe);
+  // Without a short name for "Program Files" the path stays quoted; with one it is the shell-plain spelling, read back with backslashes.
+  assert.equal(nativeHookProgram(nativeHookCommand("claude", exe, () => null)), exe);
+  assert.equal(nativeHookProgram("C:/PROGRA~1/Scopebond/scopebond-agent.exe hook claude"), "C:\\PROGRA~1\\Scopebond\\scopebond-agent.exe");
   assert.equal(nativeHookProgram(`"${exe}" hook codex`), exe);
   assert.equal(nativeHookProgram("npx -y @scopebond/hook@1.0.0 claude"), null);
   assert.equal(nativeHookProgram(`"C:\\node\\node.exe" "C:\\x\\cli.js" claude`), null);
