@@ -112,6 +112,18 @@ export interface CloudExporter {
   stop(): void;
   pending(): number;
   status(): CloudExporterStatus;
+  /** Routine records waiting on purpose for their summary window to close (none without summaries). Optional, so an
+   *  exporter made elsewhere still fits; a caller without it treats every waiting record as undelivered. */
+  held?(): CloudHeldStatus;
+}
+
+/** Routine records the exporter holds back until their summary window closes: they are not undelivered, they wait to
+ *  leave as one signed summary. */
+export interface CloudHeldStatus {
+  /** How many of the waiting records are routine ones in a window still open. */
+  routine: number;
+  /** When the last of those windows closes and its summary can be sent (ms since epoch), or null when none are held. */
+  until: number | null;
 }
 
 export interface CloudExporterOptions {
@@ -469,6 +481,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
   const summaryEndpoint = base + "/v1/summaries";
   // A workspace without summaries (404 or 405) is sent every receipt, as before, for the life of this exporter.
   let summariesRefused = false;
+  const windowLength = () => Math.max(60_000, Math.trunc(opts.summaries?.windowMs ?? 300_000));
   const summarising = () => !!opts.summaries && !summariesRefused && !!opts.outbox.claimWindow && opts.summaries.detail() === "standard";
   const notable = (payload: ReceiptPayload) => {
     try { return isNotable(payload) || !Number.isFinite(Date.parse(payload.timestamp)) || (opts.summaries?.notable?.(payload) ?? false); }
@@ -817,6 +830,29 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
     stop() { stopped = true; clearInterval(timer as unknown as ReturnType<typeof setInterval>); opts.outbox.close?.(); },
     pending() { return opts.outbox.pendingCount?.() ?? opts.outbox.status().pending; },
     status() { return { ...opts.outbox.status(), consecutiveFailures, nextAttemptAt, lastSuccessAt, lastError, backoff: backoff ? { ...backoff } : null }; },
+    held() {
+      if (!summarising()) return { routine: 0, until: null };
+      // The same split a flush makes: a routine record whose window (and its grace) has not ended yet waits for its summary.
+      // Like a flush, only the oldest SUMMARY_PEEK records are looked at; any beyond count as waiting to be sent.
+      const windowMs = windowLength();
+      const at = now();
+      const seen = new Set<string>();
+      let routine = 0;
+      let until: number | null = null;
+      for (;;) {
+        const part = opts.outbox.peek(100, at, seen.size ? seen : undefined);
+        for (const e of part) {
+          seen.add(e.id);
+          if (notable(e.receipt.payload)) continue;
+          const closesAt = (Math.floor(Date.parse(e.receipt.payload.timestamp) / windowMs) + 1) * windowMs + SUMMARY_GRACE_MS;
+          if (closesAt <= at) continue;
+          routine += 1;
+          until = until === null ? closesAt : Math.max(until, closesAt);
+        }
+        if (part.length < 100 || seen.size >= SUMMARY_PEEK) break;
+      }
+      return { routine, until };
+    },
   };
 }
 

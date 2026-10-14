@@ -107,7 +107,8 @@ export type { SqlClass, SqlVerb } from "./sql-classify.js";
 // Delivery, status and identity pieces the Scopebond Agent reuses (one implementation, one contract).
 export { readDeliveryState, writeDeliveryState, recordDeliveryAttempt, recordRulesCredential, deliveryBackoff, waitingUntil, DELIVERY_STATE_FILE } from "./delivery-state.js";
 export type { DeliveryState } from "./delivery-state.js";
-export { describeDelivery, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
+export { describeDelivery, flushOutcome, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
+export type { FlushOutcome } from "./delivery-report.js";
 export {
   repairDelivery, repairDeliveryAt, backfillQueue, settleInterruptedActions, noteQueueMiss, BACKFILL_FILE, INTERRUPTED_AFTER_MS, INTERRUPTED_REFERENCE,
 } from "./delivery-repair.js";

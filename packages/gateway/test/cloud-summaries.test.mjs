@@ -238,3 +238,23 @@ test("without anything notable, a hook call sends the summaries once routine rec
     assert.equal(exporter.pending(), 0);
   } finally { exporter.stop(); }
 });
+
+test("held(): the open window's routine records are held until it closes; notable and full detail are never held", async () => {
+  const ws = workspace();
+  const { exporter } = await setup("standard", ws);
+  try {
+    assert.equal(exporter.pending(), 2);
+    // The second window (10:05-10:10) closes at 10:10, and is summarised 30 seconds after.
+    assert.deepEqual(exporter.held(), { routine: 2, until: W0 + 10 * 60_000 + 30_000 });
+  } finally { exporter.stop(); }
+  const full = await setup("full", workspace());
+  try { assert.deepEqual(full.exporter.held(), { routine: 0, until: null }); } finally { full.exporter.stop(); }
+  // A notable record the workspace did not take is waiting, not held.
+  const down = { fetch: async () => ({ ok: false, status: 503, text: async () => "down", headers: new Map() }) };
+  const failing = await setup("standard", down);
+  try {
+    assert.equal(failing.exporter.pending(), 9);
+    assert.deepEqual(failing.exporter.held(), { routine: 2, until: W0 + 10 * 60_000 + 30_000 });
+    assert.ok(failing.exporter.status().lastError);
+  } finally { failing.exporter.stop(); }
+});
