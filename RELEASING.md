@@ -87,8 +87,9 @@ workflow meets them:
   an `.npmrc` whose auth token is an unset `${NODE_AUTH_TOKEN}`.
 - When npm's OIDC exchange is refused, npm logs the reason only at verbose level
   and the publish fails with a misleading `E404 Not Found`. So before publishing,
-  `scripts/check-npm-trusted-publishing.mjs` makes the same exchange for every
-  public package and, on a refusal, stops with the registry's message and the
+  `scripts/check-npm-trusted-publishing.mjs` makes the same exchange for each
+  package whose version is not on npm yet (packages outside the release are
+  skipped) and, on a refusal, stops with the registry's message and the
   OIDC claims (repository, workflow, environment) to compare with the trusted
   publisher settings. It prints no token and publishes nothing.
 

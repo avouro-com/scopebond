@@ -175,6 +175,7 @@ jobs:
     needs: [version, check, pack]
     if: needs.version.outputs.mode == 'publish' && (needs.check.outputs.versionMerge == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Owner approval is required to deploy to this environment. npm's trusted
     # publisher for each package names this repository, release.yml and this
     # environment, so no other workflow or job can publish with OIDC. npm matches
@@ -210,10 +211,11 @@ jobs:
       # Installs @changesets/cli for the publish step; nothing is built here.
       - run: pnpm install --frozen-lockfile --ignore-scripts
       # npm's own OIDC exchange fails quietly (verbose log only) and the publish then
-      # reports a misleading E404. Make the same exchange first, for every public
-      # package, and stop with the registry's reason and the token's claims if npm
-      # would refuse it. Prints and keeps no token; publishes nothing.
-      - name: Check npm trusted publishing (OIDC) for every package
+      # reports a misleading E404. Make the same exchange first, for each package
+      # whose version is not on npm yet (the others are skipped), and stop with the
+      # registry's reason and the token's claims if npm would refuse it. Prints and
+      # keeps no token; publishes nothing.
+      - name: Check npm trusted publishing (OIDC) for the packages being published
         run: node scripts/check-npm-trusted-publishing.mjs
       - name: Configure company commit identity (release tags)
         run: |
