@@ -41,7 +41,7 @@ import {
   absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
   localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy, isTrustedProject,
-  wireLifecycleHooks, unwireLifecycleHooks, nativeHookProgram, missingHookPrograms,
+  wireLifecycleHooks, unwireLifecycleHooks, nativeHookProgram, missingHookPrograms, quotedEntryNote,
   npxAvailable, samePath,
 } from "./install.js";
 import {
@@ -1748,6 +1748,10 @@ function runStatus(args: string[] = []): void {
   console.log(`  Cursor           ${harnessScopeLabel(cursor) || (cursorDetected() ? "detected, not configured" : "not detected")}`);
   console.log(`  Codex            ${codex.project || codex.user ? `${harnessScopeLabel(codex)} — approve once with /hooks` : codexDetected() ? "detected, not configured" : "not detected"}`);
   console.log(`  GitHub Copilot   ${harnessScopeLabel(copilot) ? `${harnessScopeLabel(copilot)} — ${COPILOT_ENFORCEMENT}` : copilotDetected() ? "detected, not configured" : "not detected"}`);
+  for (const [harness, scopes] of [["cursor", cursor], ["codex", codex]] as const) {
+    const note = quotedEntryNote(harness, [scopes.project, scopes.local, scopes.user]);
+    if (note) console.log(`  note             ${harnessName(harness)}: ${note}`);
+  }
   console.log(`  cloud workspace  ${connected ? "connected" : "not connected (local only)"}`);
   {
     const activeDir = resolveConfigDir(process.cwd());
@@ -2006,6 +2010,8 @@ async function runDoctor(): Promise<void> {
         }
       }
     }
+    const quotedNote = quotedEntryNote(harness, [scopes.project, scopes.local, scopes.user]);
+    if (quotedNote) console.log(`    note: ${quotedNote}`);
     if (harness === "codex") console.log(`    run /hooks in Codex and approve Scopebond once`);
     if (harness === "copilot") console.log(`    ${COPILOT_ENFORCEMENT}`);
   }

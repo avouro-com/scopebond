@@ -258,3 +258,20 @@ test("held(): the open window's routine records are held until it closes; notabl
     assert.ok(failing.exporter.status().lastError);
   } finally { failing.exporter.stop(); }
 });
+
+test("held(): a routine record stamped further ahead than one window and its grace is pending, not held", async () => {
+  const outbox = new SqliteCloudOutbox(join(mkdtempSync(join(tmpdir(), "sb-sum-")), "outbox.db"), { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER });
+  const now = W0 + 10 * 60_000 + 1000;
+  // One in the window open now (10:10-10:15), one an hour ahead (a clock set wrong).
+  const inWindow = await receiptsAt([now - 500], { action_type: "file.read", params: { path: "a.txt" } });
+  const ahead = await receiptsAt([now + 60 * 60_000], { action_type: "file.read", params: { path: "b.txt" } });
+  const ws = workspace();
+  const exporter = createCloudExporter({ url: "https://ws.example", credential: "sbm_x", outbox, flushMs: 1e9, fetch: ws.fetch, now: () => now,
+    summaries: { detail: () => "standard", attester } });
+  try {
+    for (const r of [...inWindow, ...ahead]) exporter.enqueue(r);
+    await settle(exporter);
+    assert.equal(exporter.pending(), 2);
+    assert.deepEqual(exporter.held(), { routine: 1, until: W0 + 15 * 60_000 + 30_000 });
+  } finally { exporter.stop(); }
+});

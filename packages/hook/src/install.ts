@@ -339,7 +339,8 @@ export function harnessEntryCommand(e: unknown): string | undefined {
 }
 
 /** Whether any command field of one hook entry is Scopebond's (a Codex entry may name it only in `commandWindows`). */
-const commandIsOurs = (e: unknown): boolean => isRecord(e) && ENTRY_COMMAND_KEYS.some((key) => isScopebond(e[key]));
+export const harnessHookIsOurs = (e: unknown): boolean => isRecord(e) && ENTRY_COMMAND_KEYS.some((key) => isScopebond(e[key]));
+const commandIsOurs = harnessHookIsOurs;
 
 /** Whether a harness hook entry (either shape: a bare command, or a group with a
  *  nested `hooks` array) is a Scopebond entry. */
@@ -473,6 +474,20 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
   return file;
 }
 
+/** A hook list without Scopebond's entries. A group (`{ matcher, hooks: [...] }`) another tool shares keeps its matcher and
+ *  every hook that is not Scopebond's; only a group left with no hook at all goes. */
+function withoutOurHooks(list: unknown[]): unknown[] {
+  const kept: unknown[] = [];
+  for (const entry of list) {
+    if (isRecord(entry) && Array.isArray(entry.hooks) && !commandIsOurs(entry)) {
+      const others = entry.hooks.filter((h) => !commandIsOurs(h));
+      if (others.length === entry.hooks.length) kept.push(entry);
+      else if (others.length > 0) kept.push({ ...entry, hooks: others });
+    } else if (!entryMatches(entry)) kept.push(entry);
+  }
+  return kept;
+}
+
 /** Remove any Scopebond hook entry from a user-level harness config, leaving the rest
  *  intact. Returns true if the file existed. */
 export function removeHarnessConfig(file: string): boolean {
@@ -481,7 +496,7 @@ export function removeHarnessConfig(file: string): boolean {
   if (config === undefined) return false;
   const hooks = isRecord(config.hooks) ? config.hooks : {};
   for (const [event, value] of Object.entries(hooks)) {
-    if (Array.isArray(value)) (hooks as Record<string, unknown[]>)[event] = value.filter((e) => !entryMatches(e));
+    if (Array.isArray(value)) (hooks as Record<string, unknown[]>)[event] = withoutOurHooks(value);
   }
   // Copilot's `scopebond.json` is Scopebond's own file: once nothing else is in it, it goes rather than stay behind empty.
   // A file someone added their own hooks or settings to is kept, with only Scopebond's entries removed.
@@ -546,7 +561,8 @@ export function windowsShortPath(path: string): string | null {
   const known = shortPaths.get(path);
   if (known !== undefined) return known;
   // cmd.exe's own quoting: /s takes the outer quotes off and leaves the quoted path inside, so the arguments go verbatim.
-  const run = spawnSync(windowsSystemProgram("cmd"), ["/d", "/s", "/c", `"for %I in ("${path}") do @echo %~sI"`], {
+  // `chcp 65001` first: cmd prints in the console's OEM code page otherwise, which garbles a folder name outside it.
+  const run = spawnSync(windowsSystemProgram("cmd"), ["/d", "/s", "/c", `"chcp 65001 >nul & for %I in ("${path}") do @echo %~sI"`], {
     encoding: "utf8", windowsVerbatimArguments: true, windowsHide: true, timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
   });
   const found = run.status === 0 ? (run.stdout ?? "").trim() || null : null;
@@ -588,6 +604,36 @@ export function windowsHookCommandLine(paths: string[], args: string, shorten: S
   return plain.every((p): p is string => p !== null) ? `${plain.join(" ")} ${args}` : null;
 }
 
+/** Characters a shell still reads inside double quotes: Git Bash expands `$` and a backtick there, and cmd.exe expands
+ *  `%` (and `!` under delayed expansion). */
+const QUOTED_UNSAFE = /[$`%!]/;
+
+/** The quoted fallback (a path with no shell-plain spelling) cannot carry a path with a character a shell expands even
+ *  inside double quotes: the hook would name a different file and could not start, which leaves the agent unchecked. */
+export function refuseUnsafeQuotedPaths(paths: string[]): void {
+  const bad = paths.find((p) => QUOTED_UNSAFE.test(p));
+  if (bad) {
+    throw new Error(`cannot write a hook command naming ${bad}: a shell expands its ${bad.match(QUOTED_UNSAFE)?.[0]} even inside quotes, so the hook could not start. Install Scopebond under a folder whose path has no $, backtick, % or ! in it`);
+  }
+}
+
+/** Whether a Windows hook command is the quoted fallback (`"<node.exe>" "<cli.js>" codex`), which cmd.exe and Git Bash start
+ *  but PowerShell does not (it reads the quoted path as a string). */
+export function isQuotedWindowsHookCommand(command: string): boolean {
+  return /^"[A-Za-z]:[\\/]/.test(command.trim());
+}
+
+/** The note `status` and `doctor` print for a harness on Windows whose Scopebond entry is the quoted fallback: Codex and
+ *  Cursor may run it under PowerShell, which cannot start it, and a hook that cannot start leaves the agent unchecked.
+ *  Claude Code runs hooks under Git Bash, which starts it, and Copilot entries carry a PowerShell form of their own.
+ *  Null when there is nothing to say. */
+export function quotedEntryNote(harness: Harness, files: Array<string | null | undefined>, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform !== "win32" || (harness !== "codex" && harness !== "cursor")) return null;
+  const quoted = files.flatMap((f) => (f ? configuredHookCommands(f) : [])).find(isQuotedWindowsHookCommand);
+  if (!quoted) return null;
+  return "its hook entry names quoted paths (this computer has no short name for one of its folders), so it may not start under PowerShell; cmd.exe and Git Bash start it";
+}
+
 /** The absolute command a harness entry runs: the current Node executable and the
  *  absolute path to this CLI, so it does not depend on PATH.
  *
@@ -599,6 +645,7 @@ export function absoluteHookCommand(cliPath: string, harness: Harness, shorten: 
   if (process.platform === "win32") {
     const plain = windowsHookCommandLine([process.execPath, cliPath], harness, shorten);
     if (plain) return plain;
+    refuseUnsafeQuotedPaths([process.execPath, cliPath]);
   }
   const quote = (s: string) => (process.platform === "win32" || /\s/.test(s) ? `"${s}"` : s);
   return `${quote(process.execPath)} ${quote(cliPath)} ${harness}`;
@@ -611,6 +658,7 @@ export function nativeHookCommand(harness: Harness, exe: string = process.execPa
   if (process.platform === "win32") {
     const plain = windowsHookCommandLine([exe], `hook ${harness}`, shorten);
     if (plain) return plain;
+    refuseUnsafeQuotedPaths([exe]);
   }
   return `"${exe}" hook ${harness}`;
 }
@@ -666,6 +714,9 @@ export function configuredHookCommands(file: string): string[] {
     if (!isRecord(entry)) return;
     const command = harnessEntryCommand(entry);
     if (command !== undefined && isScopebond(command)) found.push(command);
+    // Codex runs `commandWindows` instead on Windows: a different one there is checked too.
+    const windows = entry.commandWindows;
+    if (typeof windows === "string" && windows !== command && isScopebond(windows)) found.push(windows);
     if (Array.isArray(entry.hooks)) for (const h of entry.hooks) collect(h);
   };
   try {

@@ -846,6 +846,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           if (notable(e.receipt.payload)) continue;
           const closesAt = (Math.floor(Date.parse(e.receipt.payload.timestamp) / windowMs) + 1) * windowMs + SUMMARY_GRACE_MS;
           if (closesAt <= at) continue;
+          // A window cannot close later than one window and its grace from now: a record stamped further ahead (a clock
+          // set wrong) is not waiting for a window that will close, so it counts as undelivered rather than held.
+          if (closesAt > at + windowMs + SUMMARY_GRACE_MS) continue;
           routine += 1;
           until = until === null ? closesAt : Math.max(until, closesAt);
         }

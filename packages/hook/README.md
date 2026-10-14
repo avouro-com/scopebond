@@ -80,9 +80,23 @@ slashes, and with the short (8.3) name of any folder whose name has a space or a
 character a shell treats specially — for example
 `C:/PROGRA~1/nodejs/node.exe C:/…/.scopebond/runtime/…/cli.js codex` — a form
 every one of those shells starts the same way. Codex entries also carry `commandWindows`
-(the portable `npx` form becomes `npx.cmd` there). Where a volume has short names switched off,
-the paths are quoted instead, which cmd.exe and Git Bash run but PowerShell does not;
-`uninstall` and upgrades recognise both forms.
+(the portable `npx` form becomes `npx.cmd` there). The paths are quoted instead — a form
+cmd.exe and Git Bash run but PowerShell does not — when a folder that needs a short name has
+none:
+
+- the volume has short (8.3) names switched off;
+- a folder name has `%`, `^`, `!` or `&` in it (the short-name lookup through cmd.exe is not
+  attempted for those);
+- a folder's short name still has a character outside plain ASCII letters, digits and
+  `. _ - @ ~` (a non-ASCII name; the lookup runs with code page 65001 so the name itself reads
+  correctly);
+- the path is a network (UNC) path, which has no drive letter.
+
+`status` and `doctor` then add a note that the Codex or Cursor entry may not start under
+PowerShell. A quoted path with `$`, a backtick, `%` or `!` in it is refused outright (Git Bash
+or cmd.exe expands those even inside quotes, so the hook could not start): install Scopebond
+under a folder without them. The Scopebond Agent rewrites a quoted entry into the plain form
+once the plain form is available. `uninstall` and upgrades recognise both forms.
 
 ```
 scopebond status                    # home, which agents are configured, cloud, receipts
@@ -688,6 +702,13 @@ locally and retried if the workspace is unreachable. `npx -y @scopebond/hook@lat
 delivers anything still queued — run it on a session-end hook (and set
 `SCOPEBOND_HOOK_FLUSH_MS=0`) if you want zero per-call latency. Records then wait until the
 session ends, so during a long session `status` and `doctor` report them as not delivered.
+With summary records on, routine records wait for their five-minute window to close and then
+leave as one signed summary: `flush` reports them on their own line ("N routine record(s) held
+for the summary window until HH:MM", with the date when that is not today) and exits 0 when they
+are all that is left. A `flush` with only such records left sends nothing and does not contact
+the workspace. A record stamped further ahead than one window (a clock set wrong) is counted as
+still pending, not held. `flush` exits 1 when anything else is left or the last delivery attempt
+failed, even with nothing left in the queue.
 
 **Reconnecting.** Run `login` again from any folder: it repairs your user-level connection
 instead of creating a second one; pass `--project` to reconnect the setup of the folder you

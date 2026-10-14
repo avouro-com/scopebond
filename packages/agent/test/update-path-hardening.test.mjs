@@ -229,3 +229,16 @@ test("the start check runs the installed program and requires it to report the v
   const other = await startCheck(next());
   assert.equal(other.ok, false, "the program on disk still reports the running version");
 });
+
+test("a quoted Windows entry is rewritten in the plain form every hook shell starts, once that form exists", { skip: process.platform !== "win32" && "Windows only" }, () => {
+  // An earlier release's form: quoted paths, which PowerShell cannot start.
+  const quoted = `"${process.execPath}" "${hookCliPath()}" claude`;
+  claudeSettings(quoted);
+  assert.equal(maintainHookEntries(["claude"], false, "linux").length, 0, "nothing to repair off Windows");
+  assert.equal(claudeCommand(), quoted);
+  const changed = maintainHookEntries(["claude"], false, "win32");
+  assert.equal(changed.length, 1);
+  assert.match(changed[0].reason, /every Windows hook shell starts/);
+  assert.doesNotMatch(claudeCommand(), /^"/, claudeCommand());
+  assert.equal(maintainHookEntries(["claude"], false, "win32").length, 0, "the plain form is left alone");
+});

@@ -13,7 +13,7 @@ import {
   readHarnessConfig, projectHarnessFile, localHarnessFile, harnessEntryMatches, backupHarnessConfig,
   gitShareState, excludeFromGit, pruneHarnessEntries, configuredHookCommands, isMachineSpecificCommand,
   userHarnessFile, isNpxHookCommand, hookCommandResolves, nativeHookCommand, addCopilotHooks, copilotHookEntry, codexHookEntry,
-  COPILOT_EVENTS, harnessEntryCommand, isScopebondHookCommand, type Harness,
+  COPILOT_EVENTS, harnessHookIsOurs, type Harness,
 } from "./install.js";
 import { cliCommand, hookCommand } from "./version.js";
 import { loadOrCreateDigestKey } from "./minimize.js";
@@ -238,7 +238,8 @@ function mergeHarnessConfig(harness: Harness, config: Record<string, unknown>, c
       ? { hooks: [codexHookEntry(codexCmd)] }
       : { matcher: "*", hooks: [{ type: "command", command: claudeCmd }] };
     // Only Scopebond's own hook leaves a group: other hooks in the same group, and that group's matcher, stay as they are.
-    const ours = (h: unknown): boolean => isScopebondHookCommand(harnessEntryCommand(h));
+    // Any command field counts: a Codex hook may name Scopebond only in `commandWindows`.
+    const ours = harnessHookIsOurs;
     const kept: unknown[] = [];
     for (const group of list) {
       if (isRecord(group) && Array.isArray(group.hooks) && group.hooks.some(ours)) {

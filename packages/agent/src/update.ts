@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isScopebondHookCommand, isSingleExecutable,
+  absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isQuotedWindowsHookCommand, isScopebondHookCommand, isSingleExecutable,
   nativeHookCommand, userHarnessFile, writeHarnessConfig, type Harness, type HookConnection,
 } from "@scopebond/hook";
 import { findProgram, windowsSystemProgram } from "@scopebond/gateway/node";
@@ -161,7 +161,7 @@ export function npmOnPath(args: string[], env: NodeJS.ProcessEnv = process.env, 
  *  "recommended" (`moveVersions`) an entry naming an older hook, or any `npx` entry, is pinned to the carried hook; under
  *  "hold" only broken entries and `npx` entries that name no version or the carried one are (their version does not
  *  change). Entries of other tools are never touched. Returns the files changed. */
-export function maintainHookEntries(harnesses: Harness[], moveVersions = true): Array<{ harness: Harness; file: string; reason: string }> {
+export function maintainHookEntries(harnesses: Harness[], moveVersions = true, platform: NodeJS.Platform = process.platform): Array<{ harness: Harness; file: string; reason: string }> {
   // The signed install: every Scopebond entry runs this executable, whatever wrote it (an npm install before it, an npx
   // form), under either policy: the hook is the one inside this program, so no version moves.
   if (isSingleExecutable()) return useNativeHookEntries(harnesses);
@@ -174,9 +174,13 @@ export function maintainHookEntries(harnesses: Harness[], moveVersions = true): 
     const broken = ours.some((c) => !isNpxCommand(c) && !hookCommandResolves(c));
     const npx = ours.some((c) => { if (!isNpxCommand(c)) return false; const v = commandHookVersion(c); return moveVersions || v === null || v === carried; });
     const behind = moveVersions && ours.some((c) => { const v = commandHookVersion(c); return v !== null && compareVersions(v, carried) < 0; });
-    if (!broken && !npx && !behind) continue;
-    writeHarnessConfig(file, harness, maintainedHookCommand(harness));
-    changed.push({ harness, file, reason: broken ? "the hook command could not start" : npx ? `pinned to the hook this agent carries (${carried})` : `moved to hook ${carried}` });
+    // A quoted Windows entry (an earlier release's form, or a fallback from when a folder had no short name) that now has
+    // the shell-plain spelling every hook shell starts is rewritten: PowerShell cannot start the quoted one.
+    const target = !broken && !npx && !behind && platform === "win32" && ours.some(isQuotedWindowsHookCommand) ? maintainedHookCommand(harness) : null;
+    const quoted = target !== null && !isQuotedWindowsHookCommand(target);
+    if (!broken && !npx && !behind && !quoted) continue;
+    writeHarnessConfig(file, harness, target ?? maintainedHookCommand(harness));
+    changed.push({ harness, file, reason: broken ? "the hook command could not start" : npx ? `pinned to the hook this agent carries (${carried})` : behind ? `moved to hook ${carried}` : "rewritten in the form every Windows hook shell starts (PowerShell could not start the quoted one)" });
   }
   return changed;
 }

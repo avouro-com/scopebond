@@ -57,10 +57,15 @@ export function deliveryStalled(state: Pick<DeliveryState, "last_success_at">, p
     && (state.last_success_at === null || state.last_success_at < oldest);
 }
 
-/** "14:05": a time on this computer's clock, rounded up to the minute so it is never earlier than the time itself. */
-function clockTime(at: number): string {
+/** "14:05": a time on this computer's clock, rounded up to the minute so it is never earlier than the time itself, with
+ *  its date ("2026-10-14 00:02") when that is not today's. */
+export function clockTime(at: number, now = Date.now()): string {
   const d = new Date(Math.ceil(at / 60_000) * 60_000);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const today = new Date(now);
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+  return sameDay ? time : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
 }
 
 export interface FlushOutcome {
@@ -85,7 +90,7 @@ export function flushOutcome(
   const wait = total && status?.backoff && status.backoff.until > now && !status.lastError ? status.backoff.until : null;
   const lines = [`flushed; ${pending} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}${wait ? ` (the workspace asked this computer to wait; next try after ${new Date(wait).toISOString()})` : ""}`];
   if (routine) {
-    const until = held?.until ? ` until ${clockTime(held.until)}` : "";
+    const until = held?.until ? ` until ${clockTime(held.until, now)}` : "";
     lines.push(`${routine} routine record(s) held for the summary window${until}; once it closes they are sent as one signed summary (by the agent, or the next \`${cliCommand("flush")}\`)`);
   }
   return { lines, exitCode: status?.lastError || pending > 0 ? 1 : 0, pending, held: routine };
