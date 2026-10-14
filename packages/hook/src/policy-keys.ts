@@ -4,11 +4,13 @@
 // `key_id` of the key that made it (policy-signature.ts). The hook trusts only the keys listed here: a key a document names
 // that is not listed, or that is outside its validity window, is refused like a bad signature.
 //
-// The list ships empty: the workspace's signing key does not exist yet, so this release verifies nothing it could pin and
-// runs in `dual` mode by default (signed documents are verified against the keys it has, unsigned ones are accepted and
-// recorded). A future release pins the workspace's key here. Rotation is a release too: the next key is added ahead of time,
-// with a `not_before` in the future, so computers already have it when the workspace starts signing with it; the old key is
-// removed once its `not_after` has passed.
+// This release pins Scopebond Cloud's policy signing key. It still runs in `dual` mode by default (signed documents are
+// verified against the pinned keys, unsigned ones are accepted and recorded); `enforce` stays opt-in. Rotation is a release
+// too: the next key is added ahead of time, with a `not_before` in the future, so computers already have it when the
+// workspace starts signing with it; the old key is removed once its `not_after` has passed.
+//
+// Scopebond Cloud names its key `pol_` followed by the first 16 hex digits of the SHA-256 of the key's SPKI DER in base64
+// (the PEM body on one line), and publishes the same entries at https://cloud.scopebond.com/.well-known/scopebond-policy-keys.json.
 //
 // An entry looks like this (an illustration, not a key):
 //
@@ -35,8 +37,15 @@ export interface PolicyKey {
   not_after: string;
 }
 
-/** The keys pinned in this release. Empty until the workspace's key exists; see the note above. */
-export const PINNED_POLICY_KEYS: readonly PolicyKey[] = [];
+/** The keys pinned in this release; see the note above. */
+export const PINNED_POLICY_KEYS: readonly PolicyKey[] = [
+  {
+    key_id: "pol_088707688c36e0f6",
+    public_key: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA/eUv90rHLFgh6UWx/6cV67mSiedwjmHnqCXI8kxIlyk=\n-----END PUBLIC KEY-----\n",
+    not_before: "2026-10-13T21:00:18Z",
+    not_after: "2027-10-13T21:00:18Z",
+  },
+];
 
 export const POLICY_KEYS_ENV = "SCOPEBOND_POLICY_KEYS_JSON";
 

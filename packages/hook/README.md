@@ -851,11 +851,14 @@ even if the answer passed through something that could change it.
   again after the workspace has issued a newer one, keeps the rules as they are.
 - **Keys.** The trusted keys are pinned in the release (`src/policy-keys.ts`: `key_id`,
   `public_key` as SPKI PEM or the raw 32-byte key in base64, `not_before`, `not_after`). This
-  release pins none yet, because the workspace's signing key does not exist yet: a later release
-  pins it. Rotation is a release too: the next key ships ahead of time with a future
-  `not_before`. `SCOPEBOND_POLICY_KEYS_JSON` (a JSON array of the same entries) adds keys, for
-  tests and for trying a key before it is pinned. An entry whose window closes before it opens,
-  or whose `public_key` does not read as an Ed25519 key, is left out, and `doctor` says why.
+  release pins Scopebond Cloud's policy signing key, `pol_088707688c36e0f6` (valid
+  2026-10-13T21:00:18Z to 2027-10-13T21:00:18Z), which Scopebond Cloud also publishes at
+  `https://cloud.scopebond.com/.well-known/scopebond-policy-keys.json`. Its id is `pol_` and the
+  first 16 hex digits of the SHA-256 of the key's SPKI DER in base64. Rotation is a release
+  too: the next key ships ahead of time with a future `not_before`.
+  `SCOPEBOND_POLICY_KEYS_JSON` (a JSON array of the same entries) adds keys, for tests and for
+  trying a key before it is pinned. An entry whose window closes before it opens, or whose
+  `public_key` does not read as an Ed25519 key, is left out, and `doctor` says why.
 - **What is reported.** `status --json` has `policy_signature: { mode, last, reason }`, where
   `last` is `verified`, `unsigned` or `refused`; each rules check tells the workspace the same
   (`x-scopebond-policy-signature`).
