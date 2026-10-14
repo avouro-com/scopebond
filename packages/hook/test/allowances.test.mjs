@@ -306,3 +306,22 @@ test("unblocking automatically, reviewed later: the workspace sets one length; o
   assert.deepEqual(p.offers, { allow: true, always: true, ask: true, fifteen: true });
   assert.equal(p.reviewed, false);
 });
+
+test("an allowance the person stopped no longer applies, stays stopped when the workspace sends its copy, and carries how it was unblocked", async () => {
+  const { endAllowance, mergeWorkspaceAllowances, matchAllowance } = await import("../dist/index.js");
+  const { unblockedBy } = await import("../dist/override.js");
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ lasts: "15m", review: true }) } });
+  const d = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "15m" }] });
+  assert.equal(d.decision, "allow");
+  const made = readAllowances(dir).at(-1);
+  assert.equal(made.unblocked, "automatic", "applied at once, reviewed later");
+  assert.equal((await run(dir, bash("rm -rf build"))).override.method, "allowance");
+  assert.deepEqual(endAllowance(dir, made.id), { outcome: "ended" });
+  assert.equal((await run(dir, bash("rm -rf build"), { answers: [] })).decision, "deny", "stopped: it no longer lets the action through");
+  const merged = mergeWorkspaceAllowances(readAllowances(dir), [{ ...made, created_by: "person" }], []);
+  assert.ok(merged.find((a) => a.id === made.id).ended_at, "the workspace's copy does not bring it back");
+  assert.equal(matchAllowance(merged, { rule: "destructive-shell", actionKey: made.action_key, osUserDigest: made.os_user_digest, now: Date.now() }), null);
+  assert.equal(unblockedBy(terms()), undefined, "an older workspace's records stay as they were");
+  assert.equal(unblockedBy(terms({ lasts: "once" })), "person");
+  assert.equal(unblockedBy(terms({ review: true })), "automatic");
+});

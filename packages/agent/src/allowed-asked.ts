@@ -24,6 +24,8 @@ export interface AllowedItem {
   ends_at: string;
   /** Who approved it, when the workspace said. */
   answered_by: string | null;
+  /** "automatic": applied at once by the workspace's terms and reviewed later; "person": the person's own choice. */
+  unblocked: "automatic" | "person" | "admin" | null;
 }
 
 /** A request to an admin. `state`: waiting (not answered yet), approved (the workspace sent an allowance for it) or declined
@@ -76,7 +78,7 @@ const extra = (a: Allowance, key: string, max: number): string | null => text((a
 export function allowedList(dir: string, now = Date.now()): AllowedItem[] {
   const texts = textsByKey(dir);
   return allAllowances(dir)
-    .filter((a) => Date.parse(a.expires_at) > now && (a.state === "proposed" || (a.state === "active" && !(a.once && a.uses > 0))))
+    .filter((a) => !a.ended_at && Date.parse(a.expires_at) > now && (a.state === "proposed" || (a.state === "active" && !(a.once && a.uses > 0))))
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
     .slice(0, MAX_ITEMS)
     .map((a) => ({
@@ -84,6 +86,7 @@ export function allowedList(dir: string, now = Date.now()): AllowedItem[] {
       choice: a.once ? "once" : a.created_by === "person" && Date.parse(a.expires_at) - Date.parse(a.created_at) <= FIFTEEN_MS + 60_000 ? "fifteen" : "always",
       state: a.state === "proposed" ? "proposed" : "active", needs_admin: a.state === "proposed", by: a.created_by === "workspace" ? "admin" : "person",
       created_at: a.created_at, ends_at: a.expires_at, answered_by: a.created_by === "workspace" ? extra(a, "approved_by", 120) : null,
+      unblocked: a.unblocked ?? null,
     }));
 }
 

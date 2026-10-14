@@ -200,3 +200,23 @@ test("the words after an unblock that an admin reviews later", () => {
   assert.equal(answerText("allowed", "always", 30, "Acme", true, true, now), "Unblocked until Nov 13 · an admin will review it");
   assert.equal(answerText("allowed", "fifteen", 30, "Acme", true, false, now), "Allowed for 15 minutes · Recorded and sent to Acme", "not reviewed: as before");
 });
+
+test("stop allowing from the tray: the person's allowance ends at once and leaves Allowed; an admin's is not theirs to stop", async () => {
+  const { dir, id } = await blockedComputer();
+  const service = await serviceFor(dir);
+  try {
+    await answer(dir, { action_id: id, choice: "fifteen", reason: REASON });
+    const [mine] = (await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances;
+    assert.equal(mine.by, "person");
+    const stopped = await callAgent(dir, "POST", "/allowances/stop", { id: mine.id }, 10_000);
+    assert.deepEqual(stopped, { outcome: "stopped", text: "Stopped allowing rm -rf build on this computer" });
+    assert.deepEqual((await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances, []);
+    assert.ok(readAllowances(dir).find((a) => a.id === mine.id).ended_at);
+    assert.equal((await callAgent(dir, "POST", "/allowances/stop", { id: mine.id }, 10_000)).outcome, "gone");
+    const doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8"));
+    const admins = { ...makeAllowance({ rule: "destructive-shell", actionKey: "c".repeat(64), reason: REASON, osUserDigest: null, lasts: "always" }), created_by: "workspace" };
+    delete admins.reason;
+    writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ ...doc, allowances: [admins] }));
+    assert.equal((await callAgent(dir, "POST", "/allowances/stop", { id: admins.id }, 10_000)).outcome, "gone");
+  } finally { await service.stop(); }
+});

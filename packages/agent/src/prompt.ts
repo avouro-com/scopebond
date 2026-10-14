@@ -19,6 +19,15 @@ export interface OverrideQuestion {
   mode: "override" | "ask";
   /** Which choices the workspace allows: allow (once), fifteen (for 15 minutes), always (an allowance), ask (Ask an admin). */
   offers: { allow: boolean; always: boolean; ask: boolean; fifteen?: boolean };
+  /** The coding tool that asked (the tray names it), when the hook says. */
+  harness?: string;
+  /** The project (the repository's name), when the hook says. */
+  project?: string;
+  /** Every unblock is reviewed by an admin later (the workspace's `review` term). */
+  reviewed?: boolean;
+  /** Days an "always" allowance lasts, and whether it waits for an admin. */
+  always_days?: number;
+  always_needs_admin?: boolean;
 }
 export interface OverrideAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always" }
 export type Prompter = (question: OverrideQuestion) => Promise<OverrideAnswer>;
@@ -42,10 +51,16 @@ export function parseQuestion(raw: unknown): OverrideQuestion | null {
     : { allow: mode === "override" && o.allow === true, always: mode === "override" && o.always === true, ask: o.ask === true,
         // A hook that does not say offers 15 minutes wherever it offers "always" (both came with allowances).
         fifteen: mode === "override" && (o.fifteen === true || (o.fifteen === undefined && o.always === true)) };
+  const days = Number(r.always_days);
   return {
     action_id: r.action_id, rule: r.rule, title: clip(r.title, 120) || r.rule, summary: clip(r.summary, 200), reason_min: reasonMin,
     lasts: clip(r.lasts, 80) || "this action only", timeout_ms: Number.isFinite(timeout) ? Math.min(Math.max(timeout, 5_000), 55_000) : 45_000,
     mode, offers,
+    ...(typeof r.harness === "string" && /^[a-z][a-z0-9-]{0,39}$/.test(r.harness) ? { harness: r.harness } : {}),
+    ...(typeof r.project === "string" && clip(r.project, 80) ? { project: clip(r.project, 80) } : {}),
+    ...(r.reviewed === true ? { reviewed: true } : {}),
+    ...(Number.isInteger(days) && days >= 1 && days <= 365 ? { always_days: days } : {}),
+    ...(r.always_needs_admin === true ? { always_needs_admin: true } : {}),
   };
 }
 
@@ -54,7 +69,7 @@ const allowsAny = (q: OverrideQuestion): boolean => q.offers.allow || !!q.offers
 
 export function questionText(q: OverrideQuestion): string {
   const head = `Scopebond blocked this. Your workspace's rule "${q.title}" blocked this action:\n\n${q.summary}\n\n`;
-  if (!allowsAny(q)) return `${head}You may ask an admin to allow it. Say why, in at least ${q.reason_min} characters. The action stays blocked until an admin answers; your name, the reason and the action are recorded in your workspace.`;
+  if (!allowsAny(q)) return `${head}You may ask to unblock it; an admin decides. Say why, in at least ${q.reason_min} characters. The action stays blocked until an admin answers; your name, the reason and the action are recorded in your workspace.`;
   return `${head}You may allow it. Say why, in at least ${q.reason_min} characters. Your name, the reason and the action are recorded in your workspace.`;
 }
 
@@ -109,7 +124,7 @@ function Btn($label, $width, $decision, $lasts, $needs) {
   $b
 }
 $d = Btn '${b64("Don't allow")}' 100 'deny' 'once' $false; $x -= 108
-${q.offers.ask ? `[void](Btn '${b64("Ask an admin")}' 110 'ask' 'once' $true); $x -= 118` : ""}
+${q.offers.ask ? `[void](Btn '${b64("Ask to unblock")}' 110 'ask' 'once' $true); $x -= 118` : ""}
 ${q.offers.always ? `[void](Btn '${b64("Always allow this here…")}' 150 'allow' 'always' $true); $x -= 158` : ""}
 ${q.offers.fifteen ? `[void](Btn '${b64("Allow for 15 min")}' 120 'allow' '15m' $true); $x -= 128; ` : ""}${q.offers.allow ? `[void](Btn '${b64("Allow once")}' 92 'allow' 'once' $true)` : ""}
 $r.Add_TextChanged({ foreach ($b in $script:needReason) { $b.Enabled = ($r.Text.Trim().Length -ge $min) } })
@@ -140,6 +155,16 @@ async function promptWindows(q: OverrideQuestion): Promise<OverrideAnswer> {
   } catch { return { decision: "unavailable" }; }
 }
 
+/** The one button a dialog with room for a single choice shows (macOS and Linux): allow once where that is offered, else
+ *  the one length the workspace set, else ask to unblock. Null when nothing may be done. */
+export function singleChoice(q: OverrideQuestion): { label: string; decision: "allow" | "ask"; lasts?: "once" | "15m" | "always" } | null {
+  if (q.offers.allow) return { label: "Allow once", decision: "allow", lasts: "once" };
+  if (q.offers.fifteen) return { label: "Allow for 15 min", decision: "allow", lasts: "15m" };
+  if (q.offers.always) return { label: "Always allow", decision: "allow", lasts: "always" };
+  if (q.offers.ask) return { label: "Ask to unblock", decision: "ask" };
+  return null;
+}
+
 const MAC_SCRIPT = [
   "on run argv",
   "set q to item 1 of argv",
@@ -151,28 +176,29 @@ const MAC_SCRIPT = [
 ];
 
 async function promptMac(q: OverrideQuestion): Promise<OverrideAnswer> {
-  // macOS dialogs take three buttons: "Allow once" where allowing is offered, otherwise "Ask an admin".
-  const asking = !q.offers.allow && q.offers.ask;
-  if (!q.offers.allow && !asking) return { decision: "unavailable" };
-  const script = asking ? MAC_SCRIPT.map((line) => line.replace(/Allow once/g, "Ask an admin").replace('return "allow"', 'return "ask"')) : MAC_SCRIPT;
+  // A macOS dialog here has one choice besides "Don't allow" (singleChoice).
+  const one = singleChoice(q);
+  if (!one) return { decision: "unavailable" };
+  const label = one.label.replace(/"/g, "");
+  const script = MAC_SCRIPT.map((line) => line.replace(/Allow once/g, label).replace('return "allow"', `return "${one.decision}"`));
   const args = script.flatMap((line) => ["-e", line]);
   const { code, stdout } = await run("osascript", [...args, questionText(q), String(Math.round(q.timeout_ms / 1000))], q.timeout_ms);
   if (code === null) return { decision: "unavailable" };
   if (code !== 0) return { decision: "deny" }; // "Don't allow" is the cancel button
   const [first, ...rest] = stdout.replace(/\r?\n$/, "").split("\n");
-  if (first === "ask") return { decision: "ask", reason: rest.join("\n") };
-  return first === "allow" ? { decision: "allow", reason: rest.join("\n"), lasts: "once" } : { decision: "deny" };
+  if (first === "ask" && one.decision === "ask") return { decision: "ask", reason: rest.join("\n") };
+  return first === "allow" && one.decision === "allow" ? { decision: "allow", reason: rest.join("\n"), lasts: one.lasts } : { decision: "deny" };
 }
 
 async function promptLinux(q: OverrideQuestion): Promise<OverrideAnswer> {
-  const asking = !q.offers.allow && q.offers.ask;
-  if (!q.offers.allow && !asking) return { decision: "unavailable" };
+  const one = singleChoice(q);
+  if (!one) return { decision: "unavailable" };
   const { code, stdout } = await run("zenity", [
-    "--entry", "--title=Scopebond", `--text=${questionText(q)}`, `--ok-label=${asking ? "Ask an admin" : "Allow once"}`, "--cancel-label=Don't allow",
+    "--entry", "--title=Scopebond", `--text=${questionText(q)}`, `--ok-label=${one.label}`, "--cancel-label=Don't allow",
     `--timeout=${Math.round(q.timeout_ms / 1000)}`,
   ], q.timeout_ms);
   if (code === null) return { decision: "unavailable" };
-  if (code === 0) return asking ? { decision: "ask", reason: stdout.replace(/\r?\n$/, "") } : { decision: "allow", reason: stdout.replace(/\r?\n$/, ""), lasts: "once" };
+  if (code === 0) return one.decision === "ask" ? { decision: "ask", reason: stdout.replace(/\r?\n$/, "") } : { decision: "allow", reason: stdout.replace(/\r?\n$/, ""), lasts: one.lasts };
   // 1: Don't allow; 5: timed out; anything else (no display, not installed): no window.
   return code === 1 || code === 5 ? { decision: "deny" } : { decision: "unavailable" };
 }

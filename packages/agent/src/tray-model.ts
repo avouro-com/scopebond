@@ -5,6 +5,7 @@
 import type { StatusJson } from "@scopebond/hook";
 import type { Health } from "./health.js";
 import type { AllowedItem, AskedItem } from "./allowed-asked.js";
+import type { LiveQuestion } from "./live-prompt.js";
 
 /** The six icon states of the "S" tile: no badge when protected; a badge with its own glyph otherwise. */
 export type TrayState = "protected" | "working" | "offline" | "attention" | "problem" | "disconnected";
@@ -44,6 +45,8 @@ export interface TrayModel {
   /** What the person let through (in force or waiting for an admin), and what they asked an admin (allowed-asked.ts). */
   allowed?: AllowedItem[];
   asked?: AskedItem[];
+  /** The hook's question waiting for the person now, when the tray is listening (live-prompt.ts). */
+  pending?: LiveQuestion | null;
 }
 
 /** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes, or

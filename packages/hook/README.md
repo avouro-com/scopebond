@@ -749,7 +749,9 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   with the next rules check. The receipt of an action an allowance lets through says
   `method: "allowance"` and names it. An allowance is bound to one rule, never applies to
   Scopebond's own protection, and stops applying when it expires, is used up (a one-time one) or
-  the workspace revokes it. The hook keeps them, and the last blocks a person may act on, in its
+  the workspace revokes it, or the person stops it ("Stop allowing" in the tray: it stops applying at once, and the agent
+  sends the workspace the ended record). Where the workspace sets the unblock terms, each allowance a person makes also
+  says how it was unblocked (`unblocked`: `automatic` or `person`). The hook keeps them, and the last blocks a person may act on, in its
   own folder (`allowances.json`, `requests.json`, `blocked.json`), which the coding agent cannot
   change. The hook tells the workspace it understands these settings
   (`x-scopebond-hook-capabilities: allowances`); a workspace sends them only then. A workspace may also set the one length

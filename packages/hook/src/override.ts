@@ -124,6 +124,13 @@ export function offersFor(mode: string, terms: OverrideTerms, underLimit = true)
   };
 }
 
+/** How an unblock under these terms is recorded, for a workspace that sets the unblock terms (it reads the flag): applied
+ *  at once and reviewed later, or the person's own choice. Undefined for an older workspace (its records stay as they were). */
+export function unblockedBy(terms: OverrideTerms): "automatic" | "person" | undefined {
+  if (terms.lasts === undefined && terms.review === undefined) return undefined;
+  return terms.review === true ? "automatic" : "person";
+}
+
 /** Whether any length of allowing is offered. */
 export const allowsAny = (offers: { allow: boolean; always: boolean; fifteen: boolean }): boolean => offers.allow || offers.fifteen || offers.always;
 
@@ -275,6 +282,8 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     const waitMs = typeof ctx.waitMs === "function" ? ctx.waitMs() : ctx.waitMs ?? 45_000;
     let answer = await (ctx.ask ?? askAgent)(ctx.home, {
       action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting.mode, offers,
+      // For the tray, which shows the question too: the coding tool, and what the workspace set about the length.
+      harness: ctx.harness, reviewed: terms.review === true, always_days: terms.always_days ?? ALLOWANCE_DEFAULT_DAYS, always_needs_admin: terms.always === "needs_admin",
       lasts: terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only", timeout_ms: waitMs,
     }, waitMs + 2_000);
     // Ask an admin: the action stays blocked; the request waits for the agent to send it.
@@ -300,7 +309,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
       if (length === "15m" || length === "always") {
         try {
           const made = makeAllowance({ rule, actionKey: key, reason, osUserDigest: record.os_user_digest, lasts: length,
-            alwaysDays: terms.always_days, needsAdmin: terms.always === "needs_admin", now: t });
+            alwaysDays: terms.always_days, needsAdmin: terms.always === "needs_admin", now: t, unblocked: unblockedBy(terms) });
           writeAllowances(ctx.dir, [...allowances, made], t);
           rememberActionText(ctx.dir, key, summary, t);
           // Waiting for an admin, the person is still covered for 15 minutes.
@@ -384,7 +393,7 @@ export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now =
   try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { /* checked above */ }
   const terms = doc?.rules?.[q.item.rule as AnyManagedRuleId]?.override;
   const made = makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts,
-    alwaysDays: terms?.always_days, needsAdmin: terms?.always === "needs_admin", now });
+    alwaysDays: terms?.always_days, needsAdmin: terms?.always === "needs_admin", now, unblocked: terms ? unblockedBy(terms) : undefined });
   const allowances = [...readAllowances(dir), made];
   // Waiting for an admin, the person is still covered for 15 minutes.
   if (made.state === "proposed") allowances.push(makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts: "15m", now }));

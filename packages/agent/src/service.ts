@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { hostname, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleTitle,
+  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleTitle,
   writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -23,6 +23,7 @@ import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
+import { livePrompt } from "./live-prompt.js";
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
@@ -372,7 +373,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     summary = connection ? await fetchComputerSummary(connection, options.fetchImpl) : null;
   };
 
-  const prompt = serialized(options.prompter ?? systemPrompter);
+  // The Scopebond window, one at a time; and the hook's questions, asked in the tray first when one is listening (the window
+  // is their fallback).
+  const windowPrompt = serialized(options.prompter ?? systemPrompter);
+  const live = livePrompt({ fallback: windowPrompt });
+  const prompt = serialized(live.prompter);
   let shownLevel: HealthLevel | null = null;
   const health = () => healthOf(computerStatus(options.dir), lastMaintenance?.selfCheck ?? null);
   const noticeHealth = () => { const h = health(); notifyChange(shownLevel, h); shownLevel = h.level; };
@@ -384,7 +389,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // Allowances a person made here, and their requests to an admin.
     try {
       const sent = await sendAllowancesAndRequests(options.dir, connection, options.fetchImpl);
-      if (sent.allowances || sent.requests) log(`sent ${sent.allowances} allowance(s) and ${sent.requests} request(s) to the workspace`);
+      if (sent.allowances || sent.requests || sent.ended) log(`sent ${sent.allowances} allowance(s), ${sent.ended} stopped allowance(s) and ${sent.requests} request(s) to the workspace`);
     } catch { /* they wait for the next cycle */ }
   };
   const cycle = async (): Promise<CycleResult> => {
@@ -639,7 +644,29 @@ export async function startService(options: ServiceOptions): Promise<Service> {
 
   const control = await startControl(options.dir, `${AGENT_VERSION} hook/${hookVersion()}`, {
     // What the tray draws, and the person's tray settings.
-    "GET /tray": () => ({ tray: trayState(), settings: readTraySettings(options.dir) }),
+    "GET /tray": () => ({ tray: { ...trayState(), pending: live.current() }, settings: readTraySettings(options.dir) }),
+    // The live prompt: the tray waits here for the hook's question (the one waiting now, at once when it is not the one the
+    // tray last saw), says when the person opened it (then no window opens for it), and sends the person's answer, which
+    // the hook's waiting call receives. Checked as the window's answer would be; only the person at the computer sees the
+    // tray's panel.
+    "POST /override/wait": async (body) => {
+      const seen = typeof (body as { seen?: unknown } | null)?.seen === "string" ? String((body as { seen: string }).seen) : null;
+      return { question: await live.wait(seen, 20_000) };
+    },
+    "POST /override/open": (body) => {
+      const id = (body as { action_id?: unknown } | null)?.action_id;
+      return { opened: typeof id === "string" && live.open(id) };
+    },
+    "POST /override/answer": (body) => {
+      const waiting = live.current();
+      let os_user: string | undefined;
+      try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
+      const done = live.answer(body, os_user);
+      if (!done.ok) return { outcome: done.outcome, text: done.text };
+      const outcome = done.choice === "ask" ? "asked" as const : done.choice === "always" && waiting?.offers.always_needs_admin ? "proposed" as const : "allowed" as const;
+      log(`question under "${waiting?.rule_title ?? "a rule"}", answered in the tray: ${outcome} (${done.choice})`);
+      return { outcome, choice: done.choice, text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), done.reviewed) };
+    },
     "POST /settings": (body) => ({ settings: writeTraySettings(options.dir, body) }),
     // "Check now" always says what it found.
     "POST /check": async () => {
@@ -673,7 +700,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const q = id ? blockedQuestion(options.dir, id) : null;
       if (!q) return { outcome: "gone", text: "This block can no longer be allowed or sent to an admin from here." };
       log(`asking about an earlier block under "${q.title}"`);
-      const answer = await prompt({ action_id: id, rule: q.item.rule, title: q.title, summary: q.item.summary, reason_min: q.reason_min,
+      const answer = await windowPrompt({ action_id: id, rule: q.item.rule, title: q.title, summary: q.item.summary, reason_min: q.reason_min,
         lasts: "the next time it runs", timeout_ms: 55_000, mode: q.mode, offers: q.offers });
       if (answer.decision === "unavailable") return { outcome: "unavailable", text: "The Scopebond window could not be shown." };
       const done = actOnBlocked(options.dir, id, answer);
@@ -707,6 +734,19 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // What the person let through (in force, or waiting for an admin) and what they asked an admin, with the answers.
     "GET /allowances": () => ({ allowances: allowedList(options.dir) }),
     "GET /requests": () => ({ requests: askedList(options.dir) }),
+    // "Stop allowing": the person ends an allowance they made here. It stops applying at once, and the ended record goes to
+    // the workspace, signed by this computer's key.
+    "POST /allowances/stop": (body) => {
+      const id = typeof (body as { id?: unknown } | null)?.id === "string" ? String((body as { id: string }).id) : "";
+      const item = allowedList(options.dir).find((a) => a.id === id && a.by === "person");
+      if (!item) return { outcome: "gone", text: "This allowance has already ended." };
+      if (endAllowance(options.dir, id).outcome !== "ended") return { outcome: "gone", text: "This allowance has already ended." };
+      setTimeout(() => { void sendReasons(); }, 1_000);
+      const what = item.what ?? item.rule_title ?? "it";
+      const connected = !!loadConnection(options.dir);
+      log(`stopped allowing an action under "${item.rule_title ?? item.rule}", from the tray`);
+      return { outcome: "stopped", text: connected ? `Stopped allowing ${what} · Recorded and sent to ${summary?.workspace_name ?? "your workspace"}` : `Stopped allowing ${what} on this computer` };
+    },
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
@@ -744,6 +784,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   if (nativeTray && retireLauncherRunValue()) log("removed the ScopebondAgent sign-in entry: the Scopebond tray starts the agent");
   const stop = async () => {
     stopped = true;
+    // A question waiting in the tray ends with the agent (the hook hears "unavailable", as when no agent runs).
+    live.close();
     try { tray?.kill(); } catch { /* already gone */ }
     // A sign-in waiting for approval ends with the agent (an update or an uninstall replaces this program).
     try { endSignIn?.(); } catch { /* already over */ }
