@@ -3,9 +3,9 @@
 
 use serde_json::Value;
 
-/// The panel's size in logical pixels.
+/// The panel's size in logical pixels (the blocked list, its forms and the settings fit; the list scrolls).
 pub const PANEL_WIDTH: f64 = 360.0;
-pub const PANEL_HEIGHT: f64 = 420.0;
+pub const PANEL_HEIGHT: f64 = 560.0;
 const MARGIN: f64 = 8.0;
 
 /// A rectangle in physical pixels.

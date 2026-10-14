@@ -12,20 +12,38 @@ PowerShell tray.
   attention; a red cross for a problem; a slate tile with a slash when the computer is not connected to its workspace.
   Shape and colour both say the state. The icon is drawn in code (`src/icon.rs`, the same grid and colours as the
   PowerShell tray), so the repository holds no image files; the build writes the program's .ico from the same code.
-- **Right-click menu**, in this order: a header line (the agent's headline), *Open status…*, the actions the agent offers
-  right now (the one fix first, then *Send records now*, *Update now*, *Check now*, *Reconnect…*, *Open workspace* only
-  when the agent's model offers them), *Start with Windows*, *Notifications* ▸ *All* / *Problems only* / *Off*, *Help* ▸
-  *Copy diagnostics* / *Open logs folder* / *About Scopebond*, and *Hide icon*. There is no *Quit* and no *Pause
-  protection*: the hook decides every action of a coding agent whether or not the tray runs. *Hide icon* hides the icon
-  until the next sign-in, or until the tray is started again (the Start-menu entry opens the status panel). *Start with
-  Windows* turns the installer's sign-in entry (the Run value `Scopebond`) on or off for this person, and the choice is
-  kept across upgrades; for an install for every user it is shown, not changed.
-- **Status panel** (left-click, or *Open status…*): about 360 × 420 next to the tray, created when it opens and destroyed
-  when it closes (it closes when it loses focus and on Esc). The headline and state, the rows the agent reports (Rules,
-  Delivery, Today, Version), the one fix as the main button, a hint when no button can fix it, the other actions, and the
-  recent blocks (with *Allow or ask…* where the person may still act on one). Light or dark follows the Windows setting;
-  the colours are CSS variables with the PowerShell tray's palette. Every control is reachable with the keyboard and has
-  an accessible name, and the status line is a live region, so a screen reader hears what changed.
+- **Right-click menu**, short, in this order: *Open Scopebond*, *Blocked today (N)*, the one fix when the agent's model
+  offers one (*Send records now*, *Reconnect…*, *Repair*…; or *Start the Scopebond Agent* when it is not answering),
+  *Open <workspace> in Scopebond Cloud* (when the model offers the workspace's page), *Notifications* ▸ *All* / *Problems
+  only* / *Off*, *Start with Windows*, *Help* ▸ (the model's other actions such as *Check now* or *Update now*, then *Copy
+  diagnostics* / *Open logs folder* / *About Scopebond*), and *Hide icon*. There is no *Quit* and no *Pause protection*:
+  the hook decides every action of a coding agent whether or not the tray runs. *Hide icon* hides the icon until the next
+  sign-in, or until the tray is started again (the Start-menu entry opens the status panel). *Start with Windows* turns
+  the installer's sign-in entry (the Run value `Scopebond`) on or off for this person, and the choice is kept across
+  upgrades; for an install for every user it is shown, not changed.
+- **Status panel** (left-click, *Open Scopebond* or *Blocked today*): 360 × 560 next to the tray, created when it opens
+  and destroyed when it closes (it closes when it loses focus and on Esc). Built around what got blocked:
+  - At the top, the "S" tile with the state's badge, the state in one word ("Protected", "Needs attention"…) and one line
+    under it ("Rules checked 3 min ago · 2 blocked today", or what is wrong). A banner with the one fix button appears
+    only when the agent's model has a fix or a problem to explain.
+  - **Blocked · Allowed · Asked.** *Blocked* lists up to 20 blocks, today's first and then earlier ones, newest first:
+    the action in plain words as the Scopebond window shows it, with secrets masked ("Read .env.production", "git push
+    --force origin main"), the rule's name, the project and the coding tool, and the time. *Unblock…* appears where the
+    workspace lets the person allow it, *Ask an admin…* where it only lets them ask, and no button otherwise; either
+    opens the Scopebond window for that block. *Allowed* and *Asked* show what was let through and what was asked once
+    the agent lists them.
+  - The footer says how many actions were checked today and opens the workspace in Scopebond Cloud.
+  - **Settings** (the gear): notifications, *Start with Windows*, *This computer* (the rows the agent reports: rules,
+    delivery, today, version), the model's other actions (*Check now*, *Send records now*…), *Copy diagnostics*, *Open logs
+    folder*, *Help* and *Hide icon*.
+  Light or dark follows the Windows setting, in the workspace portal's colours (violet actions, the navy tile) and
+  Windows' own type. Every control is reachable with the keyboard (the three lists are tabs, moved between with the arrow
+  keys) and has an accessible name, keyboard focus stays where it was when the panel redraws, and the status line is a
+  live region, so a screen reader hears what changed. Text from the agent is only ever set as text.
+- **Reviewing the panel in a browser**: `node packages/tray/dev/preview.mjs` writes a preview page into `dev/dist/` (ignored
+  by git) and prints its address; open it (no server, no Rust toolchain needed). It shows each scene, light and dark: the
+  panel's own page from `build.rs` with the shipped `ui/` files and a stand-in for the tray (`dev/fake-tauri.js`).
+  Nothing under `dev/` is built into the program.
 - **Notifications**: one when the state gets worse (for "needs attention", only once it has lasted five minutes, so
   sleep and wake do not flap) and one when it is protected again; none for blocks unless the person chose *All* (then
   one per new block); none at all with *Off*. An agent that has not answered for two minutes while the tray keeps trying

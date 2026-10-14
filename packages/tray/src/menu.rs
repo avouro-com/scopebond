@@ -1,6 +1,8 @@
 //! The right-click menu, worked out from the agent's tray model as plain data (no window system here, so it is tested on
-//! its own). The menu offers what the model offers, one item per action, and nothing else: there is no "Quit" and no
-//! "Pause protection"; the hook decides every action whether or not the tray runs.
+//! its own). It is short: *Open Scopebond*, *Blocked today (N)*, the one fix when the model offers one, *Open in Scopebond
+//! Cloud*, *Notifications*, *Start with Windows*, *Help* (the model's other actions, diagnostics, logs, about) and *Hide
+//! icon*. An action item calls only what the model offers at that moment, and there is no "Quit" and no "Pause
+//! protection": the hook decides every action whether or not the tray runs.
 
 use crate::model::{Notifications, TrayAction, TrayAnswer};
 
@@ -28,6 +30,16 @@ pub enum Autostart {
     Off,
     /// Installed for every user: set by whoever installed it, not changed from here.
     Managed,
+}
+
+impl Autostart {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Autostart::On => "on",
+            Autostart::Off => "off",
+            Autostart::Managed => "managed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +74,8 @@ pub enum Command {
 
 const ACTION_PREFIX: &str = "action:";
 const NOTIFICATIONS_PREFIX: &str = "notifications:";
+/// The model's action that opens this computer's page in the workspace.
+pub const OPEN_WORKSPACE: &str = "open_workspace";
 
 /// A menu label as Windows shows it: "&" would mark a keyboard shortcut, so it is doubled; long text is cut.
 pub fn menu_text(text: &str, max: usize) -> String {
@@ -76,7 +90,7 @@ pub fn menu_text(text: &str, max: usize) -> String {
     cut.replace('&', "&&")
 }
 
-/// The first line of the menu.
+/// One line saying how things stand (the tooltip when the agent gives none, notifications, the panel's headline).
 pub fn header(answer: Option<&TrayAnswer>, link: AgentLink) -> String {
     let line = match (link, answer) {
         (AgentLink::Answering, Some(a)) => a.tray.headline.clone(),
@@ -89,32 +103,39 @@ pub fn header(answer: Option<&TrayAnswer>, link: AgentLink) -> String {
     format!("Scopebond — {line}")
 }
 
+/// "Open <workspace> in Scopebond Cloud", or without the name when the agent does not know it.
+pub fn open_cloud_label(workspace: Option<&str>) -> String {
+    match workspace.map(str::trim).filter(|w| !w.is_empty()) {
+        Some(name) => format!("Open {name} in Scopebond Cloud"),
+        None => "Open in Scopebond Cloud".into(),
+    }
+}
+
 /// The whole menu for this model and context, top to bottom.
 pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
     let item = |id: &str, label: &str| Entry::Item { id: id.to_string(), label: menu_text(label, 80), enabled: true };
-    let mut out = vec![
-        Entry::Item { id: "header".into(), label: menu_text(&header(answer, ctx.link), 80), enabled: false },
-        item("open_status", "Open status…"),
-        Entry::Separator,
-    ];
-    match (ctx.link, answer) {
-        (AgentLink::Answering, Some(a)) => {
-            for action in a.tray.offered() {
-                out.push(item(&format!("{ACTION_PREFIX}{}", action.id), &action.label));
-            }
-        }
-        (AgentLink::NotAnswering | AgentLink::Stopped, _) => out.push(item("start_agent", "Start the Scopebond Agent")),
+    let action = |a: &TrayAction| item(&format!("{ACTION_PREFIX}{}", a.id), &a.label);
+    let model = match (ctx.link, answer) {
+        (AgentLink::Answering, Some(a)) => Some(&a.tray),
+        _ => None,
+    };
+    let offered = model.map(|m| m.offered()).unwrap_or_default();
+    // The fix is the model's first offered action when it has one (offered() puts it first, with a valid route).
+    let fix = model.and_then(|m| m.fix.as_ref()).and_then(|f| offered.iter().copied().find(|a| a.id == f.id));
+
+    let mut out = vec![item("open_status", "Open Scopebond")];
+    if let Some(m) = model {
+        out.push(item("blocked", &format!("Blocked today ({})", m.blocked_today())));
+    }
+    match (fix, ctx.link) {
+        (Some(fix), _) => out.push(action(fix)),
+        (None, AgentLink::NotAnswering | AgentLink::Stopped) => out.push(item("start_agent", "Start the Scopebond Agent")),
         _ => {}
     }
-    if !matches!(out.last(), Some(Entry::Separator)) {
-        out.push(Entry::Separator);
+    out.push(Entry::Separator);
+    if let Some(open) = offered.iter().find(|a| a.id == OPEN_WORKSPACE && fix.is_none_or(|f| f.id != a.id)) {
+        out.push(item(&format!("{ACTION_PREFIX}{}", open.id), &open_cloud_label(model.and_then(|m| m.workspace.as_deref()))));
     }
-    out.push(Entry::Check {
-        id: "autostart".into(),
-        label: if ctx.autostart == Autostart::Managed { "Start with Windows (set for every user)".into() } else { "Start with Windows".into() },
-        checked: ctx.autostart != Autostart::Off,
-        enabled: ctx.autostart != Autostart::Managed,
-    });
     out.push(Entry::Submenu {
         label: "Notifications".into(),
         entries: Notifications::ALL
@@ -127,11 +148,20 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
             })
             .collect(),
     });
-    out.push(Entry::Submenu {
-        label: "Help".into(),
-        entries: vec![item("copy_diagnostics", "Copy diagnostics"), item("open_logs", "Open logs folder"), item("about", "About Scopebond")],
+    out.push(Entry::Check {
+        id: "autostart".into(),
+        label: if ctx.autostart == Autostart::Managed { "Start with Windows (set for every user)".into() } else { "Start with Windows".into() },
+        checked: ctx.autostart != Autostart::Off,
+        enabled: ctx.autostart != Autostart::Managed,
     });
     out.push(Entry::Separator);
+    // The model's other actions (Check now, Send records now, Update now…) stay one click away, under Help.
+    let mut help: Vec<Entry> = offered.iter().filter(|a| fix.is_none_or(|f| f.id != a.id) && a.id != OPEN_WORKSPACE).map(|a| action(*a)).collect();
+    if !help.is_empty() {
+        help.push(Entry::Separator);
+    }
+    help.extend([item("copy_diagnostics", "Copy diagnostics"), item("open_logs", "Open logs folder"), item("about", "About Scopebond")]);
+    out.push(Entry::Submenu { label: "Help".into(), entries: help });
     out.push(item("hide_icon", "Hide icon"));
     out
 }
@@ -146,7 +176,8 @@ pub fn command_for(id: &str, answer: Option<&TrayAnswer>) -> Option<Command> {
         return Notifications::ALL.iter().find(|n| n.as_str() == value).map(|n| Command::Notifications(*n));
     }
     Some(match id {
-        "open_status" => Command::OpenStatus,
+        // Blocked today opens the panel, which shows the blocked list first.
+        "open_status" | "blocked" => Command::OpenStatus,
         "start_agent" => Command::StartAgent,
         "autostart" => Command::ToggleAutostart,
         "copy_diagnostics" => Command::CopyDiagnostics,
@@ -200,53 +231,59 @@ mod tests {
     }
 
     #[test]
-    fn protected_offers_the_models_actions_and_the_fixed_items() {
-        let a = answer(fixtures::PROTECTED);
+    fn protected_is_short_open_blocked_today_cloud_settings_help() {
+        let a = answer(fixtures::BLOCKED);
         assert_eq!(
             labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering))),
             [
-                "Scopebond — Protected",
-                "Open status…",
+                "Open Scopebond",
+                "Blocked today (2)",
                 "-",
-                "Check now",
-                "Open workspace",
-                "-",
-                "[x] Start with Windows",
+                "Open Acme in Scopebond Cloud",
                 "Notifications >",
                 "  [ ] All",
                 "  [x] Problems only",
                 "  [ ] Off",
+                "[x] Start with Windows",
+                "-",
                 "Help >",
+                "  Check now",
+                "  -",
                 "  Copy diagnostics",
                 "  Open logs folder",
                 "  About Scopebond",
-                "-",
                 "Hide icon",
             ]
         );
     }
 
     #[test]
-    fn the_header_is_not_clickable() {
-        let a = answer(fixtures::PROTECTED);
-        assert!(matches!(&menu_spec(Some(&a), &ctx(AgentLink::Answering))[0], Entry::Item { enabled: false, .. }));
+    fn the_one_fix_comes_right_after_blocked_today_only_when_offered() {
+        let protected = labels(&menu_spec(Some(&answer(fixtures::PROTECTED)), &ctx(AgentLink::Answering)));
+        assert_eq!(&protected[..3], ["Open Scopebond", "Blocked today (1)", "-"]);
+        for absent in ["Send records now", "Update now", "Reconnect…"] {
+            assert!(!protected.iter().any(|l| l.trim() == absent), "{absent} without the model offering it");
+        }
+        let waiting = labels(&menu_spec(Some(&answer(fixtures::WAITING)), &ctx(AgentLink::Answering)));
+        assert_eq!(&waiting[..4], ["Open Scopebond", "Blocked today (0)", "Send records now", "-"]);
+        assert!(waiting.contains(&"  Update now".to_string()) && waiting.contains(&"  Check now".to_string()), "the other actions under Help");
+        assert_eq!(waiting.iter().filter(|l| l.contains("Send records now")).count(), 1, "the fix once");
+        let disconnected = labels(&menu_spec(Some(&answer(fixtures::DISCONNECTED)), &ctx(AgentLink::Answering)));
+        assert_eq!(disconnected[2], "Reconnect…");
+        assert!(!disconnected.iter().any(|l| l.contains("Scopebond Cloud")), "no Cloud item when the model offers no page");
     }
 
     #[test]
-    fn send_update_and_reconnect_appear_only_when_the_model_offers_them() {
-        let protected = labels(&menu_spec(Some(&answer(fixtures::PROTECTED)), &ctx(AgentLink::Answering)));
-        for absent in ["Send records now", "Update now", "Reconnect…"] {
-            assert!(!protected.iter().any(|l| l == absent), "{absent} without the model offering it");
-        }
-        let waiting = labels(&menu_spec(Some(&answer(fixtures::WAITING)), &ctx(AgentLink::Answering)));
-        assert_eq!(&waiting[3..6], ["Send records now", "Update now", "Check now"], "the fix first, then the model's order");
-        let disconnected = labels(&menu_spec(Some(&answer(fixtures::DISCONNECTED)), &ctx(AgentLink::Answering)));
-        assert_eq!(&disconnected[3..5], ["Reconnect…", "Check now"]);
+    fn open_scopebond_comes_first_and_every_item_is_clickable() {
+        let a = answer(fixtures::BLOCKED);
+        let spec = menu_spec(Some(&a), &ctx(AgentLink::Answering));
+        assert!(matches!(&spec[0], Entry::Item { id, enabled: true, .. } if id == "open_status"));
+        assert_eq!(command_for("blocked", Some(&a)), Some(Command::OpenStatus), "Blocked today opens the panel");
     }
 
     #[test]
     fn there_is_no_quit_and_no_pause() {
-        for fixture in [fixtures::PROTECTED, fixtures::WAITING, fixtures::DISCONNECTED] {
+        for fixture in [fixtures::PROTECTED, fixtures::WAITING, fixtures::DISCONNECTED, fixtures::BLOCKED] {
             for link in [AgentLink::Answering, AgentLink::Starting, AgentLink::NotAnswering, AgentLink::Waiting, AgentLink::Stopped, AgentLink::Missing] {
                 for label in labels(&menu_spec(Some(&answer(fixture)), &ctx(link))) {
                     let l = label.to_lowercase();
@@ -261,10 +298,6 @@ mod tests {
         let a = answer(fixtures::WAITING);
         let spec = menu_spec(Some(&a), &ctx(AgentLink::Answering));
         for id in ids(&spec) {
-            if id == "header" {
-                assert_eq!(command_for(&id, Some(&a)), None);
-                continue;
-            }
             assert!(command_for(&id, Some(&a)).is_some(), "{id} does nothing");
         }
         let routes: Vec<String> = ids(&spec)
@@ -275,6 +308,8 @@ mod tests {
             })
             .collect();
         assert_eq!(routes, ["/flush", "/update", "/check"]);
+        let cloud = answer(fixtures::BLOCKED);
+        assert!(ids(&menu_spec(Some(&cloud), &ctx(AgentLink::Answering))).iter().any(|id| matches!(command_for(id, Some(&cloud)), Some(Command::Run(x)) if x.route == "/open-workspace")));
     }
 
     #[test]
@@ -290,35 +325,37 @@ mod tests {
     fn a_route_that_is_not_local_is_never_offered() {
         let mut a = answer(fixtures::PROTECTED);
         a.tray.actions.push(TrayAction { id: "odd".into(), label: "Odd".into(), route: "https://example.com/x".into() });
-        assert!(!labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering))).contains(&"Odd".to_string()));
+        assert!(!labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering))).iter().any(|l| l.trim() == "Odd"));
         assert_eq!(command_for("action:odd", Some(&a)), None);
+        a.tray.fix = Some(TrayAction { id: "bad_fix".into(), label: "Bad".into(), route: "//example.com".into() });
+        assert!(!labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering))).iter().any(|l| l.trim() == "Bad"), "nor a fix with such a route");
     }
 
     #[test]
     fn an_action_from_a_newer_agent_is_offered_as_the_model_names_it() {
         let mut a = answer(fixtures::PROTECTED);
         a.tray.actions.push(TrayAction { id: "tidy".into(), label: "Tidy up".into(), route: "/tidy".into() });
-        assert!(labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering))).contains(&"Tidy up".to_string()));
+        assert!(labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering))).contains(&"  Tidy up".to_string()));
         assert_eq!(command_for("action:tidy", Some(&a)).map(|c| matches!(c, Command::Run(x) if x.route == "/tidy")), Some(true));
     }
 
     #[test]
-    fn without_the_agent_it_says_why_and_offers_to_start_it() {
+    fn without_the_agent_it_offers_to_start_it_and_no_blocked_count() {
         let spec = menu_spec(None, &ctx(AgentLink::NotAnswering));
         let l = labels(&spec);
-        assert_eq!(l[0], "Scopebond — The Scopebond Agent is not answering");
-        assert_eq!(l[3], "Start the Scopebond Agent");
+        assert_eq!(&l[..3], ["Open Scopebond", "Start the Scopebond Agent", "-"]);
         assert_eq!(command_for("start_agent", None), Some(Command::StartAgent));
-        let stopped = labels(&menu_spec(None, &ctx(AgentLink::Stopped)));
-        assert_eq!(stopped[0], "Scopebond — The Scopebond Agent is stopped");
+        assert_eq!(labels(&menu_spec(None, &ctx(AgentLink::Stopped)))[1], "Start the Scopebond Agent");
         for link in [AgentLink::Starting, AgentLink::Waiting] {
             let l = labels(&menu_spec(None, &ctx(link)));
             assert!(!l.contains(&"Start the Scopebond Agent".to_string()), "no second start while one is under way ({link:?})");
+            assert!(!l.iter().any(|x| x.starts_with("Blocked today")));
         }
         assert!(matches!(
             &spec.iter().find_map(|e| match e { Entry::Submenu { label, entries } if label == "Notifications" => Some(entries[0].clone()), _ => None }),
             Some(Entry::Check { enabled: false, .. })
         ), "the setting lives in the agent, so it waits for it");
+        assert_eq!(header(None, AgentLink::NotAnswering), "Scopebond — The Scopebond Agent is not answering");
     }
 
     #[test]
@@ -334,6 +371,7 @@ mod tests {
         assert_eq!(command_for("notifications:loud", Some(&a)), None);
         c.autostart = Autostart::Off;
         assert!(labels(&menu_spec(Some(&a), &c)).contains(&"[ ] Start with Windows".to_string()));
+        assert_eq!(Autostart::Managed.as_str(), "managed");
     }
 
     #[test]
@@ -341,9 +379,12 @@ mod tests {
         assert_eq!(menu_text("Acme & Co", 80), "Acme && Co");
         assert_eq!(menu_text("two\nlines", 80), "two lines");
         assert_eq!(menu_text("abcdefghij", 5), "abcd…");
-        let mut a = answer(fixtures::PROTECTED);
-        a.tray.headline = "x".repeat(200);
-        let Entry::Item { label, .. } = &menu_spec(Some(&a), &ctx(AgentLink::Answering))[0] else { panic!() };
-        assert_eq!(label.chars().count(), 80);
+        let mut a = answer(fixtures::BLOCKED);
+        a.tray.workspace = Some(format!("Acme & {}", "x".repeat(200)));
+        let l = labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering)));
+        let cloud = l.iter().find(|x| x.starts_with("Open Acme")).unwrap();
+        assert!(cloud.starts_with("Open Acme && "));
+        assert!(cloud.chars().count() <= 81);
+        assert_eq!(open_cloud_label(Some("  ")), "Open in Scopebond Cloud");
     }
 }

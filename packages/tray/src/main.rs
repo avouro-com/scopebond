@@ -721,6 +721,8 @@ fn panel_state(shared: State<'_, Arc<Shared>>) -> Value {
         "note": note,
         "busy": *lock(&shared.busy),
         "version": env!("CARGO_PKG_VERSION"),
+        // For the panel's Settings: Start with Windows as the menu shows it.
+        "autostart": autostart_state().as_str(),
     })
 }
 
@@ -749,11 +751,18 @@ fn panel_block(action_id: String, shared: State<'_, Arc<Shared>>) -> bool {
 
 #[tauri::command]
 fn panel_command(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> bool {
+    // The same commands the menu has (Settings in the panel offers them too); anything else does nothing.
     let command = match id.as_str() {
         "copy_diagnostics" => Command::CopyDiagnostics,
         "open_logs" => Command::OpenLogs,
         "start_agent" => Command::StartAgent,
-        _ => return false,
+        "autostart" => Command::ToggleAutostart,
+        "about" => Command::About,
+        "hide_icon" => Command::HideIcon,
+        other => match other.strip_prefix("notifications:").and_then(|v| Notifications::ALL.iter().find(|n| n.as_str() == v)) {
+            Some(n) => Command::Notifications(*n),
+            None => return false,
+        },
     };
     dispatch(&app, shared.inner(), command);
     true

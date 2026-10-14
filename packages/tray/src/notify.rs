@@ -112,7 +112,7 @@ mod tests {
     use super::*;
 
     fn block(id: &str) -> RecentBlock {
-        RecentBlock { action_id: Some(id.into()), summary: format!("rm -rf {id}"), at: String::new(), rule: Some("no-destroy".into()), can_act: false, acted: None }
+        RecentBlock { action_id: Some(id.into()), summary: format!("rm -rf {id}"), rule: Some("no-destroy".into()), ..Default::default() }
     }
 
     struct Run {

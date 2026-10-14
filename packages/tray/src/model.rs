@@ -34,10 +34,34 @@ pub struct Row {
     pub value: String,
 }
 
+/// What the person may do about a block, as the workspace allows it now.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlockOffers {
+    /// Allow it once (the next try).
+    pub once: bool,
+    /// Allow it for 15 minutes.
+    pub fifteen: bool,
+    /// Always allow it on this computer, for `always_days` (after an admin approves, when `always_needs_admin`).
+    pub always: bool,
+    pub always_days: Option<u32>,
+    pub always_needs_admin: bool,
+    /// Ask an admin.
+    pub ask: bool,
+}
+
+impl BlockOffers {
+    /// Whether the person may let it through here (once, for 15 minutes or always), not only ask an admin.
+    pub fn allows(&self) -> bool {
+        self.once || self.fifteen || self.always
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RecentBlock {
     pub action_id: Option<String>,
+    /// The one-line description `log` prints (`shell.exec rm`); newer agents also send `what`.
     pub summary: String,
     pub at: String,
     pub rule: Option<String>,
@@ -45,6 +69,30 @@ pub struct RecentBlock {
     pub can_act: bool,
     /// What they did: "allowed", "asked", or nothing yet.
     pub acted: Option<String>,
+    /// The action in plain words ("Read .env.production"), secrets masked; empty from an older agent.
+    pub what: String,
+    /// The text the Scopebond window shows for it.
+    pub action_text: String,
+    pub rule_title: Option<String>,
+    pub project: Option<String>,
+    pub tool: Option<String>,
+    /// What may be done now (none when nothing can be, or from an older agent).
+    pub offers: Option<BlockOffers>,
+    pub reason_min: Option<u32>,
+}
+
+impl RecentBlock {
+    /// The words to show: the plain words, or the older summary.
+    pub fn words(&self) -> &str {
+        if self.what.trim().is_empty() { &self.summary } else { &self.what }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Today {
+    pub actions: u64,
+    pub blocked: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +106,11 @@ pub struct TrayModel {
     pub actions: Vec<TrayAction>,
     pub hint: Option<String>,
     pub recent_blocks: Vec<RecentBlock>,
+    /// The line under "Protected" (when the rules were checked, what was blocked today); none otherwise.
+    pub detail: Option<String>,
+    /// The workspace's name, when the agent knows it.
+    pub workspace: Option<String>,
+    pub today: Option<Today>,
 }
 
 impl TrayModel {
@@ -79,6 +132,16 @@ impl TrayModel {
     /// The offered action with this id, if the model still offers it.
     pub fn offered_action(&self, id: &str) -> Option<&TrayAction> {
         self.offered().into_iter().find(|a| a.id == id)
+    }
+
+    /// How many actions were blocked today: the agent's count, or (from an older agent) the blocks it listed.
+    pub fn blocked_today(&self) -> u64 {
+        self.today.as_ref().map(|t| t.blocked).unwrap_or(self.recent_blocks.len() as u64)
+    }
+
+    /// The block with this id that the person may still act on.
+    pub fn actionable_block(&self, action_id: &str) -> Option<&RecentBlock> {
+        self.recent_blocks.iter().find(|b| b.can_act && b.action_id.as_deref() == Some(action_id))
     }
 }
 
@@ -170,6 +233,30 @@ pub(crate) mod fixtures {
       "settings": { "notifications": "problems" }
     }"#;
 
+    /// A newer agent's answer: blocks in plain words with what may be done, the line under the state, today's counts.
+    pub const BLOCKED: &str = r#"{
+      "tray": {
+        "state": "protected", "headline": "Protected", "tooltip": "Scopebond — Protected · Acme",
+        "rows": [], "fix": null, "hint": null,
+        "actions": [
+          { "id": "check_now", "label": "Check now", "route": "/check" },
+          { "id": "open_workspace", "label": "Open workspace", "route": "/open-workspace" }
+        ],
+        "detail": "Rules checked 3 min ago · 2 blocked today", "workspace": "Acme", "today": { "actions": 1160, "blocked": 2 },
+        "recent_blocks": [
+          { "action_id": "act-read-env-0000000001", "summary": "file.read .env.production", "at": "2026-10-14T15:46:00.000Z", "rule": "secret-read",
+            "can_act": true, "acted": null, "what": "Read .env.production", "action_text": ".env.production", "rule_title": "Reading a secret file",
+            "project": "checkout", "tool": "Claude Code", "reason_min": 10,
+            "offers": { "once": true, "fifteen": true, "always": true, "always_days": 30, "always_needs_admin": false, "ask": true } },
+          { "action_id": "act-push-main-00000001", "summary": "git.push origin main", "at": "2026-10-14T15:24:00.000Z", "rule": "force-push-protected",
+            "can_act": true, "acted": null, "what": "git push --force origin main", "action_text": "git push origin main",
+            "rule_title": "Force-push to a protected branch", "project": "checkout", "tool": "Claude Code", "reason_min": 20,
+            "offers": { "once": false, "fifteen": false, "always": false, "always_days": null, "always_needs_admin": false, "ask": true } }
+        ]
+      },
+      "settings": { "notifications": "problems" }
+    }"#;
+
     pub const WAITING: &str = r#"{
       "tray": {
         "state": "attention", "headline": "12 records waiting to send", "tooltip": "Scopebond — 12 records waiting to send",
@@ -206,6 +293,30 @@ mod tests {
         assert_eq!(a.tray.recent_blocks[0].action_id.as_deref(), Some("a1"));
         assert!(a.tray.recent_blocks[0].can_act);
         assert_eq!(a.settings.notifications, Notifications::Problems);
+    }
+
+    #[test]
+    fn reads_blocks_in_plain_words_with_what_may_be_done() {
+        let a = TrayAnswer::parse(fixtures::BLOCKED.as_bytes()).expect("parses");
+        let read = &a.tray.recent_blocks[0];
+        assert_eq!(read.words(), "Read .env.production");
+        assert_eq!(read.rule_title.as_deref(), Some("Reading a secret file"));
+        assert_eq!(read.tool.as_deref(), Some("Claude Code"));
+        assert_eq!(read.reason_min, Some(10));
+        let offers = read.offers.clone().unwrap();
+        assert!(offers.allows() && offers.fifteen && offers.ask);
+        assert_eq!(offers.always_days, Some(30));
+        let push = &a.tray.recent_blocks[1];
+        assert!(!push.offers.clone().unwrap().allows(), "only Ask an admin");
+        assert_eq!(a.tray.blocked_today(), 2);
+        assert_eq!(a.tray.workspace.as_deref(), Some("Acme"));
+        assert!(a.tray.actionable_block("act-push-main-00000001").is_some());
+        assert!(a.tray.actionable_block("act-unknown").is_none());
+        // An older agent's block: the summary stands in for the plain words, and nothing says what may be done.
+        let old = TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap();
+        assert_eq!(old.tray.recent_blocks[0].words(), "rm -rf build");
+        assert_eq!(old.tray.recent_blocks[0].offers, None);
+        assert_eq!(old.tray.blocked_today(), 1, "an older agent: the blocks it listed");
     }
 
     #[test]
