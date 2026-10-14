@@ -39,9 +39,14 @@ export function useNativeHookEntries(harnesses: Harness[], exe: string = process
   const changed: EntryChange[] = [];
   for (const harness of harnesses) {
     const file = userHarnessFile(harness);
-    const native = nativeHookCommand(harness, exe);
     const ours = configuredHookCommands(file);
-    if (!ours.length || ours.every((c) => c === native)) continue;
+    if (!ours.length) continue;
+    let native: string;
+    try { native = nativeHookCommand(harness, exe); } catch (error) {
+      changed.push({ harness, file, reason: `could not be moved to the signed install: ${(error as Error).message}` });
+      continue;
+    }
+    if (ours.every((c) => c === native)) continue;
     try {
       const lifecycle = harness === "claude" && hasLifecycleEntries(file);
       // The first entry becomes this executable's (the hook keeps a backup of the file as it was), then every other copy
@@ -59,6 +64,8 @@ export function useNativeHookEntries(harnesses: Harness[], exe: string = process
 
 /** Whether a Scopebond hook entry for `harness` runs something other than `exe`. */
 export function hasForeignHookEntries(harness: Harness, exe: string = process.execPath): boolean {
-  const native = nativeHookCommand(harness, exe);
+  let native: string;
+  try { native = nativeHookCommand(harness, exe); } catch { return false; } // no entry can be written for this path
+
   return configuredHookCommands(userHarnessFile(harness)).some((c) => c !== native);
 }

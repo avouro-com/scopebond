@@ -227,7 +227,7 @@ test("hook upkeep pins older Scopebond entries to the carried hook, repairs brok
     assert.ok(commands().includes("my-own-hook --strict"), "another tool's hook is untouched");
     assert.equal(JSON.parse(readFileSync(file, "utf8")).model, "opus");
     assert.deepEqual(maintainHookEntries(["claude"]), [], "nothing to do the second time");
-    write(`"${join(home, "gone", "node.exe")}" "${join(home, "gone", "runtime", "0.15.0", "cli.js")}" claude`);
+    write(`"${join(home, "gone", "node.exe")}" "${join(home, "gone", ".scopebond", "runtime", "0.15.0", "cli.js")}" claude`);
     const repaired = maintainHookEntries(["claude"], false);
     assert.equal(repaired.length, 1, "a broken entry is repaired even while held");
     assert.match(repaired[0].reason, /could not start/);

@@ -647,7 +647,7 @@ function runInit(args: string[]): void {
       console.log(`Would print         the ${harnessFileName(harness)} snippet instead of writing it`);
     } else if (personal) {
       console.log(`Would configure     ${personal} (this machine only; kept out of git)`);
-      if (isSingleExecutable()) console.log(`  adding hook       ${nativeHookCommand(harness)}`);
+      if (isSingleExecutable()) console.log(`  adding hook       ${previewCommand(() => nativeHookCommand(harness))}`);
       else {
         console.log(`  adding hook       "<node>" "${pinnedCliPath(hookVersion())}" ${harness}`);
         console.log(`                    (or the path this copy runs from, when it is already installed durably)`);
@@ -661,6 +661,15 @@ function runInit(args: string[]): void {
     process.exit(0);
   }
   requireInteractive("init", args);
+  // The hook command first: a path no hook shell can start is refused here, before anything is written.
+  const shared = args.includes("--shared");
+  const native = isSingleExecutable() && !args.includes("--npx") && !shared;
+  let pin: { cli: string | null; how: string };
+  let command: string | undefined;
+  try {
+    pin = native ? { cli: process.execPath, how: "native" } : args.includes("--npx") || shared ? { cli: null, how: "unavailable" } : ensureDurableRuntime(cliPath(), hookVersion());
+    command = native ? nativeHookCommand(harness) : pin.cli ? absoluteHookCommand(pin.cli, harness) : undefined;
+  } catch (error) { console.error(`nothing was set up: ${(error as Error).message}`); process.exit(1); }
   const { agentKid, policyPath, rulesPath: rulesFile } = scaffold(dir, { force: args.includes("--force") });
   console.log(`Scopebond hook enrolled in ${dir}`);
   console.log(`  machine key    ${agentKid}`);
@@ -677,10 +686,6 @@ function runInit(args: string[]): void {
   // directly costs ~110 ms. Pin a durable copy and use that, and fall back to `npx`
   // (slow, but it always starts) when no durable copy can be made. `--npx` forces the
   // portable form for anyone who wants it.
-  const shared = args.includes("--shared");
-  const native = isSingleExecutable() && !args.includes("--npx") && !shared;
-  const pin = native ? { cli: process.execPath, how: "native" as const } : args.includes("--npx") || shared ? { cli: null, how: "unavailable" as const } : ensureDurableRuntime(cliPath(), hookVersion());
-  const command = native ? nativeHookCommand(harness) : pin.cli ? absoluteHookCommand(pin.cli, harness) : undefined;
   // Configure the agent automatically by default (idempotent), so there is no
   // hand-editing step; --no-install prints the snippet instead.
   if (!args.includes("--no-install")) {
@@ -1258,11 +1263,19 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
       // folder's project settings — what this did before — left every other project
       // unchecked, and a sign-in run from a scratch folder governed only that folder.
       // `--project` (a per-project connection) keeps the project placement.
-      const file = forUser
-        ? writeHarnessConfig(userHarnessFile(harness), harness, durableHookCommand(harness))
-        // The installer's program needs no npx, so a per-project connection made with it pins that program (kept out of
-        // git, as `init` does); from npm it keeps the portable form.
-        : placeHook(harness, process.cwd(), isSingleExecutable() ? nativeHookCommand(harness) : undefined).file;
+      let file: string;
+      try {
+        file = forUser
+          ? writeHarnessConfig(userHarnessFile(harness), harness, durableHookCommand(harness))
+          // The installer's program needs no npx, so a per-project connection made with it pins that program (kept out of
+          // git, as `init` does); from npm it keeps the portable form.
+          : placeHook(harness, process.cwd(), isSingleExecutable() ? nativeHookCommand(harness) : undefined).file;
+      } catch (error) {
+        // Connected, but no hook entry: say so plainly, and fail, so nobody takes the agent for checked.
+        console.error(`✗ ${harnessName(harness)} hook not set up: ${(error as Error).message}`);
+        process.exitCode = 1;
+        return;
+      }
       console.log(`✓ ${harnessName(harness)} configured in ${file}`);
       if (harness === "codex") console.log(`\nOne last step: ${codexTrustStep}`);
     } else {
@@ -1620,6 +1633,11 @@ function cliPath(): string {
  *  throwaway cache; registering that path would leave a hook that stops starting whenever
  *  npm clears it — and a hook that cannot start lets every action through. Pin the durable
  *  copy, as `init` does, and fall back to the portable `npx` command when none can be made. */
+/** A hook command for a dry-run preview: the reason instead when the real run would refuse to write it. */
+function previewCommand(make: () => string): string {
+  try { return make(); } catch (error) { return `(would be refused: ${(error as Error).message})`; }
+}
+
 function durableHookCommand(h: Harness): string {
   // The single executable is its own durable copy: the installer keeps its path.
   if (isSingleExecutable()) return nativeHookCommand(h);
@@ -1647,7 +1665,7 @@ function runInstall(args: string[]): void {
       console.log(`Would ${exists ? "modify" : "create"} ${file}`);
       if (exists) console.log(`  backing it up to  ${file}.scopebond-backup`);
       // Previewed without copying anything: the path the real run would pin.
-      console.log(`  adding hook       ${isSingleExecutable() ? nativeHookCommand(h) : absoluteHookCommand(isEphemeralPath(cliPath()) ? pinnedCliPath(hookVersion()) : cliPath(), h)}`);
+      console.log(`  adding hook       ${previewCommand(() => (isSingleExecutable() ? nativeHookCommand(h) : absoluteHookCommand(isEphemeralPath(cliPath()) ? pinnedCliPath(hookVersion()) : cliPath(), h)))}`);
       if (exists && isHarnessConfigured(file)) console.log(`  (a Scopebond hook is already there; it would be replaced, not duplicated)`);
     }
     console.log(`\nNothing else in those files is changed. Run without --dry-run to apply.`);

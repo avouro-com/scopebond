@@ -126,6 +126,8 @@ export function commandHookVersion(command: string): string | null {
 }
 
 const isNpxCommand = (command: string) => /(^|\s)npx(\.cmd)?\s/.test(command);
+/** A file's text, or null when it cannot be read. */
+const fileText = (file: string): string | null => { try { return readFileSync(file, "utf8"); } catch { return null; } };
 
 /** The hook command upkeep writes: always the hook this agent carries, by its absolute path (a durable pinned copy when the
  *  carried one lives somewhere npm may clear). Never an `npx` form, which would resolve a package from the registry each
@@ -171,16 +173,27 @@ export function maintainHookEntries(harnesses: Harness[], moveVersions = true, p
     const file = userHarnessFile(harness);
     const ours = configuredHookCommands(file).filter((c) => isScopebondHookCommand(c));
     if (!ours.length) continue;
-    const broken = ours.some((c) => !isNpxCommand(c) && !hookCommandResolves(c));
-    const npx = ours.some((c) => { if (!isNpxCommand(c)) return false; const v = commandHookVersion(c); return moveVersions || v === null || v === carried; });
-    const behind = moveVersions && ours.some((c) => { const v = commandHookVersion(c); return v !== null && compareVersions(v, carried) < 0; });
-    // A quoted Windows entry (an earlier release's form, or a fallback from when a folder had no short name) that now has
-    // the shell-plain spelling every hook shell starts is rewritten: PowerShell cannot start the quoted one.
-    const target = !broken && !npx && !behind && platform === "win32" && ours.some(isQuotedWindowsHookCommand) ? maintainedHookCommand(harness) : null;
-    const quoted = target !== null && !isQuotedWindowsHookCommand(target);
-    if (!broken && !npx && !behind && !quoted) continue;
-    writeHarnessConfig(file, harness, target ?? maintainedHookCommand(harness));
-    changed.push({ harness, file, reason: broken ? "the hook command could not start" : npx ? `pinned to the hook this agent carries (${carried})` : behind ? `moved to hook ${carried}` : "rewritten in the form every Windows hook shell starts (PowerShell could not start the quoted one)" });
+    // One coding agent's entry that cannot be written (a refused path) is recorded and the rest go on: upkeep, updates
+    // and the self-check must not stop over it.
+    try {
+      const broken = ours.some((c) => !isNpxCommand(c) && !hookCommandResolves(c));
+      const npx = ours.some((c) => { if (!isNpxCommand(c)) return false; const v = commandHookVersion(c); return moveVersions || v === null || v === carried; });
+      const behind = moveVersions && ours.some((c) => { const v = commandHookVersion(c); return v !== null && compareVersions(v, carried) < 0; });
+      // A quoted Windows entry (an earlier release's form, or a fallback from when a folder had no short name) that now has
+      // the shell-plain spelling is rewritten for Codex and Cursor, which may run it under PowerShell (it cannot start the
+      // quoted one). Claude Code runs hooks under Git Bash, which starts it; Copilot entries carry a PowerShell form.
+      const target = !broken && !npx && !behind && platform === "win32" && (harness === "codex" || harness === "cursor") && ours.some(isQuotedWindowsHookCommand)
+        ? maintainedHookCommand(harness) : null;
+      const quoted = target !== null && !isQuotedWindowsHookCommand(target);
+      if (!broken && !npx && !behind && !quoted) continue;
+      const before = fileText(file);
+      writeHarnessConfig(file, harness, target ?? maintainedHookCommand(harness));
+      // Reported only when the file did change: a pass with nothing to do says nothing.
+      if (fileText(file) === before) continue;
+      changed.push({ harness, file, reason: broken ? "the hook command could not start" : npx ? `pinned to the hook this agent carries (${carried})` : behind ? `moved to hook ${carried}` : "rewritten in the form every Windows hook shell starts (PowerShell could not start the quoted one)" });
+    } catch (error) {
+      changed.push({ harness, file, reason: `could not be updated: ${(error as Error).message}` });
+    }
   }
   return changed;
 }

@@ -686,6 +686,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
             if (notable(e.receipt.payload)) { full.push(e); notableByWindow.set(w, (notableByWindow.get(w) ?? 0) + 1); }
             else if (lateThisFlush.has(e.id)) continue; // added to the full list below
             else if ((w + 1) * windowMs + SUMMARY_GRACE_MS <= cutoff) closed.push(e);
+            // Stamped further ahead than one window and its grace (a clock set wrong): no window will close for it soon,
+            // so it goes in full, as held() counts it (pending, not held).
+            else if ((w + 1) * windowMs + SUMMARY_GRACE_MS > now() + windowMs + SUMMARY_GRACE_MS) lateThisFlush.add(e.id);
             else open.push(e);
           }
           // One window busier than a whole pass would never complete: its oldest records go in full rather than wait forever.

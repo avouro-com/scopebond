@@ -133,8 +133,13 @@ export interface MaintenanceResult {
 export function repairHookEntries(harnesses: Harness[] = expectedHarnesses()): Array<{ harness: Harness; file: string }> {
   const repaired: Array<{ harness: Harness; file: string }> = [];
   for (const harness of missingHookEntries(harnesses)) {
-    const file = writeHarnessConfig(userHarnessFile(harness), harness, maintainedHookCommand(harness));
-    repaired.push({ harness, file });
+    // A refused path for one coding agent is logged and the others are still repaired.
+    try {
+      const file = writeHarnessConfig(userHarnessFile(harness), harness, maintainedHookCommand(harness));
+      repaired.push({ harness, file });
+    } catch (error) {
+      process.stderr.write(`Scopebond Agent: could not put the hook back for ${harness}: ${(error as Error).message}\n`);
+    }
   }
   return repaired;
 }

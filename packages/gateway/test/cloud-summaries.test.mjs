@@ -270,8 +270,14 @@ test("held(): a routine record stamped further ahead than one window and its gra
     summaries: { detail: () => "standard", attester } });
   try {
     for (const r of [...inWindow, ...ahead]) exporter.enqueue(r);
-    await settle(exporter);
+    // Before any flush: the one ahead is pending (not held), the other held for its window.
     assert.equal(exporter.pending(), 2);
+    assert.deepEqual(exporter.held(), { routine: 1, until: W0 + 15 * 60_000 + 30_000 });
+    // A flush sends the one ahead in full (no window would ever close for it), so the queue converges to the held record.
+    await settle(exporter);
+    assert.deepEqual(ws.calls.ingest.flatMap((b) => b.receipts).map((r) => r.payload.timestamp), [ahead[0].payload.timestamp]);
+    assert.equal(ws.calls.summaries.length, 0);
+    assert.equal(exporter.pending(), 1);
     assert.deepEqual(exporter.held(), { routine: 1, until: W0 + 15 * 60_000 + 30_000 });
   } finally { exporter.stop(); }
 });
