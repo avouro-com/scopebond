@@ -70,7 +70,7 @@
     note, busy, version: "0.1.0", autostart: "on",
   });
 
-  const handlers = {
+  const handlers = new Map(Object.entries({
     panel_state: () => state(),
     panel_close: () => { say("(The panel would close here.)"); return null; },
     panel_action: ({ id }) => { say(id === "send_now" ? "Sent 312 records; nothing is waiting" : id === "open_workspace" ? "Opened this computer's page in your workspace" : "Checked just now: all good"); if (id === "send_now") model = scenes.protected(); return true; },
@@ -90,10 +90,10 @@
       }, 1200);
       return true;
     },
-  };
+  }));
 
   window.__TAURI__ = { core: { invoke: (cmd, args) => new Promise((resolve, reject) => {
-    const h = handlers[cmd];
+    const h = typeof cmd === "string" ? handlers.get(cmd) : undefined;
     if (!h) { reject(new Error("unknown command " + cmd)); return; }
     resolve(JSON.parse(JSON.stringify(h(args || {}) ?? null)));
   }) } };
