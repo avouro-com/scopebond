@@ -97,7 +97,7 @@ pub fn block_text(answer: &Value) -> String {
 }
 
 /// What the person can do about a block, as its button says it (the panel and a block notification use the same words):
-/// *Unblock…* where the workspace lets them allow it, *Ask an admin…* where it only lets them ask, and nothing where the
+/// *Unblock…* where the workspace lets them allow it, *Ask to unblock…* where an admin decides, and nothing where the
 /// block is final. An older agent that says nothing about it but lets the person act gets *Unblock…* (its Scopebond window
 /// offers what there is).
 pub fn block_button(block: &RecentBlock) -> Option<&'static str> {
@@ -106,7 +106,7 @@ pub fn block_button(block: &RecentBlock) -> Option<&'static str> {
     }
     match &block.offers {
         Some(offers) if offers.allows() => Some("Unblock…"),
-        Some(offers) if offers.ask => Some("Ask an admin…"),
+        Some(offers) if offers.ask => Some("Ask to unblock…"),
         Some(_) => None,
         None => Some("Unblock…"),
     }
@@ -241,7 +241,7 @@ mod tests {
         let mut b = answerable();
         assert_eq!(block_button(&b), Some("Unblock…"), "self-service");
         b.offers = Some(BlockOffers { ask: true, ..Default::default() });
-        assert_eq!(block_button(&b), Some("Ask an admin…"), "only an admin unblocks");
+        assert_eq!(block_button(&b), Some("Ask to unblock…"), "an admin decides");
         b.offers = Some(BlockOffers::default());
         assert_eq!(block_button(&b), None, "final: no button");
         b.can_act = false;

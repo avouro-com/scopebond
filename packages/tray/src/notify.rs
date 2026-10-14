@@ -36,7 +36,7 @@ pub struct Toast {
     pub text: String,
     /// The block whose form the notification's button opens (one block the person may act on).
     pub unblock: Option<String>,
-    /// That button's words: *Unblock…*, or *Ask an admin…* when the workspace only lets the person ask.
+    /// That button's words: *Unblock…*, or *Ask to unblock…* where an admin decides.
     pub button: Option<&'static str>,
 }
 
@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(t.button, Some("Unblock…"));
         b.offers = Some(BlockOffers { ask: true, ..Default::default() });
         let ask = block_toast(std::slice::from_ref(&b)).unwrap();
-        assert_eq!((ask.unblock.as_deref(), ask.button), (Some("a"), Some("Ask an admin…")), "only an admin unblocks");
+        assert_eq!((ask.unblock.as_deref(), ask.button), (Some("a"), Some("Ask to unblock…")), "an admin decides");
         b.offers = Some(BlockOffers::default());
         let final_block = block_toast(std::slice::from_ref(&b)).unwrap();
         assert_eq!((final_block.unblock, final_block.button), (None, None), "final: no button");

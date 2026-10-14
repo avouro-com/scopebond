@@ -74,7 +74,7 @@
 
   // ---- The Unblock form: the choices the workspace offers for this block, a reason, and a button named for the result.
   const CHOICES = ["once", "fifteen", "always", "ask"];
-  const BUTTON = { once: "Allow once", fifteen: "Allow for 15 minutes", always: "Always allow", ask: "Send to admin" };
+  const BUTTON = { once: "Allow once", fifteen: "Allow for 15 minutes", always: "Always allow", ask: "Send request" };
   const choicesOf = (b) => CHOICES.filter((c) => b.offers && b.offers[c]);
   let holding = false;
   function hold(on) {
@@ -110,7 +110,7 @@
       once: ["Just this once", "The next time it runs"],
       fifteen: ["For 15 minutes", "This action, until " + until],
       always: ["Always on this computer", o.always_needs_admin ? "After an admin approves; allowed for 15 minutes meanwhile" : "For " + days + " days"],
-      ask: [choicesOf(b).length > 1 ? "Ask an admin instead" : "Ask an admin", "They answer in Scopebond Cloud; you see it under Asked"],
+      ask: ["Ask an admin to unblock it instead", "An admin decides; you'll see the answer under Requests"],
     }[c];
   }
   function countText(b) {
@@ -123,9 +123,9 @@
     const busy = s.busy === "answer:" + id;
     const enough = ui.reason.trim().length >= (b.reason_min || 10);
     const choices = choicesOf(b);
-    // Where the workspace only lets the person ask an admin, there is nothing to choose: the reason and Send to admin.
+    // Where an admin decides, there is nothing to choose: the action, the reason and Send request.
     const askOnly = choices.length === 1 && choices[0] === "ask";
-    const where = askOnly ? "You'll see the answer under Asked"
+    const where = askOnly ? "An admin decides; you'll see the answer under Requests"
       : model.workspace ? "Recorded and sent to " + model.workspace : "Recorded and sent to your workspace";
     const update = () => {
       const count = document.getElementById("count-" + id);
@@ -133,7 +133,7 @@
       const go = root.querySelector('[data-key="confirm-' + CSS.escape(id) + '"]');
       if (go) go.disabled = !!s.busy || ui.reason.trim().length < (b.reason_min || 10);
     };
-    return el("div", { class: "form", role: "group", "aria-label": (askOnly ? "Ask an admin about " : "Unblock ") + (b.what || b.summary) }, [
+    return el("div", { class: "form", role: "group", "aria-label": (askOnly ? "Ask to unblock " : "Unblock ") + (b.what || b.summary) }, [
       el("div", { class: "cmd", "aria-label": "What ran", text: b.action_text || b.what || b.summary }),
       askOnly ? null : el("fieldset", { class: "choices" }, [el("legend", { text: choices.some((c) => c !== "ask") ? "Let it through" : "What to do" })].concat(choices.map((c) => {
         const [title, small] = choiceWords(b, c);
@@ -245,15 +245,15 @@
     const allows = offers ? offers.once || offers.fifteen || offers.always : b.can_act;
     let act = null;
     if (b.acted === "allowed") act = el("span", { class: "chip ok", text: "Allowed" });
-    else if (b.acted === "asked") act = el("span", { class: "chip wait", text: "Sent to an admin" });
+    else if (b.acted === "asked") act = el("span", { class: "chip wait", text: "Request sent" });
     else if (b.can_act && b.action_id && ui.open === b.action_id && offers) act = unblockForm(s, model, b);
     else if (b.can_act && b.action_id && (allows || (offers && offers.ask))) {
       const mine = busy === "block:" + b.action_id;
       act = el("div", { class: "acts" }, [el("button", {
         class: "btn" + (allows ? " primary" : ""), type: "button", "data-key": "block-" + b.action_id, disabled: !!busy,
         "aria-busy": mine ? "true" : null, "aria-expanded": offers ? "false" : null,
-        "aria-label": (allows ? "Unblock: " : "Ask an admin about: ") + words,
-        text: mine ? "Waiting for your answer…" : allows ? "Unblock…" : "Ask an admin…",
+        "aria-label": (allows ? "Unblock: " : "Ask to unblock: ") + words,
+        text: mine ? "Waiting for your answer…" : allows ? "Unblock…" : "Ask to unblock…",
         // The form here when the agent says what may be done; an older agent's Scopebond window otherwise.
         onclick: () => { if (offers) { openForm(b); draw("reason"); } else run("block", b.action_id); },
       })]);
@@ -306,11 +306,11 @@
   }
   function askedList(model) {
     const items = model.asked || [];
-    if (!items.length) return [empty("No requests to an admin", "When you ask an admin to allow something, their answer shows here.")];
-    return [el("ul", { "aria-label": "Asked" }, items.map((r) => {
+    if (!items.length) return [empty("No requests", "When you ask to unblock something, the answer shows here.")];
+    return [el("ul", { "aria-label": "Requests" }, items.map((r) => {
       const chip = r.state === "approved" ? ["ok", "Approved"] : r.state === "declined" ? ["no", "Declined"] : ["wait", "Waiting for an admin"];
       const who = r.answered_by ? " by " + r.answered_by : "";
-      const said = r.state === "approved" ? "Approved" + who : r.state === "declined" ? "Declined" + who : "Asked " + when(r.asked_at) + (r.sent ? "" : " · not sent yet");
+      const said = r.state === "approved" ? "Approved" + who : r.state === "declined" ? "Declined" + who : "Requested " + when(r.asked_at) + (r.sent ? "" : " · not sent yet");
       return el("li", { class: "item" }, [
         el("div", { class: "row" }, [el("span", { class: "what", text: r.what }), el("span", { class: "chip " + chip[0], text: chip[1] })]),
         el("span", { class: "meta", text: [said, r.rule_title].filter(Boolean).join(" · ") }),

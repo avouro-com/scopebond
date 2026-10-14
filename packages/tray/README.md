@@ -30,23 +30,23 @@ PowerShell tray.
   - **Blocked · Allowed · Requests.** *Blocked* lists up to 20 blocks, today's first and then earlier ones, newest first:
     the action in plain words as the Scopebond window shows it, with secrets masked ("Read .env.production", "git push
     --force origin main"), the rule's name, the project and the coding tool, and the time. What the panel offers follows what the
-    workspace lets a person do for each block, as the agent says it: *Unblock…* where the person may allow it, *Ask an
-    admin…* where they may only ask, and no button where the block is final (nothing else is said about it).
+    workspace lets a person do for each block, as the agent says it: *Unblock…* where the person may allow it, *Ask to
+    unblock…* where an admin decides, and no button where the block stays blocked (nothing else is said about it).
   - **Unblock in the panel.** Either button opens a form on the block itself: the text the Scopebond window shows for the
     action, only the choices the workspace offers for it now (*Just this once*, *For 15 minutes*, *Always on this
-    computer* — for the workspace's number of days, or after an admin approves —, *Ask an admin*), a reason with a live
+    computer* — for the workspace's number of days, or after an admin approves —, *Ask an admin to unblock it instead*), a reason with a live
     count of the characters still needed, and a button named for the result (*Allow once*, *Allow for 15 minutes*, *Always
-    allow*, *Send to admin*). The tray checks the answer (the choice is offered, the reason long enough and at most 500
+    allow*, *Send request*). The tray checks the answer (the choice is offered, the reason long enough and at most 500
     characters) and sends it to the agent's `POST /blocked/answer`, which checks it again and applies it exactly as the
     window's answer: the allowance or the request on this computer, sent to the workspace signed by this computer's key.
-    The block then says what happened: "Allowed once · Recorded and sent to Acme". Where the workspace only lets the
-    person ask an admin, the form has nothing to choose: the action, the reason and *Send to admin*, and afterwards "Sent
-    to an admin · you'll see the answer under Asked". Scopebond never runs the action
+    The block then says what happened: "Allowed once · Recorded and sent to Acme". Where an admin decides, the form
+    has nothing to choose: the action, the reason and *Send request*, and afterwards "Request sent · you'll see the
+    answer under Requests". Scopebond never runs the action
     itself; the person or the coding agent runs it again. With an agent that does not say what may be done, the buttons
     open its Scopebond window as before.
   - *Allowed* lists what the person let through that still applies (once, for 15 minutes, always), with when it ends, and
-    what waits for an admin, and what an admin approved. *Asked*, there only when the workspace lets the person ask an
-    admin or when they have asked before, lists the requests to an admin: waiting, approved (and by whom) or declined (with the
+    what waits for an admin, and what an admin approved. *Requests*, there only when the workspace lets the person ask or
+    when they have asked before, lists their requests: waiting, approved (and by whom) or declined (with the
     admin's note when the workspace sends one), with the person's own reason. Stopping an allowance from here is not
     offered yet.
   - The footer says how many actions were checked today and opens the workspace in Scopebond Cloud.
@@ -64,8 +64,8 @@ PowerShell tray.
 - **Notifications**: one when the state gets worse (for "needs attention", only once it has lasted five minutes, so
   sleep and wake do not flap) and one when it is protected again; with *Blocks and problems* (the default for a new install;
   an older *All* reads the same), one for a new block in plain words with the tool, the project and the rule, and an
-  button that opens the panel on that block's form, named as the panel's button is (*Unblock…*, or *Ask an admin…*
-  where the person may only ask; none where the block is final); blocks that follow within a
+  button that opens the panel on that block's form, named as the panel's button is (*Unblock…*, or *Ask to unblock…*
+  where an admin decides; none where the block stays blocked); blocks that follow within a
   minute are told together ("3 actions blocked in the last minute"). *Problems only* says nothing about blocks, and *Off*
   nothing at all. An agent that has not answered for two minutes while the tray keeps trying
   counts as a problem, and so, at once, does one whose pipe accepts connections but that has given no model for half a

@@ -569,7 +569,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       notice: migrationNotice(),
       canAsk: workspaceLetsAsk(options.dir),
     });
-    // What the person let through and asked an admin, for the tray's Allowed and Asked lists.
+    // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
     return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
   };
   /** What this install can update to, for the tray: from npm, the workspace's agent and hook (as its rules check said);
@@ -837,7 +837,7 @@ export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined
   if (outcome === "gone") return blockedText("gone");
   if (outcome === "declined") return blockedText("declined");
   // A request: where the answer will show (it is recorded and sent like everything else).
-  if (outcome === "asked") return connected ? "Sent to an admin · you'll see the answer under Asked" : "Saved for an admin, sent once this computer is connected · you'll see the answer under Asked";
+  if (outcome === "asked") return connected ? "Request sent · you'll see the answer under Requests" : "Request saved, sent once this computer is connected · you'll see the answer under Requests";
   const what = outcome === "proposed" ? "Allowed for 15 minutes; always once an admin approves"
     : choice === "fifteen" ? "Allowed for 15 minutes"
     : choice === "always" ? `Always allowed on this computer for ${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`

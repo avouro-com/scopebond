@@ -1,6 +1,6 @@
 // From the tray's own form: a person answers an earlier block (allow once, for 15 minutes, always, or ask an admin) with a
 // reason. The agent checks it again as the Scopebond window would, applies it as the window's answer is applied, and sends
-// it to the workspace signed by this computer's key. The Allowed and Asked lists show what came of it.
+// it to the workspace signed by this computer's key. The Allowed and Requests lists show what came of it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -29,8 +29,8 @@ test("an answer from the form is read strictly", () => {
   }
   assert.equal(answerText("allowed", "once", 30, "Acme", true), "Allowed once · Recorded and sent to Acme");
   assert.equal(answerText("allowed", "always", 14, null, true), "Always allowed on this computer for 14 days · Recorded and sent to your workspace");
-  assert.equal(answerText("asked", "ask", 30, "Acme", true), "Sent to an admin · you'll see the answer under Asked");
-  assert.equal(answerText("asked", "ask", 30, "Acme", false), "Saved for an admin, sent once this computer is connected · you'll see the answer under Asked");
+  assert.equal(answerText("asked", "ask", 30, "Acme", true), "Request sent · you'll see the answer under Requests");
+  assert.equal(answerText("asked", "ask", 30, "Acme", false), "Request saved, sent once this computer is connected · you'll see the answer under Requests");
 });
 
 test("allow once from the tray: checked as the window would be, applied once, then no longer offered", async () => {
@@ -78,13 +78,13 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
   const service = await serviceFor(dir);
   try {
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "'Block, person may ask' never allows on the spot");
-    // Only an admin unblocks: the tray is told that asking is all there is, and shows Ask an admin and its Asked list.
+    // Only an admin unblocks: the tray is told that asking is all there is, and shows Ask to unblock and its Requests list.
     const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
     assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: true });
     assert.equal(before.can_ask, true);
     const done = await answer(dir, { action_id: id, choice: "ask", reason: REASON });
     assert.equal(done.outcome, "asked");
-    assert.equal(done.text, "Saved for an admin, sent once this computer is connected · you'll see the answer under Asked");
+    assert.equal(done.text, "Request saved, sent once this computer is connected · you'll see the answer under Requests");
     let { requests } = await callAgent(dir, "GET", "/requests", undefined, 10_000);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].state, "waiting");
@@ -158,7 +158,7 @@ test("notifications: blocks and problems for a new install; the older 'all' read
   assert.equal(writeTraySettings(existing, { notifications: "loud" }).notifications, "blocks");
 });
 
-test("blocks are final: nothing offered for a block, and no Asked list", async () => {
+test("blocks are final: nothing offered for a block, and no Requests list", async () => {
   const dir = computer({ "destructive-shell": { mode: "block" } });
   await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf build" } }]);
   const service = await serviceFor(dir);

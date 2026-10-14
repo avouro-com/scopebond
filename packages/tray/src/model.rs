@@ -183,7 +183,7 @@ impl TrayModel {
         self.today.as_ref().map(|t| t.blocked).unwrap_or(self.recent_blocks.len() as u64)
     }
 
-    /// Whether the panel shows the Asked list: the workspace lets a person ask an admin (under any rule, or for a listed
+    /// Whether the panel shows the Requests list: the workspace lets a person ask an admin (under any rule, or for a listed
     /// block), or the person has asked before.
     pub fn asks(&self) -> bool {
         self.can_ask == Some(true) || !self.asked.is_empty() || self.recent_blocks.iter().any(|b| b.offers.as_ref().is_some_and(|o| o.ask))
@@ -374,7 +374,7 @@ mod tests {
         final_rules.can_ask = Some(false);
         final_rules.asked.clear();
         final_rules.recent_blocks.iter_mut().for_each(|b| b.offers = None);
-        assert!(!final_rules.asks(), "nothing to ask: no Asked list");
+        assert!(!final_rules.asks(), "nothing to ask: no Requests list");
         assert_eq!(a.tray.allowed[0].choice, "fifteen");
         assert_eq!(a.tray.asked[0].state, "declined");
         assert_eq!(a.tray.asked[0].note.as_deref(), Some("Use the clean script"));
