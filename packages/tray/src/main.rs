@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 use scopebond_tray::agent::{scopebond_home, AgentClient};
 use scopebond_tray::icon::{self, IconState};
 use scopebond_tray::menu::{self, AgentLink, Autostart, Command, Entry, MenuContext};
-use scopebond_tray::model::{Notifications, TrayAction, TrayAnswer};
-use scopebond_tray::notify::{Kind, Notifier, Toast};
+use scopebond_tray::live::{self, LiveWatch};
+use scopebond_tray::model::{LiveQuestion, Notifications, TrayAction, TrayAnswer};
+use scopebond_tray::notify::{Kind, Notifier, RequestWatch, Toast};
 use scopebond_tray::panel::{self, Area, PANEL_HEIGHT, PANEL_WIDTH};
 use scopebond_tray::supervise::{self, Decision, Observation, Supervisor};
 use scopebond_tray::{log, win};
@@ -75,6 +76,10 @@ struct Shared {
     answered: Mutex<Option<(String, String, String, Instant)>>,
     /// The panel's form has input: the panel stays open when it loses focus.
     hold: AtomicBool,
+    /// The hook's question waiting for the person now (the live prompt), as the agent last said.
+    pending: Mutex<Option<LiveQuestion>>,
+    live_watch: Mutex<LiveWatch>,
+    request_watch: Mutex<RequestWatch>,
 }
 
 impl Shared {
@@ -97,6 +102,9 @@ impl Shared {
             open_block: Mutex::new(None),
             answered: Mutex::new(None),
             hold: AtomicBool::new(false),
+            pending: Mutex::new(None),
+            live_watch: Mutex::new(LiveWatch::new()),
+            request_watch: Mutex::new(RequestWatch::new()),
         }
     }
 
@@ -416,6 +424,54 @@ fn notify(app: &AppHandle, shared: &Arc<Shared>, answer: Option<&TrayAnswer>, li
     for toast in lock(&shared.notifier).observe(state, &headline, &blocks, setting, now) {
         show_toast(toast, Some((app.clone(), shared.clone())));
     }
+    // An admin's answer to one of the person's requests.
+    if let Some(a) = answer {
+        for toast in lock(&shared.request_watch).observe(&a.tray.asked, setting) {
+            show_toast(toast, Some((app.clone(), shared.clone())));
+        }
+    }
+}
+
+/// The live prompt: wait for the hook's question (the agent answers when one starts waiting, or after 20 s), keep it for the
+/// panel, and tell the person once. An agent without the route (an older one) is asked again only after a minute.
+fn watch_questions(app: &AppHandle, shared: &Arc<Shared>) {
+    loop {
+        let seen = lock(&shared.pending).as_ref().map(|q| q.action_id.clone());
+        let result = shared.client.call("POST", "/override/wait", Some(&live::wait_body(seen.as_deref())), Duration::from_secs(live::WAIT_TIMEOUT_SECS));
+        let pause = match result {
+            Ok(answer) => {
+                let question = live::parse_wait(&answer);
+                let setting = lock(&shared.answer).as_ref().map(|a| a.settings.notifications).unwrap_or_default();
+                let toast = lock(&shared.live_watch).observe(question.as_ref(), setting);
+                let changed = *lock(&shared.pending) != question;
+                *lock(&shared.pending) = question;
+                if let Some(toast) = toast {
+                    log::line("a question is waiting for the person in the tray");
+                    show_toast(toast, Some((app.clone(), shared.clone())));
+                }
+                if changed {
+                    shared.wake();
+                }
+                Duration::ZERO
+            }
+            Err(scopebond_tray::agent::CallError::Refused(404)) => Duration::from_secs(60),
+            Err(_) => {
+                *lock(&shared.pending) = None;
+                Duration::from_secs(3)
+            }
+        };
+        if !pause.is_zero() {
+            thread::sleep(pause);
+        }
+    }
+}
+
+/// The person opened the waiting question in the tray: the agent opens no window for it.
+fn open_question(shared: &Arc<Shared>, action_id: &str) {
+    let waiting = lock(&shared.pending).as_ref().is_some_and(|q| q.action_id == action_id);
+    if waiting {
+        let _ = shared.client.call("POST", "/override/open", Some(&json!({ "action_id": action_id })), Duration::from_secs(5));
+    }
 }
 
 /// A Windows notification under the installer's AppUserModelID (the Start-menu entry carries it). Shown on its own
@@ -424,21 +480,35 @@ fn notify(app: &AppHandle, shared: &Arc<Shared>, answer: Option<&TrayAnswer>, li
 fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
     thread::spawn(move || {
         let mut t = tauri_winrt_notification::Toast::new("Avouro.Scopebond").title(&toast.title).text1(&toast.text);
-        if matches!(toast.kind, Kind::Recovered | Kind::Block) {
+        if matches!(toast.kind, Kind::Recovered | Kind::Block | Kind::Request) {
             t = t.sound(None);
         }
-        if let (Kind::Block, Some((app, shared))) = (toast.kind, panel) {
-            if let (Some(_), Some(words)) = (&toast.unblock, toast.button) {
-                t = t.add_button(words, "unblock");
-            }
-            let block = toast.unblock.clone();
-            t = t.on_activated(move |action| {
-                if action.as_deref() == Some("unblock") {
-                    *lock(&shared.open_block) = block.clone();
+        match (toast.kind, panel) {
+            (Kind::Block, Some((app, shared))) => {
+                if let (Some(_), Some(words)) = (&toast.unblock, toast.button) {
+                    t = t.add_button(words, "unblock");
                 }
-                open_panel(&app, &shared, None);
-                Ok(())
-            });
+                let block = toast.unblock.clone();
+                t = t.on_activated(move |action| {
+                    if action.as_deref() == Some("unblock") {
+                        *lock(&shared.open_block) = block.clone();
+                        // A question waiting now: no window for it while the person answers in the panel.
+                        if let Some(id) = block.clone() {
+                            let s = shared.clone();
+                            thread::spawn(move || open_question(&s, &id));
+                        }
+                    }
+                    open_panel(&app, &shared, None);
+                    Ok(())
+                });
+            }
+            (Kind::Request, Some((app, shared))) => {
+                t = t.on_activated(move |_| {
+                    open_panel(&app, &shared, None);
+                    Ok(())
+                });
+            }
+            _ => {}
         }
         match t.show() {
             Ok(()) => log::line(&format!("notified: {}", toast.text)),
@@ -777,6 +847,8 @@ fn panel_state(shared: State<'_, Arc<Shared>>) -> Value {
         // A notification's Unblock…: the block whose form to open (once).
         "openBlock": lock(&shared.open_block).take(),
         // What came of the last answer in the panel's form, for a while.
+        // The hook's question waiting for the person now.
+        "pending": lock(&shared.pending).clone(),
         "answered": lock(&shared.answered).as_ref().filter(|a| a.3.elapsed() < NOTE_FOR).map(|(id, outcome, text, _)| json!({ "actionId": id, "outcome": outcome, "text": text })),
     })
 }
@@ -813,6 +885,67 @@ fn panel_block(action_id: String, choice: Option<String>, reason: Option<String>
             true
         }
     }
+}
+
+/// The question waiting now, from the panel: its form opened (no choice), or the person's answer (checked here, then by
+/// the agent, which hands it to the hook's waiting call).
+#[tauri::command]
+fn panel_live(action_id: String, choice: Option<String>, reason: Option<String>, shared: State<'_, Arc<Shared>>) -> bool {
+    let question = lock(&shared.pending).clone().filter(|q| q.action_id == action_id);
+    let Some(question) = question else { return false };
+    let s = shared.inner().clone();
+    match choice {
+        // The form opened: no window for this question.
+        None => {
+            thread::spawn(move || open_question(&s, &action_id));
+            true
+        }
+        Some(choice) => match live::check_live_answer(&question, &choice, reason.as_deref().unwrap_or_default()) {
+            Ok(body) => {
+                thread::spawn(move || {
+                    {
+                        let mut busy = lock(&s.busy);
+                        if busy.is_some() {
+                            return;
+                        }
+                        *busy = Some(format!("answer:{action_id}"));
+                    }
+                    let (outcome, text) = match s.client.call("POST", "/override/answer", Some(&body), Duration::from_secs(10)) {
+                        Ok(answer) => (answer.get("outcome").and_then(Value::as_str).unwrap_or("").to_string(), panel::block_text(&answer)),
+                        Err(e) => ("failed".to_string(), format!("The answer could not be sent: {e}")),
+                    };
+                    *lock(&s.busy) = None;
+                    *lock(&s.answered) = Some((action_id, outcome, text.clone(), Instant::now()));
+                    s.set_note(text);
+                    s.wake();
+                });
+                true
+            }
+            Err(why) => {
+                shared.set_note(why);
+                false
+            }
+        },
+    }
+}
+
+/// "Stop allowing" an allowance the person made (the panel asked them to confirm first).
+#[tauri::command]
+fn panel_stop(id: String, shared: State<'_, Arc<Shared>>) -> bool {
+    let known = lock(&shared.answer).as_ref().is_some_and(|a| a.tray.allowed.iter().any(|x| x.id == id && live::stoppable(x)));
+    if !known {
+        return false;
+    }
+    let s = shared.inner().clone();
+    thread::spawn(move || {
+        let text = match s.client.call("POST", "/allowances/stop", Some(&json!({ "id": id })), Duration::from_secs(10)) {
+            Ok(answer) => panel::block_text(&answer),
+            Err(e) => format!("It could not be stopped: {e}"),
+        };
+        s.set_note(text);
+        s.wake();
+    });
+    true
 }
 
 /// The panel's Unblock form has input (keep the panel open when it loses focus), or no longer has.
@@ -868,12 +1001,19 @@ fn main() {
             }
         }))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_hold, panel_command, panel_close])
+        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_live, panel_stop, panel_hold, panel_command, panel_close])
         .setup(move |app| {
             let handle = app.handle().clone();
             if let Err(e) = create_tray(&handle, &shared) {
                 log::line(&format!("the tray icon could not be added yet: {e}"));
             }
+            let (app_live, s_live) = (handle.clone(), shared.clone());
+            thread::spawn(move || loop {
+                if std::panic::catch_unwind(AssertUnwindSafe(|| watch_questions(&app_live, &s_live))).is_err() {
+                    log::line("watching for questions failed; going on");
+                    thread::sleep(Duration::from_secs(5));
+                }
+            });
             let s_supervise = shared.clone();
             thread::spawn(move || supervise_agent(&s_supervise));
             let (app_refresh, s_refresh) = (handle.clone(), shared.clone());

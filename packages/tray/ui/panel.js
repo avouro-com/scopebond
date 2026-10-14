@@ -10,7 +10,8 @@
   const SVG = "http://www.w3.org/2000/svg";
   // What the person is looking at; kept across redraws.
   // `open`: the block whose Unblock form is open, with the choice and the reason typed so far.
-  const ui = { view: "list", tab: "blocked", open: null, choice: null, reason: "" };
+  // `stopping`: the allowance whose "Stop allowing" waits for the person to confirm.
+  const ui = { view: "list", tab: "blocked", open: null, choice: null, reason: "", stopping: null };
   let last = null;
   let lastJson = "";
 
@@ -82,7 +83,19 @@
     holding = on;
     invoke("panel_hold", { hold: on }).catch(() => {});
   }
+  // The hook's question waiting now (the live prompt), drawn and answered like a block.
+  function pendingBlock(s) {
+    const q = s && s.pending;
+    if (!q || !q.action_id) return null;
+    return Object.assign({}, q, { summary: q.what, can_act: true, acted: null, live: true, at: null });
+  }
+  function secondsLeft(deadline) {
+    const left = Math.round((Date.parse(deadline) - Date.now()) / 1000);
+    return Number.isFinite(left) ? Math.max(0, left) : 0;
+  }
   function openForm(b) {
+    // The person opened the waiting question here: no Scopebond window for it.
+    if (b.live) invoke("panel_live", { actionId: b.action_id }).catch(() => {});
     ui.open = b.action_id;
     ui.choice = choicesOf(b)[0] || null;
     ui.reason = "";
@@ -98,7 +111,7 @@
   }
   async function submit(b) {
     let sent = false;
-    try { sent = await invoke("panel_block", { actionId: b.action_id, choice: ui.choice, reason: ui.reason }); } catch (_) { /* the note says why */ }
+    try { sent = await invoke(b.live ? "panel_live" : "panel_block", { actionId: b.action_id, choice: ui.choice, reason: ui.reason }); } catch (_) { /* the note says why */ }
     if (sent) closeForm();
     setTimeout(refresh, 150);
   }
@@ -274,7 +287,8 @@
       el("div", { class: "row" }, [
         el("span", { class: "mark", "aria-hidden": "true" }),
         el("span", { class: "what", text: words }),
-        el("span", { class: "when", text: when(b.at) }),
+        b.live ? el("span", { class: "when", id: "countdown", "data-deadline": b.deadline, text: secondsLeft(b.deadline) + " s left" })
+          : el("span", { class: "when", text: when(b.at) }),
       ]),
       meta ? el("span", { class: "meta", text: meta }) : null,
       answered ? el("span", { class: "done", text: answered }) : act,
@@ -282,11 +296,13 @@
   }
 
   function blockedList(s, model) {
-    const blocks = model && model.recent_blocks || [];
-    if (!blocks.length) return [empty("Nothing blocked today", "Scopebond checks every action your coding agents take.")];
+    const blocks = (model && model.recent_blocks || []).filter((b) => !(s.pending && b.action_id === s.pending.action_id));
+    const live = pendingBlock(s);
+    const out = [];
+    if (live) out.push(el("h2", { id: "live-h", text: "Waiting for your answer" }), el("ul", { "aria-labelledby": "live-h" }, [blockItem(s, model, live, 0)]));
+    if (!blocks.length) return out.concat(live ? [] : [empty("Nothing blocked today", "Scopebond checks every action your coding agents take.")]);
     const today = blocks.filter((b) => isToday(b.at));
     const earlier = blocks.filter((b) => !isToday(b.at));
-    const out = [];
     if (!today.length) out.push(empty("Nothing blocked today", "Earlier blocks are below."));
     else out.push(el("h2", { id: "today-h", text: "Today" }), el("ul", { "aria-labelledby": "today-h" }, today.map((b, i) => blockItem(s, model, b, i))));
     if (earlier.length) out.push(el("h2", { id: "earlier-h", text: "Earlier" }), el("ul", { "aria-labelledby": "earlier-h" }, earlier.map((b, i) => blockItem(s, model, b, today.length + i))));
@@ -304,14 +320,30 @@
     const items = model.allowed || [];
     if (!items.length) return [empty("Nothing allowed right now", "What you let through shows here until it ends.")];
     return [el("ul", { "aria-label": "Allowed" }, items.map((a) => {
-      const how = a.choice === "once" ? "Just this once" : a.choice === "fifteen" ? "For 15 minutes" : a.by === "admin" ? "Approved by " + (a.answered_by || "an admin") : "Always on this computer";
+      const how = a.unblocked === "automatic" ? "Unblocked automatically"
+        : a.choice === "once" ? "Just this once" : a.choice === "fifteen" ? "For 15 minutes" : a.by === "admin" ? "Approved by " + (a.answered_by || "an admin") : "Always on this computer";
       const end = a.state === "proposed" ? "Waiting for an admin" : a.choice === "once" ? "Until it runs again" : ends(a.ends_at);
+      const what = a.what || (a.rule_title ? "An action under " + a.rule_title : "an action");
+      // "Stop allowing" for what the person let through, with a confirm in the row.
+      const mine = a.by === "person" && (a.state === "active" || a.state === "proposed");
+      const stop = !mine ? null : ui.stopping === a.id
+        ? el("div", { class: "confirm", role: "group", "aria-label": "Stop allowing " + what }, [
+          el("span", { class: "meta", text: "Stop allowing it? It stops at once, and your workspace is told." }),
+          el("div", { class: "acts" }, [
+            el("button", { class: "btn primary", type: "button", "data-key": "stop-yes-" + a.id, text: "Stop allowing",
+              onclick: async () => { ui.stopping = null; try { await invoke("panel_stop", { id: a.id }); } catch (_) { /* the note says why */ } setTimeout(refresh, 150); } }),
+            el("button", { class: "btn", type: "button", "data-key": "stop-no-" + a.id, text: "Keep", onclick: () => { ui.stopping = null; draw("stop-" + a.id); } }),
+          ]),
+        ])
+        : el("div", { class: "acts" }, [el("button", { class: "btn", type: "button", "data-key": "stop-" + a.id, "aria-label": "Stop allowing " + what, text: "Stop allowing",
+          onclick: () => { ui.stopping = a.id; draw("stop-yes-" + a.id); } })]);
       return el("li", { class: "item" }, [
         el("div", { class: "row" }, [
           el("span", { class: "what", text: a.what || (a.rule_title ? "An action under " + a.rule_title : "An action") }),
           el("span", { class: "chip " + (a.state === "proposed" ? "wait" : "ok"), text: a.state === "proposed" ? "Waiting" : "Active" }),
         ]),
         el("span", { class: "meta", text: [how, end, a.what ? a.rule_title : null].filter(Boolean).join(" · ") }),
+        stop,
       ]);
     }))];
   }
@@ -398,7 +430,7 @@
     if (!s) return;
     const model = s.answer && s.answer.tray;
     // The form's block is gone (answered elsewhere, or no longer offered): close the form.
-    if (ui.open && !(model && (model.recent_blocks || []).some((b) => b.action_id === ui.open && b.can_act && b.offers))) closeForm();
+    if (ui.open && !(s.pending && s.pending.action_id === ui.open) && !(model && (model.recent_blocks || []).some((b) => b.action_id === ui.open && b.can_act && b.offers))) closeForm();
     const typing = document.activeElement && document.activeElement.id === "reason" ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
     // Keep keyboard focus on the same control across redraws.
     const active = document.activeElement;
@@ -439,7 +471,9 @@
     lastJson = json;
     last = s;
     // A notification's Unblock…: open that block's form.
-    const target = s.openBlock && s.answer && s.answer.tray && (s.answer.tray.recent_blocks || []).find((b) => b.action_id === s.openBlock && b.can_act && b.offers);
+    const live = pendingBlock(s);
+    const target = s.openBlock && (live && live.action_id === s.openBlock ? live
+      : s.answer && s.answer.tray && (s.answer.tray.recent_blocks || []).find((b) => b.action_id === s.openBlock && b.can_act && b.offers));
     if (target) { openForm(target); draw("reason"); return; }
     draw();
     if (first) {
@@ -460,4 +494,9 @@
 
   refresh();
   setInterval(refresh, 2000);
+  // The waiting question's seconds left, without redrawing the panel.
+  setInterval(() => {
+    const c = document.getElementById("countdown");
+    if (c) c.textContent = secondsLeft(c.getAttribute("data-deadline")) + " s left";
+  }, 1000);
 })();

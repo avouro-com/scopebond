@@ -119,6 +119,28 @@ pub struct TrayModel {
     pub allowed: Vec<AllowedItem>,
     /// What the person asked an admin, newest first, with the answer when there is one.
     pub asked: Vec<AskedItem>,
+    /// The hook's question waiting for the person now (the live prompt), when the tray is listening.
+    pub pending: Option<LiveQuestion>,
+}
+
+/// A question the hook is waiting on during a coding session: what the coding tool tried, under which rule, what the person
+/// may do, and until when the hook waits.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LiveQuestion {
+    pub action_id: String,
+    pub what: String,
+    pub action_text: String,
+    pub rule: String,
+    pub rule_title: String,
+    pub tool: Option<String>,
+    pub project: Option<String>,
+    pub reason_min: u32,
+    pub offers: BlockOffers,
+    /// When the hook stops waiting (RFC 3339).
+    pub deadline: String,
+    /// The person opened it in the tray.
+    pub opened: bool,
 }
 
 /// An allowance in force or waiting for an admin.
@@ -139,6 +161,8 @@ pub struct AllowedItem {
     pub created_at: String,
     pub ends_at: String,
     pub answered_by: Option<String>,
+    /// "automatic" (applied at once by the workspace's terms, reviewed later), "person", or none (an older agent).
+    pub unblocked: Option<String>,
 }
 
 /// A request to an admin.

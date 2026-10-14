@@ -50,8 +50,15 @@ PowerShell tray.
   - *Allowed* lists what the person let through that still applies (once, for 15 minutes, always), with when it ends, and
     what waits for an admin, and what an admin approved. *Requests*, there only when the workspace lets the person ask or
     when they have asked before, lists their requests: waiting, approved (and by whom) or declined (with the
-    admin's note when the workspace sends one), with the person's own reason. Stopping an allowance from here is not
-    offered yet.
+    admin's note when the workspace sends one), with the person's own reason. *Stop allowing* on what the person let through (not on what an
+    admin approved) asks them to confirm in the row, then ends it at once; the agent tells the workspace.
+  - **The question waiting now.** When a coding agent is stopped during a session and the workspace lets the person act,
+    the hook asks the agent, and the agent hands the question to the tray: a notification ("Blocked: git push --force
+    origin release/2.4 · Claude Code is waiting for your answer") with *Unblock…* or *Ask to unblock…*, and at the top of
+    *Blocked* the question with the seconds left and the same form. The answer goes back to the hook's waiting call, so
+    the coding agent goes on at once. If the person does not open the question in the tray soon (a third of the hook's
+    wait, ten seconds at most), the Scopebond window opens for the time left, as it always did; with no tray running it
+    opens at once. Unanswered when the hook stops waiting, nothing is allowed.
   - The footer says how many actions were checked today and opens the workspace in Scopebond Cloud.
   - **Settings** (the gear): notifications, *Start with Windows*, *This computer* (the rows the agent reports: rules,
     delivery, today, version), the model's other actions (*Check now*, *Send records now*…), *Copy diagnostics*, *Open logs
@@ -69,8 +76,9 @@ PowerShell tray.
   an older *All* reads the same), one for a new block in plain words with the tool, the project and the rule, and an
   button that opens the panel on that block's form, named as the panel's button is (*Unblock…*, or *Ask to unblock…*
   where an admin decides; none where the block stays blocked); blocks that follow within a
-  minute are told together ("3 actions blocked in the last minute"). *Problems only* says nothing about blocks, and *Off*
-  nothing at all. An agent that has not answered for two minutes while the tray keeps trying
+  minute are told together ("3 actions blocked in the last minute"). With *Blocks and problems* the person is also told when
+  an admin answers one of their requests ("Your request was approved", with who and their note). A question waiting now
+  (above) is told unless notifications are *Off*. *Problems only* says nothing about blocks, and *Off* nothing at all. An agent that has not answered for two minutes while the tray keeps trying
   counts as a problem, and so, at once, does one whose pipe accepts connections but that has given no model for half a
   minute; one stopped on purpose does not. An agent that stopped without anyone asking and with nothing in its place is
   told about once when the tray starts it again. *Check now* chosen from the menu says what it found. They carry

@@ -144,6 +144,7 @@ h1 { margin: 0; font: 600 16px/1.25 "Segoe UI Variable Display", "Segoe UI", san
 .reason textarea:focus { outline: 2px solid var(--focus); outline-offset: 0; }
 .done { color: var(--ok); font-size: 12px; font-weight: 600; }
 .fixed { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.confirm { display: grid; gap: 4px; margin-top: 4px; }
 
 .empty { text-align: center; padding: 28px 16px; color: var(--ink-2); display: grid; gap: 6px; justify-items: center; }
 .empty strong { color: var(--ink); font-size: 14px; }

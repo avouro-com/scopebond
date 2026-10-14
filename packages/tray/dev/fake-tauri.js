@@ -85,6 +85,9 @@
     for (const b of model.recent_blocks) {
       if (mode === "approval" && b.can_act) b.offers = offers({ ask: true });
       if (mode === "automatic" && b.can_act) b.offers = offers({ fifteen: true, reviewed: true });
+    }
+    if (mode === "automatic" && model.allowed) model.allowed[0].unblocked = "automatic";
+    for (const b of model.recent_blocks) {
       if (mode === "final") { b.can_act = false; b.offers = null; if (b.acted === "asked") b.acted = null; }
     }
     if (mode === "final" && model.asked) model.asked = [];
@@ -93,6 +96,13 @@
   let note = null;
   let busy = null;
   let answered = null;
+  // live=1: a question the hook is waiting on now (the live prompt), as the agent hands it to the tray.
+  let pending = params.get("live") ? {
+    action_id: "act-live-000000000001", what: "git push --force origin release/2.4", action_text: "git push origin release/2.4", rule: "force-push-protected",
+    rule_title: "Force-push to a protected branch", tool: "Claude Code", project: "checkout", reason_min: 10,
+    offers: offers(mode === "approval" ? { ask: true } : { once: true, fifteen: true, ask: true }),
+    deadline: new Date(Date.now() + 41_000).toISOString(), opened: false,
+  } : null;
   let openBlock = params.get("toast") || null;
   const say = (text) => { note = text; };
 
@@ -102,7 +112,7 @@
     stateLabel: model ? { protected: "Protected", working: "Working", offline: "Offline", problem: "Problem", disconnected: "Not connected" }[model.state] || "Needs attention" : "Problem",
     headline: model ? model.headline : "The Scopebond Agent is not answering",
     answer: model ? { tray: model, settings: { notifications } } : null,
-    note, busy, version: "0.1.0", autostart: "on", answered, openBlock: (() => { const o = openBlock; openBlock = null; return o; })(),
+    note, busy, version: "0.1.0", autostart: "on", answered, pending, openBlock: (() => { const o = openBlock; openBlock = null; return o; })(),
   });
 
   const handlers = new Map(Object.entries({
@@ -116,6 +126,23 @@
       return true;
     },
     panel_hold: () => null,
+    panel_live: ({ actionId, choice, reason }) => {
+      if (!pending || pending.action_id !== actionId) return false;
+      if (!choice) { pending.opened = true; return true; }
+      if (!pending.offers[choice] || String(reason || "").trim().length < pending.reason_min) { say("Say why in at least " + pending.reason_min + " characters."); return false; }
+      const what = pending.action_text;
+      pending = null;
+      say(choice === "ask" ? "Request sent · you'll see the answer under Requests" : (choice === "fifteen" ? "Allowed for 15 minutes" : "Allowed once") + " · Recorded and sent to Acme");
+      if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", rule: "force-push-protected", rule_title: "Force-push to a protected branch", what, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + 15 * MIN).toISOString(), answered_by: null, unblocked: "person" });
+      return true;
+    },
+    panel_stop: ({ id }) => {
+      const a = model && model.allowed.find((x) => x.id === id);
+      if (!a) return false;
+      model.allowed = model.allowed.filter((x) => x.id !== id);
+      say("Stopped allowing " + (a.what || "it") + " · Recorded and sent to Acme");
+      return true;
+    },
     panel_block: ({ actionId, choice, reason }) => {
       const b = model && model.recent_blocks.find((x) => x.action_id === actionId);
       if (choice) {
@@ -165,6 +192,8 @@
       const area = document.getElementById("reason");
       if (area && params.get("reason")) { area.value = params.get("reason"); area.dispatchEvent(new Event("input", { bubbles: true })); }
       if (params.get("submit")) setTimeout(() => click('[data-key^="confirm-"]'), 50);
+      // Stop allowing, as far as the confirm (stop=<id>), or all the way (&confirm=1).
+      if (params.get("stop")) { click('[data-key="stop-' + params.get("stop") + '"]'); if (params.get("confirm")) setTimeout(() => click('[data-key="stop-yes-' + params.get("stop") + '"]'), 50); }
     }, 200);
   });
 })();

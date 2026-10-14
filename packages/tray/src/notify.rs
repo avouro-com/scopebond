@@ -5,13 +5,16 @@
 //! - one when it is protected again after one of those;
 //! - with *Blocks and problems*, one for a new block (with *Unblock…* when the person may act on it); further blocks within
 //!   a minute of that one wait and are told together ("3 actions blocked in the last minute");
+//! - with *Blocks and problems*, one when an admin answers one of the person's requests ("Your request was approved");
 //! - nothing about blocks with *Problems only*, and nothing at all with *Off*.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::icon::IconState;
-use crate::model::{Notifications, RecentBlock};
+use std::collections::HashMap;
+
+use crate::model::{AskedItem, Notifications, RecentBlock};
 use crate::panel::block_button;
 
 /// "Needs attention" must last this long before it is worth a notification.
@@ -27,6 +30,8 @@ pub enum Kind {
     Attention,
     Recovered,
     Block,
+    /// An admin answered one of the person's requests.
+    Request,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +165,43 @@ impl Notifier {
     }
 }
 
+/// Tells the person when an admin answers one of their requests: once per request, when it changes from waiting to
+/// approved or declined (requests already answered when the tray starts are not told again).
+#[derive(Debug, Default)]
+pub struct RequestWatch {
+    states: Option<HashMap<String, String>>,
+}
+
+impl RequestWatch {
+    pub fn new() -> RequestWatch {
+        RequestWatch::default()
+    }
+
+    pub fn observe(&mut self, asked: &[AskedItem], setting: Notifications) -> Vec<Toast> {
+        let mut out = Vec::new();
+        let now: HashMap<String, String> = asked.iter().map(|r| (r.id.clone(), r.state.clone())).collect();
+        if let Some(before) = &self.states {
+            for r in asked {
+                let was = before.get(&r.id).map(String::as_str);
+                let answered = r.state == "approved" || r.state == "declined";
+                if answered && was != Some(r.state.as_str()) && setting == Notifications::Blocks {
+                    let by = r.answered_by.as_deref().map(|b| format!(" · by {b}")).unwrap_or_default();
+                    let note = r.note.as_deref().map(|n| format!(" · \u{201c}{n}\u{201d}")).unwrap_or_default();
+                    out.push(Toast {
+                        kind: Kind::Request,
+                        title: format!("Your request was {}", r.state),
+                        text: cut(&format!("{}{by}{note}", r.what), 200),
+                        unblock: None,
+                        button: None,
+                    });
+                }
+            }
+        }
+        self.states = Some(now);
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +312,30 @@ mod tests {
         assert!(r.blocks(80, &[block("d")], Blocks).is_empty(), "nothing new");
         // A minute after the group, a single new block is told at once again.
         assert_eq!(r.blocks(131, &[block("e"), block("d")], Blocks)[0].title, "Blocked: rm -rf e");
+    }
+
+    #[test]
+    fn an_admins_answer_to_a_request_is_told_once_with_blocks_and_problems() {
+        let req = |state: &str| AskedItem { id: "req_1".into(), what: "rm -rf ./dist".into(), state: state.into(), answered_by: Some("morgan@acme.test".into()), ..Default::default() };
+        let mut w = RequestWatch::new();
+        assert!(w.observe(&[req("approved")], Blocks).is_empty(), "already answered when the tray started");
+        let mut w = RequestWatch::new();
+        assert!(w.observe(&[req("waiting")], Blocks).is_empty());
+        let t = w.observe(&[req("approved")], Blocks);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].title, "Your request was approved");
+        assert_eq!(t[0].text, "rm -rf ./dist · by morgan@acme.test");
+        assert!(w.observe(&[req("approved")], Blocks).is_empty(), "once");
+        let mut declined = req("declined");
+        declined.id = "req_2".into();
+        declined.note = Some("Use the clean script".into());
+        assert!(w.observe(&[req("approved"), AskedItem { state: "waiting".into(), ..declined.clone() }], Blocks).is_empty());
+        let t = w.observe(&[req("approved"), declined.clone()], Blocks);
+        assert_eq!(t[0].title, "Your request was declined");
+        assert_eq!(t[0].text, "rm -rf ./dist · by morgan@acme.test · \u{201c}Use the clean script\u{201d}");
+        let mut quiet = RequestWatch::new();
+        quiet.observe(&[AskedItem { state: "waiting".into(), ..declined.clone() }], Problems);
+        assert!(quiet.observe(&[declined], Problems).is_empty(), "problems only: not told");
     }
 
     #[test]
