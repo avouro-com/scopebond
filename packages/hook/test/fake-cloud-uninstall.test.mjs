@@ -20,8 +20,8 @@ test("reportUninstall: the workspace is told, with the hook version, and says wh
     cloud.setUninstallAuthorized(true);
     assert.deepEqual(await reportUninstall(connection, { purge: false, hookVersion: "1.2.3" }), { workspace: cloud.url, told: true, authorized: true });
     assert.deepEqual(cloud.state().uninstalls, [
-      { purge: true, hook_version: "1.2.3", header_hook_version: "1.2.3" },
-      { purge: false, hook_version: "1.2.3", header_hook_version: "1.2.3" },
+      { purge: true, hook_version: "1.2.3", header_hook_version: "1.2.3", body: { purge: true, hook_version: "1.2.3" } },
+      { purge: false, hook_version: "1.2.3", header_hook_version: "1.2.3", body: { purge: false, hook_version: "1.2.3" } },
     ]);
   } finally { await cloud.close(); }
 });
@@ -39,5 +39,18 @@ test("reportUninstall: a refused credential, a failing or unreachable workspace 
     cloud.fault("uninstall", { delayMs: 2_000, times: 1 });
     assert.deepEqual(await reportUninstall(connection, { purge: false, hookVersion: "1.2.3" }, fetch, 200), untold, "bounded by its time limit");
     assert.deepEqual(cloud.state().uninstalls, [], "nothing reached the route");
+  } finally { await cloud.close(); }
+});
+
+test("reportUninstall: the workspace answers only { authorized } and the client reads it as told", async () => {
+  const cloud = await startFakeCloud();
+  try {
+    const connection = await connectionTo(cloud);
+    let answer = null;
+    const recording = async (url, init) => { const res = await fetch(url, init); answer = await res.clone().json(); return res; };
+    assert.deepEqual(await reportUninstall(connection, { purge: false, hookVersion: "1.2.3" }, recording), { workspace: cloud.url, told: true, authorized: false });
+    assert.deepEqual(answer, { authorized: false }, "no ok member, as the workspace answers");
+    await reportUninstall({ ...connection, credential: "sbm_wrong" }, { purge: false, hookVersion: "1.2.3" }, recording);
+    assert.equal(answer.code, "credential_refused", "a refused credential is told which connection problem it has");
   } finally { await cloud.close(); }
 });

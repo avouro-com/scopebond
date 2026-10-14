@@ -30,6 +30,19 @@ Routes that take faults: `device/code`, `device/token`, `enroll`, `ingest`, `sum
 `policy`, `self-check`, `uninstall`, `client-version`. A credential is issued by `enroll` and bound to the
 enrolling key's id, as the workspace does; deliveries with any other credential get 401.
 
+`summaries` and `uninstall` follow the workspace's routes:
+
+- `POST /v1/summaries` checks each summary's shape as the workspace does (summary id of 16 to 200
+  characters, counts adding up to `receipt_count`, record numbers in `seq` accounting for exactly
+  `receipt_count`, a window not ending in the future; the signature is not verified). A bad summary
+  is refused on its own: the answer is 200 `{ ok: true, accepted, duplicates, actions, rejected:
+  [{ index, summary_id, reason }] }`, where `actions` is the number of records the newly held
+  summaries stand for. Only when every summary was refused is it 400 `invalid_receipt` (with
+  `rejected`); an unreadable body is 400 `bad_request`, more than 20 summaries or 1 MiB is 413
+  `batch_too_large`, and an unknown credential is 401 `credential_refused`. Each refusal carries
+  `error`, `code` and `remediation`.
+- `POST /v1/uninstall` records whatever it is sent (never 400) and answers `{ authorized }` only.
+
 ## As a process
 
 ```bash
