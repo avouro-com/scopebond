@@ -29,14 +29,14 @@ if (!frame.includes("fake-tauri.js") || !frame.includes("../../ui/panel.css")) t
 const SCENES = [
   ["protected", "A normal day: blocked first"],
   ["protected&open=act-read-env-0000000001", "Unblock…"],
-  ["protected&mode=central", "Only an admin unblocks"],
+  ["protected&mode=approval", "An admin decides (ask to unblock)"],
   ["protected&mode=final", "Blocks are final"],
   ["quiet", "Nothing blocked today"],
   ["attention", "Something needs fixing"],
   ["disconnected", "Not connected"],
   ["not_answering", "The agent is not answering"],
   ["protected&tab=allowed", "Allowed"],
-  ["protected&tab=asked", "Asked"],
+  ["protected&tab=asked", "Requests"],
   ["protected&view=settings", "Settings"],
 ];
 

@@ -768,7 +768,7 @@ export function blockedText(outcome: "allowed" | "proposed" | "asked" | "decline
   switch (outcome) {
     case "allowed": return "Allowed. Run it again, or let the coding agent retry.";
     case "proposed": return "Allowed for 15 minutes. Your workspace's admins decide whether it stands; run it again meanwhile.";
-    case "asked": return "Asked your workspace's admins. The Scopebond icon shows their answer; then run it again.";
+    case "asked": return "Request sent to your workspace's admins. Scopebond shows the answer; then run it again.";
     case "declined": return "Nothing was allowed.";
     case "gone": return "This block can no longer be allowed or sent to an admin from here.";
   }

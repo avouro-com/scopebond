@@ -103,13 +103,13 @@ test("up to 20 blocks, newest first", async () => {
   } finally { await service.stop(); }
 });
 
-test("the model says whether the workspace lets a person ask an admin under any rule, for the tray's Asked list", async () => {
+test("the model says whether the workspace lets a person ask an admin under any rule, for the tray's Requests list", async () => {
   const asking = computer();
   const service = await serviceFor(asking);
   try { assert.equal((await callAgent(asking, "GET", "/tray", undefined, 10_000)).tray.can_ask, true); }
   finally { await service.stop(); }
   const selfService = computer({ "destructive-shell": { mode: "override", override: { reason_min: 12, minutes: 0, daily_limit: 5, harness_prompt: false, always: "at_once" } } });
-  assert.equal(workspaceLetsAsk(selfService), false, "allowing only: no Asked list until the person has requests");
+  assert.equal(workspaceLetsAsk(selfService), false, "allowing only: no Requests list until the person has asked");
   const final = computer({ "destructive-shell": { mode: "block" } });
   assert.equal(workspaceLetsAsk(final), false);
   const central = computer({ "destructive-shell": { mode: "ask", override: { reason_min: 12, minutes: 0, daily_limit: 5, harness_prompt: false, requests: true } } });

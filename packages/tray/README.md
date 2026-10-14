@@ -26,13 +26,13 @@ PowerShell tray.
   - At the top, the "S" tile with the state's badge, the state in one word ("Protected", "Needs attention"…) and one line
     under it ("Rules checked 3 min ago · 2 blocked today", or what is wrong). A banner with the one fix button appears
     only when the agent's model has a fix or a problem to explain.
-  - **Blocked · Allowed · Asked.** *Blocked* lists up to 20 blocks, today's first and then earlier ones, newest first:
+  - **Blocked · Allowed · Requests.** *Blocked* lists up to 20 blocks, today's first and then earlier ones, newest first:
     the action in plain words as the Scopebond window shows it, with secrets masked ("Read .env.production", "git push
     --force origin main"), the rule's name, the project and the coding tool, and the time. What the panel offers follows what the
-    workspace lets a person do for each block, as the agent says it: *Unblock…* where the person may allow it, *Ask an
-    admin…* where they may only ask, and no button where the block is final (nothing else is said about it); either
-    button opens the Scopebond window for that block. *Allowed* shows what was let through (also what an admin
-    approved); *Asked* is there only when the workspace lets the person ask an admin, or when they have asked before.
+    workspace lets a person do for each block, as the agent says it: *Unblock…* where the person may allow it, *Ask to
+    unblock…* where an admin decides, and no button where the block stays blocked (nothing else is said about it);
+    either button opens the Scopebond window for that block. *Allowed* shows what was let through (also what an admin
+    approved); *Requests* is there only when the workspace lets the person ask, or when they have asked before.
   - The footer says how many actions were checked today and opens the workspace in Scopebond Cloud.
   - **Settings** (the gear): notifications, *Start with Windows*, *This computer* (the rows the agent reports: rules,
     delivery, today, version), the model's other actions (*Check now*, *Send records now*…), *Copy diagnostics*, *Open logs

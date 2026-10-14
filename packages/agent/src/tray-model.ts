@@ -37,7 +37,7 @@ export interface TrayModel {
   workspace?: string | null;
   /** Since local midnight. */
   today?: { actions: number; blocked: number } | null;
-  /** Whether the workspace lets a person ask an admin under any rule (so the tray shows its Asked list even before the
+  /** Whether the workspace lets a person ask an admin under any rule (so the tray shows its Requests list even before the
    *  person has asked anything); absent from an older agent. */
   can_ask?: boolean;
 }

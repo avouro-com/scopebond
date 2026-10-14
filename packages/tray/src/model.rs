@@ -141,7 +141,7 @@ impl TrayModel {
         self.today.as_ref().map(|t| t.blocked).unwrap_or(self.recent_blocks.len() as u64)
     }
 
-    /// Whether the panel shows the Asked list: the workspace lets a person ask an admin, or a listed block offers asking.
+    /// Whether the panel shows the Requests list: the workspace lets a person ask an admin, or a listed block offers asking.
     pub fn asks(&self) -> bool {
         self.can_ask == Some(true) || self.recent_blocks.iter().any(|b| b.offers.as_ref().is_some_and(|o| o.ask))
     }
@@ -321,7 +321,7 @@ mod tests {
         let mut final_rules = a.tray.clone();
         final_rules.can_ask = Some(false);
         final_rules.recent_blocks.iter_mut().for_each(|b| b.offers = None);
-        assert!(!final_rules.asks(), "nothing to ask: no Asked list");
+        assert!(!final_rules.asks(), "nothing to ask: no Requests list");
         assert!(a.tray.actionable_block("act-push-main-00000001").is_some());
         assert!(a.tray.actionable_block("act-unknown").is_none());
         // An older agent's block: the summary stands in for the plain words, and nothing says what may be done.

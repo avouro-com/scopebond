@@ -58,13 +58,13 @@
   // Only the scenes above: the name from the address is compared with each, never used to look one up.
   const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected : scenes.protected;
   let model = scene === "not_answering" ? null : make();
-  // What the workspace lets a person do (mode=self, the default; central: only ask an admin; final: nothing): the agent
+  // What the workspace lets a person do (mode=self, the default; approval: only ask to unblock, an admin decides; final: nothing): the agent
   // says it per block in `offers`, and `can_ask` says whether asking is on under any rule.
   const mode = params.get("mode") || "self";
   if (model) {
     model.can_ask = mode !== "final";
     for (const b of model.recent_blocks) {
-      if (mode === "central" && b.can_act) b.offers = offers({ ask: true });
+      if (mode === "approval" && b.can_act) b.offers = offers({ ask: true });
       if (mode === "final") { b.can_act = false; b.offers = null; if (b.acted === "asked") b.acted = null; }
     }
     if (mode === "final" && model.asked) model.asked = [];
@@ -99,7 +99,7 @@
         busy = null;
         const b = model && model.recent_blocks.find((x) => x.action_id === actionId);
         if (b) { b.can_act = false; b.acted = b.offers && b.offers.once ? "allowed" : "asked"; }
-        say(b && b.acted === "allowed" ? "Allowed. Run it again, or let the coding agent retry." : "Asked your workspace's admins. The Scopebond icon shows their answer; then run it again.");
+        say(b && b.acted === "allowed" ? "Allowed. Run it again, or let the coding agent retry." : "Request sent · you'll see the answer under Requests");
       }, 1200);
       return true;
     },

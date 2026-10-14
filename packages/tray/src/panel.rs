@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(outcome_text("repair", &json!({ "repaired": [{ "harness": "claude" }] })), "Put the Scopebond hook back in 1 place");
         assert_eq!(outcome_text("open_workspace", &json!({ "opened": false })), "The workspace page could not be opened from here");
         assert_eq!(outcome_text("something_new", &json!({})), "Done");
-        assert_eq!(block_text(&json!({ "outcome": "asked", "text": "Asked your workspace's admins." })), "Asked your workspace's admins.");
+        assert_eq!(block_text(&json!({ "outcome": "asked", "text": "Request sent." })), "Request sent.");
         assert_eq!(outcome_text("check_now", &json!({ "text": "x".repeat(500) })).chars().count(), 300);
     }
 

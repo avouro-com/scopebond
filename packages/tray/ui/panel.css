@@ -100,7 +100,7 @@ h1 { margin: 0; font: 600 16px/1.25 "Segoe UI Variable Display", "Segoe UI", san
 .status { margin: 0 14px 8px; color: var(--ok); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .status.empty { display: none; }
 
-/* Blocked · Allowed · Asked */
+/* Blocked · Allowed · Requests */
 .seg { display: flex; gap: 4px; margin: 2px 14px 8px; padding: 3px; background: var(--field); border-radius: 8px; }
 .seg button { flex: 1; border: 0; background: transparent; color: var(--ink-2); font-weight: 500; padding: 6px 4px; border-radius: 6px; min-height: 32px; }
 .seg button[aria-selected="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14); font-weight: 600; }

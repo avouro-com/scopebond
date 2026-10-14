@@ -113,9 +113,9 @@
     ]);
   }
 
-  // ---- Blocked · Allowed · Asked
-  const TABS = [["blocked", "Blocked"], ["allowed", "Allowed"], ["asked", "Asked"]];
-  /** Asked is there when the workspace lets the person ask an admin (under any rule, or for a listed block), or when they
+  // ---- Blocked · Allowed · Requests (the requests to an admin are "asked" in the agent's model)
+  const TABS = [["blocked", "Blocked"], ["allowed", "Allowed"], ["asked", "Requests"]];
+  /** Requests is there when the workspace lets the person ask an admin (under any rule, or for a listed block), or when they
    *  have asked before; otherwise the panel does not mention asking at all. Allowed always is (it also lists what an admin
    *  approved). */
   function showsAsked(model) {
@@ -155,14 +155,14 @@
     const allows = offers ? offers.once || offers.fifteen || offers.always : b.can_act;
     let act = null;
     if (b.acted === "allowed") act = el("span", { class: "chip ok", text: "Allowed" });
-    else if (b.acted === "asked") act = el("span", { class: "chip wait", text: "Sent to an admin" });
+    else if (b.acted === "asked") act = el("span", { class: "chip wait", text: "Request sent" });
     else if (b.can_act && b.action_id && (allows || (offers && offers.ask))) {
       const mine = busy === "block:" + b.action_id;
       act = el("div", { class: "acts" }, [el("button", {
         class: "btn" + (allows ? " primary" : ""), type: "button", "data-key": "block-" + b.action_id, disabled: !!busy,
         "aria-busy": mine ? "true" : null,
-        "aria-label": (allows ? "Unblock: " : "Ask an admin about: ") + words,
-        text: mine ? "Waiting for your answer…" : allows ? "Unblock…" : "Ask an admin…",
+        "aria-label": (allows ? "Unblock: " : "Ask to unblock: ") + words,
+        text: mine ? "Waiting for your answer…" : allows ? "Unblock…" : "Ask to unblock…",
         onclick: () => run("block", b.action_id),
       })]);
     }
@@ -192,7 +192,7 @@
   function list(s, model) {
     let body;
     if (ui.tab === "allowed") body = [empty("Nothing allowed right now", "What you let through shows here until it ends.")];
-    else if (ui.tab === "asked") body = [empty("No requests to an admin", "When you ask an admin to allow something, their answer shows here.")];
+    else if (ui.tab === "asked") body = [empty("No requests", "When you ask to unblock something, the answer shows here.")];
     else body = blockedList(s, model);
     return el("div", { class: "list", id: "list", role: "tabpanel", "aria-labelledby": "tab-" + ui.tab, tabindex: "-1" }, body);
   }
