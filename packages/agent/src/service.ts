@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { hostname, uptime } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleTitle,
+  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleTitle,
   writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -552,6 +552,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       canSignIn: kind !== "npm",
       signingIn: reconnecting,
       notice: migrationNotice(),
+      canAsk: workspaceLetsAsk(options.dir),
     });
   };
   /** What this install can update to, for the tray: from npm, the workspace's agent and hook (as its rules check said);
@@ -751,6 +752,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   await cycle();
   schedule();
   return { port: control.endpoint.port, cycleNow: cycle, maintainNow: () => maintain(true), stop };
+}
+
+/** Whether the workspace's rules let a person ask an admin under any rule ("Block, person may ask", or a rule a person may
+ *  allow with requests on), as `blockedQuestion` would offer it. False without workspace rules. */
+export function workspaceLetsAsk(dir: string): boolean {
+  try {
+    const doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as { rules?: Record<string, { mode?: unknown; override?: { requests?: unknown } } | undefined> };
+    return Object.values(doc.rules ?? {}).some((r) => !!r?.override && (r.mode === "ask" || (r.mode === "override" && r.override.requests === true)));
+  } catch { return false; }
 }
 
 /** What the tray says after a person acted on an earlier block. */

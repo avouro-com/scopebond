@@ -111,6 +111,8 @@ pub struct TrayModel {
     /// The workspace's name, when the agent knows it.
     pub workspace: Option<String>,
     pub today: Option<Today>,
+    /// Whether the workspace lets a person ask an admin under any rule (none from an older agent).
+    pub can_ask: Option<bool>,
 }
 
 impl TrayModel {
@@ -137,6 +139,11 @@ impl TrayModel {
     /// How many actions were blocked today: the agent's count, or (from an older agent) the blocks it listed.
     pub fn blocked_today(&self) -> u64 {
         self.today.as_ref().map(|t| t.blocked).unwrap_or(self.recent_blocks.len() as u64)
+    }
+
+    /// Whether the panel shows the Asked list: the workspace lets a person ask an admin, or a listed block offers asking.
+    pub fn asks(&self) -> bool {
+        self.can_ask == Some(true) || self.recent_blocks.iter().any(|b| b.offers.as_ref().is_some_and(|o| o.ask))
     }
 
     /// The block with this id that the person may still act on.
@@ -242,7 +249,7 @@ pub(crate) mod fixtures {
           { "id": "check_now", "label": "Check now", "route": "/check" },
           { "id": "open_workspace", "label": "Open workspace", "route": "/open-workspace" }
         ],
-        "detail": "Rules checked 3 min ago · 2 blocked today", "workspace": "Acme", "today": { "actions": 1160, "blocked": 2 },
+        "detail": "Rules checked 3 min ago · 2 blocked today", "workspace": "Acme", "today": { "actions": 1160, "blocked": 2 }, "can_ask": true,
         "recent_blocks": [
           { "action_id": "act-read-env-0000000001", "summary": "file.read .env.production", "at": "2026-10-14T15:46:00.000Z", "rule": "secret-read",
             "can_act": true, "acted": null, "what": "Read .env.production", "action_text": ".env.production", "rule_title": "Reading a secret file",
@@ -310,6 +317,11 @@ mod tests {
         assert!(!push.offers.clone().unwrap().allows(), "only Ask an admin");
         assert_eq!(a.tray.blocked_today(), 2);
         assert_eq!(a.tray.workspace.as_deref(), Some("Acme"));
+        assert!(a.tray.asks());
+        let mut final_rules = a.tray.clone();
+        final_rules.can_ask = Some(false);
+        final_rules.recent_blocks.iter_mut().for_each(|b| b.offers = None);
+        assert!(!final_rules.asks(), "nothing to ask: no Asked list");
         assert!(a.tray.actionable_block("act-push-main-00000001").is_some());
         assert!(a.tray.actionable_block("act-unknown").is_none());
         // An older agent's block: the summary stands in for the plain words, and nothing says what may be done.

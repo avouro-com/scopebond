@@ -115,10 +115,19 @@
 
   // ---- Blocked · Allowed · Asked
   const TABS = [["blocked", "Blocked"], ["allowed", "Allowed"], ["asked", "Asked"]];
+  /** Asked is there when the workspace lets the person ask an admin (under any rule, or for a listed block), or when they
+   *  have asked before; otherwise the panel does not mention asking at all. Allowed always is (it also lists what an admin
+   *  approved). */
+  function showsAsked(model) {
+    if (!model) return false;
+    return model.can_ask === true || (model.asked || []).length > 0 || (model.recent_blocks || []).some((b) => b.offers && b.offers.ask);
+  }
   function tabs(model) {
     const blocked = (model && model.recent_blocks || []).filter((b) => isToday(b.at) && !b.acted).length;
     const counts = { blocked, allowed: model && model.allowed ? model.allowed.length : 0, asked: model && model.asked ? model.asked.length : 0 };
-    const keys = TABS.map(([k]) => k);
+    const shown = TABS.filter(([k]) => k !== "asked" || showsAsked(model));
+    if (!shown.some(([k]) => k === ui.tab)) ui.tab = "blocked";
+    const keys = shown.map(([k]) => k);
     const move = (e) => {
       const i = keys.indexOf(ui.tab);
       const next = e.key === "ArrowRight" ? keys[(i + 1) % keys.length] : e.key === "ArrowLeft" ? keys[(i + keys.length - 1) % keys.length]
@@ -128,7 +137,7 @@
       ui.tab = next;
       draw("tab-" + next);
     };
-    return el("div", { class: "seg", role: "tablist", "aria-label": "Lists" }, TABS.map(([k, label]) => el("button", {
+    return el("div", { class: "seg", role: "tablist", "aria-label": "Lists" }, shown.map(([k, label]) => el("button", {
       type: "button", role: "tab", id: "tab-" + k, "data-key": "tab-" + k, "aria-selected": ui.tab === k ? "true" : "false",
       "aria-controls": "list", tabindex: ui.tab === k ? "0" : "-1", onkeydown: move,
       onclick: () => { ui.tab = k; draw("tab-" + k); },

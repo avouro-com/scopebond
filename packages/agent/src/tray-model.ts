@@ -37,6 +37,9 @@ export interface TrayModel {
   workspace?: string | null;
   /** Since local midnight. */
   today?: { actions: number; blocked: number } | null;
+  /** Whether the workspace lets a person ask an admin under any rule (so the tray shows its Asked list even before the
+   *  person has asked anything); absent from an older agent. */
+  can_ask?: boolean;
 }
 
 /** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes, or
@@ -102,6 +105,8 @@ export interface TrayInput {
   signingIn?: { user_code: string; verification_url: string } | null;
   /** Something to tell the person once things are fine (shown as the hint when there is no other). */
   notice?: string | null;
+  /** The workspace lets a person ask an admin under at least one rule. */
+  canAsk?: boolean;
 }
 
 const MIN = 60_000;
@@ -293,6 +298,7 @@ export function trayModel(input: TrayInput): TrayModel {
     detail,
     workspace: input.workspace?.name ?? null,
     today: input.today ? { actions: input.today.actions, blocked: input.today.blocked } : null,
+    can_ask: input.canAsk ?? false,
   };
 }
 

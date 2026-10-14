@@ -58,6 +58,17 @@
   // Only the scenes above: the name from the address is compared with each, never used to look one up.
   const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected : scenes.protected;
   let model = scene === "not_answering" ? null : make();
+  // What the workspace lets a person do (mode=self, the default; central: only ask an admin; final: nothing): the agent
+  // says it per block in `offers`, and `can_ask` says whether asking is on under any rule.
+  const mode = params.get("mode") || "self";
+  if (model) {
+    model.can_ask = mode !== "final";
+    for (const b of model.recent_blocks) {
+      if (mode === "central" && b.can_act) b.offers = offers({ ask: true });
+      if (mode === "final") { b.can_act = false; b.offers = null; if (b.acted === "asked") b.acted = null; }
+    }
+    if (mode === "final" && model.asked) model.asked = [];
+  }
   let notifications = "problems";
   let note = null;
   let busy = null;

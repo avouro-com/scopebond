@@ -195,6 +195,8 @@ test("one line under Protected, the workspace's name and today's counts; up to 2
   assert.equal(m.workspace, "Avouro");
   assert.deepEqual(m.today, { actions: 312, blocked: 3 });
   assert.equal(m.recent_blocks.length, 20);
+  assert.equal(m.can_ask, false, "not said: no Asked list");
+  assert.equal(trayModel(input(status(), { canAsk: true })).can_ask, true);
   assert.equal(trayModel(input(status(), { today: { actions: 4, blocked: 0, allowed_by_person: 0 } })).detail, "Rules checked 3 min ago · nothing blocked today");
   assert.equal(trayModel(input(status(), { rules: null, today: null })).detail, null);
   assert.equal(trayModel(input(status({ pending: 42, oldest_pending_age_s: 40 * 60 }))).detail, null, "the headline says what is wrong");

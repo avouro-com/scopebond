@@ -10,6 +10,7 @@ import {
   scaffold, createHookRuntime, mapClaudeToolUse, createOverrideHandler, compileManaged, defaultRules, digestRules, MANAGED_DOC_FILE, readBlocked,
 } from "@scopebond/hook";
 import { startService, callAgent } from "../dist/index.js";
+import { workspaceLetsAsk } from "../dist/service.js";
 import { projectName, toolName } from "../dist/tray-model.js";
 
 const ENFORCE = { enforce: ["protect-branches", "safe-shell", "protect-write", "protect-read"] };
@@ -100,4 +101,18 @@ test("up to 20 blocks, newest first", async () => {
     assert.equal(tray.recent_blocks[0].what, "rm -rf build23");
     assert.equal(tray.recent_blocks[19].what, "rm -rf build4");
   } finally { await service.stop(); }
+});
+
+test("the model says whether the workspace lets a person ask an admin under any rule, for the tray's Asked list", async () => {
+  const asking = computer();
+  const service = await serviceFor(asking);
+  try { assert.equal((await callAgent(asking, "GET", "/tray", undefined, 10_000)).tray.can_ask, true); }
+  finally { await service.stop(); }
+  const selfService = computer({ "destructive-shell": { mode: "override", override: { reason_min: 12, minutes: 0, daily_limit: 5, harness_prompt: false, always: "at_once" } } });
+  assert.equal(workspaceLetsAsk(selfService), false, "allowing only: no Asked list until the person has requests");
+  const final = computer({ "destructive-shell": { mode: "block" } });
+  assert.equal(workspaceLetsAsk(final), false);
+  const central = computer({ "destructive-shell": { mode: "ask", override: { reason_min: 12, minutes: 0, daily_limit: 5, harness_prompt: false, requests: true } } });
+  assert.equal(workspaceLetsAsk(central), true);
+  assert.equal(workspaceLetsAsk(join(tmpdir(), "sb-no-such-folder")), false, "no workspace rules");
 });
