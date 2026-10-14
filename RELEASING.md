@@ -83,6 +83,15 @@ workflow meets them:
   upgraded npm performs the OIDC exchange.
 - `id-token: write` only on the `publish` job, which runs in the `npm-publish`
   environment named in each package's trusted publisher.
+- No `registry-url` on `actions/setup-node` in the `publish` job: it would write
+  an `.npmrc` whose auth token is an unset `${NODE_AUTH_TOKEN}`.
+- When npm's OIDC exchange is refused, npm logs the reason only at verbose level
+  and the publish fails with a misleading `E404 Not Found`. So before publishing,
+  `scripts/check-npm-trusted-publishing.mjs` makes the same exchange for each
+  package whose version is not on npm yet (packages outside the release are
+  skipped) and, on a refusal, stops with the registry's message and the
+  OIDC claims (repository, workflow, environment) to compare with the trusted
+  publisher settings. It prints no token and publishes nothing.
 
 npm allows one trusted publisher per package, so only `release.yml` can publish
 with OIDC. It is also the only workflow that publishes at all: there is no
