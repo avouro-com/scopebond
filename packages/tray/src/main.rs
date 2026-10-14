@@ -341,6 +341,7 @@ fn supervise_agent(shared: &Arc<Shared>) {
                         title: "Scopebond".into(),
                         text: "The Scopebond Agent stopped and nothing started in its place; starting it again".into(),
                         unblock: None,
+                        button: None,
                     }, None);
                 }
             }
@@ -427,8 +428,8 @@ fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
             t = t.sound(None);
         }
         if let (Kind::Block, Some((app, shared))) = (toast.kind, panel) {
-            if toast.unblock.is_some() {
-                t = t.add_button("Unblock…", "unblock");
+            if let (Some(_), Some(words)) = (&toast.unblock, toast.button) {
+                t = t.add_button(words, "unblock");
             }
             let block = toast.unblock.clone();
             t = t.on_activated(move |action| {
@@ -529,7 +530,7 @@ fn run_action(app: &AppHandle, shared: &Arc<Shared>, action: TrayAction, from_me
     let setting = lock(&shared.answer).as_ref().map(|a| a.settings.notifications).unwrap_or_default();
     if from_menu && !failed && action.id == "check_now" && setting != Notifications::Off {
         if let Some(Note { text, .. }) = lock(&shared.note).as_ref() {
-            show_toast(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: text.clone(), unblock: None }, None);
+            show_toast(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: text.clone(), unblock: None, button: None }, None);
         }
     }
     if from_menu && (failed || action.id == "reconnect") {

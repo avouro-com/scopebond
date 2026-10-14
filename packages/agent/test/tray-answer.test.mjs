@@ -29,7 +29,8 @@ test("an answer from the form is read strictly", () => {
   }
   assert.equal(answerText("allowed", "once", 30, "Acme", true), "Allowed once · Recorded and sent to Acme");
   assert.equal(answerText("allowed", "always", 14, null, true), "Always allowed on this computer for 14 days · Recorded and sent to your workspace");
-  assert.equal(answerText("asked", "ask", 30, "Acme", false), "Sent to an admin · Recorded on this computer");
+  assert.equal(answerText("asked", "ask", 30, "Acme", true), "Sent to an admin · you'll see the answer under Asked");
+  assert.equal(answerText("asked", "ask", 30, "Acme", false), "Saved for an admin, sent once this computer is connected · you'll see the answer under Asked");
 });
 
 test("allow once from the tray: checked as the window would be, applied once, then no longer offered", async () => {
@@ -77,8 +78,13 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
   const service = await serviceFor(dir);
   try {
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "'Block, person may ask' never allows on the spot");
+    // Only an admin unblocks: the tray is told that asking is all there is, and shows Ask an admin and its Asked list.
+    const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
+    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: true });
+    assert.equal(before.can_ask, true);
     const done = await answer(dir, { action_id: id, choice: "ask", reason: REASON });
     assert.equal(done.outcome, "asked");
+    assert.equal(done.text, "Saved for an admin, sent once this computer is connected · you'll see the answer under Asked");
     let { requests } = await callAgent(dir, "GET", "/requests", undefined, 10_000);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].state, "waiting");
@@ -150,4 +156,17 @@ test("notifications: blocks and problems for a new install; the older 'all' read
   writeFileSync(join(existing, "agent-settings.json"), JSON.stringify({ notifications: "all" }));
   assert.equal(readTraySettings(existing).notifications, "blocks");
   assert.equal(writeTraySettings(existing, { notifications: "loud" }).notifications, "blocks");
+});
+
+test("blocks are final: nothing offered for a block, and no Asked list", async () => {
+  const dir = computer({ "destructive-shell": { mode: "block" } });
+  await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf build" } }]);
+  const service = await serviceFor(dir);
+  try {
+    const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
+    assert.equal(tray.recent_blocks[0].can_act, false);
+    assert.equal(tray.recent_blocks[0].offers, null);
+    assert.equal(tray.can_ask, false);
+    assert.deepEqual(tray.asked, []);
+  } finally { await service.stop(); }
 });

@@ -96,6 +96,22 @@ pub fn block_text(answer: &Value) -> String {
     cut(&text(answer, "text").unwrap_or_else(|| "Nothing was allowed.".into()))
 }
 
+/// What the person can do about a block, as its button says it (the panel and a block notification use the same words):
+/// *Unblock…* where the workspace lets them allow it, *Ask an admin…* where it only lets them ask, and nothing where the
+/// block is final. An older agent that says nothing about it but lets the person act gets *Unblock…* (its Scopebond window
+/// offers what there is).
+pub fn block_button(block: &RecentBlock) -> Option<&'static str> {
+    if !block.can_act || block.action_id.is_none() || block.acted.is_some() {
+        return None;
+    }
+    match &block.offers {
+        Some(offers) if offers.allows() => Some("Unblock…"),
+        Some(offers) if offers.ask => Some("Ask an admin…"),
+        Some(_) => None,
+        None => Some("Unblock…"),
+    }
+}
+
 /// The longest reason the agent accepts.
 pub const REASON_MAX: usize = 500;
 
@@ -217,6 +233,24 @@ mod tests {
             offers: Some(crate::model::BlockOffers { once: true, fifteen: true, ask: true, ..Default::default() }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_blocks_button_follows_what_the_workspace_lets_a_person_do() {
+        use crate::model::BlockOffers;
+        let mut b = answerable();
+        assert_eq!(block_button(&b), Some("Unblock…"), "self-service");
+        b.offers = Some(BlockOffers { ask: true, ..Default::default() });
+        assert_eq!(block_button(&b), Some("Ask an admin…"), "only an admin unblocks");
+        b.offers = Some(BlockOffers::default());
+        assert_eq!(block_button(&b), None, "final: no button");
+        b.can_act = false;
+        b.offers = None;
+        assert_eq!(block_button(&b), None, "nothing to do");
+        b.can_act = true;
+        assert_eq!(block_button(&b), Some("Unblock…"), "an older agent: its window offers what there is");
+        b.acted = Some("asked".into());
+        assert_eq!(block_button(&b), None, "already acted on");
     }
 
     #[test]

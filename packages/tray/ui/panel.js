@@ -122,17 +122,20 @@
     const id = b.action_id;
     const busy = s.busy === "answer:" + id;
     const enough = ui.reason.trim().length >= (b.reason_min || 10);
-    const where = model.workspace ? "Recorded and sent to " + model.workspace : "Recorded and sent to your workspace";
     const choices = choicesOf(b);
+    // Where the workspace only lets the person ask an admin, there is nothing to choose: the reason and Send to admin.
+    const askOnly = choices.length === 1 && choices[0] === "ask";
+    const where = askOnly ? "You'll see the answer under Asked"
+      : model.workspace ? "Recorded and sent to " + model.workspace : "Recorded and sent to your workspace";
     const update = () => {
       const count = document.getElementById("count-" + id);
       if (count) count.textContent = countText(b);
       const go = root.querySelector('[data-key="confirm-' + CSS.escape(id) + '"]');
       if (go) go.disabled = !!s.busy || ui.reason.trim().length < (b.reason_min || 10);
     };
-    return el("div", { class: "form", role: "group", "aria-label": "Unblock " + (b.what || b.summary) }, [
+    return el("div", { class: "form", role: "group", "aria-label": (askOnly ? "Ask an admin about " : "Unblock ") + (b.what || b.summary) }, [
       el("div", { class: "cmd", "aria-label": "What ran", text: b.action_text || b.what || b.summary }),
-      el("fieldset", { class: "choices" }, [el("legend", { text: choices.some((c) => c !== "ask") ? "Let it through" : "What to do" })].concat(choices.map((c) => {
+      askOnly ? null : el("fieldset", { class: "choices" }, [el("legend", { text: choices.some((c) => c !== "ask") ? "Let it through" : "What to do" })].concat(choices.map((c) => {
         const [title, small] = choiceWords(b, c);
         return el("label", { class: "choice" }, [
           el("input", { type: "radio", name: "choice-" + id, value: c, "data-key": "choice-" + c, checked: ui.choice === c,

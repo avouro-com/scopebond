@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::icon::IconState;
 use crate::model::{Notifications, RecentBlock};
+use crate::panel::block_button;
 
 /// "Needs attention" must last this long before it is worth a notification.
 pub const ATTENTION_AFTER: Duration = Duration::from_secs(5 * 60);
@@ -33,8 +34,10 @@ pub struct Toast {
     pub kind: Kind,
     pub title: String,
     pub text: String,
-    /// The block whose Unblock form the notification's *Unblock…* button opens (one block the person may act on).
+    /// The block whose form the notification's button opens (one block the person may act on).
     pub unblock: Option<String>,
+    /// That button's words: *Unblock…*, or *Ask an admin…* when the workspace only lets the person ask.
+    pub button: Option<&'static str>,
 }
 
 /// How bad a state is: protected and working are fine, offline is not yet worth a word.
@@ -61,12 +64,13 @@ pub fn block_toast(blocks: &[RecentBlock]) -> Option<Toast> {
             };
             let rule = one.rule_title.clone().or_else(|| one.rule.clone());
             let text = [place, rule].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-            let may_act = one.can_act && one.offers.as_ref().is_none_or(|o| o.allows() || o.ask);
+            let button = block_button(one);
             Some(Toast {
                 kind: Kind::Block,
                 title: cut(&format!("Blocked: {}", one.words()), 120),
                 text: if text.is_empty() { "Scopebond blocked an action your coding agent tried".into() } else { cut(&text, 200) },
-                unblock: if may_act { one.action_id.clone() } else { None },
+                unblock: button.and(one.action_id.clone()),
+                button,
             })
         }
         many => Some(Toast {
@@ -74,6 +78,7 @@ pub fn block_toast(blocks: &[RecentBlock]) -> Option<Toast> {
             title: format!("{} actions blocked in the last minute", many.len()),
             text: "Open Scopebond to see what was blocked".into(),
             unblock: None,
+            button: None,
         }),
     }
 }
@@ -114,11 +119,11 @@ impl Notifier {
             // Better than what was told (a problem eased to attention) is remembered without a word.
             if self.told.is_none_or(|told| rank(state) > rank(told)) {
                 let kind = if rank(state) >= 3 { Kind::Problem } else { Kind::Attention };
-                out.push(Toast { kind, title: "Scopebond".into(), text: headline.to_string(), unblock: None });
+                out.push(Toast { kind, title: "Scopebond".into(), text: headline.to_string(), unblock: None, button: None });
             }
             self.told = Some(state);
         } else if state == IconState::Protected && self.told.is_some() {
-            out.push(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: "Scopebond is protecting again".into(), unblock: None });
+            out.push(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: "Scopebond is protecting again".into(), unblock: None, button: None });
             self.told = None;
         }
 
@@ -280,13 +285,17 @@ mod tests {
         assert_eq!(t.title, "Blocked: Read .env.production");
         assert_eq!(t.text, "Claude Code in checkout · Reading a secret file");
         assert_eq!(t.unblock.as_deref(), Some("a"));
+        assert_eq!(t.button, Some("Unblock…"));
         b.offers = Some(BlockOffers { ask: true, ..Default::default() });
-        assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().unblock.as_deref(), Some("a"), "asking an admin is acting too");
+        let ask = block_toast(std::slice::from_ref(&b)).unwrap();
+        assert_eq!((ask.unblock.as_deref(), ask.button), (Some("a"), Some("Ask an admin…")), "only an admin unblocks");
         b.offers = Some(BlockOffers::default());
-        assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().unblock, None);
+        let final_block = block_toast(std::slice::from_ref(&b)).unwrap();
+        assert_eq!((final_block.unblock, final_block.button), (None, None), "final: no button");
+        assert!(!final_block.text.to_lowercase().contains("setting"), "nothing about a setting the person cannot change");
         b.can_act = false;
         b.offers = None;
-        assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().unblock, None, "nothing to do: no button");
+        assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().button, None, "nothing to do: no button");
         assert!(block_toast(&[]).is_none());
         b.what = "x".repeat(300);
         assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().title.chars().count(), 120);

@@ -39,7 +39,9 @@ PowerShell tray.
     allow*, *Send to admin*). The tray checks the answer (the choice is offered, the reason long enough and at most 500
     characters) and sends it to the agent's `POST /blocked/answer`, which checks it again and applies it exactly as the
     window's answer: the allowance or the request on this computer, sent to the workspace signed by this computer's key.
-    The block then says what happened: "Allowed once · Recorded and sent to Acme". Scopebond never runs the action
+    The block then says what happened: "Allowed once · Recorded and sent to Acme". Where the workspace only lets the
+    person ask an admin, the form has nothing to choose: the action, the reason and *Send to admin*, and afterwards "Sent
+    to an admin · you'll see the answer under Asked". Scopebond never runs the action
     itself; the person or the coding agent runs it again. With an agent that does not say what may be done, the buttons
     open its Scopebond window as before.
   - *Allowed* lists what the person let through that still applies (once, for 15 minutes, always), with when it ends, and
@@ -62,7 +64,8 @@ PowerShell tray.
 - **Notifications**: one when the state gets worse (for "needs attention", only once it has lasted five minutes, so
   sleep and wake do not flap) and one when it is protected again; with *Blocks and problems* (the default for a new install;
   an older *All* reads the same), one for a new block in plain words with the tool, the project and the rule, and an
-  *Unblock…* button that opens the panel on that block's form when the person may act on it; blocks that follow within a
+  button that opens the panel on that block's form, named as the panel's button is (*Unblock…*, or *Ask an admin…*
+  where the person may only ask; none where the block is final); blocks that follow within a
   minute are told together ("3 actions blocked in the last minute"). *Problems only* says nothing about blocks, and *Off*
   nothing at all. An agent that has not answered for two minutes while the tray keeps trying
   counts as a problem, and so, at once, does one whose pipe accepts connections but that has given no model for half a

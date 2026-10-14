@@ -836,8 +836,9 @@ export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: B
 export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone", choice: BlockedChoice, alwaysDays: number, workspace: string | null, connected: boolean): string {
   if (outcome === "gone") return blockedText("gone");
   if (outcome === "declined") return blockedText("declined");
-  const what = outcome === "asked" ? "Sent to an admin"
-    : outcome === "proposed" ? "Allowed for 15 minutes; always once an admin approves"
+  // A request: where the answer will show (it is recorded and sent like everything else).
+  if (outcome === "asked") return connected ? "Sent to an admin · you'll see the answer under Asked" : "Saved for an admin, sent once this computer is connected · you'll see the answer under Asked";
+  const what = outcome === "proposed" ? "Allowed for 15 minutes; always once an admin approves"
     : choice === "fifteen" ? "Allowed for 15 minutes"
     : choice === "always" ? `Always allowed on this computer for ${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`
     : "Allowed once";

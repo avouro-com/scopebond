@@ -124,7 +124,7 @@
           b.can_act = false;
           b.acted = choice === "ask" ? "asked" : "allowed";
           const words = { once: "Allowed once", fifteen: "Allowed for 15 minutes", always: "Always allowed on this computer for " + (b.offers.always_days || 30) + " days", ask: "Sent to an admin" }[choice];
-          const text = words + " · Recorded and sent to Acme";
+          const text = choice === "ask" ? "Sent to an admin · you'll see the answer under Asked" : words + " · Recorded and sent to Acme";
           answered = { actionId, outcome: choice === "ask" ? "asked" : "allowed", text };
           say(text);
           if (choice === "ask") model.asked.unshift({ id: "req_new", rule: b.rule, rule_title: b.rule_title, what: b.action_text, reason: String(reason).trim(), asked_at: new Date().toISOString(), sent: true, state: "waiting", answered_by: null, note: null, answered_at: null });
