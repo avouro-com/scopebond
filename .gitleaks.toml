@@ -11,6 +11,16 @@ description = "Conformance vector fixtures (fixed test identifiers, not credenti
 targetRules = ["generic-api-key"]
 paths = ['''^packages/policy-schema/vectors/[^/]+\.json$''']
 
+# The same made-up key id appeared once as a summary fixture in the fake-cloud tests (now derived
+# from a generated key); history keeps it.
+[[allowlists]]
+description = "The made-up key id key:0123456789abcdef in fake-cloud test history"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "match"
+regexes = ['''key:0123456789abcdef''']
+paths = ['''^packages/fake-cloud/test/[^/]+\.test\.mjs$''']
+
 # Tests that assert the hook scrubs credentials feed it deliberately fake curl commands
 # (CANARY-* values, example.test hosts) and check none of it survives into a record.
 [[allowlists]]
