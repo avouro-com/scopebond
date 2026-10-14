@@ -1,5 +1,19 @@
 # @scopebond/hook
 
+## 0.24.0
+
+### Minor Changes
+
+- 0a135da: Block named MCP servers, hosts, programs and packages from the workspace's rules document. A workspace may send `blocked_services` (at most 500 entries of `{ kind: "mcp_server" | "host" | "cli" | "package", key }`); the hook now says it reads them (`x-scopebond-hook-capabilities` gains `service_rules`). The list is digested with the rules (`rules_digest` is the SHA-256 of the canonical JSON of `{ rules, blocked_services }` when the list is present), so a changed or malformed list refuses the document and the rules in force stay; a host key with a default port (`:80`, `:443`) is malformed, since a request's host never shows it. Each kind compiles into a policy clause (`blocked-mcp-servers`, `blocked-hosts`, `blocked-programs`, `blocked-packages`): an MCP call whose server name contains the blocked name as a word; a fetch by the coding agent's web-fetch tool (and a `gh api` call that changes something) to the blocked host, a port in the key must match (`curl`, `wget` and similar are recorded, not blocked); a shell command running the blocked program; or an install naming the blocked `manager:name` package. Every package an install names is checked (however many, also beside `-r` or `-e`; an unreadable spec is skipped), and an install whose named packages none can be read is denied while the workspace blocks any package. A denial says "Your workspace blocks the <kind> <key>" and is recorded like any rule block; a blocked package is recorded as that package's `package.install`, decided before its command. Without the list nothing changes.
+- f8fa8ea: Pins Scopebond Cloud's policy signing key; computers on this release verify signed rules.
+
+### Patch Changes
+
+- feba379: `scopebond flush` no longer fails when the only records left are routine ones waiting for their summary window. With summary records on (the default evidence detail), routine allows wait for their five-minute window to close and then leave as one signed summary; `flush` used to count them as "still pending" and exit 1. It now reports them on their own line ("N routine record(s) held for the summary window until HH:MM", in local time) and exits 0 when nothing else is waiting. It still exits 1 when a notable record (a block, a warning, an override and the like) is left undelivered or the last delivery attempt failed. The cloud exporter gains an optional `held()` method that counts the routine records held for an open window and says when the last of those windows closes.
+- 47d72a4: On Windows, every hook entry now starts under cmd.exe, Windows PowerShell, PowerShell 7 and Git Bash alike. The installed command used to start with a quoted path (`"<node.exe>" "<cli.js>" codex`), which PowerShell reads as a string and refuses ("Unexpected token"); a coding agent treats a hook that cannot start as a non-blocking error, so with PowerShell as the hook shell actions ran unchecked. Paths are now written unquoted with forward slashes, using the short (8.3) name of any folder whose name has a space or another character a shell treats specially (`C:/PROGRA~1/nodejs/node.exe …/cli.js codex`); the single executable's entry (`… scopebond-agent.exe hook <agent>`) takes the same form. Codex entries also carry `commandWindows`, which Codex runs on Windows (the portable `npx` form becomes `npx.cmd` there). Where a volume has short names switched off, the paths stay quoted as before. `uninstall`, upgrades and `doctor` recognise both the old and the new forms, and an entry that names Scopebond only in `commandWindows` counts as Scopebond's.
+- Updated dependencies [feba379]
+  - @scopebond/gateway@0.19.1
+
 ## 0.23.0
 
 ### Minor Changes

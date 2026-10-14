@@ -1,5 +1,0 @@
----
-"@scopebond/hook": patch
----
-
-On Windows, every hook entry now starts under cmd.exe, Windows PowerShell, PowerShell 7 and Git Bash alike. The installed command used to start with a quoted path (`"<node.exe>" "<cli.js>" codex`), which PowerShell reads as a string and refuses ("Unexpected token"); a coding agent treats a hook that cannot start as a non-blocking error, so with PowerShell as the hook shell actions ran unchecked. Paths are now written unquoted with forward slashes, using the short (8.3) name of any folder whose name has a space or another character a shell treats specially (`C:/PROGRA~1/nodejs/node.exe …/cli.js codex`); the single executable's entry (`… scopebond-agent.exe hook <agent>`) takes the same form. Codex entries also carry `commandWindows`, which Codex runs on Windows (the portable `npx` form becomes `npx.cmd` there). Where a volume has short names switched off, the paths stay quoted as before. `uninstall`, upgrades and `doctor` recognise both the old and the new forms, and an entry that names Scopebond only in `commandWindows` counts as Scopebond's.
