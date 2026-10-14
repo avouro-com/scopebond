@@ -166,3 +166,25 @@ export function markBlocked(dir: string, id: string, acted: "allowed" | "asked",
   const items = readBlocked(dir).map((b) => (b.id === id ? { ...b, acted, acted_at: new Date(now).toISOString() } : b));
   writeAtomic(join(dir, BLOCKED_FILE), `${JSON.stringify({ items }, null, 1)}\n`);
 }
+
+/** What the action an allowance names looked like: the text the Scopebond window showed, by the action's key, so the tray
+ *  can say what an allowance lets through (an allowance carries only the key). Kept on this computer only and never sent;
+ *  the newest 500. */
+export const ACTION_TEXT_FILE = "action-text.json";
+
+export function readActionText(dir: string): Map<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, ACTION_TEXT_FILE), "utf8")) as { items?: Array<{ action_key?: unknown; text?: unknown }> };
+    const items = Array.isArray(parsed.items) ? parsed.items : [];
+    return new Map(items.filter((i) => typeof i.action_key === "string" && typeof i.text === "string").map((i) => [i.action_key as string, (i.text as string).slice(0, 200)]));
+  } catch { return new Map(); }
+}
+
+/** Remember the text for an action a person allowed. Never throws: the allowance stands either way. */
+export function rememberActionText(dir: string, actionKey: string, text: string, now = Date.now()): void {
+  try {
+    const kept = [...readActionText(dir)].filter(([key]) => key !== actionKey).map(([action_key, t]) => ({ action_key, text: t }));
+    const items = [...kept, { action_key: actionKey, text: text.slice(0, 200), at: new Date(now).toISOString() }].slice(-500);
+    writeAtomic(join(dir, ACTION_TEXT_FILE), `${JSON.stringify({ items }, null, 1)}\n`);
+  } catch { /* the tray shows the rule's name instead */ }
+}

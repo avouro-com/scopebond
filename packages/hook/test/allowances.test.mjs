@@ -11,7 +11,7 @@ const ME = userInfo().username; // a person-scoped allowance applies to the acco
 import { join } from "node:path";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, inspectManaged, compileManaged, digestRules, defaultRules,
-  createOverrideHandler, overrideHint, MANAGED_DOC_FILE, makeAllowance, readAllowances, writeAllowances, readRequests, readBlocked, blockedQuestion, actOnBlocked,
+  createOverrideHandler, overrideHint, MANAGED_DOC_FILE, makeAllowance, readAllowances, writeAllowances, readRequests, readBlocked, blockedQuestion, actOnBlocked, readActionText,
 } from "../dist/index.js";
 import { actionKey } from "../dist/override.js";
 
@@ -153,6 +153,7 @@ test("an 'always' choice that needs an admin is proposed, and the person is cove
   await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "always" }] });
   const states = readAllowances(dir).map((a) => a.state).sort();
   assert.deepEqual(states, ["active", "proposed"]);
+  assert.equal(readActionText(dir).get(keyOf("rm -rf build")), "rm -rf build", "what the window showed, kept for the tray");
   assert.equal((await run(dir, bash("rm -rf build"))).override.method, "allowance");
 });
 
@@ -203,6 +204,7 @@ test("from the tray, an earlier block offers 15 minutes where the workspace know
   const made = readAllowances(dir).at(-1);
   assert.equal(made.once, false);
   assert.ok(Date.parse(made.expires_at) - Date.now() <= 15 * 60_000 + 1_000, "for 15 minutes");
+  assert.equal(readActionText(dir).get(item.action_key), "rm -rf build", "the tray can say what the allowance lets through");
   // An older workspace (no allowance terms): no 15 minutes, and a 15-minute answer allows the next try only.
   const { dir: old } = setup({ "destructive-shell": { mode: "override", override: terms() } });
   await run(old, bash("rm -rf build"), { answers: [] });

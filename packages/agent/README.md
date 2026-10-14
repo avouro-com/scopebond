@@ -230,7 +230,8 @@ blocks, Version); the one fix when something is wrong; **Check now**, which alwa
 now** when records wait; **Update now** when the workspace recommends a newer version; the last few blocks (**Recently blocked**: where the
 workspace lets a person allow a blocked action or ask an admin, clicking one opens the Scopebond window for it, and the
 person can allow it once, for 15 minutes or always, or ask an admin; Scopebond never runs it again by itself); the
-notification setting (All, Problems only — the default —, Off); Help (copy diagnostics without keys or credentials, open
+notification setting (Blocks and problems — the default for a new install —, Problems only — kept for an install whose
+person never chose —, Off; an older "all" reads as Blocks and problems); Help (copy diagnostics without keys or credentials, open
 the Scopebond folder, documentation, About); and Hide icon. There is no "pause" or "quit protection": the hook decides
 every action whether or not the agent runs. A balloon appears when the state gets worse ("needs attention" only after
 five minutes, so sleep and wake do not flap) and once when it is protected again. Set `SCOPEBOND_AGENT_TRAY=off` for no
@@ -241,7 +242,29 @@ fix, actions, the line under the state, today's counts, the workspace's name, an
 as the Scopebond window shows it, with secrets masked, the rule's name, the project and the coding tool, and what the
 workspace lets the person do about it now: allow it once, for 15 minutes or always, or ask an admin, with the shortest
 reason it accepts) and the person's settings; `POST /check`, `/update`, `/flush`, `/repair`, `/settings`
-and `/blocked` (an earlier block, answered only in the Scopebond window) do the work. `GET /status` carries the same `health` (level, headline, fix).
+and `/blocked` (an earlier block, answered in the Scopebond window) do the work. `GET /status` carries the same `health` (level, headline, fix).
+
+The tray's own panel answers earlier blocks and lists what came of them, over the same channel and token:
+
+- `POST /blocked/answer` with `{ action_id, choice, reason }`, where `choice` is `once`, `fifteen`, `always` or `ask`. The
+  agent checks it again as the Scopebond window would (the block is still offered, the workspace offers that choice for
+  it now, the reason is at least the workspace's minimum and at most 500 characters, with no control characters but line
+  breaks), then applies it exactly as the window's answer is applied: an allowance (once, 15 minutes, or always — waiting
+  for an admin, with 15 minutes meanwhile, when the workspace says so) or a request to an admin on this computer, sent to
+  the workspace signed by this computer's key (`/v1/allowances`, `/v1/requests`). It answers `{ outcome, choice, text }`:
+  `allowed`, `proposed`, `asked`, or why not (`gone`, `not_offered`, `reason_short`, `invalid`), and the words the tray
+  shows ("Allowed once · Recorded and sent to Acme"). Scopebond never runs the action: the person or the coding agent
+  runs it again.
+- `GET /allowances`: the allowances that still apply and those waiting for an admin, newest first: what (the text the
+  window showed, when this computer knows it), the rule and its name, the choice (`once`, `fifteen`, `always`), the state
+  (`active` or `proposed`), who made it (the person, or an admin) and when it ends. From `allowances.json` with the rules
+  document's allowances and revoked allowances brought in.
+- `GET /requests`: the requests to an admin, newest first: what, the person's reason, when it was asked and whether it
+  reached the workspace, and the state: `waiting`, `approved` (an allowance for the same rule and action came back from
+  the workspace) or `declined`, with who answered and the admin's note when the workspace sent them (an optional `request_answers` list in
+  its rules document, `{ request_id, state, by, note, at }`, or `approved_by` and `note` on the allowance it sends).
+
+`GET /tray` carries the same two lists as `allowed` and `asked`.
 
 ## Status
 

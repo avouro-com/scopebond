@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
 import { compileManaged, floorDocument, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument } from "./managed.js";
-import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, writeAllowances, type BlockedItem } from "./allowances.js";
+import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem } from "./allowances.js";
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
@@ -280,6 +280,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
           const made = makeAllowance({ rule, actionKey: key, reason, osUserDigest: record.os_user_digest, lasts: answer.lasts,
             alwaysDays: terms.always_days, needsAdmin: terms.always === "needs_admin", now: t });
           writeAllowances(ctx.dir, [...allowances, made], t);
+          rememberActionText(ctx.dir, key, summary, t);
           // Waiting for an admin, the person is still covered for 15 minutes.
           if (made.state === "proposed") writeAllowances(ctx.dir, [...allowances, made, makeAllowance({ rule, actionKey: key, reason, osUserDigest: record.os_user_digest, lasts: "15m", now: t })], t);
         } catch { /* this action is allowed by the receipt; the next one asks again */ }
@@ -370,6 +371,7 @@ export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now =
   // Waiting for an admin, the person is still covered for 15 minutes.
   if (made.state === "proposed") allowances.push(makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts: "15m", now }));
   writeAllowances(dir, allowances, now);
+  rememberActionText(dir, q.item.action_key, q.item.summary, now);
   const state = readState(dir);
   state.entries.push({ rule: q.item.rule, action_key: q.item.action_key, action_id: q.item.id, at: now, reason_digest: made.reason_digest, reason_length: made.reason_length });
   try { writeState(dir, state, now); } catch { /* the allowance stands; the workspace counts it again */ }

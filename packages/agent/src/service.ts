@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { hostname, uptime } from "node:os";
+import { hostname, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleTitle,
@@ -26,6 +26,7 @@ import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prom
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
+import { allowedList, askedList } from "./allowed-asked.js";
 import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
@@ -37,7 +38,7 @@ import {
   updateTarget, type ClientVersion,
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
-import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
+import { AWAKE_FILE, awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
@@ -49,24 +50,36 @@ export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
 /** Left in the Scopebond folder when this computer's user stops the agent (`scopebond-agent stop`), and removed when it
  *  starts: the native tray then leaves it stopped instead of starting it again. */
 export const STOPPED_FILE = "agent-stopped.json";
-/** The person's tray settings (notifications about problems by default, none about blocks). */
+/** The person's tray settings: which notifications they want. "blocks": blocks and problems (the default for a new install);
+ *  "problems": problems only (the default before, and for an install whose person never chose); "off". The older "all"
+ *  meant blocks and problems too, and is read as "blocks". */
 export const TRAY_SETTINGS_FILE = "agent-settings.json";
-export type NotificationSetting = "all" | "problems" | "off";
+export type NotificationSetting = "blocks" | "problems" | "off";
 export interface TraySettings { notifications: NotificationSetting }
+
+const notificationSetting = (value: unknown): NotificationSetting | null =>
+  value === "blocks" || value === "all" ? "blocks" : value === "problems" || value === "off" ? value : null;
 
 export function readTraySettings(dir: string): TraySettings {
   try {
-    const parsed = JSON.parse(readFileSync(join(dir, TRAY_SETTINGS_FILE), "utf8")) as Partial<TraySettings>;
-    return { notifications: parsed.notifications === "all" || parsed.notifications === "off" ? parsed.notifications : "problems" };
+    const parsed = JSON.parse(readFileSync(join(dir, TRAY_SETTINGS_FILE), "utf8")) as Partial<Record<keyof TraySettings, unknown>>;
+    return { notifications: notificationSetting(parsed.notifications) ?? "problems" };
   } catch { return { notifications: "problems" }; }
 }
 
 export function writeTraySettings(dir: string, patch: unknown): TraySettings {
   const next = readTraySettings(dir);
-  const value = (patch as { notifications?: unknown } | null)?.notifications;
-  if (value === "all" || value === "problems" || value === "off") next.notifications = value;
+  const value = notificationSetting((patch as { notifications?: unknown } | null)?.notifications);
+  if (value) next.notifications = value;
   writeFileSync(join(dir, TRAY_SETTINGS_FILE), JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
   return next;
+}
+
+/** On an agent's first start in a Scopebond folder (no agent has run there before), notifications default to blocks and
+ *  problems; an install whose person never chose keeps problems only. Written once; the person's choice is never changed. */
+export function settleTraySettings(dir: string, firstStart: boolean): void {
+  if (existsSync(join(dir, TRAY_SETTINGS_FILE))) return;
+  try { writeTraySettings(dir, { notifications: firstStart ? "blocks" : "problems" }); } catch { /* read as problems only */ }
 }
 
 /** Set for a replacement started directly because the launcher is an older one: it rewrites the launcher once the old agent is gone. */
@@ -316,6 +329,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   rmSync(join(options.dir, STOPPED_FILE), { force: true });
   // What the install helper of a signed update recorded before this start (installAfterExit).
   noteUpdateOutcome(options.dir, log);
+  // No agent has run in this folder before (it writes its wake time from its first cycle): a new install.
+  settleTraySettings(options.dir, !existsSync(join(options.dir, AWAKE_FILE)));
   const interval = options.intervalMs ?? INTERVAL_MS;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
@@ -538,7 +553,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const report = ruleReport(options.dir);
     const modes = report ? Object.values(report).map(([mode]) => mode) : [];
     const activity = localActivity(options.dir, { limit: RECENT_BLOCKS_MAX });
-    return trayModel({
+    const model = trayModel({
       status, health: health(), now, awakeSince, working,
       rules: report ? { checked_at: meta.checked_at ? Date.parse(meta.checked_at) : null, managed: isManaged(options.dir), block: modes.filter((m) => m === "enforce").length, monitor: modes.filter((m) => m === "monitor").length } : null,
       today: activity?.today ?? null,
@@ -554,6 +569,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       notice: migrationNotice(),
       canAsk: workspaceLetsAsk(options.dir),
     });
+    // What the person let through and asked an admin, for the tray's Allowed and Asked lists.
+    return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
   };
   /** What this install can update to, for the tray: from npm, the workspace's agent and hook (as its rules check said);
    *  the signed install, only the signed build the workspace names (the hook is inside it); for every user, nothing. */
@@ -664,6 +681,32 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       log(`earlier block under "${q.title}": ${done.outcome}`);
       return { outcome: done.outcome, text: blockedText(done.outcome) };
     },
+    // The same answer from the tray's own form instead of the Scopebond window: the person chose in the tray's panel, which
+    // only the person at the computer sees, and the tray sends the choice and the reason here. Checked again as the window
+    // would be (the block is still offered, the choice is one the workspace allows, the reason is long enough), then applied
+    // exactly as the window's answer is: the allowance or the request on this computer, sent to the workspace signed by this
+    // computer's key. Scopebond never runs the action: the person or the coding agent runs it again.
+    "POST /blocked/answer": (body) => {
+      const parsed = parseBlockedAnswer(body);
+      if (!parsed) return { outcome: "invalid", text: "That answer could not be read." };
+      const q = blockedQuestion(options.dir, parsed.action_id);
+      if (!q) return { outcome: "gone", text: blockedText("gone") };
+      const offered = parsed.choice === "once" ? q.offers.allow : parsed.choice === "fifteen" ? q.offers.fifteen : parsed.choice === "always" ? q.offers.always : q.offers.ask;
+      if (!offered) return { outcome: "not_offered", text: "Your workspace does not offer that choice for this block now." };
+      if (parsed.reason.length < q.reason_min) return { outcome: "reason_short", text: `Say why in at least ${q.reason_min} characters.` };
+      let os_user: string | undefined;
+      try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
+      const lasts = parsed.choice === "fifteen" ? "15m" as const : parsed.choice === "always" ? "always" as const : "once" as const;
+      const answer = parsed.choice === "ask" ? { decision: "ask" as const, reason: parsed.reason, ...(os_user ? { os_user } : {}) }
+        : { decision: "allow" as const, reason: parsed.reason, lasts, ...(os_user ? { os_user } : {}) };
+      const done = actOnBlocked(options.dir, parsed.action_id, answer);
+      if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
+      log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
+      return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir)) };
+    },
+    // What the person let through (in force, or waiting for an admin) and what they asked an admin, with the answers.
+    "GET /allowances": () => ({ allowances: allowedList(options.dir) }),
+    "GET /requests": () => ({ requests: askedList(options.dir) }),
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
@@ -772,4 +815,32 @@ export function blockedText(outcome: "allowed" | "proposed" | "asked" | "decline
     case "declined": return "Nothing was allowed.";
     case "gone": return "This block can no longer be allowed or sent to an admin from here.";
   }
+}
+
+export type BlockedChoice = "once" | "fifteen" | "always" | "ask";
+
+/** Check an answer from the tray's form: an action id, one of the four choices, and a reason of at most 500 characters
+ *  (control characters other than line breaks are refused). The rest (offered, long enough) is checked against the block. */
+export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: BlockedChoice; reason: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.action_id !== "string" || !/^[A-Za-z0-9._:-]{1,200}$/.test(r.action_id)) return null;
+  if (r.choice !== "once" && r.choice !== "fifteen" && r.choice !== "always" && r.choice !== "ask") return null;
+  if (typeof r.reason !== "string") return null;
+  const reason = r.reason.trim();
+  if (reason.length > 500 || [...reason].some((c) => { const n = c.charCodeAt(0); return (n < 32 && n !== 10 && n !== 13) || n === 127; })) return null;
+  return { action_id: r.action_id, choice: r.choice, reason };
+}
+
+/** What the tray says after a person answered a block in its form: what happened, and where it was recorded. */
+export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone", choice: BlockedChoice, alwaysDays: number, workspace: string | null, connected: boolean): string {
+  if (outcome === "gone") return blockedText("gone");
+  if (outcome === "declined") return blockedText("declined");
+  const what = outcome === "asked" ? "Sent to an admin"
+    : outcome === "proposed" ? "Allowed for 15 minutes; always once an admin approves"
+    : choice === "fifteen" ? "Allowed for 15 minutes"
+    : choice === "always" ? `Always allowed on this computer for ${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`
+    : "Allowed once";
+  const where = connected ? `Recorded and sent to ${workspace ?? "your workspace"}` : "Recorded on this computer";
+  return `${what} · ${where}`;
 }

@@ -4,6 +4,7 @@
 
 import type { StatusJson } from "@scopebond/hook";
 import type { Health } from "./health.js";
+import type { AllowedItem, AskedItem } from "./allowed-asked.js";
 
 /** The six icon states of the "S" tile: no badge when protected; a badge with its own glyph otherwise. */
 export type TrayState = "protected" | "working" | "offline" | "attention" | "problem" | "disconnected";
@@ -40,6 +41,9 @@ export interface TrayModel {
   /** Whether the workspace lets a person ask an admin under any rule (so the tray shows its Requests list even before the
    *  person has asked anything); absent from an older agent. */
   can_ask?: boolean;
+  /** What the person let through (in force or waiting for an admin), and what they asked an admin (allowed-asked.ts). */
+  allowed?: AllowedItem[];
+  asked?: AskedItem[];
 }
 
 /** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes, or

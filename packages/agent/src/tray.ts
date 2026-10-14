@@ -120,7 +120,7 @@ function Refresh {
   }
   [void]$menu.Items.Add('-')
   $notes = $menu.Items.Add('Notifications')
-  foreach ($choice in @(@('all', 'All'), @('problems', 'Problems only'), @('off', 'Off'))) {
+  foreach ($choice in @(@('blocks', 'Blocks and problems'), @('problems', 'Problems only'), @('off', 'Off'))) {
     $value = $choice[0]
     $n = $notes.DropDownItems.Add($choice[1]); $n.Checked = ($script:settings.notifications -eq $value)
     $n.Add_Click({ try { $script:settings = (Call 'POST' '/settings' @{ notifications = $value }).settings } catch {} ; Refresh }.GetNewClosure())
