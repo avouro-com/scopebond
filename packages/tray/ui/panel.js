@@ -113,6 +113,11 @@
       ask: ["Ask an admin to unblock it instead", "An admin decides; you'll see the answer under Requests"],
     }[c];
   }
+  /** The length on its own, for a form with nothing to choose. */
+  function lengthWords(b, c) {
+    const o = b.offers || {};
+    return { once: "Just this once", fifteen: "For 15 minutes", always: "For " + (o.always_days || 30) + " days" }[c] || "";
+  }
   function countText(b) {
     const min = b.reason_min || 10;
     const left = min - ui.reason.trim().length;
@@ -125,8 +130,13 @@
     const choices = choicesOf(b);
     // Where an admin decides, there is nothing to choose: the action, the reason and Send request.
     const askOnly = choices.length === 1 && choices[0] === "ask";
+    // Where the workspace set the one length (and, it may be, reviews every unblock later), nothing to choose either: one
+    // line names the length.
+    const oneLength = choices.length === 1 && !askOnly;
+    const reviewed = !!(b.offers && b.offers.reviewed);
     const where = askOnly ? "An admin decides; you'll see the answer under Requests"
       : model.workspace ? "Recorded and sent to " + model.workspace : "Recorded and sent to your workspace";
+    const fixedLine = oneLength ? lengthWords(b, choices[0]) + (reviewed ? ", set by your workspace; an admin reviews it later" : "") : null;
     const update = () => {
       const count = document.getElementById("count-" + id);
       if (count) count.textContent = countText(b);
@@ -135,7 +145,8 @@
     };
     return el("div", { class: "form", role: "group", "aria-label": (askOnly ? "Ask to unblock " : "Unblock ") + (b.what || b.summary) }, [
       el("div", { class: "cmd", "aria-label": "What ran", text: b.action_text || b.what || b.summary }),
-      askOnly ? null : el("fieldset", { class: "choices" }, [el("legend", { text: choices.some((c) => c !== "ask") ? "Let it through" : "What to do" })].concat(choices.map((c) => {
+      fixedLine ? el("p", { class: "fixed", text: fixedLine }) : null,
+      askOnly || oneLength ? null : el("fieldset", { class: "choices" }, [el("legend", { text: choices.some((c) => c !== "ask") ? "Let it through" : "What to do" })].concat(choices.map((c) => {
         const [title, small] = choiceWords(b, c);
         return el("label", { class: "choice" }, [
           el("input", { type: "radio", name: "choice-" + id, value: c, "data-key": "choice-" + c, checked: ui.choice === c,
@@ -151,7 +162,7 @@
       ]),
       el("div", { class: "acts" }, [
         el("button", { class: "btn primary", type: "button", "data-key": "confirm-" + id, disabled: !enough || !!s.busy, "aria-busy": busy ? "true" : null,
-          text: busy ? "Sending…" : BUTTON[ui.choice] || "Send", onclick: () => submit(b) }),
+          text: busy ? "Sending…" : oneLength && reviewed ? "Unblock now" : BUTTON[ui.choice] || "Send", onclick: () => submit(b) }),
         el("button", { class: "btn", type: "button", "data-key": "cancel-" + id, text: "Cancel", onclick: () => { closeForm(); draw("block-" + id); } }),
       ]),
       el("span", { class: "meta", text: where }),

@@ -143,6 +143,7 @@ h1 { margin: 0; font: 600 16px/1.25 "Segoe UI Variable Display", "Segoe UI", san
 .reason textarea { font-weight: 400; background: var(--field); border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: none; min-height: 56px; user-select: text; }
 .reason textarea:focus { outline: 2px solid var(--focus); outline-offset: 0; }
 .done { color: var(--ok); font-size: 12px; font-weight: 600; }
+.fixed { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 
 .empty { text-align: center; padding: 28px 16px; color: var(--ink-2); display: grid; gap: 6px; justify-items: center; }
 .empty strong { color: var(--ink); font-size: 14px; }

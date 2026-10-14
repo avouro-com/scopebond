@@ -48,7 +48,11 @@ export interface TrayModel {
 
 /** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes, or
  *  always (for `always_days`, after an admin approves when `always_needs_admin`), or ask an admin. */
-export interface BlockOffers { once: boolean; fifteen: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean }
+export interface BlockOffers {
+  once: boolean; fifteen: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean;
+  /** The workspace reviews every unblock later and may undo it; absent from an older agent. */
+  reviewed?: boolean;
+}
 
 /** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did. The
  *  fields after `acted` are newer (an older tray reads `summary` and `rule`): `what` is the action in plain words and

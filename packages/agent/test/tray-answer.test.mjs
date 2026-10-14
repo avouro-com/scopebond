@@ -80,7 +80,7 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "'Block, person may ask' never allows on the spot");
     // Only an admin unblocks: the tray is told that asking is all there is, and shows Ask to unblock and its Requests list.
     const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
-    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: true });
+    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false });
     assert.equal(before.can_ask, true);
     const done = await answer(dir, { action_id: id, choice: "ask", reason: REASON });
     assert.equal(done.outcome, "asked");
@@ -169,4 +169,34 @@ test("blocks are final: nothing offered for a block, and no Requests list", asyn
     assert.equal(tray.can_ask, false);
     assert.deepEqual(tray.asked, []);
   } finally { await service.stop(); }
+});
+
+test("unblocking automatically, reviewed later: one length, applied at once, and gone from Allowed when an admin undoes it", async () => {
+  const { dir, id } = await blockedComputer({ "destructive-shell": { mode: "override", override: { reason_min: 12, minutes: 0, daily_limit: 5, harness_prompt: false, lasts: "15m", review: true } } });
+  const service = await serviceFor(dir);
+  try {
+    const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
+    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: true, always: false, always_days: null, always_needs_admin: false, ask: false, reviewed: true });
+    assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "only the length the workspace set");
+    const done = await answer(dir, { action_id: id, choice: "fifteen", reason: REASON });
+    assert.equal(done.outcome, "allowed");
+    assert.match(done.text, /^Unblocked until \d{1,2}:\d{2} [AP]M · an admin will review it$/);
+    let { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
+    assert.equal(allowances.length, 1);
+    assert.equal(allowances[0].choice, "fifteen");
+    // An admin undoes it: the workspace lists it among its revoked allowances, and it leaves Allowed at the next look.
+    const doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8"));
+    writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ ...doc, revoked_allowances: [allowances[0].id] }));
+    ({ allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000));
+    assert.deepEqual(allowances, []);
+    assert.deepEqual((await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray.allowed, []);
+  } finally { await service.stop(); }
+});
+
+test("the words after an unblock that an admin reviews later", () => {
+  const now = Date.parse("2026-10-14T15:52:00");
+  assert.equal(answerText("allowed", "fifteen", 30, "Acme", true, true, now), "Unblocked until 4:07 PM · an admin will review it");
+  assert.equal(answerText("allowed", "once", 30, "Acme", true, true, now), "Unblocked for the next try · an admin will review it");
+  assert.equal(answerText("allowed", "always", 30, "Acme", true, true, now), "Unblocked until Nov 13 · an admin will review it");
+  assert.equal(answerText("allowed", "fifteen", 30, "Acme", true, false, now), "Allowed for 15 minutes · Recorded and sent to Acme", "not reviewed: as before");
 });

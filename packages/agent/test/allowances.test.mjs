@@ -67,3 +67,11 @@ test("allowances and requests a person made are sent once, signed by the compute
   assert.deepEqual(await sendAllowancesAndRequests(dir, connection, fetchImpl), { allowances: 0, requests: 0 });
   assert.equal(posts.length, 0, "nothing is sent twice");
 });
+
+test("where the workspace sets one length, the window offers only it", () => {
+  const fixed = parseQuestion(question({ mode: "override", offers: { allow: false, always: false, ask: false, fifteen: true } }));
+  const script = windowsScript(fixed);
+  assert.ok(script.includes(b64("Allow for 15 min")));
+  assert.ok(!script.includes(b64("Allow once")) && !script.includes(b64("Always allow this here…")));
+  assert.doesNotMatch(questionText(fixed), /ask an admin/, "it may be allowed, not only asked about");
+});

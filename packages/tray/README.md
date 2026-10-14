@@ -41,7 +41,10 @@ PowerShell tray.
     window's answer: the allowance or the request on this computer, sent to the workspace signed by this computer's key.
     The block then says what happened: "Allowed once · Recorded and sent to Acme". Where an admin decides, the form
     has nothing to choose: the action, the reason and *Send request*, and afterwards "Request sent · you'll see the
-    answer under Requests". Scopebond never runs the action
+    answer under Requests". Where the workspace sets the one length, there is nothing to choose either: one line names
+    it, and where the workspace reviews every unblock later it says so ("For 15 minutes, set by your workspace; an admin
+    reviews it later") and the button reads *Unblock now*; afterwards "Unblocked until 4:07 PM · an admin will review
+    it", and the allowance is listed under *Allowed* until it ends or an admin undoes it. Scopebond never runs the action
     itself; the person or the coding agent runs it again. With an agent that does not say what may be done, the buttons
     open its Scopebond window as before.
   - *Allowed* lists what the person let through that still applies (once, for 15 minutes, always), with when it ends, and

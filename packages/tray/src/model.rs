@@ -48,6 +48,8 @@ pub struct BlockOffers {
     pub always_needs_admin: bool,
     /// Ask an admin.
     pub ask: bool,
+    /// The workspace reviews every unblock later and may undo it (false from an older agent).
+    pub reviewed: bool,
 }
 
 impl BlockOffers {

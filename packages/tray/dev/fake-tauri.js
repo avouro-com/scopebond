@@ -76,13 +76,15 @@
   // Only the scenes above: the name from the address is compared with each, never used to look one up.
   const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected : scenes.protected;
   let model = scene === "not_answering" ? null : make();
-  // What the workspace lets a person do (mode=self, the default; approval: only ask to unblock, an admin decides; final: nothing): the agent
+  // What the workspace lets a person do (mode=self, the default; approval: only ask to unblock, an admin decides;
+  // automatic: one length the workspace set, applied at once and reviewed by an admin later; final: nothing): the agent
   // says it per block in `offers`, and `can_ask` says whether asking is on under any rule.
   const mode = params.get("mode") || "self";
   if (model) {
-    model.can_ask = mode !== "final";
+    model.can_ask = mode !== "final" && mode !== "automatic";
     for (const b of model.recent_blocks) {
       if (mode === "approval" && b.can_act) b.offers = offers({ ask: true });
+      if (mode === "automatic" && b.can_act) b.offers = offers({ fifteen: true, reviewed: true });
       if (mode === "final") { b.can_act = false; b.offers = null; if (b.acted === "asked") b.acted = null; }
     }
     if (mode === "final" && model.asked) model.asked = [];
@@ -124,7 +126,9 @@
           b.can_act = false;
           b.acted = choice === "ask" ? "asked" : "allowed";
           const words = { once: "Allowed once", fifteen: "Allowed for 15 minutes", always: "Always allowed on this computer for " + (b.offers.always_days || 30) + " days", ask: "Request sent" }[choice];
-          const text = choice === "ask" ? "Request sent · you'll see the answer under Requests" : words + " · Recorded and sent to Acme";
+          const until = new Date(Date.now() + 15 * MIN).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+          const text = choice === "ask" ? "Request sent · you'll see the answer under Requests"
+            : b.offers.reviewed ? "Unblocked until " + until + " · an admin will review it" : words + " · Recorded and sent to Acme";
           answered = { actionId, outcome: choice === "ask" ? "asked" : "allowed", text };
           say(text);
           if (choice === "ask") model.asked.unshift({ id: "req_new", rule: b.rule, rule_title: b.rule_title, what: b.action_text, reason: String(reason).trim(), asked_at: new Date().toISOString(), sent: true, state: "waiting", answered_by: null, note: null, answered_at: null });

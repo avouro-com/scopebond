@@ -251,6 +251,13 @@ mod tests {
         assert_eq!(block_button(&b), Some("Unblock…"), "an older agent: its window offers what there is");
         b.acted = Some("asked".into());
         assert_eq!(block_button(&b), None, "already acted on");
+        // Unblocking automatically, reviewed later: one length the workspace set, and the same button.
+        let mut automatic = answerable();
+        automatic.offers = serde_json::from_value(json!({ "once": false, "fifteen": true, "always": false, "ask": false, "reviewed": true })).ok();
+        assert!(automatic.offers.as_ref().is_some_and(|o| o.reviewed));
+        assert_eq!(block_button(&automatic), Some("Unblock…"));
+        assert!(check_answer(&automatic, "fifteen", "The tests need the API URL").is_ok());
+        assert!(check_answer(&automatic, "once", "The tests need the API URL").is_err(), "only the length the workspace set");
     }
 
     #[test]

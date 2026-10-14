@@ -49,9 +49,12 @@ export function parseQuestion(raw: unknown): OverrideQuestion | null {
   };
 }
 
+/** Whether the window lets the person allow it for any length (once, 15 minutes, always). */
+const allowsAny = (q: OverrideQuestion): boolean => q.offers.allow || !!q.offers.fifteen || q.offers.always;
+
 export function questionText(q: OverrideQuestion): string {
   const head = `Scopebond blocked this. Your workspace's rule "${q.title}" blocked this action:\n\n${q.summary}\n\n`;
-  if (!q.offers.allow) return `${head}You may ask an admin to allow it. Say why, in at least ${q.reason_min} characters. The action stays blocked until an admin answers; your name, the reason and the action are recorded in your workspace.`;
+  if (!allowsAny(q)) return `${head}You may ask an admin to allow it. Say why, in at least ${q.reason_min} characters. The action stays blocked until an admin answers; your name, the reason and the action are recorded in your workspace.`;
   return `${head}You may allow it. Say why, in at least ${q.reason_min} characters. Your name, the reason and the action are recorded in your workspace.`;
 }
 
@@ -108,7 +111,7 @@ function Btn($label, $width, $decision, $lasts, $needs) {
 $d = Btn '${b64("Don't allow")}' 100 'deny' 'once' $false; $x -= 108
 ${q.offers.ask ? `[void](Btn '${b64("Ask an admin")}' 110 'ask' 'once' $true); $x -= 118` : ""}
 ${q.offers.always ? `[void](Btn '${b64("Always allow this here…")}' 150 'allow' 'always' $true); $x -= 158` : ""}
-${q.offers.allow && q.offers.fifteen ? `[void](Btn '${b64("Allow for 15 min")}' 120 'allow' '15m' $true); $x -= 128; ` : ""}${q.offers.allow ? `[void](Btn '${b64("Allow once")}' 92 'allow' 'once' $true)` : ""}
+${q.offers.fifteen ? `[void](Btn '${b64("Allow for 15 min")}' 120 'allow' '15m' $true); $x -= 128; ` : ""}${q.offers.allow ? `[void](Btn '${b64("Allow once")}' 92 'allow' 'once' $true)` : ""}
 $r.Add_TextChanged({ foreach ($b in $script:needReason) { $b.Enabled = ($r.Text.Trim().Length -ge $min) } })
 $f.AcceptButton = $d
 $f.CancelButton = $d
@@ -131,7 +134,7 @@ async function promptWindows(q: OverrideQuestion): Promise<OverrideAnswer> {
   try {
     const parsed = JSON.parse(stdout.trim()) as { decision?: string; reason?: string; lasts?: string };
     const lasts = parsed.lasts === "15m" || parsed.lasts === "always" ? parsed.lasts : "once";
-    if (parsed.decision === "allow" && q.offers.allow && (lasts !== "always" || q.offers.always) && (lasts !== "15m" || q.offers.fifteen)) return { decision: "allow", reason: String(parsed.reason ?? ""), lasts };
+    if (parsed.decision === "allow" && (lasts === "once" ? q.offers.allow : lasts === "15m" ? q.offers.fifteen : q.offers.always)) return { decision: "allow", reason: String(parsed.reason ?? ""), lasts };
     if (parsed.decision === "ask" && q.offers.ask) return { decision: "ask", reason: String(parsed.reason ?? "") };
     return { decision: "deny" };
   } catch { return { decision: "unavailable" }; }

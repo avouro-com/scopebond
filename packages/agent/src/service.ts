@@ -539,7 +539,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         project: projectName(b.repository), tool: toolName(b.harness ?? item?.harness ?? null),
         offers: q ? {
           once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
-          always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask,
+          always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
         } : null,
         reason_min: q ? q.reason_min : null,
       };
@@ -702,7 +702,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const done = actOnBlocked(options.dir, parsed.action_id, answer);
       if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
       log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
-      return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir)) };
+      return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed) };
     },
     // What the person let through (in force, or waiting for an admin) and what they asked an admin, with the answers.
     "GET /allowances": () => ({ allowances: allowedList(options.dir) }),
@@ -833,11 +833,18 @@ export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: B
 }
 
 /** What the tray says after a person answered a block in its form: what happened, and where it was recorded. */
-export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone", choice: BlockedChoice, alwaysDays: number, workspace: string | null, connected: boolean): string {
+export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone", choice: BlockedChoice, alwaysDays: number, workspace: string | null, connected: boolean, reviewed = false, now = Date.now()): string {
   if (outcome === "gone") return blockedText("gone");
   if (outcome === "declined") return blockedText("declined");
   // A request: where the answer will show (it is recorded and sent like everything else).
   if (outcome === "asked") return connected ? "Request sent · you'll see the answer under Requests" : "Request saved, sent once this computer is connected · you'll see the answer under Requests";
+  // Applied at once, reviewed by an admin later: when it ends, and that it will be reviewed.
+  if (reviewed && outcome === "allowed") {
+    const until = choice === "once" ? "for the next try"
+      : choice === "fifteen" ? `until ${new Date(now + 15 * 60_000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+      : `until ${new Date(now + alwaysDays * 86_400_000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    return `Unblocked ${until} · an admin will review it`;
+  }
   const what = outcome === "proposed" ? "Allowed for 15 minutes; always once an admin approves"
     : choice === "fifteen" ? "Allowed for 15 minutes"
     : choice === "always" ? `Always allowed on this computer for ${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`
