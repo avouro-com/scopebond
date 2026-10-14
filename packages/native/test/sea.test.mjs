@@ -72,7 +72,10 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
   const install = spawnSync(exe, ["hook", "install", "--claude", "--yes"], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
   assert.equal(install.status, 0, install.stdout + install.stderr);
   const settings = readFileSync(join(home, ".claude", "settings.json"), "utf8");
-  assert.ok(settings.includes(JSON.stringify(`"${exe}" hook claude`).slice(1, -1)), settings);
+  // On Windows the path is written unquoted with forward slashes (short names for any folder a shell would misread), the
+  // form cmd.exe, PowerShell and Git Bash all start; elsewhere it is quoted.
+  const command = JSON.parse(settings).hooks.PreToolUse[0].hooks[0].command;
+  assert.ok(command === `"${exe}" hook claude` || (process.platform === "win32" && /^[A-Za-z]:\/\S+\/scopebond-agent\.exe hook claude$/.test(command)), settings);
   const doctor = spawnSync(exe, ["hook", "doctor"], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
   assert.doesNotMatch(doctor.stdout, /cannot start|could not start/i, doctor.stdout);
   // With the user-level install beside the project's own setup (the hook finds the project's folder itself, no pinned
