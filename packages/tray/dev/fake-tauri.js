@@ -87,7 +87,7 @@
     }
     if (mode === "final" && model.asked) model.asked = [];
   }
-  let notifications = "problems";
+  let notifications = "blocks";
   let note = null;
   let busy = null;
   let answered = null;

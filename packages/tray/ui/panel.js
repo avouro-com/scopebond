@@ -330,7 +330,7 @@
     const answer = s.answer;
     const current = answer && answer.settings ? answer.settings.notifications : "problems";
     const agentUp = !!model;
-    const radios = [["all", "Blocks and problems"], ["problems", "Problems only"], ["off", "Off"]];
+    const radios = [["blocks", "Blocks and problems"], ["problems", "Problems only"], ["off", "Off"]];
     const managed = s.autostart === "managed";
     const busy = s.busy;
     const actions = model ? [model.fix].concat(model.actions || []).filter((a, i, all) => a && a.id !== "open_workspace" && all.findIndex((x) => x && x.id === a.id) === i) : [];
