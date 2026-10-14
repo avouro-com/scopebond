@@ -55,8 +55,8 @@
     }),
   };
 
-  // Only the scenes above: a name from the address picks one, never anything else.
-  const make = new Map(Object.entries(scenes)).get(scene) || scenes.protected;
+  // Only the scenes above: the name from the address is compared with each, never used to look one up.
+  const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected : scenes.protected;
   let model = scene === "not_answering" ? null : make();
   let notifications = "problems";
   let note = null;
