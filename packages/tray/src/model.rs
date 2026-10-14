@@ -113,6 +113,48 @@ pub struct TrayModel {
     pub today: Option<Today>,
     /// Whether the workspace lets a person ask an admin under any rule (none from an older agent).
     pub can_ask: Option<bool>,
+    /// What the person let through (in force, or waiting for an admin), newest first.
+    pub allowed: Vec<AllowedItem>,
+    /// What the person asked an admin, newest first, with the answer when there is one.
+    pub asked: Vec<AskedItem>,
+}
+
+/// An allowance in force or waiting for an admin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AllowedItem {
+    pub id: String,
+    pub rule: String,
+    pub rule_title: Option<String>,
+    pub what: Option<String>,
+    /// "once", "fifteen" or "always".
+    pub choice: String,
+    /// "active" or "proposed".
+    pub state: String,
+    pub needs_admin: bool,
+    /// "person" (made on this computer) or "admin".
+    pub by: String,
+    pub created_at: String,
+    pub ends_at: String,
+    pub answered_by: Option<String>,
+}
+
+/// A request to an admin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AskedItem {
+    pub id: String,
+    pub rule: String,
+    pub rule_title: Option<String>,
+    pub what: String,
+    pub reason: String,
+    pub asked_at: String,
+    pub sent: bool,
+    /// "waiting", "approved" or "declined".
+    pub state: String,
+    pub answered_by: Option<String>,
+    pub note: Option<String>,
+    pub answered_at: Option<String>,
 }
 
 impl TrayModel {
@@ -141,9 +183,10 @@ impl TrayModel {
         self.today.as_ref().map(|t| t.blocked).unwrap_or(self.recent_blocks.len() as u64)
     }
 
-    /// Whether the panel shows the Requests list: the workspace lets a person ask an admin, or a listed block offers asking.
+    /// Whether the panel shows the Asked list: the workspace lets a person ask an admin (under any rule, or for a listed
+    /// block), or the person has asked before.
     pub fn asks(&self) -> bool {
-        self.can_ask == Some(true) || self.recent_blocks.iter().any(|b| b.offers.as_ref().is_some_and(|o| o.ask))
+        self.can_ask == Some(true) || !self.asked.is_empty() || self.recent_blocks.iter().any(|b| b.offers.as_ref().is_some_and(|o| o.ask))
     }
 
     /// The block with this id that the person may still act on.
@@ -152,11 +195,12 @@ impl TrayModel {
     }
 }
 
-/// Which notifications the person wants: everything (blocks too), problems only (the default), or none.
+/// Which notifications the person wants: blocks and problems (the agent's default for a new install), problems only (the
+/// default when the agent says nothing), or none. An older agent's "all" meant blocks and problems too.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", from = "String")]
 pub enum Notifications {
-    All,
+    Blocks,
     #[default]
     Problems,
     Off,
@@ -169,11 +213,11 @@ impl From<String> for Notifications {
 }
 
 impl Notifications {
-    pub const ALL: [Notifications; 3] = [Notifications::All, Notifications::Problems, Notifications::Off];
+    pub const ALL: [Notifications; 3] = [Notifications::Blocks, Notifications::Problems, Notifications::Off];
 
     pub fn parse(value: &str) -> Notifications {
         match value {
-            "all" => Notifications::All,
+            "blocks" | "all" => Notifications::Blocks,
             "off" => Notifications::Off,
             _ => Notifications::Problems,
         }
@@ -181,7 +225,7 @@ impl Notifications {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Notifications::All => "all",
+            Notifications::Blocks => "blocks",
             Notifications::Problems => "problems",
             Notifications::Off => "off",
         }
@@ -189,7 +233,7 @@ impl Notifications {
 
     pub fn label(self) -> &'static str {
         match self {
-            Notifications::All => "All",
+            Notifications::Blocks => "Blocks and problems",
             Notifications::Problems => "Problems only",
             Notifications::Off => "Off",
         }
@@ -250,6 +294,14 @@ pub(crate) mod fixtures {
           { "id": "open_workspace", "label": "Open workspace", "route": "/open-workspace" }
         ],
         "detail": "Rules checked 3 min ago · 2 blocked today", "workspace": "Acme", "today": { "actions": 1160, "blocked": 2 }, "can_ask": true,
+        "allowed": [
+          { "id": "alw_aaaaaaaaaaaaaaaaaaaa", "rule": "secret-read", "rule_title": "Reading a secret file", "what": ".env.staging", "choice": "fifteen",
+            "state": "active", "needs_admin": false, "by": "person", "created_at": "2026-10-14T15:52:00.000Z", "ends_at": "2026-10-14T16:07:00.000Z", "answered_by": null }
+        ],
+        "asked": [
+          { "id": "req_aaaaaaaaaaaaaaaaaaaa", "rule": "destructive-shell", "rule_title": "Destructive command", "what": "rm -rf ./dist", "reason": "Clearing the release build",
+            "asked_at": "2026-10-14T13:52:00.000Z", "sent": true, "state": "declined", "answered_by": "morgan@acme.test", "note": "Use the clean script", "answered_at": null }
+        ],
         "recent_blocks": [
           { "action_id": "act-read-env-0000000001", "summary": "file.read .env.production", "at": "2026-10-14T15:46:00.000Z", "rule": "secret-read",
             "can_act": true, "acted": null, "what": "Read .env.production", "action_text": ".env.production", "rule_title": "Reading a secret file",
@@ -320,8 +372,13 @@ mod tests {
         assert!(a.tray.asks());
         let mut final_rules = a.tray.clone();
         final_rules.can_ask = Some(false);
+        final_rules.asked.clear();
         final_rules.recent_blocks.iter_mut().for_each(|b| b.offers = None);
-        assert!(!final_rules.asks(), "nothing to ask: no Requests list");
+        assert!(!final_rules.asks(), "nothing to ask: no Asked list");
+        assert_eq!(a.tray.allowed[0].choice, "fifteen");
+        assert_eq!(a.tray.asked[0].state, "declined");
+        assert_eq!(a.tray.asked[0].note.as_deref(), Some("Use the clean script"));
+        assert!(TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap().tray.allowed.is_empty(), "an older agent sends no lists");
         assert!(a.tray.actionable_block("act-push-main-00000001").is_some());
         assert!(a.tray.actionable_block("act-unknown").is_none());
         // An older agent's block: the summary stands in for the plain words, and nothing says what may be done.
@@ -337,6 +394,15 @@ mod tests {
         assert_eq!(a.tray.icon_state(), IconState::Working);
         assert!(a.tray.actions.is_empty());
         assert_eq!(a.settings.notifications, Notifications::Problems, "an unknown setting reads as the default");
+    }
+
+    #[test]
+    fn notification_settings_old_and_new() {
+        assert_eq!(Notifications::parse("blocks"), Notifications::Blocks);
+        assert_eq!(Notifications::parse("all"), Notifications::Blocks, "an older agent's all meant blocks and problems");
+        assert_eq!(Notifications::Blocks.as_str(), "blocks");
+        assert_eq!(Notifications::Blocks.label(), "Blocks and problems");
+        assert_eq!(serde_json::to_string(&Notifications::Blocks).unwrap(), "\"blocks\"");
     }
 
     #[test]

@@ -3,8 +3,9 @@
 //! - one when the state gets worse: at once for a problem or a lost connection to the workspace, and for "needs
 //!   attention" only once it has lasted five minutes, so sleep and wake or a short hiccup do not flap;
 //! - one when it is protected again after one of those;
-//! - none for blocks, unless the person chose *All* (then one per new block);
-//! - nothing at all when the person chose *Off*.
+//! - with *Blocks and problems*, one for a new block (with *Unblock…* when the person may act on it); further blocks within
+//!   a minute of that one wait and are told together ("3 actions blocked in the last minute");
+//! - nothing about blocks with *Problems only*, and nothing at all with *Off*.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -14,6 +15,8 @@ use crate::model::{Notifications, RecentBlock};
 
 /// "Needs attention" must last this long before it is worth a notification.
 pub const ATTENTION_AFTER: Duration = Duration::from_secs(5 * 60);
+/// Blocks within this long of the last block notification are told together, once it has passed.
+pub const BLOCK_GROUP: Duration = Duration::from_secs(60);
 /// How many block ids are remembered, so a block is announced once.
 const REMEMBERED_BLOCKS: usize = 100;
 
@@ -30,6 +33,8 @@ pub struct Toast {
     pub kind: Kind,
     pub title: String,
     pub text: String,
+    /// The block whose Unblock form the notification's *Unblock…* button opens (one block the person may act on).
+    pub unblock: Option<String>,
 }
 
 /// How bad a state is: protected and working are fine, offline is not yet worth a word.
@@ -42,6 +47,41 @@ pub fn rank(state: IconState) -> u8 {
     }
 }
 
+/// The notification for blocks seen together: one in plain words (with *Unblock…* when the person may act on it), or a
+/// count.
+pub fn block_toast(blocks: &[RecentBlock]) -> Option<Toast> {
+    match blocks {
+        [] => None,
+        [one] => {
+            let place = match (one.tool.as_deref(), one.project.as_deref()) {
+                (Some(tool), Some(project)) => Some(format!("{tool} in {project}")),
+                (Some(tool), None) => Some(tool.to_string()),
+                (None, Some(project)) => Some(project.to_string()),
+                (None, None) => None,
+            };
+            let rule = one.rule_title.clone().or_else(|| one.rule.clone());
+            let text = [place, rule].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let may_act = one.can_act && one.offers.as_ref().is_none_or(|o| o.allows() || o.ask);
+            Some(Toast {
+                kind: Kind::Block,
+                title: cut(&format!("Blocked: {}", one.words()), 120),
+                text: if text.is_empty() { "Scopebond blocked an action your coding agent tried".into() } else { cut(&text, 200) },
+                unblock: if may_act { one.action_id.clone() } else { None },
+            })
+        }
+        many => Some(Toast {
+            kind: Kind::Block,
+            title: format!("{} actions blocked in the last minute", many.len()),
+            text: "Open Scopebond to see what was blocked".into(),
+            unblock: None,
+        }),
+    }
+}
+
+fn cut(s: &str, max: usize) -> String {
+    if s.chars().count() <= max { s.to_string() } else { s.chars().take(max - 1).chain(std::iter::once('…')).collect() }
+}
+
 #[derive(Debug, Default)]
 pub struct Notifier {
     /// The worse state last told about, until protected again.
@@ -50,6 +90,10 @@ pub struct Notifier {
     worse_since: Option<Instant>,
     /// Blocks already seen (None until the first look, so blocks from before the tray started are not announced).
     seen: Option<VecDeque<String>>,
+    /// When the last block notification was shown.
+    last_block_toast: Option<Instant>,
+    /// New blocks waiting to be told together.
+    held: Vec<RecentBlock>,
 }
 
 impl Notifier {
@@ -70,11 +114,11 @@ impl Notifier {
             // Better than what was told (a problem eased to attention) is remembered without a word.
             if self.told.is_none_or(|told| rank(state) > rank(told)) {
                 let kind = if rank(state) >= 3 { Kind::Problem } else { Kind::Attention };
-                out.push(Toast { kind, title: "Scopebond".into(), text: headline.to_string() });
+                out.push(Toast { kind, title: "Scopebond".into(), text: headline.to_string(), unblock: None });
             }
             self.told = Some(state);
         } else if state == IconState::Protected && self.told.is_some() {
-            out.push(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: "Scopebond is protecting again".into() });
+            out.push(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: "Scopebond is protecting again".into(), unblock: None });
             self.told = None;
         }
 
@@ -82,16 +126,11 @@ impl Notifier {
         match &mut self.seen {
             None => self.seen = Some(ids.map(|(id, _)| id).collect()),
             Some(seen) => {
-                for (id, block) in ids {
-                    if seen.contains(&id) {
-                        continue;
-                    }
-                    if setting == Notifications::All {
-                        let text = match &block.rule {
-                            Some(rule) => format!("{} (rule: {rule})", block.summary),
-                            None => block.summary.clone(),
-                        };
-                        out.push(Toast { kind: Kind::Block, title: "Scopebond blocked an action".into(), text });
+                // Oldest first, so a group is told in the order it happened.
+                let fresh: Vec<(String, &RecentBlock)> = ids.filter(|(id, _)| !seen.contains(id)).collect();
+                for (id, block) in fresh.into_iter().rev() {
+                    if setting == Notifications::Blocks {
+                        self.held.push(block.clone());
                     }
                     seen.push_back(id);
                     if seen.len() > REMEMBERED_BLOCKS {
@@ -99,6 +138,15 @@ impl Notifier {
                     }
                 }
             }
+        }
+        if setting != Notifications::Blocks {
+            self.held.clear();
+        }
+        let quiet = self.last_block_toast.is_some_and(|at| now.duration_since(at) < BLOCK_GROUP);
+        if !self.held.is_empty() && !quiet {
+            out.extend(block_toast(&self.held));
+            self.held.clear();
+            self.last_block_toast = Some(now);
         }
         if setting == Notifications::Off {
             out.clear();
@@ -110,6 +158,7 @@ impl Notifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::BlockOffers;
 
     fn block(id: &str) -> RecentBlock {
         RecentBlock { action_id: Some(id.into()), summary: format!("rm -rf {id}"), rule: Some("no-destroy".into()), ..Default::default() }
@@ -126,11 +175,14 @@ mod tests {
         fn at(&mut self, secs: u64, state: IconState, setting: Notifications) -> Vec<Kind> {
             self.n.observe(state, "headline", &[], setting, self.start + Duration::from_secs(secs)).into_iter().map(|t| t.kind).collect()
         }
+        fn blocks(&mut self, secs: u64, blocks: &[RecentBlock], setting: Notifications) -> Vec<Toast> {
+            self.n.observe(IconState::Protected, "", blocks, setting, self.start + Duration::from_secs(secs))
+        }
     }
 
     const NONE: [Kind; 0] = [];
     use IconState::*;
-    use Notifications::{All, Off, Problems};
+    use Notifications::{Blocks, Off, Problems};
 
     #[test]
     fn a_problem_is_told_once_and_the_recovery_once() {
@@ -181,19 +233,62 @@ mod tests {
         let mut r = Run::new();
         assert_eq!(r.at(0, Problem, Off), NONE);
         assert_eq!(r.at(10, Protected, Off), NONE);
+        r.blocks(20, &[block("a")], Off);
+        assert!(r.blocks(30, &[block("b"), block("a")], Off).is_empty());
     }
 
     #[test]
-    fn blocks_only_with_all_and_each_once() {
-        let mut n = Notifier::new();
-        let t = Instant::now();
+    fn a_new_block_is_told_once_with_problems_only_none() {
+        let mut r = Run::new();
         // Blocks from before the tray started are not announced.
-        assert!(n.observe(Protected, "", &[block("a")], All, t).is_empty());
-        let toasts = n.observe(Protected, "", &[block("b"), block("a")], All, t);
+        assert!(r.blocks(0, &[block("a")], Blocks).is_empty());
+        let toasts = r.blocks(5, &[block("b"), block("a")], Blocks);
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].text, "rm -rf b (rule: no-destroy)");
-        assert!(n.observe(Protected, "", &[block("b"), block("a")], All, t).is_empty());
-        assert!(n.observe(Protected, "", &[block("c")], Problems, t).is_empty(), "problems only: no blocks");
-        assert_eq!(n.observe(Protected, "", &[block("c"), block("d")], All, t).len(), 1, "c was seen meanwhile");
+        assert_eq!(toasts[0].title, "Blocked: rm -rf b");
+        assert_eq!(toasts[0].text, "no-destroy");
+        assert!(r.blocks(100, &[block("b"), block("a")], Blocks).is_empty(), "once");
+        assert!(r.blocks(200, &[block("c"), block("b")], Problems).is_empty(), "problems only: no blocks");
+        assert_eq!(r.blocks(300, &[block("d"), block("c")], Blocks).len(), 1, "c was seen meanwhile");
+    }
+
+    #[test]
+    fn blocks_within_a_minute_are_told_together() {
+        let mut r = Run::new();
+        r.blocks(0, &[], Blocks);
+        assert_eq!(r.blocks(10, &[block("a")], Blocks).len(), 1, "the first at once");
+        assert!(r.blocks(20, &[block("b"), block("a")], Blocks).is_empty(), "held");
+        assert!(r.blocks(40, &[block("d"), block("c"), block("b"), block("a")], Blocks).is_empty(), "held");
+        let group = r.blocks(70, &[block("d"), block("c"), block("b"), block("a")], Blocks);
+        assert_eq!(group.len(), 1);
+        assert_eq!(group[0].title, "3 actions blocked in the last minute");
+        assert_eq!(group[0].unblock, None);
+        assert!(r.blocks(80, &[block("d")], Blocks).is_empty(), "nothing new");
+        // A minute after the group, a single new block is told at once again.
+        assert_eq!(r.blocks(131, &[block("e"), block("d")], Blocks)[0].title, "Blocked: rm -rf e");
+    }
+
+    #[test]
+    fn a_single_block_says_where_and_offers_unblock_when_the_person_may_act() {
+        let mut b = block("a");
+        b.what = "Read .env.production".into();
+        b.tool = Some("Claude Code".into());
+        b.project = Some("checkout".into());
+        b.rule_title = Some("Reading a secret file".into());
+        b.can_act = true;
+        b.offers = Some(BlockOffers { once: true, ..Default::default() });
+        let t = block_toast(std::slice::from_ref(&b)).unwrap();
+        assert_eq!(t.title, "Blocked: Read .env.production");
+        assert_eq!(t.text, "Claude Code in checkout · Reading a secret file");
+        assert_eq!(t.unblock.as_deref(), Some("a"));
+        b.offers = Some(BlockOffers { ask: true, ..Default::default() });
+        assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().unblock.as_deref(), Some("a"), "asking an admin is acting too");
+        b.offers = Some(BlockOffers::default());
+        assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().unblock, None);
+        b.can_act = false;
+        b.offers = None;
+        assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().unblock, None, "nothing to do: no button");
+        assert!(block_toast(&[]).is_none());
+        b.what = "x".repeat(300);
+        assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().title.chars().count(), 120);
     }
 }

@@ -241,7 +241,7 @@ mod tests {
                 "-",
                 "Open Acme in Scopebond Cloud",
                 "Notifications >",
-                "  [ ] All",
+                "  [ ] Blocks and problems",
                 "  [x] Problems only",
                 "  [ ] Off",
                 "[x] Start with Windows",
@@ -367,7 +367,7 @@ mod tests {
         let l = labels(&menu_spec(Some(&a), &c));
         assert!(l.contains(&"[x] Start with Windows (set for every user)".to_string()));
         assert!(l.contains(&"  [x] Off".to_string()));
-        assert_eq!(command_for("notifications:all", Some(&a)), Some(Command::Notifications(Notifications::All)));
+        assert_eq!(command_for("notifications:blocks", Some(&a)), Some(Command::Notifications(Notifications::Blocks)));
         assert_eq!(command_for("notifications:loud", Some(&a)), None);
         c.autostart = Autostart::Off;
         assert!(labels(&menu_spec(Some(&a), &c)).contains(&"[ ] Start with Windows".to_string()));

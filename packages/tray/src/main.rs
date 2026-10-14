@@ -69,6 +69,12 @@ struct Shared {
     notifier: Mutex<Notifier>,
     /// Since when the agent has not answered (for a notification when that lasts).
     silent_since: Mutex<Option<Instant>>,
+    /// The block whose Unblock form the panel opens next (a notification's *Unblock…*).
+    open_block: Mutex<Option<String>>,
+    /// The last answer given in the panel's form: the block, what the agent said, and when.
+    answered: Mutex<Option<(String, String, String, Instant)>>,
+    /// The panel's form has input: the panel stays open when it loses focus.
+    hold: AtomicBool,
 }
 
 impl Shared {
@@ -88,6 +94,9 @@ impl Shared {
             start_requested: AtomicBool::new(false),
             notifier: Mutex::new(Notifier::new()),
             silent_since: Mutex::new(None),
+            open_block: Mutex::new(None),
+            answered: Mutex::new(None),
+            hold: AtomicBool::new(false),
         }
     }
 
@@ -331,7 +340,8 @@ fn supervise_agent(shared: &Arc<Shared>) {
                         kind: Kind::Problem,
                         title: "Scopebond".into(),
                         text: "The Scopebond Agent stopped and nothing started in its place; starting it again".into(),
-                    });
+                        unblock: None,
+                    }, None);
                 }
             }
             if sup.link() != before || *lock(&shared.supervised) != sup.link() {
@@ -374,13 +384,13 @@ fn refresh(app: &AppHandle, shared: &Arc<Shared>) {
     *lock(&shared.answer) = answer.clone();
     *lock(&shared.link) = link;
     draw(app, shared);
-    notify(shared, answer.as_ref(), link, setting);
+    notify(app, shared, answer.as_ref(), link, setting);
 }
 
 /// How long the agent may not answer (while the tray tries to start it) before that is worth a notification.
 const SILENT_FOR: Duration = Duration::from_secs(2 * 60);
 
-fn notify(shared: &Arc<Shared>, answer: Option<&TrayAnswer>, link: AgentLink, setting: Notifications) {
+fn notify(app: &AppHandle, shared: &Arc<Shared>, answer: Option<&TrayAnswer>, link: AgentLink, setting: Notifications) {
     let now = Instant::now();
     let (state, headline, blocks) = match (answer, link) {
         (Some(a), _) => {
@@ -403,17 +413,31 @@ fn notify(shared: &Arc<Shared>, answer: Option<&TrayAnswer>, link: AgentLink, se
         }
     };
     for toast in lock(&shared.notifier).observe(state, &headline, &blocks, setting, now) {
-        show_toast(toast);
+        show_toast(toast, Some((app.clone(), shared.clone())));
     }
 }
 
 /// A Windows notification under the installer's AppUserModelID (the Start-menu entry carries it). Shown on its own
-/// thread; a failure (no Start-menu entry, notifications turned off in Windows) is only logged.
-fn show_toast(toast: Toast) {
+/// thread; a failure (no Start-menu entry, notifications turned off in Windows) is only logged. A block notification opens
+/// the panel when it is clicked, and its *Unblock…* button opens the panel on that block's form.
+fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
     thread::spawn(move || {
         let mut t = tauri_winrt_notification::Toast::new("Avouro.Scopebond").title(&toast.title).text1(&toast.text);
         if matches!(toast.kind, Kind::Recovered | Kind::Block) {
             t = t.sound(None);
+        }
+        if let (Kind::Block, Some((app, shared))) = (toast.kind, panel) {
+            if toast.unblock.is_some() {
+                t = t.add_button("Unblock…", "unblock");
+            }
+            let block = toast.unblock.clone();
+            t = t.on_activated(move |action| {
+                if action.as_deref() == Some("unblock") {
+                    *lock(&shared.open_block) = block.clone();
+                }
+                open_panel(&app, &shared, None);
+                Ok(())
+            });
         }
         match t.show() {
             Ok(()) => log::line(&format!("notified: {}", toast.text)),
@@ -505,12 +529,32 @@ fn run_action(app: &AppHandle, shared: &Arc<Shared>, action: TrayAction, from_me
     let setting = lock(&shared.answer).as_ref().map(|a| a.settings.notifications).unwrap_or_default();
     if from_menu && !failed && action.id == "check_now" && setting != Notifications::Off {
         if let Some(Note { text, .. }) = lock(&shared.note).as_ref() {
-            show_toast(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: text.clone() });
+            show_toast(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: text.clone(), unblock: None }, None);
         }
     }
     if from_menu && (failed || action.id == "reconnect") {
         open_panel(app, shared, None);
     }
+}
+
+/// Send the panel's Unblock form (already checked by `panel::check_answer`) to the agent, which checks it again and applies
+/// it as the Scopebond window's answer is applied. Nothing waits for a window here, so it is quick.
+fn answer_block(shared: &Arc<Shared>, action_id: String, body: Value) {
+    {
+        let mut busy = lock(&shared.busy);
+        if busy.is_some() {
+            return;
+        }
+        *busy = Some(format!("answer:{action_id}"));
+    }
+    let (outcome, text) = match shared.client.call("POST", "/blocked/answer", Some(&body), Duration::from_secs(20)) {
+        Ok(answer) => (answer.get("outcome").and_then(Value::as_str).unwrap_or("").to_string(), panel::block_text(&answer)),
+        Err(e) => ("failed".to_string(), format!("The answer could not be sent: {e}")),
+    };
+    *lock(&shared.busy) = None;
+    *lock(&shared.answered) = Some((action_id, outcome, text.clone(), Instant::now()));
+    shared.set_note(text);
+    shared.wake();
 }
 
 fn act_on_block(shared: &Arc<Shared>, action_id: String) {
@@ -653,10 +697,15 @@ fn build_panel(app: &AppHandle, shared: &Arc<Shared>, anchor: Option<(f64, f64)>
     }
     window.show()?;
     window.set_focus()?;
+    shared.hold.store(false, Ordering::SeqCst);
     let (w, s) = (window.clone(), shared.clone());
     window.on_window_event(move |event| {
-        // It closes when it loses focus (a click elsewhere, Alt+Tab), and is made again next time.
+        // It closes when it loses focus (a click elsewhere, Alt+Tab), and is made again next time; not while the person is
+        // writing a reason in its Unblock form (Esc, the close button or the tray icon close it then).
         if let WindowEvent::Focused(false) = event {
+            if s.hold.load(Ordering::SeqCst) {
+                return;
+            }
             *lock(&s.panel_closed_at) = Some(Instant::now());
             let _ = w.destroy();
         }
@@ -675,6 +724,7 @@ fn on_tray_event(app: &AppHandle, shared: &Arc<Shared>, event: TrayIconEvent) {
             return;
         }
         if let Some(window) = app.get_webview_window(PANEL) {
+            shared.hold.store(false, Ordering::SeqCst);
             let _ = window.destroy();
             return;
         }
@@ -723,6 +773,10 @@ fn panel_state(shared: State<'_, Arc<Shared>>) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         // For the panel's Settings: Start with Windows as the menu shows it.
         "autostart": autostart_state().as_str(),
+        // A notification's Unblock…: the block whose form to open (once).
+        "openBlock": lock(&shared.open_block).take(),
+        // What came of the last answer in the panel's form, for a while.
+        "answered": lock(&shared.answered).as_ref().filter(|a| a.3.elapsed() < NOTE_FOR).map(|(id, outcome, text, _)| json!({ "actionId": id, "outcome": outcome, "text": text })),
     })
 }
 
@@ -736,17 +790,34 @@ fn panel_action(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> b
 }
 
 #[tauri::command]
-fn panel_block(action_id: String, shared: State<'_, Arc<Shared>>) -> bool {
-    let known = lock(&shared.answer)
-        .as_ref()
-        .map(|a| a.tray.recent_blocks.iter().any(|b| b.can_act && b.action_id.as_deref() == Some(action_id.as_str())))
-        .unwrap_or(false);
-    if !known {
-        return false;
-    }
+fn panel_block(action_id: String, choice: Option<String>, reason: Option<String>, shared: State<'_, Arc<Shared>>) -> bool {
+    let block = lock(&shared.answer).as_ref().and_then(|a| a.tray.actionable_block(&action_id).cloned());
+    let Some(block) = block else { return false };
     let s = shared.inner().clone();
-    thread::spawn(move || act_on_block(&s, action_id));
-    true
+    match choice {
+        // The panel's own form: checked here, then by the agent.
+        Some(choice) => match panel::check_answer(&block, &choice, reason.as_deref().unwrap_or_default()) {
+            Ok(body) => {
+                thread::spawn(move || answer_block(&s, action_id, body));
+                true
+            }
+            Err(why) => {
+                shared.set_note(why);
+                false
+            }
+        },
+        // An agent that does not say what may be done: its Scopebond window asks.
+        None => {
+            thread::spawn(move || act_on_block(&s, action_id));
+            true
+        }
+    }
+}
+
+/// The panel's Unblock form has input (keep the panel open when it loses focus), or no longer has.
+#[tauri::command]
+fn panel_hold(hold: bool, shared: State<'_, Arc<Shared>>) {
+    shared.hold.store(hold, Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -769,7 +840,8 @@ fn panel_command(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> 
 }
 
 #[tauri::command]
-fn panel_close(window: WebviewWindow) {
+fn panel_close(window: WebviewWindow, shared: State<'_, Arc<Shared>>) {
+    shared.hold.store(false, Ordering::SeqCst);
     let _ = window.destroy();
 }
 
@@ -795,7 +867,7 @@ fn main() {
             }
         }))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_command, panel_close])
+        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_hold, panel_command, panel_close])
         .setup(move |app| {
             let handle = app.handle().clone();
             if let Err(e) = create_tray(&handle, &shared) {

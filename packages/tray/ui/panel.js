@@ -1,6 +1,7 @@
 // The status panel. It draws what the tray holds from the agent's tray model (`panel_state`) and asks the tray to run
 // the actions the model offers. Blocked comes first: what was blocked, the rule, the project and the tool, and what the
-// person may do about it. Text from the agent is only ever set as text, never parsed as markup.
+// person may do about it, with the Unblock form right there; then what was allowed and what was asked. Text from the agent
+// is only ever set as text, never parsed as markup.
 "use strict";
 
 (function () {
@@ -8,7 +9,8 @@
   const root = document.getElementById("panel");
   const SVG = "http://www.w3.org/2000/svg";
   // What the person is looking at; kept across redraws.
-  const ui = { view: "list", tab: "blocked" };
+  // `open`: the block whose Unblock form is open, with the choice and the reason typed so far.
+  const ui = { view: "list", tab: "blocked", open: null, choice: null, reason: "" };
   let last = null;
   let lastJson = "";
 
@@ -20,6 +22,7 @@
       else if (key === "onclick") node.addEventListener("click", value);
       else if (key === "onchange") node.addEventListener("change", value);
       else if (key === "onkeydown") node.addEventListener("keydown", value);
+      else if (key === "oninput") node.addEventListener("input", value);
       else node.setAttribute(key, value === true ? "" : String(value));
     }
     for (const child of children || []) if (child) node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
@@ -67,6 +70,89 @@
   function offered(model, id) {
     if (!model) return null;
     return [model.fix].concat(model.actions || []).find((a) => a && a.id === id) || null;
+  }
+
+  // ---- The Unblock form: the choices the workspace offers for this block, a reason, and a button named for the result.
+  const CHOICES = ["once", "fifteen", "always", "ask"];
+  const BUTTON = { once: "Allow once", fifteen: "Allow for 15 minutes", always: "Always allow", ask: "Send to admin" };
+  const choicesOf = (b) => CHOICES.filter((c) => b.offers && b.offers[c]);
+  let holding = false;
+  function hold(on) {
+    if (on === holding) return;
+    holding = on;
+    invoke("panel_hold", { hold: on }).catch(() => {});
+  }
+  function openForm(b) {
+    ui.open = b.action_id;
+    ui.choice = choicesOf(b)[0] || null;
+    ui.reason = "";
+    ui.view = "list";
+    ui.tab = "blocked";
+    hold(true);
+  }
+  function closeForm() {
+    ui.open = null;
+    ui.choice = null;
+    ui.reason = "";
+    hold(false);
+  }
+  async function submit(b) {
+    let sent = false;
+    try { sent = await invoke("panel_block", { actionId: b.action_id, choice: ui.choice, reason: ui.reason }); } catch (_) { /* the note says why */ }
+    if (sent) closeForm();
+    setTimeout(refresh, 150);
+  }
+  function choiceWords(b, c) {
+    const until = new Date(Date.now() + 15 * 60000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const o = b.offers || {};
+    const days = o.always_days || 30;
+    return {
+      once: ["Just this once", "The next time it runs"],
+      fifteen: ["For 15 minutes", "This action, until " + until],
+      always: ["Always on this computer", o.always_needs_admin ? "After an admin approves; allowed for 15 minutes meanwhile" : "For " + days + " days"],
+      ask: [choicesOf(b).length > 1 ? "Ask an admin instead" : "Ask an admin", "They answer in Scopebond Cloud; you see it under Asked"],
+    }[c];
+  }
+  function countText(b) {
+    const min = b.reason_min || 10;
+    const left = min - ui.reason.trim().length;
+    return left > 0 ? left + (left === 1 ? " more character" : " more characters") : "Enough";
+  }
+  function unblockForm(s, model, b) {
+    const id = b.action_id;
+    const busy = s.busy === "answer:" + id;
+    const enough = ui.reason.trim().length >= (b.reason_min || 10);
+    const where = model.workspace ? "Recorded and sent to " + model.workspace : "Recorded and sent to your workspace";
+    const choices = choicesOf(b);
+    const update = () => {
+      const count = document.getElementById("count-" + id);
+      if (count) count.textContent = countText(b);
+      const go = root.querySelector('[data-key="confirm-' + CSS.escape(id) + '"]');
+      if (go) go.disabled = !!s.busy || ui.reason.trim().length < (b.reason_min || 10);
+    };
+    return el("div", { class: "form", role: "group", "aria-label": "Unblock " + (b.what || b.summary) }, [
+      el("div", { class: "cmd", "aria-label": "What ran", text: b.action_text || b.what || b.summary }),
+      el("fieldset", { class: "choices" }, [el("legend", { text: choices.some((c) => c !== "ask") ? "Let it through" : "What to do" })].concat(choices.map((c) => {
+        const [title, small] = choiceWords(b, c);
+        return el("label", { class: "choice" }, [
+          el("input", { type: "radio", name: "choice-" + id, value: c, "data-key": "choice-" + c, checked: ui.choice === c,
+            onchange: () => { ui.choice = c; draw("choice-" + c); } }),
+          el("span", {}, [title, el("small", { text: small })]),
+        ]);
+      }))),
+      el("label", { class: "reason" }, [
+        el("span", {}, ["Why ", el("span", { class: "count", id: "count-" + id, text: countText(b) })]),
+        el("textarea", { id: "reason", "data-key": "reason", rows: "2", maxlength: "500", "aria-describedby": "count-" + id,
+          placeholder: "For example: the tests need the production API URL",
+          oninput: (e) => { ui.reason = e.target.value; hold(true); update(); } }),
+      ]),
+      el("div", { class: "acts" }, [
+        el("button", { class: "btn primary", type: "button", "data-key": "confirm-" + id, disabled: !enough || !!s.busy, "aria-busy": busy ? "true" : null,
+          text: busy ? "Sending…" : BUTTON[ui.choice] || "Send", onclick: () => submit(b) }),
+        el("button", { class: "btn", type: "button", "data-key": "cancel-" + id, text: "Cancel", onclick: () => { closeForm(); draw("block-" + id); } }),
+      ]),
+      el("span", { class: "meta", text: where }),
+    ]);
   }
 
   // ---- The header: the S tile and its badge, the state, one line under it.
@@ -148,24 +234,28 @@
     return el("div", { class: "empty" }, [el("strong", { text: title }), el("span", { text })]);
   }
 
-  function blockItem(b, i, busy) {
+  function blockItem(s, model, b, i) {
+    const busy = s.busy;
     const words = b.what || b.summary;
     const meta = [b.rule_title, b.project, b.tool].filter(Boolean).join(" · ");
     const offers = b.offers;
     const allows = offers ? offers.once || offers.fifteen || offers.always : b.can_act;
     let act = null;
     if (b.acted === "allowed") act = el("span", { class: "chip ok", text: "Allowed" });
-    else if (b.acted === "asked") act = el("span", { class: "chip wait", text: "Request sent" });
+    else if (b.acted === "asked") act = el("span", { class: "chip wait", text: "Sent to an admin" });
+    else if (b.can_act && b.action_id && ui.open === b.action_id && offers) act = unblockForm(s, model, b);
     else if (b.can_act && b.action_id && (allows || (offers && offers.ask))) {
       const mine = busy === "block:" + b.action_id;
       act = el("div", { class: "acts" }, [el("button", {
         class: "btn" + (allows ? " primary" : ""), type: "button", "data-key": "block-" + b.action_id, disabled: !!busy,
-        "aria-busy": mine ? "true" : null,
-        "aria-label": (allows ? "Unblock: " : "Ask to unblock: ") + words,
-        text: mine ? "Waiting for your answer…" : allows ? "Unblock…" : "Ask to unblock…",
-        onclick: () => run("block", b.action_id),
+        "aria-busy": mine ? "true" : null, "aria-expanded": offers ? "false" : null,
+        "aria-label": (allows ? "Unblock: " : "Ask an admin about: ") + words,
+        text: mine ? "Waiting for your answer…" : allows ? "Unblock…" : "Ask an admin…",
+        // The form here when the agent says what may be done; an older agent's Scopebond window otherwise.
+        onclick: () => { if (offers) { openForm(b); draw("reason"); } else run("block", b.action_id); },
       })]);
     }
+    const answered = s.answered && s.answered.actionId === b.action_id && ["allowed", "proposed", "asked"].includes(s.answered.outcome) ? s.answered.text : null;
     return el("li", { class: "item", "data-index": String(i) }, [
       el("div", { class: "row" }, [
         el("span", { class: "mark", "aria-hidden": "true" }),
@@ -173,7 +263,7 @@
         el("span", { class: "when", text: when(b.at) }),
       ]),
       meta ? el("span", { class: "meta", text: meta }) : null,
-      act,
+      answered ? el("span", { class: "done", text: answered }) : act,
     ]);
   }
 
@@ -184,15 +274,53 @@
     const earlier = blocks.filter((b) => !isToday(b.at));
     const out = [];
     if (!today.length) out.push(empty("Nothing blocked today", "Earlier blocks are below."));
-    else out.push(el("h2", { id: "today-h", text: "Today" }), el("ul", { "aria-labelledby": "today-h" }, today.map((b, i) => blockItem(b, i, s.busy))));
-    if (earlier.length) out.push(el("h2", { id: "earlier-h", text: "Earlier" }), el("ul", { "aria-labelledby": "earlier-h" }, earlier.map((b, i) => blockItem(b, today.length + i, s.busy))));
+    else out.push(el("h2", { id: "today-h", text: "Today" }), el("ul", { "aria-labelledby": "today-h" }, today.map((b, i) => blockItem(s, model, b, i))));
+    if (earlier.length) out.push(el("h2", { id: "earlier-h", text: "Earlier" }), el("ul", { "aria-labelledby": "earlier-h" }, earlier.map((b, i) => blockItem(s, model, b, today.length + i))));
     return out;
+  }
+
+  function ends(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const left = d.getTime() - Date.now();
+    if (left < 36 * 3600000) return "Ends " + when(iso);
+    return Math.round(left / 86400000) + " days left";
+  }
+  function allowedList(model) {
+    const items = model.allowed || [];
+    if (!items.length) return [empty("Nothing allowed right now", "What you let through shows here until it ends.")];
+    return [el("ul", { "aria-label": "Allowed" }, items.map((a) => {
+      const how = a.choice === "once" ? "Just this once" : a.choice === "fifteen" ? "For 15 minutes" : a.by === "admin" ? "Approved by " + (a.answered_by || "an admin") : "Always on this computer";
+      const end = a.state === "proposed" ? "Waiting for an admin" : a.choice === "once" ? "Until it runs again" : ends(a.ends_at);
+      return el("li", { class: "item" }, [
+        el("div", { class: "row" }, [
+          el("span", { class: "what", text: a.what || (a.rule_title ? "An action under " + a.rule_title : "An action") }),
+          el("span", { class: "chip " + (a.state === "proposed" ? "wait" : "ok"), text: a.state === "proposed" ? "Waiting" : "Active" }),
+        ]),
+        el("span", { class: "meta", text: [how, end, a.what ? a.rule_title : null].filter(Boolean).join(" · ") }),
+      ]);
+    }))];
+  }
+  function askedList(model) {
+    const items = model.asked || [];
+    if (!items.length) return [empty("No requests to an admin", "When you ask an admin to allow something, their answer shows here.")];
+    return [el("ul", { "aria-label": "Asked" }, items.map((r) => {
+      const chip = r.state === "approved" ? ["ok", "Approved"] : r.state === "declined" ? ["no", "Declined"] : ["wait", "Waiting for an admin"];
+      const who = r.answered_by ? " by " + r.answered_by : "";
+      const said = r.state === "approved" ? "Approved" + who : r.state === "declined" ? "Declined" + who : "Asked " + when(r.asked_at) + (r.sent ? "" : " · not sent yet");
+      return el("li", { class: "item" }, [
+        el("div", { class: "row" }, [el("span", { class: "what", text: r.what }), el("span", { class: "chip " + chip[0], text: chip[1] })]),
+        el("span", { class: "meta", text: [said, r.rule_title].filter(Boolean).join(" · ") }),
+        r.note ? el("span", { class: "meta", text: "“" + r.note + "”" }) : null,
+        el("span", { class: "meta", text: "Your reason: " + r.reason }),
+      ]);
+    }))];
   }
 
   function list(s, model) {
     let body;
-    if (ui.tab === "allowed") body = [empty("Nothing allowed right now", "What you let through shows here until it ends.")];
-    else if (ui.tab === "asked") body = [empty("No requests", "When you ask to unblock something, the answer shows here.")];
+    if (ui.tab === "allowed") body = allowedList(model);
+    else if (ui.tab === "asked") body = askedList(model);
     else body = blockedList(s, model);
     return el("div", { class: "list", id: "list", role: "tabpanel", "aria-labelledby": "tab-" + ui.tab, tabindex: "-1" }, body);
   }
@@ -255,13 +383,18 @@
     const s = last;
     if (!s) return;
     const model = s.answer && s.answer.tray;
+    // The form's block is gone (answered elsewhere, or no longer offered): close the form.
+    if (ui.open && !(model && (model.recent_blocks || []).some((b) => b.action_id === ui.open && b.can_act && b.offers))) closeForm();
+    const typing = document.activeElement && document.activeElement.id === "reason" ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
     // Keep keyboard focus on the same control across redraws.
     const active = document.activeElement;
     const focused = focusKey || (active && active.dataset ? active.dataset.key : null);
     const parts = [header(s, model)];
     // The status line: a polite live region, so a screen reader hears results and changes without losing its place.
     const note = s.note || "";
-    parts.push(el("p", { id: "status", class: "status" + (note ? "" : " empty"), role: "status", "aria-live": "polite", text: note }));
+    // When the block's own line already shows the result, the live region still says it, without showing it twice.
+    const shown = ui.view !== "settings" && s.answered && s.answered.text === note;
+    parts.push(el("p", { id: "status", class: "status" + (note ? "" : " empty") + (shown ? " sr-only" : ""), role: "status", "aria-live": "polite", text: note }));
     if (ui.view === "settings") {
       parts.push(settings(s, model));
     } else if (!model) {
@@ -276,8 +409,11 @@
     }
     root.replaceChildren(...parts.filter(Boolean));
     root.setAttribute("aria-busy", s.busy ? "true" : "false");
+    const area = document.getElementById("reason");
+    if (area) area.value = ui.reason;
     const again = focused && root.querySelector('[data-key="' + CSS.escape(focused) + '"]');
     if (again && !again.disabled) again.focus();
+    if (area && typing && document.activeElement === area) area.setSelectionRange(typing[0], typing[1]);
   }
 
   async function refresh() {
@@ -288,6 +424,9 @@
     const first = lastJson === "";
     lastJson = json;
     last = s;
+    // A notification's Unblock…: open that block's form.
+    const target = s.openBlock && s.answer && s.answer.tray && (s.answer.tray.recent_blocks || []).find((b) => b.action_id === s.openBlock && b.can_act && b.offers);
+    if (target) { openForm(target); draw("reason"); return; }
     draw();
     if (first) {
       const start = root.querySelector(".banner .primary") || root.querySelector('[role="tab"][aria-selected="true"]') || root.querySelector("button");
@@ -296,7 +435,11 @@
   }
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { e.preventDefault(); invoke("panel_close"); }
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    // Esc first leaves the form, then closes the panel.
+    if (ui.open) { const id = ui.open; closeForm(); draw("block-" + id); return; }
+    invoke("panel_close");
   });
   // No browser menu or reload in a status panel.
   document.addEventListener("contextmenu", (e) => e.preventDefault());

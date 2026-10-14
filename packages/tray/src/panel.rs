@@ -1,7 +1,9 @@
 //! The pure parts of the status panel and of running an action: where the panel goes on screen, and what the tray says
 //! after an action (never silence: "Check now" always says what it found).
 
-use serde_json::Value;
+use serde_json::{json, Value};
+
+use crate::model::RecentBlock;
 
 /// The panel's size in logical pixels (the blocked list, its forms and the settings fit; the list scrolls).
 pub const PANEL_WIDTH: f64 = 360.0;
@@ -94,6 +96,49 @@ pub fn block_text(answer: &Value) -> String {
     cut(&text(answer, "text").unwrap_or_else(|| "Nothing was allowed.".into()))
 }
 
+/// The longest reason the agent accepts.
+pub const REASON_MAX: usize = 500;
+
+/// Whether a character may be in a reason: text, and line breaks; no other control characters.
+fn reason_char(c: char) -> bool {
+    !c.is_control() || c == '\n' || c == '\r'
+}
+
+/// Check an answer from the panel's Unblock form before it goes to the agent (which checks it again): the block is one the
+/// person may still act on and says what may be done, the choice is one it offers, and the reason is long enough, at most
+/// 500 characters and free of control characters (line breaks aside). The body for `POST /blocked/answer`, or what to say.
+pub fn check_answer(block: &RecentBlock, choice: &str, reason: &str) -> Result<Value, String> {
+    let id = block.action_id.as_deref().unwrap_or_default();
+    let id_ok = !id.is_empty() && id.len() <= 200 && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'));
+    let offers = match (&block.offers, block.can_act && id_ok) {
+        (Some(offers), true) => offers,
+        _ => return Err("This block can no longer be answered here.".into()),
+    };
+    let offered = match choice {
+        "once" => offers.once,
+        "fifteen" => offers.fifteen,
+        "always" => offers.always,
+        "ask" => offers.ask,
+        _ => false,
+    };
+    if !offered {
+        return Err("Your workspace does not offer that choice for this block.".into());
+    }
+    let reason = reason.trim();
+    let min = block.reason_min.unwrap_or(10) as usize;
+    let length = reason.chars().count();
+    if length < min {
+        return Err(format!("Say why in at least {min} characters."));
+    }
+    if length > REASON_MAX {
+        return Err(format!("Say why in at most {REASON_MAX} characters."));
+    }
+    if !reason.chars().all(reason_char) {
+        return Err("The reason has characters that cannot be sent.".into());
+    }
+    Ok(json!({ "action_id": id, "choice": choice, "reason": reason }))
+}
+
 fn plural(n: u64) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
@@ -162,6 +207,40 @@ mod tests {
         assert_eq!(outcome_text("something_new", &json!({})), "Done");
         assert_eq!(block_text(&json!({ "outcome": "asked", "text": "Request sent." })), "Request sent.");
         assert_eq!(outcome_text("check_now", &json!({ "text": "x".repeat(500) })).chars().count(), 300);
+    }
+
+    fn answerable() -> RecentBlock {
+        RecentBlock {
+            action_id: Some("act-read-env-0000000001".into()),
+            can_act: true,
+            reason_min: Some(12),
+            offers: Some(crate::model::BlockOffers { once: true, fifteen: true, ask: true, ..Default::default() }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_answer_is_checked_before_it_is_sent() {
+        let b = answerable();
+        let body = check_answer(&b, "fifteen", "  The tests need the API URL  ").unwrap();
+        assert_eq!(body, json!({ "action_id": "act-read-env-0000000001", "choice": "fifteen", "reason": "The tests need the API URL" }));
+        assert_eq!(check_answer(&b, "always", "The tests need the API URL").unwrap_err(), "Your workspace does not offer that choice for this block.");
+        assert_eq!(check_answer(&b, "forever", "The tests need the API URL").unwrap_err(), "Your workspace does not offer that choice for this block.");
+        assert_eq!(check_answer(&b, "once", "too short").unwrap_err(), "Say why in at least 12 characters.");
+        assert!(check_answer(&b, "once", &"x".repeat(501)).is_err());
+        let two_lines = format!("two lines{}are fine here", '\n');
+        assert!(check_answer(&b, "once", &two_lines).is_ok());
+        let bell = format!("a bell {} is not fine", char::from(7u8));
+        assert!(check_answer(&b, "once", &bell).is_err());
+        let mut done = answerable();
+        done.can_act = false;
+        assert_eq!(check_answer(&done, "once", "The tests need the API URL").unwrap_err(), "This block can no longer be answered here.");
+        let mut older = answerable();
+        older.offers = None;
+        assert!(check_answer(&older, "once", "The tests need the API URL").is_err(), "an older agent: the Scopebond window answers");
+        let mut odd = answerable();
+        odd.action_id = Some("../flush".into());
+        assert!(check_answer(&odd, "once", "The tests need the API URL").is_err());
     }
 
     #[test]

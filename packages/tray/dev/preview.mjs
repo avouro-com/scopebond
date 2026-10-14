@@ -28,8 +28,13 @@ if (!frame.includes("fake-tauri.js") || !frame.includes("../../ui/panel.css")) t
 
 const SCENES = [
   ["protected", "A normal day: blocked first"],
-  ["protected&open=act-read-env-0000000001", "Unblock…"],
-  ["protected&mode=approval", "An admin decides (ask to unblock)"],
+  ["protected&open=act-read-env-0000000001&reason=Integration%20tests%20need%20the%20prod%20API%20URL", "Unblock in the panel"],
+  ["protected&open=act-read-env-0000000001&choice=fifteen&reason=Integration%20tests%20need%20the%20prod%20API%20URL&submit=1", "After Unblock"],
+  ["protected&open=act-push-main-00000001", "Ask an admin"],
+  ["protected&toast=act-read-env-0000000001", "From a notification's Unblock…"],
+  ["protected&mode=central", "Only an admin unblocks"],
+  ["protected&mode=central&open=act-read-env-0000000001&reason=Integration%20tests%20need%20the%20prod%20API%20URL", "Only an admin unblocks: the form"],
+  ["protected&mode=central&open=act-read-env-0000000001&reason=Integration%20tests%20need%20the%20prod%20API%20URL&submit=1", "Only an admin unblocks: sent"],
   ["protected&mode=final", "Blocks are final"],
   ["quiet", "Nothing blocked today"],
   ["attention", "Something needs fixing"],

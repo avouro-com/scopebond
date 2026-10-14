@@ -34,14 +34,32 @@
     { label: "Today", value: "1,160 actions · 3 blocked" },
     { label: "Version", value: "Up to date (agent 0.9.0)" },
   ];
+  const ahead = (min) => new Date(Date.now() + min * MIN).toISOString();
+  const allowed = () => [
+    { id: "alw_staging00000000000001", rule: "secret-read", rule_title: "Reading a secret file", what: ".env.staging", choice: "fifteen", state: "active",
+      needs_admin: false, by: "person", created_at: ago(4), ends_at: ahead(11), answered_by: null },
+    { id: "alw_release00000000000001", rule: "push-protected", rule_title: "Push to a protected branch", what: "git push origin release/2.4", choice: "always",
+      state: "active", needs_admin: false, by: "person", created_at: ago(2 * 24 * 60), ends_at: ahead(28 * 24 * 60), answered_by: null },
+    { id: "alw_workflow0000000000001", rule: "ci-config-write", rule_title: "Changing CI configuration", what: ".github/workflows/release.yml", choice: "always",
+      state: "active", needs_admin: false, by: "admin", created_at: ago(20 * 60), ends_at: ahead(29 * 24 * 60), answered_by: "morgan@acme.test" },
+  ];
+  const asked = () => [
+    { id: "req_dist000000000000000001", rule: "destructive-shell", rule_title: "Destructive command", what: "rm -rf ./dist", reason: "Clearing the old release build",
+      asked_at: ago(120), sent: true, state: "waiting", answered_by: null, note: null, answered_at: null },
+    { id: "req_workflow0000000000001", rule: "ci-config-write", rule_title: "Changing CI configuration", what: ".github/workflows/release.yml",
+      reason: "Adding the signing step to the release workflow", asked_at: ago(22 * 60), sent: true, state: "approved", answered_by: "morgan@acme.test", note: null, answered_at: ago(20 * 60) },
+    { id: "req_paste00000000000000001", rule: "network-egress", rule_title: "Request to a site not on the allowed list", what: "https://pastebin.com/raw/x1",
+      reason: "Sharing a log with the vendor", asked_at: ago(26 * 60), sent: true, state: "declined", answered_by: "morgan@acme.test", note: "Use the internal paste tool", answered_at: ago(25 * 60) },
+  ];
   const base = () => ({
     state: "protected", headline: "Protected", tooltip: "Scopebond — Protected · Acme", rows, fix: null, actions, hint: null,
     recent_blocks: blocks(), detail: "Rules checked 3 min ago · 3 blocked today", workspace: "Acme", today: { actions: 1160, blocked: 3 },
+    allowed: allowed(), asked: asked(),
   });
 
   const scenes = {
     protected: () => base(),
-    quiet: () => ({ ...base(), recent_blocks: [], detail: "Rules checked 3 min ago · nothing blocked today", today: { actions: 212, blocked: 0 } }),
+    quiet: () => ({ ...base(), recent_blocks: [], allowed: [], asked: [], detail: "Rules checked 3 min ago · nothing blocked today", today: { actions: 212, blocked: 0 } }),
     attention: () => ({
       ...base(), state: "attention", headline: "312 records waiting to send", detail: null,
       hint: "Your workspace refused the last try. The records wait on this computer and are sent again.",
@@ -72,6 +90,8 @@
   let notifications = "problems";
   let note = null;
   let busy = null;
+  let answered = null;
+  let openBlock = params.get("toast") || null;
   const say = (text) => { note = text; };
 
   const state = () => ({
@@ -80,7 +100,7 @@
     stateLabel: model ? { protected: "Protected", working: "Working", offline: "Offline", problem: "Problem", disconnected: "Not connected" }[model.state] || "Needs attention" : "Problem",
     headline: model ? model.headline : "The Scopebond Agent is not answering",
     answer: model ? { tray: model, settings: { notifications } } : null,
-    note, busy, version: "0.1.0", autostart: "on",
+    note, busy, version: "0.1.0", autostart: "on", answered, openBlock: (() => { const o = openBlock; openBlock = null; return o; })(),
   });
 
   const handlers = new Map(Object.entries({
@@ -93,7 +113,25 @@
       if (id === "start_agent") model = scenes.protected();
       return true;
     },
-    panel_block: ({ actionId }) => {
+    panel_hold: () => null,
+    panel_block: ({ actionId, choice, reason }) => {
+      const b = model && model.recent_blocks.find((x) => x.action_id === actionId);
+      if (choice) {
+        if (!b || !b.offers || !b.offers[choice] || String(reason || "").trim().length < (b.reason_min || 10)) { say("Say why in at least " + ((b && b.reason_min) || 10) + " characters."); return false; }
+        busy = "answer:" + actionId;
+        setTimeout(() => {
+          busy = null;
+          b.can_act = false;
+          b.acted = choice === "ask" ? "asked" : "allowed";
+          const words = { once: "Allowed once", fifteen: "Allowed for 15 minutes", always: "Always allowed on this computer for " + (b.offers.always_days || 30) + " days", ask: "Sent to an admin" }[choice];
+          const text = words + " · Recorded and sent to Acme";
+          answered = { actionId, outcome: choice === "ask" ? "asked" : "allowed", text };
+          say(text);
+          if (choice === "ask") model.asked.unshift({ id: "req_new", rule: b.rule, rule_title: b.rule_title, what: b.action_text, reason: String(reason).trim(), asked_at: new Date().toISOString(), sent: true, state: "waiting", answered_by: null, note: null, answered_at: null });
+          else model.allowed.unshift({ id: "alw_new", rule: b.rule, rule_title: b.rule_title, what: b.action_text, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + (choice === "fifteen" ? 15 : choice === "once" ? 1440 : 30 * 1440) * MIN).toISOString(), answered_by: null });
+        }, 600);
+        return true;
+      }
       busy = "block:" + actionId;
       setTimeout(() => {
         busy = null;
@@ -118,6 +156,11 @@
       if (params.get("view") === "settings") click('[data-key="settings"]');
       if (params.get("tab")) click('[data-key="tab-' + params.get("tab") + '"]');
       if (params.get("open")) click('[data-key="block-' + params.get("open") + '"]');
+      // Fill the form as a person would: a choice, a reason, and (with submit) the button.
+      if (params.get("choice")) click('[data-key="choice-' + params.get("choice") + '"]');
+      const area = document.getElementById("reason");
+      if (area && params.get("reason")) { area.value = params.get("reason"); area.dispatchEvent(new Event("input", { bubbles: true })); }
+      if (params.get("submit")) setTimeout(() => click('[data-key^="confirm-"]'), 50);
     }, 200);
   });
 })();
