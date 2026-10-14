@@ -1,5 +1,5 @@
 // A stand-in Scopebond workspace for tests: the device-code sign-in, enrollment, record
-// delivery, observations, managed rules, self-check and client-version routes a computer
+// delivery, summaries, observations, managed rules, self-check, uninstall notice and client-version routes a computer
 // talks to, with a test-only control surface (approve a code, read what arrived) and fault
 // injection (401, 409, 429, 500, a slow answer, a dropped connection) per route.
 // Dependency-free: node built-ins only.
@@ -19,7 +19,7 @@ export function kidForPem(pem: string): string {
  *  `times` limits how many requests it applies to (default: every request until cleared). */
 export interface Fault { status?: number; code?: string; delayMs?: number; drop?: boolean; times?: number; retryAfter?: number }
 
-export type FakeRoute = "device/code" | "device/token" | "enroll" | "repository/enroll" | "ingest" | "observations" | "policy" | "self-check" | "client-version";
+export type FakeRoute = "device/code" | "device/token" | "enroll" | "repository/enroll" | "ingest" | "observations" | "policy" | "self-check" | "client-version" | "summaries" | "uninstall";
 
 export interface FakeCloudState {
   code_requests: Array<{ client_name: string | null; harness: string | null }>;
@@ -32,6 +32,16 @@ export interface FakeCloudState {
   self_checks: Array<{ failed: string[]; hook_version: string | null; agent_version: string | null; tools?: unknown[] | null; mcp_servers?: unknown[] | null }>;
   policy_polls: number;
   version_polls: number;
+  /** Summaries delivered to /v1/summaries and held (a summary id sent again is a duplicate, not counted twice). */
+  summaries: number;
+  /** The routine records those summaries stand for (the sum of their `receipt_count`). */
+  summarized_records: number;
+  /** Summaries sent again under an id already held. */
+  summary_duplicates: number;
+  /** The last accepted /v1/summaries body, as sent. */
+  last_summaries: unknown;
+  /** Uninstall notices (/v1/uninstall): whether the files were purged, the hook version in the body and in the header. */
+  uninstalls: Array<{ purge: boolean; hook_version: string | null; header_hook_version: string | null }>;
   approved_codes: string[];
   pending_codes: string[];
   faults_applied: Array<{ route: FakeRoute; what: string }>;
@@ -49,6 +59,8 @@ export interface FakeCloud {
   clearFaults(): void;
   /** What the client version route answers (404 until set). */
   setClientVersion(value: { policy: "recommended" | "hold"; hook: string | null; agent: string | null } | null): void;
+  /** Whether an owner or admin allowed this computer's removal first: what the uninstall route answers (false until set). */
+  setUninstallAuthorized(value: boolean): void;
   close(): Promise<void>;
 }
 
@@ -67,15 +79,19 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
   const enrolledKids = new Set<string>();
   const faults = new Map<FakeRoute, Fault>();
   let clientVersion: { policy: "recommended" | "hold"; hook: string | null; agent: string | null } | null = null;
+  let uninstallAuthorized = false;
+  /** Summary ids held, so a summary sent again is answered as a duplicate. */
+  const summaryIds = new Set<string>();
   const seen = {
     codeRequests: [] as FakeCloudState["code_requests"], enrolled: 0, repositoryEnrollments: [] as FakeCloudState["repository_enrollments"], ingested: [] as unknown[], observations: 0,
     selfChecks: [] as FakeCloudState["self_checks"], policyPolls: 0, versionPolls: 0, approved: [] as string[],
     faultsApplied: [] as FakeCloudState["faults_applied"],
+    summaries: 0, summarizedRecords: 0, summaryDuplicates: 0, lastSummaries: null as unknown, uninstalls: [] as FakeCloudState["uninstalls"],
   };
 
   const routeOf = (path: string): FakeRoute | null => {
     const name = path.replace(/^\/v1\//, "");
-    return (["device/code", "device/token", "enroll", "repository/enroll", "ingest", "observations", "policy", "self-check", "client-version"] as const).find((r) => r === name) ?? null;
+    return (["device/code", "device/token", "enroll", "repository/enroll", "ingest", "observations", "policy", "self-check", "client-version", "summaries", "uninstall"] as const).find((r) => r === name) ?? null;
   };
 
   const server = http.createServer((req, res) => {
@@ -216,6 +232,40 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
         tools: Array.isArray(body.tools) ? body.tools : null, mcp_servers: Array.isArray(body.mcp_servers) ? body.mcp_servers : null });
       return json(200, { ok: failed.length === 0, signature_verified: true, failed });
     }
+    // Signed summaries standing for a window's routine records: `{ summaries: [{ summary: { payload, signature }, seq }], queue? }`.
+    // The answer counts what is held (`accepted` new, `duplicates` already held), which the exporter checks adds up.
+    if (path === "/v1/summaries" && req.method === "POST") {
+      if (!authed()) return json(401, { error: "unauthorized", code: "credential_unknown" });
+      const items = body.summaries;
+      const payloadOf = (item: unknown) => (item as { summary?: { payload?: { summary_id?: unknown; receipt_count?: unknown } } } | null)?.summary?.payload;
+      const wellFormed = (item: unknown) => {
+        const payload = payloadOf(item);
+        return typeof payload?.summary_id === "string" && Number.isInteger(payload.receipt_count) && (payload.receipt_count as number) > 0;
+      };
+      if (!Array.isArray(items) || items.length === 0 || !items.every(wellFormed)) return json(400, { error: "invalid_request", code: "invalid_summary" });
+      let accepted = 0;
+      let duplicates = 0;
+      for (const item of items) {
+        const payload = payloadOf(item)!;
+        const id = payload.summary_id as string;
+        if (summaryIds.has(id)) { duplicates += 1; continue; }
+        summaryIds.add(id);
+        accepted += 1;
+        seen.summarizedRecords += payload.receipt_count as number;
+      }
+      seen.summaries += accepted;
+      seen.summaryDuplicates += duplicates;
+      seen.lastSummaries = body;
+      return json(200, { accepted, duplicates });
+    }
+    // A computer removing Scopebond says so first: `{ purge, hook_version }`; the answer says whether the removal was allowed.
+    if (path === "/v1/uninstall" && req.method === "POST") {
+      if (!authed()) return json(401, { error: "unauthorized", code: "credential_unknown" });
+      if (typeof body.purge !== "boolean" || (body.hook_version !== undefined && typeof body.hook_version !== "string")) return json(400, { error: "invalid_request" });
+      const header = req.headers["x-scopebond-hook-version"];
+      seen.uninstalls.push({ purge: body.purge, hook_version: typeof body.hook_version === "string" ? body.hook_version : null, header_hook_version: typeof header === "string" ? header : null });
+      return json(200, { ok: true, authorized: uninstallAuthorized });
+    }
     // The optional summary a workspace gives a computer's tray (names, links, Review count); links stay on this origin.
     if (path === "/v1/computer/summary" && req.method === "GET") {
       if (!authed()) return json(401, { error: "unauthorized" });
@@ -247,6 +297,8 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
     observations: seen.observations, self_checks: seen.selfChecks, policy_polls: seen.policyPolls, version_polls: seen.versionPolls,
     approved_codes: seen.approved, pending_codes: [...codes.values()].filter((c) => !c.approved && !c.consumed).map((c) => c.user_code),
     faults_applied: seen.faultsApplied,
+    summaries: seen.summaries, summarized_records: seen.summarizedRecords, summary_duplicates: seen.summaryDuplicates,
+    last_summaries: seen.lastSummaries, uninstalls: seen.uninstalls,
   });
 
   return new Promise((resolve, reject) => {
@@ -259,6 +311,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
         fault: (route, fault) => { faults.set(route, { ...fault }); },
         clearFaults: () => faults.clear(),
         setClientVersion: (value) => { clientVersion = value; },
+        setUninstallAuthorized: (value) => { uninstallAuthorized = value; },
         close: () => new Promise<void>((done) => { server.closeAllConnections?.(); server.close(() => done()); }),
       });
     });
