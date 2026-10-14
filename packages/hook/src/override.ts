@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
 import { compileManaged, floorDocument, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument } from "./managed.js";
-import { makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, writeAllowances, type BlockedItem } from "./allowances.js";
+import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, writeAllowances, type BlockedItem } from "./allowances.js";
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
@@ -84,6 +84,33 @@ export function actionSummary(intent: { action_type?: string; params?: Record<st
   // Arguments the hook keeps only as a keyed digest stay out of the window.
   const shown = revealHidden(text.slice(0, 2000).replace(/ ?\(hmac-sha256:[0-9a-f]{64}\)/g, "").trim());
   return shown.length > 200 ? `${shown.slice(0, 197)}...` : shown;
+}
+
+/** The action in plain words for the tray: the same masked text the Scopebond window shows (`actionSummary`), with a verb
+ *  where the text alone is a path or an address ("Read .env.production", "Edit .github/workflows/release.yml", "git push
+ *  --force origin main"). A command stays the command. Never file contents, command output or arguments the hook keeps
+ *  only as a digest. */
+export function plainAction(intent: { action_type?: string; params?: Record<string, unknown> }): string {
+  const p = intent.params ?? {};
+  const pick = (k: string) => (typeof p[k] === "string" ? String(p[k]).trim() : "");
+  const type = intent.action_type ?? "";
+  const verb = (word: string, text: string) => (text ? `${word} ${text}` : "");
+  const text = type === "file.read" ? verb("Read", pick("path"))
+    : type === "file.write" ? verb("Edit", pick("path"))
+    : type === "git.push" ? `git push${p.force === true ? " --force" : ""} ${pick("remote")} ${pick("ref")}`.replace(/\s+/g, " ").trim()
+    : type === "net.fetch" ? verb("Reach", pick("url") || pick("host"))
+    : type === "mcp.tool.call" ? verb("Use", [pick("server"), pick("tool")].filter(Boolean).join(": "))
+    : type === "package.install" ? verb("Install", pick("package_key") || `${pick("manager")} ${pick("name")}`.trim())
+    : "";
+  if (!text) return actionSummary(intent);
+  // As the window shows it: digests left out, hidden characters written out, at most 200 characters.
+  const shown = revealHidden(text.slice(0, 2000).replace(/ ?\(hmac-sha256:[0-9a-f]{64}\)/g, "").replace(/\s+/g, " ").trim());
+  return shown.length > 200 ? `${shown.slice(0, 197)}...` : shown;
+}
+
+/** The workspace rule's name as a person reads it (the managed rules' titles), or null for a rule this hook does not name. */
+export function ruleTitle(rule: string | null | undefined): string | null {
+  return rule && Object.prototype.hasOwnProperty.call(RULE_TITLE, rule) ? RULE_TITLE[rule as AnyManagedRuleId] : null;
 }
 
 /** The same action, whatever tool call it came from: its type and parameters without the per-call group id. */
@@ -278,7 +305,13 @@ export interface BlockedQuestion {
   title: string;
   reason_min: number;
   mode: "override" | "ask";
-  offers: { allow: boolean; always: boolean; ask: boolean };
+  /** allow: once (the next try); fifteen: for 15 minutes; always: an allowance for `always_days` (waiting for an admin first
+   *  when `always_needs_admin`); ask: Ask an admin. */
+  offers: { allow: boolean; always: boolean; ask: boolean; fifteen: boolean };
+  /** Days an "always" allowance lasts (the workspace's setting, else 30). */
+  always_days: number;
+  /** "Always" waits for an admin before it applies (the person is covered for 15 minutes meanwhile). */
+  always_needs_admin: boolean;
 }
 
 /** What the window may offer for an earlier block, under the rules as they are now; null when it is gone, was already acted
@@ -293,13 +326,21 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
   const terms = setting.override;
   const dayStart = now - (now % DAY_MS);
   const underLimit = readState(dir).entries.filter((e) => e.rule === item.rule && e.at >= dayStart).length < terms.daily_limit;
+  // As when the block happened (createOverrideHandler): a workspace that sends the allowance terms knows allowances, so a
+  // person may also allow it for 15 minutes; an older one gets "Allow once" only.
+  const knowsAllowances = terms.always !== undefined || terms.requests !== undefined;
   const offers = {
     allow: setting.mode === "override" && underLimit,
     always: setting.mode === "override" && underLimit && terms.always !== undefined && terms.always !== "off",
     ask: setting.mode === "ask" || terms.requests === true,
+    fifteen: setting.mode === "override" && underLimit && knowsAllowances,
   };
   if (!offers.allow && !offers.ask) return null;
-  return { item, title: RULE_TITLE[item.rule as AnyManagedRuleId] ?? item.rule, reason_min: terms.reason_min, mode: setting.mode as "override" | "ask", offers };
+  return {
+    item, title: RULE_TITLE[item.rule as AnyManagedRuleId] ?? item.rule, reason_min: terms.reason_min, mode: setting.mode as "override" | "ask", offers,
+    always_days: Math.min(ALLOWANCE_MAX_DAYS, Math.max(1, Math.round(terms.always_days ?? ALLOWANCE_DEFAULT_DAYS))),
+    always_needs_admin: terms.always === "needs_admin",
+  };
 }
 
 /** Act on an earlier block with the window's answer. Allowing makes an allowance (once: the next try; 15 minutes; or always,
@@ -319,7 +360,7 @@ export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now =
     return { outcome: "asked" };
   }
   if (!q.offers.allow) return { outcome: "declined" };
-  const lasts = answer.lasts === "always" && q.offers.always ? "always" : answer.lasts === "15m" ? "15m" : "once";
+  const lasts = answer.lasts === "always" && q.offers.always ? "always" : answer.lasts === "15m" && q.offers.fifteen ? "15m" : "once";
   let doc: ManagedDocument | null = null;
   try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { /* checked above */ }
   const terms = doc?.rules?.[q.item.rule as AnyManagedRuleId]?.override;

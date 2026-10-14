@@ -28,11 +28,50 @@ export interface TrayModel {
   actions: TrayAction[];
   /** A sign-in or similar step no button can do, in words. */
   hint: string | null;
+  /** Up to 20 blocks, newest first (today's, then earlier ones). */
   recent_blocks: RecentBlock[];
+  /** The line under the state when it is protected ("Rules checked 3 min ago · 2 blocked today"); null otherwise (the
+   *  headline says it). */
+  detail?: string | null;
+  /** The workspace's name, when the workspace said it (for "Open … in Scopebond Cloud" and "Recorded and sent to …"). */
+  workspace?: string | null;
+  /** Since local midnight. */
+  today?: { actions: number; blocked: number } | null;
 }
 
-/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did. */
-export interface RecentBlock { action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | null }
+/** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes, or
+ *  always (for `always_days`, after an admin approves when `always_needs_admin`), or ask an admin. */
+export interface BlockOffers { once: boolean; fifteen: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean }
+
+/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did. The
+ *  fields after `acted` are newer (an older tray reads `summary` and `rule`): `what` is the action in plain words and
+ *  `action_text` the text the Scopebond window shows (both with secrets masked), `rule_title` the rule's name, `project`
+ *  the repository's name and `tool` the coding tool's, each when the record has it; `offers` and `reason_min` what the
+ *  person may do now and the shortest reason the workspace accepts (null when nothing can be done). */
+export interface RecentBlock {
+  action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | null;
+  what?: string; action_text?: string; rule_title?: string | null; project?: string | null; tool?: string | null;
+  offers?: BlockOffers | null; reason_min?: number | null;
+}
+
+/** The most blocks the tray lists. */
+export const RECENT_BLOCKS_MAX = 20;
+
+const TOOL_NAMES: Readonly<Record<string, string>> = {
+  claude: "Claude Code", cursor: "Cursor", codex: "Codex", copilot: "GitHub Copilot", windsurf: "Windsurf", gemini: "Gemini CLI",
+  cline: "Cline", opencode: "OpenCode", aider: "Aider", gateway: "Scopebond Gateway", mcp: "MCP",
+};
+
+/** The coding tool's name as a person knows it, from the record's harness id (`claude` → "Claude Code"); null when unknown. */
+export function toolName(harness: string | null | undefined): string | null {
+  return harness && Object.prototype.hasOwnProperty.call(TOOL_NAMES, harness) ? TOOL_NAMES[harness] : null;
+}
+
+/** The project's name from the record's repository (`github.com/acme/checkout` → "checkout"); null when there is none. */
+export function projectName(repository: string | null | undefined): string | null {
+  const name = repository?.split("/").filter(Boolean).at(-1)?.replace(/\.git$/i, "");
+  return name ? name.slice(0, 80) : null;
+}
 
 export interface TrayInput {
   status: StatusJson;
@@ -239,10 +278,21 @@ export function trayModel(input: TrayInput): TrayModel {
   const where = [input.workspace?.name, input.workspace?.environment].filter(Boolean).join(" · ");
   const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : headline;
   const tooltip = `Scopebond — ${label}`;
+  // One line under "Protected": when the rules were last checked and what was blocked today (the rows say the rest).
+  let detail: string | null = null;
+  if (state === "protected") {
+    const checked = input.rules?.checked_at ? `Rules checked ${ago(input.rules.checked_at, now)}` : input.rules && !input.rules.managed ? "Using this computer's own rules" : null;
+    const blocked = input.today ? (input.today.blocked ? `${input.today.blocked} blocked today` : "nothing blocked today") : null;
+    detail = [checked, blocked].filter(Boolean).join(" · ") || null;
+    if (detail) detail = detail[0].toUpperCase() + detail.slice(1);
+  }
   return {
     state, headline, fix, actions, hint, rows,
     tooltip: tooltip.length > 63 ? `${tooltip.slice(0, 62)}…` : tooltip,
-    recent_blocks: (input.recentBlocks ?? []).slice(0, 3),
+    recent_blocks: (input.recentBlocks ?? []).slice(0, RECENT_BLOCKS_MAX),
+    detail,
+    workspace: input.workspace?.name ?? null,
+    today: input.today ? { actions: input.today.actions, blocked: input.today.blocked } : null,
   };
 }
 

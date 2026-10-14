@@ -1,0 +1,103 @@
+// The tray lists what was blocked in plain words: the action as the Scopebond window shows it (secrets masked), the
+// rule's name, the project and the coding tool, and what the person may do about it now (the choices the workspace allows,
+// and the shortest reason it accepts).
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  scaffold, createHookRuntime, mapClaudeToolUse, createOverrideHandler, compileManaged, defaultRules, digestRules, MANAGED_DOC_FILE, readBlocked,
+} from "@scopebond/hook";
+import { startService, callAgent } from "../dist/index.js";
+import { projectName, toolName } from "../dist/tray-model.js";
+
+const ENFORCE = { enforce: ["protect-branches", "safe-shell", "protect-write", "protect-read"] };
+const terms = (extra = {}) => ({ reason_min: 12, minutes: 0, daily_limit: 5, harness_prompt: false, ...extra });
+
+/** A computer whose workspace lets a person allow destructive commands (or ask), and blocks reading secrets outright. */
+export function computer(rules = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "sb-tray-blocks-"));
+  const { agentKid } = scaffold(dir, ENFORCE);
+  const all = {
+    "force-push-protected": { mode: "block" }, "push-protected": { mode: "block" },
+    "destructive-shell": { mode: "override", override: terms({ always: "needs_admin", always_days: 14, requests: true }) },
+    "secret-read": { mode: "block" }, "ci-config-write": { mode: "block" }, "network-egress": { mode: "monitor" }, ...rules,
+  };
+  const doc = { type: "scopebond:managed-rules", version: 1, revision: 2, export_id: "rev-2", environment_id: "env-1", agent_id: "agent-1",
+    installation_id: "gw-1", rules: all, rules_digest: digestRules(all) };
+  writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify(doc));
+  writeFileSync(join(dir, "policy.json"), JSON.stringify(compileManaged(defaultRules(), doc, agentKid)));
+  return dir;
+}
+
+/** Run tool calls through the hook as Claude Code in a checkout of acme/checkout; the window is not there, so each block is
+ *  kept for the tray. */
+export async function blockActions(dir, toolUses) {
+  const runtime = createHookRuntime({
+    policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo",
+    context: { harness: "claude", repository: "github.com/acme/checkout" },
+    override: (agentKid) => {
+      const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", waitMs: 50, ask: async () => ({ decision: "unavailable" }) });
+      return made ? { handler: made.handler, hint: () => null } : null;
+    },
+  });
+  try {
+    for (const use of toolUses) await runtime.evaluate(mapClaudeToolUse({ cwd: "/repo", ...use }));
+  } finally { runtime.close(); }
+}
+
+export const serviceFor = (dir, extra = {}) => startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false,
+  installKind: "npm", autoSignIn: false, migrate: false, ...extra });
+
+test("tool and project names a person knows", () => {
+  assert.equal(toolName("claude"), "Claude Code");
+  assert.equal(toolName("cursor"), "Cursor");
+  assert.equal(toolName("codex"), "Codex");
+  assert.equal(toolName("copilot"), "GitHub Copilot");
+  assert.equal(toolName("something-new"), null);
+  assert.equal(toolName("__proto__"), null);
+  assert.equal(projectName("github.com/acme/checkout"), "checkout");
+  assert.equal(projectName(null), null);
+});
+
+test("the tray model lists today's blocks in plain words, with the rule's name, the project, the tool and what may be done", async () => {
+  const dir = computer();
+  await blockActions(dir, [
+    { tool_name: "Read", tool_input: { file_path: "/repo/.env.production" } },
+    { tool_name: "Bash", tool_input: { command: "rm -rf build --token=SECRET-ARG-123" } },
+  ]);
+  const service = await serviceFor(dir);
+  try {
+    const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
+    const [rm, read] = tray.recent_blocks;
+    assert.equal(rm.what, "rm -rf build --token=***", "the secret is masked as the window masks it");
+    assert.equal(rm.action_text, readBlocked(dir).at(-1).summary, "the text the Scopebond window shows");
+    assert.equal(rm.rule, "destructive-shell");
+    assert.equal(rm.rule_title, "Destructive command");
+    assert.equal(rm.project, "checkout");
+    assert.equal(rm.tool, "Claude Code");
+    assert.equal(rm.can_act, true);
+    assert.deepEqual(rm.offers, { once: true, fifteen: true, always: true, always_days: 14, always_needs_admin: true, ask: true });
+    assert.equal(rm.reason_min, 12);
+    assert.equal(rm.summary, "shell.exec rm", "the older fields stay for older trays");
+    assert.equal(read.what, "Read .env.production");
+    assert.equal(read.can_act, false, "a rule on Block offers nothing");
+    assert.equal(read.offers, null);
+    assert.equal(read.reason_min, null);
+    assert.ok(!JSON.stringify(tray).includes("SECRET-ARG-123"));
+    assert.deepEqual(tray.today, { actions: 2, blocked: 2 });
+  } finally { await service.stop(); }
+});
+
+test("up to 20 blocks, newest first", async () => {
+  const dir = computer();
+  await blockActions(dir, Array.from({ length: 24 }, (_, i) => ({ tool_name: "Bash", tool_input: { command: `rm -rf build${i}` } })));
+  const service = await serviceFor(dir);
+  try {
+    const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
+    assert.equal(tray.recent_blocks.length, 20);
+    assert.equal(tray.recent_blocks[0].what, "rm -rf build23");
+    assert.equal(tray.recent_blocks[19].what, "rm -rf build4");
+  } finally { await service.stop(); }
+});

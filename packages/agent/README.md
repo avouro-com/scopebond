@@ -237,7 +237,10 @@ five minutes, so sleep and wake do not flap) and once when it is protected again
 icon. On macOS and Linux the agent sends a system notification when things get worse, and once more when they recover.
 
 The tray only draws what the agent computes: `GET /tray` on the local channel returns the model (state, headline, rows,
-fix, actions, recent blocks) and the person's settings; `POST /check`, `/update`, `/flush`, `/repair`, `/settings`
+fix, actions, the line under the state, today's counts, the workspace's name, and up to 20 recent blocks: each in plain words
+as the Scopebond window shows it, with secrets masked, the rule's name, the project and the coding tool, and what the
+workspace lets the person do about it now: allow it once, for 15 minutes or always, or ask an admin, with the shortest
+reason it accepts) and the person's settings; `POST /check`, `/update`, `/flush`, `/repair`, `/settings`
 and `/blocked` (an earlier block, answered only in the Scopebond window) do the work. `GET /status` carries the same `health` (level, headline, fix).
 
 ## Status

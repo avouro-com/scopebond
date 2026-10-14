@@ -7,7 +7,10 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname, uptime } from "node:os";
 import { join } from "node:path";
-import { actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness } from "@scopebond/hook";
+import {
+  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleTitle,
+  writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness, type RecentBlockRecord,
+} from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
 import { agentCliPath } from "./self.js";
@@ -23,7 +26,7 @@ import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prom
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
-import { checkResult, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
+import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { FIRST_SIGNIN_FILE, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
@@ -507,12 +510,24 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     timer = setTimeout(() => { void cycle().finally(schedule); }, delay);
   };
 
-  // A block under a rule a person may allow or ask about can be acted on afterwards, from the tray.
-  const actionable = (blocks: Array<{ action_id: string | null; summary: string; at: string; rule: string | null }>, now: number): RecentBlock[] => {
+  // A block under a rule a person may allow or ask about can be acted on afterwards, from the tray: what the workspace offers
+  // for it now (the same checks the Scopebond window makes), in plain words with the rule's name, the project and the tool.
+  const actionable = (blocks: RecentBlockRecord[], now: number): RecentBlock[] => {
     const known = new Map(readBlocked(options.dir).map((b) => [b.id, b]));
     return blocks.map((b) => {
       const item = b.action_id ? known.get(b.action_id) : undefined;
-      return { ...b, rule: b.rule ?? item?.rule ?? null, can_act: Boolean(item && b.action_id && blockedQuestion(options.dir, b.action_id, now)), acted: item?.acted ?? null };
+      const q = item && b.action_id ? blockedQuestion(options.dir, b.action_id, now) : null;
+      const rule = b.rule ?? item?.rule ?? null;
+      return {
+        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: item?.acted ?? null,
+        what: b.what ?? b.summary, action_text: item?.summary ?? b.action_text ?? b.summary, rule_title: ruleTitle(rule),
+        project: projectName(b.repository), tool: toolName(b.harness ?? item?.harness ?? null),
+        offers: q ? {
+          once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
+          always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask,
+        } : null,
+        reason_min: q ? q.reason_min : null,
+      };
     });
   };
 
@@ -522,7 +537,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const meta = readMeta(options.dir);
     const report = ruleReport(options.dir);
     const modes = report ? Object.values(report).map(([mode]) => mode) : [];
-    const activity = localActivity(options.dir);
+    const activity = localActivity(options.dir, { limit: RECENT_BLOCKS_MAX });
     return trayModel({
       status, health: health(), now, awakeSince, working,
       rules: report ? { checked_at: meta.checked_at ? Date.parse(meta.checked_at) : null, managed: isManaged(options.dir), block: modes.filter((m) => m === "enforce").length, monitor: modes.filter((m) => m === "monitor").length } : null,
@@ -631,7 +646,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // Sign in again for the connected workspace; the tray shows the code, the approval page opens in the browser.
     // A computer never connected (the signed install): the first sign-in, with the hook entries and autostart.
     "POST /reconnect": () => signIn("from the tray"),
-    "GET /recent-blocks": () => ({ recent_blocks: actionable(localActivity(options.dir, { limit: 10 })?.recent_blocks ?? [], Date.now()) }),
+    "GET /recent-blocks": () => ({ recent_blocks: actionable(localActivity(options.dir, { limit: RECENT_BLOCKS_MAX })?.recent_blocks ?? [], Date.now()) }),
     // Allow an earlier block, or ask an admin, from the tray. The caller names the block; only the Scopebond window
     // answers (the same window the hook uses), so whoever calls this channel cannot allow anything by itself. Scopebond never
     // runs the action: the person or the coding agent runs it again.

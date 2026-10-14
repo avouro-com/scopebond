@@ -163,8 +163,10 @@ test("from the tray, a person allows an earlier block for the next try, or asks 
   assert.equal(blocked.decision, "deny");
   const item = readBlocked(dir).at(-1);
   const q = blockedQuestion(dir, item.id);
-  assert.deepEqual(q.offers, { allow: true, always: true, ask: true });
+  assert.deepEqual(q.offers, { allow: true, always: true, ask: true, fifteen: true });
   assert.equal(q.title, "Destructive command");
+  assert.equal(q.always_days, 30);
+  assert.equal(q.always_needs_admin, false);
   assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "short" }), { outcome: "declined" }, "the reason length still applies");
   assert.deepEqual(actOnBlocked(dir, item.id, { decision: "deny" }), { outcome: "declined" });
   assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "once" }), { outcome: "allowed" });
@@ -186,6 +188,28 @@ test("from the tray, a person allows an earlier block for the next try, or asks 
   assert.equal(request.action_id, second.id);
   assert.equal(request.summary, "rm -rf dist");
   assert.equal(request.sent_at, null);
+});
+
+test("from the tray, an earlier block offers 15 minutes where the workspace knows allowances, as the window did then", async () => {
+  // The tray used to leave "Allow for 15 min" out: the question had no fifteen, so the window never showed it.
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ always: "needs_admin", always_days: 14, requests: true }) } });
+  await run(dir, bash("rm -rf build"), { answers: [] });
+  const item = readBlocked(dir).at(-1);
+  const q = blockedQuestion(dir, item.id);
+  assert.equal(q.offers.fifteen, true);
+  assert.equal(q.always_days, 14);
+  assert.equal(q.always_needs_admin, true);
+  assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "15m" }), { outcome: "allowed" });
+  const made = readAllowances(dir).at(-1);
+  assert.equal(made.once, false);
+  assert.ok(Date.parse(made.expires_at) - Date.now() <= 15 * 60_000 + 1_000, "for 15 minutes");
+  // An older workspace (no allowance terms): no 15 minutes, and a 15-minute answer allows the next try only.
+  const { dir: old } = setup({ "destructive-shell": { mode: "override", override: terms() } });
+  await run(old, bash("rm -rf build"), { answers: [] });
+  const earlier = readBlocked(old).at(-1);
+  assert.equal(blockedQuestion(old, earlier.id).offers.fifteen, false);
+  assert.equal(actOnBlocked(old, earlier.id, { decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "15m" }).outcome, "allowed");
+  assert.equal(readAllowances(old).at(-1).once, true);
 });
 
 test("from the tray, allowing stops at the daily limit and when the rule no longer lets a person allow", async () => {

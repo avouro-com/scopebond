@@ -107,10 +107,12 @@ function Refresh {
   if ($m.recent_blocks.Count -gt 0) {
     [void]$menu.Items.Add('-')
     $blocks = $menu.Items.Add('Recently blocked')
-    foreach ($b in $m.recent_blocks) {
+    # The newest few (the model lists up to 20); the plain words where the agent gives them.
+    foreach ($b in @($m.recent_blocks | Select-Object -First 5)) {
       $when = $(try { ([datetime]$b.at).ToLocalTime().ToString('HH:mm') } catch { '' })
       $note = $(if ($b.acted -eq 'allowed') { '   (allowed)' } elseif ($b.acted -eq 'asked') { '   (asked an admin)' } elseif ($b.can_act) { '   Allow or ask…' } else { '' })
-      $row = $blocks.DropDownItems.Add($b.summary + '   ' + $when + $note)
+      $words = $(if ($b.what) { $b.what } else { $b.summary })
+      $row = $blocks.DropDownItems.Add($words + '   ' + $when + $note)
       # The Scopebond window asks; the person allows it (once, 15 min, always) or asks an admin. Nothing runs again by itself.
       if ($b.can_act) { $id = $b.action_id; $row.Add_Click({ try { $r = Call 'POST' '/blocked' @{ action_id = $id }; [Windows.Forms.MessageBox]::Show($r.text, 'Scopebond') | Out-Null } catch {} ; Refresh }.GetNewClosure()) }
       else { $row.Enabled = $false }

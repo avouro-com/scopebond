@@ -5,14 +5,30 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { nodeSqlite } from "./self.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
+import { actionSummary, plainAction } from "./override.js";
+
+/** A block as the tray lists it. `summary` is the one-line description `log` prints (`shell.exec rm`); `what` is the action
+ *  in plain words ("Read .env.production", "git push --force origin main") and `action_text` the text the Scopebond window
+ *  shows. Both come from the receipt's scrubbed action: secrets masked, digested arguments left out, never raw arguments,
+ *  file contents or output. `harness` and `repository` are the receipt's context (the coding tool, and the git remote as
+ *  `host/owner/name`), when it has one. */
+export interface RecentBlockRecord {
+  action_id: string | null;
+  at: string;
+  summary: string;
+  rule: string | null;
+  what?: string;
+  action_text?: string;
+  harness?: string | null;
+  repository?: string | null;
+}
 
 export interface LocalActivity {
   /** Since local midnight. `recorded_after`: out of policy but reported only after it ran (a Cursor edit): recorded, not
    *  prevented, and never counted as blocked. */
   today: { actions: number; blocked: number; recorded_after: number; allowed_by_person: number };
-  /** Newest first, at most `limit`. The summary is the same one-line description `log` prints: the scrubbed action, never
-   *  raw arguments. */
-  recent_blocks: Array<{ action_id: string | null; at: string; summary: string; rule: string | null }>;
+  /** Newest first, at most `limit` (20 at most). */
+  recent_blocks: RecentBlockRecord[];
 }
 
 type Db = { prepare(sql: string): { all(...a: unknown[]): unknown[] }; close(): void };
@@ -46,11 +62,17 @@ export function localActivity(dir: string, options: { now?: Date; limit?: number
         if (state !== undefined && state !== "denied") return []; // monitored or recorded after it ran: not blocked
         // A receipt names its rule only when a person was asked about it (the override block); the blocked list names it.
         const override = p.override as { rule?: unknown } | undefined;
+        const intent = (p.intent && typeof p.intent === "object" ? p.intent : {}) as { action_type?: string; params?: Record<string, unknown> };
+        const context = (p.context && typeof p.context === "object" ? p.context : {}) as { harness?: unknown; repository?: unknown };
         return [{
           action_id: typeof (p.action_ref as { action_id?: unknown } | undefined)?.action_id === "string" ? String((p.action_ref as { action_id: string }).action_id) : null,
           at: typeof p.timestamp === "string" ? p.timestamp : "",
           summary: describeAction(p.intent as ExplainIntent | undefined),
           rule: typeof override?.rule === "string" ? override.rule : null,
+          what: plainAction(intent),
+          action_text: actionSummary(intent),
+          harness: typeof context.harness === "string" ? context.harness : null,
+          repository: typeof context.repository === "string" ? context.repository : null,
         }];
       } catch { return []; }
     });
