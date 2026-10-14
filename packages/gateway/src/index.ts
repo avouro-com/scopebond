@@ -58,7 +58,7 @@ export { scrubSecretText } from "./scrub.js";
 export { completeCloudEnrollment, CloudEnrollmentError } from "./enrollment.js";
 export type { CloudEnrollmentBundle, CloudEnrollmentResult } from "./enrollment.js";
 export type {
-  CloudBackoff, CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus,
+  CloudBackoff, CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus, CloudHeldStatus,
   CloudOutbox, CloudOutboxEntry, CloudOutboxStatus, MemoryCloudOutboxOptions, CloudSummaryOptions, CloudSequenceProofOptions, ChainHeadDelivery,
 } from "./cloud.js";
 export {

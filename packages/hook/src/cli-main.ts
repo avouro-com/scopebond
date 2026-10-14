@@ -74,7 +74,7 @@ import { withHookVersion } from "./workspace-fetch.js";
 import { HOT_PATH_STORE_BUSY_MS, waitWithinDeadline } from "./hook-deadline.js";
 import { policyKeyProblems } from "./policy-keys.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
-import { describeDelivery } from "./delivery-report.js";
+import { describeDelivery, flushOutcome } from "./delivery-report.js";
 import { buildStatusJson } from "./status-json.js";
 import { computeManifest, renderManifest, HOST_ENFORCEMENT } from "./capabilities.js";
 import { runProofFixtures, loadProofs, saveProofs, proofPassed, deliverProofReceipts } from "./proof.js";
@@ -1403,12 +1403,13 @@ async function runFlush(): Promise<void> {
   const status = runtime.exporter?.status();
   // Unbounded, so its outcome is a real one: `status` and `doctor` show it like any other.
   if (status) recordDeliveryAttempt(dir, status, Date.now(), before, null, "hook");
+  // Routine records held for their summary window are not undelivered: they are reported apart and do not fail the flush.
+  const held = status ? runtime.exporter?.held?.() : undefined;
   runtime.exporter?.stop();
-  // A wait the workspace asked for (429, or 503 with Retry-After) holds here too: say when the next try is.
-  const wait = status?.pending && status.backoff && status.backoff.until > Date.now() && !status.lastError ? status.backoff.until : null;
-  console.log(`flushed; ${status?.pending ?? 0} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}${wait ? ` (the workspace asked this computer to wait; next try after ${new Date(wait).toISOString()})` : ""}`);
+  const outcome = flushOutcome(status, held);
+  for (const line of outcome.lines) console.log(line);
   // Let pending HTTP handles close normally (forced exit can abort on Windows).
-  process.exitCode = status && status.pending > 0 ? 1 : 0;
+  process.exitCode = outcome.exitCode;
 }
 
 /** `observations`: what the observation emitters are doing, and the local queue. */

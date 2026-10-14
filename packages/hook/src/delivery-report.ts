@@ -4,6 +4,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { SqliteCloudOutbox } from "@scopebond/gateway/node";
+import type { CloudExporterStatus, CloudHeldStatus } from "@scopebond/gateway";
 import type { HookConnection } from "./cloud.js";
 import { ago, readDeliveryState, waitingUntil, type DeliveryState } from "./delivery-state.js";
 import { cliCommand } from "./version.js";
@@ -54,6 +55,40 @@ export const STALLED_AFTER_MS = 5 * 60 * 1000;
 export function deliveryStalled(state: Pick<DeliveryState, "last_success_at">, pending: number, oldest: number | null, now: number): boolean {
   return pending > 0 && oldest !== null && now - oldest > STALLED_AFTER_MS
     && (state.last_success_at === null || state.last_success_at < oldest);
+}
+
+/** "14:05": a time on this computer's clock, rounded up to the minute so it is never earlier than the time itself. */
+function clockTime(at: number): string {
+  const d = new Date(Math.ceil(at / 60_000) * 60_000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+export interface FlushOutcome {
+  lines: string[];
+  /** 1 when records are left undelivered or the last attempt failed; routine records held for their summary window alone are 0. */
+  exitCode: 0 | 1;
+  /** Records still waiting to be delivered, not counting the routine ones held for their summary window. */
+  pending: number;
+  /** Routine records held on purpose until their summary window closes. */
+  held: number;
+}
+
+/** What `flush` says and how it exits. With summary records on, routine records wait for their five-minute window to close
+ *  and then leave as one signed summary: they are reported apart, and do not make the flush fail. */
+export function flushOutcome(
+  status: Pick<CloudExporterStatus, "pending" | "lastError" | "backoff"> | undefined, held: CloudHeldStatus | undefined, now = Date.now(),
+): FlushOutcome {
+  const total = status?.pending ?? 0;
+  const routine = Math.max(0, Math.min(held?.routine ?? 0, total));
+  const pending = total - routine;
+  // A wait the workspace asked for (429, or 503 with Retry-After) holds here too: say when the next try is.
+  const wait = total && status?.backoff && status.backoff.until > now && !status.lastError ? status.backoff.until : null;
+  const lines = [`flushed; ${pending} receipt(s) still pending${status?.lastError ? ` (last error: ${status.lastError})` : ""}${wait ? ` (the workspace asked this computer to wait; next try after ${new Date(wait).toISOString()})` : ""}`];
+  if (routine) {
+    const until = held?.until ? ` until ${clockTime(held.until)}` : "";
+    lines.push(`${routine} routine record(s) held for the summary window${until}; once it closes they are sent as one signed summary (by the agent, or the next \`${cliCommand("flush")}\`)`);
+  }
+  return { lines, exitCode: status?.lastError || pending > 0 ? 1 : 0, pending, held: routine };
 }
 
 export interface DeliveryReport {
