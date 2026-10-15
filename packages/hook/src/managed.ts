@@ -85,18 +85,27 @@ export interface OverrideTerms {
   always_days?: number;
   /** Whether the window offers "Ask an admin". */
   requests?: boolean;
+  /** (sent only to a hook that reports the `unblock_terms` capability) The one length a person's unblock lasts, chosen by the
+   *  workspace: "once" (the next try), "15m", or "always" (for `always_days`). The window and the tray then offer only that
+   *  length, with nothing to choose. Absent: every length the other terms allow. */
+  lasts?: "once" | "15m" | "always";
+  /** (with `unblock_terms`) Every unblock a person makes applies at once and is listed for an admin to review later, who
+   *  may undo it (the workspace then sends it among its revoked allowances). The window and the tray say so. */
+  review?: boolean;
 }
 /**  rule modes, in the workspace's words: monitor = Monitor, block = Block, override = "Block, person may allow",
  *  ask = "Block, person may ask". */
 export type ManagedRule = { mode: "monitor" | "block" | "override" | "ask"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
 const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
-const TERM_KEYS = new Set(["reason_min", "minutes", "daily_limit", "harness_prompt", "always", "always_days", "requests"]);
+const TERM_KEYS = new Set(["reason_min", "minutes", "daily_limit", "harness_prompt", "always", "always_days", "requests", "lasts", "review"]);
 function validTerms(t: unknown): t is OverrideTerms {
   return isObject(t) && Object.keys(t).every((k) => TERM_KEYS.has(k)) && intIn(t.reason_min, 10, 200) && intIn(t.minutes, 0, 60) && intIn(t.daily_limit, 1, 50)
     && typeof t.harness_prompt === "boolean"
     && (t.always === undefined || t.always === "at_once" || t.always === "needs_admin" || t.always === "off")
     && (t.always_days === undefined || intIn(t.always_days, 1, 365))
-    && (t.requests === undefined || typeof t.requests === "boolean");
+    && (t.requests === undefined || typeof t.requests === "boolean")
+    && (t.lasts === undefined || t.lasts === "once" || t.lasts === "15m" || t.lasts === "always")
+    && (t.review === undefined || typeof t.review === "boolean");
 }
 /** Whether a person at the computer may act on a block under this rule (allow it, or ask an admin). */
 export const personMayAct = (rule: ManagedRule | undefined): boolean => rule?.mode === "override" || rule?.mode === "ask";

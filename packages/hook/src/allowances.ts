@@ -47,6 +47,14 @@ export interface Allowance {
   uses: number;
   /** When the agent sent it to the workspace (person-made allowances). */
   sent_at?: string | null;
+  /** How it was unblocked, for a workspace that sets the unblock terms (`lasts`, `review`): "automatic" (applied at once and
+   *  reviewed later) or "person" (the person chose). Absent otherwise, so an older workspace gets the record it knows. */
+  unblocked?: "automatic" | "person" | "admin";
+  /** The person stopped it here ("Stop allowing"): when. It no longer applies; the agent sends the ended record once
+   *  (`end_sent_at`). Kept on this computer; never part of the allowance's own record. */
+  ended_at?: string;
+  ended_by?: "person";
+  end_sent_at?: string | null;
   /** The reason text, kept only until it is sent (the workspace shows it); the receipt carries its digest. */
   reason?: string;
 }
@@ -92,7 +100,7 @@ export function validAllowance(a: unknown): a is Allowance {
 /** The allowance in force for this rule and action, for this person, now; or null. Revoked, proposed, expired and used
  *  one-time allowances never match. */
 export function matchAllowance(items: Allowance[], query: { rule: string; actionKey: string; osUserDigest: string | null; now: number; sessionId?: string | null }): Allowance | null {
-  return items.find((a) => a.state === "active" && a.rule === query.rule && a.action_key === query.actionKey
+  return items.find((a) => a.state === "active" && !a.ended_at && a.rule === query.rule && a.action_key === query.actionKey
     && Date.parse(a.expires_at) > query.now && !(a.once && a.uses > 0)
     && (a.scope === "computer" || (a.scope === "session" ? !!query.sessionId && a.session_id === query.sessionId
       : a.os_user_digest !== null && a.os_user_digest === query.osUserDigest))) ?? null;
@@ -102,7 +110,7 @@ export function matchAllowance(items: Allowance[], query: { rule: string; action
  *  "proposed" when the workspace wants an admin to confirm first). */
 export function makeAllowance(input: {
   rule: string; actionKey: string; reason: string; osUserDigest: string | null; lasts: "once" | "15m" | "always";
-  alwaysDays?: number; needsAdmin?: boolean; now?: number;
+  alwaysDays?: number; needsAdmin?: boolean; now?: number; unblocked?: "automatic" | "person";
 }): Allowance {
   const now = input.now ?? Date.now();
   const reason = input.reason.trim().slice(0, 500);
@@ -114,6 +122,7 @@ export function makeAllowance(input: {
     state: input.lasts === "always" && input.needsAdmin ? "proposed" : "active", once: input.lasts === "once",
     reason_digest: digestOf(reason), reason_length: reason.length, reason, created_by: "person",
     created_at: new Date(now).toISOString(), expires_at: new Date(expires).toISOString(), uses: 0, sent_at: null,
+    ...(input.unblocked ? { unblocked: input.unblocked } : {}),
   };
 }
 
@@ -126,7 +135,9 @@ export function mergeWorkspaceAllowances(local: Allowance[], delivered: unknown,
   for (const a of fromWorkspace) {
     const mine = byId.get(a.id);
     // Uses are counted here; the workspace's copy decides state and expiry.
-    byId.set(a.id, { ...a, uses: Math.max(a.uses, mine?.uses ?? 0), sent_at: mine?.sent_at ?? a.sent_at ?? null, ...(mine?.reason ? { reason: mine.reason } : {}) });
+    byId.set(a.id, { ...a, uses: Math.max(a.uses, mine?.uses ?? 0), sent_at: mine?.sent_at ?? a.sent_at ?? null, ...(mine?.reason ? { reason: mine.reason } : {}),
+      // Stopped here: it stays stopped, whatever the workspace's copy says until it has the ended record.
+      ...(mine?.ended_at ? { ended_at: mine.ended_at, ended_by: mine.ended_by, end_sent_at: mine.end_sent_at ?? null } : {}) });
   }
   return [...byId.values()].map((a) => (revokedIds.has(a.id) ? { ...a, state: "revoked" as const } : a));
 }
@@ -165,4 +176,37 @@ export function recordBlocked(dir: string, item: BlockedItem, now = Date.now()):
 export function markBlocked(dir: string, id: string, acted: "allowed" | "asked", now = Date.now()): void {
   const items = readBlocked(dir).map((b) => (b.id === id ? { ...b, acted, acted_at: new Date(now).toISOString() } : b));
   writeAtomic(join(dir, BLOCKED_FILE), `${JSON.stringify({ items }, null, 1)}\n`);
+}
+
+/** What the action an allowance names looked like: the text the Scopebond window showed, by the action's key, so the tray
+ *  can say what an allowance lets through (an allowance carries only the key). Kept on this computer only and never sent;
+ *  the newest 500. */
+export const ACTION_TEXT_FILE = "action-text.json";
+
+export function readActionText(dir: string): Map<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, ACTION_TEXT_FILE), "utf8")) as { items?: Array<{ action_key?: unknown; text?: unknown }> };
+    const items = Array.isArray(parsed.items) ? parsed.items : [];
+    return new Map(items.filter((i) => typeof i.action_key === "string" && typeof i.text === "string").map((i) => [i.action_key as string, (i.text as string).slice(0, 200)]));
+  } catch { return new Map(); }
+}
+
+/** Remember the text for an action a person allowed. Never throws: the allowance stands either way. */
+export function rememberActionText(dir: string, actionKey: string, text: string, now = Date.now()): void {
+  try {
+    const kept = [...readActionText(dir)].filter(([key]) => key !== actionKey).map(([action_key, t]) => ({ action_key, text: t }));
+    const items = [...kept, { action_key: actionKey, text: text.slice(0, 200), at: new Date(now).toISOString() }].slice(-500);
+    writeAtomic(join(dir, ACTION_TEXT_FILE), `${JSON.stringify({ items }, null, 1)}\n`);
+  } catch { /* the tray shows the rule's name instead */ }
+}
+
+/** "Stop allowing": the person ends an allowance they made on this computer (or one made at once by the workspace's terms).
+ *  It stops applying at once; the agent sends the ended record to the workspace. Only one in force or waiting for an admin,
+ *  made by a person, and not already ended or expired. */
+export function endAllowance(dir: string, id: string, now = Date.now()): { outcome: "ended" | "gone" } {
+  const items = readAllowances(dir);
+  const a = items.find((x) => x.id === id);
+  if (!a || a.created_by !== "person" || a.ended_at || (a.state !== "active" && a.state !== "proposed") || !(Date.parse(a.expires_at) > now)) return { outcome: "gone" };
+  writeAllowances(dir, items.map((x) => (x.id === id ? { ...x, ended_at: new Date(now).toISOString(), ended_by: "person" as const, end_sent_at: null } : x)), now);
+  return { outcome: "ended" };
 }

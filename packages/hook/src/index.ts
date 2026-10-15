@@ -40,7 +40,7 @@ export type {
   ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnyManagedRuleId, OptionalRuleId,
   ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,
 } from "./managed.js";
-export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked } from "./override.js";
+export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked, plainAction, ruleTitle, offersFor, allowsAny, offeredLength } from "./override.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES } from "./policy-sync.js";
 export {
@@ -120,7 +120,7 @@ export { hookVersion, hookCommand, cliCommand } from "./version.js";
 export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
 export type { HookEntry, HookScope } from "./duplicates.js";
 export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";
-export { readAllowances, writeAllowances, makeAllowance, matchAllowance, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS } from "./allowances.js";
+export { readAllowances, writeAllowances, makeAllowance, matchAllowance, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance } from "./allowances.js";
 export type { Allowance, BlockedItem } from "./allowances.js";
 export { sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, readSessionBudgets, validSessionBudget, validSessionBudgets, isPackageInstall, isAgentLaunch, SESSION_BUDGETS_FILE } from "./session-budgets.js";
 export type { SessionBudget, SessionBudgetLimit, SessionBudgetGuard, BudgetReservation, BudgetIntent } from "./session-budgets.js";
@@ -128,7 +128,7 @@ export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requ
 export type { AdminRequest } from "./requests.js";
 export { localActivity } from "./local-activity.js";
 export { noteUnresolvableHooks, HOOK_OUTAGE_FILE } from "./hook-outage.js";
-export type { LocalActivity } from "./local-activity.js";
+export type { LocalActivity, RecentBlockRecord } from "./local-activity.js";
 export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEFAULT_RETENTION_DAYS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./store-upkeep.js";
 export type { UpkeepOptions } from "./store-upkeep.js";
 export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-detail.js";

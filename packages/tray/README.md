@@ -12,23 +12,73 @@ PowerShell tray.
   attention; a red cross for a problem; a slate tile with a slash when the computer is not connected to its workspace.
   Shape and colour both say the state. The icon is drawn in code (`src/icon.rs`, the same grid and colours as the
   PowerShell tray), so the repository holds no image files; the build writes the program's .ico from the same code.
-- **Right-click menu**, in this order: a header line (the agent's headline), *Open status…*, the actions the agent offers
-  right now (the one fix first, then *Send records now*, *Update now*, *Check now*, *Reconnect…*, *Open workspace* only
-  when the agent's model offers them), *Start with Windows*, *Notifications* ▸ *All* / *Problems only* / *Off*, *Help* ▸
-  *Copy diagnostics* / *Open logs folder* / *About Scopebond*, and *Hide icon*. There is no *Quit* and no *Pause
-  protection*: the hook decides every action of a coding agent whether or not the tray runs. *Hide icon* hides the icon
-  until the next sign-in, or until the tray is started again (the Start-menu entry opens the status panel). *Start with
-  Windows* turns the installer's sign-in entry (the Run value `Scopebond`) on or off for this person, and the choice is
-  kept across upgrades; for an install for every user it is shown, not changed.
-- **Status panel** (left-click, or *Open status…*): about 360 × 420 next to the tray, created when it opens and destroyed
-  when it closes (it closes when it loses focus and on Esc). The headline and state, the rows the agent reports (Rules,
-  Delivery, Today, Version), the one fix as the main button, a hint when no button can fix it, the other actions, and the
-  recent blocks (with *Allow or ask…* where the person may still act on one). Light or dark follows the Windows setting;
-  the colours are CSS variables with the PowerShell tray's palette. Every control is reachable with the keyboard and has
-  an accessible name, and the status line is a live region, so a screen reader hears what changed.
+- **Right-click menu**, short, in this order: *Open Scopebond*, *Blocked today (N)*, the one fix when the agent's model
+  offers one (*Send records now*, *Reconnect…*, *Repair*…; or *Start the Scopebond Agent* when it is not answering),
+  *Open <workspace> in Scopebond Cloud* (when the model offers the workspace's page), *Notifications* ▸ *Blocks and
+  problems* / *Problems only* / *Off*, *Start with Windows*, *Help* ▸ (the model's other actions such as *Check now* or *Update now*, then *Copy
+  diagnostics* / *Open logs folder* / *About Scopebond*), and *Hide icon*. There is no *Quit* and no *Pause protection*:
+  the hook decides every action of a coding agent whether or not the tray runs. *Hide icon* hides the icon until the next
+  sign-in, or until the tray is started again (the Start-menu entry opens the status panel). *Start with Windows* turns
+  the installer's sign-in entry (the Run value `Scopebond`) on or off for this person, and the choice is kept across
+  upgrades; for an install for every user it is shown, not changed.
+- **Status panel** (left-click, *Open Scopebond* or *Blocked today*): 360 × 560 next to the tray, created when it opens
+  and destroyed when it closes (it closes when it loses focus and on Esc, but not while the person is writing a reason in
+  its Unblock form). Built around what got blocked:
+  - At the top, the "S" tile with the state's badge, the state in one word ("Protected", "Needs attention"…) and one line
+    under it ("Rules checked 3 min ago · 2 blocked today", or what is wrong). A banner with the one fix button appears
+    only when the agent's model has a fix or a problem to explain.
+  - **Blocked · Allowed · Requests.** *Blocked* lists up to 20 blocks, today's first and then earlier ones, newest first:
+    the action in plain words as the Scopebond window shows it, with secrets masked ("Read .env.production", "git push
+    --force origin main"), the rule's name, the project and the coding tool, and the time. What the panel offers follows what the
+    workspace lets a person do for each block, as the agent says it: *Unblock…* where the person may allow it, *Ask to
+    unblock…* where an admin decides, and no button where the block stays blocked (nothing else is said about it).
+  - **Unblock in the panel.** Either button opens a form on the block itself: the text the Scopebond window shows for the
+    action, only the choices the workspace offers for it now (*Just this once*, *For 15 minutes*, *Always on this
+    computer* — for the workspace's number of days, or after an admin approves —, *Ask an admin to unblock it instead*), a reason with a live
+    count of the characters still needed, and a button named for the result (*Allow once*, *Allow for 15 minutes*, *Always
+    allow*, *Send request*). The tray checks the answer (the choice is offered, the reason long enough and at most 500
+    characters) and sends it to the agent's `POST /blocked/answer`, which checks it again and applies it exactly as the
+    window's answer: the allowance or the request on this computer, sent to the workspace signed by this computer's key.
+    The block then says what happened: "Allowed once · Recorded and sent to Acme". Where an admin decides, the form
+    has nothing to choose: the action, the reason and *Send request*, and afterwards "Request sent · you'll see the
+    answer under Requests". Where the workspace sets the one length, there is nothing to choose either: one line names
+    it, and where the workspace reviews every unblock later it says so ("For 15 minutes, set by your workspace; an admin
+    reviews it later") and the button reads *Unblock now*; afterwards "Unblocked until 4:07 PM · an admin will review
+    it", and the allowance is listed under *Allowed* until it ends or an admin undoes it. Scopebond never runs the action
+    itself; the person or the coding agent runs it again. With an agent that does not say what may be done, the buttons
+    open its Scopebond window as before.
+  - *Allowed* lists what the person let through that still applies (once, for 15 minutes, always), with when it ends, and
+    what waits for an admin, and what an admin approved. *Requests*, there only when the workspace lets the person ask or
+    when they have asked before, lists their requests: waiting, approved (and by whom) or declined (with the
+    admin's note when the workspace sends one), with the person's own reason. *Stop allowing* on what the person let through (not on what an
+    admin approved) asks them to confirm in the row, then ends it at once; the agent tells the workspace.
+  - **The question waiting now.** When a coding agent is stopped during a session and the workspace lets the person act,
+    the hook asks the agent, and the agent hands the question to the tray: a notification ("Blocked: git push --force
+    origin release/2.4 · Claude Code is waiting for your answer") with *Unblock…* or *Ask to unblock…*, and at the top of
+    *Blocked* the question with the seconds left and the same form. The answer goes back to the hook's waiting call, so
+    the coding agent goes on at once. If the person does not open the question in the tray soon (a third of the hook's
+    wait, ten seconds at most), the Scopebond window opens for the time left, as it always did; with no tray running it
+    opens at once. Unanswered when the hook stops waiting, nothing is allowed.
+  - The footer says how many actions were checked today and opens the workspace in Scopebond Cloud.
+  - **Settings** (the gear): notifications, *Start with Windows*, *This computer* (the rows the agent reports: rules,
+    delivery, today, version), the model's other actions (*Check now*, *Send records now*…), *Copy diagnostics*, *Open logs
+    folder*, *Help* and *Hide icon*.
+  Light or dark follows the Windows setting, in the workspace portal's colours (violet actions, the navy tile) and
+  Windows' own type. Every control is reachable with the keyboard (the three lists are tabs, moved between with the arrow
+  keys) and has an accessible name, keyboard focus stays where it was when the panel redraws, and the status line is a
+  live region, so a screen reader hears what changed. Text from the agent is only ever set as text.
+- **Reviewing the panel in a browser**: `node packages/tray/dev/preview.mjs` writes a preview page into `dev/dist/` (ignored
+  by git) and prints its address; open it (no server, no Rust toolchain needed). It shows each scene, light and dark: the
+  panel's own page from `build.rs` with the shipped `ui/` files and a stand-in for the tray (`dev/fake-tauri.js`).
+  Nothing under `dev/` is built into the program.
 - **Notifications**: one when the state gets worse (for "needs attention", only once it has lasted five minutes, so
-  sleep and wake do not flap) and one when it is protected again; none for blocks unless the person chose *All* (then
-  one per new block); none at all with *Off*. An agent that has not answered for two minutes while the tray keeps trying
+  sleep and wake do not flap) and one when it is protected again; with *Blocks and problems* (the default for a new install;
+  an older *All* reads the same), one for a new block in plain words with the tool, the project and the rule, and an
+  button that opens the panel on that block's form, named as the panel's button is (*Unblock…*, or *Ask to unblock…*
+  where an admin decides; none where the block stays blocked); blocks that follow within a
+  minute are told together ("3 actions blocked in the last minute"). With *Blocks and problems* the person is also told when
+  an admin answers one of their requests ("Your request was approved", with who and their note). A question waiting now
+  (above) is told unless notifications are *Off*. *Problems only* says nothing about blocks, and *Off* nothing at all. An agent that has not answered for two minutes while the tray keeps trying
   counts as a problem, and so, at once, does one whose pipe accepts connections but that has given no model for half a
   minute; one stopped on purpose does not. An agent that stopped without anyone asking and with nothing in its place is
   told about once when the tray starts it again. *Check now* chosen from the menu says what it found. They carry
@@ -80,8 +130,15 @@ stop on purpose, another agent starting, no agent program).
   what the tray does; that is the same trust the person's own command line has.
 - The tray only calls short local routes the agent's model names (a path such as `/flush`, never an address), and the
   status panel loads only the files built into the program, under a content security policy that allows nothing else.
-- The tray asks nothing of the agent that the agent's own command line cannot do. Allowing an earlier block still goes
-  through the agent's Scopebond window, which only the person can answer.
+- The tray's Unblock form answers through the same channel and token (`POST /blocked/answer`), so a program already
+  running as the person, which can read the token file, could send such an answer too: the same trust as the person's
+  own command line. What it can do is bounded the same way the window's answer is: only a choice the workspace offers a
+  person for that block, with a reason as long as the workspace asks for, within the daily limit, never for Scopebond's
+  own protection or a rule on Block, and every answer is recorded on this computer and sent to the workspace with its
+  reason. The hook's own protection stops a coding agent from reading the Scopebond folder through its tools.
+- Apart from the Unblock form above, the tray asks nothing of the agent that the agent's own command line cannot do. With
+  an agent that does not say what may be done, an earlier block is answered in its Scopebond window, which only the
+  person can answer.
 
 ## Build and test
 

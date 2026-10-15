@@ -334,9 +334,9 @@ test("the hook says it reads service rules, and a synced list is enforced; a tam
     };
     const applied = await syncPolicy(dir, { agentKid, hookVersion: "0.24.0", policyBuilds, fetchImpl: workspace });
     assert.equal(applied.state, "applied", JSON.stringify(applied));
-    assert.deepEqual(seen, ["allowances,session_budgets,service_rules"]);
+    assert.deepEqual(seen, ["allowances,session_budgets,service_rules,unblock_terms"]);
     // The confirmation carries the same capabilities, so the workspace compares the digest of the document it sent this hook.
-    assert.deepEqual(acks.map((a) => [a.capabilities, a.body.result, a.body.rules_digest]), [["allowances,session_budgets,service_rules", "loaded", answer.rules_digest]]);
+    assert.deepEqual(acks.map((a) => [a.capabilities, a.body.result, a.body.rules_digest]), [["allowances,session_budgets,service_rules,unblock_terms", "loaded", answer.rules_digest]]);
     assert.ok(isManaged(dir));
     const installed = JSON.parse(readFileSync(join(dir, "policy.json"), "utf8"));
     assert.ok(installed.clauses.some((c) => c.id === "blocked-programs"));

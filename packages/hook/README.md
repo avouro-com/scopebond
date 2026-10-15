@@ -749,10 +749,15 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   with the next rules check. The receipt of an action an allowance lets through says
   `method: "allowance"` and names it. An allowance is bound to one rule, never applies to
   Scopebond's own protection, and stops applying when it expires, is used up (a one-time one) or
-  the workspace revokes it. The hook keeps them, and the last blocks a person may act on, in its
+  the workspace revokes it, or the person stops it ("Stop allowing" in the tray: it stops applying at once, and the agent
+  sends the workspace the ended record). Where the workspace sets the unblock terms, each allowance a person makes also
+  says how it was unblocked (`unblocked`: `automatic` or `person`). The hook keeps them, and the last blocks a person may act on, in its
   own folder (`allowances.json`, `requests.json`, `blocked.json`), which the coding agent cannot
   change. The hook tells the workspace it understands these settings
-  (`x-scopebond-hook-capabilities: allowances`); a workspace sends them only then.
+  (`x-scopebond-hook-capabilities: allowances`); a workspace sends them only then. A workspace may also set the one length
+  a person's unblock lasts (the rule's `lasts`: `once`, `15m` or `always`), so the window and the tray offer only that
+  length with nothing to choose, and say that every unblock is reviewed by an admin later, who may undo it (`review`); it
+  sends these only to a hook that reports `unblock_terms`.
 - **Session budgets.** A workspace may limit what one coding-agent session may do, for example an
   overnight run: at most 50 file writes, no pushes and no package installs, until the budget
   expires (two hours after it is set, unless the workspace says otherwise). An admin sets one
@@ -778,7 +783,7 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   count cannot be read or written for a session that has a budget, the limited actions are
   denied, never let through without a limit. A malformed `session_budgets` list refuses the whole
   rules document (the rules in force stay); a hook older than this ignores the member. The hook
-  says it understands budgets (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules`;
+  says it understands budgets (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules,unblock_terms`;
   `service_rules` is the blocked services below).
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
@@ -822,7 +827,7 @@ and an allowance made under another rule does not carry it through.
 
 The workspace sends the list as `blocked_services` in its rules document (at most 500 entries,
 each `{ "kind": "mcp_server" | "host" | "cli" | "package", "key": "…" }`), only to a hook that
-says it reads it (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules`).
+says it reads it (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules,unblock_terms`).
 The document's `rules_digest` then covers the list too: it is the SHA-256 of the canonical JSON
 of `{ "rules": …, "blocked_services": … }`, so a changed list is refused like changed rules, and
 so is a malformed one; the rules in force stay. Without the list nothing changes.

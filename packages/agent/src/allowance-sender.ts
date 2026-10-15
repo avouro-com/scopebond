@@ -14,8 +14,13 @@ import { readAllowances, readRequests, writeAllowances, writeRequests, type Hook
 export const ALLOWANCE_DOMAIN = "scopebond:allowance/v1\n";
 export const REQUEST_DOMAIN = "scopebond:request/v1\n";
 
-export async function sendAllowancesAndRequests(dir: string, connection: Pick<HookConnection, "url" | "credential">, fetchImpl: typeof fetch = fetch, now = Date.now()): Promise<{ allowances: number; requests: number }> {
-  const sent = { allowances: 0, requests: 0 };
+/** The record that tells the workspace the person stopped an allowance. */
+export function endedRecord(a: { id: string; ended_at?: string }): { id: string; state: "ended"; ended_by: "person"; ended_at: string } {
+  return { id: a.id, state: "ended", ended_by: "person", ended_at: a.ended_at ?? new Date().toISOString() };
+}
+
+export async function sendAllowancesAndRequests(dir: string, connection: Pick<HookConnection, "url" | "credential">, fetchImpl: typeof fetch = fetch, now = Date.now()): Promise<{ allowances: number; requests: number; ended: number }> {
+  const sent = { allowances: 0, requests: 0, ended: 0 };
   const keyFile = join(dir, "attester.key");
   if (!existsSync(keyFile)) return sent; // never makes a key: an unenrolled computer has nothing to send
   const { attester } = loadOrCreateAttester({ file: keyFile });
@@ -35,7 +40,7 @@ export async function sendAllowancesAndRequests(dir: string, connection: Pick<Ho
   const allowanceOutcomes = new Map<string, "sent" | "refused">();
   for (const a of readAllowances(dir)) {
     if (a.created_by !== "person" || a.sent_at) continue;
-    const record = without(a, "sent_at", "uses");
+    const record = without(a, "sent_at", "uses", "ended_at", "ended_by", "end_sent_at");
     const outcome = await post("/v1/allowances", record, ALLOWANCE_DOMAIN);
     if (outcome !== "later") allowanceOutcomes.set(a.id, outcome);
   }
@@ -46,6 +51,23 @@ export async function sendAllowancesAndRequests(dir: string, connection: Pick<Ho
       if (!outcome || a.sent_at) return a;
       if (outcome === "sent") { sent.allowances += 1; return { ...without(a, "reason"), sent_at: at }; } // the workspace keeps the text
       return { ...a, sent_at: at };
+    }), now);
+  }
+
+  // "Stop allowing": the ended record for an allowance the workspace already has: its id, "ended", who and when, signed the
+  // same way. A workspace that does not know it refuses it (400) and is not asked again; the allowance stays ended here.
+  const endOutcomes = new Map<string, "sent" | "refused">();
+  for (const a of readAllowances(dir)) {
+    if (!a.ended_at || a.end_sent_at || !a.sent_at || a.created_by !== "person") continue;
+    const outcome = await post("/v1/allowances", endedRecord(a), ALLOWANCE_DOMAIN);
+    if (outcome !== "later") endOutcomes.set(a.id, outcome);
+  }
+  if (endOutcomes.size) {
+    writeAllowances(dir, readAllowances(dir).map((a) => {
+      const outcome = endOutcomes.get(a.id);
+      if (!outcome || a.end_sent_at) return a;
+      if (outcome === "sent") sent.ended += 1;
+      return { ...a, end_sent_at: at };
     }), now);
   }
 
