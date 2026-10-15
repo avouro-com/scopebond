@@ -44,6 +44,11 @@
   }
   const GEAR = "M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2zm6.3 3.6l-1.4.3a5 5 0 0 1-.4 1l.8 1.2-1.1 1.1-1.2-.8a5 5 0 0 1-1 .4l-.3 1.4H7.3L7 12a5 5 0 0 1-1-.4l-1.2.8-1.1-1.1.8-1.2a5 5 0 0 1-.4-1L2.7 8.8V7.2L4.1 7a5 5 0 0 1 .4-1l-.8-1.2 1.1-1.1 1.2.8a5 5 0 0 1 1-.4l.3-1.4h1.4l.3 1.4a5 5 0 0 1 1 .4l1.2-.8 1.1 1.1-.8 1.2a5 5 0 0 1 .4 1l1.4.3z";
   const CROSS = "M4 4l8 8M12 4l-8 8";
+  // The rule's name when the agent sends none (an older agent): never an empty line, never a rule id.
+  const ANY_RULE = "A Scopebond rule";
+  const ruleOf = (item) => (item.rule_title && String(item.rule_title).trim()) || ANY_RULE;
+  // An action known only by its rule, in words: "An action under “Delete files”".
+  const underRule = (item) => "An action under “" + ruleOf(item) + "”";
 
   const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   function when(iso) {
@@ -264,7 +269,7 @@
   function blockItem(s, model, b, i) {
     const busy = s.busy;
     const words = b.what || b.summary;
-    const meta = [b.rule_title, b.project, b.tool].filter(Boolean).join(" · ");
+    const meta = [ruleOf(b), b.project, b.tool].filter(Boolean).join(" · ");
     const offers = b.offers;
     const allows = offers ? offers.once || offers.fifteen || offers.always : b.can_act;
     let act = null;
@@ -323,7 +328,7 @@
       const how = a.unblocked === "automatic" ? "Unblocked automatically"
         : a.choice === "once" ? "Just this once" : a.choice === "fifteen" ? "For 15 minutes" : a.by === "admin" ? "Approved by " + (a.answered_by || "an admin") : "Always on this computer";
       const end = a.state === "proposed" ? "Waiting for an admin" : a.choice === "once" ? "Until it runs again" : ends(a.ends_at);
-      const what = a.what || (a.rule_title ? "An action under " + a.rule_title : "an action");
+      const what = a.what || underRule(a);
       // "Stop allowing" for what the person let through, with a confirm in the row.
       const mine = a.by === "person" && (a.state === "active" || a.state === "proposed");
       const stop = !mine ? null : ui.stopping === a.id
@@ -339,10 +344,10 @@
           onclick: () => { ui.stopping = a.id; draw("stop-yes-" + a.id); } })]);
       return el("li", { class: "item" }, [
         el("div", { class: "row" }, [
-          el("span", { class: "what", text: a.what || (a.rule_title ? "An action under " + a.rule_title : "An action") }),
+          el("span", { class: "what", text: what }),
           el("span", { class: "chip " + (a.state === "proposed" ? "wait" : "ok"), text: a.state === "proposed" ? "Waiting" : "Active" }),
         ]),
-        el("span", { class: "meta", text: [how, end, a.what ? a.rule_title : null].filter(Boolean).join(" · ") }),
+        el("span", { class: "meta", text: [how, end, a.what ? ruleOf(a) : null].filter(Boolean).join(" · ") }),
         stop,
       ]);
     }))];
@@ -356,7 +361,7 @@
       const said = r.state === "approved" ? "Approved" + who : r.state === "declined" ? "Declined" + who : "Requested " + when(r.asked_at) + (r.sent ? "" : " · not sent yet");
       return el("li", { class: "item" }, [
         el("div", { class: "row" }, [el("span", { class: "what", text: r.what }), el("span", { class: "chip " + chip[0], text: chip[1] })]),
-        el("span", { class: "meta", text: [said, r.rule_title].filter(Boolean).join(" · ") }),
+        el("span", { class: "meta", text: [said, ruleOf(r)].join(" · ") }),
         r.note ? el("span", { class: "meta", text: "“" + r.note + "”" }) : null,
         el("span", { class: "meta", text: "Your reason: " + r.reason }),
       ]);

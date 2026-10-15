@@ -61,6 +61,7 @@ import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor, repositoryFacts } from "./receipt-context.js";
+import { noteBlock, projectOf } from "./block-notes.js";
 import { RepositoryEnrollmentError, isRepositoryConnection, repositoryConnectionDir, REPO_TOKEN_ENV } from "./repo-enrol.js";
 import { REPO_HOOK_MARKER } from "./init.js";
 import { keyedSessionId, sessionBudgetGuardFor } from "./session-budgets.js";
@@ -284,6 +285,12 @@ const copilotDeadlineMs = (): number => {
   return Number.isFinite(configured) && configured > 0 && configured < COPILOT_DECISION_DEADLINE_MS ? configured : COPILOT_DECISION_DEADLINE_MS;
 };
 
+/** For the tray: the rule, project and tool of a blocked call, noted on this computer (block-notes.ts). Never throws. */
+function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision): void {
+  if (decision.decision !== "deny") return;
+  try { noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd) }); } catch { /* the receipt is the record */ }
+}
+
 /** `deadlineAt`: a time after which the call is denied rather than evaluated (GitHub Copilot, whose hook timeouts fail
  *  open). It is checked once the policy and keys are loaded, before the action is evaluated: a load held up by a busy disk
  *  or a lock is synchronous, so a timer alone could not interrupt it. */
@@ -309,12 +316,13 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // workspace has not said it reads it. Never fails the call.
     const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(dir, input!), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
+      const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(dir, input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
     if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; deny(copilotDeadlineReason()); }
     const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
+    noteIfBlocked(dir, cwd, harness, decision);
     // Allowed: what is left is record delivery, which must not turn an allowed call into a "did not finish" deny.
     if (decision.decision === "allow" && copilotDeadlineTimer !== undefined) { clearTimeout(copilotDeadlineTimer); copilotDeadlineTimer = undefined; }
     const observer = recordObservations(dir, cwd, input!, decision, harness);
@@ -520,11 +528,12 @@ async function runCursor(): Promise<void> {
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(dir, input), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
+      const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(dir, input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
+    noteIfBlocked(dir, cwd, "cursor", decision);
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
     observer?.close();

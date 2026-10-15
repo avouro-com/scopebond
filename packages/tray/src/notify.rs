@@ -67,13 +67,12 @@ pub fn block_toast(blocks: &[RecentBlock]) -> Option<Toast> {
                 (None, Some(project)) => Some(project.to_string()),
                 (None, None) => None,
             };
-            let rule = one.rule_title.clone().or_else(|| one.rule.clone());
-            let text = [place, rule].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let text = [place, Some(one.rule_name().to_string())].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let button = block_button(one);
             Some(Toast {
                 kind: Kind::Block,
                 title: cut(&format!("Blocked: {}", one.words()), 120),
-                text: if text.is_empty() { "Scopebond blocked an action your coding agent tried".into() } else { cut(&text, 200) },
+                text: cut(&text, 200),
                 unblock: button.and(one.action_id.clone()),
                 button,
             })
@@ -292,7 +291,7 @@ mod tests {
         let toasts = r.blocks(5, &[block("b"), block("a")], Blocks);
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].title, "Blocked: rm -rf b");
-        assert_eq!(toasts[0].text, "no-destroy");
+        assert_eq!(toasts[0].text, "A Scopebond rule", "no rule name from the agent: a plain name, never the rule id");
         assert!(r.blocks(100, &[block("b"), block("a")], Blocks).is_empty(), "once");
         assert!(r.blocks(200, &[block("c"), block("b")], Problems).is_empty(), "problems only: no blocks");
         assert_eq!(r.blocks(300, &[block("d"), block("c")], Blocks).len(), 1, "c was seen meanwhile");
@@ -344,12 +343,12 @@ mod tests {
         b.what = "Read .env.production".into();
         b.tool = Some("Claude Code".into());
         b.project = Some("checkout".into());
-        b.rule_title = Some("Reading a secret file".into());
+        b.rule_title = Some("Read passwords, keys or secrets".into());
         b.can_act = true;
         b.offers = Some(BlockOffers { once: true, ..Default::default() });
         let t = block_toast(std::slice::from_ref(&b)).unwrap();
         assert_eq!(t.title, "Blocked: Read .env.production");
-        assert_eq!(t.text, "Claude Code in checkout · Reading a secret file");
+        assert_eq!(t.text, "Claude Code in checkout · Read passwords, keys or secrets");
         assert_eq!(t.unblock.as_deref(), Some("a"));
         assert_eq!(t.button, Some("Unblock…"));
         b.offers = Some(BlockOffers { ask: true, ..Default::default() });
@@ -365,5 +364,19 @@ mod tests {
         assert!(block_toast(&[]).is_none());
         b.what = "x".repeat(300);
         assert_eq!(block_toast(std::slice::from_ref(&b)).unwrap().title.chars().count(), 120);
+    }
+
+    #[test]
+    fn a_block_without_a_rule_name_says_a_scopebond_rule_never_the_rule_id() {
+        // An older agent sends no rule name: the toast names "A Scopebond rule", not the id ("no-destroy").
+        let b = block("a");
+        let t = block_toast(std::slice::from_ref(&b)).unwrap();
+        assert_eq!(t.text, "A Scopebond rule");
+        assert!(!t.text.contains("no-destroy"));
+        let mut blank = block("b");
+        blank.rule_title = Some("  ".into());
+        blank.tool = Some("Claude Code".into());
+        blank.project = Some("checkout".into());
+        assert_eq!(block_toast(std::slice::from_ref(&blank)).unwrap().text, "Claude Code in checkout · A Scopebond rule");
     }
 }

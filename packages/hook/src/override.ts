@@ -24,6 +24,7 @@ import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
 import { requestOverSocket } from "./local-socket.js";
 import { maskHomeInPolicy, unmaskHomeFolder, unmaskHomeInValue } from "./home-mask.js";
+import { ruleName } from "./rule-titles.js";
 
 export const OVERRIDE_STATE_FILE = "overrides.json";
 const AGENT_FILE = "agent.json";
@@ -31,20 +32,6 @@ const TOKEN_HEADER = "x-scopebond-agent-token";
 /** Claude Code permission modes in which it shows the person a prompt for "ask". Any other or missing mode blocks. */
 export const PROMPTING_MODES = new Set(["default", "acceptEdits", "plan"]);
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-const RULE_TITLE: Record<AnyManagedRuleId, string> = {
-  "force-push-protected": "Force-push to a protected branch",
-  "push-protected": "Push to a protected branch",
-  "destructive-shell": "Destructive command",
-  "secret-read": "Reading a secret file",
-  "ci-config-write": "Changing CI configuration",
-  "network-egress": "Request to a site not on the allowed list",
-  "cloud-destructive": "Deleting a cloud resource or Kubernetes object",
-  "production-deploy": "Deploying to production",
-  "secret-write": "Storing a secret",
-  "iam-change": "Changing identity or access",
-  "database-migrate": "A database migration that goes down or resets",
-};
 
 export const digestOf = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -142,11 +129,6 @@ export function offeredLength(lasts: "once" | "15m" | "always" | undefined, offe
   return offers.allow ? "once" : null;
 }
 
-/** The workspace rule's name as a person reads it (the managed rules' titles), or null for a rule this hook does not name. */
-export function ruleTitle(rule: string | null | undefined): string | null {
-  return rule && Object.prototype.hasOwnProperty.call(RULE_TITLE, rule) ? RULE_TITLE[rule as AnyManagedRuleId] : null;
-}
-
 /** The same action, whatever tool call it came from: its type and parameters without the per-call group id. */
 export function actionKey(intent: { action_type?: string; params?: Record<string, unknown> }): string {
   // The group fields name the tool call an action came from (its id, size and place in it), so they are left out.
@@ -219,11 +201,18 @@ export interface OverrideContext {
   permissionMode?: string | null;
   /** The keyed id of this coding-agent session, for allowances an admin approved for one session. */
   sessionId?: string | null;
+  /** The project's name (the repository's, else the folder's), read only when a person is asked, for the window and the tray. */
+  project?: () => string | null;
   now?: () => number;
   /** How long to wait for the person; the agent's own hook timeout must be longer. A function is read when the person is
    *  asked, so the wait can shrink to what is left of the hook call's deadline (hook-deadline.ts). */
   waitMs?: number | (() => number);
   ask?: typeof askAgent;
+}
+
+/** The project for the question, when it can be read. */
+function projectOfCall(ctx: OverrideContext): { project?: string } {
+  try { const project = ctx.project?.(); return project ? { project } : {}; } catch { return {}; }
 }
 
 /** What happened when the last override was considered, so a denial can say how an override would be possible. */
@@ -241,7 +230,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     const setting = rule ? doc.rules[rule] : undefined;
     if (!rule || !personMayAct(setting) || !setting?.override) return null;
     const terms = setting.override;
-    const title = RULE_TITLE[rule];
+    const title = ruleName(rule);
     // Would the action still be denied with every overridable rule only recorded? Then a Block rule or Scopebond's own
     // protection denies it too, and no one may override that.
     // The intent was signed with the home folder masked, so the floor's patterns are masked the same way (as the runtime's).
@@ -283,7 +272,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     let answer = await (ctx.ask ?? askAgent)(ctx.home, {
       action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting.mode, offers,
       // For the tray, which shows the question too: the coding tool, and what the workspace set about the length.
-      harness: ctx.harness, reviewed: terms.review === true, always_days: terms.always_days ?? ALLOWANCE_DEFAULT_DAYS, always_needs_admin: terms.always === "needs_admin",
+      harness: ctx.harness, ...projectOfCall(ctx), reviewed: terms.review === true, always_days: terms.always_days ?? ALLOWANCE_DEFAULT_DAYS, always_needs_admin: terms.always === "needs_admin",
       lasts: terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only", timeout_ms: waitMs,
     }, waitMs + 2_000);
     // Ask an admin: the action stays blocked; the request waits for the agent to send it.
@@ -364,7 +353,7 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
   const offers = offersFor(setting.mode, terms, underLimit);
   if (!allowsAny(offers) && !offers.ask) return null;
   return {
-    item, title: RULE_TITLE[item.rule as AnyManagedRuleId] ?? item.rule, reason_min: terms.reason_min, mode: setting.mode as "override" | "ask", offers,
+    item, title: ruleName(item.rule), reason_min: terms.reason_min, mode: setting.mode as "override" | "ask", offers,
     always_days: Math.min(ALLOWANCE_MAX_DAYS, Math.max(1, Math.round(terms.always_days ?? ALLOWANCE_DEFAULT_DAYS))),
     always_needs_admin: terms.always === "needs_admin",
     reviewed: terms.review === true,

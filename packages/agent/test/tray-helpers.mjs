@@ -3,7 +3,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scaffold, createHookRuntime, mapClaudeToolUse, createOverrideHandler, compileManaged, defaultRules, digestRules, MANAGED_DOC_FILE } from "@scopebond/hook";
+import { scaffold, createHookRuntime, mapClaudeToolUse, createOverrideHandler, compileManaged, defaultRules, digestRules, noteBlock, MANAGED_DOC_FILE } from "@scopebond/hook";
 import { startService } from "../dist/index.js";
 
 const ENFORCE = { enforce: ["protect-branches", "safe-shell", "protect-write", "protect-read"] };
@@ -26,18 +26,23 @@ export function computer(rules = {}) {
 }
 
 /** Run tool calls through the hook as Claude Code in a checkout of acme/checkout; the window is not there, so each block is
- *  kept for the tray. */
-export async function blockActions(dir, toolUses) {
+ *  kept for the tray. `context: null`: receipts without a context (a workspace that has not said it reads it); `note`: the
+ *  hook also notes each block for the tray, as its command line does. */
+export async function blockActions(dir, toolUses, options = {}) {
+  const context = options.context === undefined ? { harness: "claude", repository: "github.com/acme/checkout" } : options.context;
   const runtime = createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo",
-    context: { harness: "claude", repository: "github.com/acme/checkout" },
+    ...(context ? { context } : {}),
     override: (agentKid) => {
       const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", waitMs: 50, ask: async () => ({ decision: "unavailable" }) });
       return made ? { handler: made.handler, hint: () => null } : null;
     },
   });
   try {
-    for (const use of toolUses) await runtime.evaluate(mapClaudeToolUse({ cwd: "/repo", ...use }));
+    for (const use of toolUses) {
+      const decision = await runtime.evaluate(mapClaudeToolUse({ cwd: "/repo", ...use }));
+      if (options.note) noteBlock(dir, decision, { harness: "claude", project: options.note.project });
+    }
   } finally { runtime.close(); }
 }
 
