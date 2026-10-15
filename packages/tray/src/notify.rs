@@ -291,7 +291,7 @@ mod tests {
         let toasts = r.blocks(5, &[block("b"), block("a")], Blocks);
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].title, "Blocked: rm -rf b");
-        assert_eq!(toasts[0].text, "no-destroy");
+        assert_eq!(toasts[0].text, "A Scopebond rule", "no rule name from the agent: a plain name, never the rule id");
         assert!(r.blocks(100, &[block("b"), block("a")], Blocks).is_empty(), "once");
         assert!(r.blocks(200, &[block("c"), block("b")], Problems).is_empty(), "problems only: no blocks");
         assert_eq!(r.blocks(300, &[block("d"), block("c")], Blocks).len(), 1, "c was seen meanwhile");
