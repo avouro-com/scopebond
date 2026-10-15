@@ -5,6 +5,7 @@ import { canonical, sha256 } from "./crypto.js";
 import { isSignedChainHead, type SignedChainHead } from "@scopebond/verify/chain";
 import type { Attester, ReceiptPayload, ReceiptStore, SignedReceipt } from "./receipts.js";
 import { buildSummary, isNotable } from "./summary.js";
+import { machineIdHeaders, type MachineIdSource } from "./machine-id.js";
 
 export interface CloudOutboxEntry {
   id: string;
@@ -164,6 +165,9 @@ export interface CloudExporterOptions {
   /** A wait the workspace asked for that an earlier process recorded (`status().backoff`): nothing is sent before `until`
    *  (at most an hour and five minutes from now, whatever the value says), and its `count` carries on. */
   backoff?: CloudBackoff | null;
+  /** This computer's machine id (see machine-id.ts), sent on each delivery in the `x-scopebond-machine-id` header. A function
+   *  is asked when a request is about to be made. Nothing is sent without one. */
+  machineId?: MachineIdSource;
 }
 
 /** When a delivery that carried a chain head back was sent, and when its answer arrived (this computer's clock, ms). */
@@ -589,7 +593,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
       try {
         res = await doFetch(summaryEndpoint, {
           method: "POST",
-          headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json" },
+          headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json", ...machineIdHeaders(opts.machineId) },
           body: JSON.stringify({ summaries: part.map((p) => p.body), ...(queue ? { queue } : {}) }),
         });
       } catch (error) { release(i); throw error; }
@@ -734,7 +738,7 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
         const sentAt = now();
         const res = await doFetch(endpoint, {
           method: "POST",
-          headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json", ...(compress ? { "content-encoding": "gzip" } : {}) },
+          headers: { authorization: "Bearer " + opts.credential, "content-type": "application/json", ...(compress ? { "content-encoding": "gzip" } : {}), ...machineIdHeaders(opts.machineId) },
           body: compress ? await gzipBody(json) : json,
         });
         if (/\bgzip\b/i.test(res.headers?.get?.("accept-encoding") ?? "")) workspaceReadsGzip = true;

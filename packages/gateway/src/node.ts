@@ -14,3 +14,8 @@ export { openApprovalBinder, openDispatchGuard, openCloudSource, targetIdFor, BI
 export type { DispatchFile, ApprovalBinder } from "./dispatch-config.js";
 export { findProgram, programPath, isBareProgramName, windowsSystemProgram } from "./node-programs.js";
 export type { FindProgramOptions, WindowsSystemProgram } from "./node-programs.js";
+export {
+  cachedMachineId, computeMachineId, machineId, machineIdScope, normalizeRawMachineId, parseIoregPlatformUuid, parseRegQueryMachineGuid, readRawMachineId,
+  LINUX_MACHINE_ID_FILES, MACHINE_ID_RECHECK_MS, MACOS_IOREG, WINDOWS_MACHINE_GUID_KEY,
+} from "./node-machine-id.js";
+export type { CachedMachineIdOptions, MachineIdReaders } from "./node-machine-id.js";

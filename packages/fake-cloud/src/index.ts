@@ -22,7 +22,11 @@ export interface Fault { status?: number; code?: string; delayMs?: number; drop?
 export type FakeRoute = "device/code" | "device/token" | "enroll" | "repository/enroll" | "ingest" | "observations" | "policy" | "self-check" | "client-version" | "summaries" | "uninstall";
 
 export interface FakeCloudState {
-  code_requests: Array<{ client_name: string | null; harness: string | null }>;
+  code_requests: Array<{ client_name: string | null; harness: string | null; machine_id: string | null }>;
+  /** The `machine_id` each enrollment (/v1/enroll) carried, null when it carried none. */
+  enroll_machine_ids: Array<string | null>;
+  /** The `x-scopebond-machine-id` header of each check-in (rules check, delivery, summaries, observations), null without one. */
+  checkin_machine_ids: Array<{ route: FakeRoute; machine_id: string | null }>;
   enrolled: number;
   /** Repository enrolments (`/v1/repository/enroll`): the repository the hook reported and whether both possession proofs verified. */
   repository_enrollments: Array<{ repository: string | null; proofs_verified: boolean }>;
@@ -165,7 +169,8 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
   /** Summary ids held, so a summary sent again is answered as a duplicate. */
   const summaryIds = new Set<string>();
   const seen = {
-    codeRequests: [] as FakeCloudState["code_requests"], enrolled: 0, repositoryEnrollments: [] as FakeCloudState["repository_enrollments"], ingested: [] as unknown[], observations: 0,
+    codeRequests: [] as FakeCloudState["code_requests"], enrollMachineIds: [] as FakeCloudState["enroll_machine_ids"],
+    checkinMachineIds: [] as FakeCloudState["checkin_machine_ids"], enrolled: 0, repositoryEnrollments: [] as FakeCloudState["repository_enrollments"], ingested: [] as unknown[], observations: 0,
     selfChecks: [] as FakeCloudState["self_checks"], policyPolls: 0, versionPolls: 0, approved: [] as string[],
     faultsApplied: [] as FakeCloudState["faults_applied"],
     summaries: 0, summarizedRecords: 0, summaryDuplicates: 0, summaryRejected: 0, lastSummaries: null as unknown, uninstalls: [] as FakeCloudState["uninstalls"],
@@ -187,6 +192,10 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
       };
       const url = new URL(req.url ?? "/", "http://fake");
       const route = routeOf(url.pathname);
+      if (route === "policy" || route === "ingest" || route === "summaries" || route === "observations") {
+        const header = req.headers["x-scopebond-machine-id"];
+        seen.checkinMachineIds.push({ route, machine_id: typeof header === "string" ? header : null });
+      }
       const fault = route ? faults.get(route) : undefined;
       if (route && fault) {
         if (fault.times !== undefined) { fault.times -= 1; if (fault.times <= 0) faults.delete(route); }
@@ -221,7 +230,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
 
     if (path === "/healthz") return json(200, { ok: true });
     if (path === "/v1/device/code" && req.method === "POST") {
-      seen.codeRequests.push({ client_name: typeof body.client_name === "string" ? body.client_name : null, harness: typeof body.harness === "string" ? body.harness : null });
+      seen.codeRequests.push({ client_name: typeof body.client_name === "string" ? body.client_name : null, harness: typeof body.harness === "string" ? body.harness : null, machine_id: typeof body.machine_id === "string" ? body.machine_id : null });
       const device_code = randomBytes(32).toString("base64url");
       const user_code = newUserCode();
       codes.set(device_code, { user_code, approved: false, consumed: false, polled: false });
@@ -250,6 +259,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
     if (path === "/v1/enroll" && req.method === "POST") {
       const known = [...codes.values()].some((c) => c.enrollment_token && c.enrollment_token === body.enrollment_token) || (typeof body.enrollment_token === "string" && body.enrollment_token.startsWith("sbe_fake"));
       if (!known || typeof body.public_key_pem !== "string") return json(400, { error: "invalid_enrollment" });
+      seen.enrollMachineIds.push(typeof body.machine_id === "string" ? body.machine_id : null);
       const credential = "sbm_" + randomBytes(16).toString("hex");
       credentials.add(credential);
       seen.enrolled += 1;
@@ -412,7 +422,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
   }
 
   const state = (): FakeCloudState => ({
-    code_requests: seen.codeRequests, enrolled: seen.enrolled, repository_enrollments: seen.repositoryEnrollments, ingested: seen.ingested.length,
+    code_requests: seen.codeRequests, enroll_machine_ids: seen.enrollMachineIds, checkin_machine_ids: seen.checkinMachineIds, enrolled: seen.enrolled, repository_enrollments: seen.repositoryEnrollments, ingested: seen.ingested.length,
     ingested_results: seen.ingested.map((r) => ((r as { payload?: { realtime_result?: string } })?.payload?.realtime_result ?? null)),
     observations: seen.observations, self_checks: seen.selfChecks, policy_polls: seen.policyPolls, version_polls: seen.versionPolls,
     approved_codes: seen.approved, pending_codes: [...codes.values()].filter((c) => !c.approved && !c.consumed).map((c) => c.user_code),

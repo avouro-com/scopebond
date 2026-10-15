@@ -5,7 +5,7 @@
 // browser are stand-ins.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +18,7 @@ after(() => { for (const k of ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
 
 const { startFakeCloud } = await import("@scopebond/fake-cloud");
 const { configuredHookCommands, loadConnection, userHarnessFile } = await import("@scopebond/hook");
-const { installedWorkspace, httpsOrigin, startFirstSignIn, startService, callAgent, DEFAULT_WORKSPACE, FIRST_SIGNIN_FILE } = await import("../dist/index.js");
+const { installedWorkspace, httpsOrigin, runCycle, startFirstSignIn, startService, callAgent, DEFAULT_WORKSPACE, FIRST_SIGNIN_FILE } = await import("../dist/index.js");
 const { trayModel } = await import("../dist/tray-model.js");
 const { healthOf } = await import("../dist/health.js");
 
@@ -161,4 +161,27 @@ test("an npm install never signs in by itself, and its Reconnect still asks for 
     assert.match(answer.error, /never connected/);
     assert.match(answer.error, /login https:\/\/<your-workspace>/);
   } finally { await service.stop(); await cloud.close(); }
+});
+
+test("the machine id: the sign-in carries it unscoped, the enrollment and the agent's check-ins in the approved workspace's scope", async () => {
+  const dir = mkdtempSync(join(root, "home-m-"));
+  const { cloud, origin, fetchImpl } = await httpsWorkspace();
+  try {
+    const first = await startFirstSignIn(dir, origin, { fetchImpl, open: () => {}, harnesses: ["claude"], autostart: () => "autostart on" });
+    assert.ok(cloud.approve(first.started.user_code));
+    assert.equal(await first.done, true);
+    // This computer's own id (a hash of it), or none where the OS gives none. The sign-in does not know the workspace yet.
+    const signIn = cloud.state().code_requests[0].machine_id;
+    if (signIn !== null) assert.match(signIn, /^m1:[A-Za-z0-9_-]{43}$/);
+    // The approval named the workspace (org-fake): the enrollment carries the id in its scope, and it is kept in that scope.
+    const kept = JSON.parse(readFileSync(join(dir, "machine-id.json"), "utf8"));
+    assert.equal(kept.scope, "org-fake");
+    assert.equal(cloud.state().enroll_machine_ids[0], kept.machine_id);
+    assert.equal(kept.machine_id === null, signIn === null);
+    if (signIn !== null) assert.notEqual(kept.machine_id, signIn, "a workspace's scope gives a different id");
+    await runCycle({ dir, fetchImpl, timeoutMs: 5000 });
+    const policy = cloud.state().checkin_machine_ids.filter((c) => c.route === "policy");
+    assert.ok(policy.length >= 1, "the rules were checked");
+    for (const c of policy) assert.equal(c.machine_id, kept.machine_id);
+  } finally { await cloud.close(); }
 });

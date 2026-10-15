@@ -18,6 +18,7 @@ import { summaryOptions } from "./evidence-detail.js";
 import { replaceFile } from "./safe-fs.js";
 import { forgetWorkspaceAnnouncements, noteReceiptContext, receiptContextFrom } from "./receipt-context.js";
 import { versionedFetch, withHookVersion } from "./workspace-fetch.js";
+import { machineIdFor } from "./machine-id.js";
 
 /** The persisted connection between this machine and a Cloud workspace. Holds the
  *  scoped machine credential; treat cloud.json as a secret (written 0600). */
@@ -77,9 +78,12 @@ export function loadConnection(dir: string): HookConnection | null {
  *  token. Reconnecting then replaces the key and enrolls again with the same token, so a
  *  second `login` always works; the old key is kept under retired-keys/, and queued
  *  receipts it signed leave the delivery queue (they stay in the local log for
- *  `recover`), because the new connection can never deliver them. */
+ *  `recover`), because the new connection can never deliver them.
+ *
+ *  The enrollment carries this computer's machine id (machine-id.ts), in the scope of `workspaceId` when the sign-in
+ *  named the workspace, else of the workspace this folder is connected to or last enrolled with, else unscoped. */
 export async function connectCloud(
-  dir: string, url: string, bundle: CloudEnrollmentBundle, fetchImpl?: typeof fetch,
+  dir: string, url: string, bundle: CloudEnrollmentBundle, fetchImpl?: typeof fetch, workspaceId?: string | null,
 ): Promise<HookConnection & { rotatedFrom?: string; setAside?: number }> {
   // The credential, the keys and everything else in the folder: readable by this user alone.
   ensurePrivateDir(dir);
@@ -87,14 +91,15 @@ export async function connectCloud(
   const { attester: agent } = loadOrCreateAttester({ file: join(dir, "agent.key") });
   let rotatedFrom: string | undefined;
   let result;
+  const machineId = machineIdFor(dir, workspaceId ?? loadConnection(dir)?.organization_id);
   try {
-    result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: versionedFetch(fetchImpl) });
+    result = await completeCloudEnrollment({ url, bundle, attester, agent, machineId, fetch: versionedFetch(fetchImpl) });
   } catch (error) {
     if (!(error instanceof CloudEnrollmentError) || error.code !== "gateway_key_conflict") throw error;
     rotatedFrom = attester.kid;
     retireAttesterKey(dir, attester.kid);
     attester = loadOrCreateAttester({ file: join(dir, "attester.key") }).attester;
-    result = await completeCloudEnrollment({ url, bundle, attester, agent, fetch: versionedFetch(fetchImpl) });
+    result = await completeCloudEnrollment({ url, bundle, attester, agent, machineId, fetch: versionedFetch(fetchImpl) });
   }
   const { ingest_url: offered, ...enrolled } = result as typeof result & { ingest_url?: unknown };
   const ingest = safeIngestOrigin(offered);
@@ -105,6 +110,8 @@ export async function connectCloud(
   // A new connection may be a different workspace: what the last one said it reads (receipt context) no longer holds, and the
   // next tool call checks the rules at once (the caller may check them right away too).
   forgetWorkspaceAnnouncements(dir);
+  // From now on the machine id is computed in this workspace's scope.
+  machineIdFor(dir, connection.organization_id);
   let setAside = 0;
   const outboxPath = join(dir, "receipts.db.cloud-outbox.db");
   if (existsSync(outboxPath)) {
@@ -178,6 +185,7 @@ export function attachExporter(
     return res;
   }) as typeof fetch;
   const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: deliver,
+    machineId: () => machineIdFor(dir, connection.organization_id),
     summaries, ...(sequenceProof ? { sequenceProof } : {}), ...(options.onGap ? { onGap: options.onGap } : {}),
     ...(options.backoff ? { backoff: options.backoff } : {}),
     onChainHead: chainHeadRecorder(join(dirname(outboxDbPath), CHAIN_HEADS_FILE)) });

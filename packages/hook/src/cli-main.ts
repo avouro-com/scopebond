@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { clientNameField } from "./computer-name.js";
 import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
-import { verifyReceipt } from "@scopebond/gateway";
+import { machineIdHeaders, verifyReceipt } from "@scopebond/gateway";
 import { checkChains } from "./chain-verify.js";
 import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import * as gatewayNode from "@scopebond/gateway/node";
@@ -72,6 +72,7 @@ import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
+import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, waitWithinDeadline } from "./hook-deadline.js";
 import { policyKeyProblems } from "./policy-keys.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
@@ -1232,9 +1233,9 @@ async function runConnect(args: string[]): Promise<void> {
 
 /** Enroll with a bundle and wire the agent: shared by `connect` (a pasted enrollment)
  *  and `login` (one received through device-code approval). */
-async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBundle, harness: Harness, args: string[]): Promise<void> {
+async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBundle, harness: Harness, args: string[], workspaceId?: string | null): Promise<void> {
   try {
-    const c = await connectCloud(dir, url, bundle);
+    const c = await connectCloud(dir, url, bundle, undefined, workspaceId);
     console.log(`✓ Connected to ${c.url}`);
     if (c.rotatedFrom) console.log(`✓ This computer's earlier key (${c.rotatedFrom}) was no longer accepted, so it was replaced; the old key is kept in ${join(dir, "retired-keys")}`);
     if (c.setAside) console.log(`  ${c.setAside.toLocaleString()} queued record(s) signed by an earlier key cannot go through this connection. To deliver them, run: ${cliCommand("recover")}`);
@@ -1584,7 +1585,7 @@ async function runObservations(args: string[]): Promise<void> {
   const emitter = opened.emitter;
   try {
     if (sub === "flush") {
-      const outcome = await uploadPending(emitter.store, { url: ingestUrl(emitter.connection), credential: emitter.connection.credential, timeoutMs: 10_000 });
+      const outcome = await uploadPending(emitter.store, { url: ingestUrl(emitter.connection), credential: emitter.connection.credential, timeoutMs: 10_000, machineId: machineIdFor(emitter.dir, emitter.connection.organization_id) });
       const left = emitter.store.pendingSummary().count;
       console.log(`${outcome.result}: ${outcome.acknowledged} acknowledged, ${outcome.deferred} deferred, ${outcome.rejected} refused; ${left} still pending${outcome.detail ? ` (${outcome.detail})` : ""}`);
       process.exitCode = left > 0 ? 1 : 0;
@@ -1892,7 +1893,7 @@ async function runCapabilities(args: string[]): Promise<void> {
     }
     if (observed.emitter) {
       try {
-        const delivered = await deliverProofReceipts(observed.emitter.connection, collected);
+        const delivered = await deliverProofReceipts(observed.emitter.connection, collected, { machineId: machineIdFor(observed.emitter.dir, observed.emitter.connection.organization_id) });
         if (!delivered) console.error("could not deliver the fixture receipts to the workspace; the capability proofs were not sent (run it again when it is reachable)");
         else {
           const queued = observed.emitter.capabilityProofs(proven.cells.flatMap((cell) => {
@@ -2035,7 +2036,7 @@ async function runDoctor(): Promise<void> {
     let recommended = readMeta(active).recommended ?? null;
     try {
       const res = await fetch(new URL("/v1/policy", connection.url).toString(), {
-        headers: { authorization: `Bearer ${connection.credential}`, "x-scopebond-hook-version": hookVersion() },
+        headers: { authorization: `Bearer ${connection.credential}`, "x-scopebond-hook-version": hookVersion(), ...machineIdHeaders(machineIdFor(active, connection.organization_id)) },
         redirect: "error", signal: AbortSignal.timeout(10_000),
       });
       recommended = recommendedFrom(res.headers) ?? recommended;
@@ -2149,8 +2150,10 @@ async function runLogin(args: string[]): Promise<void> {
   if (process.env.CLAUDECODE || process.env.CODEX_SANDBOX || process.env.CURSOR_AGENT) {
     console.error("Note: this looks like a coding agent's own terminal. Signing in works best from your own terminal window, outside the agent.");
   }
+  const dir = loginDir(args);
   let start: { status: number; json: Record<string, unknown> };
-  try { start = await post("/v1/device/code", { ...clientNameField(), harness }); }
+  // The machine id (a hash, never the OS id itself) lets the workspace see that a computer signing in again is the same one.
+  try { start = await post("/v1/device/code", { ...clientNameField(), harness, ...machineIdField(dir, loadConnection(dir)?.organization_id) }); }
   catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}. ${unreachableHint(error)}`); process.exit(1); }
   const deviceCode = typeof start.json.device_code === "string" ? start.json.device_code : "";
   if (start.status !== 200 || !deviceCode) {
@@ -2163,7 +2166,6 @@ async function runLogin(args: string[]): Promise<void> {
   const deadline = Date.now() + Math.max(60, Number(start.json.expires_in ?? 600)) * 1000;
   console.log(`To connect this computer, open:\n\n  ${verify}\n\nand check that it shows the code  ${userCode}\n`);
   console.log("Waiting for approval (the code expires in 10 minutes; Ctrl+C to stop)…");
-  const dir = loginDir(args);
   scaffold(dir, {});
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -2186,7 +2188,7 @@ async function runLogin(args: string[]): Promise<void> {
           process.exit(1);
         }
       }
-      await finishConnect(dir, origin, polled.json.enrollment as CloudEnrollmentBundle, harness, args);
+      await finishConnect(dir, origin, polled.json.enrollment as CloudEnrollmentBundle, harness, args, approvedWorkspaceId(polled.json));
       return;
     }
     const error = polled.json.error;

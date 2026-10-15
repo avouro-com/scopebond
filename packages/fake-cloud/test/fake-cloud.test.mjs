@@ -28,7 +28,7 @@ test("a computer signs in with a code a person approves, enrolls, and delivers",
     const state = cloud.state();
     assert.equal(state.ingested, 1);
     assert.deepEqual(state.ingested_results, ["deny"]);
-    assert.deepEqual(state.code_requests, [{ client_name: "laptop", harness: "claude" }]);
+    assert.deepEqual(state.code_requests, [{ client_name: "laptop", harness: "claude", machine_id: null }]);
     assert.equal((await fetch(cloud.url + "/v1/policy", { headers: { authorization: `Bearer ${credential}` } })).status, 204);
     assert.equal((await fetch(cloud.url + "/v1/client-version", { headers: { authorization: `Bearer ${credential}` } })).status, 404);
     cloud.setClientVersion({ policy: "recommended", hook: "1.2.3", agent: "0.4.0" });

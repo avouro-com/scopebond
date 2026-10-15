@@ -22,6 +22,8 @@
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { connectionPath, loadConnection } from "./cloud.js";
+import { machineIdHeaders } from "@scopebond/gateway";
+import { machineIdFor } from "./machine-id.js";
 import { readDeliveryState, recordRulesCredential } from "./delivery-state.js";
 import { queueStatus } from "./delivery-report.js";
 import { refreshIfDue } from "./credential-refresh.js";
@@ -147,7 +149,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const installationId = (connection as { installation_id?: string }).installation_id ?? connection.gateway_id;
   const mode = signatureMode(connection);
   const base = connection.url.replace(/\/+$/, "");
-  const auth = { authorization: `Bearer ${connection.credential}` };
+  // This computer's machine id (a hash; machine-id.ts) rides on the rules check and its confirmation.
+  const auth = { authorization: `Bearer ${connection.credential}`, ...machineIdHeaders(() => machineIdFor(dir, connection.organization_id)) };
   const meta = readMeta(dir);
   // The workspace's recommended versions ride on every rules check; kept with the rules' state.
   let recommended = meta.recommended ?? null;

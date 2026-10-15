@@ -1140,6 +1140,18 @@ is. Set `SCOPEBOND_HOSTNAME_MODE` to choose what is sent:
 
 Any other value is read as `hash`. Receipts themselves do not carry the host name.
 
+**The machine id.** So the workspace can tell that a computer signing in again is the same
+computer, the hook sends a machine id: `m1:` and a SHA-256 hash of your operating system's
+own machine id (Windows `MachineGuid`, macOS `IOPlatformUUID`, Linux `/etc/machine-id`)
+together with the workspace's id, so each workspace sees a different value and none can be
+turned back into the original. The original id never leaves this computer and is never
+written to a file, a receipt or a log, or shown; only the hash is sent, in the body of a
+sign-in (`login`, `connect`) and in the `x-scopebond-machine-id` header of the rules check,
+deliveries and observation uploads. Before the workspace is known (the start of a sign-in) the
+hash uses `unscoped` in place of its id. The hash is kept in `machine-id.json` beside
+`cloud.json`, and worked out again once a day. Where the operating system has no machine
+id, nothing is sent; the host name or a network address is never used instead.
+
 **Where receipts live, and how much room they take.** `.scopebond/receipts.db` in the
 project, about 3 KiB per action (each receipt is kept once and each policy once). A tool
 call's decision does not read that log unless the policy has a windowed limit, and then
