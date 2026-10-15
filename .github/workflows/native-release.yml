@@ -16,8 +16,11 @@ name: Native release (signed)
 # Either way both signing environments still wait for an owner's approval, and the release stays a draft pre-release for
 # a person to check and publish.
 #
-# A pull request that touches this workflow, packages/native or packages/tray runs the `build` job alone (no secrets,
-# no `signing`): a build or "Check it runs" step that would break the release fails on the pull request instead.
+# A pull request that touches this workflow or the release-only tooling in packages/native (version stamping, SBOM,
+# icon, manifests, the installer definition) runs the `build` job alone (no secrets, no `signing`): a step that would
+# break the release fails on the pull request instead. Other changes to packages/native and packages/tray are built and
+# run on every pull request by ci.yml (single executable, MSI) and tray.yml (the tray's release build), so this build
+# would only repeat them.
 
 on:
   workflow_dispatch:
@@ -36,8 +39,16 @@ on:
   pull_request:
     paths:
       - .github/workflows/native-release.yml
-      - packages/native/**
-      - packages/tray/**
+      - packages/native/package.json
+      - packages/native/stamp.mjs
+      - packages/native/sbom.mjs
+      - packages/native/icon.mjs
+      - packages/native/manifest.mjs
+      - packages/native/winget.mjs
+      - packages/native/updater-key.mjs
+      - packages/native/updater-public-key.txt
+      - packages/native/verify-signed.ps1
+      - packages/native/wix/**
 
 permissions: {}
 
