@@ -48,8 +48,12 @@ export function computeMachineId(raw: string, scope?: string | null): string | n
 
 /** The value of `MachineGuid` in what `reg query` printed, or null. */
 export function parseRegQueryMachineGuid(output: string): string | null {
-  const match = /^\s*MachineGuid\s+REG_SZ\s+(\S.*?)\s*$/im.exec(output);
-  return match ? normalizeRawMachineId(match[1]) : null;
+  // Line by line, split on whitespace: no pattern that could backtrack over a long line.
+  for (const line of output.split("\n")) {
+    const [name, type, ...value] = line.trim().split(/\s+/);
+    if (name?.toLowerCase() === "machineguid" && type === "REG_SZ" && value.length > 0) return normalizeRawMachineId(value.join(" "));
+  }
+  return null;
 }
 
 /** The value of `IOPlatformUUID` in what `ioreg -rd1 -c IOPlatformExpertDevice` printed, or null. */

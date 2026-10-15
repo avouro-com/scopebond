@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { clientNameField } from "./computer-name.js";
 import { execFileSync } from "node:child_process";
 import type { CloudEnrollmentBundle } from "@scopebond/gateway";
-import { machineIdHeaders, verifyReceipt } from "@scopebond/gateway";
+import { verifyReceipt } from "@scopebond/gateway";
 import { checkChains } from "./chain-verify.js";
 import { openReceiptStore, loadOrCreateAttester, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import * as gatewayNode from "@scopebond/gateway/node";
@@ -2036,7 +2036,7 @@ async function runDoctor(): Promise<void> {
     let recommended = readMeta(active).recommended ?? null;
     try {
       const res = await fetch(new URL("/v1/policy", connection.url).toString(), {
-        headers: { authorization: `Bearer ${connection.credential}`, "x-scopebond-hook-version": hookVersion(), ...machineIdHeaders(machineIdFor(active, connection.organization_id)) },
+        headers: { authorization: `Bearer ${connection.credential}`, "x-scopebond-hook-version": hookVersion() },
         redirect: "error", signal: AbortSignal.timeout(10_000),
       });
       recommended = recommendedFrom(res.headers) ?? recommended;
