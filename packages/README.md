@@ -14,12 +14,12 @@ See the [root README](../README.md) for product scope and hosted versus local se
 | `verify` | Deterministic policy evaluation and independent evidence verification. | **experimental** (published 0.6.6) |
 | `gateway` | HTTP/MCP policy engine, constrained execution, signed evidence, and a kill switch. Default execution is a simulation. | **experimental alpha; not production-qualified** (published 0.19.1) |
 | `sdk` | Signing action intents and approvals and submitting them to a gateway. | **experimental** (published 0.1.8) |
-| `hook` | Claude Code, Cursor, and Codex checks and signed local records. Coverage depends on the tool; Cursor file edits are recorded after writing. | **experimental** (published 0.24.0) |
+| `hook` | Claude Code, Cursor, and Codex checks and signed local records. Coverage depends on the tool; Cursor file edits are recorded after writing. | **experimental** (published 0.25.0) |
 | `github-action` | Agent pull-request checks in your own runner. Make the check required to gate merge; signing is configurable. | **experimental** (published 0.5.13) |
 | `mcp` | Checks routed MCP tools/call requests before forwarding; other MCP operations are outside the tool-call policy. | **experimental** (published 2.0.14) |
 | `framework` | Guards supported tools in Vercel AI SDK, LangGraph/LangChain, and custom loops; the application must honor the decision. | **experimental** (published 0.3.17) |
 | `fake-cloud` | A stand-in Scopebond workspace for tests: device sign-in, enrollment, delivery, rules, self-check and client version, with fault injection (401, 409, 429, 500, slow, dropped). | **experimental** (private test tool; not published) |
-| `agent` | Open-source companion for delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.8.1) |
+| `agent` | Open-source companion for delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.9.0) |
 
 **Core-package rule:** `policy-schema`, `verify`, `gateway`, and `sdk` carry no
 vendor or agent-framework SDK dependencies. External services sit behind an

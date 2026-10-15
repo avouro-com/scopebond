@@ -1,5 +1,30 @@
 # @scopebond/hook
 
+## 0.25.0
+
+### Minor Changes
+
+- 7a4ffe3: The tray lists what was blocked in plain words, and allowing an earlier block from the tray offers 15 minutes again.
+  
+  - Fix: acting on an earlier block from the tray (`POST /blocked`) left "Allow for 15 min" out of the Scopebond window, because the question for an earlier block carried no 15-minute offer. `blockedQuestion` now offers it wherever the window offers it when the block happens (a rule set to "Block, person may allow" whose workspace sends the allowance terms, under the daily limit), and `actOnBlocked` makes a 15-minute allowance only where it is offered.
+  - `GET /tray` lists up to 20 recent blocks (was 3), newest first. Each keeps its older fields and adds `what` (the action in plain words, such as "Read .env.production" or "git push --force origin main", with secrets masked as the Scopebond window masks them), `action_text` (the text the window shows), `rule_title`, `project` (the repository's name), `tool` ("Claude Code", "Cursor", "Codex"…), `offers` (once, fifteen, always with `always_days` and `always_needs_admin`, ask) and `reason_min`. The model also adds `can_ask` (the workspace lets a person ask an admin under some rule), `detail` (the line under "Protected"), `workspace` (its name) and `today` (actions and blocks since midnight).
+  - The hook exports `plainAction` and `ruleTitle`; `localActivity` adds `what`, `action_text`, `harness` and `repository` to each recent block, and `blockedQuestion` adds `offers.fifteen`, `always_days` and `always_needs_admin`.
+  - The PowerShell tray lists the newest five blocks, in plain words.
+- dd05d59: The tray answers the hook's question during a coding session, and a person can stop an allowance.
+  
+  - Live prompt: when the hook asks the agent during a coding session (`POST /override`) and a tray is listening, the agent hands the question to the tray first (`POST /override/wait`, a long wait; `GET /tray` carries it as `pending`). The person answers in the tray's panel (`POST /override/answer`, checked as the window's answer would be), and the hook's waiting call receives that answer. If the person does not open the question in the tray within a third of the hook's wait (ten seconds at most; `POST /override/open` says they did), it is withdrawn and the Scopebond window opens for the time left. With no tray listening the window opens at once, as before. Unanswered at the deadline, nothing is allowed.
+  - The hook's question carries the coding tool and what the workspace set about the length (`harness`, `reviewed`, `always_days`, `always_needs_admin`); an older agent ignores them.
+  - Stop allowing: `POST /allowances/stop` ends an allowance the person made (`endAllowance` in the hook: it stops applying at once and stays stopped when the workspace sends its copy). The agent sends the workspace `{ id, state: "ended", ended_by: "person", ended_at }` to `/v1/allowances`, signed like the other records, once; a workspace that refuses it is not asked again.
+  - Where the workspace sets the unblock terms, an allowance a person makes carries `unblocked` (`automatic` or `person`); the Allowed list shows "Unblocked automatically".
+  - The Scopebond window says "Ask to unblock" ("You may ask to unblock it; an admin decides."), and the macOS and Linux dialogs offer the workspace's one length when it sets one (`singleChoice`) instead of refusing.
+- c707f52: The tray answers earlier blocks itself and lists what was allowed and asked.
+  
+  - `POST /blocked/answer` (`{ action_id, choice, reason }`, `choice` one of `once`, `fifteen`, `always`, `ask`) answers an earlier block from the tray's own form. The agent checks it as the Scopebond window would (the block is still offered, the workspace offers that choice now, the reason is long enough and at most 500 characters) and applies it exactly as the window's answer: the allowance or the request on this computer, sent to the workspace signed by this computer's key. It answers with the outcome and the words the tray shows ("Allowed once · Recorded and sent to Acme"; for a request, "Request sent · you'll see the answer under Requests").
+  - `GET /allowances` lists the allowances that still apply and those waiting for an admin (what, the rule's name, once / fifteen / always, who made it, when it ends); `GET /requests` lists the requests to an admin (waiting, approved or declined, who answered and their note when the workspace sends them). `GET /tray` carries both as `allowed` and `asked`.
+  - Notifications: a new setting value, `blocks` (blocks and problems), is the default on an agent's first start in a new Scopebond folder; an install whose person never chose keeps `problems`, and an older `all` reads as `blocks`. The PowerShell tray offers *Blocks and problems*, *Problems only* and *Off*.
+  - A workspace may set the one length a person's unblock lasts (the rule's `lasts`: `once`, `15m` or `always`) and say that every unblock is reviewed by an admin later (`review`). The window and the tray then offer only that length; an answer for another length allows nothing. The hook reports the `unblock_terms` capability, and a workspace sends these terms only then. The hook exports `offersFor`, `allowsAny` and `offeredLength`; `blockedQuestion` adds `reviewed`, and the tray model's `offers` add `reviewed` ("Unblocked until 4:07 PM · an admin will review it").
+  - The hook remembers, on this computer only, the text the Scopebond window showed for each action a person allows (`action-text.json`, the newest 500; `readActionText`, `rememberActionText`), so the tray can say what an allowance lets through. It is never sent.
+
 ## 0.24.0
 
 ### Minor Changes
