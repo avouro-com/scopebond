@@ -39,12 +39,12 @@ function setup(rules) {
   return { dir, agentKid };
 }
 
-async function run(dir, toolUse, { answers = [], permissionMode = "default", now } = {}) {
+async function run(dir, toolUse, { answers = [], permissionMode = "default", now, project } = {}) {
   const asked = [];
   const runtime = createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo",
     override: (agentKid) => {
-      const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", permissionMode, now, waitMs: 50,
+      const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", permissionMode, now, waitMs: 50, ...(project ? { project } : {}),
         ask: async (_home, request) => { asked.push(request); return answers.shift() ?? { decision: "unavailable" }; } });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     },
@@ -74,6 +74,9 @@ test("a person allows one action in the Scopebond window: approved, with the rea
     assert.equal(allowed.asked.length, 1);
     assert.equal(allowed.asked[0].rule, "destructive-shell");
     assert.equal(allowed.asked[0].summary, "rm -rf build");
+    assert.equal(allowed.asked[0].title, "Run a command that deletes data or shuts down the computer", "the workspace's name for the rule");
+    assert.equal(allowed.asked[0].harness, "claude");
+    assert.equal(allowed.asked[0].project, undefined, "no project when the hook cannot read one");
     assert.deepEqual({ ...allowed.override, decided_at: "x" }, {
       version: 1, rule: "destructive-shell", method: "agent_dialog", state: "allowed", repeat_of: null,
       reason_digest: digestOf(reason), reason_length: reason.length, os_user_digest: digestOf("dev"), decided_at: "x",
@@ -83,8 +86,9 @@ test("a person allows one action in the Scopebond window: approved, with the rea
     assert.equal(short.decision, "deny");
     assert.match(short.reason, /not given/);
     // The person says no.
-    const declined = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "deny" }] });
+    const declined = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "deny" }], project: () => "checkout" });
     assert.equal(declined.decision, "deny");
+    assert.equal(declined.asked[0].project, "checkout", "the window and the tray name the project");
     // Other commands are untouched: an ordinary one never asks.
     const ordinary = await run(dir, bash("npm test"));
     assert.equal(ordinary.decision, "allow");

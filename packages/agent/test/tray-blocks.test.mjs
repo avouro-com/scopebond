@@ -35,7 +35,7 @@ test("the tray model lists today's blocks in plain words, with the rule's name, 
     assert.equal(rm.what, "rm -rf build --token=***", "the secret is masked as the window masks it");
     assert.equal(rm.action_text, readBlocked(dir).at(-1).summary, "the text the Scopebond window shows");
     assert.equal(rm.rule, "destructive-shell");
-    assert.equal(rm.rule_title, "Destructive command");
+    assert.equal(rm.rule_title, "Run a command that deletes data or shuts down the computer");
     assert.equal(rm.project, "checkout");
     assert.equal(rm.tool, "Claude Code");
     assert.equal(rm.can_act, true);
@@ -48,6 +48,36 @@ test("the tray model lists today's blocks in plain words, with the rule's name, 
     assert.equal(read.reason_min, null);
     assert.ok(!JSON.stringify(tray).includes("SECRET-ARG-123"));
     assert.deepEqual(tray.today, { actions: 2, blocked: 2 });
+  } finally { await service.stop(); }
+});
+
+test("a block by Scopebond's own protection, from a receipt with no context, still names its rule, project and tool", async () => {
+  // A connected workspace that has not said it reads receipt context gets receipts without the tool and repository, and a
+  // receipt names its rule only when a person was asked. The hook's note of the block fills in all three.
+  const dir = computer();
+  await blockActions(dir, [
+    { tool_name: "Write", tool_input: { file_path: "/repo/.scopebond/policy.json", content: "{}" } },
+    { tool_name: "Bash", tool_input: { command: "rm -rf build" } },
+  ], { context: null, note: { project: "checkout" } });
+  await blockActions(dir, [{ tool_name: "Read", tool_input: { file_path: "/repo/.env" } }], { context: null });
+  const service = await serviceFor(dir);
+  try {
+    const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
+    const [unnoted, rm, guard] = tray.recent_blocks;
+    assert.equal(guard.what, "Edit .scopebond/policy.json");
+    assert.equal(guard.rule, "guardrail-config-write");
+    assert.equal(guard.rule_title, "Change Scopebond's or the agent's safety settings", "the workspace's name for the rule");
+    assert.equal(guard.project, "checkout");
+    assert.equal(guard.tool, "Claude Code");
+    assert.equal(guard.can_act, false, "Scopebond's own protection offers nothing");
+    assert.equal(rm.rule, "destructive-shell");
+    assert.equal(rm.rule_title, "Run a command that deletes data or shuts down the computer");
+    assert.equal(rm.tool, "Claude Code");
+    // Nothing noted and no context: a plain name, never empty and never a rule id.
+    assert.equal(unnoted.what, "Read .env");
+    assert.equal(unnoted.rule_title, "A Scopebond rule");
+    assert.equal(unnoted.project, null);
+    assert.equal(unnoted.tool, null);
   } finally { await service.stop(); }
 });
 

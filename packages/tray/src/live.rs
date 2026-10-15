@@ -75,11 +75,11 @@ impl LiveWatch {
         let block = as_block(q);
         let button = block_button(&block);
         let who = q.tool.clone().unwrap_or_else(|| "Your coding agent".into());
-        let rule = if q.rule_title.is_empty() { String::new() } else { format!(" · {}", q.rule_title) };
+        let rule = block.rule_name().to_string();
         Some(Toast {
             kind: Kind::Block,
             title: cut(&format!("Blocked: {}", block.words()), 120),
-            text: cut(&format!("{who} is waiting for your answer{rule}"), 200),
+            text: cut(&format!("{who} is waiting for your answer · {rule}"), 200),
             unblock: button.and(Some(q.action_id.clone())),
             button,
         })
@@ -107,7 +107,7 @@ mod tests {
             what: "Read .env.production".into(),
             action_text: ".env.production".into(),
             rule: "secret-read".into(),
-            rule_title: "Reading a secret file".into(),
+            rule_title: "Read passwords, keys or secrets".into(),
             tool: Some("Claude Code".into()),
             reason_min: 12,
             offers,
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn reads_the_question_from_a_wait_and_nothing_from_an_older_agent() {
-        let q = parse_wait(&json!({ "question": { "action_id": "act-1", "what": "Read .env", "rule": "secret-read", "rule_title": "Reading a secret file",
+        let q = parse_wait(&json!({ "question": { "action_id": "act-1", "what": "Read .env", "rule": "secret-read", "rule_title": "Read passwords, keys or secrets",
             "reason_min": 12, "deadline": "2026-10-14T16:00:00.000Z", "opened": false,
             "offers": { "once": true, "fifteen": true, "always": false, "always_days": null, "always_needs_admin": false, "ask": true, "reviewed": false } } }));
         let q = q.expect("a question");
@@ -137,7 +137,7 @@ mod tests {
         let unblock = question(BlockOffers { once: true, fifteen: true, ask: true, ..Default::default() });
         let t = w.observe(Some(&unblock), Notifications::Problems).expect("told, whatever the block setting");
         assert_eq!(t.title, "Blocked: Read .env.production");
-        assert_eq!(t.text, "Claude Code is waiting for your answer · Reading a secret file");
+        assert_eq!(t.text, "Claude Code is waiting for your answer · Read passwords, keys or secrets");
         assert_eq!((t.button, t.unblock.as_deref()), (Some("Unblock…"), Some("act-live-000000000001")));
         assert_eq!(w.observe(Some(&unblock), Notifications::Blocks), None, "once");
         assert_eq!(w.observe(None, Notifications::Blocks), None);

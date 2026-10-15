@@ -165,7 +165,7 @@ test("from the tray, a person allows an earlier block for the next try, or asks 
   const item = readBlocked(dir).at(-1);
   const q = blockedQuestion(dir, item.id);
   assert.deepEqual(q.offers, { allow: true, always: true, ask: true, fifteen: true });
-  assert.equal(q.title, "Destructive command");
+  assert.equal(q.title, "Run a command that deletes data or shuts down the computer");
   assert.equal(q.always_days, 30);
   assert.equal(q.always_needs_admin, false);
   assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "short" }), { outcome: "declined" }, "the reason length still applies");

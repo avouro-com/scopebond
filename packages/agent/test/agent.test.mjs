@@ -308,7 +308,7 @@ test("the self-check names what is broken locally and sends a signed proof to th
   }
 });
 
-const question = (extra = {}) => ({ action_id: "action-0000000000001", rule: "destructive-shell", title: "Destructive command", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 20_000, ...extra });
+const question = (extra = {}) => ({ action_id: "action-0000000000001", rule: "destructive-shell", title: "Run a command that deletes data or shuts down the computer", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 20_000, ...extra });
 
 test("an override request is checked before any window opens, and its text reaches PowerShell only as data", () => {
   assert.equal(parseQuestion(question()).rule, "destructive-shell");

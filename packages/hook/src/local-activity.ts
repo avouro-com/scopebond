@@ -6,12 +6,16 @@ import { join } from "node:path";
 import { nodeSqlite } from "./self.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { actionSummary, plainAction } from "./override.js";
+import { projectOf, readBlockNotes } from "./block-notes.js";
+import { blockTitle } from "./rule-titles.js";
 
 /** A block as the tray lists it. `summary` is the one-line description `log` prints (`shell.exec rm`); `what` is the action
  *  in plain words ("Read .env.production", "git push --force origin main") and `action_text` the text the Scopebond window
  *  shows. Both come from the receipt's scrubbed action: secrets masked, digested arguments left out, never raw arguments,
  *  file contents or output. `harness` and `repository` are the receipt's context (the coding tool, and the git remote as
- *  `host/owner/name`), when it has one. */
+ *  `host/owner/name`), when it has one; the hook's note of the block fills in the tool when the receipt has none.
+ *  `rule_title` is the rule's name as the workspace shows it (never empty, never a rule id) and `project` the project's
+ *  name (the repository's, else the folder's), when known. */
 export interface RecentBlockRecord {
   action_id: string | null;
   at: string;
@@ -21,6 +25,8 @@ export interface RecentBlockRecord {
   action_text?: string;
   harness?: string | null;
   repository?: string | null;
+  rule_title?: string;
+  project?: string | null;
 }
 
 export interface LocalActivity {
@@ -55,7 +61,8 @@ export function localActivity(dir: string, options: { now?: Date; limit?: number
         WHERE id > (SELECT COALESCE(MAX(id), 0) - ? FROM receipts) AND realtime_result = 'deny'
         ORDER BY id DESC LIMIT ?`,
     ).all(Math.max(1, options.scan ?? 5_000), Math.max(1, Math.min(20, options.limit ?? 3))) as Array<{ receipt_json: string }>;
-    const recent = rows.flatMap((row) => {
+    const notes = new Map(readBlockNotes(dir).map((n) => [n.id, n]));
+    const recent = rows.flatMap((row): RecentBlockRecord[] => {
       try {
         const p = (JSON.parse(row.receipt_json) as { payload?: Record<string, unknown> }).payload ?? {};
         const state = (p.execution as { state?: unknown } | undefined)?.state;
@@ -64,15 +71,22 @@ export function localActivity(dir: string, options: { now?: Date; limit?: number
         const override = p.override as { rule?: unknown } | undefined;
         const intent = (p.intent && typeof p.intent === "object" ? p.intent : {}) as { action_type?: string; params?: Record<string, unknown> };
         const context = (p.context && typeof p.context === "object" ? p.context : {}) as { harness?: unknown; repository?: unknown };
+        const actionId = typeof (p.action_ref as { action_id?: unknown } | undefined)?.action_id === "string" ? String((p.action_ref as { action_id: string }).action_id) : null;
+        // The hook's note names the rule (from the clause that denied it), the project and the tool when the receipt does not.
+        const note = actionId ? notes.get(actionId) : undefined;
+        const rule = typeof override?.rule === "string" ? override.rule : note?.rule ?? null;
+        const repository = typeof context.repository === "string" ? context.repository : null;
         return [{
-          action_id: typeof (p.action_ref as { action_id?: unknown } | undefined)?.action_id === "string" ? String((p.action_ref as { action_id: string }).action_id) : null,
+          action_id: actionId,
           at: typeof p.timestamp === "string" ? p.timestamp : "",
           summary: describeAction(p.intent as ExplainIntent | undefined),
-          rule: typeof override?.rule === "string" ? override.rule : null,
+          rule,
           what: plainAction(intent),
           action_text: actionSummary(intent),
-          harness: typeof context.harness === "string" ? context.harness : null,
-          repository: typeof context.repository === "string" ? context.repository : null,
+          harness: typeof context.harness === "string" ? context.harness : note?.harness ?? null,
+          repository,
+          rule_title: blockTitle(rule, note?.clause),
+          project: projectOf(repository, null) ?? note?.project ?? null,
         }];
       } catch { return []; }
     });

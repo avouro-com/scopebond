@@ -10,7 +10,7 @@ import { computer, serviceFor } from "./tray-helpers.mjs";
 
 const REASON = "Integration tests need the production API URL";
 const question = (extra = {}) => parseQuestion({
-  action_id: "act-live-000000000001", rule: "secret-read", title: "Reading a secret file", summary: ".env.production", reason_min: 12,
+  action_id: "act-live-000000000001", rule: "secret-read", title: "Read passwords, keys or secrets", summary: ".env.production", reason_min: 12,
   lasts: "this action only", timeout_ms: 45_000, mode: "override", offers: { allow: true, always: true, ask: true, fifteen: true },
   harness: "claude", always_days: 30, ...extra,
 });
@@ -33,7 +33,7 @@ test("a listening tray gets the question, and the person's answer from its form 
   const q = await waited;
   assert.equal(q.action_id, "act-live-000000000001");
   assert.equal(q.what, ".env.production");
-  assert.equal(q.rule_title, "Reading a secret file");
+  assert.equal(q.rule_title, "Read passwords, keys or secrets");
   assert.equal(q.tool, "Claude Code");
   assert.deepEqual(q.offers, { once: true, fifteen: true, always: true, always_days: 30, always_needs_admin: false, ask: true, reviewed: false });
   assert.ok(Date.parse(q.deadline) > Date.now() + 40_000, "the hook's own wait");
@@ -92,7 +92,7 @@ test("through the agent: the hook's POST /override waits for the tray's answer; 
   const dir = computer();
   const service = await serviceFor(dir, { prompter: async (q) => { shown.push(q); return { decision: "deny" }; } });
   try {
-    const body = { action_id: "act-live-000000000001", rule: "secret-read", title: "Reading a secret file", summary: ".env.production", reason_min: 12,
+    const body = { action_id: "act-live-000000000001", rule: "secret-read", title: "Read passwords, keys or secrets", summary: ".env.production", reason_min: 12,
       lasts: "this action only", timeout_ms: 20_000, mode: "ask", offers: { allow: false, always: false, ask: true }, harness: "codex" };
     // No tray: the window, as before.
     assert.deepEqual(await callAgent(dir, "POST", "/override", body, 10_000), { decision: "deny" });

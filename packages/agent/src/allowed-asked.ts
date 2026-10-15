@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { MANAGED_DOC_FILE, mergeWorkspaceAllowances, readActionText, readAllowances, readBlocked, readRequests, ruleTitle, type Allowance } from "@scopebond/hook";
+import { MANAGED_DOC_FILE, mergeWorkspaceAllowances, readActionText, readAllowances, readBlocked, readRequests, ruleName, type Allowance } from "@scopebond/hook";
 
 /** An allowance in force or waiting for an admin. `choice`: once (the next try), fifteen (15 minutes) or always (until
  *  `ends_at`). `by`: the person on this computer, or an admin in the workspace (an approved request, or one an admin made). */
@@ -82,7 +82,7 @@ export function allowedList(dir: string, now = Date.now()): AllowedItem[] {
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
     .slice(0, MAX_ITEMS)
     .map((a) => ({
-      id: a.id, rule: a.rule, rule_title: ruleTitle(a.rule), what: texts.get(a.action_key) ?? null,
+      id: a.id, rule: a.rule, rule_title: ruleName(a.rule), what: texts.get(a.action_key) ?? null,
       choice: a.once ? "once" : a.created_by === "person" && Date.parse(a.expires_at) - Date.parse(a.created_at) <= FIFTEEN_MS + 60_000 ? "fifteen" : "always",
       state: a.state === "proposed" ? "proposed" : "active", needs_admin: a.state === "proposed", by: a.created_by === "workspace" ? "admin" : "person",
       created_at: a.created_at, ends_at: a.expires_at, answered_by: a.created_by === "workspace" ? extra(a, "approved_by", 120) : null,
@@ -119,7 +119,7 @@ export function askedList(dir: string): AskedItem[] {
       const approved = fromWorkspace.find((a) => a.rule === r.rule && a.action_key === r.action_key && Date.parse(a.created_at) >= Date.parse(r.created_at) - 5 * 60_000);
       const state: AskedItem["state"] = said?.state ?? (approved ? "approved" : "waiting");
       return {
-        id: r.id, rule: r.rule, rule_title: ruleTitle(r.rule), what: r.summary, reason: r.reason, asked_at: r.created_at, sent: !!r.sent_at, state,
+        id: r.id, rule: r.rule, rule_title: ruleName(r.rule), what: r.summary, reason: r.reason, asked_at: r.created_at, sent: !!r.sent_at, state,
         answered_by: said?.by ?? (approved ? extra(approved, "approved_by", 120) : null),
         note: said?.note ?? (approved ? extra(approved, "note", 300) : null),
         answered_at: said?.at ?? (state === "approved" && approved ? approved.created_at : null),

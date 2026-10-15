@@ -12,7 +12,7 @@ import { createPublicKey, verify } from "node:crypto";
 import { parseQuestion, questionText, windowsScript } from "../dist/prompt.js";
 import { sendAllowancesAndRequests, ALLOWANCE_DOMAIN, REQUEST_DOMAIN } from "../dist/allowance-sender.js";
 
-const question = (extra = {}) => ({ action_id: "act-0123456789abcdef", rule: "destructive-shell", title: "Destructive command", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 45_000, ...extra });
+const question = (extra = {}) => ({ action_id: "act-0123456789abcdef", rule: "destructive-shell", title: "Run a command that deletes data or shuts down the computer", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 45_000, ...extra });
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
 
 test("the window offers what the rule allows: allow (once, 15 minutes, always) or ask to unblock", () => {

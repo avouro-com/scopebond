@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { hostname, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleTitle,
+  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
   writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -540,8 +540,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const rule = b.rule ?? item?.rule ?? null;
       return {
         action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: item?.acted ?? null,
-        what: b.what ?? b.summary, action_text: item?.summary ?? b.action_text ?? b.summary, rule_title: ruleTitle(rule),
-        project: projectName(b.repository), tool: toolName(b.harness ?? item?.harness ?? null),
+        what: b.what ?? b.summary, action_text: item?.summary ?? b.action_text ?? b.summary, rule_title: ruleTitle(rule) ?? b.rule_title ?? ruleName(rule),
+        project: projectName(b.repository) ?? b.project ?? null, tool: toolName(b.harness ?? item?.harness ?? null),
         offers: q ? {
           once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
           always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,

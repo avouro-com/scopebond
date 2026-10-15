@@ -13,15 +13,18 @@
 
   const blocks = () => [
     { action_id: "act-read-env-0000000001", summary: "file.read .env.production", at: ago(6), rule: "secret-read", can_act: true, acted: null,
-      what: "Read .env.production", action_text: ".env.production", rule_title: "Reading a secret file", project: "checkout", tool: "Claude Code",
+      what: "Read .env.production", action_text: ".env.production", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
       offers: offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true }), reason_min: 10 },
     { action_id: "act-push-main-00000001", summary: "git.push origin main", at: ago(28), rule: "force-push-protected", can_act: true, acted: null,
-      what: "git push --force origin main", action_text: "git push origin main", rule_title: "Force-push to a protected branch", project: "checkout",
+      what: "git push --force origin main", action_text: "git push origin main", rule_title: "Rewrite history on a protected branch", project: "checkout",
       tool: "Claude Code", offers: offers({ ask: true }), reason_min: 20 },
     { action_id: "act-rm-dist-0000000001", summary: "shell.exec rm", at: ago(95), rule: null, can_act: false, acted: null,
       what: "rm -rf ./dist --token=***", action_text: "rm -rf ./dist --token=***", rule_title: null, project: "billing-api", tool: "Cursor", offers: null, reason_min: null },
+    { action_id: "act-policy-0000000001", summary: "file.write .scopebond/policy.json", at: ago(140), rule: "guardrail-config-write", can_act: false, acted: null,
+      what: "Edit .scopebond/policy.json", action_text: ".scopebond/policy.json", rule_title: "Change Scopebond's or the agent's safety settings", project: "checkout",
+      tool: "Claude Code", offers: null, reason_min: null },
     { action_id: "act-curl-paste-000001", summary: "net.fetch pastebin.com", at: ago(26 * 60), rule: "network-egress", can_act: false, acted: "asked",
-      what: "Reach https://pastebin.com/raw/x1", action_text: "https://pastebin.com/raw/x1", rule_title: "Request to a site not on the allowed list",
+      what: "Reach https://pastebin.com/raw/x1", action_text: "https://pastebin.com/raw/x1", rule_title: "Contact websites and online services",
       project: "checkout", tool: "Codex", offers: null, reason_min: null },
   ];
   const actions = [
@@ -36,19 +39,19 @@
   ];
   const ahead = (min) => new Date(Date.now() + min * MIN).toISOString();
   const allowed = () => [
-    { id: "alw_staging00000000000001", rule: "secret-read", rule_title: "Reading a secret file", what: ".env.staging", choice: "fifteen", state: "active",
+    { id: "alw_staging00000000000001", rule: "secret-read", rule_title: "Read passwords, keys or secrets", what: ".env.staging", choice: "fifteen", state: "active",
       needs_admin: false, by: "person", created_at: ago(4), ends_at: ahead(11), answered_by: null },
-    { id: "alw_release00000000000001", rule: "push-protected", rule_title: "Push to a protected branch", what: "git push origin release/2.4", choice: "always",
+    { id: "alw_release00000000000001", rule: "push-protected", rule_title: "Push straight to a protected branch", what: "git push origin release/2.4", choice: "always",
       state: "active", needs_admin: false, by: "person", created_at: ago(2 * 24 * 60), ends_at: ahead(28 * 24 * 60), answered_by: null },
-    { id: "alw_workflow0000000000001", rule: "ci-config-write", rule_title: "Changing CI configuration", what: ".github/workflows/release.yml", choice: "always",
+    { id: "alw_workflow0000000000001", rule: "ci-config-write", rule_title: "Change build and release settings", what: ".github/workflows/release.yml", choice: "always",
       state: "active", needs_admin: false, by: "admin", created_at: ago(20 * 60), ends_at: ahead(29 * 24 * 60), answered_by: "morgan@acme.test" },
   ];
   const asked = () => [
-    { id: "req_dist000000000000000001", rule: "destructive-shell", rule_title: "Destructive command", what: "rm -rf ./dist", reason: "Clearing the old release build",
+    { id: "req_dist000000000000000001", rule: "destructive-shell", rule_title: "Run a command that deletes data or shuts down the computer", what: "rm -rf ./dist", reason: "Clearing the old release build",
       asked_at: ago(120), sent: true, state: "waiting", answered_by: null, note: null, answered_at: null },
-    { id: "req_workflow0000000000001", rule: "ci-config-write", rule_title: "Changing CI configuration", what: ".github/workflows/release.yml",
+    { id: "req_workflow0000000000001", rule: "ci-config-write", rule_title: "Change build and release settings", what: ".github/workflows/release.yml",
       reason: "Adding the signing step to the release workflow", asked_at: ago(22 * 60), sent: true, state: "approved", answered_by: "morgan@acme.test", note: null, answered_at: ago(20 * 60) },
-    { id: "req_paste00000000000000001", rule: "network-egress", rule_title: "Request to a site not on the allowed list", what: "https://pastebin.com/raw/x1",
+    { id: "req_paste00000000000000001", rule: "network-egress", rule_title: "Contact websites and online services", what: "https://pastebin.com/raw/x1",
       reason: "Sharing a log with the vendor", asked_at: ago(26 * 60), sent: true, state: "declined", answered_by: "morgan@acme.test", note: "Use the internal paste tool", answered_at: ago(25 * 60) },
   ];
   const base = () => ({
@@ -99,7 +102,7 @@
   // live=1: a question the hook is waiting on now (the live prompt), as the agent hands it to the tray.
   let pending = params.get("live") ? {
     action_id: "act-live-000000000001", what: "git push --force origin release/2.4", action_text: "git push origin release/2.4", rule: "force-push-protected",
-    rule_title: "Force-push to a protected branch", tool: "Claude Code", project: "checkout", reason_min: 10,
+    rule_title: "Rewrite history on a protected branch", tool: "Claude Code", project: "checkout", reason_min: 10,
     offers: offers(mode === "approval" ? { ask: true } : { once: true, fifteen: true, ask: true }),
     deadline: new Date(Date.now() + 41_000).toISOString(), opened: false,
   } : null;
@@ -133,7 +136,7 @@
       const what = pending.action_text;
       pending = null;
       say(choice === "ask" ? "Request sent · you'll see the answer under Requests" : (choice === "fifteen" ? "Allowed for 15 minutes" : "Allowed once") + " · Recorded and sent to Acme");
-      if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", rule: "force-push-protected", rule_title: "Force-push to a protected branch", what, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + 15 * MIN).toISOString(), answered_by: null, unblocked: "person" });
+      if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", rule: "force-push-protected", rule_title: "Rewrite history on a protected branch", what, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + 15 * MIN).toISOString(), answered_by: null, unblocked: "person" });
       return true;
     },
     panel_stop: ({ id }) => {

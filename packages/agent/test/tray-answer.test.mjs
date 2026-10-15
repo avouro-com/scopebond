@@ -51,7 +51,7 @@ test("allow once from the tray: checked as the window would be, applied once, th
     assert.equal(allowances.length, 1);
     assert.equal(allowances[0].choice, "once");
     assert.equal(allowances[0].what, "rm -rf build");
-    assert.equal(allowances[0].rule_title, "Destructive command");
+    assert.equal(allowances[0].rule_title, "Run a command that deletes data or shuts down the computer");
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
     assert.equal(tray.allowed.length, 1);
     assert.equal(tray.recent_blocks[0].acted, "allowed");

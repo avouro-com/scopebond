@@ -83,10 +83,18 @@ pub struct RecentBlock {
     pub reason_min: Option<u32>,
 }
 
+/// The rule's name when the agent sends none (an older agent): never an empty line, never a rule id.
+pub const ANY_RULE: &str = "A Scopebond rule";
+
 impl RecentBlock {
     /// The words to show: the plain words, or the older summary.
     pub fn words(&self) -> &str {
         if self.what.trim().is_empty() { &self.summary } else { &self.what }
+    }
+
+    /// The rule's name as the workspace shows it, or "A Scopebond rule".
+    pub fn rule_name(&self) -> &str {
+        self.rule_title.as_deref().map(str::trim).filter(|t| !t.is_empty()).unwrap_or(ANY_RULE)
     }
 }
 
@@ -321,21 +329,21 @@ pub(crate) mod fixtures {
         ],
         "detail": "Rules checked 3 min ago · 2 blocked today", "workspace": "Acme", "today": { "actions": 1160, "blocked": 2 }, "can_ask": true,
         "allowed": [
-          { "id": "alw_aaaaaaaaaaaaaaaaaaaa", "rule": "secret-read", "rule_title": "Reading a secret file", "what": ".env.staging", "choice": "fifteen",
+          { "id": "alw_aaaaaaaaaaaaaaaaaaaa", "rule": "secret-read", "rule_title": "Read passwords, keys or secrets", "what": ".env.staging", "choice": "fifteen",
             "state": "active", "needs_admin": false, "by": "person", "created_at": "2026-10-14T15:52:00.000Z", "ends_at": "2026-10-14T16:07:00.000Z", "answered_by": null }
         ],
         "asked": [
-          { "id": "req_aaaaaaaaaaaaaaaaaaaa", "rule": "destructive-shell", "rule_title": "Destructive command", "what": "rm -rf ./dist", "reason": "Clearing the release build",
+          { "id": "req_aaaaaaaaaaaaaaaaaaaa", "rule": "destructive-shell", "rule_title": "Run a command that deletes data or shuts down the computer", "what": "rm -rf ./dist", "reason": "Clearing the release build",
             "asked_at": "2026-10-14T13:52:00.000Z", "sent": true, "state": "declined", "answered_by": "morgan@acme.test", "note": "Use the clean script", "answered_at": null }
         ],
         "recent_blocks": [
           { "action_id": "act-read-env-0000000001", "summary": "file.read .env.production", "at": "2026-10-14T15:46:00.000Z", "rule": "secret-read",
-            "can_act": true, "acted": null, "what": "Read .env.production", "action_text": ".env.production", "rule_title": "Reading a secret file",
+            "can_act": true, "acted": null, "what": "Read .env.production", "action_text": ".env.production", "rule_title": "Read passwords, keys or secrets",
             "project": "checkout", "tool": "Claude Code", "reason_min": 10,
             "offers": { "once": true, "fifteen": true, "always": true, "always_days": 30, "always_needs_admin": false, "ask": true } },
           { "action_id": "act-push-main-00000001", "summary": "git.push origin main", "at": "2026-10-14T15:24:00.000Z", "rule": "force-push-protected",
             "can_act": true, "acted": null, "what": "git push --force origin main", "action_text": "git push origin main",
-            "rule_title": "Force-push to a protected branch", "project": "checkout", "tool": "Claude Code", "reason_min": 20,
+            "rule_title": "Rewrite history on a protected branch", "project": "checkout", "tool": "Claude Code", "reason_min": 20,
             "offers": { "once": false, "fifteen": false, "always": false, "always_days": null, "always_needs_admin": false, "ask": true } }
         ]
       },
@@ -385,7 +393,7 @@ mod tests {
         let a = TrayAnswer::parse(fixtures::BLOCKED.as_bytes()).expect("parses");
         let read = &a.tray.recent_blocks[0];
         assert_eq!(read.words(), "Read .env.production");
-        assert_eq!(read.rule_title.as_deref(), Some("Reading a secret file"));
+        assert_eq!(read.rule_title.as_deref(), Some("Read passwords, keys or secrets"));
         assert_eq!(read.tool.as_deref(), Some("Claude Code"));
         assert_eq!(read.reason_min, Some(10));
         let offers = read.offers.clone().unwrap();
