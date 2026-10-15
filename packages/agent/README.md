@@ -137,6 +137,12 @@ not as verified. These are exactly the facts sent, and nothing else:
 
 No path, user name or file content beyond those names is sent. A name that reads as a path or an address is left out.
 
+The agent also sends this computer's machine id, as the hook does (see the hook's README, "The machine id"): a SHA-256
+hash of the operating system's own machine id and the workspace's id, in the body of its first sign-in and in the
+`x-scopebond-machine-id` header of its rules checks and deliveries, so the workspace can tell that a computer
+connecting again is the same one. The operating system's id itself never leaves the computer and is never written,
+logged or shown. Without one, nothing is sent.
+
 | Tool | Present when | Version from | MCP server names from |
 |---|---|---|---|
 | Claude Code | `~/.claude/settings.json` or `~/.claude/` | `@anthropic-ai/claude-code` in npm's global folder, else `claude --version` | `~/.claude.json` (`mcpServers`) |

@@ -37,6 +37,7 @@ import type { GitProbe } from "./typed-ops.js";
 import { isProtectedBranch, loadRules } from "./rules.js";
 import { uploadPending, type UploadOutcome } from "./obs-upload.js";
 import { readMeta } from "./managed.js";
+import { machineIdFor } from "./machine-id.js";
 
 export const OBSERVATIONS_SCOPE = "observations:write";
 /** Every minute, unless the workspace says it reads a heartbeat's interval (`x-scopebond-heartbeat-interval-s` on the rules
@@ -161,7 +162,7 @@ export class ObservationEmitter {
     try {
       return await uploadPending(this.store, {
         url: ingestUrl(this.connection), credential: this.connection.credential,
-        fetch: this.options.fetch, now: this.options.now, timeoutMs,
+        fetch: this.options.fetch, now: this.options.now, timeoutMs, machineId: () => machineIdFor(this.dir, this.connection.organization_id),
       });
     } catch { return null; }
   }

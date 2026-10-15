@@ -1,5 +1,6 @@
 import type { Attester } from "./receipts.js";
 import { canonical } from "./crypto.js";
+import { resolveMachineId, type MachineIdSource } from "./machine-id.js";
 
 export interface CloudEnrollmentBundle {
   enrollment_token: string;
@@ -34,6 +35,9 @@ export async function completeCloudEnrollment(options: {
   attester: Attester;
   /** Optional separate signing key used by authenticated hook receipts. */
   agent?: Attester;
+  /** This computer's machine id (see machine-id.ts), sent as `machine_id` so the workspace can tell a computer that connects
+   *  again is the same one. Nothing is sent without one. */
+  machineId?: MachineIdSource;
   fetch?: typeof fetch;
 }): Promise<CloudEnrollmentResult> {
   const endpoint = new URL("/v1/enroll", options.url);
@@ -61,6 +65,7 @@ export async function completeCloudEnrollment(options: {
   const proofCanonical = options.agent
     ? canonical({ ...claims, agent_public_key_pem: agentPublicKeyPem })
     : options.bundle.proof_canonical;
+  const machineId = resolveMachineId(options.machineId);
   const response = await (options.fetch ?? fetch)(endpoint, {
     method: "POST",
     redirect: "error",
@@ -73,6 +78,7 @@ export async function completeCloudEnrollment(options: {
         agent_public_key_pem: agentPublicKeyPem,
         agent_signature: await options.agent.sign(proofCanonical),
       } : {}),
+      ...(machineId ? { machine_id: machineId } : {}),
     }),
   });
   const declaredLength = Number(response.headers.get("content-length") ?? 0);

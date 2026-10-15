@@ -56,6 +56,8 @@ export type { KvLike } from "./workers.js";
 export { createCloudExporter, createMemoryCloudOutbox, withCloudExporter, seqRanges, LOSSLESS_CLOUD_OUTBOX, DELIVERY_SEQUENCE_CONTEXT, deliverySequenceMaterial } from "./cloud.js";
 export { scrubSecretText } from "./scrub.js";
 export { completeCloudEnrollment, CloudEnrollmentError } from "./enrollment.js";
+export { MACHINE_ID_HEADER, MACHINE_ID_UNSCOPED, MACHINE_ID_DOMAIN, isMachineId, resolveMachineId, machineIdHeaders } from "./machine-id.js";
+export type { MachineIdSource } from "./machine-id.js";
 export type { CloudEnrollmentBundle, CloudEnrollmentResult } from "./enrollment.js";
 export type {
   CloudBackoff, CloudDeliveryGap, CloudExporter, CloudExporterOptions, CloudExporterStatus, CloudHeldStatus,
