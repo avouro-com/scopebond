@@ -1,5 +1,5 @@
-// A signed install that was never connected signs in with no terminal: the workspace the installer named (HKCU, then
-// HKLM, else Scopebond Cloud; https only), the approval page opened on that workspace only, the code in the tray, and once
+// A signed install that was never connected signs in with no terminal: the workspace the installer named (HKLM, then
+// HKCU, else Scopebond Cloud; https only), the approval page opened on that workspace only, the code in the tray, and once
 // approved the rest of a first-time setup (hook entries, autostart). On its very first start it does this by itself, once.
 // HOME, USERPROFILE and SCOPEBOND_HOME point at temporary folders; the workspace is the fake cloud; autostart and the
 // browser are stand-ins.
@@ -27,11 +27,15 @@ const registry = (values) => (key, name) => (name === "Workspace" && key in valu
 const HKCU = "HKCU\\Software\\Avouro\\Scopebond";
 const HKLM = "HKLM\\Software\\Avouro\\Scopebond";
 
-test("the workspace: this user's setting, then the machine's, else Scopebond Cloud; only an https origin", () => {
+test("the workspace: the machine's setting, then this user's, else Scopebond Cloud; only an https origin", () => {
   assert.deepEqual(installedWorkspace(registry({})), { origin: DEFAULT_WORKSPACE, from: "default" });
   assert.equal(DEFAULT_WORKSPACE, "https://cloud.scopebond.com");
   assert.deepEqual(installedWorkspace(registry({ [HKLM]: "https://acme.example.test/app" })), { origin: "https://acme.example.test", from: HKLM });
-  assert.deepEqual(installedWorkspace(registry({ [HKCU]: " https://mine.example.test ", [HKLM]: "https://acme.example.test" })), { origin: "https://mine.example.test", from: HKCU });
+  // An administrator's per-machine setting wins: a per-user value, which any program running as the person can write, never
+  // moves the computer to another workspace.
+  assert.deepEqual(installedWorkspace(registry({ [HKCU]: " https://mine.example.test ", [HKLM]: "https://acme.example.test" })), { origin: "https://acme.example.test", from: HKLM });
+  assert.deepEqual(installedWorkspace(registry({ [HKCU]: " https://mine.example.test " })), { origin: "https://mine.example.test", from: HKCU }, "a per-user install names its own");
+  assert.deepEqual(installedWorkspace(registry({ [HKCU]: "https://mine.example.test", [HKLM]: "" })).origin, "https://mine.example.test", "an empty machine value counts as none");
   for (const bad of ["http://acme.example.test", "javascript:alert(1)", "file:///C:/x", "https://user:pw@acme.example.test", "acme.example.test"]) {
     assert.match(installedWorkspace(registry({ [HKCU]: bad })).error ?? "", /not an https address/, bad);
     assert.equal(httpsOrigin(bad), null, bad);

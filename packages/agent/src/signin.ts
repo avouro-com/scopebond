@@ -23,8 +23,9 @@ import type { ReconnectStart } from "./reconnect.js";
 
 /** The workspace a signed install signs in to when its installer named none. */
 export const DEFAULT_WORKSPACE = "https://cloud.scopebond.com";
-/** Where the installer keeps its settings: this user's first, then the machine's (an install for every user). */
-export const SETTINGS_KEYS = ["HKCU\\Software\\Avouro\\Scopebond", "HKLM\\Software\\Avouro\\Scopebond"] as const;
+/** Where the installer keeps its settings: the machine's first (an install for every user, set by an administrator), then this
+ *  user's. A per-user value, which any program running as the person can write, never overrides the machine's. */
+export const SETTINGS_KEYS = ["HKLM\\Software\\Avouro\\Scopebond", "HKCU\\Software\\Avouro\\Scopebond"] as const;
 export const WORKSPACE_VALUE = "Workspace";
 
 /** Reads one registry string value; null when it is not there. Tests pass their own. */
@@ -48,7 +49,7 @@ export function httpsOrigin(value: string): string | null {
   } catch { return null; }
 }
 
-/** The workspace the installer named (this user's setting, then the machine's), else Scopebond Cloud. A setting that is
+/** The workspace the installer named (the machine's setting, then this user's), else Scopebond Cloud. A setting that is
  *  there but is not an https address is refused, not skipped: signing in somewhere else would surprise whoever set it. */
 export function installedWorkspace(read: RegistryReader = readRegistryValue): { origin: string; from: string } | { error: string } {
   for (const key of SETTINGS_KEYS) {

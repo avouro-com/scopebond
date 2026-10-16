@@ -40,6 +40,7 @@ import {
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
 import { AWAKE_FILE, awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
+import { withoutNodeInjection } from "./child-env.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
@@ -174,7 +175,7 @@ export function handoverPlan(o: {
 }): Handover {
   if (o.platform === "linux" && o.env.INVOCATION_ID) return { kind: "service-restart" };
   const launcher = launcherPath(o.dir, o.platform);
-  const env = { ...o.env, [AFTER_PID_ENV]: String(o.pid), [AGENT_LOG_ENV]: join(o.dir, "agent.log") };
+  const env = { ...withoutNodeInjection(o.env), [AFTER_PID_ENV]: String(o.pid), [AGENT_LOG_ENV]: join(o.dir, "agent.log") };
   if (o.launcherText !== null && launcherIsCurrent(o.launcherText, o.platform)) {
     if (o.platform !== "win32") return { kind: "spawn", command: "/bin/sh", args: [launcher], env, verbatim: false };
     let start: [string, string[]] | undefined;

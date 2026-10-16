@@ -3,6 +3,7 @@ export type { CycleOptions, CycleResult } from "./agent.js";
 export { startService, noteUpdateOutcome, repairHookEntries, spawnReplacement, handoverPlan, takeOver, acquireAgentLock, releaseAgentLock, lockHeldBy, waitForAgentVersion, HANDOVER_CONFIRM_MS, AGENT_LOCK, AGENT_VERSION, AFTER_PID_ENV, REFRESH_LAUNCHER_ENV, RESTART_EXIT_CODE, STOPPED_FILE } from "./service.js";
 export type { Handover } from "./service.js";
 export { writeOutputTo, FALLBACK_LOG } from "./log-file.js";
+export { scrubNodeInjection, withoutNodeInjection, NODE_INJECTION_VARS } from "./child-env.js";
 export type { Service, ServiceOptions, MaintenanceResult } from "./service.js";
 export { appsEntryValues, uninstallScript, writeUninstallScript, writeAppsEntry, removeAppsEntry, npmBeside, psQuote, UNINSTALL_KEY, UNINSTALL_SCRIPT, UTF8_BOM } from "./apps-entry.js";
 export { awakeSinceAtStart, readAwake, writeAwake, AWAKE_FILE } from "./awake.js";
