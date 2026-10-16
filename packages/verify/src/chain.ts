@@ -10,8 +10,8 @@
 //   - a list's and a head's Ed25519 signatures against the key the list publishes (whose id is derived from it);
 //   - that heads agree with each other, wherever they come from (kept by the computer, or published): a chain's sequence
 //     never goes back, and one sequence number never ends two different segments. "Goes back" is judged in issue order and
-//     also in the computer's own order of deliveries, which the workspace cannot choose (it signs `issued_at`, so it could
-//     stamp a lower head before a higher one it already handed out);
+//     also in the computer's own order of deliveries and of the heads it received, which the workspace cannot choose (it
+//     signs `issued_at`, so it could stamp a lower head before a higher one it already handed out);
 //   - downloaded evidence segments against the heads: each segment's digest, canonical form, leaves, Merkle root and
 //     sequence numbers, the previous-segment links, and that every head's segment is still in the chain its newest head
 //     names. A deleted, truncated or re-chained segment then contradicts a head somebody outside the workspace holds.
@@ -214,15 +214,30 @@ const localClock = (h: KeptChainHead): string | null => {
   return typeof value === "string" && value.length > 0 && value.length <= 64 ? value : null;
 };
 
+/** May `b`, received after `a`, have been sent before `a` arrived, so that the two were answered out of order? Only this
+ *  computer's own times can say so: `b`'s delivery was sent before `a` was held, on one clock. Heads that name two
+ *  different clocks (a folder two computers share) are not ordered by each other, and a later head marked held before an
+ *  earlier one was timed across a clock step back, so their order is not known either. Without such times, the order
+ *  received stands. */
+function mayBeOutTogether(a: Sourced, b: Sourced): boolean {
+  if (a.clock !== null && b.clock !== null && a.clock !== b.clock) return true;
+  if (b.heldBy < a.heldBy) return true;
+  const sent = b.heldBy < b.sentAt ? NaN : b.sentAt;
+  return sent < a.heldBy;
+}
+
 /** Do the heads agree? A chain's sequence number never goes back, and one sequence number never ends two different
  *  segments. Kept heads (from this computer's delivery answers, with the times it kept beside them) and published heads
- *  are merged per chain. "Never goes back" is checked two ways, and either one failing is reported:
+ *  are merged per chain. "Never goes back" is checked three ways, and any one failing is reported:
  *   - in this computer's own order, which the workspace cannot choose: a kept head that answered a delivery sent after
  *     another kept head was held was issued after it, so its sequence number is not lower (deliveries in flight together
  *     may be answered out of order, and are not compared). Times are compared on one clock only: heads that name two
  *     different clocks are not compared, and a head held before its delivery was sent was timed across a clock step back,
  *     so its sent time orders nothing;
- *   - in issue order (`issued_at`), which also covers published heads and heads kept without times.
+ *   - in the order received: `kept` lists each chain's heads in the order this computer received them (as the store keeps
+ *     them), so a kept head listed after a higher one went back, whatever either says about its issue time, unless the
+ *     times above show the two may have been out together. A head kept without times is judged this way;
+ *   - in issue order (`issued_at`), which also covers published heads.
  *  Only published heads of chains the kept heads name are compared; times a published head carries are ignored. Never
  *  throws. */
 export function checkChainHeads(kept: readonly KeptChainHead[], published: readonly SignedChainHead[] = []): HeadsCheck {
@@ -264,7 +279,23 @@ function compareHeads(kept: readonly KeptChainHead[], published: readonly Signed
         if (!before || a.head.ingest_seq > before.head.ingest_seq) before = a;
       }
       if (before) {
+        reported.add(b);
         problems.push(`chain ${short(id)} went back: sequence ${before.head.ingest_seq} (kept, issued ${before.head.issued_at}, held here by ${new Date(before.heldBy).toISOString()}) then ${b.head.ingest_seq} (kept, issued ${b.head.issued_at}, answering a delivery sent after that, at ${new Date(b.sentAt).toISOString()})`);
+      }
+    }
+    // The order received: kept heads are listed as they arrived, so a lower head listed after a higher one went back,
+    // unless this computer's times show the two may have been out together (answered out of order).
+    const received = list.filter((s) => s.from === "kept");
+    for (const [j, b] of received.entries()) {
+      if (reported.has(b)) continue;
+      let before: Sourced | null = null;
+      for (const a of received.slice(0, j)) {
+        if (a.head.ingest_seq <= b.head.ingest_seq || mayBeOutTogether(a, b)) continue;
+        if (!before || a.head.ingest_seq > before.head.ingest_seq) before = a;
+      }
+      if (before) {
+        reported.add(b);
+        problems.push(`chain ${short(id)} went back: sequence ${before.head.ingest_seq} (kept, issued ${before.head.issued_at}) then ${b.head.ingest_seq} (kept, issued ${b.head.issued_at}, received after it)`);
       }
     }
     const ends = new Map<number, { digest: string; from: string }>();

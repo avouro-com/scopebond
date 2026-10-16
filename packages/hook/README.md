@@ -640,8 +640,8 @@ scopebond verify --anchor <day.json> --segments <folder of downloaded evidence s
 ```
 
 `verify` exits non-zero when a chain went back below a head this computer kept (judged by
-the order this computer sent its deliveries as well as by the times the workspace put on
-its heads), when one position names two different segments, or when a kept head's segment
+the order this computer sent its deliveries and received their answers as well as by the
+times the workspace put on its heads), when one position names two different segments, or when a kept head's segment
 is no longer in the chain: records were removed, reordered or re-chained after the
 workspace acknowledged them. A list or segment that cannot be checked is reported, not
 crashed on. With `--segments`, every segment's digest, leaves, Merkle root, links and sequence
