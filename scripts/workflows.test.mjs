@@ -80,7 +80,7 @@ function onTriggers(top) {
 
 const isCheckout = (step) => /uses:\s*actions\/checkout@/.test(step);
 /** The step that publishes to npm, and the one job that holds it. */
-const isPublish = (step) => /changesets\/action\/publish@/.test(step);
+const isPublish = (step) => /node scripts\/publish-packed\.mjs/.test(step);
 const publishJobOf = (release) => release.jobs.find((job) => job.steps.some(isPublish));
 const workflowNames = () => readdirSync(workflowsDir).filter((name) => /\.ya?ml$/.test(name));
 
@@ -108,6 +108,18 @@ test("npm publishing holds no npm token: trusted publishing (OIDC) only, in one 
   assert.doesNotMatch(job.header + job.steps.join("\n"), AUTOMATION_SECRET, "release.yml: the publish job has no automation token");
   for (const step of job.steps) assert.doesNotMatch(step, /secrets\./, "release.yml: the publish job's steps have no secrets");
   assert.match(job.header, /^ {4}environment:/m, "release.yml: the publish job runs in a named environment");
+});
+
+test("the job that can mint the npm OIDC token installs nothing and runs no dependency code", () => {
+  const release = readWorkflow("release.yml");
+  const job = publishJobOf(release);
+  const text = job.header + job.steps.join("\n");
+  assert.doesNotMatch(text, /pnpm|changesets\/action|changeset publish|npx|yarn|npm (ci|install)(?! -g --ignore-scripts npm@)/,
+    "release.yml: the publish job runs only Node's built-ins, a pinned npm and gh");
+  // The script it runs imports nothing but Node's built-ins.
+  const script = readFileSync(join(workflowsDir, "..", "..", "scripts", "publish-packed.mjs"), "utf8");
+  for (const [, spec] of script.matchAll(/^import [^"]*"([^"]+)";$/gm)) assert.match(spec, /^node:/, `publish-packed.mjs imports ${spec}`);
+  assert.match(text, /actions\/download-artifact@[0-9a-f]{40}/, "release.yml: the publish job takes the packed tarballs from the pack job");
 });
 
 test("publishing runs only for the merged Version packages pull request with no changesets left", () => {
