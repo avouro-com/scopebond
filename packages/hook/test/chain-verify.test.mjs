@@ -126,3 +126,28 @@ test("verify --anchor fails when the published chain went back below a head this
     assert.equal(unknown.status, 2);
   } finally { done(); }
 });
+
+test("verify --segments fails when the segments end before the newest head's sequence (the newest batch deleted)", () => {
+  const { dir, done } = folder();
+  try {
+    const project = join(dir, "project");
+    const hookDir = join(project, ".scopebond");
+    mkdirSync(hookDir, { recursive: true });
+    const env = { ...process.env, SCOPEBOND_HOOK_DIR: hookDir };
+    const a = segment(null, 1, 3), b = segment(a.digest, 4, 3), c = segment(b.digest, 7, 3);
+    // Each answer's head names the segment before the batch it answers.
+    recordChainHead(join(hookDir, CHAIN_HEADS_FILE), head(null, 3, "2026-10-07T10:00:00.000Z"));
+    recordChainHead(join(hookDir, CHAIN_HEADS_FILE), head(null, 6, "2026-10-07T11:00:00.000Z", { digest: a.digest, last_ingest_seq: 3 }));
+    recordChainHead(join(hookDir, CHAIN_HEADS_FILE), head(null, 9, "2026-10-07T12:00:00.000Z", { digest: b.digest, last_ingest_seq: 6 }));
+    const segments = join(dir, "segments");
+    mkdirSync(segments);
+    writeFileSync(join(segments, "a.json.gz"), gzipSync(a.text));
+    writeFileSync(join(segments, "b.json.gz"), gzipSync(b.text));
+    const deleted = spawnSync(process.execPath, [cli, "verify", "--segments", segments], { encoding: "utf8", cwd: project, env });
+    assert.equal(deleted.status, 1, deleted.stdout + deleted.stderr);
+    assert.match(deleted.stderr, /records 7–9, which its heads say were admitted, are in no segment given/);
+    writeFileSync(join(segments, "c.json.gz"), gzipSync(c.text));
+    const whole = spawnSync(process.execPath, [cli, "verify", "--segments", segments], { encoding: "utf8", cwd: project, env });
+    assert.equal(whole.status, 0, whole.stdout + whole.stderr);
+  } finally { done(); }
+});

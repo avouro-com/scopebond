@@ -303,7 +303,10 @@ export interface SegmentChainCheck {
  *  the signature of every record and summary that names that key; an environment's other computers sign theirs with their
  *  own keys, and those are counted, not checked), then per chain the links from its newest head's segment back to the first,
  *  consecutive across segments, and every other head of that chain naming a segment on that path with the same last
- *  sequence number. Never throws: segments it cannot check do not pass. */
+ *  sequence number. Past the newest head's segment, the segments that continue it (one each, consecutive) must reach the
+ *  highest sequence number any head of the chain gives: a head names the segment before the batch it answers, so records
+ *  a head says were admitted but no segment given holds are reported, never passed. Never throws: segments it cannot
+ *  check do not pass. */
 export async function verifySegmentChain(
   segmentTexts: readonly string[], heads: readonly SignedChainHead[] = [], options: { publicKey?: string | JsonWebKey } = {},
 ): Promise<SegmentChainCheck> {
@@ -368,11 +371,25 @@ async function checkSegmentChain(
     if (!isSignedChainHead(h)) { problems.push("a head is malformed"); continue; }
     byChain.set(h.head.anchor_id, [...(byChain.get(h.head.anchor_id) ?? []), h.head]);
   }
+  // Which given segments continue each segment, to follow a chain past its newest named segment.
+  const continuing = new Map<string, string[]>();
+  for (const [digest, doc] of docs) {
+    if (typeof doc.previous_segment_digest !== "string") continue;
+    continuing.set(doc.previous_segment_digest, [...(continuing.get(doc.previous_segment_digest) ?? []), digest]);
+  }
   const covered: Record<string, number> = {};
   for (const [id, list] of byChain) {
     const ordered = [...list].sort((a, b) => Date.parse(a.issued_at) - Date.parse(b.issued_at));
     const newest = [...ordered].reverse().find((h) => h.segment);
-    if (!newest?.segment) continue;
+    // The most records any head of this chain says were admitted. The segments must reach it: a head names the segment
+    // before the batch it answers, so without this check the newest batch could be removed without contradicting a head.
+    const admitted = list.reduce((most, h) => Math.max(most, h.ingest_seq), 0);
+    const unreached = (reached: number): void => {
+      if (reached < admitted) {
+        problems.push(`chain ${short(id)}: records ${reached + 1}–${admitted}, which its heads say were admitted, are in no segment given`);
+      }
+    };
+    if (!newest?.segment) { unreached(0); continue; }
     // The path from the newest head's segment back to the first segment.
     const path = new Map<string, number>();
     let digest: string | null = newest.segment.digest;
@@ -388,6 +405,29 @@ async function checkSegmentChain(
       digest = typeof doc.previous_segment_digest === "string" ? doc.previous_segment_digest : null;
     }
     covered[id] = newest.segment.last_ingest_seq;
+    // Forward from the newest named segment: the segments that continue it, one at a time, consecutive. They are not
+    // anchored by a head yet; they must exist, so that what the heads say was admitted is held.
+    const tip = docs.get(newest.segment.digest);
+    if (tip) {
+      // Kept apart from `path`: a head naming one of these segments is checked against the path its newest head names.
+      const ahead = new Set<string>();
+      let at = newest.segment.digest;
+      let last = Number(tip.bounds?.last_ingest_seq);
+      for (let guard = 0; guard < 1_000_000; guard++) {
+        const after = (continuing.get(at) ?? []).filter((d) => !path.has(d) && !ahead.has(d));
+        if (after.length > 1) { problems.push(`chain ${short(id)}: two segments continue segment ${short(at)} (${after.map(short).join(", ")})`); break; }
+        if (after.length === 0) break;
+        const next = after[0];
+        const doc = docs.get(next)!;
+        const first = Number(doc.bounds?.first_ingest_seq);
+        if (first > last + 1) problems.push(`chain ${short(id)}: sequence numbers ${last + 1}–${first - 1} are in no segment`);
+        else if (first !== last + 1) problems.push(`chain ${short(id)}: segment ${short(next)} starts at ${first}, not ${last + 1}`);
+        ahead.add(next);
+        at = next;
+        last = Number(doc.bounds?.last_ingest_seq);
+      }
+      unreached(Number.isFinite(last) ? last : 0);
+    }
     for (const h of ordered) {
       if (!h.segment) continue;
       const end = path.get(h.segment.digest);

@@ -166,3 +166,48 @@ test("a changed record, a broken link or a gap in the sequence is reported", asy
   const gapped = await verifySegmentChain([a.text, gap.text], [head(null, { seq: 5, segment: { digest: gap.digest, last_ingest_seq: 5 }, at: "2026-10-07T12:00:00.000Z" })]);
   assert.match(gapped.problems.join("\n"), /sequence numbers 4–4 are in no segment/);
 });
+
+// Heads as a queue-bound workspace gives them: each names the segment before the batch it answers, so the newest batch is
+// in a segment no head names yet.
+function queuedHeads(a, b) {
+  return [
+    head(null, { seq: 3, at: "2026-10-07T10:00:00.000Z" }),
+    head(null, { seq: 6, segment: { digest: a.digest, last_ingest_seq: 3 }, at: "2026-10-07T11:00:00.000Z" }),
+    head(null, { seq: 9, segment: { digest: b.digest, last_ingest_seq: 6 }, at: "2026-10-07T12:00:00.000Z" }),
+  ];
+}
+
+test("the segments must reach the newest head's sequence: deleting the newest batch is reported", async () => {
+  const { a, b, c } = await history();
+  const queued = queuedHeads(a, b);
+  const all = await verifySegmentChain([a.text, b.text, c.text], queued);
+  assert.deepEqual({ ok: all.ok, problems: all.problems, covered: all.covered }, { ok: true, problems: [], covered: { [ANCHOR]: 6 } });
+  // Segment 7–9 deleted: the newest head says 9 were admitted, but the segments end at 6.
+  const deleted = await verifySegmentChain([a.text, b.text], queued);
+  assert.equal(deleted.ok, false);
+  assert.match(deleted.problems.join("\n"), /records 7–9, .*in no segment given/);
+  // The same with heads that each name their own batch's segment, and a later head naming none.
+  const own = await history();
+  const later = [...own.kept, head(null, { seq: 12, at: "2026-10-07T13:00:00.000Z" })];
+  assert.equal((await verifySegmentChain([own.a.text, own.b.text, own.c.text], own.kept)).ok, true);
+  const unsealed = await verifySegmentChain([own.a.text, own.b.text, own.c.text], later);
+  assert.equal(unsealed.ok, false);
+  assert.match(unsealed.problems.join("\n"), /records 10–12, .*in no segment given/);
+  // A chain whose heads name no segment yet has nothing that reaches its sequence.
+  const none = await verifySegmentChain([], [queued[0]]);
+  assert.equal(none.ok, false);
+  assert.match(none.problems.join("\n"), /records 1–3, .*in no segment given/);
+});
+
+test("past the newest named segment, the chain continues without a fork or a gap", async () => {
+  const { computer, a, b, c } = await history();
+  const queued = queuedHeads(a, b);
+  const fork = await segment(b.digest, 7, [70, 80, 90].map(computer.receipt));
+  const forked = await verifySegmentChain([a.text, b.text, c.text, fork.text], queued);
+  assert.equal(forked.ok, false);
+  assert.match(forked.problems.join("\n"), /two segments continue segment/);
+  const skip = await segment(b.digest, 8, [8, 9].map(computer.receipt));
+  const skipped = await verifySegmentChain([a.text, b.text, skip.text], queued);
+  assert.equal(skipped.ok, false);
+  assert.match(skipped.problems.join("\n"), /sequence numbers 7–7 are in no segment/);
+});
