@@ -48,7 +48,8 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
   they are installed) and turns autostart on, as `setup` does. If you close the page, **Sign in…** in the tray's menu
   starts it again. The workspace is the one the installer was given (`msiexec /i … WORKSPACE=https://<your-workspace>`,
   kept as `Workspace` under `HKCU\Software\Avouro\Scopebond`, or `HKLM` for an install for every user), else
-  `https://cloud.scopebond.com`. Only an https address there is used. From a terminal the same is
+  `https://cloud.scopebond.com`. Only an https address there is used, and the machine's `HKLM` value, when there is
+  one, wins over this user's `HKCU` one. From a terminal the same is
   `scopebond-agent setup https://<your-workspace>`. The sign-in sends this computer's host name so the approver can
   tell which computer it is; set `SCOPEBOND_HOSTNAME_MODE=hash` to send a short stable hash of it instead, or `off` to
   send none (see the hook's README).

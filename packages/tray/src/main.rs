@@ -4,7 +4,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
@@ -217,22 +217,13 @@ fn agent_program() -> Option<PathBuf> {
     std::env::current_exe().ok().map(|p| p.with_file_name("scopebond-agent.exe"))
 }
 
-/// Start `scopebond-agent.exe run` with no console window. It writes its own log and leaves the tray to this program.
+/// Start `scopebond-agent.exe run` with no console window (supervise::agent_command: never with NODE_OPTIONS). It writes its
+/// own log and leaves the tray to this program.
 fn start_agent(program: &Path, home: &Path) -> std::io::Result<Child> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::fs::create_dir_all(home);
-    std::process::Command::new(program)
-        .arg("run")
-        .env("SCOPEBOND_AGENT_TRAY", "off")
-        .env("SCOPEBOND_AGENT_LOG", home.join("agent.log"))
-        .env_remove("SCOPEBOND_AGENT_AFTER_PID")
-        .current_dir(home)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
+    supervise::agent_command(program, home).creation_flags(CREATE_NO_WINDOW).spawn()
 }
 
 /// Another agent is starting: its lock is fresh and its process alive, and it is not the tray's own child.
