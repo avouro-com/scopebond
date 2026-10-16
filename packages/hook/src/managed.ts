@@ -159,6 +159,10 @@ export interface ManagedDocument {
   issued_at?: string;
   key_id?: string;
   signature?: string;
+  /** Signed grants (policy-signature.ts): the digest of `allowances`, `revoked_allowances`, `session_budgets` and
+   *  `request_answers`, and its base64 Ed25519 signature by the same key at the same `issued_at`. */
+  grants_digest?: string;
+  grants_signature?: string;
   /** Lists for the AI coding tools' own settings, signed on their own; only the Scopebond Agent applies them. */
   tool_settings?: ToolSettingsSection;
 }
@@ -360,6 +364,10 @@ export interface ManagedMeta {
   policy_issued_at?: string | null;
   /** The workspace id `policy_issued_at` belongs to. */
   policy_issued_workspace?: string | null;
+  /** The grants digest (policy-signature.ts `digestGrants`) of the document in force when `etag` was saved. An ETag saved
+   *  without it came from a version that did not compare grants at the same revision, so it is not sent (`if-none-match`):
+   *  a revocation that version missed is fetched again. */
+  grants_digest?: string | null;
   /** A repository connection: when the workspace's rules first loaded (a rules check succeeded); calls are denied before. */
   repository_rules_at?: string | null;
 }

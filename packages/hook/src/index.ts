@@ -51,7 +51,7 @@ export {
   BLOCKED_SERVICE_KINDS, BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, BLOCKED_SERVICE_REASON, SERVICE_RULES_CAPABILITY, MAX_BLOCKED_SERVICES, MAX_BLOCKED_SERVICE_KEY,
 } from "./service-rules.js";
 export type { BlockedService, BlockedServiceKind } from "./service-rules.js";
-export { checkPolicySignature, checkToolSettingsSignature, workspaceIdOf, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload, type ToolSettingsSignatureContext } from "./policy-signature.js";
+export { checkPolicySignature, checkToolSettingsSignature, checkGrantsSignature, checkAnswerSignature, digestGrants, carriesGrants, GRANT_FIELDS, workspaceIdOf, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload, type ToolSettingsSignatureContext } from "./policy-signature.js";
 export { policyKeys, policyKeyProblems, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
 export { versionedFetch, withHookVersion, HOOK_VERSION_HEADER } from "./workspace-fetch.js";
 export {
