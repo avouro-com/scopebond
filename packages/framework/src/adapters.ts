@@ -110,37 +110,82 @@ export interface LangChainTool {
 
 /** The methods through which a LangChain-style tool runs. Each one present on the tool is
  *  guarded, so calling `call`, `_call`, `func`, `stream` or `batch` directly cannot skip the
- *  policy check that `invoke` has. */
-const LANGCHAIN_ENTRY_POINTS = ["invoke", "call", "_call", "func"] as const;
+ *  policy check that `invoke` has.
+ *
+ *  `invoke` and `call` (and `stream`/`batch`, which run `invoke`) take the tool's *input*: the
+ *  arguments, or a LangGraph ToolCall (`{ name, args, id, type: "tool_call" }`) that the tool
+ *  unwraps itself and parses with its schema before running. `_call` and `func` take arguments
+ *  that are already parsed. */
+const LANGCHAIN_INPUT_ENTRY_POINTS = ["invoke", "call"] as const;
+const LANGCHAIN_PARSED_ENTRY_POINTS = ["_call", "func"] as const;
+
+/** LangChain's own test for a ToolCall (`_isToolCall` in `@langchain/core`): `invoke` and `call`
+ *  run such an input with `input.args`, not with the envelope. */
+const isToolCall = (input: unknown): input is { name?: unknown; args?: unknown; type: "tool_call" } =>
+  !!input && typeof input === "object" && (input as { type?: unknown }).type === "tool_call";
+
+const isPlainArgs = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** Wrap a LangChain/LangGraph tool so it checks policy before it runs. Returns a
  *  proxy that preserves the tool instance and guards every entry point it has
  *  (`invoke`, `call`, `_call`, `func`, `stream`, `batch`). The originals run against
- *  the unwrapped tool, so one allowed call is checked once. */
+ *  the unwrapped tool, so one allowed call is checked once.
+ *
+ *  The check sees the arguments the tool will run with. A ToolCall input (how LangGraph's
+ *  `ToolNode` runs every tool) is checked on its `args`, and a ToolCall naming a different tool
+ *  is denied. When the tool has a schema with `parseAsync` (a zod schema), the check sees the
+ *  arguments after that parsing, as the tool does. */
 export function wrapLangGraphTool<T extends LangChainTool>(tool: T, guard: ToolGuard, opts: WrapOptions = {}): T {
   type Fn = (...a: unknown[]) => unknown;
-  const decide = async (input: unknown): Promise<{ denied: false } | { denied: true; value: unknown }> => {
-    const args = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : { input };
+  type Decision = { denied: false } | { denied: true; value: unknown };
+  const check = async (args: Record<string, unknown>, input: unknown): Promise<Decision> => {
     const decision = await guard.check(tool.name, args);
     return decision.allowed ? { denied: false } : { denied: true, value: deniedResult(opts, tool.name, decision.reason, input) };
   };
+  const asArgs = (value: unknown): Record<string, unknown> => (isPlainArgs(value) ? value : { input: value });
+  // Through invoke/call/stream/batch: the arguments the tool runs `input` with.
+  const decideInput = async (input: unknown): Promise<Decision> => {
+    let raw = input;
+    if (isToolCall(input)) {
+      if (input.name !== tool.name) {
+        const reason = `the tool call names "${String(input.name)}", not "${tool.name}"`;
+        return { denied: true, value: deniedResult(opts, tool.name, reason, input) };
+      }
+      raw = input.args;
+    }
+    let args = raw;
+    const schema = (tool as Record<string, unknown>).schema as { parseAsync?: unknown } | null | undefined;
+    if (schema && typeof schema.parseAsync === "function" && isPlainArgs(raw)) {
+      try {
+        const parsed = await (schema.parseAsync as (v: unknown) => Promise<unknown>).call(schema, raw);
+        if (isPlainArgs(parsed)) args = parsed;
+      } catch {
+        // The tool refuses input its schema rejects, so it does not run; check the raw arguments.
+      }
+    }
+    return check(asArgs(args), input);
+  };
+  // Through `_call` and `func`: exactly what they are given.
+  const decideParsed = (input: unknown): Promise<Decision> => check(asArgs(input), input);
   const original = (prop: string): Fn | undefined => {
     const fn = (tool as Record<string, unknown>)[prop];
     return typeof fn === "function" ? (fn as Fn).bind(tool) : undefined;
   };
   const wrappers = new Map<PropertyKey, Fn>();
-  for (const prop of LANGCHAIN_ENTRY_POINTS) {
+  const guardEntry = (prop: string, decide: (input: unknown) => Promise<Decision>): void => {
     const fn = original(prop);
-    if (!fn) continue;
+    if (!fn) return;
     wrappers.set(prop, async (input: unknown, ...rest: unknown[]) => {
       const d = await decide(input);
       return d.denied ? d.value : fn(input, ...rest);
     });
-  }
+  };
+  for (const prop of LANGCHAIN_INPUT_ENTRY_POINTS) guardEntry(prop, decideInput);
+  for (const prop of LANGCHAIN_PARSED_ENTRY_POINTS) guardEntry(prop, decideParsed);
   const stream = original("stream");
   if (stream) {
     wrappers.set("stream", async (input: unknown, ...rest: unknown[]) => {
-      const d = await decide(input);
+      const d = await decideInput(input);
       if (!d.denied) return stream(input, ...rest);
       return (async function* () { yield await d.value; })(); // the same as `yield d.value`: an async generator awaits what it yields
     });
@@ -150,7 +195,7 @@ export function wrapLangGraphTool<T extends LangChainTool>(tool: T, guard: ToolG
   if (batch) {
     wrappers.set("batch", async (inputs: unknown, ...rest: unknown[]) => {
       if (!Array.isArray(inputs)) throw new TypeError(`scopebond: ${tool.name}.batch() expects an array of inputs`);
-      const decisions = await Promise.all(inputs.map(decide));
+      const decisions = await Promise.all(inputs.map((input) => decideInput(input)));
       if (decisions.every((d) => !d.denied)) return batch(inputs, ...rest);
       // Some inputs are denied: run only the allowed ones, one by one, and keep the order.
       const config = Array.isArray(rest[0]) ? undefined : rest[0];
