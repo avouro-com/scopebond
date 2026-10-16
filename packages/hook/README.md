@@ -70,7 +70,11 @@ Scopebond, and choose **Trust** once. Every project you open is then governed by
 user-level policy. A project's own `.scopebond/policy.json` applies only after you trust it
 in that project (`scopebond trust`, or `init` there), pinned to its exact contents: a
 repository you clone, or an agent working in it, cannot swap in a weaker policy, and any
-later edit to that file stops it applying until you trust it again.
+later edit to that file stops it applying until you trust it again. The pin also covers the
+project's `rules.json` and the workspace its `cloud.json` names, so a change to either stops
+it applying too. In a trusted project, what can let a blocked action through (the workspace
+rules document's terms for allowing or asking, allowances, earlier overrides) always comes from
+your user-level folder, never from files beside the project's policy.
 
 On Windows a coding agent may run the hook command under cmd.exe, PowerShell or Git Bash
 (Codex runs it through the session's shell, which can be PowerShell), and they read quoted
