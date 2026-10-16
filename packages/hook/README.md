@@ -849,6 +849,19 @@ even if the answer passed through something that could change it.
   `{ "type": "scopebond:managed-rules", "version": 1, "managed": false, "installation_id": …,
   "revision": 0, "rules_digest": "000…0" (64 zeros), "local_changes": false, "issued_at": …,
   "key_id": …, "signature": … }` (a 204 is the unsigned form of the same answer).
+- **Signed grants.** A rules document's `allowances`, `revoked_allowances`, `session_budgets`
+  and `request_answers` decide whether a blocked action is let through, so they are signed
+  too. `grants_digest` is the lowercase hex SHA-256 of the canonical JSON of
+  `{ allowances, revoked_allowances, session_budgets, request_answers }` (each absent member as
+  `[]`), and `grants_signature` is over the same payload as the rules, by the same key and at
+  the same `issued_at`, with `grants_digest` as `rules_digest`, `local_changes: false`,
+  `managed: true` and `kind: "grants"`: a rules signature never passes as a grants signature,
+  nor the reverse. When either field is present both must be, the digest must match the
+  document's own lists and the signature must verify; otherwise the answer is refused like a
+  bad rules signature. In `enforce` mode a signed document that carries any of those lists
+  without `grants_signature` is refused as `unsigned_policy`. A change to those lists alone
+  (the same revision and rules digest, for example a revoked allowance) is installed, not
+  treated as unchanged.
 - **What is refused.** A signature that does not verify (a changed digest or switch, a forged
   answer), a `key_id` this release does not trust, a key whose validity window does not hold
   both the answer's `issued_at` and the present moment, an answer for another computer or

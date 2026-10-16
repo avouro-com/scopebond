@@ -31,7 +31,7 @@ import { recommendedFrom } from "./client-health.js";
 import { retentionDaysFrom } from "./store-upkeep.js";
 import { evidenceDetailFrom } from "./evidence-detail.js";
 import { receiptContextFrom } from "./receipt-context.js";
-import { admitSigned, checkPolicySignature, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
+import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
@@ -64,6 +64,10 @@ function deliveryHeaders(dir: string): Record<string, string> {
 /** Whether the workspace document in force lets people change rules on this computer. */
 function installedLocalChanges(dir: string): boolean {
   try { return (JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as { local_changes?: unknown }).local_changes === true; } catch { return false; }
+}
+/** The grants digest (policy-signature.ts `digestGrants`) of the workspace document in force, or null. */
+function installedGrantsDigest(dir: string): string | null {
+  try { return digestGrants(JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as Record<string, unknown>); } catch { return null; }
 }
 /** The tool settings mark of the workspace document in force (managed.ts `toolSettingsMark`). */
 function installedToolSettingsMark(dir: string): string | null {
@@ -193,7 +197,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // and the always/requests terms, session budgets and blocked services only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
-      headers: { ...auth, "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(","), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
+      headers: { ...auth, "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(","), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag && meta.grants_digest ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -219,7 +223,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const lastIssuedAt = (): string | null => (meta.policy_issued_workspace ?? null) === workspaceId ? meta.policy_issued_at ?? null : null;
   const issued = (issuedAt: string | null) => (issuedAt ? { policy_issued_at: issuedAt, policy_issued_workspace: workspaceId } : {});
   const signed = (raw: Record<string, unknown>, managed: boolean) => {
-    const check = checkPolicySignature(raw, { workspace: workspaceId, computer: installationId, managed, lastIssuedAt: lastIssuedAt(), now });
+    const check = checkAnswerSignature(raw, { workspace: workspaceId, computer: installationId, managed, lastIssuedAt: lastIssuedAt(), now }, mode);
     return { issuedAt: check.result === "verified" ? check.issuedAt : null, admitted: admitSigned(check, mode, at) };
   };
   if (res.status === 401) {
@@ -280,8 +284,11 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const sameVersion = isManaged(dir) && r.revision === meta.revision && r.rules_digest === meta.rules_digest && meta.revision !== null;
   // So are the tool settings (signed on their own): a section with another digest or key is a change to install. An answer
   // without the section changes nothing here (a hook call is not sent it; only the Scopebond Agent is).
+  // And so are the allowances, revoked allowances, session budgets and request answers: a revoked allowance arrives at the same
+  // version with the same rules digest, and must reach the computer.
   const switchChanged = sameVersion && ((r.local_changes === true) !== installedLocalChanges(dir)
-    || (toolSettingsMark(r) !== null && toolSettingsMark(r) !== installedToolSettingsMark(dir)));
+    || (toolSettingsMark(r) !== null && toolSettingsMark(r) !== installedToolSettingsMark(dir))
+    || digestGrants(r) !== installedGrantsDigest(dir));
   // The same version already in force: confirm it again if the last confirmation did not land.
   if (sameVersion && !switchChanged) {
     // Checked like a new answer: the version in force served again without its signature (or with a bad one) is not
@@ -295,7 +302,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     }
     const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "loaded" });
-    save({ etag, last_ack: confirmed, last_error: null, policy_signature: again.admitted.state, ...issued(again.issuedAt) });
+    save({ etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, policy_signature: again.admitted.state, ...issued(again.issuedAt) });
     return { state: "unchanged", revision: meta.revision! };
   }
   const inspected = inspectManaged(raw, switchChanged ? { installationId, currentRevision: null }
@@ -324,7 +331,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   }
   options.afterPolicyWrite?.(dir);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
-  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, last_ack: confirmed, last_error: null,
+  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null,
     policy_signature: admitted.state, ...issued(issuedAt) });
   return { state: "applied", revision: doc.revision };
 }
