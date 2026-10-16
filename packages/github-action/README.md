@@ -32,7 +32,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}   # the BASE commit only; never the PR head
           fetch-depth: 0
-      - uses: avouro-com/scopebond/packages/github-action@main  # or pin a full commit SHA
+      - uses: avouro-com/scopebond/packages/github-action@<full commit SHA>  # pin a commit; @main follows every change
         with:
           policy: scopebond.policy.json
 ```
@@ -63,13 +63,17 @@ files) — the check fails closed. Files are counted per entry, never per line, 
 path that contains a control character (a newline, for example) fails the check
 closed.
 
-**What code runs.** The check step installs `@scopebond/github-action` at the
-version this action's own `package.json` names (unless you set the `version` input),
-so pinning the action to a full commit SHA also pins the checking code. It installs
-into the runner's temp directory with lifecycle scripts off, so a `node_modules` or
-`.npmrc` in the checked-out workspace cannot choose the code, and inputs reach the
-script through environment variables, never template expansion. A `version` older
-than the action may not read the file list the action writes and then fails closed.
+**What code runs.** The check step fetches `@scopebond/github-action` at the
+version this action's own `package.json` names (unless you set the `version` input)
+and runs its bundled check: one file that holds every dependency, so no dependency
+is resolved or installed at run time and pinning the action to a full commit SHA
+pins all of the checking code. Only the package's own tarball is fetched, into the
+runner's temp directory with lifecycle scripts off, so a `node_modules` or `.npmrc`
+in the checked-out workspace cannot choose the code, and inputs reach the script
+through environment variables, never template expansion. A `version` from before
+the bundled check is installed with its dependencies, with a warning; a `version`
+older than the action may not read the file list the action writes and then fails
+closed.
 
 ## Policy
 
@@ -104,7 +108,7 @@ PR head — the verdict, the gate, the attributed agent and the pinned policy, i
 the `boundary` evidence class:
 
 ```yaml
-      - uses: avouro-com/scopebond/packages/github-action@main  # or pin a full commit SHA
+      - uses: avouro-com/scopebond/packages/github-action@<full commit SHA>  # pin a commit; @main follows every change
         with:
           policy: scopebond.policy.json
         env:
@@ -125,7 +129,7 @@ agent PRs show in the hosted portal. Export is **best-effort** — a Cloud outag
 never fails the required check, which already gated the merge:
 
 ```yaml
-      - uses: avouro-com/scopebond/packages/github-action@main  # or pin a full commit SHA
+      - uses: avouro-com/scopebond/packages/github-action@<full commit SHA>  # pin a commit; @main follows every change
         with:
           policy: scopebond.policy.json
           workspace-url: https://your-workspace.example

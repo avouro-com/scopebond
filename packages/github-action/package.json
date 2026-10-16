@@ -46,11 +46,14 @@
     "@scopebond/gateway": "workspace:^"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "prepublishOnly": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
+    "build": "tsc -p tsconfig.json && node scripts/bundle.mjs",
+    "prepublishOnly": "tsc -p tsconfig.json && node scripts/bundle.mjs",
+    "test": "tsc -p tsconfig.json && node scripts/bundle.mjs && node --test test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

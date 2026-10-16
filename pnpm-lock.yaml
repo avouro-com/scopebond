@@ -129,6 +129,10 @@ importers:
       '@scopebond/verify':
         specifier: workspace:^
         version: link:../verify
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   packages/hook:
     dependencies:
