@@ -4,72 +4,61 @@
 [![CI](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml/badge.svg)](https://github.com/avouro-com/scopebond/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@scopebond/hook.svg)](https://www.npmjs.com/package/@scopebond/hook)
 
-**Free, open-source guardrails and verifiable evidence for AI coding agents.**
+**See, control and prove what AI coding agents do on your computers.**
 
-As organizations adopt more AI, they need clear oversight and accountability:
-what did an agent do, how are harmful actions controlled, and what evidence can
-they provide? Scopebond's open-source components check supported actions against
-your rules and create signed records you can inspect and verify independently.
-Connect Claude Code, Cursor, Codex, GitHub Copilot, MCP tools, your agent framework,
-or GitHub pull-request checks.
+Scopebond checks each action a coding agent asks to take (a shell command, a file
+read or write, a push, an MCP call) against your rules before it runs, and signs a
+record of every decision that you can verify offline. It works with Claude Code,
+Cursor, Codex, GitHub Copilot, MCP tools, agent frameworks and GitHub pull-request
+checks.
 
-**This repository contains free, Apache-2.0 open-source software. Scopebond Cloud,
-the hosted shared workspace, is a separate proprietary service and is not open
-source.** Cloud offers Free and paid plans; a Free plan does not make the hosted
-service open source. You can use the local controls and verify their records
-without a Cloud account.
-
-[Product overview](https://scopebond.com) ·
-[Getting started](https://scopebond.com/get-started) ·
-[Explore the hosted sample workspace](https://cloud.scopebond.com/app/sample)
-
-## Visibility, control, and evidence
-
-| The question | What the open-source software provides | What the separate hosted workspace adds |
-|---|---|---|
-| **What did an agent do?** | Local records of supported actions and policy decisions. | Shared activity, responsible owners, computers, connection health, and review queues. |
-| **How are we protected against harmful actions?** | Configured rules that block supported actions before execution or merge. | Team rule settings, review workflows, and confirmation of which computers loaded a setting. |
-| **Do we have evidence of what an agent did?** | Signed action and decision records with independent verification. | Retained records, team review context, reports, and exports. |
-
-For example, an agent requests a force-push to a protected branch. A configured
-hook checks that supported request, denies it under your rule, and signs the
-decision. Inspect the record locally or, if connected, review it in Cloud.
-
-Coverage depends on the tool and connection. Some actions can be prevented;
-others are observed after they happen. Actions outside the configured connection
-are not covered. A signature supports integrity and provenance for what the signer
-asserted; it does not by itself prove an external effect, complete coverage, or
-regulatory compliance.
+[Get started](#get-started) ·
+[Explore the sample workspace](https://cloud.scopebond.com/app/sample) ·
+[Docs](https://scopebond.com/documentation)
 
 ## Get started
 
-Use a current Node.js LTS release; the hook and Scopebond Agent require Node
-22.13 or later. In Windows PowerShell, use `npx.cmd` or `npm.cmd` if script
-execution policy blocks the `.ps1` command; no execution-policy change is needed.
+### Windows
 
-### Shared oversight: the separate hosted service
+[Create a free workspace](https://cloud.scopebond.com/app), press **Connect a
+computer** and download the signed installer. Or run this in PowerShell:
 
-[Create a free Scopebond Cloud workspace](https://cloud.scopebond.com/app), then
-open **Agents → Add an agent** and follow your coding tool's setup. The
-[getting-started page](https://scopebond.com/get-started) covers sign-up, device
-connection, the optional Scopebond Agent companion, and reviewing first activity.
-Cloud's proprietary hosted service has Free and paid plans, separate from the
-free open-source packages here.
-
-For Claude Code, run this in your own terminal, outside the coding agent:
-
-```bash
-npx -y @scopebond/hook@latest login https://cloud.scopebond.com
+```powershell
+irm https://cloud.scopebond.com/install.ps1 | iex
 ```
 
-Add `--cursor`, `--codex` or `--copilot` for those tools. The command prints a short code and
-an approval link for the workspace owner. For Codex, review Scopebond in `/hooks`,
-choose **Trust**, and start a new task. See the [hook README](packages/hook) for
-connection details and tool-specific coverage.
+The installer is signed by Avouro LLC, needs no Node.js and keeps itself updated. It
+installs the Scopebond Agent (a companion program, not the AI coding agent doing the
+work), the hook, and the Scopebond tray. On first start the agent signs the computer
+in with a code you approve in the workspace and sets up the coding agents it finds.
+See [Windows: the signed installer](packages/agent#windows-the-signed-installer) and
+the [tray](packages/tray).
 
-### Local controls: free, open source, no account required
+### macOS and Linux
 
-Install once for your user account on this computer:
+```bash
+npx -y @scopebond/agent@latest setup https://cloud.scopebond.com
+```
+
+`setup` needs Node.js 22.13 or later. It signs the computer in with a code you approve
+in the workspace, adds the hook to Claude Code (add `--cursor` or `--codex` for those
+tools), and starts the Scopebond Agent with your sign-in. On a Windows computer that
+uses npm, type `npx.cmd`; no execution-policy change is needed.
+
+### GitHub Copilot, or the hook alone
+
+Run this in your own terminal, outside the coding agent:
+
+```bash
+npx -y @scopebond/hook@latest login https://cloud.scopebond.com --copilot
+```
+
+It prints a short code and an approval link for the workspace owner. Leave out
+`--copilot` to connect Claude Code, or use `--cursor` or `--codex`. For Codex, review
+Scopebond in `/hooks`, choose **Trust**, and start a new task. See the
+[hook README](packages/hook) for each tool's details.
+
+### Local only, no account
 
 ```bash
 npm install -g @scopebond/hook@latest
@@ -77,8 +66,8 @@ scopebond install
 scopebond status
 ```
 
-`install` configures Claude Code and detects installed Cursor, Codex and GitHub
-Copilot settings; you can choose a tool with `--cursor`, `--codex` or `--copilot`.
+`install` configures Claude Code and detects Cursor, Codex and the GitHub Copilot CLI;
+choose one with `--cursor`, `--codex` or `--copilot`. Records stay on this computer.
 For one project's setup:
 
 ```bash
@@ -87,35 +76,83 @@ npx -y @scopebond/hook@latest log           # inspect recent decisions
 npx -y @scopebond/hook@latest verify        # check stored records offline
 ```
 
-The starter rules protect release branches, block destructive programs, and
-protect configured secret, build, and guardrail settings. Network and MCP calls
-are observed by default so you can decide which limits to apply. Edit readable
-rules with `scopebond rules`. The [hook README](packages/hook) covers policy trust,
-setup scope, diagnostics, and uninstall. In unattended setup, pass `--yes` to
-`init` after reviewing the configuration you are authorizing.
+In unattended setup, pass `--yes` to `init` after reviewing the configuration you are
+authorizing.
 
-## Supported tools and coverage
+> **Open source and hosted.** Everything in this repository is free, Apache-2.0
+> open-source software, and it works without an account. Scopebond Cloud, the hosted
+> workspace, is a separate proprietary service with Free and paid plans. Connecting
+> one to the other changes the licence of neither.
 
-| Connection | What it checks | Important limit |
+## How it works
+
+- **Every action is checked before it runs.** The hook on the computer checks each
+  action the coding agent routes through its tools against your rules, and decides
+  there, without waiting for the workspace.
+- **Each rule is Watch, Needs approval or Block.** In a workspace a rule is set for
+  everyone, for one agent, or for a group of agents. *Watch* records the action,
+  *Needs approval* stops it until it is unblocked, and *Block* stops it. Changing
+  Scopebond's own settings is always blocked, so a coding agent cannot switch
+  Scopebond off.
+- **Without an account,** each rule records (the default) or blocks. `scopebond rules`
+  lists them in plain words, `scopebond rules enforce <rule>` makes one block, and
+  `scopebond rules monitor <rule>` sets it back to recording. The starter rules cover
+  release branches, destructive programs, and secret, build and guardrail settings;
+  network and MCP calls are recorded so you can decide which limits to apply.
+- **Every decision is a signed record.** Read them with `scopebond log` and check them
+  offline with `scopebond verify`.
+
+## When something is blocked
+
+- On Windows, the tray shows it under **Blocked · Allowed · Requests**, in plain words,
+  with the rule that stopped it. On macOS and Linux, and on Windows npm installs, the
+  Scopebond Agent asks in its own window.
+- What happens next follows the workspace's **Who approves unblocking** setting: *An
+  admin* (the person asks to unblock it, with a reason, and an admin decides);
+  *Automatic, reviewed later* (it is unblocked at once, for a length the workspace
+  sets, and an admin reviews it later); or *People unblock their own* (the person
+  unblocks it with a reason). A rule set to Block, and Scopebond's own protection,
+  cannot be unblocked.
+- Every unblock is recorded and shown in the workspace's **Activity**. Scopebond
+  never runs the action itself; the person or the coding agent runs it again.
+- Without an account, the coding agent is told which rule stopped it, and
+  `scopebond rules` changes what blocks.
+
+## The hosted workspace
+
+Scopebond Cloud is a separate, proprietary service that brings every connected
+computer into one place:
+
+- **Overview**: coverage (which computers are protected), what **Needs you** (requests
+  to unblock, findings, rule reviews), and what was **Stopped**.
+- **Activity**: every action and decision from every connected computer, unblocks
+  included.
+- **Protection**: the rules, for everyone, one agent or a group, and who approves
+  unblocking.
+- **Share report**: a summary for a period, as a share link or a PDF.
+
+| The question | The open-source software | What the hosted workspace adds |
 |---|---|---|
-| [Claude Code, Cursor, and Codex hook](packages/hook) | Supported tool actions delivered through the configured hook. | Cursor file edits are recorded **after** writing, not prevented. Codex file reads are checked when derived from supported shell commands; reads outside that path are not seen. |
-| [GitHub Copilot hook](packages/hook#github-copilot) | Shell commands, file reads and edits, and git pushes from the Copilot CLI, checked before they run. | Cooperative: prevents if honored, but **a hook timeout fails open in Copilot**, so the hook denies on its own shorter deadline. MCP tool calls are recorded, not evaluated. VS Code agent mode and the cloud coding agent are not covered yet. |
-| [GitHub Action](packages/github-action) | Policy checks on supported agent pull requests in your own runner. | Make the check required to gate merge. It does not monitor the agent's cloud sandbox; bypass rights remain outside the gate. Signing needs your configured signing key. |
-| [MCP proxy](packages/mcp) | Each `tools/call` routed through the proxy before forwarding. | Resource reads and prompt fetches are outside the tool-call policy. |
-| [Framework integrations](packages/framework) | Guarded tools in Vercel AI SDK, LangGraph/LangChain, or your own tool loop. | The application must honor the guard; calls outside it are not covered. |
+| **What did an agent do?** | Signed local records of supported actions and decisions. | **Activity** across every computer, and coverage on the **Overview**. |
+| **How are harmful actions stopped?** | Rules that record or block supported actions before they run, or before merge. | **Protection**: Watch · Needs approval · Block for everyone, one agent or a group, who approves unblocking, and confirmation of which computers loaded each rule. |
+| **Can we prove it?** | Signed records you can verify offline, without an account. | Retained records, **Needs you**, and a **Share report**. |
 
-The [hook capability manifest](packages/hook#what-this-hook-can-honestly-claim-capabilities)
-separates unsupported, inactive, configured, degraded, and verified-reporting
-states. A configured hook or a received signal alone is not verified coverage.
+See [workspace features](https://scopebond.com/hosted) and
+[hosted plans](https://scopebond.com/pricing).
 
-## What is open source, and what is hosted?
+![The coding tools' actions are checked on the computer against your rules and signed; on Windows the tray shows what was blocked; an optional connection sends records to the separate, proprietary hosted workspace.](architecture.svg)
 
-All packages here are **free to use and self-host under Apache-2.0**:
+The hook decides without waiting for the workspace to receive records. An action
+that needs approval still needs it: an unreachable workspace never grants
+permission. Without a workspace connection, records stay on the computer. Connected
+components send their records and health signals to the workspace.
+
+## Packages
 
 | Package | Purpose |
 |---|---|
-| [`@scopebond/hook`](packages/hook) | Local coding-tool checks, signed records, and optional workspace connection. |
-| [`@scopebond/agent`](packages/agent) | Open-source companion for record delivery, connection maintenance, health, and hook repair. Distinct from the AI coding agent doing the work. |
+| [`@scopebond/hook`](packages/hook) | Checks for Claude Code, Cursor, Codex and GitHub Copilot, signed local records, and an optional workspace connection. |
+| [`@scopebond/agent`](packages/agent) | The Scopebond Agent: delivers records, keeps the connection and the hook working, and asks a person about a blocked action. Distinct from the AI coding agent doing the work. |
 | [`@scopebond/github-action`](packages/github-action) | Required agent pull-request checks in your own runner. |
 | [`@scopebond/mcp`](packages/mcp) | A policy-checking proxy for MCP tool calls. |
 | [`@scopebond/framework`](packages/framework) | Policy guards for tools inside agent applications. |
@@ -123,19 +160,44 @@ All packages here are **free to use and self-host under Apache-2.0**:
 | [`@scopebond/verify`](packages/verify) | Deterministic policy evaluation, signature verification, and conformance vectors. |
 | [`@scopebond/policy-schema`](packages/policy-schema) | Policy, action, receipt, and observation schemas and shared vectors. |
 | [`@scopebond/sdk`](packages/sdk) | Signing action intents and approvals and submitting them to a gateway. |
+| [`native`](packages/native) | The signed single executable for Windows: the Scopebond Agent and the hook in one program, and its installer. Windows program, not on npm. |
+| [`tray`](packages/tray) | The Scopebond tray for Windows, a Tauri program. Windows program, not on npm. |
 
-**Scopebond Cloud is not included.** Its hosted portal, tenancy, billing, shared
-retention, administration, and review workflows are proprietary. Connecting an
-open-source package to Cloud does not change the ownership or license of either.
-See [workspace features](https://scopebond.com/hosted) and
-[hosted plans](https://scopebond.com/pricing).
+All of them are free to use and self-host under Apache-2.0. Scopebond Cloud's hosted
+portal, tenancy, billing, shared retention and administration are not included.
 
-![Open-source controls and signed records operate locally; an optional connection sends records to the separate proprietary hosted workspace.](architecture.svg)
+## Coverage and limits
 
-The hook evaluates local actions without waiting for Cloud to receive records.
-Rules requiring a workspace approval still need that authorization; an unavailable
-service does not grant permission. Without a workspace connection, records stay
-local. Connected components send configured records and health signals to Cloud.
+### Supported tools
+
+| Connection | What it checks | Important limit |
+|---|---|---|
+| [Claude Code, Cursor, and Codex hook](packages/hook) | Supported tool actions delivered through the configured hook. | Cursor file edits are recorded **after** writing, not prevented. Codex file reads are checked when derived from supported shell commands; reads outside that path are not seen. |
+| [GitHub Copilot hook](packages/hook#github-copilot) | Shell commands, file reads and edits, and git pushes, checked before they run. The Copilot CLI is covered; VS Code agent mode and the Copilot cloud agent are handled, with verification on live sessions in progress. | Cooperative: prevents if honored, but **a hook timeout fails open in Copilot**, so the hook denies on its own shorter deadline. MCP tool calls are recorded, not evaluated. |
+| [GitHub Action](packages/github-action) | Policy checks on supported agent pull requests in your own runner. | Make the check required to gate merge. It does not monitor the agent's cloud sandbox; bypass rights remain outside the gate. Signing needs your configured signing key. |
+| [MCP proxy](packages/mcp) | Each `tools/call` routed through the proxy before forwarding. | Resource reads and prompt fetches are outside the tool-call policy. |
+| [Framework integrations](packages/framework) | Guarded tools in Vercel AI SDK, LangGraph/LangChain, or your own tool loop. | The application must honor the guard; calls outside it are not covered. |
+
+### What to keep in mind
+
+- **Coverage depends on the tool and the connection.** Only actions that reach a
+  configured connection are checked; a process started outside the coding agent's
+  tools is not covered. Some actions can be prevented; others are recorded after they
+  happen. The [hook capability manifest](packages/hook#what-this-hook-can-honestly-claim-capabilities)
+  separates unsupported, inactive, configured, degraded, and verified-reporting
+  states: a configured hook or a received signal alone is not verified coverage.
+- **A hook that cannot start fails open.** Coding agents treat a hook that cannot
+  start as a non-blocking error and run the action unchecked. `scopebond status` and
+  `scopebond doctor` report a hook entry that cannot start.
+- **The packages are experimental.** Start with controlled test systems and review
+  each package's coverage and operational limits before important work. Source
+  availability is not a certification of production protection.
+- **A signature proves less than it may seem.** It supports the integrity and
+  provenance of what the signer asserted. By itself it does not prove an external
+  effect, complete coverage, or regulatory compliance. See [SPEC.md](SPEC.md).
+- **Future concepts are not product capabilities.** Additional business-platform
+  connections, collateral deposits, and on-chain registry features are ideas, not
+  current features; see the [product roadmap](https://scopebond.com/roadmap).
 
 ## Verification and developer examples
 
@@ -158,12 +220,9 @@ const { app, handleAction } = createGateway({ policy, authentication: { keys } }
 See the [gateway README](packages/gateway) for simulation versus execution,
 authentication, signing keys, and verification. Runnable examples live in
 [`examples/`](examples/); they do not require the proprietary hosted workspace.
+Existing policy and verification conformance vectors are available here.
 
-## Component maturity and releases
-
-The open-source packages are experimental. Start with controlled test systems and
-review each package's coverage and operational limits before important work.
-Source availability is not a certification of production protection.
+## Releases
 
 Current release set: `@scopebond/policy-schema@0.8.0`, `@scopebond/verify@0.6.6`,
 `@scopebond/gateway@0.19.1`, `@scopebond/sdk@0.1.8`, `@scopebond/hook@0.25.1`,
@@ -171,12 +230,8 @@ Current release set: `@scopebond/policy-schema@0.8.0`, `@scopebond/verify@0.6.6`
 and `@scopebond/framework@0.3.17`. Release tooling keeps these references in step
 with package manifests. Public setup selects npm's latest published release;
 generated hook configuration and managed workspace updates can pin versions
-separately.
-
-Additional business-platform connections, collateral deposits, and on-chain
-registry features are future concepts, not current product capabilities. Existing
-policy and verification conformance vectors are available here. See the
-[product roadmap](https://scopebond.com/roadmap) for future direction.
+separately. The signed Windows programs are published on the
+[releases page](https://github.com/avouro-com/scopebond/releases).
 
 ## Contributing and support
 
