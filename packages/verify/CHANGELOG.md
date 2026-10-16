@@ -1,5 +1,12 @@
 # @scopebond/verify
 
+## 0.6.7
+
+### Patch Changes
+
+- 2c0b2af: `checkChainHeads` judges a rollback by the order this computer received its heads, not only by the issue times the workspace signs. Kept heads without this computer's delivery times were compared by `issued_at` alone, so a workspace that rolled its chain back and stamped the lower head at or before the higher one it had already handed out passed the check, and `scopebond verify --anchor` reported that the chain heads agree. A kept head listed after a higher one is now reported as going back, whatever either says about its issue time, unless this computer's own times show the two deliveries may have been out together. Kept heads must be passed in the order received, as the chain-heads store keeps them.
+- f8157bd: `verifySegmentChain` checks that the segments reach the newest head's sequence. A head names the segment before the batch it answers, so a chain's newest batch could be removed without contradicting any head, and the check still passed. Past the newest head's segment, the segments that continue it must now link one after another, with no fork and no gap, up to the highest sequence number any head of the chain gives. Records that a head says were admitted but that are in no segment given are reported as a problem, and `scopebond verify --segments` exits non-zero.
+
 ## 0.6.6
 
 ### Patch Changes
