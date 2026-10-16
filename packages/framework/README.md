@@ -49,7 +49,10 @@ const guardedSearch = wrapLangGraphTool(searchTool, guard);
 ```
 
 Every way the tool can run is guarded: `invoke`, `call`, `_call`, `func`, `stream`
-and `batch`.
+and `batch`. The check sees the arguments the tool runs with: a ToolCall input
+(`{ name, args, id, type: "tool_call" }`, as `ToolNode` passes it) is checked on
+its `args`, after the tool's own zod schema parsing, and a ToolCall that names a
+different tool is denied.
 
 ## Other frameworks
 
