@@ -1,5 +1,32 @@
 # @scopebond/hook
 
+## 0.26.0
+
+### Minor Changes
+
+- 7577598: A machine id, so a workspace can tell that a computer connecting again is the same computer.
+  
+  - The machine id is `m1:` and the unpadded base64url SHA-256 of `scopebond-machine-id/v1`, the workspace's id (`unscoped` before it is known) and the operating system's own machine id (Windows `MachineGuid`, macOS `IOPlatformUUID`, Linux `/etc/machine-id` or `/var/lib/dbus/machine-id`), trimmed and lowercased. The operating system's id never leaves the computer and is never written, logged or shown; where there is none, nothing is sent, and the host name or a network address is never used instead.
+  - Sign-in and enrollment carry it as `machine_id` in their body (`login`, `connect`, the Scopebond Agent's first sign-in, `scopebond-gateway enroll`); the rules check, record deliveries and summaries, and observation uploads carry it in the `x-scopebond-machine-id` header.
+  - It is kept with its scope in `machine-id.json` beside `cloud.json` (the gateway: `scopebond-machine-id.json`, or `SCOPEBOND_MACHINE_ID_FILE`), worked out again once the workspace's id is known after enrolling, and once a day.
+  - `@scopebond/gateway` exports the shared implementation (`computeMachineId`, `readRawMachineId`, `cachedMachineId` from `@scopebond/gateway/node`; `MACHINE_ID_HEADER`, `isMachineId`, `machineIdHeaders` from the root), and `completeCloudEnrollment` and `createCloudExporter` take a `machineId` option.
+
+### Patch Changes
+
+- 2c0b2af: `checkChainHeads` judges a rollback by the order this computer received its heads, not only by the issue times the workspace signs. Kept heads without this computer's delivery times were compared by `issued_at` alone, so a workspace that rolled its chain back and stamped the lower head at or before the higher one it had already handed out passed the check, and `scopebond verify --anchor` reported that the chain heads agree. A kept head listed after a higher one is now reported as going back, whatever either says about its issue time, unless this computer's own times show the two deliveries may have been out together. Kept heads must be passed in the order received, as the chain-heads store keeps them.
+- a03b216: Signed grants, and revocations that reach the computer.
+  
+  - A rules document's `allowances`, `revoked_allowances`, `session_budgets` and `request_answers` are now checked against `grants_digest` (SHA-256 of their canonical JSON, absent members as `[]`) and `grants_signature` (Ed25519 by the document's key at its `issued_at`, over the rules payload with `kind: "grants"`). When either field is present both must be, the digest must match and the signature must verify; otherwise the answer is refused like a bad rules signature and the rules in force stay. In `enforce` mode a signed document that carries any of those lists without `grants_signature` is refused as `unsigned_policy`. Answers without the fields are still accepted in `dual` mode.
+  - A change to those lists alone, at the same revision and rules digest (for example a revoked allowance), is now installed instead of being treated as unchanged, so a revocation takes effect at the next rules check. An ETag saved by an earlier version is not sent once, so a revocation it missed is fetched again.
+  - New exports: `checkGrantsSignature`, `checkAnswerSignature`, `digestGrants`, `carriesGrants`, `GRANT_FIELDS`.
+- 9df359a: A trusted project can no longer let through what its policy blocks with files placed beside that policy.
+  
+  - In a project whose own policy governs because you trusted it (a user-level install exists), what can let a blocked action through (the workspace rules document's allow and ask terms, allowances, and the record of earlier overrides) is read from and written to the user-level folder, never the project's `.scopebond` folder. A repository could otherwise add a `managed-rules.json` and an `allowances.json` beside its unchanged, trusted `policy.json` and turn a block into an allowance.
+  - The trust pin now covers the project's `rules.json` (read on each call for the allowed roots and the remote-database guard) and the workspace its `cloud.json` names (not the credential, which renews), as well as `policy.json`. A change to any of them stops the project's policy applying until you run `scopebond trust` again. A pin made by an earlier version is honoured while `policy.json` is unchanged, and renewed to cover the other two.
+  - New export: `decisionStateDir`.
+- Updated dependencies [7577598]
+  - @scopebond/gateway@0.20.0
+
 ## 0.25.1
 
 ### Patch Changes

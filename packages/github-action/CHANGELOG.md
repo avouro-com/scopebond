@@ -1,5 +1,16 @@
 # @scopebond/github-action
 
+## 0.5.14
+
+### Patch Changes
+
+- c9d90bf: The action now runs a bundled check: one file that holds every dependency, fetched as the package's own tarball with no dependency resolved or installed at run time, so pinning the action to a commit pins all of the checking code. The README examples now pin a commit instead of following `@main`.
+- Updated dependencies [2c0b2af]
+- Updated dependencies [7577598]
+- Updated dependencies [f8157bd]
+  - @scopebond/verify@0.6.7
+  - @scopebond/gateway@0.20.0
+
 ## 0.5.13
 
 ### Patch Changes
