@@ -72,7 +72,7 @@ export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, copilotDetected, copilotHome, harnessDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
   HARNESSES, COPILOT_EVENTS, COPILOT_HOOK_FILE, COPILOT_TIMEOUT_SEC, COPILOT_DECISION_DEADLINE_MS, copilotHookEntry, powershellHookCommand, harnessEntryCommand,
-  readHarnessConfig, backupHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile, canonicalPath, samePath,
+  readHarnessConfig, backupHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, decisionStateDir, trustedProjectsFile, canonicalPath, samePath,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
   isScopebondHookCommand, harnessEntryMatches, nativeHookProgram, missingHookPrograms, npxAvailable, isNpxHookCommand,
   codexHookEntry, codexWindowsCommand, shellPlainWindowsPath, windowsHookCommandLine, windowsShortPath, type ShortPathFinder,
