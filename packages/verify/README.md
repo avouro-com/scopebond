@@ -215,7 +215,11 @@ time; deliveries in flight together may be answered out of order and are not com
 These times are compared on one clock only: `local.clock` names the computer whose clock
 took them, so heads two computers keep in one shared folder are not ordered by each
 other's clocks, and a head held before its own delivery was sent (timed across a clock
-step back) does not order anything by its sent time. Times on published heads are ignored. The checks never throw on hostile input: a list,
+step back) does not order anything by its sent time. Times on published heads are ignored.
+Pass the kept heads in the order they were received (as the chain-heads store keeps
+them): a kept head listed after a higher one is reported as going back, whatever either
+says about its issue time, unless those times show the two deliveries may have been out
+together. A head kept without times is judged by that order. The checks never throw on hostile input: a list,
 head or segment that cannot be checked is reported as a problem.
 
 With `publicKey`, `verifySegmentChain` checks the

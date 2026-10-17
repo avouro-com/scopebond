@@ -1,40 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 430" width="1200" height="430" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440" role="img" aria-labelledby="title desc">
   <title id="title">Scopebond open-source software and separate hosted service</title>
-  <desc id="desc">Supported tools send actions through local or workflow controls. The Apache-2.0 open-source software checks rules and creates signed records that can be verified without a Cloud account. An optional connection sends records to Scopebond Cloud, a separate proprietary hosted shared workspace with Free and paid plans. Coverage depends on the configured tool; some events are observed after execution.</desc>
+  <desc id="desc">Supported coding tools send actions through local or workflow controls. The Apache-2.0 open-source software checks them against your rules and creates signed records that can be verified without a Cloud account. On Windows, the Scopebond tray shows what was blocked, allowed and requested. An optional connection sends records to Scopebond Cloud, a separate proprietary hosted workspace with Overview, Activity, Protection and Share report, on Free and paid plans.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#52657b"/></marker>
   </defs>
-  <rect width="1200" height="430" rx="18" fill="#f4f6fb"/>
+  <rect width="1200" height="440" rx="18" fill="#f4f6fb"/>
   <style>
     text{font-family:Segoe UI,Arial,sans-serif;fill:#20324a}
     .heading{font-size:19px;font-weight:600}.label{font-size:14px;fill:#52657b}.body{font-size:16px}
   </style>
-  <text class="heading" x="36" y="42">Visibility, control, and evidence — with a clear hosting boundary</text>
-  <rect x="28" y="67" width="767" height="274" rx="14" fill="#fff" stroke="#cbd5e1"/>
+  <text class="heading" x="36" y="42">See, control and prove what AI coding agents do — with a clear hosting boundary</text>
+  <rect x="28" y="67" width="767" height="344" rx="14" fill="#fff" stroke="#cbd5e1"/>
   <text class="heading" x="50" y="101">Free, open-source software</text>
   <text class="label" x="50" y="125">Apache-2.0 · runs on your computer or in your workflow</text>
   <rect x="50" y="155" width="260" height="136" rx="10" fill="#eef2fa" stroke="#d7dfea"/>
   <text class="heading" x="70" y="185">Connected tools</text>
-  <text class="body" x="70" y="216">Claude Code · Cursor · Codex</text>
-  <text class="body" x="70" y="243">MCP · frameworks · GitHub</text>
-  <text class="label" x="70" y="270">Supported actions and events</text>
+  <text class="body" x="70" y="211">Claude Code · Cursor · Codex</text>
+  <text class="body" x="70" y="235">GitHub Copilot · MCP</text>
+  <text class="body" x="70" y="259">Frameworks · GitHub checks</text>
+  <text class="label" x="70" y="281">Supported actions and events</text>
   <path d="M310 223 H375" fill="none" stroke="#52657b" stroke-width="2" marker-end="url(#arrow)"/>
   <rect x="389" y="155" width="384" height="136" rx="10" fill="#1b3a5c"/>
   <text class="heading" x="411" y="185" style="fill:#fff">Rules, controls, and signed records</text>
-  <text class="body" x="411" y="216" style="fill:#fff">Block supported actions · record decisions</text>
+  <text class="body" x="411" y="216" style="fill:#fff">Check each action before it runs</text>
   <text class="body" x="411" y="243" style="fill:#fff">Inspect locally · verify independently</text>
   <text class="label" x="411" y="270" style="fill:#d5e1f0">Local controls need no Cloud account</text>
-  <text class="label" x="50" y="319">GitHub checks gate merge; some tool events are observation-only.</text>
+  <path d="M581 291 V315" fill="none" stroke="#52657b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="389" y="319" width="384" height="72" rx="10" fill="#eef2fa" stroke="#d7dfea"/>
+  <text class="heading" x="411" y="347">Tray on Windows</text>
+  <text class="body" x="411" y="374">Blocked · Allowed · Requests</text>
   <path d="M795 223 H836" fill="none" stroke="#52657b" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
-  <rect x="851" y="67" width="321" height="274" rx="14" fill="#eeedf8" stroke="#a6a2c2" stroke-dasharray="6 4"/>
+  <rect x="851" y="67" width="321" height="344" rx="14" fill="#eeedf8" stroke="#a6a2c2" stroke-dasharray="6 4"/>
   <text class="heading" x="875" y="101">Scopebond Cloud</text>
   <text class="label" x="875" y="125">Separate proprietary hosted service</text>
-  <text class="body" x="875" y="174">Shared activity and responsible owners</text>
-  <text class="body" x="875" y="206">Team rule reviews and connection health</text>
-  <text class="body" x="875" y="238">Retained evidence, reports, and exports</text>
-  <text class="label" x="875" y="279">Optional workspace connection</text>
-  <text class="heading" x="875" y="304">Free and paid plans</text>
-  <text class="label" x="875" y="326">The hosted service is not open source</text>
-  <text class="label" x="36" y="380">Coverage depends on the configured connection. Actions outside it are not covered.</text>
-  <text class="label" x="36" y="406">Signed records support integrity and provenance, not a certification of completeness, external outcomes, or compliance.</text>
+  <text class="body" x="875" y="174">Overview: coverage, Needs you,</text>
+  <text class="body" x="875" y="196">and what was stopped</text>
+  <text class="body" x="875" y="230">Activity across every computer</text>
+  <text class="body" x="875" y="264">Protection: rules and unblocking</text>
+  <text class="body" x="875" y="298">Share report</text>
+  <text class="label" x="875" y="340">Optional workspace connection</text>
+  <text class="heading" x="875" y="368">Free and paid plans</text>
+  <text class="label" x="875" y="392">The hosted service is not open source</text>
 </svg>

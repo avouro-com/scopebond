@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { MemoryReceiptStore, canonical } from "@scopebond/gateway";
-import { CHAIN_HEADS_FILE, loadOrCreateAttester, readChainHeads, recordChainHead } from "@scopebond/gateway/node";
+import { CHAIN_HEADS_FILE, loadOrCreateAttester, mergeChainHead, readChainHeads, recordChainHead } from "@scopebond/gateway/node";
 import { attachExporter, checkChains } from "../dist/index.js";
 
 // `scopebond verify --anchor` against a workspace that is the party being checked: a rollback it hides behind the issue
@@ -60,6 +60,29 @@ test("a rolled-back chain whose new head is backdated is reported by verify --an
       assert.deepEqual(readChainHeads(join(dir, CHAIN_HEADS_FILE)).chains[ANCHOR].map((h) => h.head.ingest_seq), [100, 50]);
 
       // The workspace's signed day list agrees with the lower head.
+      const anchorFile = join(dir, "anchors-2026-10-09.json");
+      writeFileSync(anchorFile, JSON.stringify(list(key, "2026-10-09", [B])));
+      const report = await checkChains({ dir, anchors: [anchorFile] });
+      assert.equal(report.ok, false, `${at}: ${JSON.stringify(report)}`);
+      assert.match(report.problems.join("\n"), /went back: sequence 100 \(kept/);
+      assert.ok(!report.lines.some((l) => /Chain heads agree/.test(l)), report.lines.join("\n"));
+    } finally { done(); }
+  }
+});
+
+test("a backdated rollback among heads kept without this computer's times is reported by verify --anchor", async () => {
+  for (const at of ["2026-10-09T09:59:59.000Z", "2026-10-09T10:00:00.000Z"]) {
+    const { dir, done } = folder();
+    try {
+      const key = segmentKey();
+      const A = head(key, 100, "1", "2026-10-09T10:00:00.000Z");
+      const B = head(key, 50, "2", at);
+      // Kept in the order received, with no delivery times (as an earlier version kept them).
+      let state = { version: 1, chains: {} };
+      state = mergeChainHead(state, A);
+      state = mergeChainHead(state, B);
+      assert.deepEqual(state.chains[ANCHOR].map((h) => h.head.ingest_seq), [100, 50]);
+      writeFileSync(join(dir, CHAIN_HEADS_FILE), JSON.stringify(state));
       const anchorFile = join(dir, "anchors-2026-10-09.json");
       writeFileSync(anchorFile, JSON.stringify(list(key, "2026-10-09", [B])));
       const report = await checkChains({ dir, anchors: [anchorFile] });

@@ -14,6 +14,7 @@ import { canonical } from "@scopebond/policy-schema/canonical";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { describeToolCall, intentDraft, jsonString, manifestHash, outcomeDraft, type ExitCategory, type TypedAdapterConfig } from "./typed.js";
 import { historyBound, type HistoryLimit } from "./history-limit.js";
+import { memberVariantReason } from "./fold.js";
 
 export interface JsonRpcMessage {
   jsonrpc?: string;
@@ -131,11 +132,39 @@ const GOVERNED_METHODS = ["tools/call", "tools/list"] as const;
 const methodSkeleton = (method: string): string => method.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
 const GOVERNED_SKELETONS = new Map<string, string>(GOVERNED_METHODS.map((m) => [methodSkeleton(m), m]));
 
+/** The members of a JSON-RPC message, and of `tools/call` params. Only these are forwarded. */
+const JSONRPC_MEMBERS = ["jsonrpc", "id", "method", "params", "result", "error"] as const;
+const TOOLS_CALL_PARAMS = ["name", "arguments", "_meta"] as const;
+
+/** The message rebuilt from exactly the members the proxy reads (for `tools/call`, the params too), so the upstream
+ *  is sent nothing the decision did not see. Call only on a message `invalidMessageReason` accepts. */
+function rebuiltMessage(message: Record<string, unknown>): JsonRpcMessage {
+  const pick = (from: Record<string, unknown>, members: readonly string[]): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const m of members) if (Object.hasOwn(from, m)) out[m] = from[m];
+    return out;
+  };
+  const rebuilt = pick(message, JSONRPC_MEMBERS);
+  if (rebuilt.method === "tools/call") rebuilt.params = pick(rebuilt.params as Record<string, unknown>, TOOLS_CALL_PARAMS);
+  return rebuilt;
+}
+
 /** Why a message is not a single JSON-RPC object the proxy can decide on, or undefined. Batches
  *  are rejected rather than split: a call inside one would otherwise skip the policy check. */
 export function invalidMessageReason(message: unknown): string | undefined {
   if (Array.isArray(message)) return "JSON-RPC batches are not supported; send each message on its own";
   if (message === null || typeof message !== "object") return "a JSON-RPC message must be an object";
+  // Member names are read exactly. An upstream that matches them case-insensitively would read "Method" or a second
+  // "Name" the proxy never decided on, so a member spelled like a protocol member in another case is refused.
+  const topLevel = memberVariantReason(message as Record<string, unknown>, JSONRPC_MEMBERS, "the message");
+  if (topLevel) return topLevel;
+  if ((message as { method?: unknown }).method === "tools/call") {
+    const params = (message as { params?: unknown }).params;
+    if (params !== null && typeof params === "object" && !Array.isArray(params)) {
+      const inParams = memberVariantReason(params as Record<string, unknown>, TOOLS_CALL_PARAMS, "tools/call params");
+      if (inParams) return inParams;
+    }
+  }
   if ("method" in message && typeof (message as { method?: unknown }).method !== "string") return "method must be a string";
   const { method, params } = message as { method?: unknown; params?: unknown };
   // Only the exact method is decided. Another spelling of it ("Tools/Call", "tools/call ") would be passed through
@@ -149,9 +178,11 @@ export function invalidMessageReason(message: unknown): string | undefined {
   return undefined;
 }
 
-/** Build a proxy handler. A batch or malformed message is rejected (-32600). Every
- * `tools/call` is decided against policy; any other single message
- * is passed through to the upstream unchanged. */
+/** Build a proxy handler. A batch or malformed message is rejected (-32600), as is one
+ * with a member spelled like a protocol member in another case. Every `tools/call` is
+ * decided against policy; any other single message is passed through to the upstream.
+ * What is forwarded is rebuilt from the JSON-RPC members only (and for `tools/call`,
+ * params `name`, `arguments` and `_meta`). */
 export function createMcpProxy(config: McpProxyConfig): McpProxy {
   const attester: Attester = attesterFromPrivateKeyPem(config.attesterKeyPem);
   // Session history of authorized calls. A forwarded call actually runs, so it
@@ -227,7 +258,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
     async handle(raw: unknown): Promise<JsonRpcMessage> {
       const invalid = invalidMessageReason(raw);
       if (invalid) return invalidRequest((raw as { id?: unknown } | null)?.id, invalid);
-      const message = raw as JsonRpcMessage;
+      const message = rebuiltMessage(raw as Record<string, unknown>);
       if (message.method === "tools/list" && typed?.manifest) {
         // A client listing tools shows the live revision: learn it from every page it gets.
         const response = await config.upstream.call(message);

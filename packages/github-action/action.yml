@@ -9,7 +9,7 @@ inputs:
     required: false
     default: "scopebond.policy.json"
   version:
-    description: "The @scopebond/github-action version to run. Leave empty (the default) to run the version this action's own package.json names, so pinning the action to a commit SHA pins the code that runs. A version older than the action may not read its file list and then fails closed."
+    description: "The @scopebond/github-action version to run. Leave empty (the default) to run the version this action's own package.json names, so pinning the action to a commit SHA pins the code that runs (the check is one bundled file; no dependency is resolved at run time). A version older than the action may not read its file list and then fails closed."
     required: false
     default: ""
   workspace-url:
@@ -91,12 +91,28 @@ runs:
         case "$version" in
           ""|*[!0-9A-Za-z.+-]*) echo "Scopebond: the version input is not a valid package version (failing closed)" >&2; exit 1 ;;
         esac
-        # Install outside the checked-out workspace (this step runs in the runner's temp
-        # directory, so no workspace node_modules or .npmrc is consulted) and without
-        # lifecycle scripts; then run the installed CLI from the workspace.
+        # Fetch outside the checked-out workspace (this step runs in the runner's temp
+        # directory, so no workspace node_modules or .npmrc is consulted). The package
+        # carries the check as one bundled file with every dependency inside it, so only
+        # the package's own tarball is fetched (npm checks its registry integrity) and no
+        # dependency is resolved or installed: the version fixes all of the checking code.
         prefix="$RUNNER_TEMP/scopebond-cli"
         rm -rf "$prefix"
         mkdir -p "$prefix"
-        npm install --prefix "$prefix" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund --loglevel=error "@scopebond/github-action@$version"
+        tarball=$(npm pack --pack-destination "$prefix" --ignore-scripts --silent "@scopebond/github-action@$version" | tail -n 1)
+        case "$tarball" in
+          scopebond-github-action-*.tgz) ;;
+          *) echo "Scopebond: could not fetch @scopebond/github-action@$version (failing closed)" >&2; exit 1 ;;
+        esac
+        # A relative name: GNU tar reads "D:\..." (a Windows runner path) as a remote host.
+        (cd "$prefix" && tar -xzf "./$tarball")
+        cli="$prefix/package/dist/action.mjs"
+        if [ ! -f "$cli" ]; then
+          # A version from before the bundled check: install it with its dependencies,
+          # without lifecycle scripts, as earlier versions of this action did.
+          echo "::warning::Scopebond: @scopebond/github-action@$version predates the bundled check; its dependencies are resolved at install time. Use a newer version to pin all of the checking code."
+          npm install --prefix "$prefix" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund --loglevel=error "@scopebond/github-action@$version"
+          cli="$prefix/node_modules/@scopebond/github-action/dist/cli.js"
+        fi
         cd "$GITHUB_WORKSPACE"
-        node "$prefix/node_modules/@scopebond/github-action/dist/cli.js" --policy "$SCOPEBOND_POLICY"
+        node "$cli" --policy "$SCOPEBOND_POLICY"

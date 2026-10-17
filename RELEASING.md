@@ -78,9 +78,15 @@ workflow meets them:
 
 - npm CLI 11.5.1 or later. Node 22.20.0 bundles npm 10, so the `publish` job
   installs a pinned `npm@11.21.0` first.
-- `changeset publish` in this pnpm workspace runs `pnpm publish` for each packed
-  tarball, and pnpm 10 hands a tarball to `npm publish` from `PATH`, so the
-  upgraded npm performs the OIDC exchange.
+- The `publish` job installs no dependencies and runs no dependency code, because
+  it is the one job that can mint the OIDC token. It downloads the `pack` job's
+  tarballs and runs `scripts/publish-packed.mjs`, which imports only Node's
+  built-ins. The script checks each tarball against the publish plan's sha256 and
+  publishes the missing versions in the plan's order with the upgraded
+  `npm publish` (lifecycle scripts off, provenance on), so that npm performs the
+  OIDC exchange. Then it creates each package's tag and GitHub release with `gh`
+  and the workflow token. A re-run publishes only versions npm does not have yet
+  and creates any missing releases.
 - `id-token: write` only on the `publish` job, which runs in the `npm-publish`
   environment named in each package's trusted publisher.
 - No `registry-url` on `actions/setup-node` in the `publish` job: it would write

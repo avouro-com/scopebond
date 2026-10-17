@@ -34,10 +34,36 @@ pub struct Row {
     pub value: String,
 }
 
+/// What the person may do about a block, as the workspace allows it now.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlockOffers {
+    /// Allow it once (the next try).
+    pub once: bool,
+    /// Allow it for 15 minutes.
+    pub fifteen: bool,
+    /// Always allow it on this computer, for `always_days` (after an admin approves, when `always_needs_admin`).
+    pub always: bool,
+    pub always_days: Option<u32>,
+    pub always_needs_admin: bool,
+    /// Ask an admin.
+    pub ask: bool,
+    /// The workspace reviews every unblock later and may undo it (false from an older agent).
+    pub reviewed: bool,
+}
+
+impl BlockOffers {
+    /// Whether the person may let it through here (once, for 15 minutes or always), not only ask an admin.
+    pub fn allows(&self) -> bool {
+        self.once || self.fifteen || self.always
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RecentBlock {
     pub action_id: Option<String>,
+    /// The one-line description `log` prints (`shell.exec rm`); newer agents also send `what`.
     pub summary: String,
     pub at: String,
     pub rule: Option<String>,
@@ -45,6 +71,38 @@ pub struct RecentBlock {
     pub can_act: bool,
     /// What they did: "allowed", "asked", or nothing yet.
     pub acted: Option<String>,
+    /// The action in plain words ("Read .env.production"), secrets masked; empty from an older agent.
+    pub what: String,
+    /// The text the Scopebond window shows for it.
+    pub action_text: String,
+    pub rule_title: Option<String>,
+    pub project: Option<String>,
+    pub tool: Option<String>,
+    /// What may be done now (none when nothing can be, or from an older agent).
+    pub offers: Option<BlockOffers>,
+    pub reason_min: Option<u32>,
+}
+
+/// The rule's name when the agent sends none (an older agent): never an empty line, never a rule id.
+pub const ANY_RULE: &str = "A Scopebond rule";
+
+impl RecentBlock {
+    /// The words to show: the plain words, or the older summary.
+    pub fn words(&self) -> &str {
+        if self.what.trim().is_empty() { &self.summary } else { &self.what }
+    }
+
+    /// The rule's name as the workspace shows it, or "A Scopebond rule".
+    pub fn rule_name(&self) -> &str {
+        self.rule_title.as_deref().map(str::trim).filter(|t| !t.is_empty()).unwrap_or(ANY_RULE)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Today {
+    pub actions: u64,
+    pub blocked: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +116,79 @@ pub struct TrayModel {
     pub actions: Vec<TrayAction>,
     pub hint: Option<String>,
     pub recent_blocks: Vec<RecentBlock>,
+    /// The line under "Protected" (when the rules were checked, what was blocked today); none otherwise.
+    pub detail: Option<String>,
+    /// The workspace's name, when the agent knows it.
+    pub workspace: Option<String>,
+    pub today: Option<Today>,
+    /// Whether the workspace lets a person ask an admin under any rule (none from an older agent).
+    pub can_ask: Option<bool>,
+    /// What the person let through (in force, or waiting for an admin), newest first.
+    pub allowed: Vec<AllowedItem>,
+    /// What the person asked an admin, newest first, with the answer when there is one.
+    pub asked: Vec<AskedItem>,
+    /// The hook's question waiting for the person now (the live prompt), when the tray is listening.
+    pub pending: Option<LiveQuestion>,
+}
+
+/// A question the hook is waiting on during a coding session: what the coding tool tried, under which rule, what the person
+/// may do, and until when the hook waits.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LiveQuestion {
+    pub action_id: String,
+    pub what: String,
+    pub action_text: String,
+    pub rule: String,
+    pub rule_title: String,
+    pub tool: Option<String>,
+    pub project: Option<String>,
+    pub reason_min: u32,
+    pub offers: BlockOffers,
+    /// When the hook stops waiting (RFC 3339).
+    pub deadline: String,
+    /// The person opened it in the tray.
+    pub opened: bool,
+}
+
+/// An allowance in force or waiting for an admin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AllowedItem {
+    pub id: String,
+    pub rule: String,
+    pub rule_title: Option<String>,
+    pub what: Option<String>,
+    /// "once", "fifteen" or "always".
+    pub choice: String,
+    /// "active" or "proposed".
+    pub state: String,
+    pub needs_admin: bool,
+    /// "person" (made on this computer) or "admin".
+    pub by: String,
+    pub created_at: String,
+    pub ends_at: String,
+    pub answered_by: Option<String>,
+    /// "automatic" (applied at once by the workspace's terms, reviewed later), "person", or none (an older agent).
+    pub unblocked: Option<String>,
+}
+
+/// A request to an admin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AskedItem {
+    pub id: String,
+    pub rule: String,
+    pub rule_title: Option<String>,
+    pub what: String,
+    pub reason: String,
+    pub asked_at: String,
+    pub sent: bool,
+    /// "waiting", "approved" or "declined".
+    pub state: String,
+    pub answered_by: Option<String>,
+    pub note: Option<String>,
+    pub answered_at: Option<String>,
 }
 
 impl TrayModel {
@@ -80,13 +211,30 @@ impl TrayModel {
     pub fn offered_action(&self, id: &str) -> Option<&TrayAction> {
         self.offered().into_iter().find(|a| a.id == id)
     }
+
+    /// How many actions were blocked today: the agent's count, or (from an older agent) the blocks it listed.
+    pub fn blocked_today(&self) -> u64 {
+        self.today.as_ref().map(|t| t.blocked).unwrap_or(self.recent_blocks.len() as u64)
+    }
+
+    /// Whether the panel shows the Requests list: the workspace lets a person ask an admin (under any rule, or for a listed
+    /// block), or the person has asked before.
+    pub fn asks(&self) -> bool {
+        self.can_ask == Some(true) || !self.asked.is_empty() || self.recent_blocks.iter().any(|b| b.offers.as_ref().is_some_and(|o| o.ask))
+    }
+
+    /// The block with this id that the person may still act on.
+    pub fn actionable_block(&self, action_id: &str) -> Option<&RecentBlock> {
+        self.recent_blocks.iter().find(|b| b.can_act && b.action_id.as_deref() == Some(action_id))
+    }
 }
 
-/// Which notifications the person wants: everything (blocks too), problems only (the default), or none.
+/// Which notifications the person wants: blocks and problems (the agent's default for a new install), problems only (the
+/// default when the agent says nothing), or none. An older agent's "all" meant blocks and problems too.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", from = "String")]
 pub enum Notifications {
-    All,
+    Blocks,
     #[default]
     Problems,
     Off,
@@ -99,11 +247,11 @@ impl From<String> for Notifications {
 }
 
 impl Notifications {
-    pub const ALL: [Notifications; 3] = [Notifications::All, Notifications::Problems, Notifications::Off];
+    pub const ALL: [Notifications; 3] = [Notifications::Blocks, Notifications::Problems, Notifications::Off];
 
     pub fn parse(value: &str) -> Notifications {
         match value {
-            "all" => Notifications::All,
+            "blocks" | "all" => Notifications::Blocks,
             "off" => Notifications::Off,
             _ => Notifications::Problems,
         }
@@ -111,7 +259,7 @@ impl Notifications {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Notifications::All => "all",
+            Notifications::Blocks => "blocks",
             Notifications::Problems => "problems",
             Notifications::Off => "off",
         }
@@ -119,7 +267,7 @@ impl Notifications {
 
     pub fn label(self) -> &'static str {
         match self {
-            Notifications::All => "All",
+            Notifications::Blocks => "Blocks and problems",
             Notifications::Problems => "Problems only",
             Notifications::Off => "Off",
         }
@@ -170,6 +318,38 @@ pub(crate) mod fixtures {
       "settings": { "notifications": "problems" }
     }"#;
 
+    /// A newer agent's answer: blocks in plain words with what may be done, the line under the state, today's counts.
+    pub const BLOCKED: &str = r#"{
+      "tray": {
+        "state": "protected", "headline": "Protected", "tooltip": "Scopebond — Protected · Acme",
+        "rows": [], "fix": null, "hint": null,
+        "actions": [
+          { "id": "check_now", "label": "Check now", "route": "/check" },
+          { "id": "open_workspace", "label": "Open workspace", "route": "/open-workspace" }
+        ],
+        "detail": "Rules checked 3 min ago · 2 blocked today", "workspace": "Acme", "today": { "actions": 1160, "blocked": 2 }, "can_ask": true,
+        "allowed": [
+          { "id": "alw_aaaaaaaaaaaaaaaaaaaa", "rule": "secret-read", "rule_title": "Read passwords, keys or secrets", "what": ".env.staging", "choice": "fifteen",
+            "state": "active", "needs_admin": false, "by": "person", "created_at": "2026-10-14T15:52:00.000Z", "ends_at": "2026-10-14T16:07:00.000Z", "answered_by": null }
+        ],
+        "asked": [
+          { "id": "req_aaaaaaaaaaaaaaaaaaaa", "rule": "destructive-shell", "rule_title": "Run a command that deletes data or shuts down the computer", "what": "rm -rf ./dist", "reason": "Clearing the release build",
+            "asked_at": "2026-10-14T13:52:00.000Z", "sent": true, "state": "declined", "answered_by": "morgan@acme.test", "note": "Use the clean script", "answered_at": null }
+        ],
+        "recent_blocks": [
+          { "action_id": "act-read-env-0000000001", "summary": "file.read .env.production", "at": "2026-10-14T15:46:00.000Z", "rule": "secret-read",
+            "can_act": true, "acted": null, "what": "Read .env.production", "action_text": ".env.production", "rule_title": "Read passwords, keys or secrets",
+            "project": "checkout", "tool": "Claude Code", "reason_min": 10,
+            "offers": { "once": true, "fifteen": true, "always": true, "always_days": 30, "always_needs_admin": false, "ask": true } },
+          { "action_id": "act-push-main-00000001", "summary": "git.push origin main", "at": "2026-10-14T15:24:00.000Z", "rule": "force-push-protected",
+            "can_act": true, "acted": null, "what": "git push --force origin main", "action_text": "git push origin main",
+            "rule_title": "Rewrite history on a protected branch", "project": "checkout", "tool": "Claude Code", "reason_min": 20,
+            "offers": { "once": false, "fifteen": false, "always": false, "always_days": null, "always_needs_admin": false, "ask": true } }
+        ]
+      },
+      "settings": { "notifications": "problems" }
+    }"#;
+
     pub const WAITING: &str = r#"{
       "tray": {
         "state": "attention", "headline": "12 records waiting to send", "tooltip": "Scopebond — 12 records waiting to send",
@@ -209,11 +389,54 @@ mod tests {
     }
 
     #[test]
+    fn reads_blocks_in_plain_words_with_what_may_be_done() {
+        let a = TrayAnswer::parse(fixtures::BLOCKED.as_bytes()).expect("parses");
+        let read = &a.tray.recent_blocks[0];
+        assert_eq!(read.words(), "Read .env.production");
+        assert_eq!(read.rule_title.as_deref(), Some("Read passwords, keys or secrets"));
+        assert_eq!(read.tool.as_deref(), Some("Claude Code"));
+        assert_eq!(read.reason_min, Some(10));
+        let offers = read.offers.clone().unwrap();
+        assert!(offers.allows() && offers.fifteen && offers.ask);
+        assert_eq!(offers.always_days, Some(30));
+        let push = &a.tray.recent_blocks[1];
+        assert!(!push.offers.clone().unwrap().allows(), "only Ask an admin");
+        assert_eq!(a.tray.blocked_today(), 2);
+        assert_eq!(a.tray.workspace.as_deref(), Some("Acme"));
+        assert!(a.tray.asks());
+        let mut final_rules = a.tray.clone();
+        final_rules.can_ask = Some(false);
+        final_rules.asked.clear();
+        final_rules.recent_blocks.iter_mut().for_each(|b| b.offers = None);
+        assert!(!final_rules.asks(), "nothing to ask: no Requests list");
+        assert_eq!(a.tray.allowed[0].choice, "fifteen");
+        assert_eq!(a.tray.asked[0].state, "declined");
+        assert_eq!(a.tray.asked[0].note.as_deref(), Some("Use the clean script"));
+        assert!(TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap().tray.allowed.is_empty(), "an older agent sends no lists");
+        assert!(a.tray.actionable_block("act-push-main-00000001").is_some());
+        assert!(a.tray.actionable_block("act-unknown").is_none());
+        // An older agent's block: the summary stands in for the plain words, and nothing says what may be done.
+        let old = TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap();
+        assert_eq!(old.tray.recent_blocks[0].words(), "rm -rf build");
+        assert_eq!(old.tray.recent_blocks[0].offers, None);
+        assert_eq!(old.tray.blocked_today(), 1, "an older agent: the blocks it listed");
+    }
+
+    #[test]
     fn fields_it_does_not_know_and_fields_that_are_missing_are_fine() {
         let a = TrayAnswer::parse(br#"{"tray":{"state":"working","headline":"Updating","new_field":1},"settings":{"notifications":"loud"}}"#).unwrap();
         assert_eq!(a.tray.icon_state(), IconState::Working);
         assert!(a.tray.actions.is_empty());
         assert_eq!(a.settings.notifications, Notifications::Problems, "an unknown setting reads as the default");
+    }
+
+    #[test]
+    fn notification_settings_old_and_new() {
+        assert_eq!(Notifications::parse("blocks"), Notifications::Blocks);
+        assert_eq!(Notifications::parse("all"), Notifications::Blocks, "an older agent's all meant blocks and problems");
+        assert_eq!(Notifications::Blocks.as_str(), "blocks");
+        assert_eq!(Notifications::Blocks.label(), "Blocks and problems");
+        assert_eq!(serde_json::to_string(&Notifications::Blocks).unwrap(), "\"blocks\"");
     }
 
     #[test]

@@ -67,6 +67,13 @@ test("a head checked against a key that is not a key is false, never a throw", a
   assert.match(check.problems.join("\n"), /a signed list must publish its key/);
 });
 
+test("a segment nested too deeply to put in canonical form is reported, not thrown on", async () => {
+  const deep = `{"bounds":{},"records":[],"type":"scopebond:evidence-segment","x":${"[".repeat(100000)}${"]".repeat(100000)}}`;
+  const check = await verifySegmentChain([deep]);
+  assert.equal(check.ok, false);
+  assert.match(check.problems.join("\n"), /is not in canonical form/);
+});
+
 test("heads of any shape are reported, not thrown on", () => {
   assert.doesNotThrow(() => checkChainHeads([null, 5, { head: null }], [null, { head: { anchor_id: ANCHOR } }]));
   assert.equal(checkChainHeads([null]).ok, false);

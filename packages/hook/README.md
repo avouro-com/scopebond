@@ -70,7 +70,11 @@ Scopebond, and choose **Trust** once. Every project you open is then governed by
 user-level policy. A project's own `.scopebond/policy.json` applies only after you trust it
 in that project (`scopebond trust`, or `init` there), pinned to its exact contents: a
 repository you clone, or an agent working in it, cannot swap in a weaker policy, and any
-later edit to that file stops it applying until you trust it again.
+later edit to that file stops it applying until you trust it again. The pin also covers the
+project's `rules.json` and the workspace its `cloud.json` names, so a change to either stops
+it applying too. In a trusted project, what can let a blocked action through (the workspace
+rules document's terms for allowing or asking, allowances, earlier overrides) always comes from
+your user-level folder, never from files beside the project's policy.
 
 On Windows a coding agent may run the hook command under cmd.exe, PowerShell or Git Bash
 (Codex runs it through the session's shell, which can be PowerShell), and they read quoted
@@ -652,8 +656,8 @@ scopebond verify --anchor <day.json> --segments <folder of downloaded evidence s
 ```
 
 `verify` exits non-zero when a chain went back below a head this computer kept (judged by
-the order this computer sent its deliveries as well as by the times the workspace put on
-its heads), when one position names two different segments, or when a kept head's segment
+the order this computer sent its deliveries and received their answers as well as by the
+times the workspace put on its heads), when one position names two different segments, or when a kept head's segment
 is no longer in the chain: records were removed, reordered or re-chained after the
 workspace acknowledged them. A list or segment that cannot be checked is reported, not
 crashed on. With `--segments`, every segment's digest, leaves, Merkle root, links and sequence
@@ -772,10 +776,19 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   with the next rules check. The receipt of an action an allowance lets through says
   `method: "allowance"` and names it. An allowance is bound to one rule, never applies to
   Scopebond's own protection, and stops applying when it expires, is used up (a one-time one) or
-  the workspace revokes it. The hook keeps them, and the last blocks a person may act on, in its
+  the workspace revokes it, or the person stops it ("Stop allowing" in the tray: it stops applying at once, and the agent
+  sends the workspace the ended record). Where the workspace sets the unblock terms, each allowance a person makes also
+  says how it was unblocked (`unblocked`: `automatic` or `person`). The hook keeps them, and the last blocks a person may act on, in its
   own folder (`allowances.json`, `requests.json`, `blocked.json`), which the coding agent cannot
   change. The hook tells the workspace it understands these settings
-  (`x-scopebond-hook-capabilities: allowances`); a workspace sends them only then.
+  (`x-scopebond-hook-capabilities: allowances`); a workspace sends them only then. A workspace may also set the one length
+  a person's unblock lasts (the rule's `lasts`: `once`, `15m` or `always`), so the window and the tray offer only that
+  length with nothing to choose, and say that every unblock is reviewed by an admin later, who may undo it (`review`); it
+  sends these only to a hook that reports `unblock_terms`. A rule's override terms may also say `"minutes": "unlimited"`
+  (once a person allows an action, the same action stays allowed from then on, with no time window) and
+  `"daily_limit": "unlimited"` (no limit on how many a person may allow per day), besides the numbers (`minutes` 0 to 60,
+  `daily_limit` 1 to 50); any other value refuses the rules document. A workspace sends `"unlimited"` only to a hook that
+  reports `unlimited_terms` (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules,unblock_terms,unlimited_terms`).
 - **Session budgets.** A workspace may limit what one coding-agent session may do, for example an
   overnight run: at most 50 file writes, no pushes and no package installs, until the budget
   expires (two hours after it is set, unless the workspace says otherwise). An admin sets one
@@ -801,7 +814,7 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   count cannot be read or written for a session that has a budget, the limited actions are
   denied, never let through without a limit. A malformed `session_budgets` list refuses the whole
   rules document (the rules in force stay); a hook older than this ignores the member. The hook
-  says it understands budgets (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules`;
+  says it understands budgets (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules,unblock_terms,unlimited_terms`;
   `service_rules` is the blocked services below).
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
@@ -845,7 +858,7 @@ and an allowance made under another rule does not carry it through.
 
 The workspace sends the list as `blocked_services` in its rules document (at most 500 entries,
 each `{ "kind": "mcp_server" | "host" | "cli" | "package", "key": "…" }`), only to a hook that
-says it reads it (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules`).
+says it reads it (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules,unblock_terms,unlimited_terms`).
 The document's `rules_digest` then covers the list too: it is the SHA-256 of the canonical JSON
 of `{ "rules": …, "blocked_services": … }`, so a changed list is refused like changed rules, and
 so is a malformed one; the rules in force stay. Without the list nothing changes.
@@ -867,6 +880,19 @@ even if the answer passed through something that could change it.
   `{ "type": "scopebond:managed-rules", "version": 1, "managed": false, "installation_id": …,
   "revision": 0, "rules_digest": "000…0" (64 zeros), "local_changes": false, "issued_at": …,
   "key_id": …, "signature": … }` (a 204 is the unsigned form of the same answer).
+- **Signed grants.** A rules document's `allowances`, `revoked_allowances`, `session_budgets`
+  and `request_answers` decide whether a blocked action is let through, so they are signed
+  too. `grants_digest` is the lowercase hex SHA-256 of the canonical JSON of
+  `{ allowances, revoked_allowances, session_budgets, request_answers }` (each absent member as
+  `[]`), and `grants_signature` is over the same payload as the rules, by the same key and at
+  the same `issued_at`, with `grants_digest` as `rules_digest`, `local_changes: false`,
+  `managed: true` and `kind: "grants"`: a rules signature never passes as a grants signature,
+  nor the reverse. When either field is present both must be, the digest must match the
+  document's own lists and the signature must verify; otherwise the answer is refused like a
+  bad rules signature. In `enforce` mode a signed document that carries any of those lists
+  without `grants_signature` is refused as `unsigned_policy`. A change to those lists alone
+  (the same revision and rules digest, for example a revoked allowance) is installed, not
+  treated as unchanged.
 - **What is refused.** A signature that does not verify (a changed digest or switch, a forged
   answer), a `key_id` this release does not trust, a key whose validity window does not hold
   both the answer's `issued_at` and the present moment, an answer for another computer or
@@ -1157,6 +1183,18 @@ is. Set `SCOPEBOND_HOSTNAME_MODE` to choose what is sent:
 | `off` | no computer name; the workspace names the computer itself |
 
 Any other value is read as `hash`. Receipts themselves do not carry the host name.
+
+**The machine id.** So the workspace can tell that a computer signing in again is the same
+computer, the hook sends a machine id: `m1:` and a SHA-256 hash of your operating system's
+own machine id (Windows `MachineGuid`, macOS `IOPlatformUUID`, Linux `/etc/machine-id`)
+together with the workspace's id, so each workspace sees a different value and none can be
+turned back into the original. The original id never leaves this computer and is never
+written to a file, a receipt or a log, or shown; only the hash is sent, in the body of a
+sign-in (`login`, `connect`) and in the `x-scopebond-machine-id` header of the rules check,
+deliveries and observation uploads. Before the workspace is known (the start of a sign-in) the
+hash uses `unscoped` in place of its id. The hash is kept in `machine-id.json` beside
+`cloud.json`, and worked out again once a day. Where the operating system has no machine
+id, nothing is sent; the host name or a network address is never used instead.
 
 **Where receipts live, and how much room they take.** `.scopebond/receipts.db` in the
 project, about 3 KiB per action (each receipt is kept once and each policy once). A tool

@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/github-action",
-  "version": "0.5.13",
+  "version": "0.5.14",
   "description": "Free, open-source policy checks for supported agent pull requests in your own GitHub Actions runner. A required check gates merge; optional signing creates a verifiable decision record.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
@@ -46,11 +46,14 @@
     "@scopebond/gateway": "workspace:^"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "prepublishOnly": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs"
+    "build": "tsc -p tsconfig.json && node scripts/bundle.mjs",
+    "prepublishOnly": "tsc -p tsconfig.json && node scripts/bundle.mjs",
+    "test": "tsc -p tsconfig.json && node scripts/bundle.mjs && node --test test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

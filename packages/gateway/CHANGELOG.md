@@ -1,5 +1,28 @@
 # @scopebond/gateway
 
+## 0.20.0
+
+### Minor Changes
+
+- 7577598: A machine id, so a workspace can tell that a computer connecting again is the same computer.
+  
+  - The machine id is `m1:` and the unpadded base64url SHA-256 of `scopebond-machine-id/v1`, the workspace's id (`unscoped` before it is known) and the operating system's own machine id (Windows `MachineGuid`, macOS `IOPlatformUUID`, Linux `/etc/machine-id` or `/var/lib/dbus/machine-id`), trimmed and lowercased. The operating system's id never leaves the computer and is never written, logged or shown; where there is none, nothing is sent, and the host name or a network address is never used instead.
+  - Sign-in and enrollment carry it as `machine_id` in their body (`login`, `connect`, the Scopebond Agent's first sign-in, `scopebond-gateway enroll`); the rules check, record deliveries and summaries, and observation uploads carry it in the `x-scopebond-machine-id` header.
+  - It is kept with its scope in `machine-id.json` beside `cloud.json` (the gateway: `scopebond-machine-id.json`, or `SCOPEBOND_MACHINE_ID_FILE`), worked out again once the workspace's id is known after enrolling, and once a day.
+  - `@scopebond/gateway` exports the shared implementation (`computeMachineId`, `readRawMachineId`, `cachedMachineId` from `@scopebond/gateway/node`; `MACHINE_ID_HEADER`, `isMachineId`, `machineIdHeaders` from the root), and `completeCloudEnrollment` and `createCloudExporter` take a `machineId` option.
+
+### Patch Changes
+
+- Updated dependencies [2c0b2af]
+- Updated dependencies [f8157bd]
+  - @scopebond/verify@0.6.7
+
+## 0.19.1
+
+### Patch Changes
+
+- feba379: `scopebond flush` no longer fails when the only records left are routine ones waiting for their summary window. With summary records on (the default evidence detail), routine allows wait for their five-minute window to close and then leave as one signed summary; `flush` used to count them as "still pending" and exit 1. It now reports them on their own line ("N routine record(s) held for the summary window until HH:MM", in local time) and exits 0 when nothing else is waiting. It still exits 1 when a notable record (a block, a warning, an override and the like) is left undelivered or the last delivery attempt failed. The cloud exporter gains an optional `held()` method that counts the routine records held for an open window and says when the last of those windows closes.
+
 ## 0.19.0
 
 ### Minor Changes

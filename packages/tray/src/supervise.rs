@@ -245,6 +245,31 @@ impl Supervisor {
     }
 }
 
+/// Environment variables that make a Node.js program load code of someone else's choosing before its own
+/// (`NODE_OPTIONS=--require=…`). Any program running as the person can set them for every later sign-in, so the agent is
+/// never started with them.
+pub const NODE_INJECTION_VARS: [&str; 2] = ["NODE_OPTIONS", "NODE_REPL_EXTERNAL_MODULE"];
+
+/// The command that starts `<program> run` in `home`, with the agent's own log, without the tray of its own (this program is
+/// the tray), without a handover's wait, without the variables above, and with no standard input or output. The caller
+/// adds what only Windows has (no console window) and starts it.
+pub fn agent_command(program: &std::path::Path, home: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command
+        .arg("run")
+        .env("SCOPEBOND_AGENT_TRAY", "off")
+        .env("SCOPEBOND_AGENT_LOG", home.join("agent.log"))
+        .env_remove("SCOPEBOND_AGENT_AFTER_PID")
+        .current_dir(home)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    for name in NODE_INJECTION_VARS {
+        command.env_remove(name);
+    }
+    command
+}
+
 /// The agent's lock file says `<pid> <milliseconds since 1970>`. The holder's pid, and whether the lock is still young
 /// enough to belong to an agent that is starting.
 pub fn read_lock(text: &str, now_ms: u64) -> Option<(u32, bool)> {
@@ -521,6 +546,23 @@ mod tests {
         s.start_failed(c.at(0));
         assert_eq!(s.tick(&obs(false, Child::None), c.at(1)), Decision::Wait);
         assert_eq!(s.tick(&obs(false, Child::None), c.at(2)), Decision::Start);
+    }
+
+    #[test]
+    fn the_agent_is_started_without_node_options() {
+        use std::ffi::OsStr;
+        let home = std::path::Path::new("home");
+        let command = agent_command(std::path::Path::new("scopebond-agent.exe"), home);
+        let envs: Vec<(&OsStr, Option<&OsStr>)> = command.get_envs().collect();
+        let removed = |name: &str| envs.iter().any(|(k, v)| k.eq_ignore_ascii_case(name) && v.is_none());
+        assert!(removed("NODE_OPTIONS"));
+        assert!(removed("NODE_REPL_EXTERNAL_MODULE"));
+        assert!(removed("SCOPEBOND_AGENT_AFTER_PID"));
+        assert!(envs.iter().any(|(k, v)| k.eq_ignore_ascii_case("SCOPEBOND_AGENT_TRAY") && *v == Some(OsStr::new("off"))));
+        let log = home.join("agent.log");
+        assert!(envs.iter().any(|(k, v)| k.eq_ignore_ascii_case("SCOPEBOND_AGENT_LOG") && *v == Some(log.as_os_str())));
+        assert_eq!(command.get_args().collect::<Vec<_>>(), vec![OsStr::new("run")]);
+        assert_eq!(command.get_current_dir(), Some(home));
     }
 
     #[test]

@@ -32,6 +32,7 @@ import { agentProgram, npmProgram, setupCli } from "./commands.js";
 import { missingPrograms } from "./hook-entries.js";
 import { findNpmInstall, hasNpmInstall, npmRemovalCommand } from "./migrate.js";
 import { readRegistryValue, SETTINGS_KEYS } from "./signin.js";
+import { scrubNodeInjection } from "./child-env.js";
 import { helperInput, runUpdateHelper } from "./update-helper.js";
 import { failedUpdate } from "./update.js";
 import { discoverTools, toolLines, type ToolDiscovery } from "./tools.js";
@@ -63,6 +64,8 @@ connection current. Home: ${dir}`);
 
 /** Run one command (`argv` as after the program name). cli.ts, the npm program, calls this; so does the single executable. */
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  // No process the agent starts inherits a variable that makes Node load other code first (child-env.ts).
+  scrubNodeInjection();
   [cmd = "help", ...rest] = argv;
   switch (cmd) {
     case "run": {

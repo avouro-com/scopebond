@@ -169,11 +169,11 @@ export const proofPassed = (proof: ProofRecord, cell: CapabilityCell): boolean =
 /** Deliver fixture receipts to the workspace's receipt route and report whether every one was
  *  accepted. A proof names these receipts by digest, so it is only worth sending after they
  *  landed; anything short of full delivery leaves the proof unsent, never half-claimed. */
-export async function deliverProofReceipts(connection: HookConnection, receipts: unknown[], options: { fetch?: typeof fetch; timeoutMs?: number } = {}): Promise<boolean> {
+export async function deliverProofReceipts(connection: HookConnection, receipts: unknown[], options: { fetch?: typeof fetch; timeoutMs?: number; machineId?: string | null } = {}): Promise<boolean> {
   if (receipts.length === 0) return true;
   const exporter = createCloudExporter({
     url: ingestUrl(connection), credential: connection.credential, outbox: createMemoryCloudOutbox({ maxPending: Math.max(1000, receipts.length) }),
-    fetch: versionedFetch(options.fetch), flushMs: 60_000,
+    fetch: versionedFetch(options.fetch), flushMs: 60_000, machineId: options.machineId,
   });
   try {
     for (const receipt of receipts) exporter.enqueue(receipt as SignedReceipt);

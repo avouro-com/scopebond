@@ -16,7 +16,8 @@
 //      SCOPEBOND_DB (default ./scopebond.db) — set SCOPEBOND_RECEIPTS_FILE to force JSONL,
 //      SCOPEBOND_MODE (enforce | check_only; same as --check-only),
 //      SCOPEBOND_POLICY_WATCH (1 | poll | 0) + SCOPEBOND_POLICY_POLL (5s) for reloading the policy and key registry,
-//      SCOPEBOND_CLOUD_URL + SCOPEBOND_CLOUD_CREDENTIAL for durable hosted export.
+//      SCOPEBOND_CLOUD_URL + SCOPEBOND_CLOUD_CREDENTIAL for durable hosted export,
+//      SCOPEBOND_MACHINE_ID_FILE (default ./scopebond-machine-id.json): this computer's machine id, a hash kept for the workspace.
 
 import { serve } from "@hono/node-server";
 import { closeSync, openSync, readFileSync, unlinkSync, writeFileSync, watch } from "node:fs";
@@ -30,6 +31,11 @@ import { attesterFromPrivateKeyPem, verifyReceipt } from "./receipts.js";
 import type { Attester } from "./receipts.js";
 import { loadOrCreateAttester } from "./node-keys.js";
 import { openReceiptStore, SqliteCloudOutbox } from "./node-stores.js";
+import { cachedMachineId } from "./node-machine-id.js";
+
+/** Where the machine id (a hash of the OS machine id; the raw id is never kept) is kept with the workspace scope it was
+ *  computed for: enrolling records the workspace, and serving uses the same scope for its deliveries. */
+const machineIdFile = (): string => process.env.SCOPEBOND_MACHINE_ID_FILE || "scopebond-machine-id.json";
 
 function fail(msg: string): never { console.error(msg); process.exit(1); }
 
@@ -184,7 +190,7 @@ function cmdServe(policyPath: string | undefined): void {
       fail(`durable Cloud outbox could not open: ${error instanceof Error ? error.message : String(error)}`);
     }
     exporter = createCloudExporter({
-      url: cloudUrl, credential: cloudCredential, outbox,
+      url: cloudUrl, credential: cloudCredential, outbox, machineId: () => cachedMachineId(machineIdFile()),
       flushMs: Number(process.env.SCOPEBOND_CLOUD_FLUSH_MS ?? 15000),
       onError: (e) => console.error(`  cloud export error: ${(e as Error).message}`),
       onGap: (gap) => console.error(`  cloud delivery gap: ${gap.reason}${gap.id ? ` (${gap.id})` : ""}`),
@@ -312,7 +318,9 @@ async function cmdEnroll(args: string[]): Promise<void> {
   catch (error) { fail(`could not read enrollment bundle: ${(error as Error).message}`); }
   const { attester, source } = resolveAttester();
   try {
-    const result = await completeCloudEnrollment({ url, bundle, attester });
+    const result = await completeCloudEnrollment({ url, bundle, attester, machineId: cachedMachineId(machineIdFile()) });
+    // From now on the machine id is computed in this workspace's scope.
+    cachedMachineId(machineIdFile(), result.organization_id);
     console.log(`gateway enrolled: ${result.gateway_id}`);
     console.log(`attester: ${result.attester_kid} [${source}]`);
     console.log(`credential expires: ${result.expires_at}`);

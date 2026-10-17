@@ -11,7 +11,8 @@
 
 import { execFileSync } from "node:child_process";
 import {
-  clientNameField, configuredHookCommands, connectCloud, isHarnessConfigured, loadConnection, observationStatus, scaffold, userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
+  approvedWorkspaceId, clientNameField, configuredHookCommands, connectCloud, isHarnessConfigured, loadConnection, machineIdField, observationStatus, scaffold,
+  userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
   type Harness,
 } from "@scopebond/hook";
 import { expectedHarnesses } from "./agent.js";
@@ -22,8 +23,9 @@ import type { ReconnectStart } from "./reconnect.js";
 
 /** The workspace a signed install signs in to when its installer named none. */
 export const DEFAULT_WORKSPACE = "https://cloud.scopebond.com";
-/** Where the installer keeps its settings: this user's first, then the machine's (an install for every user). */
-export const SETTINGS_KEYS = ["HKCU\\Software\\Avouro\\Scopebond", "HKLM\\Software\\Avouro\\Scopebond"] as const;
+/** Where the installer keeps its settings: the machine's first (an install for every user, set by an administrator), then this
+ *  user's. A per-user value, which any program running as the person can write, never overrides the machine's. */
+export const SETTINGS_KEYS = ["HKLM\\Software\\Avouro\\Scopebond", "HKCU\\Software\\Avouro\\Scopebond"] as const;
 export const WORKSPACE_VALUE = "Workspace";
 
 /** Reads one registry string value; null when it is not there. Tests pass their own. */
@@ -47,7 +49,7 @@ export function httpsOrigin(value: string): string | null {
   } catch { return null; }
 }
 
-/** The workspace the installer named (this user's setting, then the machine's), else Scopebond Cloud. A setting that is
+/** The workspace the installer named (the machine's setting, then this user's), else Scopebond Cloud. A setting that is
  *  there but is not an https address is refused, not skipped: signing in somewhere else would surprise whoever set it. */
 export function installedWorkspace(read: RegistryReader = readRegistryValue): { origin: string; from: string } | { error: string } {
   for (const key of SETTINGS_KEYS) {
@@ -94,7 +96,8 @@ export async function startFirstSignIn(dir: string, origin: string, o: FirstSign
     return { status: res.status, json, retryAfter: res.headers.get("retry-after") };
   };
   let start: Awaited<ReturnType<typeof post>>;
-  try { start = await post("/v1/device/code", { ...clientNameField(), harness: "claude" }); }
+  // The machine id (a hash, never the OS id itself) lets the workspace see that a computer signing in again is the same one.
+  try { start = await post("/v1/device/code", { ...clientNameField(), harness: "claude", ...machineIdField(dir, loadConnection(dir)?.organization_id) }); }
   catch (error) { return { error: `could not reach ${origin}: ${(error as Error).message}` }; }
   const deviceCode = textOf(start.json.device_code);
   const userCode = textOf(start.json.user_code, 40);
@@ -126,7 +129,7 @@ export async function startFirstSignIn(dir: string, origin: string, o: FirstSign
       if (polled.status === 429 || polled.status === 503) { intervalMs = Math.max(intervalMs, Math.min(300, Number(polled.retryAfter) || 10) * 1000); continue; }
       const enrollment = polled.json.enrollment;
       if (polled.status === 200 && enrollment && typeof enrollment === "object") {
-        try { return finish({ ok: true, lines: await completeSetup(dir, origin, enrollment, o) }); }
+        try { return finish({ ok: true, lines: await completeSetup(dir, origin, enrollment, o, approvedWorkspaceId(polled.json)) }); }
         catch (error) { return finish({ ok: false, error: `the sign-in was approved but could not be completed: ${(error as Error).message}` }); }
       }
       const error = polled.json.error;
@@ -142,9 +145,9 @@ export async function startFirstSignIn(dir: string, origin: string, o: FirstSign
 }
 
 /** What a first-time setup does after the approval: enroll, then the hook entries and autostart. */
-async function completeSetup(dir: string, origin: string, enrollment: object, o: FirstSignInOptions): Promise<string[]> {
+async function completeSetup(dir: string, origin: string, enrollment: object, o: FirstSignInOptions, workspaceId: string | null): Promise<string[]> {
   const lines: string[] = [];
-  const connected = await connectCloud(dir, origin, enrollment as Parameters<typeof connectCloud>[2], o.fetchImpl);
+  const connected = await connectCloud(dir, origin, enrollment as Parameters<typeof connectCloud>[2], o.fetchImpl, workspaceId);
   lines.push(`connected to ${connected.url}`);
   // The hook entries: the hook this agent carries, for each coding agent on this computer, where none is there yet (an
   // existing Scopebond entry is the agent's upkeep's to keep current).

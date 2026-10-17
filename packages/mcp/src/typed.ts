@@ -22,6 +22,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
 import { SOURCE_RECEIPT_DOMAIN } from "@scopebond/policy-schema";
+import { foldName, hasFoldDuplicateMembers } from "./fold.js";
 
 /** Request binding and keyed opaque ids. The hook's binding key satisfies this structurally. */
 export interface RequestBinder {
@@ -158,6 +159,19 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/;
 export const UNVERIFIED = "unverified";
 export const MAX_RESOURCES = 100;
 
+/** Whether a dotted path of the dispatched arguments is absent as spelled but present in another case: a decoder
+ *  that matches member names case-insensitively would read that member as the resource. */
+function variantAt(args: unknown, path: string): boolean {
+  let node: unknown = args;
+  for (const part of path.split(".")) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return false;
+    if (Object.hasOwn(node, part)) { node = (node as Record<string, unknown>)[part]; continue; }
+    const fold = foldName(part);
+    return Object.keys(node).some((key) => foldName(key) === fold);
+  }
+  return false;
+}
+
 /** The value(s) at a dotted path of the dispatched arguments; undefined when absent or not
  *  a string, number, or list of them. */
 function valuesAt(args: unknown, path: string): string[] | undefined {
@@ -209,12 +223,19 @@ export function describeToolCall(
   const resourceIds: string[] = [];
   const bound: Array<{ kind: string; value: string }> = [];
   let resourcesBound = true;
+  let variant = false;
   for (const { arg, kind } of declared) {
+    if (variantAt(params.arguments, arg)) variant = true;
     const values = valuesAt(params.arguments, arg);
     if (!values) { resourcesBound = false; continue; }
     for (const value of values) { bound.push({ kind, value }); resourceIds.push(config.binder.resourceId(`mcp:${kind}`, value)); }
   }
-  if (resourceIds.length > MAX_RESOURCES) { resourcesBound = false; resourceIds.length = 0; bound.length = 0; }
+  // Arguments an upstream could read differently from the adapter: two keys that differ only in case (a case-insensitive
+  // decoder reads either one), or a resource argument spelled in another case. Nothing is bound from them.
+  const ambiguous = hasFoldDuplicateMembers(params.arguments);
+  if (ambiguous) reasons.push("the arguments hold keys that differ only in case");
+  if (variant) reasons.push("a resource argument is spelled differently from the manifest");
+  if (resourceIds.length > MAX_RESOURCES || ambiguous || variant) { resourcesBound = false; resourceIds.length = 0; bound.length = 0; }
   if (config.requireResourceBinding) {
     const resourceSpecific = pinned && (pinned.operation_class === "mutation" || declared.length > 0);
     if (resourceSpecific && declared.length === 0) reasons.push("the tool is a mutation and its manifest names no resource to bind");

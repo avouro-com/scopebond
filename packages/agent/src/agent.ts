@@ -11,7 +11,7 @@ import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, ensurePrivateDi
 import { createSigner } from "@scopebond/sdk";
 import {
   LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, deliveryBackoff, hookVersion, ingestUrl,
-  isHarnessConfigured, loadConnection, policyBuilds, recordDeliveryAttempt, repairDeliveryAt, sequenceProofFor, summaryOptions, syncPolicy, userHarnessFile,
+  isHarnessConfigured, loadConnection, machineIdFor, policyBuilds, recordDeliveryAttempt, repairDeliveryAt, sequenceProofFor, summaryOptions, syncPolicy, userHarnessFile,
   type Harness, type StatusJson, type SyncOutcome,
 } from "@scopebond/hook";
 import { applyToolSettings, toolSettingsReport } from "./tool-settings.js";
@@ -87,6 +87,8 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
     const exporter = createCloudExporter({
       url: ingestUrl(connection), credential: connection.credential, outbox,
       flushMs: 24 * 60 * 60 * 1000, fetch: options.fetchImpl, now, summaries, requestTimeoutMs: options.deliveryTimeoutMs ?? 30_000,
+      // This computer's machine id (a hash of the OS machine id, never the id itself) on each delivery.
+      machineId: () => machineIdFor(dir, connection.organization_id),
       ...(sequenceProof ? { sequenceProof } : {}), ...(backoff ? { backoff } : {}),
       // The chain head each answer carries is kept beside the hook's receipts (chain-heads.json).
       onChainHead: chainHeadRecorder(join(dir, CHAIN_HEADS_FILE)),

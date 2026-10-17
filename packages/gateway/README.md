@@ -121,6 +121,7 @@ do not close the alpha findings described above. Configure:
 | `SCOPEBOND_CLOUD_MAX_BYTES` | `67108864` | maximum queued canonical evidence bytes |
 | `SCOPEBOND_CLOUD_MAX_AGE_MS` | `604800000` | maximum queued age (7 days) before an explicit delivery gap |
 | `SCOPEBOND_CLOUD_MAX_GAPS` | `10000` | maximum retained gap-detail rows; the cumulative count remains monotonic |
+| `SCOPEBOND_MACHINE_ID_FILE` | `./scopebond-machine-id.json` | where the machine id (a hash, never the OS id itself) is kept with its workspace scope |
 
 `principal-keys.json` contains public material only. The gateway derives and checks
 each `kid`; do not put private keys in this file:
@@ -168,6 +169,18 @@ npx -y @scopebond/gateway@latest enroll https://cloud.scopebond.com scopebond-en
 The command refuses non-HTTPS remote origins, signs the canonical challenge locally,
 and prints the scoped exporter credential only to that terminal. Keep the bundle and
 returned credential out of URLs, chat, shell arguments and source control.
+
+Enrollment and each delivery also carry a machine id, so the workspace can tell that a
+gateway enrolling again runs on the same computer: `m1:` and a SHA-256 hash of the
+operating system's own machine id (Windows `MachineGuid`, macOS `IOPlatformUUID`, Linux
+`/etc/machine-id`) with the workspace's id. The original id never leaves the computer and
+is never written, logged or shown; only the hash is sent (`machine_id` in the enrollment
+body, the `x-scopebond-machine-id` header on deliveries). The hash is kept with the
+workspace's id in `scopebond-machine-id.json` (`SCOPEBOND_MACHINE_ID_FILE`) so `serve`
+uses the same one `enroll` did. Without an OS machine id (some containers), nothing is
+sent; the host name or a network address is never used instead. `computeMachineId`,
+`readRawMachineId` and `cachedMachineId` (from `@scopebond/gateway/node`) are the shared
+implementation the hook and the Scopebond Agent use.
 
 ## Tamper-evidence (anchoring)
 

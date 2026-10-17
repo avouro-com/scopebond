@@ -10,14 +10,15 @@
 // are the document's, `local_changes` is the document's switch (absent means false), and `managed` is true for a rules
 // document and false for the "no rules" answer. A document signed for another computer or workspace therefore never
 // verifies here, whatever it says about itself. The signature is Ed25519 over those bytes, in base64, next to the `key_id`
-// that names the key (policy-keys.ts).
+// that names the key (policy-keys.ts). A rules document's allowances, revocations, session budgets and request answers are
+// signed beside it (`grants_digest` and `grants_signature`; see "signed grants" below).
 //
 // Modes (`SCOPEBOND_POLICY_SIGNATURE_MODE`, or `policy_signature_mode` in cloud.json; the stricter of the two applies):
 //   dual     the default. A signed document must verify; an unsigned one is accepted and recorded (`unsigned_policy`).
 //   enforce  an unsigned document is refused too. A refused document never changes the rules in force: the computer keeps
 //            the policy it has, and never falls back to no rules.
 
-import { verify } from "node:crypto";
+import { createHash, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { canonical } from "@scopebond/gateway";
@@ -43,8 +44,9 @@ export interface SignedPolicyPayload {
   local_changes: boolean;
   managed: boolean;
   issued_at: string;
-  /** Only on a tool settings section's payload ("tool_settings"); a rules payload never carries it. */
-  kind?: "tool_settings";
+  /** Only on a tool settings section's payload ("tool_settings") or a document's grants payload ("grants"); a rules payload
+   *  never carries it. */
+  kind?: "tool_settings" | "grants";
 }
 
 export type SignatureCheck =
@@ -101,8 +103,8 @@ export interface SignatureContext {
   lastIssuedAt: string | null;
   keys?: PolicyKey[];
   now?: Date;
-  /** Set only by `checkToolSettingsSignature`: the payload then carries `kind: "tool_settings"`. */
-  domain?: "tool_settings";
+  /** Set only by `checkToolSettingsSignature` / `checkGrantsSignature`: the payload then carries that `kind`. */
+  domain?: "tool_settings" | "grants";
 }
 
 /** Check a document's signature. Pure apart from reading the trusted keys (`keys` overrides them). */
@@ -189,4 +191,60 @@ export function checkToolSettingsSignature(section: Record<string, unknown>, con
     revision: section.revision, rules_digest: section.settings_digest, local_changes: false, installation_id: context.computer,
     workspace_id: section.workspace_id, issued_at: section.issued_at, key_id: section.key_id, signature: section.signature,
   }, { workspace: context.workspace, computer: context.computer, managed: true, lastIssuedAt: context.lastIssuedAt, keys: context.keys, now: context.now, domain: "tool_settings" });
+}
+
+// --- signed grants ---------------------------------------------------------------------------------------------------------
+//
+// A rules document also carries what lets a blocked action through, or stops doing so: the allowances the workspace holds for
+// this computer, the ones it revoked, the session budgets and the answers to requests. The workspace signs them with the rules,
+// by the same key and at the same `issued_at`: `grants_digest` is the sha256 of the canonical JSON of
+// `{ allowances, revoked_allowances, session_budgets, request_answers }` (each absent member as []), and `grants_signature` is
+// over the rules payload with that digest as `rules_digest`, `local_changes` false, `managed` true and `kind: "grants"`, which no
+// rules payload carries: a rules signature never verifies as grants, nor the reverse.
+
+/** The members of a rules document the grants signature covers. */
+export const GRANT_FIELDS = ["allowances", "revoked_allowances", "session_budgets", "request_answers"] as const;
+
+/** A document's grants digest (lowercase hex), computed from its own members. */
+export function digestGrants(doc: Record<string, unknown>): string {
+  return createHash("sha256").update(canonical({
+    allowances: doc.allowances ?? [], revoked_allowances: doc.revoked_allowances ?? [],
+    session_budgets: doc.session_budgets ?? [], request_answers: doc.request_answers ?? [],
+  })).digest("hex");
+}
+
+/** Whether a document carries any member the grants signature covers. */
+export const carriesGrants = (doc: Record<string, unknown>): boolean => GRANT_FIELDS.some((field) => doc[field] !== undefined);
+
+/** Check a rules document's grants signature. `unsigned` when it has neither `grants_digest` nor `grants_signature`; refused
+ *  when only one is there, when the digest does not match the document's own members, or when the signature does not verify. */
+export function checkGrantsSignature(doc: Record<string, unknown>, context: ToolSettingsSignatureContext): SignatureCheck {
+  const hasDigest = doc.grants_digest !== undefined;
+  const hasSignature = doc.grants_signature !== undefined;
+  if (!hasDigest && !hasSignature) return { result: "unsigned" };
+  if (!hasDigest || !hasSignature || typeof doc.grants_digest !== "string" || !HEX64.test(doc.grants_digest)) {
+    return { result: "refused", reason: "malformed_signature", message: "the rules document's grants signature fields are incomplete or malformed" };
+  }
+  if (digestGrants(doc) !== doc.grants_digest) {
+    return { result: "refused", reason: "bad_signature", message: "the rules document's allowances, revoked allowances, session budgets or request answers do not match their signed digest; they were changed or damaged" };
+  }
+  const check = checkPolicySignature({
+    revision: doc.revision, rules_digest: doc.grants_digest, local_changes: false, installation_id: doc.installation_id,
+    workspace_id: doc.workspace_id, issued_at: doc.issued_at, key_id: doc.key_id, signature: doc.grants_signature,
+  }, { workspace: context.workspace, computer: context.computer, managed: true, lastIssuedAt: context.lastIssuedAt, keys: context.keys, now: context.now, domain: "grants" });
+  return check.result === "refused" ? { ...check, message: `grants signature: ${check.message}` } : check;
+}
+
+/** The whole signature check of a workspace answer: its rules signature and, for a rules document, its grants signature.
+ *  A refused grants signature refuses the answer exactly as a refused rules signature does. In enforce mode, a signed rules
+ *  document that carries grants without signing them is refused as unsigned. */
+export function checkAnswerSignature(doc: Record<string, unknown>, context: SignatureContext, mode: SignatureMode): SignatureCheck {
+  const rules = checkPolicySignature(doc, context);
+  if (rules.result === "refused" || !context.managed) return rules;
+  const grants = checkGrantsSignature(doc, { workspace: context.workspace, computer: context.computer, lastIssuedAt: context.lastIssuedAt, keys: context.keys, now: context.now });
+  if (grants.result === "refused") return grants;
+  if (grants.result === "unsigned" && rules.result === "verified" && mode === "enforce" && carriesGrants(doc)) {
+    return { result: "refused", reason: "unsigned_policy", message: "the workspace's answer carries allowances, revocations, session budgets or request answers that are not signed, and this computer accepts only signed rules (enforce mode)" };
+  }
+  return rules;
 }

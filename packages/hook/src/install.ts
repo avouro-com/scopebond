@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants, mkdirSync, writeFileSync, existsSync, readFileSync, realpathSync, rmSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { canonical } from "@scopebond/gateway";
 import { findProgram, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 import { hookCliPath } from "./self.js";
@@ -185,14 +186,43 @@ export function pruneHarnessEntries(file: string, remove: (command: string) => b
 }
 
 /** The file in the user home that pins trusted project policies: absolute project
- *  config dir → SHA-256 of its policy.json. It lives under the protected home, so the
+ *  config dir → its trust digest (`trustDigest`). It lives under the protected home, so the
  *  governed agent cannot write it. */
 export function trustedProjectsFile(): string {
   return join(userHome(), "trusted-projects.json");
 }
 
+const sha256Hex = (bytes: Buffer | string): string => createHash("sha256").update(bytes).digest("hex");
+
+/** The SHA-256 of the project's policy.json: what a pin covered before `trustDigest`. */
 function policyDigest(dir: string): string | null {
-  try { return createHash("sha256").update(readFileSync(join(dir, "policy.json"))).digest("hex"); } catch { return null; }
+  try { return sha256Hex(readFileSync(join(dir, "policy.json"))); } catch { return null; }
+}
+
+/** The workspace a config folder's connection (cloud.json) names: its addresses, workspace, environment and installation,
+ *  never the credential, which renews. Null when there is none; a file that cannot be read stands for itself. */
+function connectionIdentity(dir: string): unknown {
+  let text: string;
+  try { text = readFileSync(join(dir, "cloud.json"), "utf8"); } catch { return null; }
+  try {
+    const c = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text) as unknown;
+    if (!isRecord(c)) return { unreadable: sha256Hex(text) };
+    const field = (name: string): unknown => c[name] ?? null;
+    return { url: field("url"), ingest_url: field("ingest_url"), organization_id: field("organization_id"), environment_id: field("environment_id"),
+      installation_id: field("installation_id"), gateway_id: field("gateway_id") };
+  } catch { return { unreadable: sha256Hex(text) }; }
+}
+
+/** What a trust pin covers in a project's config folder: everything there that decides what its policy enforces, apart from
+ *  what may let a blocked action through (for a trusted project that comes from the user home: `decisionStateDir`). That is
+ *  policy.json; rules.json, which the hook also reads on each call (the allowed roots, the remote-database guard); and the
+ *  identity of the folder's workspace connection, whose rules checks rewrite the policy. Null when there is no policy. */
+function trustDigest(dir: string): string | null {
+  const policy = policyDigest(dir);
+  if (!policy) return null;
+  let rules: string | null;
+  try { rules = sha256Hex(readFileSync(join(dir, "rules.json"))); } catch { rules = null; }
+  return `v2:${sha256Hex(canonical({ policy, rules, connection: connectionIdentity(dir) }))}`;
 }
 
 function readTrusted(): Record<string, string> {
@@ -228,22 +258,44 @@ const legacyTrustKey = (dir: string): string => resolve(dir).replace(/\\/g, "/")
 /** Pin the project's current policy as trusted. Editing the policy afterwards un-trusts
  *  it until the user trusts it again, so a rewrite by the agent never takes effect. */
 export function trustProjectPolicy(dir: string): string {
-  const digest = policyDigest(dir);
+  const digest = trustDigest(dir);
   if (!digest) throw new Error(`no policy at ${join(dir, "policy.json")}`);
+  pin(dir, digest);
+  return policyDigest(dir)!;
+}
+
+function pin(dir: string, digest: string): void {
   const trusted = readTrusted();
   if (legacyTrustKey(dir) !== trustKey(dir)) delete trusted[legacyTrustKey(dir)];
   trusted[trustKey(dir)] = digest;
   mkdirSync(userHome(), { recursive: true });
   replaceFile(trustedProjectsFile(), JSON.stringify(trusted, null, 2) + "\n");
-  return digest;
 }
 
-/** Whether the project's policy is exactly the one the user trusted. */
+/** Whether the project's policy, rule list and connection are exactly the ones the user trusted. A pin made before the rule
+ *  list and the connection were covered (the policy's own SHA-256) still holds while the policy is unchanged, and is renewed
+ *  to cover them, so any later change to either lapses the trust. */
 export function isTrustedProject(dir: string): boolean {
-  const digest = policyDigest(dir);
+  const digest = trustDigest(dir);
   if (!digest) return false;
   const trusted = readTrusted();
-  return trusted[trustKey(dir)] === digest || trusted[legacyTrustKey(dir)] === digest;
+  const pinned = trusted[trustKey(dir)] ?? trusted[legacyTrustKey(dir)];
+  if (pinned === digest) return true;
+  if (pinned === undefined || pinned !== policyDigest(dir)) return false;
+  try { pin(dir, digest); } catch { /* renewed on a later check */ }
+  return true;
+}
+
+/** Where a hook call reads, and writes, what may let a blocked action through: the workspace rules document (whether a person
+ *  may allow or ask, and on what terms), allowances and the record of earlier overrides. The config folder itself, except a
+ *  project folder that governs only because the person trusted it (a user-level install exists): the trust pins the
+ *  project's rule files, never this state, so a repository could otherwise bring an allowance for an action its trusted
+ *  policy blocks. For such a project it is the user-level home. */
+export function decisionStateDir(dir: string): string {
+  if (process.env.SCOPEBOND_HOOK_DIR) return dir;
+  const home = userHome();
+  if (samePath(dir, home) || !existsSync(join(home, "policy.json"))) return dir;
+  return home;
 }
 
 /** Resolve the config dir for a hook event, most specific first:

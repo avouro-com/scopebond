@@ -49,7 +49,16 @@ A JSON-RPC batch (an array of messages on one line) is rejected with a `-32600`
 error and never forwarded, so every call is decided on its own. So is a method
 that spells `tools/call` or `tools/list` another way (`Tools/Call`,
 `tools/call `), which an upstream that matches method names loosely could
-otherwise run without a decision.
+otherwise run without a decision. So is a message with a member spelled like a
+JSON-RPC member in another case (`Method`, `Params`), or `tools/call` params
+with another spelling of `name`, `arguments` or `_meta` (`Name`): an upstream
+that matches member names case-insensitively (Go's `encoding/json`, which also
+folds `ſ` to `s` and the Kelvin sign to `k`) could read that member instead of
+the one decided. What is forwarded is rebuilt from the JSON-RPC members only
+(for `tools/call`, params `name`, `arguments` and `_meta`). Under the typed
+adapter, arguments holding two keys that differ only in case, at any depth, or
+a resource argument spelled in another case, are not bound, and `enforce`
+denies them.
 
 Windowed clauses (`rate_limit`, `sequence`, a windowed `spend_limit`) hold for
 calls that arrive together: a call policy allows takes its place in the window

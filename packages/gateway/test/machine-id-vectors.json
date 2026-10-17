@@ -1,0 +1,9 @@
+{
+  "description": "Machine id test vectors: m1: + unpadded base64url(SHA-256(\"scopebond-machine-id/v1\\n\" + scope + \"\\n\" + raw)), raw trimmed and lowercased first. Shared by the TypeScript (packages/gateway) and Rust (packages/tray) implementations. The raw ids are made up.",
+  "vectors": [
+    { "raw": "8f14e45f-ceea-467a-9575-0b3b0d6c4e2a", "scope": "unscoped", "machine_id": "m1:WrgIeb-MwWX3F4qzWGXIvnLOCxtAhb7xKzMQqqccRNE" },
+    { "raw": "  8F14E45F-CEEA-467A-9575-0B3B0D6C4E2A\r\n", "scope": "org_7Hk2Qp9xLm", "machine_id": "m1:Pp78O31lp9LaOUohmJw0uVmufPtkzmsoAohiy3kMlnw" },
+    { "raw": "0123456789abcdef0123456789abcdef\n", "scope": "org_7Hk2Qp9xLm", "machine_id": "m1:BiNYnEpVop-JNoFTCZYGzhJSMS83M5SljwtjxfZEcn8" },
+    { "raw": "0123456789abcdef0123456789abcdef", "scope": "unscoped", "machine_id": "m1:qv591q08_nEKW6I4Gu4-_aDrP9jfnShQtUwx0ILEMgU" }
+  ]
+}

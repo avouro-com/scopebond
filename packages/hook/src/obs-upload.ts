@@ -26,6 +26,7 @@
 import { MAX_BATCH_BODY_BYTES, MAX_BATCH_ITEMS } from "./observation.js";
 import type { ObservationStore, PendingRow } from "./obs-store.js";
 import { versionedFetch } from "./workspace-fetch.js";
+import { machineIdHeaders, type MachineIdSource } from "@scopebond/gateway";
 
 export const OBSERVATIONS_PATH = "/v1/observations";
 export const BATCH_VERSION = "1.0";
@@ -54,6 +55,8 @@ export interface UploadOptions {
   timeoutMs?: number;
   /** Send at most this many batches in one call. */
   maxBatches?: number;
+  /** This computer's machine id (a hash; machine-id.ts), sent in the `x-scopebond-machine-id` header. */
+  machineId?: MachineIdSource;
 }
 
 /** Parse Retry-After: delta-seconds or an HTTP date. Bounded; undefined when unusable. */
@@ -119,7 +122,7 @@ export async function uploadPending(store: ObservationStore, options: UploadOpti
     try {
       response = await doFetch(endpoint, {
         method: "POST", redirect: "error", signal: controller.signal,
-        headers: { "content-type": "application/json", authorization: `Bearer ${options.credential}` },
+        headers: { "content-type": "application/json", authorization: `Bearer ${options.credential}`, ...machineIdHeaders(options.machineId) },
         body,
       });
     } catch (error) {

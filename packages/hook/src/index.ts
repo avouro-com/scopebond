@@ -40,7 +40,10 @@ export type {
   ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnyManagedRuleId, OptionalRuleId,
   ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,
 } from "./managed.js";
-export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked } from "./override.js";
+export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked, plainAction, offersFor, allowsAny, offeredLength } from "./override.js";
+export { ruleTitle, ruleName, blockTitle, GENERIC_RULE_TITLE } from "./rule-titles.js";
+export { noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
+export type { BlockNote } from "./block-notes.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES } from "./policy-sync.js";
 export {
@@ -48,7 +51,7 @@ export {
   BLOCKED_SERVICE_KINDS, BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, BLOCKED_SERVICE_REASON, SERVICE_RULES_CAPABILITY, MAX_BLOCKED_SERVICES, MAX_BLOCKED_SERVICE_KEY,
 } from "./service-rules.js";
 export type { BlockedService, BlockedServiceKind } from "./service-rules.js";
-export { checkPolicySignature, checkToolSettingsSignature, workspaceIdOf, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload, type ToolSettingsSignatureContext } from "./policy-signature.js";
+export { checkPolicySignature, checkToolSettingsSignature, checkGrantsSignature, checkAnswerSignature, digestGrants, carriesGrants, GRANT_FIELDS, workspaceIdOf, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload, type ToolSettingsSignatureContext } from "./policy-signature.js";
 export { policyKeys, policyKeyProblems, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
 export { versionedFetch, withHookVersion, HOOK_VERSION_HEADER } from "./workspace-fetch.js";
 export {
@@ -69,7 +72,7 @@ export {
   userHome, userHarnessFile, projectHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, copilotDetected, copilotHome, harnessDetected, absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome,
   HARNESSES, COPILOT_EVENTS, COPILOT_HOOK_FILE, COPILOT_TIMEOUT_SEC, COPILOT_DECISION_DEADLINE_MS, copilotHookEntry, powershellHookCommand, harnessEntryCommand,
-  readHarnessConfig, backupHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, trustedProjectsFile, canonicalPath, samePath,
+  readHarnessConfig, backupHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, decisionStateDir, trustedProjectsFile, canonicalPath, samePath,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
   isScopebondHookCommand, harnessEntryMatches, harnessHookIsOurs, isQuotedWindowsHookCommand, quotedEntryNote, refuseUnsafeQuotedPaths, nativeHookProgram, missingHookPrograms, npxAvailable, isNpxHookCommand,
   codexHookEntry, codexWindowsCommand, shellPlainWindowsPath, windowsHookCommandLine, windowsShortPath, type ShortPathFinder,
@@ -84,6 +87,7 @@ export {
 export type { PinResult } from "./runtime-install.js";
 export { connectCloud, ingestUrl, loadConnection, attachExporter, sequenceProofFor, flushBounded, connectionPath, reportUninstall } from "./cloud.js";
 export { checkChains } from "./chain-verify.js";
+export { machineIdFor, machineIdField, approvedWorkspaceId, MACHINE_ID_FILE } from "./machine-id.js";
 export type { ChainCheckOptions, ChainCheckReport } from "./chain-verify.js";
 export type { HookConnection } from "./cloud.js";
 export { scrubSecrets, scrubParam, scrubUrlPath, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
@@ -120,7 +124,7 @@ export { hookVersion, hookCommand, cliCommand } from "./version.js";
 export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
 export type { HookEntry, HookScope } from "./duplicates.js";
 export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";
-export { readAllowances, writeAllowances, makeAllowance, matchAllowance, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS } from "./allowances.js";
+export { readAllowances, writeAllowances, makeAllowance, matchAllowance, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance } from "./allowances.js";
 export type { Allowance, BlockedItem } from "./allowances.js";
 export { sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, readSessionBudgets, validSessionBudget, validSessionBudgets, isPackageInstall, isAgentLaunch, SESSION_BUDGETS_FILE } from "./session-budgets.js";
 export type { SessionBudget, SessionBudgetLimit, SessionBudgetGuard, BudgetReservation, BudgetIntent } from "./session-budgets.js";
@@ -128,7 +132,7 @@ export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requ
 export type { AdminRequest } from "./requests.js";
 export { localActivity } from "./local-activity.js";
 export { noteUnresolvableHooks, HOOK_OUTAGE_FILE } from "./hook-outage.js";
-export type { LocalActivity } from "./local-activity.js";
+export type { LocalActivity, RecentBlockRecord } from "./local-activity.js";
 export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEFAULT_RETENTION_DAYS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./store-upkeep.js";
 export type { UpkeepOptions } from "./store-upkeep.js";
 export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-detail.js";

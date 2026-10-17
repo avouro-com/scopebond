@@ -1,5 +1,82 @@
 # @scopebond/hook
 
+## 0.26.0
+
+### Minor Changes
+
+- 7577598: A machine id, so a workspace can tell that a computer connecting again is the same computer.
+  
+  - The machine id is `m1:` and the unpadded base64url SHA-256 of `scopebond-machine-id/v1`, the workspace's id (`unscoped` before it is known) and the operating system's own machine id (Windows `MachineGuid`, macOS `IOPlatformUUID`, Linux `/etc/machine-id` or `/var/lib/dbus/machine-id`), trimmed and lowercased. The operating system's id never leaves the computer and is never written, logged or shown; where there is none, nothing is sent, and the host name or a network address is never used instead.
+  - Sign-in and enrollment carry it as `machine_id` in their body (`login`, `connect`, the Scopebond Agent's first sign-in, `scopebond-gateway enroll`); the rules check, record deliveries and summaries, and observation uploads carry it in the `x-scopebond-machine-id` header.
+  - It is kept with its scope in `machine-id.json` beside `cloud.json` (the gateway: `scopebond-machine-id.json`, or `SCOPEBOND_MACHINE_ID_FILE`), worked out again once the workspace's id is known after enrolling, and once a day.
+  - `@scopebond/gateway` exports the shared implementation (`computeMachineId`, `readRawMachineId`, `cachedMachineId` from `@scopebond/gateway/node`; `MACHINE_ID_HEADER`, `isMachineId`, `machineIdHeaders` from the root), and `completeCloudEnrollment` and `createCloudExporter` take a `machineId` option.
+
+### Patch Changes
+
+- 2c0b2af: `checkChainHeads` judges a rollback by the order this computer received its heads, not only by the issue times the workspace signs. Kept heads without this computer's delivery times were compared by `issued_at` alone, so a workspace that rolled its chain back and stamped the lower head at or before the higher one it had already handed out passed the check, and `scopebond verify --anchor` reported that the chain heads agree. A kept head listed after a higher one is now reported as going back, whatever either says about its issue time, unless this computer's own times show the two deliveries may have been out together. Kept heads must be passed in the order received, as the chain-heads store keeps them.
+- a03b216: Signed grants, and revocations that reach the computer.
+  
+  - A rules document's `allowances`, `revoked_allowances`, `session_budgets` and `request_answers` are now checked against `grants_digest` (SHA-256 of their canonical JSON, absent members as `[]`) and `grants_signature` (Ed25519 by the document's key at its `issued_at`, over the rules payload with `kind: "grants"`). When either field is present both must be, the digest must match and the signature must verify; otherwise the answer is refused like a bad rules signature and the rules in force stay. In `enforce` mode a signed document that carries any of those lists without `grants_signature` is refused as `unsigned_policy`. Answers without the fields are still accepted in `dual` mode.
+  - A change to those lists alone, at the same revision and rules digest (for example a revoked allowance), is now installed instead of being treated as unchanged, so a revocation takes effect at the next rules check. An ETag saved by an earlier version is not sent once, so a revocation it missed is fetched again.
+  - New exports: `checkGrantsSignature`, `checkAnswerSignature`, `digestGrants`, `carriesGrants`, `GRANT_FIELDS`.
+- 9df359a: A trusted project can no longer let through what its policy blocks with files placed beside that policy.
+  
+  - In a project whose own policy governs because you trusted it (a user-level install exists), what can let a blocked action through (the workspace rules document's allow and ask terms, allowances, and the record of earlier overrides) is read from and written to the user-level folder, never the project's `.scopebond` folder. A repository could otherwise add a `managed-rules.json` and an `allowances.json` beside its unchanged, trusted `policy.json` and turn a block into an allowance.
+  - The trust pin now covers the project's `rules.json` (read on each call for the allowed roots and the remote-database guard) and the workspace its `cloud.json` names (not the credential, which renews), as well as `policy.json`. A change to any of them stops the project's policy applying until you run `scopebond trust` again. A pin made by an earlier version is honoured while `policy.json` is unchanged, and renewed to cover the other two.
+  - New export: `decisionStateDir`.
+- Updated dependencies [7577598]
+  - @scopebond/gateway@0.20.0
+
+## 0.25.1
+
+### Patch Changes
+
+- e835c1f: Every block the tray lists names its rule, and the project and coding tool where the hook knows them.
+  
+  - Rule names are the workspace's own ("Rewrite history on a protected branch", "Run a command that deletes data or shuts down the computer", "Read passwords, keys or secrets", …), for every workspace rule, in the tray, the Scopebond window and the hook's messages. A block by Scopebond's own protection reads "Change Scopebond's or the agent's safety settings" (a change) or "Read passwords, keys or secrets" (a read), and a blocked service reads "Blocked service". A rule the hook cannot name reads "A Scopebond rule": never an empty line, never a rule id. `ruleName` and `blockTitle` join `ruleTitle` in the hook's exports.
+  - The hook notes each call it blocks in `block-notes.json` in its folder: the action's id, the clause that denied it and the rule that clause carries, the coding tool's id and the project's name (the repository's, else the folder's, never the home folder). It holds no arguments and never leaves the computer. `localActivity` reads it, so a block whose receipt has no context (a workspace that has not said it reads it) or names no rule still shows its rule, project and tool; each recent block now carries `rule_title` and `project`.
+  - The hook's question to the agent carries the project (`project`), for the window and the tray.
+  - The tray's panel and notifications show "A Scopebond rule" when an older agent sends no rule name, instead of a blank line or the rule's id.
+
+## 0.25.0
+
+### Minor Changes
+
+- 7a4ffe3: The tray lists what was blocked in plain words, and allowing an earlier block from the tray offers 15 minutes again.
+  
+  - Fix: acting on an earlier block from the tray (`POST /blocked`) left "Allow for 15 min" out of the Scopebond window, because the question for an earlier block carried no 15-minute offer. `blockedQuestion` now offers it wherever the window offers it when the block happens (a rule set to "Block, person may allow" whose workspace sends the allowance terms, under the daily limit), and `actOnBlocked` makes a 15-minute allowance only where it is offered.
+  - `GET /tray` lists up to 20 recent blocks (was 3), newest first. Each keeps its older fields and adds `what` (the action in plain words, such as "Read .env.production" or "git push --force origin main", with secrets masked as the Scopebond window masks them), `action_text` (the text the window shows), `rule_title`, `project` (the repository's name), `tool` ("Claude Code", "Cursor", "Codex"…), `offers` (once, fifteen, always with `always_days` and `always_needs_admin`, ask) and `reason_min`. The model also adds `can_ask` (the workspace lets a person ask an admin under some rule), `detail` (the line under "Protected"), `workspace` (its name) and `today` (actions and blocks since midnight).
+  - The hook exports `plainAction` and `ruleTitle`; `localActivity` adds `what`, `action_text`, `harness` and `repository` to each recent block, and `blockedQuestion` adds `offers.fifteen`, `always_days` and `always_needs_admin`.
+  - The PowerShell tray lists the newest five blocks, in plain words.
+- dd05d59: The tray answers the hook's question during a coding session, and a person can stop an allowance.
+  
+  - Live prompt: when the hook asks the agent during a coding session (`POST /override`) and a tray is listening, the agent hands the question to the tray first (`POST /override/wait`, a long wait; `GET /tray` carries it as `pending`). The person answers in the tray's panel (`POST /override/answer`, checked as the window's answer would be), and the hook's waiting call receives that answer. If the person does not open the question in the tray within a third of the hook's wait (ten seconds at most; `POST /override/open` says they did), it is withdrawn and the Scopebond window opens for the time left. With no tray listening the window opens at once, as before. Unanswered at the deadline, nothing is allowed.
+  - The hook's question carries the coding tool and what the workspace set about the length (`harness`, `reviewed`, `always_days`, `always_needs_admin`); an older agent ignores them.
+  - Stop allowing: `POST /allowances/stop` ends an allowance the person made (`endAllowance` in the hook: it stops applying at once and stays stopped when the workspace sends its copy). The agent sends the workspace `{ id, state: "ended", ended_by: "person", ended_at }` to `/v1/allowances`, signed like the other records, once; a workspace that refuses it is not asked again.
+  - Where the workspace sets the unblock terms, an allowance a person makes carries `unblocked` (`automatic` or `person`); the Allowed list shows "Unblocked automatically".
+  - The Scopebond window says "Ask to unblock" ("You may ask to unblock it; an admin decides."), and the macOS and Linux dialogs offer the workspace's one length when it sets one (`singleChoice`) instead of refusing.
+- c707f52: The tray answers earlier blocks itself and lists what was allowed and asked.
+  
+  - `POST /blocked/answer` (`{ action_id, choice, reason }`, `choice` one of `once`, `fifteen`, `always`, `ask`) answers an earlier block from the tray's own form. The agent checks it as the Scopebond window would (the block is still offered, the workspace offers that choice now, the reason is long enough and at most 500 characters) and applies it exactly as the window's answer: the allowance or the request on this computer, sent to the workspace signed by this computer's key. It answers with the outcome and the words the tray shows ("Allowed once · Recorded and sent to Acme"; for a request, "Request sent · you'll see the answer under Requests").
+  - `GET /allowances` lists the allowances that still apply and those waiting for an admin (what, the rule's name, once / fifteen / always, who made it, when it ends); `GET /requests` lists the requests to an admin (waiting, approved or declined, who answered and their note when the workspace sends them). `GET /tray` carries both as `allowed` and `asked`.
+  - Notifications: a new setting value, `blocks` (blocks and problems), is the default on an agent's first start in a new Scopebond folder; an install whose person never chose keeps `problems`, and an older `all` reads as `blocks`. The PowerShell tray offers *Blocks and problems*, *Problems only* and *Off*.
+  - A workspace may set the one length a person's unblock lasts (the rule's `lasts`: `once`, `15m` or `always`) and say that every unblock is reviewed by an admin later (`review`). The window and the tray then offer only that length; an answer for another length allows nothing. The hook reports the `unblock_terms` capability, and a workspace sends these terms only then. The hook exports `offersFor`, `allowsAny` and `offeredLength`; `blockedQuestion` adds `reviewed`, and the tray model's `offers` add `reviewed` ("Unblocked until 4:07 PM · an admin will review it").
+  - The hook remembers, on this computer only, the text the Scopebond window showed for each action a person allows (`action-text.json`, the newest 500; `readActionText`, `rememberActionText`), so the tray can say what an allowance lets through. It is never sent.
+
+## 0.24.0
+
+### Minor Changes
+
+- 0a135da: Block named MCP servers, hosts, programs and packages from the workspace's rules document. A workspace may send `blocked_services` (at most 500 entries of `{ kind: "mcp_server" | "host" | "cli" | "package", key }`); the hook now says it reads them (`x-scopebond-hook-capabilities` gains `service_rules`). The list is digested with the rules (`rules_digest` is the SHA-256 of the canonical JSON of `{ rules, blocked_services }` when the list is present), so a changed or malformed list refuses the document and the rules in force stay; a host key with a default port (`:80`, `:443`) is malformed, since a request's host never shows it. Each kind compiles into a policy clause (`blocked-mcp-servers`, `blocked-hosts`, `blocked-programs`, `blocked-packages`): an MCP call whose server name contains the blocked name as a word; a fetch by the coding agent's web-fetch tool (and a `gh api` call that changes something) to the blocked host, a port in the key must match (`curl`, `wget` and similar are recorded, not blocked); a shell command running the blocked program; or an install naming the blocked `manager:name` package. Every package an install names is checked (however many, also beside `-r` or `-e`; an unreadable spec is skipped), and an install whose named packages none can be read is denied while the workspace blocks any package. A denial says "Your workspace blocks the <kind> <key>" and is recorded like any rule block; a blocked package is recorded as that package's `package.install`, decided before its command. Without the list nothing changes.
+- f8fa8ea: Pins Scopebond Cloud's policy signing key; computers on this release verify signed rules.
+
+### Patch Changes
+
+- feba379: `scopebond flush` no longer fails when the only records left are routine ones waiting for their summary window. With summary records on (the default evidence detail), routine allows wait for their five-minute window to close and then leave as one signed summary; `flush` used to count them as "still pending" and exit 1. It now reports them on their own line ("N routine record(s) held for the summary window until HH:MM", in local time) and exits 0 when nothing else is waiting. It still exits 1 when a notable record (a block, a warning, an override and the like) is left undelivered or the last delivery attempt failed. The cloud exporter gains an optional `held()` method that counts the routine records held for an open window and says when the last of those windows closes.
+- 47d72a4: On Windows, every hook entry now starts under cmd.exe, Windows PowerShell, PowerShell 7 and Git Bash alike. The installed command used to start with a quoted path (`"<node.exe>" "<cli.js>" codex`), which PowerShell reads as a string and refuses ("Unexpected token"); a coding agent treats a hook that cannot start as a non-blocking error, so with PowerShell as the hook shell actions ran unchecked. Paths are now written unquoted with forward slashes, using the short (8.3) name of any folder whose name has a space or another character a shell treats specially (`C:/PROGRA~1/nodejs/node.exe …/cli.js codex`); the single executable's entry (`… scopebond-agent.exe hook <agent>`) takes the same form. Codex entries also carry `commandWindows`, which Codex runs on Windows (the portable `npx` form becomes `npx.cmd` there). Where a volume has short names switched off, the paths stay quoted as before. `uninstall`, upgrades and `doctor` recognise both the old and the new forms, and an entry that names Scopebond only in `commandWindows` counts as Scopebond's.
+- Updated dependencies [feba379]
+  - @scopebond/gateway@0.19.1
+
 ## 0.23.0
 
 ### Minor Changes

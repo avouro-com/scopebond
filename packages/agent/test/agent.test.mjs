@@ -308,7 +308,7 @@ test("the self-check names what is broken locally and sends a signed proof to th
   }
 });
 
-const question = (extra = {}) => ({ action_id: "action-0000000000001", rule: "destructive-shell", title: "Destructive command", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 20_000, ...extra });
+const question = (extra = {}) => ({ action_id: "action-0000000000001", rule: "destructive-shell", title: "Run a command that deletes data or shuts down the computer", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 20_000, ...extra });
 
 test("an override request is checked before any window opens, and its text reaches PowerShell only as data", () => {
   assert.equal(parseQuestion(question()).rule, "destructive-shell");
@@ -355,12 +355,16 @@ test("from the tray, an earlier block is allowed or sent to an admin only throug
     writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ rules: { "destructive-shell": { mode: "override", override: { reason_min: 10, minutes: 0, daily_limit: 5, harness_prompt: false, requests: true } } } }));
     const id = "action-blocked-00000001";
     recordBlocked(dir, { id, at: new Date().toISOString(), rule: "destructive-shell", mode: "override", action_key: "a".repeat(64), summary: "rm -rf build", harness: "claude" });
+    // The tray lists it with what may be done now: the choices the workspace allows, and the shortest reason.
+    const listed = (await callAgent(dir, "GET", "/recent-blocks", undefined, 10_000)).recent_blocks;
+    assert.ok(Array.isArray(listed));
     assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: "action-unknown-0000001" }, 10_000)).outcome, "gone");
     assert.equal(shown.length, 0, "an unknown block opens no window");
     assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000)).outcome, "declined");
     const allowed = await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000);
     assert.deepEqual(allowed, { outcome: "allowed", text: "Allowed. Run it again, or let the coding agent retry." });
-    assert.deepEqual(shown[1].offers, { allow: true, always: false, ask: true });
+    assert.deepEqual(shown[1].offers, { allow: true, always: false, ask: true, fifteen: true });
+    assert.ok(windowsScript(shown[1]).includes(Buffer.from("Allow for 15 min", "utf8").toString("base64")), "the tray's window offers 15 minutes too");
     assert.equal(shown[1].summary, "rm -rf build");
     assert.equal(readAllowances(dir).filter((a) => a.once).length, 1);
     assert.equal(readBlocked(dir)[0].acted, "allowed");

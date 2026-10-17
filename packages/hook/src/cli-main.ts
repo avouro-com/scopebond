@@ -40,7 +40,7 @@ import {
   cursorDetected, codexDetected, copilotDetected, harnessDetected, HARNESSES, COPILOT_DECISION_DEADLINE_MS,
   absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
-  localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy, isTrustedProject,
+  localHarnessFile, gitShareState, isMachineSpecificCommand, trustProjectPolicy, untrustedProjectPolicy, isTrustedProject, decisionStateDir,
   wireLifecycleHooks, unwireLifecycleHooks, nativeHookProgram, missingHookPrograms, quotedEntryNote,
   npxAvailable, samePath,
 } from "./install.js";
@@ -61,6 +61,7 @@ import { createOverrideHandler, overrideHint } from "./override.js";
 import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor, repositoryFacts } from "./receipt-context.js";
+import { noteBlock, projectOf } from "./block-notes.js";
 import { RepositoryEnrollmentError, isRepositoryConnection, repositoryConnectionDir, REPO_TOKEN_ENV } from "./repo-enrol.js";
 import { REPO_HOOK_MARKER } from "./init.js";
 import { keyedSessionId, sessionBudgetGuardFor } from "./session-budgets.js";
@@ -71,6 +72,7 @@ import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
+import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, waitWithinDeadline } from "./hook-deadline.js";
 import { policyKeyProblems } from "./policy-keys.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
@@ -284,6 +286,12 @@ const copilotDeadlineMs = (): number => {
   return Number.isFinite(configured) && configured > 0 && configured < COPILOT_DECISION_DEADLINE_MS ? configured : COPILOT_DECISION_DEADLINE_MS;
 };
 
+/** For the tray: the rule, project and tool of a blocked call, noted on this computer (block-notes.ts). Never throws. */
+function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision): void {
+  if (decision.decision !== "deny") return;
+  try { noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd) }); } catch { /* the receipt is the record */ }
+}
+
 /** `deadlineAt`: a time after which the call is denied rather than evaluated (GitHub Copilot, whose hook timeouts fail
  *  open). It is checked once the policy and keys are loaded, before the action is evaluated: a load held up by a busy disk
  *  or a lock is synchronous, so a timer alone could not interrupt it. */
@@ -309,12 +317,13 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // workspace has not said it reads it. Never fails the call.
     const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = createOverrideHandler({ dir, home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(dir, input!), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
+      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
     if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; deny(copilotDeadlineReason()); }
     const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
+    noteIfBlocked(dir, cwd, harness, decision);
     // Allowed: what is left is record delivery, which must not turn an allowed call into a "did not finish" deny.
     if (decision.decision === "allow" && copilotDeadlineTimer !== undefined) { clearTimeout(copilotDeadlineTimer); copilotDeadlineTimer = undefined; }
     const observer = recordObservations(dir, cwd, input!, decision, harness);
@@ -520,11 +529,12 @@ async function runCursor(): Promise<void> {
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = overridable ? createOverrideHandler({ dir, home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(dir, input), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
+      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
+    noteIfBlocked(dir, cwd, "cursor", decision);
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
     observer?.close();
@@ -1228,9 +1238,9 @@ async function runConnect(args: string[]): Promise<void> {
 
 /** Enroll with a bundle and wire the agent: shared by `connect` (a pasted enrollment)
  *  and `login` (one received through device-code approval). */
-async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBundle, harness: Harness, args: string[]): Promise<void> {
+async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBundle, harness: Harness, args: string[], workspaceId?: string | null): Promise<void> {
   try {
-    const c = await connectCloud(dir, url, bundle);
+    const c = await connectCloud(dir, url, bundle, undefined, workspaceId);
     console.log(`✓ Connected to ${c.url}`);
     if (c.rotatedFrom) console.log(`✓ This computer's earlier key (${c.rotatedFrom}) was no longer accepted, so it was replaced; the old key is kept in ${join(dir, "retired-keys")}`);
     if (c.setAside) console.log(`  ${c.setAside.toLocaleString()} queued record(s) signed by an earlier key cannot go through this connection. To deliver them, run: ${cliCommand("recover")}`);
@@ -1588,7 +1598,7 @@ async function runObservations(args: string[]): Promise<void> {
   const emitter = opened.emitter;
   try {
     if (sub === "flush") {
-      const outcome = await uploadPending(emitter.store, { url: ingestUrl(emitter.connection), credential: emitter.connection.credential, timeoutMs: 10_000 });
+      const outcome = await uploadPending(emitter.store, { url: ingestUrl(emitter.connection), credential: emitter.connection.credential, timeoutMs: 10_000, machineId: machineIdFor(emitter.dir, emitter.connection.organization_id) });
       const left = emitter.store.pendingSummary().count;
       console.log(`${outcome.result}: ${outcome.acknowledged} acknowledged, ${outcome.deferred} deferred, ${outcome.rejected} refused; ${left} still pending${outcome.detail ? ` (${outcome.detail})` : ""}`);
       process.exitCode = left > 0 ? 1 : 0;
@@ -1905,7 +1915,7 @@ async function runCapabilities(args: string[]): Promise<void> {
     }
     if (observed.emitter) {
       try {
-        const delivered = await deliverProofReceipts(observed.emitter.connection, collected);
+        const delivered = await deliverProofReceipts(observed.emitter.connection, collected, { machineId: machineIdFor(observed.emitter.dir, observed.emitter.connection.organization_id) });
         if (!delivered) console.error("could not deliver the fixture receipts to the workspace; the capability proofs were not sent (run it again when it is reachable)");
         else {
           const queued = observed.emitter.capabilityProofs(proven.cells.flatMap((cell) => {
@@ -2164,8 +2174,10 @@ async function runLogin(args: string[]): Promise<void> {
   if (process.env.CLAUDECODE || process.env.CODEX_SANDBOX || process.env.CURSOR_AGENT) {
     console.error("Note: this looks like a coding agent's own terminal. Signing in works best from your own terminal window, outside the agent.");
   }
+  const dir = loginDir(args);
   let start: { status: number; json: Record<string, unknown> };
-  try { start = await post("/v1/device/code", { ...clientNameField(), harness }); }
+  // The machine id (a hash, never the OS id itself) lets the workspace see that a computer signing in again is the same one.
+  try { start = await post("/v1/device/code", { ...clientNameField(), harness, ...machineIdField(dir, loadConnection(dir)?.organization_id) }); }
   catch (error) { console.error(`could not reach ${origin}: ${(error as Error).message}. ${unreachableHint(error)}`); process.exit(1); }
   const deviceCode = typeof start.json.device_code === "string" ? start.json.device_code : "";
   if (start.status !== 200 || !deviceCode) {
@@ -2178,7 +2190,6 @@ async function runLogin(args: string[]): Promise<void> {
   const deadline = Date.now() + Math.max(60, Number(start.json.expires_in ?? 600)) * 1000;
   console.log(`To connect this computer, open:\n\n  ${verify}\n\nand check that it shows the code  ${userCode}\n`);
   console.log("Waiting for approval (the code expires in 10 minutes; Ctrl+C to stop)…");
-  const dir = loginDir(args);
   scaffold(dir, {});
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -2201,7 +2212,7 @@ async function runLogin(args: string[]): Promise<void> {
           process.exit(1);
         }
       }
-      await finishConnect(dir, origin, polled.json.enrollment as CloudEnrollmentBundle, harness, args);
+      await finishConnect(dir, origin, polled.json.enrollment as CloudEnrollmentBundle, harness, args, approvedWorkspaceId(polled.json));
       return;
     }
     const error = polled.json.error;
