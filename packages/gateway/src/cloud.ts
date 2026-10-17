@@ -690,6 +690,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
             if (notable(e.receipt.payload)) { full.push(e); notableByWindow.set(w, (notableByWindow.get(w) ?? 0) + 1); }
             else if (lateThisFlush.has(e.id)) continue; // added to the full list below
             else if ((w + 1) * windowMs + SUMMARY_GRACE_MS <= cutoff) closed.push(e);
+            // Stamped further ahead than one window and its grace (a clock set wrong): no window will close for it soon,
+            // so it goes in full, as held() counts it (pending, not held).
+            else if ((w + 1) * windowMs + SUMMARY_GRACE_MS > now() + windowMs + SUMMARY_GRACE_MS) lateThisFlush.add(e.id);
             else open.push(e);
           }
           // One window busier than a whole pass would never complete: its oldest records go in full rather than wait forever.
@@ -850,6 +853,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           if (notable(e.receipt.payload)) continue;
           const closesAt = (Math.floor(Date.parse(e.receipt.payload.timestamp) / windowMs) + 1) * windowMs + SUMMARY_GRACE_MS;
           if (closesAt <= at) continue;
+          // A window cannot close later than one window and its grace from now: a record stamped further ahead (a clock
+          // set wrong) is not waiting for a window that will close, so it counts as undelivered rather than held.
+          if (closesAt > at + windowMs + SUMMARY_GRACE_MS) continue;
           routine += 1;
           until = until === null ? closesAt : Math.max(until, closesAt);
         }

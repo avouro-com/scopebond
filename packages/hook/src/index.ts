@@ -74,7 +74,7 @@ export {
   HARNESSES, COPILOT_EVENTS, COPILOT_HOOK_FILE, COPILOT_TIMEOUT_SEC, COPILOT_DECISION_DEADLINE_MS, copilotHookEntry, powershellHookCommand, harnessEntryCommand,
   readHarnessConfig, backupHarnessConfig, trustProjectPolicy, isTrustedProject, untrustedProjectPolicy, decisionStateDir, trustedProjectsFile, canonicalPath, samePath,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves,
-  isScopebondHookCommand, harnessEntryMatches, nativeHookProgram, missingHookPrograms, npxAvailable, isNpxHookCommand,
+  isScopebondHookCommand, harnessEntryMatches, harnessHookIsOurs, isQuotedWindowsHookCommand, quotedEntryNote, refuseUnsafeQuotedPaths, nativeHookProgram, missingHookPrograms, npxAvailable, isNpxHookCommand,
   codexHookEntry, codexWindowsCommand, shellPlainWindowsPath, windowsHookCommandLine, windowsShortPath, type ShortPathFinder,
   localHarnessFile, isMachineSpecificCommand, gitShareState, excludeFromGit, pruneHarnessEntries,
 } from "./install.js";
@@ -112,7 +112,7 @@ export type { SqlClass, SqlVerb } from "./sql-classify.js";
 // Delivery, status and identity pieces the Scopebond Agent reuses (one implementation, one contract).
 export { readDeliveryState, writeDeliveryState, recordDeliveryAttempt, recordRulesCredential, deliveryBackoff, waitingUntil, DELIVERY_STATE_FILE } from "./delivery-state.js";
 export type { DeliveryState } from "./delivery-state.js";
-export { describeDelivery, flushOutcome, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
+export { clockTime, describeDelivery, flushOutcome, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
 export type { FlushOutcome } from "./delivery-report.js";
 export {
   repairDelivery, repairDeliveryAt, backfillQueue, settleInterruptedActions, noteQueueMiss, BACKFILL_FILE, INTERRUPTED_AFTER_MS, INTERRUPTED_REFERENCE,

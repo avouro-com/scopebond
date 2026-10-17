@@ -60,7 +60,7 @@ test("user settings plus a project's: found, and dedupe keeps the user entry and
 test("two entries in one file: the second goes", () => {
   const { home, project } = computer();
   const user = join(home, ".claude", "settings.json");
-  write(user, { hooks: { PreToolUse: [ours(), OTHER, ours('"C:/node.exe" "C:/x/cli.js" claude')] } });
+  write(user, { hooks: { PreToolUse: [ours(), OTHER, ours('"C:/node.exe" "C:/x/.scopebond/cli.js" claude')] } });
   withHome(home, () => {
     assert.equal(duplicateHooks("claude", project, home).length, 2);
     dedupeHooks("claude", "user", project, home);

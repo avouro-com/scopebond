@@ -189,8 +189,12 @@ async function completeSetup(dir: string, origin: string, enrollment: object, o:
   for (const harness of harnesses) {
     const file = userHarnessFile(harness);
     if (isHarnessConfigured(file)) continue;
-    writeHarnessConfig(file, harness, maintainedHookCommand(harness));
-    lines.push(`put the Scopebond hook in ${file}`);
+    try {
+      writeHarnessConfig(file, harness, maintainedHookCommand(harness));
+      lines.push(`put the Scopebond hook in ${file}`);
+    } catch (error) {
+      lines.push(`could not put the Scopebond hook in ${file}: ${(error as Error).message}`);
+    }
   }
   // Session and after-action observations, when the workspace granted them (Claude Code only), as the hook's sign-in does.
   if (harnesses.includes("claude") && observationStatus(loadConnection(dir)).state === "on") {

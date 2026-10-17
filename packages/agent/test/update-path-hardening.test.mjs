@@ -229,3 +229,25 @@ test("the start check runs the installed program and requires it to report the v
   const other = await startCheck(next());
   assert.equal(other.ok, false, "the program on disk still reports the running version");
 });
+
+test("a quoted Windows Codex entry is rewritten in the plain form, keeping a shared group; Claude Code's is left", { skip: process.platform !== "win32" && "Windows only" }, () => {
+  // An earlier release's form: quoted paths, which PowerShell cannot start.
+  const quoted = (h) => `"${process.execPath}" "${hookCliPath()}" ${h}`;
+  const codexFile = userHarnessFile("codex");
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  const theirs = { type: "command", command: "my-linter --check" };
+  writeFileSync(codexFile, JSON.stringify({ hooks: { PreToolUse: [{ matcher: "shell", hooks: [theirs, { type: "command", command: quoted("codex"), commandWindows: quoted("codex"), timeout: 45 }] }] } }));
+  claudeSettings(quoted("claude"));
+  assert.deepEqual(maintainHookEntries(["claude", "codex"], false, "linux"), [], "nothing to repair off Windows");
+  const changed = maintainHookEntries(["claude", "codex"], false, "win32");
+  assert.deepEqual(changed.map((c) => c.harness), ["codex"], "Claude Code runs hooks under Git Bash, which starts the quoted form");
+  assert.match(changed[0].reason, /every Windows hook shell starts/);
+  assert.equal(claudeCommand(), quoted("claude"));
+  const [group] = JSON.parse(readFileSync(codexFile, "utf8")).hooks.PreToolUse;
+  assert.equal(group.matcher, "shell", "the shared group's matcher stays");
+  assert.deepEqual(group.hooks[0], theirs, "the other tool's hook stays");
+  assert.doesNotMatch(group.hooks[1].command, /^"/);
+  assert.equal(group.hooks[1].commandWindows, group.hooks[1].command);
+  assert.equal(group.hooks[1].timeout, 45, "Scopebond's own timeout is carried");
+  assert.deepEqual(maintainHookEntries(["claude", "codex"], false, "win32"), [], "a second pass has nothing to report");
+});

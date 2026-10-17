@@ -68,7 +68,7 @@ test("a Codex entry carries its Windows command: npx.cmd for the portable form, 
 test("the plain forms are recognised as Scopebond's, so uninstall and upgrade find them as well as the quoted ones", () => {
   const forms = [
     "C:/PROGRA~1/nodejs/node.exe D:/Teams/PATONE~1/.scopebond/runtime/0.23.0/node_modules/@scopebond/hook/dist/cli.js claude",
-    "C:/PROGRA~1/nodejs/node.exe D:/x/hook/dist/cli.js codex",
+    "C:/PROGRA~1/nodejs/node.exe D:/x/node_modules/@scopebond/hook/dist/cli.js codex",
     "C:/PROGRA~1/Scopebond/scopebond-agent.exe hook cursor",
     `"C:\\Program Files\\nodejs\\node.exe" "D:\\Teams\\Pat\\.scopebond\\runtime\\0.22.0\\node_modules\\@scopebond\\hook\\dist\\cli.js" codex`,
     `"C:\\Program Files\\Scopebond\\scopebond-agent.exe" hook claude`,

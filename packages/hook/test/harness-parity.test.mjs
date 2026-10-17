@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import * as hook from "../dist/index.js";
@@ -172,7 +172,7 @@ test("the hook answers deny when it fails before it can decide (Claude Code: exi
 
 test("a Codex or Cursor hook entry that cannot start is kept as a delivery gap, once per outage", () => {
   const { home: userHome, dir } = home("default");
-  const missing = join(userHome, "gone", "cli.js");
+  const missing = join(userHome, ".scopebond", "runtime", "gone", "cli.js");
   const command = `"${process.execPath}" "${missing}" codex`;
   mkdirSync(join(userHome, ".codex"), { recursive: true });
   const hooksFile = join(userHome, ".codex", "hooks.json");
@@ -188,7 +188,7 @@ test("a Codex or Cursor hook entry that cannot start is kept as a delivery gap, 
   assert.deepEqual(noteUnresolvableHooks(dir, ["codex", "cursor"], { files }).recorded, []);
   assert.equal(queueStatus(dir).gapsByReason.hook_unresolvable, 1);
   // Repaired, then broken again: a new outage.
-  mkdirSync(join(userHome, "gone"), { recursive: true });
+  mkdirSync(dirname(missing), { recursive: true });
   writeFileSync(missing, "");
   assert.deepEqual(noteUnresolvableHooks(dir, ["codex", "cursor"], { files }).unresolvable, []);
   writeFileSync(hooksFile, JSON.stringify({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: command.replace("gone", "gone-again") }] }] } }));
