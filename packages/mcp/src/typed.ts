@@ -156,8 +156,8 @@ export function typedConfigProblem(raw: unknown): string | null {
 }
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/;
-export const UNVERIFIED = "unverified";
-export const MAX_RESOURCES = 100;
+const UNVERIFIED = "unverified";
+const MAX_RESOURCES = 100;
 
 /** Whether a dotted path of the dispatched arguments is absent as spelled but present in another case: a decoder
  *  that matches member names case-insensitively would read that member as the resource. */

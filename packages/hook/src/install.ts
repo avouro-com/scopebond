@@ -15,6 +15,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { canonical } from "@scopebond/gateway";
 import { findProgram, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
+import { hookCliPath } from "./self.js";
 
 export type Harness = "claude" | "cursor" | "codex" | "copilot";
 
@@ -370,11 +371,36 @@ export const isScopebondHookCommand = (input: unknown): boolean => {
   const tokens = cmd.split(/\s+/).filter(Boolean);
   const last = unquote(tokens[tokens.length - 1] ?? "");
   if (!HARNESS_SUBCOMMANDS.has(last)) return false;
-  return tokens.some((token) => {
-    const t = unquote(token).toLowerCase();
-    return t.includes("scopebond") || /cli\.(m|c)?js$/.test(t);
-  });
+  return tokens.some((token) => isScopebondProgram(unquote(token)));
 };
+
+/** Scopebond's own program names: the npm bins and the single executable. */
+const SCOPEBOND_PROGRAMS = new Set(["scopebond", "scopebond-hook", "scopebond-agent"]);
+const slashes = (p: string): string => p.replace(/\\/g, "/").toLowerCase();
+let ownCli: Set<string> | null = null;
+/** This hook's own cli.js, as written in an entry (its path, and on Windows its shell-plain spelling). */
+function ownCliSpellings(): Set<string> {
+  if (ownCli) return ownCli;
+  const spellings = new Set<string>();
+  try {
+    const cli = hookCliPath();
+    spellings.add(slashes(cli));
+    if (process.platform === "win32") { const plain = shellPlainWindowsPath(cli); if (plain) spellings.add(slashes(plain)); }
+  } catch { /* no path to compare with */ }
+  return (ownCli = spellings);
+}
+
+/** Whether one token of a hook command is a Scopebond program: one of its program names (`scopebond`, `scopebond-hook`,
+ *  `scopebond-agent`, with any folder and `.exe`/`.cmd`), a `cli.js` inside a `.scopebond` or `@scopebond` folder (npm's
+ *  install, the pinned copy), or this hook's own `cli.js`. A `cli.js` anywhere else, or a path that merely has
+ *  "scopebond" in a folder name, is someone else's. */
+function isScopebondProgram(token: string): boolean {
+  const t = slashes(token);
+  const name = (t.split("/").pop() ?? "").replace(/\.(exe|cmd)$/, "");
+  if (SCOPEBOND_PROGRAMS.has(name)) return true;
+  if (!/(^|\/)cli\.(m|c)?js$/.test(t)) return false;
+  return t.includes("/.scopebond/") || t.includes("/@scopebond/") || ownCliSpellings().has(t);
+}
 const isScopebond = isScopebondHookCommand;
 
 /** The fields a hook entry names a command in: `command` (Claude Code, Cursor, Codex), Codex's Windows override
@@ -391,7 +417,8 @@ export function harnessEntryCommand(e: unknown): string | undefined {
 }
 
 /** Whether any command field of one hook entry is Scopebond's (a Codex entry may name it only in `commandWindows`). */
-const commandIsOurs = (e: unknown): boolean => isRecord(e) && ENTRY_COMMAND_KEYS.some((key) => isScopebond(e[key]));
+export const harnessHookIsOurs = (e: unknown): boolean => isRecord(e) && ENTRY_COMMAND_KEYS.some((key) => isScopebond(e[key]));
+const commandIsOurs = harnessHookIsOurs;
 
 /** Whether a harness hook entry (either shape: a bare command, or a group with a
  *  nested `hooks` array) is a Scopebond entry. */
@@ -404,7 +431,7 @@ const entryMatches = harnessEntryMatches;
  *  silently delete the user's other settings, so the installer stops instead. */
 /** A config file's text without a UTF-8 byte-order mark: Windows PowerShell 5.1 writes one
  *  (Set-Content -Encoding UTF8), and JSON.parse refuses the whole file because of it. */
-export function readConfigText(file: string): string {
+function readConfigText(file: string): string {
   return readFileSync(file, "utf8").replace(/^\uFEFF/, "");
 }
 
@@ -509,11 +536,10 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
     }
   } else {
     const list = Array.isArray((hooks).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
-    const at = list.findIndex(entryMatches);
+    const hook = harness === "codex" ? codexHookEntry(command) : { type: "command", command };
     // Codex matchers are regular expressions; omitting the matcher means every tool.
     // A literal "*" is not a valid regular expression and causes Codex to skip the group.
-    const entry = harness === "codex" ? { hooks: [codexHookEntry(command)] } : { matcher: "*", hooks: [{ type: "command", command }] };
-    if (at >= 0) list[at] = entry; else list.push(entry);
+    placeGroupedHook(list, hook, () => (harness === "codex" ? { hooks: [hook] } : { matcher: "*", hooks: [hook] }));
   }
   // A settings file that already holds exactly this entry is left byte-for-byte
   // untouched — no rewrite, no backup. A running agent session watches this file, and
@@ -525,6 +551,46 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
   return file;
 }
 
+/** Put Scopebond's `hook` into a list of hook groups (`{ matcher?, hooks: [...] }`), in place of the Scopebond hook
+ *  already there. A group another tool shares keeps its matcher and every other hook, and Scopebond's hook keeps its place
+ *  and its own timeout (someone may have raised it); any further copy of Scopebond's hook goes, and a group left with no
+ *  hook goes with it. With no Scopebond hook there yet, `newGroup()` is added at the end. */
+function placeGroupedHook(list: unknown[], hook: Record<string, unknown>, newGroup: () => Record<string, unknown>): void {
+  let placed = false;
+  for (let i = 0; i < list.length; i++) {
+    const group = list[i];
+    if (isRecord(group) && Array.isArray(group.hooks) && group.hooks.some(commandIsOurs)) {
+      const kept: unknown[] = [];
+      for (const h of group.hooks) {
+        if (!commandIsOurs(h)) { kept.push(h); continue; }
+        if (placed) continue;
+        placed = true;
+        kept.push(isRecord(h) && typeof h.timeout === "number" ? { ...hook, timeout: h.timeout } : hook);
+      }
+      if (kept.length) list[i] = { ...group, hooks: kept };
+      else { list.splice(i, 1); i -= 1; }
+    } else if (commandIsOurs(group)) {
+      // A bare entry (no group) of Scopebond's: the first becomes a group, any other goes.
+      if (placed) { list.splice(i, 1); i -= 1; } else { list[i] = newGroup(); placed = true; }
+    }
+  }
+  if (!placed) list.push(newGroup());
+}
+
+/** A hook list without Scopebond's entries. A group (`{ matcher, hooks: [...] }`) another tool shares keeps its matcher and
+ *  every hook that is not Scopebond's; only a group left with no hook at all goes. */
+function withoutOurHooks(list: unknown[]): unknown[] {
+  const kept: unknown[] = [];
+  for (const entry of list) {
+    if (isRecord(entry) && Array.isArray(entry.hooks) && !commandIsOurs(entry)) {
+      const others = entry.hooks.filter((h) => !commandIsOurs(h));
+      if (others.length === entry.hooks.length) kept.push(entry);
+      else if (others.length > 0) kept.push({ ...entry, hooks: others });
+    } else if (!entryMatches(entry)) kept.push(entry);
+  }
+  return kept;
+}
+
 /** Remove any Scopebond hook entry from a user-level harness config, leaving the rest
  *  intact. Returns true if the file existed. */
 export function removeHarnessConfig(file: string): boolean {
@@ -533,7 +599,7 @@ export function removeHarnessConfig(file: string): boolean {
   if (config === undefined) return false;
   const hooks = isRecord(config.hooks) ? config.hooks : {};
   for (const [event, value] of Object.entries(hooks)) {
-    if (Array.isArray(value)) (hooks as Record<string, unknown[]>)[event] = value.filter((e) => !entryMatches(e));
+    if (Array.isArray(value)) (hooks as Record<string, unknown[]>)[event] = withoutOurHooks(value);
   }
   // Copilot's `scopebond.json` is Scopebond's own file: once nothing else is in it, it goes rather than stay behind empty.
   // A file someone added their own hooks or settings to is kept, with only Scopebond's entries removed.
@@ -589,19 +655,24 @@ const SHELL_PLAIN_COMPONENT = /^[A-Za-z0-9._@~-]+$/;
 export type ShortPathFinder = (path: string) => string | null;
 
 const shortPaths = new Map<string, string | null>();
+/** The environment variable `windowsShortPath` hands cmd.exe the path in. */
+const SHORT_PATH_ENV = "SCOPEBOND_SHORT_PATH";
 
 /** The short (8.3) spelling of an existing Windows path (`C:\PROGRA~1\nodejs`), from cmd.exe's `%~s`. Without a short
  *  name on that volume (8.3 names can be switched off), or for a path that does not exist, cmd prints the path unchanged;
  *  the caller checks the result. Null off Windows, or for a path cmd itself could misread. */
 export function windowsShortPath(path: string): string | null {
-  if (process.platform !== "win32" || /["%^!&\r\n]/.test(path)) return null;
+  if (process.platform !== "win32" || /["\r\n\0]/.test(path)) return null;
   const known = shortPaths.get(path);
   if (known !== undefined) return known;
-  // cmd.exe's own quoting: /s takes the outer quotes off and leaves the quoted path inside, so the arguments go verbatim.
-  const run = spawnSync(windowsSystemProgram("cmd"), ["/d", "/s", "/c", `"for %I in ("${path}") do @echo %~sI"`], {
-    encoding: "utf8", windowsVerbatimArguments: true, windowsHide: true, timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
+  // The path reaches cmd.exe through an environment variable, never on its command line, so none of its characters
+  // (`%`, `!`, `&`, `^`) are parsed: cmd expands the variable once, inside quotes, with delayed expansion off (/v:off).
+  // /u makes cmd write UTF-16LE, so a folder name outside the console's code page reads correctly. /s takes the outer
+  // quotes off and leaves the quoted variable inside, so the arguments go verbatim.
+  const run = spawnSync(windowsSystemProgram("cmd"), ["/d", "/u", "/v:off", "/s", "/c", `"for %I in ("%${SHORT_PATH_ENV}%") do @echo %~sI"`], {
+    env: { ...process.env, [SHORT_PATH_ENV]: path }, windowsVerbatimArguments: true, windowsHide: true, timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
   });
-  const found = run.status === 0 ? (run.stdout ?? "").trim() || null : null;
+  const found = run.status === 0 && run.stdout ? Buffer.from(run.stdout).toString("utf16le").trim() || null : null;
   shortPaths.set(path, found);
   return found;
 }
@@ -640,6 +711,37 @@ export function windowsHookCommandLine(paths: string[], args: string, shorten: S
   return plain.every((p): p is string => p !== null) ? `${plain.join(" ")} ${args}` : null;
 }
 
+/** Characters Git Bash still expands inside double quotes (`$` and a backtick). cmd.exe expands `%NAME%` there too, but
+ *  only a defined variable's name between two `%`, and `!` only under delayed expansion, which a hook shell does not
+ *  turn on: a quoted path with those starts under cmd.exe and Git Bash, so it is written, and `doctor` notes it. */
+const QUOTED_UNSAFE = /[$`]/;
+
+/** The quoted fallback (a path with no shell-plain spelling) cannot carry a path with a character a shell expands even
+ *  inside double quotes: the hook would name a different file and could not start, which leaves the agent unchecked. */
+export function refuseUnsafeQuotedPaths(paths: string[]): void {
+  const bad = paths.find((p) => QUOTED_UNSAFE.test(p));
+  if (bad) {
+    throw new Error(`cannot write a hook command naming ${bad}: a shell expands its ${bad.match(QUOTED_UNSAFE)?.[0]} even inside quotes, so the hook could not start. Install Scopebond under a folder whose path has no $ or backtick in it`);
+  }
+}
+
+/** Whether a Windows hook command is the quoted form (`"<node.exe>" "<cli.js>" codex`, a drive or network path), which
+ *  cmd.exe and Git Bash start but PowerShell does not (it reads the quoted path as a string). */
+export function isQuotedWindowsHookCommand(command: string): boolean {
+  return /^"(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/"])/.test(command.trim());
+}
+
+/** The note `status` and `doctor` print for a harness on Windows whose Scopebond entry is the quoted fallback: Codex and
+ *  Cursor may run it under PowerShell, which cannot start it, and a hook that cannot start leaves the agent unchecked.
+ *  Claude Code runs hooks under Git Bash, which starts it, and Copilot entries carry a PowerShell form of their own.
+ *  Null when there is nothing to say. */
+export function quotedEntryNote(harness: Harness, files: Array<string | null | undefined>, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform !== "win32" || (harness !== "codex" && harness !== "cursor")) return null;
+  const quoted = files.flatMap((f) => (f ? configuredHookCommands(f) : [])).find(isQuotedWindowsHookCommand);
+  if (!quoted) return null;
+  return "its hook entry uses the quoted form (written by an earlier release, or this computer has no short name for one of its folders), which may not start under PowerShell; the Scopebond Agent rewrites it when it can — or reinstall";
+}
+
 /** The absolute command a harness entry runs: the current Node executable and the
  *  absolute path to this CLI, so it does not depend on PATH.
  *
@@ -651,6 +753,7 @@ export function absoluteHookCommand(cliPath: string, harness: Harness, shorten: 
   if (process.platform === "win32") {
     const plain = windowsHookCommandLine([process.execPath, cliPath], harness, shorten);
     if (plain) return plain;
+    refuseUnsafeQuotedPaths([process.execPath, cliPath]);
   }
   const quote = (s: string) => (process.platform === "win32" || /\s/.test(s) ? `"${s}"` : s);
   return `${quote(process.execPath)} ${quote(cliPath)} ${harness}`;
@@ -663,6 +766,7 @@ export function nativeHookCommand(harness: Harness, exe: string = process.execPa
   if (process.platform === "win32") {
     const plain = windowsHookCommandLine([exe], `hook ${harness}`, shorten);
     if (plain) return plain;
+    refuseUnsafeQuotedPaths([exe]);
   }
   return `"${exe}" hook ${harness}`;
 }
@@ -718,6 +822,9 @@ export function configuredHookCommands(file: string): string[] {
     if (!isRecord(entry)) return;
     const command = harnessEntryCommand(entry);
     if (command !== undefined && isScopebond(command)) found.push(command);
+    // Codex runs `commandWindows` instead on Windows: a different one there is checked too.
+    const windows = entry.commandWindows;
+    if (typeof windows === "string" && windows !== command && isScopebond(windows)) found.push(windows);
     if (Array.isArray(entry.hooks)) for (const h of entry.hooks) collect(h);
   };
   try {
@@ -777,11 +884,8 @@ export function wireLifecycleHooks(file: string, command: string): string {
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   for (const event of LIFECYCLE_EVENTS) {
     const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
-    const at = list.findIndex(entryMatches);
-    const entry = event.startsWith("Session")
-      ? { hooks: [{ type: "command", command }] }
-      : { matcher: "*", hooks: [{ type: "command", command }] };
-    if (at >= 0) list[at] = entry; else list.push(entry);
+    const hook = { type: "command", command };
+    placeGroupedHook(list, hook, () => (event.startsWith("Session") ? { hooks: [hook] } : { matcher: "*", hooks: [hook] }));
   }
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return file;

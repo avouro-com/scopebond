@@ -112,7 +112,7 @@ export function signObservation(payload: ObservationPayload, signer: Observation
 /** RFC 3339 UTC with millisecond precision, as the schema requires (`...Z`). */
 export const utc = (ms: number): string => new Date(ms).toISOString();
 
-export const newObservationId = (): string => randomUUID();
+const newObservationId = (): string => randomUUID();
 
 // ---- installation-local keyed ids and the request binding ------------------------------
 
@@ -288,10 +288,8 @@ export interface DispatchedAction {
   params: Record<string, unknown>;
 }
 
-export const REFERENCE_SET_VERSION = "hook-1";
+const REFERENCE_SET_VERSION = "hook-1";
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/;
-// eslint-disable-next-line security/detect-unsafe-regex -- linear: one unbounded quantifier (its overlap with the last character costs one step back), and the lookahead bounds the input to 253 characters
-export const HOSTNAME = /^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/;
 const PROGRAM_DESTRUCTIVE = new Set([
   "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "shred", "truncate", "unlink", "wipe", "srm",
   "del", "rd", "rmdir", "erase", "deltree", "format", "diskpart", "remove-item", "ri", "clear-content", "clc", "stop-computer", "restart-computer",
@@ -349,7 +347,7 @@ export interface OperationContext {
 }
 
 /** The context the typed-operation builders take, from an operation context. */
-export const typedContext = (context: OperationContext): TypedContext => ({
+const typedContext = (context: OperationContext): TypedContext => ({
   key: context.key, cwd: context.cwd, repositoryId: context.repositoryId ?? "", referenceSetVersion: REFERENCE_SET_VERSION,
   ...(context.probe ? { probe: context.probe } : {}), ...(context.isProtectedRef ? { isProtectedRef: context.isProtectedRef } : {}),
   ...(context.files ? { files: context.files } : {}), ...(context.env ? { env: context.env } : {}),

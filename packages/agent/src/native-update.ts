@@ -19,7 +19,7 @@ import { isSingleExecutable } from "@scopebond/hook";
 import { windowsSystemProgram, type WindowsSystemProgram } from "@scopebond/gateway/node";
 
 /** Where the signed releases are published. */
-export const RELEASE_BASE = "https://github.com/avouro-com/scopebond/releases/download";
+const RELEASE_BASE = "https://github.com/avouro-com/scopebond/releases/download";
 /** The domain the updater key signs in: a manifest, never anything else. */
 export const MANIFEST_DOMAIN = "scopebond:agent-release/v1\n";
 /** The publisher an installer must be signed by. */

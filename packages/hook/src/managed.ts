@@ -40,7 +40,7 @@ export const MANAGED_META_FILE = "managed-meta.json";
 export const PREVIOUS_POLICY_FILE = "policy.previous.json";
 
 export const MANAGED_RULE_IDS = ["force-push-protected", "push-protected", "destructive-shell", "secret-read", "ci-config-write", "network-egress"] as const;
-export type ManagedRuleId = (typeof MANAGED_RULE_IDS)[number];
+type ManagedRuleId = (typeof MANAGED_RULE_IDS)[number];
 /** Rules a document may set and may leave out (left out, they record): the target rules. Each takes a mode (and override terms)
  *  and no lists. */
 export const OPTIONAL_RULE_IDS = TARGET_RULES;

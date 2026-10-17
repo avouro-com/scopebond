@@ -41,7 +41,7 @@ export const policyScopeDigest = (scope: { export_id: string; agent_id: string; 
 const HEX64 = /^[0-9a-f]{64}$/;
 const OPAQUE = /^[\x21-\x7e]{1,200}$/;
 
-export interface ExportFacts {
+interface ExportFacts {
   exportId: string;
   policyId: string;
   policyVersion: number;
@@ -60,7 +60,7 @@ export type Inspection =
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Accept the export itself, or the workspace's `{ id, configuration }` answer around it. */
-export function unwrapExport(raw: unknown): Record<string, unknown> | null {
+function unwrapExport(raw: unknown): Record<string, unknown> | null {
   if (!isObject(raw)) return null;
   if (raw.type === undefined && isObject(raw.configuration)) return raw.configuration;
   return raw;

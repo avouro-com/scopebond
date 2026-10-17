@@ -132,7 +132,7 @@ export const HOST_ENFORCEMENT: Partial<Record<HostVariant, string>> = {
 };
 
 /** What a host's cells cannot promise, said on every one of its cells (beside the gaps its vectors document). */
-export const HOST_GAPS: Partial<Record<HostVariant, string[]>> = {
+const HOST_GAPS: Partial<Record<HostVariant, string[]>> = {
   copilot_vscode: [
     "verified on a live install: not yet",
     "VS Code's Copilot session target runs the Copilot CLI's hook implementation and tool names; its Local session target sends tool names that GitHub and VS Code do not publish, so until a live run records them (`capabilities --prove --copilot`) a Local call is recorded as an unevaluated tool.<name>, not checked",

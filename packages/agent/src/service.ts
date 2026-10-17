@@ -31,7 +31,7 @@ import { allowedList, askedList } from "./allowed-asked.js";
 import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
-import { FIRST_SIGNIN_FILE, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
+import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
 import { migrateFromNpm, readMigration, npmRemovalCommand } from "./migrate.js";
 import { enableAutostart } from "./autostart.js";
 import {
@@ -55,8 +55,8 @@ export const STOPPED_FILE = "agent-stopped.json";
 /** The person's tray settings: which notifications they want. "blocks": blocks and problems (the default for a new install);
  *  "problems": problems only (the default before, and for an install whose person never chose); "off". The older "all"
  *  meant blocks and problems too, and is read as "blocks". */
-export const TRAY_SETTINGS_FILE = "agent-settings.json";
-export type NotificationSetting = "blocks" | "problems" | "off";
+const TRAY_SETTINGS_FILE = "agent-settings.json";
+type NotificationSetting = "blocks" | "problems" | "off";
 export interface TraySettings { notifications: NotificationSetting }
 
 const notificationSetting = (value: unknown): NotificationSetting | null =>
@@ -126,7 +126,7 @@ function recordAgentError(dir: string, message: string): void {
 }
 
 /** How long one delivery cycle may run before the agent stops waiting for it. */
-export const CYCLE_LIMIT_MS = 10 * 60_000;
+const CYCLE_LIMIT_MS = 10 * 60_000;
 
 export interface Service {
   stop(): Promise<void>;
@@ -151,8 +151,13 @@ export interface MaintenanceResult {
 export function repairHookEntries(harnesses: Harness[] = expectedHarnesses()): Array<{ harness: Harness; file: string }> {
   const repaired: Array<{ harness: Harness; file: string }> = [];
   for (const harness of missingHookEntries(harnesses)) {
-    const file = writeHarnessConfig(userHarnessFile(harness), harness, maintainedHookCommand(harness));
-    repaired.push({ harness, file });
+    // A refused path for one coding agent is logged and the others are still repaired.
+    try {
+      const file = writeHarnessConfig(userHarnessFile(harness), harness, maintainedHookCommand(harness));
+      repaired.push({ harness, file });
+    } catch (error) {
+      process.stderr.write(`Scopebond Agent: could not put the hook back for ${harness}: ${(error as Error).message}\n`);
+    }
   }
   return repaired;
 }
@@ -250,7 +255,7 @@ export async function waitForAgentVersion(dir: string, version: string, timeoutM
 export const AGENT_LOCK = "agent.lock";
 
 /** How long a lock whose agent never answered on its local channel still counts as an agent starting up. */
-export const AGENT_LOCK_STARTING_MS = 60_000;
+const AGENT_LOCK_STARTING_MS = 60_000;
 
 /** Take the one-agent-per-home lock: created exclusively, or taken over when the agent named in it is
  *  gone. The caller has already found no agent answering on the local channel, so a lock older than
@@ -598,7 +603,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // never connected, for the first time, to the workspace the installer named (else Scopebond Cloud). The tray shows the
   // code; asked again while it waits, it opens the approval page again and gives the same code.
   let signInOrigin: string | null = null;
-  const signIn = async (by: string): Promise<ReconnectStart | { error: string }> => {
+  const signIn = async (by: string): Promise<ReconnectStart | { connected: true } | { error: string }> => {
     if (reconnecting) {
       if (signInOrigin && sameOrigin(reconnecting.verification_url, signInOrigin)) (options.signIn?.open ?? openInBrowser)(reconnecting.verification_url);
       return reconnecting;
@@ -625,6 +630,19 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // Autostart as setup turns it on: the tray's sign-in entry beside the native tray, else the launcher. Only the signed
       // executable itself does it (a test names its own).
       const autostart = options.signIn?.autostart ?? (isSingleExecutable() ? () => enableAutostart(options.dir, agentCliPath()) : undefined);
+      // A company-wide install was given an install key: connect with it, no code. If the key is not accepted, the person signs
+      // in with a code as usual.
+      const key = installedKey(options.signIn?.registry);
+      if (key) {
+        log(`connecting with the install key named in ${key.from}`);
+        const keyed = await connectWithInstallKey(options.dir, workspace.origin, key.key, { fetchImpl: options.fetchImpl, autostart });
+        if (keyed.ok) {
+          for (const line of keyed.lines) log(`first sign-in: ${line}`);
+          void cycle(); void refreshSummary();
+          return { connected: true };
+        }
+        log(`the install key did not connect this computer: ${keyed.error}; signing in with a code instead`);
+      }
       const first: FirstSignIn | { error: string } = await startFirstSignIn(options.dir, workspace.origin, {
         fetchImpl: options.fetchImpl, open: options.signIn?.open, autostart,
         onDone: (outcome) => {
@@ -850,7 +868,7 @@ export function workspaceLetsAsk(dir: string): boolean {
 }
 
 /** What the tray says after a person acted on an earlier block. */
-export function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone"): string {
+function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone"): string {
   switch (outcome) {
     case "allowed": return "Allowed. Run it again, or let the coding agent retry.";
     case "proposed": return "Allowed for 15 minutes. Your workspace's admins decide whether it stands; run it again meanwhile.";

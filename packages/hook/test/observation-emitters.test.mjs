@@ -430,7 +430,10 @@ test("the real helper: heartbeats flow while a session is active, from one proce
   for (let i = 0; i < 3; i += 1) await run(home.dir, ["claude"], claudeEvent(home.dir, "PreToolUse", { tool_name: "Bash", tool_input: { command: "ls" }, tool_use_id: `h${i}` }), env);
   assert.ok(await settled(() => server.observations().filter((i) => i.payload.kind === "health").length >= 3, 8000), "at least three heartbeats");
   await run(home.dir, ["claude"], claudeEvent(home.dir, "SessionEnd", { reason: "prompt_input_exit" }), env);
-  await new Promise((r) => setTimeout(r, 900));
+  // Wait for the stop record to arrive rather than for a fixed time (a busy Windows runner took longer than 900 ms),
+  // then four heartbeat intervals more, so a heartbeat the helper wrongly sent after the stop would be here too.
+  assert.ok(await settled(() => server.observations().some((i) => i.payload.data.event === "stop"), 8000), "the stop record arrives");
+  await new Promise((r) => setTimeout(r, 1000));
   const afterStop = server.observations();
   const stopIndex = afterStop.findIndex((i) => i.payload.data.event === "stop");
   assert.ok(stopIndex >= 0);

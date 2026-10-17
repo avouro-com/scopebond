@@ -137,3 +137,17 @@ test("a hook entry whose program is gone names the missing file", () => {
   assert.deepEqual(missingPrograms([`"C:\\Program Files\\Gone\\scopebond-agent.exe" hook claude`, nativeHookCommand("claude", EXE)], exists), ["C:\\Program Files\\Gone\\scopebond-agent.exe"]);
   assert.deepEqual(missingPrograms(["npx -y @scopebond/hook@1.0.0 claude"], () => false), [], "an npx form names no file");
 });
+
+test("an executable path no hook shell could start is recorded per coding agent, not thrown (Windows)", { skip: process.platform !== "win32" && "Windows only" }, async () => {
+  const { hasForeignHookEntries } = await import("../dist/index.js");
+  settings();
+  // A `$` in a folder that has no short name (it does not exist): only the quoted form would be left, and Git Bash would
+  // expand the `$` in it. Each coding agent's entry is reported as not moved; nothing throws, nothing is rewritten.
+  const bad = "D:\\no such\\$dir\\scopebond-agent.exe";
+  const before = readFileSync(userHarnessFile("claude"), "utf8");
+  const changes = useNativeHookEntries(["claude", "cursor"], bad);
+  assert.deepEqual(changes.map((c) => c.harness), ["claude", "cursor"]);
+  for (const c of changes) assert.match(c.reason, /could not be moved to the signed install: .*even inside quotes/);
+  assert.equal(readFileSync(userHarnessFile("claude"), "utf8"), before, "the settings are left as they were");
+  assert.equal(hasForeignHookEntries("claude", bad), false);
+});

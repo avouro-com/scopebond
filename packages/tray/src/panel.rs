@@ -77,6 +77,8 @@ pub fn outcome_text(action_id: &str, answer: &Value) -> String {
             Some(0) | None => "Nothing needed repairing".into(),
             Some(n) => format!("Put the Scopebond hook back in {n} place{}", plural(n as u64)),
         },
+        "reconnect" if answer.get("connected").and_then(Value::as_bool) == Some(true) =>
+            "Connected to your workspace. Open it from here to make this computer yours.".into(),
         "reconnect" => match (text(answer, "user_code"), text(answer, "verification_url")) {
             (Some(code), _) => format!("Approve this computer in your workspace (the page is opening in your browser). Check that it shows the code {code}."),
             (None, Some(url)) => format!("Approve this computer in your workspace: {url}"),
@@ -209,6 +211,7 @@ mod tests {
 
     #[test]
     fn reconnect_shows_the_code_to_check() {
+        assert!(outcome_text("reconnect", &json!({ "connected": true })).starts_with("Connected to your workspace."));
         let t = outcome_text("reconnect", &json!({ "user_code": "ABCD-EFGH", "verification_url": "https://cloud.example.test/device" }));
         assert!(t.ends_with("Check that it shows the code ABCD-EFGH."));
         assert_eq!(outcome_text("reconnect", &json!({ "error": "this computer was never connected" })), "It did not work: this computer was never connected");

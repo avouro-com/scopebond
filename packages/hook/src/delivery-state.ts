@@ -59,7 +59,7 @@ function recordedWaitEnds(state: Pick<DeliveryState, "backoff_until" | "backoff_
 }
 
 /** How long the agent's last delivery error stands over a hook call's cut-off: longer than its longest wait between tries. */
-export const AGENT_ERROR_STANDS_MS = 2 * 60 * 60 * 1000;
+const AGENT_ERROR_STANDS_MS = 2 * 60 * 60 * 1000;
 
 const EMPTY: DeliveryState = {
   last_attempt_at: null, last_success_at: null, last_error: null, last_status: null, invalid_since: null, invalid_source: null,
@@ -129,9 +129,9 @@ export function httpStatusOf(message: string | null | undefined): number | null 
 /** The error recorded for an attempt the time limit cut off. The trailing `(timeout)` is the
  *  code `status --json` reports. */
 /** A cut-off attempt is reported as the last problem only when nothing was delivered for this long. */
-export const TIMEOUT_MATTERS_AFTER_MS = 15 * 60 * 1000;
+const TIMEOUT_MATTERS_AFTER_MS = 15 * 60 * 1000;
 
-export const timeoutError = (ms: number): string => `delivery did not finish within ${ms} ms, so it was cut off (timeout)`;
+const timeoutError = (ms: number): string => `delivery did not finish within ${ms} ms, so it was cut off (timeout)`;
 
 /** Record the outcome of one delivery attempt from the exporter's in-process status.
  *  `before` is the exporter's last success time before this attempt, so an attempt with

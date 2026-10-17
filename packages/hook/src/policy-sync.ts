@@ -384,12 +384,12 @@ function claimSyncLock(lock: string, now: number): boolean {
   }
 }
 
-export function releaseSyncLock(dir: string): void {
+function releaseSyncLock(dir: string): void {
   try { rmSync(join(dir, LOCK_FILE), { force: true }); } catch { /* expires on its own */ }
 }
 
 /** The heartbeat interval a workspace allows (`x-scopebond-heartbeat-interval-s`, 60–900), or null when it does not say. */
-export function heartbeatIntervalFrom(headers: { get(name: string): string | null } | undefined): number | null {
+function heartbeatIntervalFrom(headers: { get(name: string): string | null } | undefined): number | null {
   const raw = headers?.get?.("x-scopebond-heartbeat-interval-s")?.trim() ?? "";
   if (!/^\d{2,3}$/.test(raw)) return null;
   const n = Number(raw);

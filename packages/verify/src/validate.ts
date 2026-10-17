@@ -62,7 +62,7 @@ function hasKeys(o: Obj, required: readonly string[]): boolean {
  *  array of JSON values, or a plain object of JSON values. Rejects NaN/Infinity,
  *  functions, undefined, symbols and non-plain objects. */
 /** How deeply a JSON value may nest (an action's parameters are shallow; a deeper value is refused, not walked). */
-export const MAX_JSON_DEPTH = 64;
+const MAX_JSON_DEPTH = 64;
 
 function isFiniteJsonValue(v: unknown, depth = 0): boolean {
   if (v === null) return true;

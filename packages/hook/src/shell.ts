@@ -434,7 +434,7 @@ export const INTERPRETERS = new Set(["node", "deno", "bun", "python", "python3",
 /** The options that hand an interpreter its code inline (`python -c`, `node -e`, `perl -E`, `php -r`). */
 const INLINE_CODE = /^(?:-c|-e|-E|-r|-p|--eval|--print|--command)$|^--eval=|^--print=/;
 /** Whether this interpreter takes its program from standard input: no inline code and no script operand, or `-`. */
-export function interpreterReadsStdin(argv: string[]): boolean {
+function interpreterReadsStdin(argv: string[]): boolean {
   if (argv.some((a) => INLINE_CODE.test(a))) return false;
   const operands = argv.filter((a) => !a.startsWith("-") || a === "-");
   return operands.length === 0 || operands[0] === "-";
@@ -688,7 +688,7 @@ export interface PushTarget {
 /** Canonicalize a push destination to the short branch name a policy names:
  *  `refs/heads/main` → `main`, `heads/main` → `main`. `HEAD` and `@` mean the
  *  current branch and resolve to undefined (the runtime fills the real branch in). */
-export function canonRef(dst: string): string | undefined {
+function canonRef(dst: string): string | undefined {
   const d = dst.trim();
   if (!d || d === "HEAD" || d === "@") return undefined;
   return d.replace(/^refs\/heads\//, "").replace(/^heads\//, "");

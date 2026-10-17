@@ -8,7 +8,7 @@ import type { AllowedItem, AskedItem } from "./allowed-asked.js";
 import type { LiveQuestion } from "./live-prompt.js";
 
 /** The six icon states of the "S" tile: no badge when protected; a badge with its own glyph otherwise. */
-export type TrayState = "protected" | "working" | "offline" | "attention" | "problem" | "disconnected";
+type TrayState = "protected" | "working" | "offline" | "attention" | "problem" | "disconnected";
 
 export interface TrayAction {
   id: "send_now" | "update_now" | "check_now" | "repair" | "reconnect" | "open_workspace";
@@ -125,9 +125,9 @@ const HOUR = 60 * MIN;
 /** Records waiting this long while the computer is awake and online need attention. */
 export const WAITING_ATTENTION_MS = 15 * MIN;
 /** Offline (the workspace unreachable) this long needs attention. */
-export const OFFLINE_ATTENTION_MS = 4 * HOUR;
+const OFFLINE_ATTENTION_MS = 4 * HOUR;
 /** Rules not checked for this long while online need attention. */
-export const RULES_STALE_MS = HOUR;
+const RULES_STALE_MS = HOUR;
 
 /** A delivery error that means the workspace could not be reached (no answer at all), not a refusal. */
 export function unreachable(error: string | null | undefined): boolean {
@@ -135,7 +135,7 @@ export function unreachable(error: string | null | undefined): boolean {
 }
 
 /** The workspace refused records because it reached its monthly limit (they stay on the computer). */
-export function overQuota(error: string | null | undefined): boolean {
+function overQuota(error: string | null | undefined): boolean {
   return !!error && /HTTP 429 \(quota\)/.test(error);
 }
 
@@ -148,12 +148,12 @@ function planLiftsTo(error: string | null | undefined): number | null {
 }
 
 /** The workspace's plan keeps fewer agents active than it has, and this one is paused (HTTP 402 agent_paused). */
-export function planPaused(error: string | null | undefined): boolean {
+function planPaused(error: string | null | undefined): boolean {
   return !!error && /HTTP 402 \(agent_paused\)/.test(error);
 }
 
 /** The HTTP status of a refusal the workspace answered (not "unreachable"), or null. */
-export function refusedStatus(error: string | null | undefined): number | null {
+function refusedStatus(error: string | null | undefined): number | null {
   const m = error ? /HTTP (\d{3})/.exec(error) : null;
   return m ? Number(m[1]) : null;
 }

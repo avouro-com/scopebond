@@ -46,7 +46,7 @@ export type ConsumeAnswer =
   | { ok: false; reason: "unreachable"; detail: string };
 
 export const DELEGATION_STATES = ["active", "ended", "revoked", "expired", "invalid_scope", "unknown_ancestry", "not_found"] as const;
-export type CloudDelegationState = (typeof DELEGATION_STATES)[number];
+type CloudDelegationState = (typeof DELEGATION_STATES)[number];
 
 /** The parts of the workspace's resolved delegation the boundary uses. */
 export interface CloudDelegation {

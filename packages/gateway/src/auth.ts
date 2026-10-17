@@ -266,20 +266,6 @@ export async function authenticateRequest(
   };
 }
 
-export function authorizationIds(receipts: Array<{ payload?: { authorization?: AuthorizationEvidence } }>): {
-  requestIds: Set<string>;
-  approvalIds: Set<string>;
-} {
-  const requestIds = new Set<string>();
-  const approvalIds = new Set<string>();
-  for (const receipt of receipts) {
-    const evidence = receipt.payload?.authorization;
-    if (evidence?.agent?.request_id) requestIds.add(evidence.agent.request_id);
-    if (evidence?.approval?.approval_id) approvalIds.add(evidence.approval.approval_id);
-  }
-  return { requestIds, approvalIds };
-}
-
 /** Verify preserved agent and approval evidence at the receipt timestamp. This is
  * synchronous for offline receipt verification; callers provide public records. */
 export function verifyAuthorizationEvidenceSignatures(

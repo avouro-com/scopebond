@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isScopebondHookCommand, isSingleExecutable,
+  absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isQuotedWindowsHookCommand, isScopebondHookCommand, isSingleExecutable,
   nativeHookCommand, userHarnessFile, writeHarnessConfig, type Harness, type HookConnection,
 } from "@scopebond/hook";
 import { findProgram, windowsSystemProgram } from "@scopebond/gateway/node";
@@ -126,6 +126,8 @@ export function commandHookVersion(command: string): string | null {
 }
 
 const isNpxCommand = (command: string) => /(^|\s)npx(\.cmd)?\s/.test(command);
+/** A file's text, or null when it cannot be read. */
+const fileText = (file: string): string | null => { try { return readFileSync(file, "utf8"); } catch { return null; } };
 
 /** The hook command upkeep writes: always the hook this agent carries, by its absolute path (a durable pinned copy when the
  *  carried one lives somewhere npm may clear). Never an `npx` form, which would resolve a package from the registry each
@@ -161,7 +163,7 @@ export function npmOnPath(args: string[], env: NodeJS.ProcessEnv = process.env, 
  *  "recommended" (`moveVersions`) an entry naming an older hook, or any `npx` entry, is pinned to the carried hook; under
  *  "hold" only broken entries and `npx` entries that name no version or the carried one are (their version does not
  *  change). Entries of other tools are never touched. Returns the files changed. */
-export function maintainHookEntries(harnesses: Harness[], moveVersions = true): Array<{ harness: Harness; file: string; reason: string }> {
+export function maintainHookEntries(harnesses: Harness[], moveVersions = true, platform: NodeJS.Platform = process.platform): Array<{ harness: Harness; file: string; reason: string }> {
   // The signed install: every Scopebond entry runs this executable, whatever wrote it (an npm install before it, an npx
   // form), under either policy: the hook is the one inside this program, so no version moves.
   if (isSingleExecutable()) return useNativeHookEntries(harnesses);
@@ -171,12 +173,27 @@ export function maintainHookEntries(harnesses: Harness[], moveVersions = true): 
     const file = userHarnessFile(harness);
     const ours = configuredHookCommands(file).filter((c) => isScopebondHookCommand(c));
     if (!ours.length) continue;
-    const broken = ours.some((c) => !isNpxCommand(c) && !hookCommandResolves(c));
-    const npx = ours.some((c) => { if (!isNpxCommand(c)) return false; const v = commandHookVersion(c); return moveVersions || v === null || v === carried; });
-    const behind = moveVersions && ours.some((c) => { const v = commandHookVersion(c); return v !== null && compareVersions(v, carried) < 0; });
-    if (!broken && !npx && !behind) continue;
-    writeHarnessConfig(file, harness, maintainedHookCommand(harness));
-    changed.push({ harness, file, reason: broken ? "the hook command could not start" : npx ? `pinned to the hook this agent carries (${carried})` : `moved to hook ${carried}` });
+    // One coding agent's entry that cannot be written (a refused path) is recorded and the rest go on: upkeep, updates
+    // and the self-check must not stop over it.
+    try {
+      const broken = ours.some((c) => !isNpxCommand(c) && !hookCommandResolves(c));
+      const npx = ours.some((c) => { if (!isNpxCommand(c)) return false; const v = commandHookVersion(c); return moveVersions || v === null || v === carried; });
+      const behind = moveVersions && ours.some((c) => { const v = commandHookVersion(c); return v !== null && compareVersions(v, carried) < 0; });
+      // A quoted Windows entry (an earlier release's form, or a fallback from when a folder had no short name) that now has
+      // the shell-plain spelling is rewritten for Codex and Cursor, which may run it under PowerShell (it cannot start the
+      // quoted one). Claude Code runs hooks under Git Bash, which starts it; Copilot entries carry a PowerShell form.
+      const target = !broken && !npx && !behind && platform === "win32" && (harness === "codex" || harness === "cursor") && ours.some(isQuotedWindowsHookCommand)
+        ? maintainedHookCommand(harness) : null;
+      const quoted = target !== null && !isQuotedWindowsHookCommand(target);
+      if (!broken && !npx && !behind && !quoted) continue;
+      const before = fileText(file);
+      writeHarnessConfig(file, harness, target ?? maintainedHookCommand(harness));
+      // Reported only when the file did change: a pass with nothing to do says nothing.
+      if (fileText(file) === before) continue;
+      changed.push({ harness, file, reason: broken ? "the hook command could not start" : npx ? `pinned to the hook this agent carries (${carried})` : behind ? `moved to hook ${carried}` : "rewritten in the form every Windows hook shell starts (PowerShell could not start the quoted one)" });
+    } catch (error) {
+      changed.push({ harness, file, reason: `could not be updated: ${(error as Error).message}` });
+    }
   }
   return changed;
 }

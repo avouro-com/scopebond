@@ -29,7 +29,7 @@ import { versionedFetch } from "./workspace-fetch.js";
 import { machineIdHeaders, type MachineIdSource } from "@scopebond/gateway";
 
 export const OBSERVATIONS_PATH = "/v1/observations";
-export const BATCH_VERSION = "1.0";
+const BATCH_VERSION = "1.0";
 
 const ACKNOWLEDGED = new Set(["accepted", "duplicate", "pending_link"]);
 const MAX_BACKOFF_MS = 60 * 60 * 1000;

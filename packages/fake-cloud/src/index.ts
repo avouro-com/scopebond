@@ -23,6 +23,8 @@ export type FakeRoute = "device/code" | "device/token" | "enroll" | "repository/
 
 export interface FakeCloudState {
   code_requests: Array<{ client_name: string | null; harness: string | null; machine_id: string | null }>;
+  /** The install keys sent to /v1/install/enroll, in order. */
+  install_keys: string[];
   /** The `machine_id` each enrollment (/v1/enroll) carried, null when it carried none. */
   enroll_machine_ids: Array<string | null>;
   /** The `x-scopebond-machine-id` header of each check-in (rules check, delivery, summaries, observations), null without one. */
@@ -169,7 +171,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
   /** Summary ids held, so a summary sent again is answered as a duplicate. */
   const summaryIds = new Set<string>();
   const seen = {
-    codeRequests: [] as FakeCloudState["code_requests"], enrollMachineIds: [] as FakeCloudState["enroll_machine_ids"],
+    codeRequests: [] as FakeCloudState["code_requests"], installKeys: [] as string[], enrollMachineIds: [] as FakeCloudState["enroll_machine_ids"],
     checkinMachineIds: [] as FakeCloudState["checkin_machine_ids"], enrolled: 0, repositoryEnrollments: [] as FakeCloudState["repository_enrollments"], ingested: [] as unknown[], observations: 0,
     selfChecks: [] as FakeCloudState["self_checks"], policyPolls: 0, versionPolls: 0, approved: [] as string[],
     faultsApplied: [] as FakeCloudState["faults_applied"],
@@ -254,6 +256,21 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
           expires_at: new Date(Date.now() + 600_000).toISOString(),
         },
         organization_id: "org-fake", environment_id: "env-fake", agent_id: "agent-fake",
+      });
+    }
+    // An install key: `sbk_fake…` connects, `sbk_fake_revoked…` was revoked, `sbk_fake_full…` reached its daily limit.
+    if (path === "/v1/install/enroll" && req.method === "POST") {
+      const key = typeof body.key === "string" ? body.key : "";
+      seen.installKeys.push(key);
+      if (!key.startsWith("sbk_fake") || key.startsWith("sbk_fake_revoked")) return json(401, { error: "the install key is not valid or was revoked", code: "invalid_credential" });
+      if (key.startsWith("sbk_fake_full")) return json(429, { error: "this install key has connected as many new computers as it allows today", code: "quota" });
+      return json(200, {
+        enrollment: {
+          enrollment_token: "sbe_fake_" + randomBytes(12).toString("hex"),
+          proof_canonical: JSON.stringify({ challenge: randomBytes(8).toString("hex"), enrollment_id: "enr-key", type: "scopebond:gateway-enrollment", version: 1 }),
+          expires_at: new Date(Date.now() + 600_000).toISOString(),
+        },
+        organization_id: "org-fake", environment_id: "env-fake", agent_id: "agent-unclaimed", workspace: { name: "Fake workspace", region: "us" },
       });
     }
     if (path === "/v1/enroll" && req.method === "POST") {
@@ -422,7 +439,7 @@ export function startFakeCloud(options: FakeCloudOptions = {}): Promise<FakeClou
   }
 
   const state = (): FakeCloudState => ({
-    code_requests: seen.codeRequests, enroll_machine_ids: seen.enrollMachineIds, checkin_machine_ids: seen.checkinMachineIds, enrolled: seen.enrolled, repository_enrollments: seen.repositoryEnrollments, ingested: seen.ingested.length,
+    code_requests: seen.codeRequests, install_keys: seen.installKeys, enroll_machine_ids: seen.enrollMachineIds, checkin_machine_ids: seen.checkinMachineIds, enrolled: seen.enrolled, repository_enrollments: seen.repositoryEnrollments, ingested: seen.ingested.length,
     ingested_results: seen.ingested.map((r) => ((r as { payload?: { realtime_result?: string } })?.payload?.realtime_result ?? null)),
     observations: seen.observations, self_checks: seen.selfChecks, policy_polls: seen.policyPolls, version_polls: seen.versionPolls,
     approved_codes: seen.approved, pending_codes: [...codes.values()].filter((c) => !c.approved && !c.consumed).map((c) => c.user_code),

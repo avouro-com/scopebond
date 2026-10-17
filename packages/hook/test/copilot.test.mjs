@@ -178,7 +178,7 @@ test("the PowerShell command keeps the hook's own entries recognisable and its e
   const ps = powershellHookCommand(pinned);
   assert.equal(ps, `& ${pinned}; exit $LASTEXITCODE`);
   assert.equal(isScopebondHookCommand(ps), true);
-  assert.equal(isScopebondHookCommand(`& "C:\\node.exe" "C:\\x\\cli.js" copilot; exit $LASTEXITCODE`), true, "the suffix is not a harness name");
+  assert.equal(isScopebondHookCommand(`& "C:\\node.exe" "C:\\x\\@scopebond\\hook\\dist\\cli.js" copilot; exit $LASTEXITCODE`), true, "the suffix is not a harness name");
   assert.equal(isScopebondHookCommand(powershellHookCommand("npx -y @scopebond/hook@1.0.0 copilot")), true);
   // The unquoted form `install` writes on macOS and Linux gets the same tail, and the tail is never doubled.
   const posix = "/usr/local/bin/node /opt/sb/.scopebond/runtime/1.0.0/node_modules/@scopebond/hook/dist/cli.js copilot";
@@ -188,7 +188,7 @@ test("the PowerShell command keeps the hook's own entries recognisable and its e
   // A Copilot entry written with only a PowerShell command is still found and removed.
   const dir = mkdtempSync(join(tmpdir(), "sb-copilot-ps-"));
   const file = join(dir, "hooks.json");
-  writeFileSync(file, JSON.stringify({ version: 1, hooks: { PreToolUse: [{ type: "command", powershell: `& "C:\\node.exe" "C:\\x\\cli.js" copilot; exit $LASTEXITCODE` }] } }));
+  writeFileSync(file, JSON.stringify({ version: 1, hooks: { PreToolUse: [{ type: "command", powershell: `& "C:\\node.exe" "C:\\x\\@scopebond\\hook\\dist\\cli.js" copilot; exit $LASTEXITCODE` }] } }));
   assert.equal(isHarnessConfigured(file), true);
 });
 

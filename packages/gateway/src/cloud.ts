@@ -411,7 +411,7 @@ function refusalMessage(status: number, text: string): string {
  *    (`batch_too_large`) can never be accepted as it is and becomes an "oversize" gap. It stays in the
  *    local log. A lone record refused with a 413 that is not the workspace's (a proxy's) is retried.
  *  Anything else: null, and the batch is retried with backoff, as before. */
-export function settleRefusal(status: number, text: string, batch: Array<Pick<CloudOutboxEntry, "id">>): Array<{ id: string; reason: CloudDeliveryGap["reason"] }> | "isolate" | "split" | null {
+function settleRefusal(status: number, text: string, batch: Array<Pick<CloudOutboxEntry, "id">>): Array<{ id: string; reason: CloudDeliveryGap["reason"] }> | "isolate" | "split" | null {
   if (status === 413 && batch.length > 1) return "split";
   let body: { code?: unknown; rejected?: unknown } | null;
   try { body = JSON.parse(text) as { code?: unknown; rejected?: unknown }; } catch { return null; }
@@ -468,7 +468,7 @@ function refusedIn(answer: unknown, batch: CloudOutboxEntry[]): Array<{ entry: C
 const RETRYABLE = new Set(["future_timestamp", "attester_mismatch"]);
 /** How long a record refused for one of those reasons is kept and sent again. After that it is settled
  *  as a gap, so a clock that is badly wrong, or a key that never comes back, cannot hold the queue for ever. */
-export const CLOCK_AHEAD_KEEP_MS = 24 * 60 * 60 * 1000;
+const CLOCK_AHEAD_KEEP_MS = 24 * 60 * 60 * 1000;
 const keepForClock = (entry: Pick<CloudOutboxEntry, "enqueuedAt">, code: unknown, at: number) =>
   RETRYABLE.has(String(code)) && at - entry.enqueuedAt < CLOCK_AHEAD_KEEP_MS;
 
@@ -695,6 +695,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
             if (notable(e.receipt.payload)) { full.push(e); notableByWindow.set(w, (notableByWindow.get(w) ?? 0) + 1); }
             else if (lateThisFlush.has(e.id)) continue; // added to the full list below
             else if ((w + 1) * windowMs + SUMMARY_GRACE_MS <= cutoff) closed.push(e);
+            // Stamped further ahead than one window and its grace (a clock set wrong): no window will close for it soon,
+            // so it goes in full, as held() counts it (pending, not held).
+            else if ((w + 1) * windowMs + SUMMARY_GRACE_MS > now() + windowMs + SUMMARY_GRACE_MS) lateThisFlush.add(e.id);
             else open.push(e);
           }
           // One window busier than a whole pass would never complete: its oldest records go in full rather than wait forever.
@@ -855,6 +858,9 @@ export function createCloudExporter(opts: CloudExporterOptions): CloudExporter {
           if (notable(e.receipt.payload)) continue;
           const closesAt = (Math.floor(Date.parse(e.receipt.payload.timestamp) / windowMs) + 1) * windowMs + SUMMARY_GRACE_MS;
           if (closesAt <= at) continue;
+          // A window cannot close later than one window and its grace from now: a record stamped further ahead (a clock
+          // set wrong) is not waiting for a window that will close, so it counts as undelivered rather than held.
+          if (closesAt > at + windowMs + SUMMARY_GRACE_MS) continue;
           routine += 1;
           until = until === null ? closesAt : Math.max(until, closesAt);
         }

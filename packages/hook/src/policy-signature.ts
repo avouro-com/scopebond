@@ -84,7 +84,7 @@ export function signedPolicyBytes(payload: SignedPolicyPayload): Buffer {
 }
 
 /** How far ahead of this computer's clock an answer's `issued_at` may be (clock skew). */
-export const FUTURE_SKEW_MS = 60 * 60 * 1000;
+const FUTURE_SKEW_MS = 60 * 60 * 1000;
 
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, fixed-width fields, one optional bounded fraction
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;

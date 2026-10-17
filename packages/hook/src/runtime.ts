@@ -150,7 +150,7 @@ export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + INSTALL_
 export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER;
 /** The read protection that is always on, whoever manages the rules: the hook's own folder, which holds this computer's
  *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
-export const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
+const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
 
 /** Scopebond's own protection, always enforced and never relaxed by a rule set or a workspace: the hook's folder (its keys,
  *  connection and policy) and the coding agents' hook settings can be neither changed nor read by the coding agent, and an
@@ -275,7 +275,7 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
 
 /** How long a tool call's delivery-queue writes wait for another process's lock. Codex's hook entry allows 30 s and its
  *  override wait is 20 s; this, with the local log's shorter wait after an override (below), keeps a call inside it. */
-export const HOT_PATH_QUEUE_BUSY_MS = 2_000;
+const HOT_PATH_QUEUE_BUSY_MS = 2_000;
 /** How long the local log waits for a lock once a person has been asked (the override wait has used most of the time limit). */
 const AFTER_OVERRIDE_STORE_BUSY_MS = 5_000;
 /** How long the end-of-call repair pass waits for a lock before leaving the work to the next flush. */

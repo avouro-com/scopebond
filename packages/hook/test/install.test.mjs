@@ -102,7 +102,7 @@ test("resolveConfigDir: $CLAUDE_PROJECT_DIR is consulted when the payload cwd is
 test("writeHarnessConfig registers an absolute command and is idempotent + removable", () => {
   const dir = tmp();
   const file = join(dir, "settings.json");
-  const cmd = absoluteHookCommand("/abs/path/cli.js", "claude");
+  const cmd = absoluteHookCommand("/abs/.scopebond/runtime/1.0.0/cli.js", "claude");
   assert.match(cmd, /cli\.js.* claude$/);
   writeHarnessConfig(file, "claude", cmd);
   assert.equal(isHarnessConfigured(file), true);
@@ -119,7 +119,7 @@ test("writeHarnessConfig registers an absolute command and is idempotent + remov
 test("writeHarnessConfig preserves unrelated user config", () => {
   const dir = tmp(); const file = join(dir, "settings.json");
   writeFileSync(file, JSON.stringify({ theme: "dark", hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "my-own-hook" }] }] } }));
-  writeHarnessConfig(file, "claude", absoluteHookCommand("/abs/cli.js", "claude"));
+  writeHarnessConfig(file, "claude", absoluteHookCommand("/abs/.scopebond/runtime/1.0.0/cli.js", "claude"));
   const parsed = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(parsed.theme, "dark");
   assert.equal(parsed.hooks.PreToolUse.length, 2); // the user's hook plus ours
@@ -128,14 +128,14 @@ test("writeHarnessConfig preserves unrelated user config", () => {
 
 test("writeHarnessConfig installs a Codex PreToolUse hook with a clear status", () => {
   const dir = tmp(); const file = join(dir, "hooks.json");
-  writeHarnessConfig(file, "codex", absoluteHookCommand("/abs/cli.js", "codex"));
+  writeHarnessConfig(file, "codex", absoluteHookCommand("/abs/.scopebond/runtime/1.0.0/cli.js", "codex"));
   const parsed = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(parsed.hooks.PreToolUse.length, 1);
   assert.equal(parsed.hooks.PreToolUse[0].matcher, undefined, "no matcher means every Codex tool");
   assert.match(parsed.hooks.PreToolUse[0].hooks[0].command, /cli\.js.* codex$/);
   assert.equal(parsed.hooks.PreToolUse[0].hooks[0].statusMessage, "Checking this action with Scopebond");
   assert.equal(parsed.hooks.PreToolUse[0].hooks[0].timeout, 30);
-  writeHarnessConfig(file, "codex", absoluteHookCommand("/abs/cli.js", "codex"));
+  writeHarnessConfig(file, "codex", absoluteHookCommand("/abs/.scopebond/runtime/1.0.0/cli.js", "codex"));
   assert.equal(JSON.parse(readFileSync(file, "utf8")).hooks.PreToolUse.length, 1, "reinstall is idempotent");
   removeHarnessConfig(file);
   assert.equal(isHarnessConfigured(file), false);

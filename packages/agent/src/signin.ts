@@ -26,7 +26,10 @@ export const DEFAULT_WORKSPACE = "https://cloud.scopebond.com";
 /** Where the installer keeps its settings: the machine's first (an install for every user, set by an administrator), then this
  *  user's. A per-user value, which any program running as the person can write, never overrides the machine's. */
 export const SETTINGS_KEYS = ["HKLM\\Software\\Avouro\\Scopebond", "HKCU\\Software\\Avouro\\Scopebond"] as const;
-export const WORKSPACE_VALUE = "Workspace";
+const WORKSPACE_VALUE = "Workspace";
+/** An install key the installer was given (`msiexec … KEY=sbk_…`): a company-wide install connects with it, with no code. */
+export const INSTALL_KEY_VALUE = "InstallKey";
+const INSTALL_KEY = /^sbk_[A-Za-z0-9_-]{20,96}$/;
 
 /** Reads one registry string value; null when it is not there. Tests pass their own. */
 export type RegistryReader = (key: string, name: string) => string | null;
@@ -60,6 +63,15 @@ export function installedWorkspace(read: RegistryReader = readRegistryValue): { 
     return { origin, from: key };
   }
   return { origin: DEFAULT_WORKSPACE, from: "default" };
+}
+
+/** The install key the installer was given (the machine's setting, then this user's), or null. Only a well-formed key is used. */
+export function installedKey(read: RegistryReader = readRegistryValue): { key: string; from: string } | null {
+  for (const key of SETTINGS_KEYS) {
+    const value = read(key, INSTALL_KEY_VALUE)?.trim() ?? "";
+    if (INSTALL_KEY.test(value)) return { key: value, from: key };
+  }
+  return null;
 }
 
 /** Left in the Scopebond folder once the agent has started a first sign-in by itself, so it never does so twice. */
@@ -144,6 +156,28 @@ export async function startFirstSignIn(dir: string, origin: string, o: FirstSign
   return { started, cancel: () => stop.abort(), done };
 }
 
+/** A first-time connection with the install key a company-wide install was given: no code and no approval. The workspace answers
+ *  as a granted sign-in does, and the rest is the same first-time setup. The computer joins as unclaimed; the person on it claims
+ *  it by opening their workspace from the tray. */
+export async function connectWithInstallKey(dir: string, origin: string, key: string, o: FirstSignInOptions = {}): Promise<{ ok: true; lines: string[] } | { ok: false; error: string }> {
+  const fetchImpl = o.fetchImpl ?? fetch;
+  try { scaffold(dir, {}); } catch (error) { return { ok: false, error: `the Scopebond folder could not be set up: ${(error as Error).message}` }; }
+  let res: Response;
+  try {
+    res = await fetchImpl(new URL("/v1/install/enroll", origin).toString(), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, ...clientNameField() }), redirect: "error", signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) { return { ok: false, error: `could not reach ${origin}: ${(error as Error).message}` }; }
+  let json: Record<string, unknown> = {};
+  try { json = await res.json() as Record<string, unknown>; } catch { /* no body */ }
+  if (res.status === 401) return { ok: false, error: "the install key was not accepted (it may have been revoked); ask whoever installed Scopebond for a new one" };
+  if (res.status === 429) return { ok: false, error: "the install key has connected as many computers as it allows today; Scopebond tries again later" };
+  const enrollment = json.enrollment;
+  if (res.status !== 200 || !enrollment || typeof enrollment !== "object") return { ok: false, error: `${origin} did not connect this computer (HTTP ${res.status})` };
+  try { return { ok: true, lines: await completeSetup(dir, origin, enrollment, o, approvedWorkspaceId(json)) }; }
+  catch (error) { return { ok: false, error: `the install key was accepted but the connection could not be completed: ${(error as Error).message}` }; }
+}
+
 /** What a first-time setup does after the approval: enroll, then the hook entries and autostart. */
 async function completeSetup(dir: string, origin: string, enrollment: object, o: FirstSignInOptions, workspaceId: string | null): Promise<string[]> {
   const lines: string[] = [];
@@ -155,8 +189,12 @@ async function completeSetup(dir: string, origin: string, enrollment: object, o:
   for (const harness of harnesses) {
     const file = userHarnessFile(harness);
     if (isHarnessConfigured(file)) continue;
-    writeHarnessConfig(file, harness, maintainedHookCommand(harness));
-    lines.push(`put the Scopebond hook in ${file}`);
+    try {
+      writeHarnessConfig(file, harness, maintainedHookCommand(harness));
+      lines.push(`put the Scopebond hook in ${file}`);
+    } catch (error) {
+      lines.push(`could not put the Scopebond hook in ${file}: ${(error as Error).message}`);
+    }
   }
   // Session and after-action observations, when the workspace granted them (Claude Code only), as the hook's sign-in does.
   if (harnesses.includes("claude") && observationStatus(loadConnection(dir)).state === "on") {
