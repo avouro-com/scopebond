@@ -1,5 +1,50 @@
 # @scopebond/hook
 
+## 0.27.0
+
+### Minor Changes
+
+- 4d30452: Errors that say what to do. A fail-closed block names the broken file and the command that fixes it (a rules file that does not parse: `rules apply`, or `init --force` with its warning; on a computer that follows its workspace's rules, `policy sync`, which now installs the workspace's rules again when the file on disk is missing or does not parse; a full disk; a folder the account cannot write; a missing file) instead of `init`, which never replaced a file that exists. `doctor` reports a rules file that does not parse, an unreachable or unhealthy workspace and a refused connection as problems, and its health check gives up after 10 seconds. The block message names the rule as the tray does (its id in brackets), tells the coding agent not to retry or work around it, tells the person what to do (on a computer that follows its workspace's rules: ask an admin), and gives the record id. When a refused connection puts a computer back on its own rules, the person is told once and `status` says so first. The hook keeps a rotated, redacted local record of its own failures (`hook-errors.jsonl`), and `status` and `doctor` say how many actions it blocked that way in the last day. The gateway keeps the workspace's `reason` (for `credential_refused`) and its reference (`[ref …]`) in a refusal.
+- 69ecb8d: A workspace may now say that a person's unblock has no time limit, no daily limit, or both.
+  
+  - A rule's override terms accept `"minutes": "unlimited"` and `"daily_limit": "unlimited"` besides the numbers (`minutes` 0 to 60, `daily_limit` 1 to 50). Any other value still makes the terms invalid and the rules document is refused, so the rules in force stay.
+  - With no time limit, once a person allows an action, the same action under the same rule stays allowed from then on without asking again, and each repeat is recorded as a repeat of that unblock. The window says the unblock covers "the same action from now on". The hook keeps such an unblock past the two days it keeps the others, so it still applies later.
+  - With no daily limit, a person may allow as many actions per rule per day as they need, in the window and from the tray.
+  - The hook reports the new `unlimited_terms` capability on its rules check (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules,unblock_terms,unlimited_terms`). A workspace sends `"unlimited"` only to a hook that reports it; older hooks keep getting numbers.
+
+### Patch Changes
+
+- 560880e: Windows hook entries: the quoted fallback is reported and hardened, and shared hook groups are kept.
+  
+  - `status` and `doctor` note when a Codex or Cursor entry uses the quoted form, which may not start under PowerShell. The quoted form is either written by an earlier release, or used because this computer has no short name for one of the folders; quoted network (UNC) paths count too. The note says the Scopebond Agent rewrites the entry when it can, or to reinstall.
+  - A quoted path containing `$` or a backtick is refused with a clear error instead of being written (Git Bash expands those even inside quotes). A path with `%` or `!` is written: cmd.exe and Git Bash start it.
+  - The short-name lookup passes the path to cmd.exe through an environment variable, so a folder name with `%`, `!`, `&` or `^` is not parsed. It reads cmd's answer as UTF-16 (`cmd /u`), so a name outside the console's code page reads correctly. The quoted form is used when the volume has short names switched off, a short name keeps such a character or is not plain ASCII, or the path is a network (UNC) path.
+  - The Scopebond Agent rewrites a quoted Codex or Cursor entry into the plain form once that form is available. Claude Code runs hooks under Git Bash, which starts the quoted form, so its entries are left alone. The agent reports a change only when a settings file actually changed.
+  - A path that cannot be written no longer stops anything else:
+    - the dry-run previews show the refusal;
+    - `init` refuses before anything is set up;
+    - signing in reports it and fails;
+    - the agent's upkeep, the move to the signed install and the hook repair record it for that coding agent and carry on.
+  - Writing the hook (install, upgrade, the agent's upkeep, the Claude Code session entries) replaces only Scopebond's own hook in a hook group another tool shares. The group's matcher and other hooks stay, and Scopebond's hook keeps its own timeout. `uninstall` likewise removes only Scopebond's hook from such a group.
+  - `doctor` also checks a Codex entry's `commandWindows`, and `init` recognises a hook that names Scopebond only there.
+  - A hook command counts as Scopebond's only when it runs one of Scopebond's own programs:
+    - `@scopebond/hook`;
+    - `scopebond`, `scopebond-hook` or `scopebond-agent`;
+    - a `cli.js` inside a `.scopebond` or `@scopebond` folder;
+    - this hook's own `cli.js`.
+  
+    Another tool's `cli.js`, or a path that merely mentions "scopebond", is left alone.
+  
+  `flush` edge cases:
+  
+  - `flush` exits 1 when the last delivery attempt failed, even with nothing left in the queue (it used to exit 0 then).
+  - A routine record stamped further ahead than one summary window and its grace (a clock set wrong) is sent in full rather than held for a window that will not close. Until then it counts as pending, not held.
+  - The "held until" time shows its date when it is not today.
+  - With only held routine records left, `flush` sends nothing and does not contact the workspace (now documented).
+- Updated dependencies [4d30452]
+- Updated dependencies [560880e]
+  - @scopebond/gateway@0.20.1
+
 ## 0.26.0
 
 ### Minor Changes
