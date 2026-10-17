@@ -12,6 +12,7 @@ import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
 import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
+import { isManaged } from "./managed.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
@@ -328,9 +329,12 @@ export function createHookRuntime(config: RuntimeConfig) {
   const { attester } = loadOrCreateAttester({ file: config.attesterPath });
   // When the project has a readable rule set, a denial names the command that edits it
   // rather than the generated file.
-  const rulesRemedy = existsSync(join(dirname(config.policyPath), RULES_FILE))
-    ? `run \`${cliCommand("rules")}\` to see the limits in plain terms, or edit ${join(dirname(config.policyPath), RULES_FILE)}`
-    : undefined;
+  // A computer that follows its workspace's rules is changed by an admin there; editing the local rules file does nothing.
+  const rulesRemedy = isManaged(dirname(config.policyPath))
+    ? "this computer follows your Scopebond workspace's rules; ask an admin of the workspace to change the rule or unblock this action"
+    : existsSync(join(dirname(config.policyPath), RULES_FILE))
+      ? `run \`${cliCommand("rules")}\` to see the limits in plain terms, or edit ${join(dirname(config.policyPath), RULES_FILE)}`
+      : undefined;
   const { store: baseStore } = openReceiptStore({ db: config.dbPath });
   const storeBusyMs = config.storeBusyTimeoutMs ?? STORE_BUSY_MS;
   if (config.storeBusyTimeoutMs !== undefined) { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(storeBusyMs); } catch { /* keeps its wait */ } }
@@ -499,7 +503,8 @@ export function createHookRuntime(config: RuntimeConfig) {
           // from `rules.json`, so telling someone to hand-edit it invites a change the
           // next `rules` run would overwrite.
           remedy: rulesRemedy,
-        }) + (override?.hint() ? ` ${override.hint()}` : ""),
+          actionId: (result.receipt as { payload?: { action_ref?: { action_id?: string } } } | undefined)?.payload?.action_ref?.action_id ?? null,
+        }) + (override?.hint() ? `\n${override.hint()}` : ""),
         clauseId,
         ...(blockedServiceKindOf(clauseId) ? { code: BLOCKED_SERVICE_REASON } : {}),
         receipt: result.receipt,

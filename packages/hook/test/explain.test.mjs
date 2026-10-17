@@ -37,11 +37,14 @@ test("the message names the action, the rule, the reason and where to change it"
     policy, clauseId: "protect-branches", detail: "param ref fails pattern",
     intent: pushIntent, policyPath: "/repo/.scopebond/policy.json",
   });
-  assert.match(message, /^Scopebond blocked git\.push origin main — rule "protect-branches" \(enforce\)\./);
+  // The rule by the name the tray uses, not its clause id.
+  assert.match(message, /^Scopebond blocked git\.push origin main: "Push straight to a protected branch" \(rule protect-branches, enforce\)\./);
   assert.match(message, /Why: Deny pushes to main/);
   // The engine's own wording is kept, so a surprising decision stays debuggable.
   assert.match(message, /Detail: param ref fails pattern/);
-  assert.match(message, /Change the rule: edit clause "protect-branches" in \/repo\/\.scopebond\/policy\.json/);
+  assert.match(message, /For the person: edit clause "protect-branches" in \/repo\/\.scopebond\/policy\.json/);
+  // The agent is told to stop, not to edit its own rules.
+  assert.match(message, /What to do: do not retry this or work around it; tell the person what you were trying to do\./);
   // The old message was this and nothing else; it must no longer be the whole story.
   assert.notEqual(message, "param ref fails pattern");
 });
@@ -64,7 +67,21 @@ test("a clause with no description still names the rule and the next step", () =
   const message = explainDeny({ policy, clauseId: "no-words", detail: "param x fails pattern", intent: pushIntent });
   assert.match(message, /rule "no-words"/);
   assert.doesNotMatch(message, /Why:/);
-  assert.match(message, /Change the rule/);
+  assert.match(message, /For the person:/);
+});
+
+test("a workspace rule is named as the tray names it, and the record id is given", () => {
+  const message = explainDeny({ policy, clauseId: "protect-branches", detail: "denied", intent: pushIntent, actionId: "act-123", remedy: "this computer follows your Scopebond workspace's rules; ask an admin of the workspace to change the rule or unblock this action" });
+  const lines = message.split("\n");
+  assert.match(lines[0], /^Scopebond blocked git\.push origin main: "Push straight to a protected branch" \(rule protect-branches, enforce\)\.$/);
+  assert.match(message, /For the person: this computer follows your Scopebond workspace's rules/);
+  assert.equal(lines.at(-1), "Record: act-123");
+  assert.doesNotMatch(message, /edit .*rules\.json/);
+});
+
+test("a post-hoc record carries no instruction to stop (the action already ran)", () => {
+  const message = explainDeny({ policy, clauseId: "protect-branches", detail: "x", intent: pushIntent, postHoc: true });
+  assert.doesNotMatch(message, /What to do:/);
 });
 
 test("with no deciding clause it reports the engine reason and invents no rule", () => {

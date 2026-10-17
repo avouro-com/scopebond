@@ -2067,7 +2067,6 @@ async function runDoctor(): Promise<void> {
     } catch (error) { accepted = `not checked (${(error as Error).message})`; }
     console.log(`  connection       ${accepted}`);
     if (accepted === "REFUSED (401)") problems.push(`the workspace refused this computer's connection: sign in again with \`${cliCommand("login")}\``);
-    else if (accepted !== "accepted" && reachable === "reachable") problems.push(`this computer's connection could not be checked: ${accepted}`);
     const delivery = describeDelivery(active, connection);
     for (const line of delivery.lines) console.log(`                   ${line}`);
     problems.push(...delivery.problems);

@@ -12,6 +12,8 @@
 // `permissionDecisionReason`, Cursor's `agentMessage`), so a clear one lets the
 // agent pick a different approach instead of retrying the same blocked call.
 
+import { ruleTitle } from "./rule-titles.js";
+import { RULE_OF_CLAUSE } from "./managed.js";
 import { BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, blockedServiceKindOf, blockedServiceOf, isUnreadablePackageKey, type BlockedService } from "./service-rules.js";
 
 /** A policy clause, as much of it as the message needs. */
@@ -99,7 +101,13 @@ export interface ExplainDenyInput {
   postHoc?: boolean;
   /** The workspace's blocked services (service-rules.ts), to name the one a blocked-service clause denied. */
   services?: readonly BlockedService[];
+  /** The record of this action (its action id), so the person can hand it to an admin who finds it in the workspace. */
+  actionId?: string | null;
 }
+
+/** What the coding agent reads first: stop, do not retry or work around the block, say what it was trying to do. A remedy
+ *  addressed to "you" read as an instruction to the agent to edit its own rules, which is itself blocked. */
+export const AGENT_INSTRUCTION = "What to do: do not retry this or work around it; tell the person what you were trying to do.";
 
 /** Compose the block message. Degrades in order: with a clause and a description
  *  it explains the rule; with a clause but no description it still names it; with
@@ -131,11 +139,17 @@ export function explainDeny(input: ExplainDenyInput): string {
   }
   const mode = str(clause?.mode) || "enforce";
   const why = shorten(str(clause?.description));
+  // The rule by the name a person reads (the tray's), with its id only when it has no name.
+  const title = ruleTitle(RULE_OF_CLAUSE[clauseId] ?? clauseId);
+  const actionId = str(input.actionId);
   const lines = [
-    `Scopebond ${verb} ${action || "action"} — rule "${clauseId}" (${mode}).`,
+    // The id stays in brackets after the name, so an admin can find the rule and support can match it.
+    `Scopebond ${verb} ${action || "action"}: ${title ? `"${title}" (rule ${clauseId}, ${mode})` : `rule "${clauseId}" (${mode})`}.`,
     ...(why ? [`Why: ${why}`] : []),
     ...(detail && detail !== "denied" ? [`Detail: ${detail}`] : []),
-    `Change the rule: ${input.remedy ?? `edit clause "${clauseId}" in ${input.policyPath || "your Scopebond policy"}`}`,
+    ...(input.postHoc ? [] : [AGENT_INSTRUCTION]),
+    `For the person: ${input.remedy ?? `edit clause "${clauseId}" in ${input.policyPath || "your Scopebond policy"}`}`,
+    ...(actionId ? [`Record: ${actionId}`] : []),
   ];
   return lines.join("\n");
 }
