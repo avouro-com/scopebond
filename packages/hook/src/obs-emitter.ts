@@ -44,7 +44,7 @@ export const OBSERVATIONS_SCOPE = "observations:write";
  *  check): then every five minutes, said in each heartbeat (`interval_s`), and the workspace waits three of those before calling
  *  a computer lost. A busy workspace's computers otherwise send hundreds of thousands of heartbeats a day. */
 export const HEARTBEAT_INTERVAL_MS = 60_000;
-export const SLOW_HEARTBEAT_INTERVAL_MS = 300_000;
+const SLOW_HEARTBEAT_INTERVAL_MS = 300_000;
 
 /** This computer's heartbeat interval: five minutes where its workspace reads the interval, else one minute. */
 export function heartbeatIntervalMs(dir: string): number {
@@ -55,8 +55,7 @@ export function heartbeatIntervalMs(dir: string): number {
 export const SLEEP_GAP_MS = 3 * HEARTBEAT_INTERVAL_MS;
 /** Heartbeats continue this long after the last hook activity, then the lease is released. */
 export const IDLE_LIMIT_MS = 15 * 60_000;
-export const HEARTBEAT_LEASE_MS = 2.5 * HEARTBEAT_INTERVAL_MS;
-export const QUEUE_TELEMETRY_INTERVAL_MS = 5 * 60_000;
+const QUEUE_TELEMETRY_INTERVAL_MS = 5 * 60_000;
 /** At most this many typed operations are recorded per tool call; the rest are counted. */
 export const MAX_INTENTS_PER_CALL = 10;
 
@@ -368,7 +367,7 @@ export function gitHead(cwd: string): string | null {
 
 /** Count and oldest enqueue time of receipts not yet delivered to the workspace, from the
  *  receipt outbox beside the local receipts. Null when there is no outbox. */
-export function receiptBacklog(dir: string): { count: number; oldestAt: number } | null {
+function receiptBacklog(dir: string): { count: number; oldestAt: number } | null {
   const file = join(dir, "receipts.db.cloud-outbox.db");
   if (!existsSync(file)) return null;
   try {

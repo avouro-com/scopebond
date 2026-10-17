@@ -51,7 +51,7 @@ export type BudgetInspection =
   | { ok: false; error: PolicyLoadError | "expired"; message: string; ack?: Omit<PolicyAckInput, "error"> };
 
 /** Accept the export itself, or the workspace's `{ version, export }` answer around it. */
-export function unwrapBudgetExport(raw: unknown): Record<string, unknown> | null {
+function unwrapBudgetExport(raw: unknown): Record<string, unknown> | null {
   if (!isObject(raw)) return null;
   if (raw.type === undefined && isObject(raw.export)) return raw.export;
   return raw;

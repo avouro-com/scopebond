@@ -20,7 +20,7 @@
 import { writeSync } from "node:fs";
 
 export const HOOK_DEADLINE_MS: Readonly<Record<string, number>> = { claude: 55_000, codex: 28_000, cursor: 28_000, copilot: 45_000 };
-export const HOOK_DEADLINE_ENV = "SCOPEBOND_HOOK_DEADLINE_MS";
+const HOOK_DEADLINE_ENV = "SCOPEBOND_HOOK_DEADLINE_MS";
 /** How long the local log may wait for another process's lock on a hook call (instead of the 15 s other commands wait). */
 export const HOT_PATH_STORE_BUSY_MS = 8_000;
 /** What a hook call keeps back from its deadline when it asks a person: the log's lock wait after the answer (5 s), the
@@ -56,7 +56,7 @@ function writeNow(fd: 1 | 2, text: string): void {
 
 /** Each agent's "deny" for a hook call that cannot decide (a crash, a missed deadline), then exit. The deadline and the
  *  single executable use it; cli.js keeps its own copy, because it must answer even when no file beside it can load. */
-export function denyHookCall(command: string | undefined, reason: string): never {
+function denyHookCall(command: string | undefined, reason: string): never {
   try {
     if (command === "claude" || command === "codex") {
       writeNow(1, JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }) + "\n");

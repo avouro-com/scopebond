@@ -31,13 +31,13 @@ export const OBSERVATION_DB = "observations.db";
 
 /** Bounds on the local queue. Past them new observations are counted as dropped (visible
  *  in `status`) rather than growing without limit; enforcement never depends on the queue. */
-export const MAX_PENDING = 5_000;
-export const MAX_PENDING_BYTES = 32 * 1024 * 1024;
+const MAX_PENDING = 5_000;
+const MAX_PENDING_BYTES = 32 * 1024 * 1024;
 export const MAX_TERMINAL = 1_000;
 /** How long a route found missing is left alone before one upload probes it again. */
 /** How long a batch stays reserved for the process that took it. */
-export const INFLIGHT_MS = 30_000;
-export const UNSUPPORTED_RECHECK_MS = 24 * 60 * 60 * 1000;
+const INFLIGHT_MS = 30_000;
+const UNSUPPORTED_RECHECK_MS = 24 * 60 * 60 * 1000;
 
 export type Capability = "active" | "unsupported" | "blocked";
 

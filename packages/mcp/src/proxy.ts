@@ -63,7 +63,7 @@ export interface McpUpstream {
 
 /** The minimal receipt shape a windowed clause needs to count a prior authorized
  *  call. The proxy keeps these for the session so rate_limit/sequence clauses work. */
-export interface CountableCall {
+interface CountableCall {
   intent: { action_type: string; params?: Record<string, unknown>; asset?: string; amount?: number };
   executed: boolean;
   timestamp: string;

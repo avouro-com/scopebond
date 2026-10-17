@@ -64,7 +64,7 @@ interface AllowanceFile { version: 1; items: Allowance[] }
 const HEX64 = /^[0-9a-f]{64}$/;
 const ID = /^alw_[A-Za-z0-9_-]{16,64}$/;
 
-export function newAllowanceId(): string {
+function newAllowanceId(): string {
   return `alw_${randomBytes(16).toString("base64url")}`;
 }
 
@@ -83,7 +83,7 @@ export function writeAllowances(dir: string, items: Allowance[], now = Date.now(
 
 /** Whether a value has the shape of an allowance (one from the workspace is checked the same way; a bad one is ignored, so
  *  a malformed delivery can only allow less). */
-export function validAllowance(a: unknown): a is Allowance {
+function validAllowance(a: unknown): a is Allowance {
   if (!a || typeof a !== "object") return false;
   const x = a as Record<string, unknown>;
   return typeof x.id === "string" && ID.test(x.id) && typeof x.rule === "string" && /^[a-z0-9-]{1,64}$/.test(x.rule)

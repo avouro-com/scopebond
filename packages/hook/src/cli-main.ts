@@ -146,7 +146,7 @@ function readStdin(): string {
 /** How long a hook waits for a person in the Scopebond window: well inside each agent's hook timeout (Claude Code 60 s by
  *  default; the Codex entry Scopebond writes says 30 s; for Copilot, inside the hook's own deadline, which is itself inside
  *  the 60 s its entry says), so the wait ends as a block, never as a timed-out hook. */
-export const OVERRIDE_WAIT_MS: Record<Harness, number> = { claude: 45_000, codex: 20_000, cursor: 20_000, copilot: 25_000 };
+const OVERRIDE_WAIT_MS: Record<Harness, number> = { claude: 45_000, codex: 20_000, cursor: 20_000, copilot: 25_000 };
 
 /** Warn mode: Claude Code shows the person its own prompt for this action (only where the workspace allows it and Claude Code
  *  really asks; see override.ts). */
@@ -1115,7 +1115,7 @@ async function runPrune(args: string[]): Promise<void> {
 }
 
 /** A `--since` value: a duration (`7d`, `24h`, `30m`) or an ISO-ish date. */
-export function parseSince(value: string | undefined, now: number = Date.now()): number | null {
+function parseSince(value: string | undefined, now: number = Date.now()): number | null {
   if (!value) return null;
   const duration = /^(\d+)\s*([dhm])$/i.exec(value.trim());
   if (duration) {

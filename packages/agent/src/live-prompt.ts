@@ -25,7 +25,7 @@ export interface LiveQuestion {
   opened: boolean;
 }
 
-export type LiveChoice = "once" | "fifteen" | "always" | "ask";
+type LiveChoice = "once" | "fifteen" | "always" | "ask";
 
 export interface LivePrompt {
   /** Ask the person: in the tray when one is listening, else (or when they do not open it in time) in the window. */
@@ -42,9 +42,9 @@ export interface LivePrompt {
 }
 
 /** How long the tray has to show that the person opened the question before the window opens instead. */
-export const openWithinMs = (timeoutMs: number): number => Math.min(10_000, Math.round(timeoutMs / 3));
+const openWithinMs = (timeoutMs: number): number => Math.min(10_000, Math.round(timeoutMs / 3));
 /** A tray counts as listening while it waits, and for this long after its last wait returned (it waits again at once). */
-export const LISTENING_GRACE_MS = 5_000;
+const LISTENING_GRACE_MS = 5_000;
 
 interface Pending {
   question: OverrideQuestion;

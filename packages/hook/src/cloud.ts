@@ -123,10 +123,10 @@ export async function connectCloud(
 
 /** Where a replaced countersigning key is kept: receipts it signed stay verifiable, and
  *  `recover` can still deliver the ones the workspace never received. */
-export const retiredKeysDir = (dir: string): string => join(dir, "retired-keys");
+const retiredKeysDir = (dir: string): string => join(dir, "retired-keys");
 
 /** Move the current countersigning key aside so the next load creates a fresh one. */
-export function retireAttesterKey(dir: string, kid: string): string {
+function retireAttesterKey(dir: string, kid: string): string {
   const target = join(retiredKeysDir(dir), `${kid.replace(/[^A-Za-z0-9_-]/g, "-")}.key`);
   const destination = existsSync(target) ? `${target}.${Date.now()}` : target;
   mkdirSync(retiredKeysDir(dir), { recursive: true });

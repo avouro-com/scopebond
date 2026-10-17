@@ -403,11 +403,11 @@ export function createDispatchGuard(config: DispatchGuardConfig): DispatchGuard 
 }
 
 /** A person's approval held in the workspace, left in the inbox by id. It carries nothing that authorizes; the workspace decides. */
-export const isCloudApprovalRef = (v: unknown): v is { cloud_approval_id: string } =>
+const isCloudApprovalRef = (v: unknown): v is { cloud_approval_id: string } =>
   typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 1 &&
   typeof (v as { cloud_approval_id?: unknown }).cloud_approval_id === "string" && /^[\x21-\x7e]{1,100}$/.test((v as { cloud_approval_id: string }).cloud_approval_id);
 
-export const DELEGATION_CACHE_MS = 15_000;
+const DELEGATION_CACHE_MS = 15_000;
 
 function workspaceRefusal(answer: Exclude<ConsumeAnswer, { ok: true }>, actionType: string, approvalId: string): [DispatchReason, string] {
   if (answer.reason === "unreachable") return ["approval_unavailable", `the workspace could not be reached to consume approval ${approvalId} for ${actionType}, and no valid local approval was presented (${answer.detail})`];

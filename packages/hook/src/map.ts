@@ -543,7 +543,7 @@ const SENSITIVE = /(?:^|[/\\])(?:\.scopebond(?:[/\\]|$)|\.env(?:\.[^/\\]*)?$|\.e
 // Scopebond's own folder, and what follows it, wherever it appears in an argument.
 /** Code that builds a path from pieces (`'.scope' + 'bond'`, `".sco" "pebond"`, SQL `'.scope' || 'bond'`) is read with the
  *  pieces joined, so the scan sees the path the code will use. Linear: one pass of a bounded string. */
-export function foldConcatenation(code: string): string {
+function foldConcatenation(code: string): string {
   return code.replace(/(['"`])\s*(?:\+|\|\||\.\.|\.)?\s*\1/g, "");
 }
 // eslint-disable-next-line security/detect-unsafe-regex -- bounded: the nested optionals spell at most `.scopebond`
@@ -1710,7 +1710,7 @@ export function fillPushBranch(mapped: Mapped[], branch: string | null | undefin
 const VSCODE_SETTINGS_FILE = /(?:^|[\\/])(?:\.vscode[\\/]settings\.json|Code(?: - Insiders)?[\\/]User[\\/]settings\.json|[^\\/]*\.code-workspace)$/i;
 const HOOK_SWITCH_SETTING = /chat\.(?:useHooks|hookFilesLocations|useClaudeHooks)\b/;
 /** Where a hook-switching VS Code settings write is recorded as well: Copilot's user-level hook file. */
-export const HOOK_SWITCH_GUARD_PATH = ".copilot/hooks/scopebond.json";
+const HOOK_SWITCH_GUARD_PATH = ".copilot/hooks/scopebond.json";
 function withHookSwitchGuard(out: Mapped[], toolInput: unknown, source: string): Mapped[] {
   const writesSettings = out.some((m) => m.intent.action_type === "file.write" && VSCODE_SETTINGS_FILE.test(textOf(m.intent.params.path)));
   if (!writesSettings) return out;

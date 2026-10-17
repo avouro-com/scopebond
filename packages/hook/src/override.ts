@@ -13,7 +13,7 @@
 // never asks while it is on). Beyond the daily limit the rule blocks.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
@@ -171,7 +171,7 @@ export function actionKey(intent: { action_type?: string; params?: Record<string
 /** The keys an older version gave this action, before records masked the home folder as `~`: the working folder as the
  *  coding agent reported it, and also every path with the home folder written out. Lookups only; new allowances use
  *  `actionKey`. */
-export function legacyActionKeys(intent: { action_type?: string; params?: Record<string, unknown> }, home: string = homedir()): string[] {
+function legacyActionKeys(intent: { action_type?: string; params?: Record<string, unknown> }, home: string = homedir()): string[] {
   const params = intent.params ?? {};
   if (!home || !JSON.stringify(params).includes("~")) return [];
   const cwd = typeof params.cwd === "string" ? { cwd: unmaskHomeFolder(params.cwd, home) } : {};
@@ -441,5 +441,3 @@ export function overrideHint(note: OverrideNote | null): string | null {
     case "ask_unavailable": return `Your workspace lets you ask an admin to allow this, from the Scopebond window, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
   }
 }
-
-export const hasOverrideState = (dir: string): boolean => existsSync(join(dir, OVERRIDE_STATE_FILE));

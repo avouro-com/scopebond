@@ -40,14 +40,14 @@ export function queueStatus(dir: string): {
 }
 
 /** "rejected 2, outbox_error 1": the counts by reason, largest first. */
-export function gapReasons(byReason: Record<string, number>): string {
+function gapReasons(byReason: Record<string, number>): string {
   return Object.entries(byReason).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([r, n]) => `${r} ${n}`).join(", ");
 }
 
 /** How long the oldest waiting record may wait, with nothing accepted since it was queued,
  *  before this computer counts as not delivering. Each tool call tries to send, so a working
  *  connection empties the queue within seconds. */
-export const STALLED_AFTER_MS = 5 * 60 * 1000;
+const STALLED_AFTER_MS = 5 * 60 * 1000;
 
 /** Records are waiting and nothing has been accepted since the oldest was queued, for longer
  *  than `STALLED_AFTER_MS`. True whatever the last error says, including none at all: an

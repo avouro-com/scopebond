@@ -67,23 +67,37 @@
   "knip": {
     "$schema": "https://unpkg.com/knip@6/schema.json",
     "workspaces": {
-      ".": {},
+      ".": {
+        "entry": [
+          "scripts/strip-ticket-ids.mjs",
+          "packages/tray/ui/panel.js",
+          "packages/tray/dev/*.{js,mjs}",
+          "packages/tray/tests/*.mjs"
+        ]
+      },
       "packages/*": {},
       "examples": {
         "entry": [
           "*.mjs"
         ]
+      },
+      "packages/native": {
+        "entry": [
+          "src/sea-main.mjs",
+          "updater-key.mjs"
+        ],
+        "ignoreDependencies": [
+          "@scopebond/hook",
+          "postject"
+        ]
       }
     },
-    "ignoreDependencies": [
-      "@arethetypeswrong/cli",
-      "@microsoft/eslint-formatter-sarif",
-      "publint"
-    ],
     "ignoreBinaries": [
       "reg",
       "icacls",
-      "msiexec"
+      "msiexec",
+      "pwsh.exe",
+      "tasklist"
     ]
   }
 }
