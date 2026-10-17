@@ -4,7 +4,7 @@
 import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 
 const ME = userInfo().username; // a person-scoped allowance applies to the account that made it
@@ -189,6 +189,26 @@ test("from the tray, a person allows an earlier block for the next try, or asks 
   assert.equal(request.action_id, second.id);
   assert.equal(request.summary, "rm -rf dist");
   assert.equal(request.sent_at, null);
+});
+
+test("from the tray, no daily limit still offers allowing after 50 today, and an unblock with no time limit is kept as lasting", async () => {
+  const reason = "Cleaning the build output before release";
+  const today = Array.from({ length: 60 }, (_, i) => ({ rule: "destructive-shell", action_key: `earlier-${i}`, action_id: `earlier-${i}`,
+    at: Date.now() - (i + 1) * 1000, reason_digest: "0".repeat(64), reason_length: reason.length }));
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ always: "at_once", minutes: "unlimited", daily_limit: "unlimited" }) } });
+  writeFileSync(join(dir, "overrides.json"), JSON.stringify({ entries: today }));
+  await run(dir, bash("rm -rf build"), { answers: [] });
+  const item = readBlocked(dir).at(-1);
+  const q = blockedQuestion(dir, item.id);
+  assert.equal(q.offers.allow, true, "past 50 today, still under no limit");
+  assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason, os_user: ME, lasts: "once" }), { outcome: "allowed" });
+  const entry = JSON.parse(readFileSync(join(dir, "overrides.json"), "utf8")).entries.find((e) => e.action_id === item.id);
+  assert.equal(entry.lasting, true);
+  // The one-time allowance is used on the next try; after that the unblock with no time limit keeps it allowed.
+  assert.equal((await run(dir, bash("rm -rf build"))).override.method, "allowance");
+  const after = await run(dir, bash("rm -rf build"));
+  assert.equal(after.decision, "allow");
+  assert.equal(after.override.repeat_of, item.id);
 });
 
 test("from the tray, an earlier block offers 15 minutes where the workspace knows allowances, as the window did then", async () => {

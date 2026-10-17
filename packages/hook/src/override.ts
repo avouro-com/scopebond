@@ -35,7 +35,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const digestOf = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
-interface StateEntry { rule: string; action_key: string; action_id: string; at: number; reason_digest: string; reason_length: number }
+/** One unblock a person made. `lasting`: made while the rule's unblock had no time limit (`minutes: "unlimited"`). */
+interface StateEntry { rule: string; action_key: string; action_id: string; at: number; reason_digest: string; reason_length: number; lasting?: true }
 interface OverrideState { entries: StateEntry[] }
 
 function readState(dir: string): OverrideState {
@@ -45,10 +46,36 @@ function readState(dir: string): OverrideState {
   } catch { return { entries: [] }; }
 }
 function writeState(dir: string, state: OverrideState, now: number): void {
-  // Keep two days: enough for today's count and any time window.
-  const kept = state.entries.filter((e) => now - e.at < 2 * DAY_MS).slice(-500);
+  // Keep two days: enough for today's count and any time window. An unblock made with no time limit stands for as long as
+  // the terms say so, so the newest one for each rule and action is kept however old it is (at most 500 of them).
+  const recent = state.entries.filter((e) => now - e.at < 2 * DAY_MS).slice(-500);
+  const pair = (e: StateEntry): string => JSON.stringify([e.rule, e.action_key]);
+  const inRecent = new Set(recent);
+  const covered = new Set(recent.map(pair));
+  const lasting = new Map<string, StateEntry>();
+  for (const e of state.entries) {
+    if (e.lasting !== true || inRecent.has(e) || covered.has(pair(e))) continue;
+    lasting.delete(pair(e));
+    lasting.set(pair(e), e);
+  }
+  const entries = [...[...lasting.values()].slice(-500), ...recent];
   mkdirSync(dir, { recursive: true });
-  writeAtomic(join(dir, OVERRIDE_STATE_FILE), `${JSON.stringify({ entries: kept })}\n`);
+  writeAtomic(join(dir, OVERRIDE_STATE_FILE), `${JSON.stringify({ entries })}\n`);
+}
+
+/** Whether an earlier unblock (made at `at`) of the same action still lets it through at `t`: within `minutes` of it, or at
+ *  any time when the workspace set no time limit ("unlimited"); never for 0 (this action only). */
+function stillCovers(terms: OverrideTerms, at: number, t: number): boolean {
+  return terms.minutes === "unlimited" || (terms.minutes > 0 && t - at <= terms.minutes * 60_000);
+}
+/** Whether `count` unblocks today leave room for one more: always when the workspace set no daily limit ("unlimited"). */
+function underDailyLimit(terms: OverrideTerms, count: number): boolean {
+  return terms.daily_limit === "unlimited" || count < terms.daily_limit;
+}
+/** What the window says an unblock covers, under these terms. */
+function coverText(terms: OverrideTerms): string {
+  if (terms.minutes === "unlimited") return "the same action from now on";
+  return terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only";
 }
 
 /** Control, bidi and zero-width characters: shown to a person, they can make a command read as a different one. */
@@ -258,22 +285,23 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     const allowing = allowsAny(offers);
     const state = readState(ctx.dir);
     const dayStart = t - (t % DAY_MS);
-    // Inside the time an earlier override allowed, the same action is allowed again without asking, and says so.
-    if (terms.minutes > 0) {
-      const earlier = [...state.entries].reverse().find((e) => e.rule === rule && e.action_key === key && t - e.at <= terms.minutes * 60_000);
+    // Inside the time an earlier override allowed (at any time, where the workspace set no time limit), the same action is
+    // allowed again without asking, and says so.
+    if (terms.minutes !== 0) {
+      const earlier = [...state.entries].reverse().find((e) => e.rule === rule && e.action_key === key && stillCovers(terms, e.at, t));
       if (earlier) {
         return { version: 1, rule, method: "agent_dialog", state: "allowed", repeat_of: earlier.action_id, reason_digest: earlier.reason_digest,
           reason_length: earlier.reason_length, os_user_digest: osUserDigest(), decided_at: new Date(t).toISOString() };
       }
     }
-    if (allowing && state.entries.filter((e) => e.rule === rule && e.at >= dayStart).length >= terms.daily_limit) { last = { rule, title, outcome: "limit" }; blocked(); return null; }
+    if (allowing && !underDailyLimit(terms, state.entries.filter((e) => e.rule === rule && e.at >= dayStart).length)) { last = { rule, title, outcome: "limit" }; blocked(); return null; }
 
     const waitMs = typeof ctx.waitMs === "function" ? ctx.waitMs() : ctx.waitMs ?? 45_000;
     let answer = await (ctx.ask ?? askAgent)(ctx.home, {
       action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting.mode, offers,
       // For the tray, which shows the question too: the coding tool, and what the workspace set about the length.
       harness: ctx.harness, ...projectOfCall(ctx), reviewed: terms.review === true, always_days: terms.always_days ?? ALLOWANCE_DEFAULT_DAYS, always_needs_admin: terms.always === "needs_admin",
-      lasts: terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only", timeout_ms: waitMs,
+      lasts: coverText(terms), timeout_ms: waitMs,
     }, waitMs + 2_000);
     // Ask an admin: the action stays blocked; the request waits for the agent to send it.
     // An older Scopebond Agent shows only "Allow once"; where only asking is offered, its answer is a request to an admin.
@@ -292,7 +320,8 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
       if (reason.length < terms.reason_min || reason.length > 500) { last = { rule, title, outcome: "declined" }; return null; }
       const record: OverrideRecord = { version: 1, rule, method: "agent_dialog", state: "allowed", repeat_of: null, reason_digest: digestOf(reason),
         reason_length: reason.length, os_user_digest: answer.os_user ? digestOf(answer.os_user) : osUserDigest(), decided_at: new Date(t).toISOString() };
-      state.entries.push({ rule, action_key: key, action_id, at: t, reason_digest: record.reason_digest!, reason_length: reason.length });
+      state.entries.push({ rule, action_key: key, action_id, at: t, reason_digest: record.reason_digest!, reason_length: reason.length,
+        ...(terms.minutes === "unlimited" ? { lasting: true as const } : {}) });
       try { writeState(ctx.dir, state, t); } catch { /* the receipt still records it; the count is checked again in the workspace */ }
       // "Allow for 15 min" and "Always allow this here…" also stand for the same action afterwards.
       if (length === "15m" || length === "always") {
@@ -348,7 +377,7 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
   if (!personMayAct(setting) || !setting?.override) return null;
   const terms = setting.override;
   const dayStart = now - (now % DAY_MS);
-  const underLimit = readState(dir).entries.filter((e) => e.rule === item.rule && e.at >= dayStart).length < terms.daily_limit;
+  const underLimit = underDailyLimit(terms, readState(dir).entries.filter((e) => e.rule === item.rule && e.at >= dayStart).length);
   // As when the block happened (createOverrideHandler).
   const offers = offersFor(setting.mode, terms, underLimit);
   if (!allowsAny(offers) && !offers.ask) return null;
@@ -389,7 +418,8 @@ export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now =
   writeAllowances(dir, allowances, now);
   rememberActionText(dir, q.item.action_key, q.item.summary, now);
   const state = readState(dir);
-  state.entries.push({ rule: q.item.rule, action_key: q.item.action_key, action_id: q.item.id, at: now, reason_digest: made.reason_digest, reason_length: made.reason_length });
+  state.entries.push({ rule: q.item.rule, action_key: q.item.action_key, action_id: q.item.id, at: now, reason_digest: made.reason_digest, reason_length: made.reason_length,
+    ...(terms?.minutes === "unlimited" ? { lasting: true as const } : {}) });
   try { writeState(dir, state, now); } catch { /* the allowance stands; the workspace counts it again */ }
   markBlocked(dir, id, "allowed", now);
   return { outcome: made.state === "proposed" ? "proposed" : "allowed" };

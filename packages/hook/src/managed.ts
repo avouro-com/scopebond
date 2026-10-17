@@ -74,10 +74,13 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const OPAQUE = /^[A-Za-z0-9._:-]{1,128}$/;
 
 /** What the computer enforces for a rule set to "Block, user may override": the shortest reason accepted, how long one override
- *  lasts (0 = this action only), how many a person may make per rule per day, and whether the coding agent's own prompt may be
- *  used when the Scopebond window is not available. Who may override is the workspace's decision: it sends "override" only then. */
+ *  lasts (`minutes`: 0 = this action only, up to 60; "unlimited" = the same action from then on, with no time window), how many
+ *  a person may make per rule per day (`daily_limit`: 1 to 50; "unlimited" = no daily count), and whether the coding agent's
+ *  own prompt may be used when the Scopebond window is not available. Who may override is the workspace's decision: it sends
+ *  "override" only then. A workspace sends "unlimited" only to a hook that reports the `unlimited_terms` capability (an older
+ *  hook gets numbers); any other value makes the terms invalid. */
 export interface OverrideTerms {
-  reason_min: number; minutes: number; daily_limit: number; harness_prompt: boolean;
+  reason_min: number; minutes: number | "unlimited"; daily_limit: number | "unlimited"; harness_prompt: boolean;
   /**  (sent only to a hook that reports the `allowances` capability): what a person's "Always allow this here…" does —
    *  applies at once (listed in the workspace for an admin to confirm or revoke), waits for an admin, or is not offered. */
   always?: "at_once" | "needs_admin" | "off";
@@ -97,9 +100,12 @@ export interface OverrideTerms {
  *  ask = "Block, person may ask". */
 export type ManagedRule = { mode: "monitor" | "block" | "override" | "ask"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
 const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+/** An integer in the range, or the string "unlimited" (`unlimited_terms`); anything else fails closed. */
+const intOrUnlimited = (v: unknown, min: number, max: number): boolean => v === "unlimited" || intIn(v, min, max);
 const TERM_KEYS = new Set(["reason_min", "minutes", "daily_limit", "harness_prompt", "always", "always_days", "requests", "lasts", "review"]);
 function validTerms(t: unknown): t is OverrideTerms {
-  return isObject(t) && Object.keys(t).every((k) => TERM_KEYS.has(k)) && intIn(t.reason_min, 10, 200) && intIn(t.minutes, 0, 60) && intIn(t.daily_limit, 1, 50)
+  return isObject(t) && Object.keys(t).every((k) => TERM_KEYS.has(k)) && intIn(t.reason_min, 10, 200)
+    && intOrUnlimited(t.minutes, 0, 60) && intOrUnlimited(t.daily_limit, 1, 50)
     && typeof t.harness_prompt === "boolean"
     && (t.always === undefined || t.always === "at_once" || t.always === "needs_admin" || t.always === "off")
     && (t.always_days === undefined || intIn(t.always_days, 1, 365))
