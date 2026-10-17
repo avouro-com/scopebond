@@ -26,7 +26,7 @@ import { mapClaudeToolUse, mapCodexToolUse, mapCopilotCall, copilotAsClaude, map
 import { copilotCloudAgent, copilotSurface, surfaceSignals, recordCopilotProbe, openCopilotProbe, readCopilotProbe, renderCopilotProbe, COPILOT_PROBE_FILE } from "./copilot-surface.js";
 import { copilotAnswer, type CopilotAnswer } from "./copilot-answer.js";
 import { createHash } from "node:crypto";
-import { createHookRuntime, type Decision } from "./runtime.js";
+import { createHookRuntime, readPolicyFile, type Decision } from "./runtime.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { replaceFile } from "./safe-fs.js";
 import { scaffold, harnessSnippet, placeHook, coverWithoutNpx, migrateToMonitorDefault, installRepositoryHooks, REPO_HARNESSES, type HookPlacement } from "./init.js";
@@ -266,16 +266,26 @@ function databaseGuard(dir: string, cwd: string, input: Record<string, unknown>)
   }
 }
 
-/** The one fix for a failure while deciding: the error's own when it names one, else `init`. */
-function repairFor(error: unknown): string {
-  const repair = (error as { repair?: unknown } | null)?.repair;
+/** The one fix for a failure while deciding: the error's own when it names one, else the command that fixes its kind (a broken
+ *  rules file, a full disk, a folder this account cannot write, a missing file), naming the file. `init` alone never helped a
+ *  file that exists: it writes only what is missing. */
+export function repairFor(error: unknown): string {
+  const e = (error ?? {}) as { repair?: unknown; code?: unknown; path?: unknown; file?: unknown; kind?: unknown; message?: unknown };
+  const repair = e.repair;
   if (typeof repair === "string" && repair) return repair;
+  const file = typeof e.file === "string" ? e.file : typeof e.path === "string" ? e.path : null;
+  if (e.code === "ENOSPC") return "free some disk space on this computer, then run the action again";
+  if ((e.code === "EACCES" || e.code === "EPERM") && file) return `make sure your account can read and write ${file} (it should be yours), then run \`${cliCommand("doctor")}\``;
+  if (e.kind === "policy") {
+    return `rebuild it with \`${cliCommand("rules apply")}\`; if that fails, \`${cliCommand("init --force")}\` restores the starter rules (it replaces your own rules and settings in that folder)`;
+  }
+  if (e.code === "ENOENT" && file) return `${file} is missing: run \`${cliCommand("init")}\` to create it`;
   // A busy local log is another Scopebond check on this computer writing at the same moment (two agents at once), not a
   // broken setup: init would not help.
   if (/database is locked|SQLITE_BUSY/i.test((error as Error | null)?.message ?? "")) {
     return `another Scopebond check on this computer was writing at the same moment; run the action again (if it keeps happening, \`${cliCommand("status")}\` says what holds it)`;
   }
-  return `run \`${cliCommand("init")}\``;
+  return `run \`${cliCommand("doctor")}\`, which names what is broken and the command that fixes it`;
 }
 
 /** What a Copilot check that ran out of time answers. */
@@ -1963,6 +1973,11 @@ async function runDoctor(): Promise<void> {
   const fileAccess = fileAccessLine(active);
   if (fileAccess) console.log(`  file access      ${fileAccess}`);
   if (!hasPolicy) problems.push("no policy found in the active config dir");
+  // C-01: a rules file that does not parse blocks every action; doctor says so with the fix instead of "ok".
+  if (hasPolicy) {
+    try { readPolicyFile(join(active, "policy.json")); }
+    catch (error) { problems.push(`${(error as Error).message}: ${repairFor(error)}`); }
+  }
   const ignored = untrustedProjectPolicy(process.cwd());
   const shadowed = shadowedUserConnection(active);
   if (shadowed) {
@@ -2026,10 +2041,12 @@ async function runDoctor(): Promise<void> {
   } else {
     let reachable: string;
     try {
-      const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET", headers: withHookVersion({}) });
+      const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET", headers: withHookVersion({}), signal: AbortSignal.timeout(10_000) });
       reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
     } catch (error) { reachable = `unreachable (${(error as Error).message})`; }
     console.log(`  cloud            ${connection.url} — ${reachable}`);
+    // C-11: an unreachable or unhealthy workspace is a problem (records queue here; nothing is lost), not "All good".
+    if (reachable !== "reachable") problems.push(`the workspace is ${reachable}: records stay queued on this computer and send once it answers (service status: https://status.scopebond.com)`);
     // An authenticated check. Reaching the workspace says nothing about whether it
     // still accepts this computer; the rules endpoint answers 401 when it does not.
     let accepted: string;
@@ -2049,6 +2066,8 @@ async function runDoctor(): Promise<void> {
       } else accepted = `unknown (HTTP ${res.status})`;
     } catch (error) { accepted = `not checked (${(error as Error).message})`; }
     console.log(`  connection       ${accepted}`);
+    if (accepted === "REFUSED (401)") problems.push(`the workspace refused this computer's connection: sign in again with \`${cliCommand("login")}\``);
+    else if (accepted !== "accepted" && reachable === "reachable") problems.push(`this computer's connection could not be checked: ${accepted}`);
     const delivery = describeDelivery(active, connection);
     for (const line of delivery.lines) console.log(`                   ${line}`);
     problems.push(...delivery.problems);

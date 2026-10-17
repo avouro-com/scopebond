@@ -296,6 +296,14 @@ export function namedActionTypes(policy: unknown): Set<string> {
   return out;
 }
 
+/** The compiled rules, or an error that names the file (a bare JSON.parse error said neither which file nor what to do). */
+export function readPolicyFile(path: string): ReturnType<typeof JSON.parse> {
+  let text: string;
+  try { text = readFileSync(path, "utf8"); } catch (error) { throw Object.assign(error as Error, { file: path, kind: "policy" }); }
+  try { return JSON.parse(text.replace(/^\uFEFF/, "")); }
+  catch (error) { throw Object.assign(new SyntaxError(`the rules file ${path} is not valid JSON (${(error as Error).message})`), { file: path, kind: "policy" }); }
+}
+
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
  *  key, unavailable store) — the CLI turns that into a fail-closed deny. */
 export function createHookRuntime(config: RuntimeConfig) {
@@ -305,7 +313,7 @@ export function createHookRuntime(config: RuntimeConfig) {
   // Paths are signed with the home folder masked (home-mask.ts), so a rule that names the home folder by its full path
   // is rewritten the same way to keep matching.
   const homes = config.homeFolders ?? homeFolders();
-  const policy = maskHomeInPolicy(upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8").replace(/^\uFEFF/, ""))), homes);
+  const policy = maskHomeInPolicy(upgradeStarterPolicy(readPolicyFile(config.policyPath)), homes);
   /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */
