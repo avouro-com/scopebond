@@ -7,6 +7,7 @@
     msiexec /i scopebond-agent-<version>-x64.msi /qn                     per user, silent
     msiexec /i scopebond-agent-<version>-x64.msi /qn ALLUSERS=1          every user
     msiexec /i … WORKSPACE=https://cloud.scopebond.com                   the workspace `setup` connects to (kept on upgrades)
+    msiexec /i … ALLUSERS=1 KEY=sbk_…                                     an install key: connects with no code (company-wide installs)
     msiexec /x … PURGE=1                                                  removal also deletes the Scopebond folder
 
   Removing it runs `scopebond-agent.exe uninstall` first, as the person removing it: autostart off, the agent stopped,
@@ -42,6 +43,9 @@
          version's components go. The searches fill properties of their own, so they never replace a value that was given;
          a search cannot name HKMU, so this user's (HKCU) and every user's (HKLM, with ALLUSERS=1) are read apart. -->
     <Property Id="WORKSPACE" Secure="yes" />
+    <!-- An install key (KEY=sbk_…): the agent connects with it on its first start, with no code. Hidden, so it is never written
+         to an installer log. -->
+    <Property Id="KEY" Secure="yes" Hidden="yes" />
     <Property Id="REMEMBERED_USER_WORKSPACE" Secure="yes">
       <RegistrySearch Id="RememberedUserWorkspace" Root="HKCU" Key="Software\Avouro\Scopebond" Name="Workspace" Type="raw" />
     </Property>
@@ -86,6 +90,9 @@
         <Component Id="WorkspaceSetting" Condition="WORKSPACE">
           <RegistryValue Root="HKMU" Key="Software\Avouro\Scopebond" Name="Workspace" Type="string" Value="[WORKSPACE]" KeyPath="yes" />
         </Component>
+        <Component Id="InstallKeySetting" Condition="KEY">
+          <RegistryValue Root="HKMU" Key="Software\Avouro\Scopebond" Name="InstallKey" Type="string" Value="[KEY]" KeyPath="yes" />
+        </Component>
         <!-- The folder on PATH, at its end: this user's PATH for a per-user install, the system's for every user. Removal
              takes out this entry only. -->
         <Component Id="UserPath" Condition="ALLUSERS &lt;&gt; &quot;1&quot;">
@@ -122,6 +129,7 @@
       <ComponentRef Id="AgentExecutable" />
       <ComponentRef Id="InstallSettings" />
       <ComponentRef Id="WorkspaceSetting" />
+      <ComponentRef Id="InstallKeySetting" />
       <ComponentRef Id="UserPath" />
       <ComponentRef Id="MachinePath" />
       <ComponentRef Id="StartMenuShortcut" />

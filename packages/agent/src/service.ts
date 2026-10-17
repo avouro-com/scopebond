@@ -31,7 +31,7 @@ import { allowedList, askedList } from "./allowed-asked.js";
 import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
-import { FIRST_SIGNIN_FILE, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
+import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
 import { migrateFromNpm, readMigration, npmRemovalCommand } from "./migrate.js";
 import { enableAutostart } from "./autostart.js";
 import {
@@ -598,7 +598,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // never connected, for the first time, to the workspace the installer named (else Scopebond Cloud). The tray shows the
   // code; asked again while it waits, it opens the approval page again and gives the same code.
   let signInOrigin: string | null = null;
-  const signIn = async (by: string): Promise<ReconnectStart | { error: string }> => {
+  const signIn = async (by: string): Promise<ReconnectStart | { connected: true } | { error: string }> => {
     if (reconnecting) {
       if (signInOrigin && sameOrigin(reconnecting.verification_url, signInOrigin)) (options.signIn?.open ?? openInBrowser)(reconnecting.verification_url);
       return reconnecting;
@@ -625,6 +625,19 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // Autostart as setup turns it on: the tray's sign-in entry beside the native tray, else the launcher. Only the signed
       // executable itself does it (a test names its own).
       const autostart = options.signIn?.autostart ?? (isSingleExecutable() ? () => enableAutostart(options.dir, agentCliPath()) : undefined);
+      // A company-wide install was given an install key: connect with it, no code. If the key is not accepted, the person signs
+      // in with a code as usual.
+      const key = installedKey(options.signIn?.registry);
+      if (key) {
+        log(`connecting with the install key named in ${key.from}`);
+        const keyed = await connectWithInstallKey(options.dir, workspace.origin, key.key, { fetchImpl: options.fetchImpl, autostart });
+        if (keyed.ok) {
+          for (const line of keyed.lines) log(`first sign-in: ${line}`);
+          void cycle(); void refreshSummary();
+          return { connected: true };
+        }
+        log(`the install key did not connect this computer: ${keyed.error}; signing in with a code instead`);
+      }
       const first: FirstSignIn | { error: string } = await startFirstSignIn(options.dir, workspace.origin, {
         fetchImpl: options.fetchImpl, open: options.signIn?.open, autostart,
         onDone: (outcome) => {
