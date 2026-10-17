@@ -189,3 +189,30 @@ test("the machine id: the sign-in carries it unscoped, the enrollment and the ag
     for (const c of policy) assert.equal(c.machine_id, kept.machine_id);
   } finally { await cloud.close(); }
 });
+
+test("an install key: read from the machine's setting first, only when well formed", async () => {
+  const { installedKey } = await import("../dist/index.js");
+  const keys = (values) => (key, name) => (name === "InstallKey" && key in values ? values[key] : null);
+  const good = "sbk_" + "a".repeat(43);
+  assert.equal(installedKey(keys({})), null);
+  assert.deepEqual(installedKey(keys({ [HKLM]: good, [HKCU]: "sbk_" + "b".repeat(43) })), { key: good, from: HKLM });
+  assert.deepEqual(installedKey(keys({ [HKCU]: ` ${good} ` })), { key: good, from: HKCU });
+  for (const bad of ["", "sbk_short", "sbe_" + "a".repeat(43), "sbk_" + "a".repeat(40) + "!"]) assert.equal(installedKey(keys({ [HKLM]: bad })), null, bad);
+});
+
+test("a company-wide install connects with its install key, with no code; a refused key says why", async () => {
+  const { connectWithInstallKey } = await import("../dist/index.js");
+  const { cloud, origin, fetchImpl } = await httpsWorkspace();
+  try {
+    const dir = mkdtempSync(join(root, "home-key-"));
+    const done = await connectWithInstallKey(dir, origin, "sbk_fake_" + "k".repeat(30), { fetchImpl, harnesses: [] });
+    assert.equal(done.ok, true, JSON.stringify(done));
+    assert.ok(loadConnection(dir), "connected");
+    assert.deepEqual(cloud.state().code_requests, [], "no code was asked for");
+    const revoked = await connectWithInstallKey(mkdtempSync(join(root, "home-key2-")), origin, "sbk_fake_revoked_" + "k".repeat(20), { fetchImpl, harnesses: [] });
+    assert.equal(revoked.ok, false);
+    assert.match(revoked.error, /not accepted/);
+    const full = await connectWithInstallKey(mkdtempSync(join(root, "home-key3-")), origin, "sbk_fake_full_" + "k".repeat(20), { fetchImpl, harnesses: [] });
+    assert.match(full.ok ? "" : full.error, /as many computers as it allows today/);
+  } finally { await cloud.close(); }
+});

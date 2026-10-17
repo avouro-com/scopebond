@@ -42,7 +42,7 @@ export {
 export type { InstallKind, InstallResult, ReleaseManifest, UpdaterKey, VerifiedInstaller, HelperPlan } from "./native-update.js";
 export { runUpdateHelper, helperInput, UPDATE_START_DEADLINE_MS } from "./update-helper.js";
 export type { HelperInput, HelperDeps } from "./update-helper.js";
-export { installedWorkspace, httpsOrigin, startFirstSignIn, DEFAULT_WORKSPACE, SETTINGS_KEYS, FIRST_SIGNIN_FILE } from "./signin.js";
+export { installedWorkspace, installedKey, connectWithInstallKey, httpsOrigin, startFirstSignIn, DEFAULT_WORKSPACE, SETTINGS_KEYS, FIRST_SIGNIN_FILE, INSTALL_KEY_VALUE } from "./signin.js";
 export type { RegistryReader, FirstSignIn, FirstSignInOptions } from "./signin.js";
 export { findNpmInstall, hasNpmInstall, migrateFromNpm, isNpmLauncher, readMigration, MIGRATED_FILE } from "./migrate.js";
 export type { NpmInstall, MigrateDeps, Migration } from "./migrate.js";
