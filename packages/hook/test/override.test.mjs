@@ -5,12 +5,12 @@
 import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, inspectManaged, compileManaged, digestRules, defaultRules,
-  createOverrideHandler, overrideHint, digestOf, MANAGED_DOC_FILE,
+  createOverrideHandler, overrideHint, digestOf, MANAGED_DOC_FILE, HOOK_CAPABILITIES,
 } from "../dist/index.js";
 import { actionSummary, revealHidden } from "../dist/override.js";
 
@@ -62,6 +62,17 @@ test("the workspace may send mode override only with valid terms", () => {
   assert.equal(at({ "destructive-shell": { mode: "block", override: terms() } }).ok, false, "terms only with override");
   assert.equal(at({ "destructive-shell": { mode: "override", override: terms({ daily_limit: 0 }) } }).ok, false);
   assert.equal(at({ "destructive-shell": { mode: "override", override: { ...terms(), extra: 1 } } }).ok, false);
+  // "unlimited" for either length or daily count (unlimited_terms); any other value still refuses the terms.
+  assert.equal(at({ "destructive-shell": { mode: "override", override: terms({ minutes: "unlimited" }) } }).ok, true);
+  assert.equal(at({ "destructive-shell": { mode: "override", override: terms({ daily_limit: "unlimited" }) } }).ok, true);
+  assert.equal(at({ "destructive-shell": { mode: "override", override: terms({ minutes: "unlimited", daily_limit: "unlimited" }) } }).ok, true);
+  for (const bad of ["forever", -1, 61, 1.5, "Unlimited", "60", null, true]) {
+    assert.equal(at({ "destructive-shell": { mode: "override", override: terms({ minutes: bad }) } }).ok, false, `minutes ${String(bad)}`);
+  }
+  for (const bad of ["forever", -1, 0, 51, 2.5, "unlimited ", "50", null, false]) {
+    assert.equal(at({ "destructive-shell": { mode: "override", override: terms({ daily_limit: bad }) } }).ok, false, `daily_limit ${String(bad)}`);
+  }
+  assert.equal(at({ "destructive-shell": { mode: "override", override: terms({ reason_min: "unlimited" }) } }).ok, false, "only minutes and daily_limit");
   assert.equal(at({ "network-egress": { mode: "override", override: terms() } }).ok, false, "an allowlist needs sites, as for Block");
 });
 
@@ -136,6 +147,79 @@ test("the daily limit holds, and a repeat inside the allowed time is recorded as
     assert.equal(tomorrow.decision, "allow");
     assert.ok(existsSync(join(dir, "overrides.json")));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("with no time limit, an allowed action stays allowed from then on: after an hour and after the two days the hook keeps", async () => {
+  let clock = Date.parse("2026-10-05T10:00:00Z");
+  const now = () => clock;
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ minutes: "unlimited" }) } });
+  try {
+    const reason = "Cleaning the build output before release";
+    const first = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    assert.equal(first.decision, "allow");
+    assert.equal(first.asked[0].lasts, "the same action from now on", "the window says how long it lasts");
+    const firstId = first.receipts[0].payload.action_ref.action_id;
+    clock += 61 * 60_000;
+    const later = await run(dir, bash("rm -rf build"), { now });
+    assert.equal(later.decision, "allow", "beyond any numbered window");
+    assert.equal(later.asked.length, 0);
+    assert.equal(later.override.repeat_of, firstId);
+    assert.equal(later.override.reason_digest, digestOf(reason));
+    const other = await run(dir, bash("rm -rf dist"), { now });
+    assert.equal(other.decision, "deny", "another action still asks");
+    // Three days on, another unblock rewrites the hook's state; the earlier unblock is kept and still applies.
+    clock += 3 * 24 * 60 * 60_000;
+    assert.equal((await run(dir, bash("rm -rf dist"), { answers: [{ decision: "allow", reason }], now })).decision, "allow");
+    const kept = JSON.parse(readFileSync(join(dir, "overrides.json"), "utf8")).entries;
+    assert.ok(kept.some((e) => e.action_id === firstId && e.lasting === true));
+    const days = await run(dir, bash("rm -rf build"), { now });
+    assert.equal(days.decision, "allow");
+    assert.equal(days.asked.length, 0);
+    assert.equal(days.override.repeat_of, firstId);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("with a numbered time window, the same action asks again once it has passed", async () => {
+  let clock = Date.parse("2026-10-05T10:00:00Z");
+  const now = () => clock;
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ minutes: 60 }) } });
+  try {
+    const reason = "Cleaning the build output before release";
+    const first = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    assert.equal(first.asked[0].lasts, "the same action for 60 minutes");
+    clock += 61 * 60_000;
+    const later = await run(dir, bash("rm -rf build"), { now });
+    assert.equal(later.decision, "deny");
+    assert.equal(later.asked.length, 1, "asked again");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("with no daily limit, a person may allow more than 50 in a day; the highest numbered limit still stops at 50", async () => {
+  const clock = Date.parse("2026-10-05T18:00:00Z");
+  const now = () => clock;
+  const reason = "Cleaning the build output before release";
+  // Sixty unblocks of this rule earlier today, each of a different action.
+  const today = Array.from({ length: 60 }, (_, i) => ({ rule: "destructive-shell", action_key: digestOf(`earlier-${i}`), action_id: `earlier-${i}`,
+    at: clock - (i + 1) * 60_000, reason_digest: digestOf(reason), reason_length: reason.length }));
+  const unlimited = setup({ "destructive-shell": { mode: "override", override: terms({ daily_limit: "unlimited" }) } });
+  const fifty = setup({ "destructive-shell": { mode: "override", override: terms({ daily_limit: 50 }) } });
+  try {
+    for (const { dir } of [unlimited, fifty]) writeFileSync(join(dir, "overrides.json"), JSON.stringify({ entries: today }));
+    const more = await run(unlimited.dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    assert.equal(more.decision, "allow");
+    assert.equal(more.asked.length, 1);
+    const kept = JSON.parse(readFileSync(join(unlimited.dir, "overrides.json"), "utf8")).entries;
+    assert.equal(kept.length, 61, "the 61st of the day is counted");
+    const stopped = await run(fifty.dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    assert.equal(stopped.decision, "deny");
+    assert.equal(stopped.asked.length, 0);
+    assert.match(stopped.reason, /today's overrides/);
+  } finally { for (const s of [unlimited, fifty]) rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("the hook tells the workspace it reads unlimited terms", () => {
+  assert.ok(HOOK_CAPABILITIES.includes("unlimited_terms"));
+  assert.ok(HOOK_CAPABILITIES.includes("unblock_terms"));
 });
 
 test("without the window, Claude Code's prompt is offered only where allowed and where it really asks; otherwise it blocks and says how", async () => {
