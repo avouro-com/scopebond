@@ -49,7 +49,7 @@ test("a fail-closed block of a real hook call is recorded and status says so", (
   assert.equal(lines[0].kind, "fail_closed");
   assert.equal(lines[0].harness, "claude");
   assert.match(lines[0].message, /is not valid JSON/);
-  let out = "";
+  let out;
   try { out = execFileSync(process.execPath, [cli, "status"], { encoding: "utf8", env }); } catch (error) { out = String(error.stdout ?? ""); }
   assert.match(out, /hook failures +1 action\(s\) blocked in the last 24 h because the hook itself failed/);
 });

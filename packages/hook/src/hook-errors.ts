@@ -43,7 +43,7 @@ export function recordHookError(kind: HookErrorKind, message: string, now = Date
 
 /** How many failures in the last 24 hours, and the newest. */
 export function hookErrorSummary(dir: string, now = Date.now()): { last24h: number; newest: HookErrorLine | null } {
-  let lines: HookErrorLine[] = [];
+  let lines: HookErrorLine[];
   try {
     lines = readFileSync(join(dir, HOOK_ERRORS_FILE), "utf8").split("\n").filter(Boolean)
       .map((l) => { try { return JSON.parse(l) as HookErrorLine; } catch { return null; } })
