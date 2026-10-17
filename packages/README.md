@@ -40,5 +40,5 @@ Worked examples live in [`../examples/`](../examples/). After `pnpm -r build`, r
 | `gateway` | `quickstart.mjs` | Signed request allowed within policy and denied over its limit. |
 
 Conformance vectors are already included in the schema and verifier packages.
-Separate certification packages, collateral contracts, and registry features are
-future concepts, not available packages.
+Curated rule packs and Safe Install checks are part of Scopebond Cloud and are not
+packages in this repository.

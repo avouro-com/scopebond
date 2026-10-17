@@ -1,74 +1,86 @@
 # Scope policy
 
-This repository contains Scopebond's free, Apache-2.0 open-source guardrails and
-verification components for AI coding agents: Claude Code, Cursor, Codex, MCP,
-framework tools, and GitHub pull requests. They check supported actions routed
-through configured connections and produce verifiable records. Scopebond Cloud,
-the hosted shared workspace, is a separate proprietary service and is not included.
+This repository contains Scopebond's free, Apache-2.0 open-source engine for AI coding
+agents: Claude Code, Cursor, Codex, GitHub Copilot, MCP, framework tools, and GitHub
+pull requests. It checks supported actions routed through configured connections,
+blocks what your rules say to block, and produces records anyone can verify offline.
+Scopebond Cloud, the hosted service, is a separate proprietary product and is not
+included.
 
-This is the contract that decides what belongs in Scopebond. It is written for
-two readers: contributors, and the **automated scope-review agent** that reads
-every pull request and issue and judges it against this document. Keep it precise —
-the agent's verdict is only as good as this document.
+This is the contract that decides what belongs in this repository. It is written for
+two readers: contributors, and the **automated scope-review agent** that reads every
+pull request and issue and judges it against this document. Keep it precise: the
+agent's verdict is only as good as this document.
 
-The current product connects visibility, control, and evidence for supported coding
-tools. Additional business-platform connections, collateral deposits, and registry
-features are future concepts, not current product capabilities or a request to
-implement them. Substantive scope changes still require maintainer sign-off.
+## The rule: engine or knowledge?
+
+- **Engine belongs here.** How to read, decide, enforce, record or verify, written so
+  it is true of any tool. Examples: tool adapters, the shell parser, the rule
+  language, git and package-install detection, receipts, verification, and the client
+  code that talks to Scopebond Cloud.
+- **Knowledge does not.** What is risky about a specific vendor CLI, cloud API, MCP
+  server, website or package, and curated rule catalogs. That is maintained as rule
+  packs in Scopebond Cloud.
+- **The exception: the starter protections.** Protected branches, destructive shell
+  commands, secret files, and Scopebond's own settings stay here, because core safety
+  is always free.
 
 ## In scope
 
-- **Policy enforcement** — the gateway proxy (HTTP + MCP ingress) that evaluates
-  the policy vocabulary in real time, denies out-of-policy actions, and fails closed.
-- **Receipts** — countersigning actions in the ACTA `scopebond:receipt` envelope;
-  attestation of occurrence and content (not a compliance verdict).
-- **Kill switch** — halting execution for one or all agents, fail-closed.
-- **The verdict layer** — `scopebond-verify` (`violates(policy, receipts, claimed)`),
-  the policy schema, the test vectors, and the conformance suite. Deterministic,
-  reproducible, no network, no clock.
-- **Future registry work** — indexer, read API, and on-chain contracts are parked;
-  route proposals to a maintainer rather than treating them as current work.
-- **Portability** — anything that lets a track record be read by any counterparty
-  without a platform's permission.
-- **Framework/wallet integrations** — as separate leaf packages that emit
-  `scopebond:receipt`.
-- Docs, examples, tests, and tooling for the above.
+- **Enforcement:** the hook, the agent and the gateway evaluate the policy vocabulary
+  before an action runs, deny out-of-policy actions, and fail closed.
+- **Tool adapters:** turning each supported coding agent's tool calls into actions,
+  and shell decomposition.
+- **Detection:** recognising an action's type from the actual request, for example a
+  git push or a package install, without vendor-specific risk knowledge.
+- **The rule language and the starter protections,** plus running rule packs that
+  Scopebond Cloud delivers as signed data.
+- **Receipts:** countersigning actions in the `scopebond:receipt` envelope.
+  Receipts attest to occurrence and content; they are not a compliance verdict.
+- **Kill switch:** halting execution for one or all agents, failing closed.
+- **Verification:** `@scopebond/verify`, the policy schema, the test vectors and the
+  conformance suite. Deterministic and reproducible, with no network and no clock.
+- **The client side of Scopebond Cloud:** connecting, delivering records, and
+  receiving signed rules, so anyone can read exactly what runs on their computers.
+- **Integrations** as separate leaf packages that emit `scopebond:receipt`.
+- Docs, examples, tests and tooling for the above.
 
 ## Out of scope (reject or route to a maintainer)
 
-- **Detection, analytics, dashboards-for-customers, or SOC/compliance features**
-  sold to gateway users. The gateway is enforcement + receipts + kill switch only.
-- **Anything custodial** — code that lets Scopebond hold a key that can move
-  collateral, or that makes a fee loss-contingent, or adds claim discretion.
+- **Vendor or ecosystem knowledge:** new CLI, cloud API, MCP server, website or package
+  profiles; curated rule lists; malicious-package, typo-squat or domain-reputation
+  data or verdicts. These belong in Scopebond Cloud rule packs.
+- **Analytics, customer dashboards, inventory, approvals workflows, or compliance
+  reporting.**
+- **The hosted service:** tenancy, billing, SSO, retention, quotas, the hosted portal.
+  It is proprietary and lives in a separate repository.
+- **Anything custodial:** code that lets Scopebond hold a customer's keys or secrets.
 - **Vendor or agent-framework SDK dependencies inside a core package**
-  (`policy-schema`, `verify`, `gateway`, `sdk`, `contracts`). External services go
-  behind an interface with a local implementation; framework glue is a leaf package.
-- **The hosted control plane** — tenancy, billing, SSO, retention, quotas, the
-  hosted dashboard app. That is proprietary and lives in a separate repository.
-- **The compliance/audit-readiness engine** and any prior-project (codename) code.
-- **A second cloud, Postgres, a separate indexer, an SSR framework, a sovereign
-  chain, or a v1 token** — these contradict settled architecture decisions.
+  (`policy-schema`, `verify`, `gateway`, `sdk`). External services go behind an
+  interface with a local implementation; framework glue is a leaf package.
+- **Remote code:** downloading and running code from a server. Rule packs are data,
+  never code.
 
 ## Hard constraints (a change that breaks one is rejected regardless of merit)
 
-- **Fail closed.** Deny-by-default; unparseable input denies or goes stale; never "no limit."
-- **No PII** in receipts, anchors, or evidence — hashes only.
-- **Determinism** of `violates()` — no network or wall-clock reads; the evaluation
+- **Fail closed.** Deny by default; unparseable input denies or goes stale; never "no limit."
+- **No file contents, prompts or secrets** in receipts, anchors or evidence.
+- **Determinism** of verification: no network or wall-clock reads; the evaluation
   timestamp is an input; ambiguity resolves for the operator.
-- **Closed schema** — unknown clause types or fields make a policy invalid.
-- **No secrets, no private material, no prior-project codenames** (the OSS gate enforces this).
-- **Trademark** — a fork must rename; "Scopebond-compatible" requires passing the conformance suite.
+- **Closed schema.** Unknown clause types or fields make a policy invalid.
+- **No secrets, no private material, no prior-project codenames.** The OSS gate enforces this.
+- **Trademark.** A fork must rename; "Scopebond-compatible" requires passing the conformance suite.
 
 ## How the agent should decide
 
-For each PR/issue, classify as one of:
+For each PR or issue, classify it as one of:
 
-- **ALIGNED** — within "In scope", breaks no hard constraint. Proceed to normal review.
-- **NEEDS-CHANGES** — in scope but violates a constraint or a package rule that the
+- **ALIGNED:** within "In scope" and breaks no hard constraint. Proceed to normal review.
+- **NEEDS-CHANGES:** in scope, but it violates a constraint or a package rule that the
   author can fix. Explain precisely what to change.
-- **OUT-OF-SCOPE** — matches "Out of scope", or expands scope / adds a new package /
+- **OUT-OF-SCOPE:** matches "Out of scope", or expands scope, adds a new package, or
   changes a public interface or a settled decision. **Do not close it; label it and
   route it to a maintainer** for a human decision.
 
-Always cite the specific rule above. When genuinely uncertain, prefer NEEDS-CHANGES
-or OUT-OF-SCOPE (route to a human) over ALIGNED — false "aligned" is the costly error.
+Always cite the specific rule above. When genuinely uncertain, prefer NEEDS-CHANGES or
+OUT-OF-SCOPE (route to a human) over ALIGNED: a false "aligned" is the costly error.

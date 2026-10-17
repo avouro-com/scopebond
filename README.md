@@ -80,9 +80,13 @@ In unattended setup, pass `--yes` to `init` after reviewing the configuration yo
 authorizing.
 
 > **Open source and hosted.** Everything in this repository is free, Apache-2.0
-> open-source software, and it works without an account. Scopebond Cloud, the hosted
-> workspace, is a separate proprietary service with Free and paid plans. Connecting
-> one to the other changes the licence of neither.
+> open-source software, and it works without an account: the engine that checks and
+> records every action, the starter protections, your own rules, and offline
+> verification. Scopebond Cloud is a separate proprietary service with Free and paid
+> plans. It adds curated rule packs that are kept up to date, Safe Install checks on
+> the packages and downloads your agents install, one set of rules for every computer,
+> approvals, inventory, and history for audits. Connecting one to the other changes
+> the licence of neither.
 
 ## How it works
 
@@ -163,8 +167,10 @@ components send their records and health signals to the workspace.
 | [`native`](packages/native) | The signed single executable for Windows: the Scopebond Agent and the hook in one program, and its installer. Windows program, not on npm. |
 | [`tray`](packages/tray) | The Scopebond tray for Windows, a Tauri program. Windows program, not on npm. |
 
-All of them are free to use and self-host under Apache-2.0. Scopebond Cloud's hosted
-portal, tenancy, billing, shared retention and administration are not included.
+All of them are free to use and self-host under Apache-2.0. Not included, because they
+are part of Scopebond Cloud: the curated rule packs, Safe Install checks, the hosted
+portal, rules managed across many computers, approvals, inventory, shared retention
+and evidence, administration, the API and billing.
 
 ## Coverage and limits
 
@@ -195,9 +201,9 @@ portal, tenancy, billing, shared retention and administration are not included.
 - **A signature proves less than it may seem.** It supports the integrity and
   provenance of what the signer asserted. By itself it does not prove an external
   effect, complete coverage, or regulatory compliance. See [SPEC.md](SPEC.md).
-- **Future concepts are not product capabilities.** Additional business-platform
-  connections, collateral deposits, and on-chain registry features are ideas, not
-  current features; see the [product roadmap](https://scopebond.com/roadmap).
+- **Future connections are not product capabilities.** Additional business-platform
+  connections are ideas, not current features; see the
+  [product roadmap](https://scopebond.com/roadmap).
 
 ## Verification and developer examples
 
