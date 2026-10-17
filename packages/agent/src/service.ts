@@ -55,8 +55,8 @@ export const STOPPED_FILE = "agent-stopped.json";
 /** The person's tray settings: which notifications they want. "blocks": blocks and problems (the default for a new install);
  *  "problems": problems only (the default before, and for an install whose person never chose); "off". The older "all"
  *  meant blocks and problems too, and is read as "blocks". */
-export const TRAY_SETTINGS_FILE = "agent-settings.json";
-export type NotificationSetting = "blocks" | "problems" | "off";
+const TRAY_SETTINGS_FILE = "agent-settings.json";
+type NotificationSetting = "blocks" | "problems" | "off";
 export interface TraySettings { notifications: NotificationSetting }
 
 const notificationSetting = (value: unknown): NotificationSetting | null =>
@@ -126,7 +126,7 @@ function recordAgentError(dir: string, message: string): void {
 }
 
 /** How long one delivery cycle may run before the agent stops waiting for it. */
-export const CYCLE_LIMIT_MS = 10 * 60_000;
+const CYCLE_LIMIT_MS = 10 * 60_000;
 
 export interface Service {
   stop(): Promise<void>;
@@ -255,7 +255,7 @@ export async function waitForAgentVersion(dir: string, version: string, timeoutM
 export const AGENT_LOCK = "agent.lock";
 
 /** How long a lock whose agent never answered on its local channel still counts as an agent starting up. */
-export const AGENT_LOCK_STARTING_MS = 60_000;
+const AGENT_LOCK_STARTING_MS = 60_000;
 
 /** Take the one-agent-per-home lock: created exclusively, or taken over when the agent named in it is
  *  gone. The caller has already found no agent answering on the local channel, so a lock older than
@@ -868,7 +868,7 @@ export function workspaceLetsAsk(dir: string): boolean {
 }
 
 /** What the tray says after a person acted on an earlier block. */
-export function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone"): string {
+function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone"): string {
   switch (outcome) {
     case "allowed": return "Allowed. Run it again, or let the coding agent retry.";
     case "proposed": return "Allowed for 15 minutes. Your workspace's admins decide whether it stands; run it again meanwhile.";

@@ -135,7 +135,6 @@ function sentence(items: string[], limit = 12): string {
 
 /** The rules a person or a workspace can switch between recording (monitor) and blocking (enforce). */
 export const ENFORCEABLE_RULES = ["protect-branches", "safe-shell", "protect-write", "protect-read"] as const;
-export type EnforceableRule = typeof ENFORCEABLE_RULES[number];
 /** Every rule `rules enforce|monitor` accepts: the four above and the target rules. */
 export const SWITCHABLE_RULES: readonly string[] = [...ENFORCEABLE_RULES, ...TARGET_RULES];
 

@@ -22,7 +22,7 @@ const PAGE = 500;
 /** How long one batch is retried through lost connections and server errors. */
 const RETRY_FOR_MS = 15 * 60_000;
 
-export interface KeyGroup { kid: string; count: number; first: string | null; last: string | null }
+interface KeyGroup { kid: string; count: number; first: string | null; last: string | null }
 
 export interface RecoverIo {
   log(line: string): void;
@@ -37,7 +37,7 @@ const kidOf = (r: SignedReceipt): string | null => {
 };
 
 /** Walk the whole local log once and count receipts per signing key other than `currentKid`. */
-export function groupByEarlierKey(store: SqliteReceiptStore, currentKid: string): KeyGroup[] {
+function groupByEarlierKey(store: SqliteReceiptStore, currentKid: string): KeyGroup[] {
   const groups = new Map<string, KeyGroup>();
   for (let after = 0; ;) {
     const page = store.page(after, PAGE);

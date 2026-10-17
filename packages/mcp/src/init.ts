@@ -7,7 +7,7 @@ import { loadOrCreateAttester } from "@scopebond/gateway/node";
 /** The tool-name pattern of the starter policy: an allowlist of names that conventionally mark
  *  a read-only tool. Every other tool, including any whose name does not say what it does, is
  *  denied. */
-export const READ_ONLY_TOOL_PATTERN = "^(read|list|get|search|describe|view)_[A-Za-z0-9_]+$";
+const READ_ONLY_TOOL_PATTERN = "^(read|list|get|search|describe|view)_[A-Za-z0-9_]+$";
 
 /** A starter MCP policy: allow only tools whose names mark them read-only on the server, deny
  *  everything else. A name is a convention, not a guarantee: review the server's tools/list and

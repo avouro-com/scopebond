@@ -431,7 +431,7 @@ const entryMatches = harnessEntryMatches;
  *  silently delete the user's other settings, so the installer stops instead. */
 /** A config file's text without a UTF-8 byte-order mark: Windows PowerShell 5.1 writes one
  *  (Set-Content -Encoding UTF8), and JSON.parse refuses the whole file because of it. */
-export function readConfigText(file: string): string {
+function readConfigText(file: string): string {
   return readFileSync(file, "utf8").replace(/^\uFEFF/, "");
 }
 

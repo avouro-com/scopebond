@@ -26,7 +26,7 @@ export const DEFAULT_WORKSPACE = "https://cloud.scopebond.com";
 /** Where the installer keeps its settings: the machine's first (an install for every user, set by an administrator), then this
  *  user's. A per-user value, which any program running as the person can write, never overrides the machine's. */
 export const SETTINGS_KEYS = ["HKLM\\Software\\Avouro\\Scopebond", "HKCU\\Software\\Avouro\\Scopebond"] as const;
-export const WORKSPACE_VALUE = "Workspace";
+const WORKSPACE_VALUE = "Workspace";
 /** An install key the installer was given (`msiexec … KEY=sbk_…`): a company-wide install connects with it, with no code. */
 export const INSTALL_KEY_VALUE = "InstallKey";
 const INSTALL_KEY = /^sbk_[A-Za-z0-9_-]{20,96}$/;

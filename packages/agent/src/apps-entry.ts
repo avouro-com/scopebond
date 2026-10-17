@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 
 export const UNINSTALL_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ScopebondAgent";
 export const UNINSTALL_SCRIPT = "uninstall-agent.ps1";
-export const DISPLAY_NAME = "Scopebond Agent";
+const DISPLAY_NAME = "Scopebond Agent";
 export const PUBLISHER = "Avouro LLC";
 
 /** A PowerShell single-quoted string. PowerShell ends such a string at any of its single quotes, the ASCII one and the

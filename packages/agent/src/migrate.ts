@@ -58,7 +58,7 @@ const systemReg: RegRunner = (args) => {
   try { execFileSync(windowsTool("reg"), args, { stdio: "ignore", windowsHide: true }); return true; } catch { return false; }
 };
 
-export function defaultMigrateDeps(): MigrateDeps {
+function defaultMigrateDeps(): MigrateDeps {
   return {
     reg: systemReg,
     exists: existsSync,

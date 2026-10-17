@@ -31,7 +31,7 @@ export interface CycleOptions {
 }
 
 /** One cycle sends for at most this long, so a long queue never holds up the rules check and the credential renewal. */
-export const CYCLE_DELIVERY_MS = 60_000;
+const CYCLE_DELIVERY_MS = 60_000;
 
 export interface CycleResult {
   at: number;
