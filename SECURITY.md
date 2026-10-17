@@ -27,9 +27,9 @@ In scope: the code in this repository — the core packages `@scopebond/gateway`
 `@scopebond/verify`, `@scopebond/policy-schema` and `@scopebond/sdk`, and the
 connectors `@scopebond/hook`, `@scopebond/mcp`, `@scopebond/framework` and
 `@scopebond/github-action`, plus the `@scopebond/agent` companion (including its
-credential handling, local control channel, and update path). Policy and evidence
-conformance vectors are already in the tree. On-chain contracts and a registry
-read API are future work, not current product features.
+credential handling, local control channel, and update path), and the Windows
+programs `native` (the signed single executable and its installer) and `tray`.
+Policy and evidence conformance vectors are already in the tree.
 
 The hosted shared workspace (Scopebond Cloud) is a separate proprietary service,
 not open source and not included in this repository. Report issues affecting it
