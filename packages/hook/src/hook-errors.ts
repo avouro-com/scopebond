@@ -3,7 +3,7 @@
 // failed". Each one now appends a line to `hook-errors.jsonl` in the hook's folder: when, the hook version, the agent, what
 // kind of failure, and the message with the home folder masked and anything shaped like a credential removed. The file is
 // rotated at 256 KB (one older file kept). Best effort: recording never changes or delays the block itself.
-import { closeSync, fstatSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, ftruncateSync, openSync, readFileSync, readSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { maskHomeFolder } from "./home-mask.js";
 
@@ -31,22 +31,25 @@ export function redactHookError(message: string): string {
     .slice(0, 300);
 }
 
-/** Append one failure. Never throws. The size is read from the open file, not checked by path first; two hook calls that
- *  rotate at the same moment can at worst both rename, and the second finds nothing to move. */
+/** Append one failure. Never throws. Rotation works on the open file only (copy it to `.1`, then empty it), so nothing is
+ *  checked by path and then used. The file is opened read-write rather than for appending (Windows cannot empty a file opened
+ *  for appending) and the line goes at its end; two hook calls failing at the same moment can at worst lose one line. */
 export function recordHookError(kind: HookErrorKind, message: string, now = Date.now(), ctx = context): void {
   if (!ctx) return;
   const file = join(ctx.dir, HOOK_ERRORS_FILE);
   const line: HookErrorLine = { at: new Date(now).toISOString(), version: ctx.version, harness: ctx.harness, kind, message: redactHookError(message) };
   let fd: number | null = null;
   try {
-    fd = openSync(file, "a", 0o600);
-    if (fstatSync(fd).size > MAX_BYTES) {
-      closeSync(fd);
-      fd = null;
-      try { renameSync(file, `${file}.1`); } catch { /* another hook call rotated it first */ }
-      fd = openSync(file, "a", 0o600);
+    fd = openSync(file, constants.O_RDWR | constants.O_CREAT, 0o600);
+    let end = fstatSync(fd).size;
+    if (end > MAX_BYTES) {
+      const older = Buffer.alloc(end);
+      readSync(fd, older, 0, end, 0);
+      writeFileSync(`${file}.1`, older, { mode: 0o600 });
+      ftruncateSync(fd, 0);
+      end = 0;
     }
-    writeSync(fd, `${JSON.stringify(line)}\n`);
+    writeSync(fd, `${JSON.stringify(line)}\n`, end);
   } catch { /* the block already happened; a record that cannot be written changes nothing */ } finally {
     if (fd !== null) { try { closeSync(fd); } catch { /* nothing to keep */ } }
   }
