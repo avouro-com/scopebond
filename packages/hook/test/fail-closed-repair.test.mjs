@@ -42,6 +42,25 @@ test("each kind of setup failure gets its own repair", () => {
   assert.equal(repairFor(Object.assign(new Error("x"), { repair: "do this" })), "do this");
   assert.match(repairFor(new Error("something else")), /doctor`, which names what is broken/);
   assert.match(repairFor(new Error("SQLITE_BUSY: database is locked")), /run the action again/);
+  // A missing rules file on a computer with its own rules: init creates it (rules apply would need agent.key and rules.json).
+  assert.match(repairFor(Object.assign(new Error("ENOENT"), { code: "ENOENT", file: "/x/policy.json", kind: "policy", managed: false })), /\/x\/policy\.json is missing: run `.*init`/);
+  // A computer that follows its workspace's rules refuses `rules apply`: fetch them again instead, never `init --force`.
+  for (const code of [undefined, "ENOENT"]) {
+    const repair = repairFor(Object.assign(new SyntaxError("not valid JSON"), { code, file: "/x/policy.json", kind: "policy", managed: true }));
+    assert.match(repair, /policy sync/);
+    assert.doesNotMatch(repair, /rules apply|init --force/);
+  }
+});
+
+test("a workspace-managed computer whose rules file does not parse is told to fetch the rules again", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-repair-managed-"));
+  scaffold(dir, ENFORCE);
+  writeFileSync(join(dir, "managed-rules.json"), JSON.stringify({ revision: 1, local_changes: false }));
+  writeFileSync(join(dir, "policy.json"), "{ not json");
+  const r = runHook(dir, ["claude"], JSON.stringify({ tool_name: "Write", tool_input: { file_path: "src/app.ts" } }));
+  assert.equal(r.status, 2, r.stdout);
+  assert.match(r.stdout, /policy sync/);
+  assert.doesNotMatch(r.stdout, /rules apply/);
 });
 
 test("doctor counts a broken rules file and an unreachable workspace as problems", async () => {

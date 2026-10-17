@@ -391,6 +391,11 @@ export function writeMeta(dir: string, meta: ManagedMeta): void { writeAtomic(jo
 /** Whether a workspace currently manages the rules on this computer. */
 export const isManaged = (dir: string): boolean => existsSync(join(dir, MANAGED_DOC_FILE));
 
+/** Whether the workspace document in force lets people change rules on this computer. */
+export function allowsLocalChanges(dir: string): boolean {
+  try { return (JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as { local_changes?: unknown }).local_changes === true; } catch { return false; }
+}
+
 export function writeAtomic(file: string, text: string): void {
   const temp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
   try { writeFileSync(temp, text, { mode: 0o600 }); renameSync(temp, file); }

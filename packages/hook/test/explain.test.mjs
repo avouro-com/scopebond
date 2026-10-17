@@ -79,6 +79,11 @@ test("a workspace rule is named as the tray names it, and the record id is given
   assert.doesNotMatch(message, /edit .*rules\.json/);
 });
 
+test("Scopebond's own protection is named as the tray names it, not by its clause id", () => {
+  const message = explainDeny({ policy: { clauses: [{ id: "protect-scopebond-write", mode: "enforce" }] }, clauseId: "protect-scopebond-write", detail: "denied", intent: pushIntent });
+  assert.match(message.split("\n")[0], /"Change Scopebond's or the agent's safety settings" \(rule protect-scopebond-write, enforce\)\.$/);
+});
+
 test("a post-hoc record carries no instruction to stop (the action already ran)", () => {
   const message = explainDeny({ policy, clauseId: "protect-branches", detail: "x", intent: pushIntent, postHoc: true });
   assert.doesNotMatch(message, /What to do:/);

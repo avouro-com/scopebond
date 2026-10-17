@@ -3,7 +3,7 @@
 // failed". Each one now appends a line to `hook-errors.jsonl` in the hook's folder: when, the hook version, the agent, what
 // kind of failure, and the message with the home folder masked and anything shaped like a credential removed. The file is
 // rotated at 256 KB (one older file kept). Best effort: recording never changes or delays the block itself.
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { maskHomeFolder } from "./home-mask.js";
 
@@ -21,34 +21,51 @@ export function setHookErrorContext(dir: string, harness: string | null, version
   context = { dir, harness, version };
 }
 
-/** The message as it is kept: home folder masked, credential-shaped values removed, at most 300 characters. */
+/** The message as it is kept: home folder masked, credential-shaped values removed, at most 300 characters. A word such as
+ *  "token" or "key" counts only with `=` or `:` after it, so a parser's "Unexpected token" keeps its detail. */
 export function redactHookError(message: string): string {
   return maskHomeFolder(message)
     .replace(/\bsb[a-z]_[A-Za-z0-9_-]{6,}/g, "[credential]")
-    .replace(/\b(?:Bearer|token|key|secret|password)[=: ]+\S+/gi, "[removed]")
+    .replace(/\bBearer\s+\S+|\b(?:token|key|secret|password)\s*[=:]\s*\S+/gi, "[removed]")
     .replace(/\s+/g, " ")
     .slice(0, 300);
 }
 
-/** Append one failure. Never throws. */
+/** Append one failure. Never throws. The size is read from the open file, not checked by path first; two hook calls that
+ *  rotate at the same moment can at worst both rename, and the second finds nothing to move. */
 export function recordHookError(kind: HookErrorKind, message: string, now = Date.now(), ctx = context): void {
   if (!ctx) return;
+  const file = join(ctx.dir, HOOK_ERRORS_FILE);
+  const line: HookErrorLine = { at: new Date(now).toISOString(), version: ctx.version, harness: ctx.harness, kind, message: redactHookError(message) };
+  let fd: number | null = null;
   try {
-    const file = join(ctx.dir, HOOK_ERRORS_FILE);
-    if (existsSync(file) && statSync(file).size > MAX_BYTES) renameSync(file, `${file}.1`);
-    const line: HookErrorLine = { at: new Date(now).toISOString(), version: ctx.version, harness: ctx.harness, kind, message: redactHookError(message) };
-    appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });
-  } catch { /* the block already happened; a record that cannot be written changes nothing */ }
+    fd = openSync(file, "a", 0o600);
+    if (fstatSync(fd).size > MAX_BYTES) {
+      closeSync(fd);
+      fd = null;
+      try { renameSync(file, `${file}.1`); } catch { /* another hook call rotated it first */ }
+      fd = openSync(file, "a", 0o600);
+    }
+    writeSync(fd, `${JSON.stringify(line)}\n`);
+  } catch { /* the block already happened; a record that cannot be written changes nothing */ } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* nothing to keep */ } }
+  }
 }
 
-/** How many failures in the last 24 hours, and the newest. */
-export function hookErrorSummary(dir: string, now = Date.now()): { last24h: number; newest: HookErrorLine | null } {
-  let lines: HookErrorLine[];
+/** The lines of one file, oldest first; none when it cannot be read. */
+function readLines(file: string): HookErrorLine[] {
   try {
-    lines = readFileSync(join(dir, HOOK_ERRORS_FILE), "utf8").split("\n").filter(Boolean)
+    return readFileSync(file, "utf8").split("\n").filter(Boolean)
       .map((l) => { try { return JSON.parse(l) as HookErrorLine; } catch { return null; } })
       .filter((l): l is HookErrorLine => !!l && typeof l.at === "string");
-  } catch { return { last24h: 0, newest: null }; }
+  } catch { return []; }
+}
+
+/** How many failures in the last 24 hours, and the newest. The rotated file is read too, so a rotation does not hide
+ *  failures from the same day. */
+export function hookErrorSummary(dir: string, now = Date.now()): { last24h: number; newest: HookErrorLine | null } {
+  const file = join(dir, HOOK_ERRORS_FILE);
+  const lines = [...readLines(`${file}.1`), ...readLines(file)];
   const recent = lines.filter((l) => now - Date.parse(l.at) < DAY_MS);
   return { last24h: recent.length, newest: lines.at(-1) ?? null };
 }

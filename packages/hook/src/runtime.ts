@@ -12,7 +12,7 @@ import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
 import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
-import { isManaged } from "./managed.js";
+import { allowsLocalChanges, isManaged } from "./managed.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
@@ -300,9 +300,11 @@ export function namedActionTypes(policy: unknown): Set<string> {
 /** The compiled rules, or an error that names the file (a bare JSON.parse error said neither which file nor what to do). */
 export function readPolicyFile(path: string): ReturnType<typeof JSON.parse> {
   let text: string;
-  try { text = readFileSync(path, "utf8"); } catch (error) { throw Object.assign(error as Error, { file: path, kind: "policy" }); }
+  // Whether it is the workspace's: the repair then fetches it again rather than rebuilding it from local rules.
+  const managed = isManaged(dirname(path));
+  try { text = readFileSync(path, "utf8"); } catch (error) { throw Object.assign(error as Error, { file: path, kind: "policy", managed }); }
   try { return JSON.parse(text.replace(/^\uFEFF/, "")); }
-  catch (error) { throw Object.assign(new SyntaxError(`the rules file ${path} is not valid JSON (${(error as Error).message})`), { file: path, kind: "policy" }); }
+  catch (error) { throw Object.assign(new SyntaxError(`the rules file ${path} is not valid JSON (${(error as Error).message})`), { file: path, kind: "policy", managed }); }
 }
 
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
@@ -330,8 +332,12 @@ export function createHookRuntime(config: RuntimeConfig) {
   // When the project has a readable rule set, a denial names the command that edits it
   // rather than the generated file.
   // A computer that follows its workspace's rules is changed by an admin there; editing the local rules file does nothing.
-  const rulesRemedy = isManaged(dirname(config.policyPath))
-    ? "this computer follows your Scopebond workspace's rules; ask an admin of the workspace to change the rule or unblock this action"
+  // Where the workspace allows changes on computers, the person can switch the rule here themselves.
+  const policyDir = dirname(config.policyPath);
+  const rulesRemedy = isManaged(policyDir)
+    ? allowsLocalChanges(policyDir)
+      ? `this computer follows your Scopebond workspace's rules, and the workspace lets you change them here: \`${cliCommand("rules monitor <rule>")}\` makes a rule record without blocking (or ask an admin of the workspace)`
+      : "this computer follows your Scopebond workspace's rules; ask an admin of the workspace to change the rule or unblock this action"
     : existsSync(join(dirname(config.policyPath), RULES_FILE))
       ? `run \`${cliCommand("rules")}\` to see the limits in plain terms, or edit ${join(dirname(config.policyPath), RULES_FILE)}`
       : undefined;

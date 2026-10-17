@@ -27,6 +27,21 @@ test("a failure is recorded with its kind, redacted, and summed for the last day
   assert.match(hookErrorLine(dir, now), /^1 action\(s\) blocked in the last 24 h because the hook itself failed; newest .* \(deadline\): no decision within 50 s$/);
   assert.equal(hookErrorLine(mkdtempSync(join(tmpdir(), "sb-hook-errors-empty-")), now), null);
   assert.equal(redactHookError("Bearer abc.def"), "[removed]");
+  assert.equal(redactHookError("password: hunter2 key=abc"), "[removed] [removed]");
+  // A parser's own words keep their detail: "token" or "key" counts only with = or : after it.
+  assert.equal(redactHookError("Unexpected token 'b', \"{ broken\" is not valid JSON"), "Unexpected token 'b', \"{ broken\" is not valid JSON");
+  assert.equal(redactHookError("open '/x/agent.key' failed"), "open '/x/agent.key' failed");
+});
+
+test("failures in the rotated file still count for the last day", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-errors-rot-count-"));
+  const now = Date.parse("2026-10-17T12:00:00Z");
+  const line = (at) => JSON.stringify({ at: new Date(at).toISOString(), version: null, harness: "claude", kind: "fail_closed", message: "x" });
+  writeFileSync(join(dir, `${HOOK_ERRORS_FILE}.1`), `${line(now - 2 * 86_400_000)}\n${line(now - 3_600_000)}\n`);
+  writeFileSync(join(dir, HOOK_ERRORS_FILE), `${line(now - 60_000)}\n`);
+  const summary = hookErrorSummary(dir, now);
+  assert.equal(summary.last24h, 2);
+  assert.equal(summary.newest.at, new Date(now - 60_000).toISOString());
 });
 
 test("the file is rotated past 256 KB, keeping one older file", () => {
@@ -52,4 +67,16 @@ test("a fail-closed block of a real hook call is recorded and status says so", (
   let out;
   try { out = execFileSync(process.execPath, [cli, "status"], { encoding: "utf8", env }); } catch (error) { out = String(error.stdout ?? ""); }
   assert.match(out, /hook failures +1 action\(s\) blocked in the last 24 h because the hook itself failed/);
+});
+
+test("a fail-closed block of a Cursor hook call is recorded too", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-errors-cursor-"));
+  scaffold(dir, ENFORCE);
+  writeFileSync(join(dir, "policy.json"), "{ broken");
+  const out = execFileSync(process.execPath, [cli, "cursor"], { input: JSON.stringify({ hook_event_name: "beforeShellExecution", cwd: dir, command: "ls" }), encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: dir } });
+  assert.equal(JSON.parse(out).permission, "deny");
+  const lines = readFileSync(join(dir, HOOK_ERRORS_FILE), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].harness, "cursor");
+  assert.equal(lines[0].kind, "fail_closed");
 });

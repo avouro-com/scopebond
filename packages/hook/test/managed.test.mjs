@@ -250,6 +250,13 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
     assert.deepEqual(reported["safe-shell"], ["enforce", "workspace"]);
     assert.equal(w.calls[0].headers["if-none-match"], `"1:${d1.rules_digest}"`);
     assert.equal(w.calls.length, 1);
+    // A rules file that no longer parses (the fix a fail-closed block names: `policy sync`): no ETag goes out, and the same
+    // version is installed again rather than answered "unchanged".
+    writeFileSync(join(dir, "policy.json"), "{ not json");
+    w = fakeWorkspace([{ status: 200, body: d1, etag: `"1:${d1.rules_digest}"` }]);
+    assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "applied", revision: 1 });
+    assert.equal(w.calls[0].headers["if-none-match"], undefined);
+    assert.doesNotThrow(() => JSON.parse(readFileSync(join(dir, "policy.json"), "utf8")));
     // An older version is refused and the refusal is confirmed; the rules in force stay.
     const d2 = doc(2, { "push-protected": { mode: "monitor" } });
     w = fakeWorkspace([{ status: 200, body: d2, etag: `"2:${d2.rules_digest}"` }]);
