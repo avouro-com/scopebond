@@ -27,6 +27,7 @@ import { copilotCloudAgent, copilotSurface, surfaceSignals, recordCopilotProbe, 
 import { copilotAnswer, type CopilotAnswer } from "./copilot-answer.js";
 import { createHash } from "node:crypto";
 import { createHookRuntime, readPolicyFile, type Decision } from "./runtime.js";
+import { hookErrorLine, recordHookError, setHookErrorContext } from "./hook-errors.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { replaceFile } from "./safe-fs.js";
 import { scaffold, harnessSnippet, placeHook, coverWithoutNpx, migrateToMonitorDefault, installRepositoryHooks, REPO_HARNESSES, type HookPlacement } from "./init.js";
@@ -316,6 +317,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // A repository token (a cloud agent's sandbox, a CI job) connects this hook as that repository when no one signed in here.
     const dir = await repositoryConnectionDir(configFolder, { home: userHome(), repository: () => repositoryFacts(cwd).repository });
     configFolder = dir;
+    setHookErrorContext(dir, harness, hookVersion());
     // A repository run decides nothing before its workspace's rules are loaded once: in a fresh sandbox the starter rules
     // would let through what the workspace blocks. Tried again on every call until it succeeds.
     await requireRepositoryRules(dir);
@@ -331,7 +333,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
-    if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; deny(copilotDeadlineReason()); }
+    if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; recordHookError("deadline", copilotDeadlineReason()); deny(copilotDeadlineReason()); }
     const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
     noteIfBlocked(dir, cwd, harness, decision);
     // Allowed: what is left is record delivery, which must not turn an allowed call into a "did not finish" deny.
@@ -363,9 +365,10 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     process.exit(0);
   } catch (error) {
     try { runtime?.close(); } catch { /* already failing; the deny below is what matters */ }
-    if (error instanceof RepositoryEnrollmentError) deny(`Scopebond hook failed closed: ${error.message}. Repair: ${error.repair}.`);
+    if (error instanceof RepositoryEnrollmentError) { recordHookError("fail_closed", error.message); deny(`Scopebond hook failed closed: ${error.message}. Repair: ${error.repair}.`); }
     // No Scopebond setup here at all (no policy): for Copilot that is the cloud agent's sandbox, so say what to do about it.
     if (harness === "copilot" && configFolder !== undefined && !existsSync(join(configFolder, "policy.json"))) deny(COPILOT_NOT_SET_UP);
+    recordHookError("fail_closed", (error as Error).message);
     deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`);
   }
 }
@@ -577,6 +580,7 @@ async function runCursor(): Promise<void> {
       : decision.reason;
   } catch (error) {
     permission = "deny";
+    recordHookError("fail_closed", (error as Error).message);
     message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`;
   } finally {
     // Release the SQLite handles on every path: an unclosed writer leaves its
@@ -1778,6 +1782,8 @@ function runStatus(args: string[] = []): void {
     const activeDir = resolveConfigDir(process.cwd());
     const connection = loadConnection(activeDir);
     if (connection) for (const line of describeDelivery(activeDir, connection).lines) console.log(`                   ${line}`);
+    const failures = hookErrorLine(activeDir);
+    if (failures) console.log(`  hook failures    ${failures}`);
   }
   {
     const activeDir = resolveConfigDir(process.cwd());
@@ -1978,6 +1984,8 @@ async function runDoctor(): Promise<void> {
   const fileAccess = fileAccessLine(active);
   if (fileAccess) console.log(`  file access      ${fileAccess}`);
   if (!hasPolicy) problems.push("no policy found in the active config dir");
+  const failures = hookErrorLine(active);
+  if (failures) console.log(`  hook failures    ${failures}`);
   // C-01: a rules file that does not parse blocks every action; doctor says so with the fix instead of "ok".
   if (hasPolicy) {
     try { readPolicyFile(join(active, "policy.json")); }
