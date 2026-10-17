@@ -274,6 +274,16 @@ test("sync installs, confirms, keeps a newer version only, and falls back to the
     assert.deepEqual(await syncPolicy(dir, opts(w.fetchImpl)), { state: "disconnected" });
     assert.equal(isManaged(dir), false);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8")), compile({ ...defaultRules(), ...ENFORCE }, agentKid));
+    // ... and the person is told once that the workspace's rules stopped applying (C-03); then never again.
+    const { rulesDroppedNotice, markRulesDroppedTold } = await import("../dist/policy-sync.js");
+    assert.ok(readMeta(dir).rules_dropped_at);
+    assert.match(rulesDroppedNotice(dir, "scopebond-hook login"), /workspace's rules stopped applying on this computer .*sign in again with scopebond-hook login/);
+    markRulesDroppedTold(dir);
+    assert.equal(rulesDroppedNotice(dir, "scopebond-hook login"), null);
+    // A second 401 on own rules drops nothing, so it says nothing new.
+    w = fakeWorkspace([{ status: 401 }]);
+    await syncPolicy(dir, opts(w.fetchImpl));
+    assert.equal(rulesDroppedNotice(dir, "scopebond-hook login"), null);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

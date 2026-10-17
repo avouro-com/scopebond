@@ -236,8 +236,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       save({ policy_signature: state, last_error: "the workspace connection is no longer valid; in enforce mode the workspace rules in force stay until this computer signs in again or is disconnected" });
       return { state: "disconnected" };
     }
-    backToOwnRules();
-    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules" });
+    const dropped = backToOwnRules();
+    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules",
+      ...(dropped ? { rules_dropped_at: at, rules_dropped_told: false } : {}) });
     return { state: "disconnected" };
   }
   /** The workspace sets no rules for this computer (a 204, or its signed 200 form): back to its own rules, once admitted. */
@@ -251,7 +252,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     const last = meta.last_ack;
     const confirmed = changed || !last || last.revision !== 0 || last.result !== "loaded"
       ? await ack({ export_id: `rev-0-${installationId}`, revision: 0, rules_digest: UNMANAGED_DIGEST, result: "loaded" }) : last;
-    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...issued(issuedAt) });
+    // Accepted again and the workspace sets no rules: its own rules are what the workspace asks for, nothing was dropped.
+    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
     return { state: "own_rules", changed };
   };
   if (res.status === 204) return toOwnRules(admitSigned({ result: "unsigned" }, mode, at), null);
@@ -334,7 +336,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   options.afterPolicyWrite?.(dir);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
   save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null,
-    policy_signature: admitted.state, ...issued(issuedAt) });
+    policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
   return { state: "applied", revision: doc.revision };
 }
 
@@ -392,4 +394,17 @@ export function heartbeatIntervalFrom(headers: { get(name: string): string | nul
   if (!/^\d{2,3}$/.test(raw)) return null;
   const n = Number(raw);
   return n >= 60 && n <= 900 ? n : null;
+}
+
+/** The one-time notice that the workspace's rules stopped applying here after a refused connection, or null when there is none
+ *  to give (never dropped, already told, or back on the workspace's rules). */
+export function rulesDroppedNotice(dir: string, loginCommand: string): string | null {
+  const meta = readMeta(dir);
+  if (!meta.rules_dropped_at || meta.rules_dropped_told) return null;
+  return `Scopebond: your workspace's rules stopped applying on this computer at ${meta.rules_dropped_at} because the workspace refused its connection; this computer's own rules apply until you sign in again with ${loginCommand}.`;
+}
+
+/** Mark the notice given, so it is said once. Never throws. */
+export function markRulesDroppedTold(dir: string): void {
+  try { writeMeta(dir, { ...readMeta(dir), rules_dropped_told: true }); } catch { /* said again next time: better than never */ }
 }

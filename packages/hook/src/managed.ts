@@ -376,6 +376,10 @@ export interface ManagedMeta {
   grants_digest?: string | null;
   /** A repository connection: when the workspace's rules first loaded (a rules check succeeded); calls are denied before. */
   repository_rules_at?: string | null;
+  /** When a refused connection (401) put this computer back on its own rules while the workspace's were in force, and whether
+   *  the person was told (once, with the next decision; `status` says it until the computer signs in again). */
+  rules_dropped_at?: string | null;
+  rules_dropped_told?: boolean | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 

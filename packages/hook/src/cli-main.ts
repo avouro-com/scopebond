@@ -58,7 +58,7 @@ import { compileManaged, isManaged, readMeta, writeMeta, MANAGED_DOC_FILE, type 
 import { agentPresence, healthLines, recommendedFrom, NATIVE_DOWNLOAD_URL } from "./client-health.js";
 import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.js";
 import { createOverrideHandler, overrideHint } from "./override.js";
-import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
+import { markRulesDroppedTold, rulesDroppedNotice, syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor, repositoryFacts } from "./receipt-context.js";
 import { noteBlock, projectOf } from "./block-notes.js";
@@ -345,7 +345,11 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     runtime.close();
     runtime = undefined;
     keepStore(dir);
-    if (decision.decision === "deny") deny(decision.reason);
+    // C-03: once, the person is told that a refused connection put this computer back on its own rules: with a deny, in its
+    // reason; on an allow, as Claude Code's warning line (other agents read it on their next deny, and `status` always says it).
+    const dropped = rulesDroppedNotice(dir, cliCommand("login"));
+    if (dropped && (decision.decision === "deny" || harness === "claude")) markRulesDroppedTold(dir);
+    if (decision.decision === "deny") deny(dropped ? `${decision.reason}\n${dropped}` : decision.reason);
     // Only Claude Code is offered "ask" by the override (override.ts); Copilot is answered "ask" if a decision ever is one
     // (its cloud agent reads that as a deny); any other harness treats it as a denial.
     if (decision.decision === "ask") {
@@ -354,7 +358,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
       deny(decision.reason);
     }
     // Stay silent on allow/not_evaluated so the coding agent's normal permission
-    // flow remains in charge. Scopebond blocks; it never silently approves.
+    // flow remains in charge. Scopebond blocks; it never silently approves. (A warning line is not a decision.)
+    if (dropped && harness === "claude") process.stdout.write(`${JSON.stringify({ systemMessage: dropped })}\n`);
     process.exit(0);
   } catch (error) {
     try { runtime?.close(); } catch { /* already failing; the deny below is what matters */ }
