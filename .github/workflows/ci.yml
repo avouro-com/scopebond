@@ -50,9 +50,15 @@ jobs:
         run: pnpm run test:scripts
 
   # The hook's path, case and shell handling is Windows-sensitive (backslash paths,
-  # case-insensitive names, PowerShell), so the full unit suites run there too.
+  # case-insensitive names, PowerShell), so the full unit suites run there too. Run one
+  # after another they took about six minutes, four of them the hook's, so the hook's
+  # suite runs as two halves beside one job for every other package.
   test-windows:
-    name: test-windows
+    name: "test-windows (${{ matrix.part }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [hook-1, hook-2, packages]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -64,8 +70,17 @@ jobs:
           node-version: 22.20.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build + test (tsc build, then node --test)
-        run: pnpm -r test
+      - name: Build all packages (each suite needs its workspace dependencies built)
+        run: pnpm -r build
+      - name: Hook tests, half ${{ matrix.part == 'hook-1' && '1' || '2' }} of 2
+        if: matrix.part != 'packages'
+        working-directory: packages/hook
+        env:
+          SHARD: ${{ matrix.part == 'hook-1' && '1/2' || '2/2' }}
+        run: node --test --test-timeout=300000 "--test-shard=$env:SHARD" test/*.test.mjs test/*.test.js
+      - name: Every other package (tsc build, then node --test)
+        if: matrix.part == 'packages'
+        run: pnpm -r --filter "!@scopebond/hook" test
         # The Windows journeys run in their own jobs below, in parallel.
         env:
           SCOPEBOND_WINDOWS_JOURNEY: "0"
@@ -183,3 +198,20 @@ jobs:
       - name: Install the packed tarball globally and drive the real install
         shell: bash
         run: SCOPEBOND_PACK_DIR="$RUNNER_TEMP/pack" node packages/hook/test/install-matrix.mjs
+
+  # One check for every platform job, so branch protection can require them all by one name: it fails unless every
+  # Windows, macOS and install job passed. Until it is required, the merge queue waits only for `test`.
+  platforms:
+    name: platforms
+    if: always()
+    needs: [test-windows, test-macos, windows-journey, single-executable, install-matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every platform job to have passed
+        shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do test "$result" = success; done

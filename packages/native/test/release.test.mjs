@@ -97,8 +97,21 @@ test("the SBOM names every crate in the tray's Cargo.lock, and the dependency sc
 
 test("the tray's checks run when the agent or the hook it starts changes", () => {
   const on = workflow("tray.yml").split("\njobs:")[0];
-  for (const path of ["packages/tray/**", "packages/native/**", "packages/agent/**", "packages/hook/**", ".github/workflows/**"]) {
+  for (const path of ["packages/tray/**", "packages/native/**", "packages/agent/**", "packages/hook/**", ".github/workflows/tray.yml"]) {
     assert.ok(on.includes(`- "${path}"`), path);
+  }
+  // Its own workflow file, not every workflow: another workflow's change does not build the tray.
+  assert.ok(!on.includes(`- ".github/workflows/**"`));
+});
+
+test("a pull request builds the release only when the release workflow or its release-only tooling changes", () => {
+  const on = workflow("native-release.yml").split("\npermissions:")[0];
+  const paths = [...on.split(/^ {2}pull_request:/m)[1].matchAll(/^ {6}- (\S+)$/gm)].map((m) => m[1]);
+  assert.ok(paths.includes(".github/workflows/native-release.yml"));
+  assert.ok(paths.includes("packages/native/stamp.mjs") && paths.includes("packages/native/wix/**"));
+  // ci.yml builds and runs the executable and the MSI, and tray.yml builds the tray, on every pull request.
+  for (const covered of ["packages/native/**", "packages/tray/**", "packages/native/build-sea.mjs", "packages/native/build-msi.mjs"]) {
+    assert.ok(!paths.includes(covered), covered);
   }
 });
 
