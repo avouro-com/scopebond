@@ -58,7 +58,7 @@ test("an out-of-policy action is denied outright, with the rule named", () => {
   const dir = enrolled();
   const result = cursorEvent(dir, { hook_event_name: "beforeShellExecution", cwd: dir, command: "rm -rf src" });
   assert.equal(result.permission, "deny");
-  assert.match(result.agentMessage, /rule "safe-shell"/);
+  assert.match(result.agentMessage, /"Run a command that deletes data or shuts down the computer" \(rule safe-shell, enforce\)/);
 });
 
 test("an action no rule covers still defers to Cursor's own prompt", () => {

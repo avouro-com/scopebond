@@ -61,9 +61,10 @@ function deliveryHeaders(dir: string): Record<string, string> {
     };
   } catch { return {}; }
 }
-/** Whether the workspace document in force lets people change rules on this computer. */
-function installedLocalChanges(dir: string): boolean {
-  try { return (JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as { local_changes?: unknown }).local_changes === true; } catch { return false; }
+/** Whether the rules file in force parses. One that is missing or does not (a disk error, a hand edit) blocks every action,
+ *  so the next check fetches and installs the workspace's rules again instead of answering "unchanged". */
+function policyFileParses(dir: string): boolean {
+  try { JSON.parse(readFileSync(join(dir, "policy.json"), "utf8").replace(/^\uFEFF/, "")); return true; } catch { return false; }
 }
 /** The grants digest (policy-signature.ts `digestGrants`) of the workspace document in force, or null. */
 function installedGrantsDigest(dir: string): string | null {
@@ -85,7 +86,7 @@ function signatureHeader(dir: string): Record<string, string> {
 const ackReasonFor = (reason: SignatureReason): RefusalReason =>
   reason === "wrong_computer" ? "wrong_computer" : reason === "replayed" ? "stale_revision" : "invalid_document";
 import {
-  ruleReport, toolSettingsMark, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
+  allowsLocalChanges, ruleReport, toolSettingsMark, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
 import { SERVICE_RULES_CAPABILITY } from "./service-rules.js";
 
@@ -190,6 +191,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     return true;
   };
 
+  const intact = policyFileParses(dir);
   let res: Response;
   try {
     res = await fetchImpl(`${base}/v1/policy`, {
@@ -199,7 +201,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // and the always/requests terms, session budgets and blocked services only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
-      headers: { ...auth, "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(","), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag && meta.grants_digest ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
+      headers: { ...auth, "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(","), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag && meta.grants_digest && intact ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -236,8 +238,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       save({ policy_signature: state, last_error: "the workspace connection is no longer valid; in enforce mode the workspace rules in force stay until this computer signs in again or is disconnected" });
       return { state: "disconnected" };
     }
-    backToOwnRules();
-    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules" });
+    const dropped = backToOwnRules();
+    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules",
+      ...(dropped ? { rules_dropped_at: at, rules_dropped_told: false } : {}) });
     return { state: "disconnected" };
   }
   /** The workspace sets no rules for this computer (a 204, or its signed 200 form): back to its own rules, once admitted. */
@@ -251,7 +254,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     const last = meta.last_ack;
     const confirmed = changed || !last || last.revision !== 0 || last.result !== "loaded"
       ? await ack({ export_id: `rev-0-${installationId}`, revision: 0, rules_digest: UNMANAGED_DIGEST, result: "loaded" }) : last;
-    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...issued(issuedAt) });
+    // Accepted again and the workspace sets no rules: its own rules are what the workspace asks for, nothing was dropped.
+    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
     return { state: "own_rules", changed };
   };
   if (res.status === 204) return toOwnRules(admitSigned({ result: "unsigned" }, mode, at), null);
@@ -283,12 +287,12 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   }
   // Whether people may change rules on this computer is outside the rules digest, so the same version can arrive
   // with only that switch changed; it is a change to install, not "unchanged".
-  const sameVersion = isManaged(dir) && r.revision === meta.revision && r.rules_digest === meta.rules_digest && meta.revision !== null;
+  const sameVersion = intact && isManaged(dir) && r.revision === meta.revision && r.rules_digest === meta.rules_digest && meta.revision !== null;
   // So are the tool settings (signed on their own): a section with another digest or key is a change to install. An answer
   // without the section changes nothing here (a hook call is not sent it; only the Scopebond Agent is).
   // And so are the allowances, revoked allowances, session budgets and request answers: a revoked allowance arrives at the same
   // version with the same rules digest, and must reach the computer.
-  const switchChanged = sameVersion && ((r.local_changes === true) !== installedLocalChanges(dir)
+  const switchChanged = sameVersion && ((r.local_changes === true) !== allowsLocalChanges(dir)
     || (toolSettingsMark(r) !== null && toolSettingsMark(r) !== installedToolSettingsMark(dir))
     || digestGrants(r) !== installedGrantsDigest(dir));
   // The same version already in force: confirm it again if the last confirmation did not land.
@@ -307,7 +311,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     save({ etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, policy_signature: again.admitted.state, ...issued(again.issuedAt) });
     return { state: "unchanged", revision: meta.revision! };
   }
-  const inspected = inspectManaged(raw, switchChanged ? { installationId, currentRevision: null }
+  // Reinstalling the version in force (a switch changed, or the rules file on disk no longer parses) is not a stale revision.
+  const inspected = inspectManaged(raw, switchChanged || !intact ? { installationId, currentRevision: null }
     : { installationId, currentRevision: isManaged(dir) ? meta.revision : null, currentDigest: isManaged(dir) ? meta.rules_digest : null });
   const echo = typeof r.export_id === "string" && Number.isInteger(r.revision) && typeof r.rules_digest === "string" && /^[0-9a-f]{64}$/.test(r.rules_digest)
     ? { export_id: r.export_id, revision: r.revision as number, rules_digest: r.rules_digest } : null;
@@ -334,7 +339,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   options.afterPolicyWrite?.(dir);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
   save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null,
-    policy_signature: admitted.state, ...issued(issuedAt) });
+    policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
   return { state: "applied", revision: doc.revision };
 }
 
@@ -392,4 +397,17 @@ function heartbeatIntervalFrom(headers: { get(name: string): string | null } | u
   if (!/^\d{2,3}$/.test(raw)) return null;
   const n = Number(raw);
   return n >= 60 && n <= 900 ? n : null;
+}
+
+/** The one-time notice that the workspace's rules stopped applying here after a refused connection, or null when there is none
+ *  to give (never dropped, already told, or back on the workspace's rules). */
+export function rulesDroppedNotice(dir: string, loginCommand: string): string | null {
+  const meta = readMeta(dir);
+  if (!meta.rules_dropped_at || meta.rules_dropped_told) return null;
+  return `Scopebond: your workspace's rules stopped applying on this computer at ${meta.rules_dropped_at} because the workspace refused its connection; this computer's own rules apply until you sign in again with ${loginCommand}.`;
+}
+
+/** Mark the notice given, so it is said once. Never throws. */
+export function markRulesDroppedTold(dir: string): void {
+  try { writeMeta(dir, { ...readMeta(dir), rules_dropped_told: true }); } catch { /* said again next time: better than never */ }
 }

@@ -383,12 +383,17 @@ export function randomQueueId(): string {
 function refusalMessage(status: number, text: string): string {
   const base = "ingest failed: HTTP " + status;
   try {
-    const body = JSON.parse(text) as { code?: unknown; remediation?: unknown; plan_lifts_to?: unknown };
+    const body = JSON.parse(text) as { code?: unknown; remediation?: unknown; plan_lifts_to?: unknown; reason?: unknown; ref?: unknown };
     const code = typeof body.code === "string" && /^[a-z_]{1,40}$/.test(body.code) ? body.code : null;
     const remediation = typeof body.remediation === "string" ? body.remediation.replace(/[^\x20-\x7e]/g, " ").slice(0, 240) : null;
     const lifts = body.plan_lifts_to;
     const liftsTo = code === "quota" && typeof lifts === "number" && Number.isSafeInteger(lifts) && lifts > 0 ? lifts : null;
-    return code ? `${base} (${code})${remediation ? ": " + remediation : ""}${liftsTo !== null ? ` [plan_lifts_to=${liftsTo}]` : ""}` : base;
+    // Why a credential was refused (revoked, workspace_suspended, scopebond_paused) and the workspace's reference for this
+    // answer, so a person can quote it to support. plan_lifts_to stays last: the tray reads it from the end.
+    const reason = code === "credential_refused" && typeof body.reason === "string" && /^[a-z_]{1,40}$/.test(body.reason) ? ` [reason=${body.reason}]` : "";
+    const ref = typeof body.ref === "string" && /^[A-Za-z0-9]{4,16}$/.test(body.ref) ? ` [ref ${body.ref}]` : "";
+    if (!code) return `${base}${ref}`;
+    return `${base} (${code})${remediation ? ": " + remediation : ""}${reason}${ref}${liftsTo !== null ? ` [plan_lifts_to=${liftsTo}]` : ""}`;
   } catch {
     return base;
   }

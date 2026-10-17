@@ -17,6 +17,7 @@
 //
 // `SCOPEBOND_HOOK_DEADLINE_MS` can only shorten the deadline (tests use it to prove the deny); it can never lengthen it.
 
+import { recordHookError } from "./hook-errors.js";
 import { writeSync } from "node:fs";
 
 export const HOOK_DEADLINE_MS: Readonly<Record<string, number>> = { claude: 55_000, codex: 28_000, cursor: 28_000, copilot: 45_000 };
@@ -95,7 +96,10 @@ export function armHookDeadline(command: string | undefined = process.argv[2], e
   const ms = hookDeadlineMs(command, env);
   if (ms === null) return () => {};
   deadlineAt = Date.now() + ms;
-  const timer = setTimeout(() => denyHookCall(command,
-    `Scopebond hook failed closed: no decision within ${ms < 1000 ? `${ms} ms` : `${Math.round(ms / 1000)} s`}, so this action is blocked rather than run unchecked. Run it again; if it keeps happening, run the Scopebond doctor command.`), ms);
+  const timer = setTimeout(() => {
+    const reason = `Scopebond hook failed closed: no decision within ${ms < 1000 ? `${ms} ms` : `${Math.round(ms / 1000)} s`}, so this action is blocked rather than run unchecked. Run it again; if it keeps happening, run the Scopebond doctor command.`;
+    recordHookError("deadline", reason);
+    denyHookCall(command, reason);
+  }, ms);
   return () => { clearTimeout(timer); deadlineAt = null; };
 }

@@ -26,7 +26,8 @@ import { mapClaudeToolUse, mapCodexToolUse, mapCopilotCall, copilotAsClaude, map
 import { copilotCloudAgent, copilotSurface, surfaceSignals, recordCopilotProbe, openCopilotProbe, readCopilotProbe, renderCopilotProbe, COPILOT_PROBE_FILE } from "./copilot-surface.js";
 import { copilotAnswer, type CopilotAnswer } from "./copilot-answer.js";
 import { createHash } from "node:crypto";
-import { createHookRuntime, type Decision } from "./runtime.js";
+import { createHookRuntime, readPolicyFile, type Decision } from "./runtime.js";
+import { hookErrorLine, recordHookError, setHookErrorContext } from "./hook-errors.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { replaceFile } from "./safe-fs.js";
 import { scaffold, harnessSnippet, placeHook, coverWithoutNpx, migrateToMonitorDefault, installRepositoryHooks, REPO_HARNESSES, type HookPlacement } from "./init.js";
@@ -58,7 +59,7 @@ import { compileManaged, isManaged, readMeta, writeMeta, MANAGED_DOC_FILE, type 
 import { agentPresence, healthLines, recommendedFrom, NATIVE_DOWNLOAD_URL } from "./client-health.js";
 import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.js";
 import { createOverrideHandler, overrideHint } from "./override.js";
-import { syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
+import { markRulesDroppedTold, rulesDroppedNotice, syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor, repositoryFacts } from "./receipt-context.js";
 import { noteBlock, projectOf } from "./block-notes.js";
@@ -266,16 +267,31 @@ function databaseGuard(dir: string, cwd: string, input: Record<string, unknown>)
   }
 }
 
-/** The one fix for a failure while deciding: the error's own when it names one, else `init`. */
-function repairFor(error: unknown): string {
-  const repair = (error as { repair?: unknown } | null)?.repair;
+/** The one fix for a failure while deciding: the error's own when it names one, else the command that fixes its kind (a broken
+ *  rules file, a full disk, a folder this account cannot write, a missing file), naming the file. `init` alone never helped a
+ *  file that exists: it writes only what is missing. */
+export function repairFor(error: unknown): string {
+  const e = (error ?? {}) as { repair?: unknown; code?: unknown; path?: unknown; file?: unknown; kind?: unknown; managed?: unknown; message?: unknown };
+  const repair = e.repair;
   if (typeof repair === "string" && repair) return repair;
+  const file = typeof e.file === "string" ? e.file : typeof e.path === "string" ? e.path : null;
+  if (e.code === "ENOSPC") return "free some disk space on this computer, then run the action again";
+  if ((e.code === "EACCES" || e.code === "EPERM") && file) return `make sure your account can read and write ${file} (it should be yours), then run \`${cliCommand("doctor")}\``;
+  // A computer that follows its workspace's rules refuses `rules apply`, and `init --force` would drop the workspace's rules:
+  // the fix is to fetch them again (a rules file that is missing or does not parse is installed again, not "unchanged").
+  if (e.kind === "policy" && e.managed === true) {
+    return `get your workspace's rules again with \`${cliCommand("policy sync")}\`; if that fails, ask an admin of your Scopebond workspace`;
+  }
+  if (e.code === "ENOENT" && file) return `${file} is missing: run \`${cliCommand("init")}\` to create it`;
+  if (e.kind === "policy") {
+    return `rebuild it with \`${cliCommand("rules apply")}\`; if that fails, \`${cliCommand("init --force")}\` restores the starter rules (it replaces your own rules and settings in that folder)`;
+  }
   // A busy local log is another Scopebond check on this computer writing at the same moment (two agents at once), not a
   // broken setup: init would not help.
   if (/database is locked|SQLITE_BUSY/i.test((error as Error | null)?.message ?? "")) {
     return `another Scopebond check on this computer was writing at the same moment; run the action again (if it keeps happening, \`${cliCommand("status")}\` says what holds it)`;
   }
-  return `run \`${cliCommand("init")}\``;
+  return `run \`${cliCommand("doctor")}\`, which names what is broken and the command that fixes it`;
 }
 
 /** What a Copilot check that ran out of time answers. */
@@ -306,6 +322,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // A repository token (a cloud agent's sandbox, a CI job) connects this hook as that repository when no one signed in here.
     const dir = await repositoryConnectionDir(configFolder, { home: userHome(), repository: () => repositoryFacts(cwd).repository });
     configFolder = dir;
+    setHookErrorContext(dir, harness, hookVersion());
     // A repository run decides nothing before its workspace's rules are loaded once: in a fresh sandbox the starter rules
     // would let through what the workspace blocks. Tried again on every call until it succeeds.
     await requireRepositoryRules(dir);
@@ -321,7 +338,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
-    if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; deny(copilotDeadlineReason()); }
+    if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; recordHookError("deadline", copilotDeadlineReason()); deny(copilotDeadlineReason()); }
     const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
     noteIfBlocked(dir, cwd, harness, decision);
     // Allowed: what is left is record delivery, which must not turn an allowed call into a "did not finish" deny.
@@ -335,22 +352,30 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     runtime.close();
     runtime = undefined;
     keepStore(dir);
-    if (decision.decision === "deny") deny(decision.reason);
+    // C-03: once, the person is told that a refused connection put this computer back on its own rules: with a deny, in its
+    // reason; on an allow, as Claude Code's warning line (other agents read it on their next deny, and `status` always says it).
+    const dropped = rulesDroppedNotice(dir, cliCommand("login"));
+    // Marked told only where it is said: in a deny's or an ask's reason, or Claude Code's warning line on an allow.
+    if (dropped && (decision.decision === "deny" || decision.decision === "ask" || harness === "claude")) markRulesDroppedTold(dir);
+    const told = (reason: string): string => (dropped ? `${reason}\n${dropped}` : reason);
+    if (decision.decision === "deny") deny(told(decision.reason));
     // Only Claude Code is offered "ask" by the override (override.ts); Copilot is answered "ask" if a decision ever is one
     // (its cloud agent reads that as a deny); any other harness treats it as a denial.
     if (decision.decision === "ask") {
-      if (harness === "claude") askClaude(decision.reason);
-      if (harness === "copilot") askCopilot(decision.reason);
-      deny(decision.reason);
+      if (harness === "claude") askClaude(told(decision.reason));
+      if (harness === "copilot") askCopilot(told(decision.reason));
+      deny(told(decision.reason));
     }
     // Stay silent on allow/not_evaluated so the coding agent's normal permission
-    // flow remains in charge. Scopebond blocks; it never silently approves.
+    // flow remains in charge. Scopebond blocks; it never silently approves. (A warning line is not a decision.)
+    if (dropped && harness === "claude") process.stdout.write(`${JSON.stringify({ systemMessage: dropped })}\n`);
     process.exit(0);
   } catch (error) {
     try { runtime?.close(); } catch { /* already failing; the deny below is what matters */ }
-    if (error instanceof RepositoryEnrollmentError) deny(`Scopebond hook failed closed: ${error.message}. Repair: ${error.repair}.`);
+    if (error instanceof RepositoryEnrollmentError) { recordHookError("fail_closed", error.message); deny(`Scopebond hook failed closed: ${error.message}. Repair: ${error.repair}.`); }
     // No Scopebond setup here at all (no policy): for Copilot that is the cloud agent's sandbox, so say what to do about it.
     if (harness === "copilot" && configFolder !== undefined && !existsSync(join(configFolder, "policy.json"))) deny(COPILOT_NOT_SET_UP);
+    recordHookError("fail_closed", (error as Error).message);
     deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`);
   }
 }
@@ -517,9 +542,12 @@ async function runCursor(): Promise<void> {
   let message: string;
   let postHoc = false;
   let runtime: ReturnType<typeof createHookRuntime> | undefined;
+  let configDir: string | undefined;
   try {
     const cwd = input?.cwd ? textOf(input.cwd) : process.cwd();
     const dir = resolveConfigDir(cwd);
+    configDir = dir;
+    setHookErrorContext(dir, "cursor", hookVersion());
     const permissionMode = typeof input.permission_mode === "string" ? input.permission_mode : null;
     const branch = currentBranch(cwd);
     const mapped = fillPushBranch(mapCursorEvent(event, input), branch);
@@ -562,6 +590,7 @@ async function runCursor(): Promise<void> {
       : decision.reason;
   } catch (error) {
     permission = "deny";
+    recordHookError("fail_closed", (error as Error).message);
     message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`;
   } finally {
     // Release the SQLite handles on every path: an unclosed writer leaves its
@@ -570,6 +599,11 @@ async function runCursor(): Promise<void> {
   }
   if (postHoc && permission === "deny") {
     message = `${message}\nCursor reports a file edit only after it is written, so this edit was not prevented. Review and revert it yourself.`;
+  }
+  // C-03 for Cursor: its agent reads a deny's message, so the one-time notice rides on the next deny.
+  if (permission === "deny" && configDir !== undefined) {
+    const dropped = rulesDroppedNotice(configDir, cliCommand("login"));
+    if (dropped) { markRulesDroppedTold(configDir); message = `${message}\n${dropped}`; }
   }
   process.stdout.write(JSON.stringify({ permission, agentMessage: message }) + "\n");
   process.exit(0);
@@ -1785,6 +1819,8 @@ function runStatus(args: string[] = []): void {
     const activeDir = resolveConfigDir(process.cwd());
     const connection = loadConnection(activeDir);
     if (connection) for (const line of describeDelivery(activeDir, connection).lines) console.log(`                   ${line}`);
+    const failures = hookErrorLine(activeDir);
+    if (failures) console.log(`  hook failures    ${failures}`);
   }
   {
     const activeDir = resolveConfigDir(process.cwd());
@@ -1985,6 +2021,13 @@ async function runDoctor(): Promise<void> {
   const fileAccess = fileAccessLine(active);
   if (fileAccess) console.log(`  file access      ${fileAccess}`);
   if (!hasPolicy) problems.push("no policy found in the active config dir");
+  const failures = hookErrorLine(active);
+  if (failures) console.log(`  hook failures    ${failures}`);
+  // C-01: a rules file that does not parse blocks every action; doctor says so with the fix instead of "ok".
+  if (hasPolicy) {
+    try { readPolicyFile(join(active, "policy.json")); }
+    catch (error) { problems.push(`${(error as Error).message}: ${repairFor(error)}`); }
+  }
   const ignored = untrustedProjectPolicy(process.cwd());
   const shadowed = shadowedUserConnection(active);
   if (shadowed) {
@@ -2050,10 +2093,12 @@ async function runDoctor(): Promise<void> {
   } else {
     let reachable: string;
     try {
-      const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET", headers: withHookVersion({}) });
+      const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET", headers: withHookVersion({}), signal: AbortSignal.timeout(10_000) });
       reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
     } catch (error) { reachable = `unreachable (${(error as Error).message})`; }
     console.log(`  cloud            ${connection.url} — ${reachable}`);
+    // C-11: an unreachable or unhealthy workspace is a problem (records queue here; nothing is lost), not "All good".
+    if (reachable !== "reachable") problems.push(`the workspace is ${reachable}: records stay queued on this computer and send once it answers (service status: https://status.scopebond.com)`);
     // An authenticated check. Reaching the workspace says nothing about whether it
     // still accepts this computer; the rules endpoint answers 401 when it does not.
     let accepted: string;
@@ -2073,6 +2118,7 @@ async function runDoctor(): Promise<void> {
       } else accepted = `unknown (HTTP ${res.status})`;
     } catch (error) { accepted = `not checked (${(error as Error).message})`; }
     console.log(`  connection       ${accepted}`);
+    if (accepted === "REFUSED (401)") problems.push(`the workspace refused this computer's connection: sign in again with \`${cliCommand("login")}\``);
     const delivery = describeDelivery(active, connection);
     for (const line of delivery.lines) console.log(`                   ${line}`);
     problems.push(...delivery.problems);

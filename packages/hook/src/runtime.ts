@@ -12,6 +12,7 @@ import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
 import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
+import { allowsLocalChanges, isManaged } from "./managed.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
@@ -296,6 +297,16 @@ export function namedActionTypes(policy: unknown): Set<string> {
   return out;
 }
 
+/** The compiled rules, or an error that names the file (a bare JSON.parse error said neither which file nor what to do). */
+export function readPolicyFile(path: string): ReturnType<typeof JSON.parse> {
+  let text: string;
+  // Whether it is the workspace's: the repair then fetches it again rather than rebuilding it from local rules.
+  const managed = isManaged(dirname(path));
+  try { text = readFileSync(path, "utf8"); } catch (error) { throw Object.assign(error as Error, { file: path, kind: "policy", managed }); }
+  try { return JSON.parse(text.replace(/^\uFEFF/, "")); }
+  catch (error) { throw Object.assign(new SyntaxError(`the rules file ${path} is not valid JSON (${(error as Error).message})`), { file: path, kind: "policy", managed }); }
+}
+
 /** Build the runtime. Throws on any setup failure (unparseable policy, missing
  *  key, unavailable store) — the CLI turns that into a fail-closed deny. */
 export function createHookRuntime(config: RuntimeConfig) {
@@ -305,7 +316,7 @@ export function createHookRuntime(config: RuntimeConfig) {
   // Paths are signed with the home folder masked (home-mask.ts), so a rule that names the home folder by its full path
   // is rewritten the same way to keep matching.
   const homes = config.homeFolders ?? homeFolders();
-  const policy = maskHomeInPolicy(upgradeStarterPolicy(JSON.parse(readFileSync(config.policyPath, "utf8").replace(/^\uFEFF/, ""))), homes);
+  const policy = maskHomeInPolicy(upgradeStarterPolicy(readPolicyFile(config.policyPath)), homes);
   /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */
@@ -320,9 +331,16 @@ export function createHookRuntime(config: RuntimeConfig) {
   const { attester } = loadOrCreateAttester({ file: config.attesterPath });
   // When the project has a readable rule set, a denial names the command that edits it
   // rather than the generated file.
-  const rulesRemedy = existsSync(join(dirname(config.policyPath), RULES_FILE))
-    ? `run \`${cliCommand("rules")}\` to see the limits in plain terms, or edit ${join(dirname(config.policyPath), RULES_FILE)}`
-    : undefined;
+  // A computer that follows its workspace's rules is changed by an admin there; editing the local rules file does nothing.
+  // Where the workspace allows changes on computers, the person can switch the rule here themselves.
+  const policyDir = dirname(config.policyPath);
+  const rulesRemedy = isManaged(policyDir)
+    ? allowsLocalChanges(policyDir)
+      ? `this computer follows your Scopebond workspace's rules, and the workspace lets you change them here: \`${cliCommand("rules monitor <rule>")}\` makes a rule record without blocking (or ask an admin of the workspace)`
+      : "this computer follows your Scopebond workspace's rules; ask an admin of the workspace to change the rule or unblock this action"
+    : existsSync(join(dirname(config.policyPath), RULES_FILE))
+      ? `run \`${cliCommand("rules")}\` to see the limits in plain terms, or edit ${join(dirname(config.policyPath), RULES_FILE)}`
+      : undefined;
   const { store: baseStore } = openReceiptStore({ db: config.dbPath });
   const storeBusyMs = config.storeBusyTimeoutMs ?? STORE_BUSY_MS;
   if (config.storeBusyTimeoutMs !== undefined) { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(storeBusyMs); } catch { /* keeps its wait */ } }
@@ -491,7 +509,8 @@ export function createHookRuntime(config: RuntimeConfig) {
           // from `rules.json`, so telling someone to hand-edit it invites a change the
           // next `rules` run would overwrite.
           remedy: rulesRemedy,
-        }) + (override?.hint() ? ` ${override.hint()}` : ""),
+          actionId: (result.receipt as { payload?: { action_ref?: { action_id?: string } } } | undefined)?.payload?.action_ref?.action_id ?? null,
+        }) + (override?.hint() ? `\n${override.hint()}` : ""),
         clauseId,
         ...(blockedServiceKindOf(clauseId) ? { code: BLOCKED_SERVICE_REASON } : {}),
         receipt: result.receipt,

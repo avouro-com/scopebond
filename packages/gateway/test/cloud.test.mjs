@@ -257,3 +257,23 @@ test("flush({ maxMs }) starts no batch once its time is up; the next flush carri
     assert.equal(exporter.pending(), 0);
   } finally { exporter.stop(); }
 });
+
+test("a refusal keeps why a credential was refused and the workspace's reference; plan_lifts_to stays last", async () => {
+  const lastError = async (status, body) => {
+    const ex = createCloudExporter({
+      url: "https://c", credential: "sbm_k", outbox: createMemoryCloudOutbox(), batchSize: 10, flushMs: 1e9,
+      fetch: async () => new Response(JSON.stringify(body), { status }),
+    });
+    ex.enqueue(receipt(`action:cloud-ref-${status}-${Object.keys(body).length}`));
+    await ex.flush();
+    const error = ex.status().lastError;
+    ex.stop();
+    return error;
+  };
+  assert.equal(await lastError(401, { error: "unauthorized", code: "credential_refused", reason: "workspace_suspended", remediation: "Its owner can reopen it.", ref: "1a2b3c4d" }),
+    "ingest failed: HTTP 401 (credential_refused): Its owner can reopen it. [reason=workspace_suspended] [ref 1a2b3c4d]");
+  assert.equal(await lastError(503, { error: "unavailable", ref: "abcd1234" }), "ingest failed: HTTP 503 [ref abcd1234]");
+  assert.equal(await lastError(429, { error: "quota", code: "quota", remediation: "Records stay queued.", plan_lifts_to: 50000, ref: "0f0f0f0f" }),
+    "ingest failed: HTTP 429 (quota): Records stay queued. [ref 0f0f0f0f] [plan_lifts_to=50000]");
+  assert.equal(await lastError(401, { code: "credential_refused", reason: "Not A Code!", ref: "<script>" }), "ingest failed: HTTP 401 (credential_refused)");
+});

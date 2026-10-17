@@ -9,6 +9,7 @@ import type { HookConnection } from "./cloud.js";
 import { ago, readDeliveryState, waitingUntil, type DeliveryState } from "./delivery-state.js";
 import { cliCommand } from "./version.js";
 import { readSignatureState, signatureMode } from "./policy-signature.js";
+import { readMeta } from "./managed.js";
 
 export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
 
@@ -115,6 +116,9 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
     lines.push("fix: free some disk space, or make that file and its -wal and -shm files writable for your user (do not delete it: it holds records waiting to be sent)");
     problems.push(`the delivery queue cannot be opened (${queueError}); actions stay allowed and are recorded on this computer, and are sent once the queue can be written again`);
   }
+  // C-03: a refused connection that dropped the workspace's rules says so first: protection changed, not only delivery.
+  const dropped = readMeta(dir).rules_dropped_at;
+  if (dropped) lines.push(`WORKSPACE RULES NOT IN FORCE since ${dropped}: the workspace refused this computer's connection, so its own rules apply.`);
   if (state.invalid_since !== null) {
     fix = cliCommand(`login ${connection.url}`);
     lines.push(`NOT DELIVERING since ${new Date(state.invalid_since).toISOString()}: the workspace refused this computer's connection (it was revoked, replaced or removed).`);
