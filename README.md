@@ -230,9 +230,9 @@ Existing policy and verification conformance vectors are available here.
 
 ## Releases
 
-Current release set: `@scopebond/policy-schema@0.9.0`, `@scopebond/verify@0.6.8`,
-`@scopebond/gateway@0.20.2`, `@scopebond/sdk@0.1.9`, `@scopebond/hook@0.28.0`,
-`@scopebond/agent@0.11.1`, `@scopebond/github-action@0.5.15`, `@scopebond/mcp@2.0.16`,
+Current release set: `@scopebond/policy-schema@0.10.0`, `@scopebond/verify@0.6.9`,
+`@scopebond/gateway@0.20.3`, `@scopebond/sdk@0.1.10`, `@scopebond/hook@0.29.0`,
+`@scopebond/agent@0.11.2`, `@scopebond/github-action@0.5.16`, `@scopebond/mcp@2.0.17`,
 and `@scopebond/framework@0.3.18`. Release tooling keeps these references in step
 with package manifests. Public setup selects npm's latest published release;
 generated hook configuration and managed workspace updates can pin versions

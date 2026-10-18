@@ -1,5 +1,12 @@
 # @scopebond/verify
 
+## 0.6.9
+
+### Patch Changes
+
+- Updated dependencies [e4ba261]
+  - @scopebond/policy-schema@0.10.0
+
 ## 0.6.8
 
 ### Patch Changes

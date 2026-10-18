@@ -1,5 +1,14 @@
 # @scopebond/github-action
 
+## 0.5.16
+
+### Patch Changes
+
+- Updated dependencies [e4ba261]
+  - @scopebond/policy-schema@0.10.0
+  - @scopebond/gateway@0.20.3
+  - @scopebond/verify@0.6.9
+
 ## 0.5.15
 
 ### Patch Changes
