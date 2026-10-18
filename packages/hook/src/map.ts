@@ -18,6 +18,7 @@ import { deriveMcpOperations } from "./mcp-profiles.js";
 import { derivePackMcp, derivePackTargets } from "./packs.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
 import { packagesToCheck } from "./typed-ops.js";
+import { deriveInstalls, deriveSettingsInstalls, MCP_SETTINGS_FILE } from "./typed-install.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -1518,7 +1519,9 @@ function capDerived(mapped: Mapped[]): Mapped[] {
 }
 
 function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell" = "posix"): Mapped[] {
-  return capDerived(mapShellCall(command, cwd, dialect));
+  // What the command line installs or runs from outside the project (typed-install.ts), beside its commands.
+  const installs: Mapped[] = deriveInstalls(command, dialect).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
+  return capDerived([...mapShellCall(command, cwd, dialect), ...installs]);
 }
 
 function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powershell" = "posix"): Mapped[] {
@@ -1724,14 +1727,32 @@ function withHookSwitchGuard(out: Mapped[], toolInput: unknown, source: string):
   return HOOK_SWITCH_SETTING.test(text) ? [...out, ...pathIntents("file.write", HOOK_SWITCH_GUARD_PATH, source)] : out;
 }
 
+/** A write to a coding tool's MCP settings file adds the servers it configures: one `software.install` per server the new
+ *  text names (typed-install.ts), beside the write. The text is read for each server's launch command or URL only; its other
+ *  members (environment values, headers) are never read or recorded. Any other write is untouched. */
+function withSettingsInstalls(out: Mapped[], toolInput: unknown, source: string): Mapped[] {
+  const write = out.find((m) => m.intent.action_type === "file.write" && MCP_SETTINGS_FILE.test(textOf(m.intent.params.path)));
+  if (!write) return out;
+  const texts: string[] = [];
+  if (typeof toolInput === "string") texts.push(toolInput);
+  else if (toolInput && typeof toolInput === "object") {
+    const ti = toolInput as Record<string, unknown>;
+    for (const key of ["content", "file_text", "new_string", "new_str", "patch", "command", "input"]) if (typeof ti[key] === "string") texts.push(ti[key]);
+    if (Array.isArray(ti.edits)) for (const e of ti.edits) if (e && typeof (e as { new_string?: unknown }).new_string === "string") texts.push((e as { new_string: string }).new_string);
+  }
+  const path = textOf(write.intent.params.path);
+  const installs = texts.flatMap((text) => deriveSettingsInstalls(path, text));
+  return installs.length ? [...out, ...installs.map((intent): Mapped => ({ intent, evaluated: true, derived: true, source, ...(write.postHoc ? { postHoc: true } : {}) }))] : out;
+}
+
 /** Map a Claude Code tool call to the normalized actions it represents (see mapClaudeToolUseRaw), plus the hook-switch guard. */
 export function mapClaudeToolUse(input: Record<string, unknown>): Mapped[] {
-  return withHookSwitchGuard(mapClaudeToolUseRaw(input), input?.tool_input, textOf(input?.tool_name));
+  return withHookSwitchGuard(withSettingsInstalls(mapClaudeToolUseRaw(input), input?.tool_input, textOf(input?.tool_name)), input?.tool_input, textOf(input?.tool_name));
 }
 
 /** Map a Codex tool call (see mapCodexToolUseRaw), plus the hook-switch guard. */
 export function mapCodexToolUse(input: Record<string, unknown>): Mapped[] {
-  return withHookSwitchGuard(mapCodexToolUseRaw(input), input?.tool_input, textOf(input?.tool_name));
+  return withHookSwitchGuard(withSettingsInstalls(mapCodexToolUseRaw(input), input?.tool_input, textOf(input?.tool_name)), input?.tool_input, textOf(input?.tool_name));
 }
 
 function mapClaudeToolUseRaw(input: Record<string, unknown>): Mapped[] {
@@ -1885,7 +1906,7 @@ export function copilotAsClaude(input: Record<string, unknown>): Record<string, 
 export function mapCopilotCall(call: Record<string, unknown>): Mapped[] {
   const ti = (call?.tool_input ?? {}) as Record<string, unknown>;
   if (call?.tool_name === "Edit" && ti.file_path === undefined && typeof ti.patch === "string") {
-    return withHookSwitchGuard(mapApplyPatch(ti.patch, call.cwd ? textOf(call.cwd) : undefined), ti, "apply_patch");
+    return withHookSwitchGuard(withSettingsInstalls(mapApplyPatch(ti.patch, call.cwd ? textOf(call.cwd) : undefined), ti, "apply_patch"), ti, "apply_patch");
   }
   return mapClaudeToolUse(call);
 }
@@ -1910,7 +1931,7 @@ export function mapCursorEvent(event: string, payload: Record<string, unknown>):
       // Cursor reports an edit only once it has been made; there is no before-edit
       // hook to block at. The rule still decides and the decision is still recorded —
       // it just cannot be called prevention.
-      return pathIntents("file.write", rel(p.path ?? p.file_path, cwd), event).map((m) => ({ ...m, postHoc: true }));
+      return withSettingsInstalls(pathIntents("file.write", rel(p.path ?? p.file_path, cwd), event).map((m) => ({ ...m, postHoc: true })), p, event);
     case "beforeMCPExecution": {
       // Cursor sends `mcp_server_name`, `tool_name` and `tool_input` (the arguments as JSON text), and the server's `url`
       // (HTTP) or launch `command` (stdio). Older payloads named them `server`, `tool` and `args`/`arguments`.

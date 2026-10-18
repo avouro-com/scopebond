@@ -20,7 +20,7 @@
 // Nothing here uses the network. `packs add` (cli-main.ts) puts a local pack file into this cache for a person at a terminal.
 
 import { createHash, verify } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { PACK_LIMITS, packRef, packSigningInput, validatePack, type Pack } from "@scopebond/policy-schema/pack";
 import { policyKeys, publicKeyFrom, type PolicyKey } from "./policy-keys.js";
@@ -52,14 +52,28 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 export const packsDir = (dir: string): string => join(dir, PACKS_DIR);
+
+/** A regular file's text when it is at most `max` bytes: "too_large" past that, null when it cannot be read. The file is
+ *  opened once and its type and size are checked on that descriptor, so what passed the check is what is read. */
+function readBounded(file: string, max: number): string | "too_large" | null {
+  let fd: number;
+  try { fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0)); } catch { return null; }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return null;
+    if (st.size > max) return "too_large";
+    return readFileSync(fd, "utf8");
+  } catch { return null; } finally { closeSync(fd); }
+}
 const fileOf = (dir: string, ref: string): string => join(packsDir(dir), `${ref}.json`);
 
 /** Read the index; null when it is missing or not exactly the documented shape. */
 export function readPackIndex(dir: string): PackIndex | null {
   try {
     const file = join(packsDir(dir), PACK_INDEX_FILE);
-    if (statSync(file).size > MAX_INDEX_BYTES) return null;
-    const doc = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const text = readBounded(file, MAX_INDEX_BYTES);
+    if (text === null || text === "too_large") return null;
+    const doc = JSON.parse(text) as Record<string, unknown>;
     if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
     if (Object.keys(doc).some((k) => !["v", "checked_at", "packs"].includes(k))) return null;
     if (doc.v !== 1 || typeof doc.checked_at !== "string" || !RFC3339.test(doc.checked_at) || !Number.isFinite(Date.parse(doc.checked_at))) return null;
@@ -135,12 +149,9 @@ export function loadPacks(dir: string, options: { keys?: PolicyKey[]; now?: Date
     const ref = `${entry.id}@${entry.version}`;
     if (seen.has(entry.id)) { problems.push({ ref, reason: "invalid", message: `the index lists ${entry.id} twice; only the first is used` }); continue; }
     seen.add(entry.id);
-    let text: string;
-    try {
-      const file = fileOf(dir, ref);
-      if (statSync(file).size > PACK_LIMITS.maxBytes) { problems.push({ ref, reason: "too_large", message: "the pack file is too large" }); continue; }
-      text = readFileSync(file, "utf8");
-    } catch { problems.push({ ref, reason: "missing", message: "the pack file is missing" }); continue; }
+    const text = readBounded(fileOf(dir, ref), PACK_LIMITS.maxBytes);
+    if (text === "too_large") { problems.push({ ref, reason: "too_large", message: "the pack file is too large" }); continue; }
+    if (text === null) { problems.push({ ref, reason: "missing", message: "the pack file is missing" }); continue; }
     if (createHash("sha256").update(text, "utf8").digest("hex") !== entry.sha256) { problems.push({ ref, reason: "digest_mismatch", message: "the pack file does not match the index" }); continue; }
     const checkedPack = checkPackText(text, options);
     if (!checkedPack.ok) { problems.push({ ref, reason: checkedPack.reason, message: checkedPack.message }); continue; }

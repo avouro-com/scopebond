@@ -115,6 +115,7 @@ export function plainAction(intent: { action_type?: string; params?: Record<stri
     : type === "net.fetch" ? verb("Reach", pick("url") || pick("host"))
     : type === "mcp.tool.call" ? verb("Use", [pick("server"), pick("tool")].filter(Boolean).join(": "))
     : type === "package.install" ? verb("Install", pick("package_key") || `${pick("manager")} ${pick("name")}`.trim())
+    : type === "software.install" ? verb("Install", [pick("name") || pick("source_url") || pick("source_domain"), pick("source_domain") && pick("name") ? `from ${pick("source_domain")}` : ""].filter(Boolean).join(" "))
     : "";
   if (!text) return actionSummary(intent);
   // As the window shows it: digests left out, hidden characters written out, at most 200 characters.

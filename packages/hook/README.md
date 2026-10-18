@@ -330,6 +330,37 @@ known only at run time (`$FN`, `$(…)`) is never digested as a name. `terraform
 it is `unknown`; the environment of a command comes only from words it shows, never from a profile file, the current
 kube context or environment variables the command does not set itself.
 
+### What the hook sees being installed
+
+When a coding agent installs or runs software from outside the project, the hook records it as a `software.install`
+action (Action Taxonomy 1.2) beside the command or file write that does it, in the same action group and in the same
+signed receipts. It is detection only: the hook says what is installed, from where and how, and never judges whether it
+is safe. A rule (or Scopebond Cloud's verdicts) decides that.
+
+| Route (`route`) | Read from |
+|---|---|
+| `npm`, `pnpm`, `yarn`, `bun` | `install`/`i`/`add`/`update` with named packages (`name@range`, `@scope/name@tag`, aliases, git and tarball URLs), `-g`, `--registry` or `NPM_CONFIG_REGISTRY=`, `--ignore-scripts`; `npm ci`, a bare `install` (`from_manifest`); `create`/`init <initializer>` (the `create-*` package) |
+| `npx` | `npx`, `npm exec` (with `--yes`: `auto_confirm`), `--package`; `pnpm dlx`, `yarn dlx`, `bunx` and `bun x` use the manager's route |
+| `pip`, `uv`, `poetry`, `pipx` | `pip install` (also `python -m pip`), requirements with `==`, ranges and extras, VCS and URL specs, `-r` (`from_manifest`), `-i`/`--index-url`; `uv add`, `uv pip install`, `uv tool install`, `uvx`, `uv tool run`, `uv sync`; `poetry add`/`install`/`update`; `pipx install`/`run`/`inject` |
+| `cargo`, `go`, `gem`, `brew` | `cargo install`/`add` (`--git`, `--version`); `go install`, `go get`, `go run module@version`; `gem install`, `bundle add`/`install`; `brew install`/`reinstall`/`upgrade`, `brew tap`, `brew bundle` |
+| `curl_pipe_shell` | a fetch fed to a shell or interpreter: `curl … \| sh`, `wget -qO- … \| sudo bash`, `sh -c "$(curl …)"`, `bash <(curl …)`, `bash -c '…'` around any of these, `iwr … \| iex`, `iex (…DownloadString(…))` |
+| `download_exec` | a fetch saved to a file that the same command line makes executable or runs (`chmod +x`, `./file`, `bash file`, `Start-Process`, `msiexec`, `dpkg -i`; `executed: true`), or that is a program or installer by its name (`.exe`, `.msi`, `.pkg`, `.dmg`, `.deb`, `.rpm`, `.sh`, `.AppImage`, …; `executed: false`) |
+| `git_clone`, `git_clone_run` | `git clone` and `gh repo clone`; `git_clone_run` when the same command line goes on to run what is in the clone (`cd repo && npm install`, `./repo/install.sh`, `make -C repo`) |
+| `docker_pull`, `docker_run` | `docker`/`podman`/`nerdctl` `pull`, `run`, `create` (the image, its tag or digest, and its registry when the reference names one); `docker compose pull/up/run` (`from_manifest`) |
+| `mcp_settings` | `claude mcp add`/`add-json`, `codex mcp add`, `code --add-mcp`, and a write or edit of `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `~/.claude.json`, `.codex/config.toml` or `.copilot/mcp-config.json`: one action per server, described by its launch command (`npx` package, `uvx` package, container image) or its URL (`ecosystem: "remote"`) |
+
+Each action carries `route`, `ecosystem`, `verb` and, when the request shows them, `name`, `version`, `source_url`,
+`source_domain`, `from_manifest`, `global`, `lifecycle_scripts`, `auto_confirm`, `executed` and `mcp_server`, plus
+`via`, `derived_from` and `risk_class: "sensitive"`. A URL keeps only its scheme, host and path: credentials, the
+query and the fragment are removed and token-like parts masked. A file's contents, a server's environment values and
+headers, and local paths are never recorded. No registry is assumed when the command names none.
+
+Under the starter rules an install is recorded and decides nothing new. A rule can match it, for example
+`{ "type": "action_allowlist", "action_types": ["software.install"], "param_bounds": { "route": { "pattern": "^(?!curl_pipe_shell$).+" } } }`
+blocks scripts piped to a shell. The cases are public: `@scopebond/policy-schema/vectors/install-detection.json`.
+Limits: an install inside a script file the agent runs (`./setup.sh`) or in a later tool call than its download or
+clone is not connected to it, and system package managers (`apt`, `dnf`, `winget`, `choco`) are not read yet.
+
 ### Rule packs
 
 What the hook knows about more tools and MCP servers can also come as **rule packs**: signed data in the

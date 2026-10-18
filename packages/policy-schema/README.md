@@ -30,7 +30,10 @@ evidence, and coverage all share.
   reaches through cloud, Kubernetes, database, deployment, secret, messaging and tracker
   tools: `cloud.resource.create|modify|delete`, `k8s.apply|delete|exec`, `db.migrate`,
   `db.exec`, `secret.write`, `iam.change`, `communication.send` and
-  `work.item.create|update`. Each action carries the taxonomy version that introduced it;
+  `work.item.create|update`. Taxonomy 1.2 adds `software.install`: software an agent installs or
+  runs from outside the project (a package, a script fed to a shell, a downloaded program, a cloned repository, a
+  container image or an MCP server), with its route, ecosystem, name, version and source, and no verdict. Each action
+  carries the taxonomy version that introduced it;
   the 1.0 types are unchanged. Exposed at the `./registry` subpath, which also exports
   `actionRegistry`, `TAXONOMY_VERSION`, `getActionType(id)` and
   `validateActionParams(type, params)`. Parameters are carried under `intent.params`;
@@ -40,6 +43,8 @@ evidence, and coverage all share.
   at the `./pack` subpath: `validatePack`, `packSigningInput`, `packRef`, `comparePackVersions`.
 - `src/canonical.ts` — the shared strict RFC-8785-target canonical serializer used
   by schema, verifier, gateway and SDK signature/hash boundaries.
+- `vectors/install-detection.json` — install detection conformance: coding-agent requests on every route and the
+  exact `software.install` actions each must derive.
 - `vectors/action-taxonomy.json` — schema conformance (valid/invalid parameter
   payloads per action type) for `validateActionParams`.
 - `vectors/evidence-contract.json` — shared execution-state, legacy/unknown-version

@@ -1,6 +1,6 @@
 {
-  "taxonomy_version": "1.1",
-  "description": "Scopebond Action Taxonomy v1 — the coding, GitHub, MCP and HTTP action types and their parameter bounds, an extension of the policy vocabulary. Version 1.1 adds the cloud, Kubernetes, database, secret, identity, messaging and work-item types a coding agent reaches through command-line tools and MCP servers; each action carries the taxonomy version that introduced it, and 1.0 types are unchanged. Parameters are carried under intent.params; bound-able parameters (boundable: true) may be constrained by an action_allowlist clause's param_bounds. This JSON is the machine source; the @scopebond/policy-schema README describes it. Money/commerce action types keep their existing gateway/demo shapes and are not redefined here.",
+  "taxonomy_version": "1.2",
+  "description": "Scopebond Action Taxonomy v1 — the coding, GitHub, MCP and HTTP action types and their parameter bounds, an extension of the policy vocabulary. Version 1.1 adds the cloud, Kubernetes, database, secret, identity, messaging and work-item types a coding agent reaches through command-line tools and MCP servers; each action carries the taxonomy version that introduced it, and 1.0 types are unchanged. Version 1.2 adds software.install: software an agent installs or runs from outside the project, by any route, without a verdict. Parameters are carried under intent.params; bound-able parameters (boundable: true) may be constrained by an action_allowlist clause's param_bounds. This JSON is the machine source; the @scopebond/policy-schema README describes it. Money/commerce action types keep their existing gateway/demo shapes and are not redefined here.",
   "actions": [
     {
       "id": "shell.exec",
@@ -447,6 +447,36 @@
       ],
       "examples": [
         { "provider": "linear", "via": "linear" }
+      ]
+    },
+    {
+      "id": "software.install",
+      "taxonomy_version": "1.2",
+      "summary": "Software a coding agent installs or runs from outside the project: a package, a script piped to a shell, a downloaded program, a cloned repository whose scripts it runs, a container image, or an MCP server added to a tool's settings. Detection only: it says what is installed and from where, never whether it is safe.",
+      "risk_class": "sensitive",
+      "spend": null,
+      "emitted_by": ["claude_code_cursor", "codex"],
+      "parameters": [
+        { "name": "route", "type": "enum", "required": true, "boundable": true, "description": "How it is installed: the package manager or runner, a script piped to a shell, a download that is run, a clone whose scripts run, a container pull or run, or an MCP server written into a tool's settings.", "enum": ["npm", "pnpm", "yarn", "bun", "npx", "pip", "uv", "poetry", "pipx", "cargo", "go", "gem", "brew", "curl_pipe_shell", "download_exec", "git_clone", "git_clone_run", "docker_pull", "docker_run", "mcp_settings"] },
+        { "name": "ecosystem", "type": "enum", "required": true, "boundable": true, "description": "Where the name lives: a package registry, a container registry, a git host, a script or program fetched by URL, a remote MCP server, or unknown.", "enum": ["npm", "pypi", "cargo", "go", "rubygems", "homebrew", "container", "git", "script", "binary", "remote", "unknown"] },
+        { "name": "verb", "type": "enum", "required": true, "boundable": true, "description": "What the command does with it.", "enum": ["install", "add", "update", "run", "clone", "pull", "download", "configure"] },
+        { "name": "name", "type": "string", "required": false, "boundable": true, "description": "The package, module, image or repository as the request names it (an npm or PyPI name, a Go module path, an image without its tag, host/owner/repo). Never a local path; omitted when the request names none." },
+        { "name": "version", "type": "string", "required": false, "boundable": true, "description": "The version, range, tag or digest as written (1.2.3, ^1, >=2,<3, latest, sha256:...); omitted when none is written." },
+        { "name": "source_url", "type": "string", "required": false, "boundable": true, "description": "The URL it comes from, as scheme, host and path: never credentials, a query or a fragment." },
+        { "name": "source_domain", "type": "string", "required": false, "boundable": true, "description": "The host it comes from: the URL's host, or the registry or index the command names (--registry, --index-url, an image's registry). Omitted when the command names none, since the tool's own settings choose it." },
+        { "name": "from_manifest", "type": "boolean", "required": false, "boundable": true, "description": "True when it installs what a manifest, lockfile or requirements file lists (npm ci, pip install -r ..., uv sync, docker compose pull): the packages are not in the request." },
+        { "name": "global", "type": "boolean", "required": false, "boundable": true, "description": "True when it installs for the whole computer rather than the project (-g, pipx, cargo install, go install, brew)." },
+        { "name": "lifecycle_scripts", "type": "enum", "required": false, "boundable": true, "description": "For npm, pnpm, yarn and bun: blocked with --ignore-scripts, else unknown.", "enum": ["blocked", "unknown"] },
+        { "name": "auto_confirm", "type": "boolean", "required": false, "boundable": true, "description": "True when the command answers the runner's own install prompt for itself (npx -y, npm exec --yes)." },
+        { "name": "executed", "type": "boolean", "required": false, "boundable": true, "description": "For a download: whether the same command line also makes it executable or runs it." },
+        { "name": "mcp_server", "type": "string", "required": false, "boundable": true, "description": "For an MCP server added to a tool's settings: the name it is configured under." },
+        { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The program the install was read from (npm, pip, curl, git, docker, claude), or the settings file's tool." },
+        { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes, recorded beside it in the same action group: the shell command, or the file write that changes a tool's settings.", "enum": ["shell.exec", "file.write"] },
+        { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (sensitive).", "enum": ["routine", "sensitive", "destructive", "identity"] }
+      ],
+      "examples": [
+        { "route": "npm", "ecosystem": "npm", "verb": "install", "name": "left-pad", "version": "1.3.0", "via": "npm" },
+        { "route": "curl_pipe_shell", "ecosystem": "script", "verb": "run", "source_url": "https://get.example.test/install.sh", "source_domain": "get.example.test", "via": "curl" }
       ]
     }
   ]

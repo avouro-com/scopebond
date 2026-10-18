@@ -56,7 +56,9 @@ export function describeAction(intent: ExplainIntent | undefined): string {
     : type === "deploy.release" ? `${str(p.provider) || str(p.repo)} ${str(p.environment)}`.trim()
     : type === "secret.write" ? `${str(p.store)} ${str(p.env)}`.trim()
     : type === "communication.send" || type.startsWith("work.item.") ? str(p.provider)
-    : type === "package.install" ? str(p.package_key) || `${str(p.manager)} ${str(p.name)}`.trim() : "";
+    : type === "package.install" ? str(p.package_key) || `${str(p.manager)} ${str(p.name)}`.trim()
+    // An install (typed-install.ts): how, then what and from where.
+    : type === "software.install" ? `${str(p.route)} ${str(p.name)}${str(p.version) ? `@${str(p.version)}` : ""} ${str(p.source_domain)}`.replace(/\s+/g, " ").trim() : "";
   return `${type || "?"}${bits ? ` ${bits}` : ""}`;
 }
 
