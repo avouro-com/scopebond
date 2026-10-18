@@ -56,6 +56,10 @@
     { "action_type": "work.item.create", "params": { "provider": 3 }, "valid": false, "reason": "provider must be a string" },
     { "action_type": "work.item.update", "params": { "provider": "jira" }, "valid": true },
     { "action_type": "work.item.update", "params": {}, "valid": false, "reason": "missing required provider" },
+    { "action_type": "software.install", "params": { "route": "npm", "ecosystem": "npm", "verb": "add", "name": "@scope/pkg", "version": "^1.2.0", "via": "pnpm", "derived_from": "shell.exec" }, "valid": true },
+    { "action_type": "software.install", "params": { "route": "curl_pipe_shell", "ecosystem": "script", "verb": "run", "source_url": "https://get.example.test/install.sh", "source_domain": "get.example.test" }, "valid": true },
+    { "action_type": "software.install", "params": { "route": "npm", "ecosystem": "npm" }, "valid": false, "reason": "missing required verb" },
+    { "action_type": "software.install", "params": { "route": "make", "ecosystem": "npm", "verb": "install" }, "valid": false, "reason": "route is a closed enum" },
     { "action_type": "totally.made.up", "params": {}, "valid": false, "known": false, "reason": "unknown action type" }
   ]
 }

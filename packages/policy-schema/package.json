@@ -58,7 +58,8 @@
     "./pack.schema.json": "./schema/pack.schema.json",
     "./vectors/pack-format.json": "./vectors/pack-format.json",
     "./vectors/example-pack.json": "./vectors/example-pack.json",
-    "./vectors/example-pack-key.json": "./vectors/example-pack-key.json"
+    "./vectors/example-pack-key.json": "./vectors/example-pack-key.json",
+    "./vectors/install-detection.json": "./vectors/install-detection.json"
   },
   "files": [
     "dist",

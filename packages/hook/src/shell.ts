@@ -53,13 +53,15 @@ const MAX_DEPTH = 6;
 /** Split a command line into top-level simple-command strings at unquoted
  *  separators (`;`, newline, `&&`, `||`, `|`, `&`), leaving quotes, `$( )`,
  *  backticks and `( )` groups intact inside each piece. */
-function splitTopLevel(src: string): { segments: string[]; unbalanced: boolean } {
+function splitTopLevel(src: string): { segments: string[]; seps: string[]; unbalanced: boolean } {
   const segments: string[] = [];
+  // The separator after each segment (`;`, a line end, `&&`, `||`, `|`, `&`, or "" after the last).
+  const seps: string[] = [];
   let cur = "";
   let quote: '"' | "'" | null = null;
   let paren = 0; // depth of $( ) and ( )
   let backtick = false;
-  const flush = () => { const t = cur.trim(); if (t) segments.push(t); cur = ""; };
+  const flush = (sep = "") => { const t = cur.trim(); if (t) { segments.push(t); seps.push(sep); } cur = ""; };
 
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
@@ -89,14 +91,22 @@ function splitTopLevel(src: string): { segments: string[]; unbalanced: boolean }
     // `&>file`, `2>&1`, `<&3` and `>|file` are redirections, not separators.
     if (c === "&" && (n === ">" || prev === ">" || prev === "<")) { cur += c; continue; }
     if (c === "|" && prev === ">") { cur += c; continue; }
-    if (c === ";" || c === "\n") { flush(); continue; }
-    if (c === "&" && n === "&") { flush(); i++; continue; }
-    if (c === "|" && n === "|") { flush(); i++; continue; }
-    if (c === "&" || c === "|") { flush(); continue; }
+    if (c === ";" || c === "\n") { flush(c); continue; }
+    if (c === "&" && n === "&") { flush("&&"); i++; continue; }
+    if (c === "|" && n === "|") { flush("||"); i++; continue; }
+    if (c === "&" || c === "|") { flush(c); continue; }
     cur += c;
   }
   flush();
-  return { segments, unbalanced: quote !== null || paren !== 0 || backtick };
+  return { segments, seps, unbalanced: quote !== null || paren !== 0 || backtick };
+}
+
+/** A command line split at its top-level separators, with the separator after each part (`|` for a pipe), here-documents
+ *  removed. Null when its quoting or grouping does not balance. For readers that need to know what feeds what. */
+export function splitCommandLine(command: string): Array<{ text: string; sep: string }> | null {
+  const { text } = stripHeredocs(command.trim());
+  const { segments, seps, unbalanced } = splitTopLevel(text);
+  return unbalanced ? null : segments.map((t, i) => ({ text: t, sep: seps[i] ?? "" }));
 }
 
 /** What a command substitution leaves behind in the outer command: a parameter
@@ -380,7 +390,7 @@ function watchCommand(argv: string[]): string | null {
 
 /** Find the script argument of a shell invoked with `-c`, including combined short
  *  flags where `c` is last (`-lc`, `-xec`). The script is the next non-option word. */
-function shellScriptArg(argv: string[]): string | null {
+export function shellScriptArg(argv: string[]): string | null {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "-c" || /^-[A-Za-z]*c$/.test(argv[i])) {
       for (let j = i + 1; j < argv.length; j++) if (!argv[j].startsWith("-")) return argv[j];

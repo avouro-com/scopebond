@@ -167,7 +167,9 @@ test("package operations: Windows program spellings and PowerShell", () => {
 
 test("a compound command types each command that can be described and leaves the rest as shell actions", () => {
   const { dispatched, typed } = derive("git commit -m x && npm ci && pnpm add zod");
-  assert.equal(dispatched.length, 3);
+  // Three commands, then the two installs they perform (software.install), which have no operation of their own.
+  assert.equal(dispatched.filter((d) => d.action.action_type === "shell.exec").length, 3);
+  assert.deepEqual(dispatched.slice(3).map((d) => d.action.action_type), ["software.install", "software.install"]);
   assert.deepEqual([...typed.keys()], [0, 2]);
   assert.equal(typed.get(0).type, "git");
   assert.equal(typed.get(2).type, "package");
@@ -264,7 +266,8 @@ test("emitter: a typed operation replaces the plain shell one for the same recei
     const rows = await readPending(home.dir);
     const intents = rows.filter((r) => r.payload.kind === "tool_intent");
     assert.deepEqual(intents.map((r) => r.payload.data.operation.type), ["git", "package", "shell"]);
-    const receipts = decision.receipts.map((r) => r.payload.action_ref.action_id);
+    // The install action (software.install) beside `pnpm add` is a derived action: it has no observation operation.
+    const receipts = decision.receipts.filter((r) => r.payload.intent.action_type !== "software.install").map((r) => r.payload.action_ref.action_id);
     assert.deepEqual(intents.map((r) => r.payload.parent_action_id), receipts, "each operation is linked to the receipt of the command it describes");
     for (const row of intents) assert.equal(validObservation(row.payload), true);
     const outcomes = rows.filter((r) => r.payload.kind === "tool_outcome");

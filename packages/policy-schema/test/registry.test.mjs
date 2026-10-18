@@ -12,17 +12,18 @@ const PARAM_TYPES = new Set(["string", "integer", "boolean", "array", "enum"]);
 const RISK_CLASSES = new Set(["routine", "sensitive", "destructive", "money", "identity"]);
 
 // Each action carries the taxonomy version that introduced it; the registry carries the current one.
-const KNOWN_VERSIONS = ["1.0", "1.1"];
+const KNOWN_VERSIONS = ["1.0", "1.1", "1.2"];
+const V12_TYPES = ["software.install"];
 const FIRST_TYPES = ["shell.exec", "file.read", "file.write", "git.push", "package.install", "net.fetch", "http.call", "mcp.tool.call", "pr.open", "pr.merge", "deploy.release"];
 
 test("the registry is internally consistent", () => {
-  assert.equal(actionRegistry.taxonomy_version, "1.1");
-  assert.equal(TAXONOMY_VERSION, "1.1");
+  assert.equal(actionRegistry.taxonomy_version, "1.2");
+  assert.equal(TAXONOMY_VERSION, "1.2");
   const ids = actionRegistry.actions.map((a) => a.id);
   assert.equal(new Set(ids).size, ids.length, "action ids are unique");
   for (const a of actionRegistry.actions) {
     assert.ok(KNOWN_VERSIONS.includes(a.taxonomy_version), `${a.id} carries a known taxonomy version`);
-    assert.equal(a.taxonomy_version, FIRST_TYPES.includes(a.id) ? "1.0" : "1.1", `${a.id} carries the version that introduced it`);
+    assert.equal(a.taxonomy_version, FIRST_TYPES.includes(a.id) ? "1.0" : V12_TYPES.includes(a.id) ? "1.2" : "1.1", `${a.id} carries the version that introduced it`);
     assert.ok(RISK_CLASSES.has(a.risk_class), `${a.id} has a known risk_class`);
     assert.ok(Array.isArray(a.parameters) && a.parameters.length > 0, `${a.id} declares parameters`);
     const names = a.parameters.map((p) => p.name);
@@ -79,3 +80,15 @@ for (const c of vectors.schema_cases) {
     if (!c.valid) assert.ok(result.errors.length > 0, `${c.action_type}: invalid cases report an error`);
   });
 }
+
+test("taxonomy 1.2 adds software.install: route, ecosystem and verb are closed, and it carries no content", () => {
+  const def = getActionType("software.install");
+  assert.equal(def.taxonomy_version, "1.2");
+  assert.equal(def.risk_class, "sensitive");
+  const p = Object.fromEntries(def.parameters.map((x) => [x.name, x]));
+  for (const name of ["route", "ecosystem", "verb"]) { assert.equal(p[name].required, true); assert.equal(p[name].type, "enum"); }
+  assert.ok(p.route.enum.includes("curl_pipe_shell") && p.route.enum.includes("mcp_settings") && p.route.enum.includes("git_clone_run"));
+  assert.deepEqual(p.derived_from.enum, ["shell.exec", "file.write"]);
+  assert.equal(validateActionParams("software.install", { route: "npm", ecosystem: "npm", verb: "install", name: "left-pad" }).valid, true);
+  assert.equal(validateActionParams("software.install", { route: "apt", ecosystem: "npm", verb: "install" }).valid, false);
+});
