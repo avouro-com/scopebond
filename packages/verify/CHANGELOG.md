@@ -1,5 +1,12 @@
 # @scopebond/verify
 
+## 0.6.10
+
+### Patch Changes
+
+- Updated dependencies [40270e7]
+  - @scopebond/policy-schema@0.11.0
+
 ## 0.6.9
 
 ### Patch Changes
