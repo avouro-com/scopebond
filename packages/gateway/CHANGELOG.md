@@ -1,5 +1,13 @@
 # @scopebond/gateway
 
+## 0.20.3
+
+### Patch Changes
+
+- Updated dependencies [e4ba261]
+  - @scopebond/policy-schema@0.10.0
+  - @scopebond/verify@0.6.9
+
 ## 0.20.2
 
 ### Patch Changes
