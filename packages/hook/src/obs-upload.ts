@@ -157,7 +157,7 @@ export async function uploadPending(store: ObservationStore, options: UploadOpti
       continue;
     }
     if (response.status === 402) {
-      // The workspace's plan has paused this agent. Nothing is lost: keep the queue, look again later.
+      // The workspace's plan has paused this agent, or it holds no license. Nothing is lost: keep the queue, look again later.
       const attempts = Math.max(...batch.map((r) => r.attempts)) + 1;
       const wait = Math.max(backoffFor(attempts), 30 * 60 * 1000);
       store.defer(batch.map((r) => r.observation_id), wait);

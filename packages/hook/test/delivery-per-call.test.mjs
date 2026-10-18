@@ -108,3 +108,16 @@ test("status says an agent the plan paused is paused, and suggests no flush", as
   assert.match(report.lines[0], /^PAUSED BY THE WORKSPACE'S PLAN: 3 record\(s\)/);
   assert.ok(!report.lines.some((l) => /next step\s+run .*flush/.test(l)), "no flush is suggested");
 });
+
+test("status says an agent the workspace does not license is not licensed, in one plain line, and suggests no flush", async () => {
+  const { describeDelivery } = await import("../dist/delivery-report.js");
+  const all = await backlogReceipts(6_308 + 40);
+  const dir = mkdtempSync(join(tmpdir(), "sb-percall-unlicensed-"));
+  await seed(dir, all.slice(0, 2), 60 * 60_000);
+  recordDeliveryAttempt(dir, { lastSuccessAt: null, lastError: "ingest failed: HTTP 402 (not_licensed): This agent is not licensed.", pending: 2 }, Date.now(), null, null, "agent");
+  const report = describeDelivery(dir, { url: "https://ws.example" });
+  assert.match(report.lines[0], /^NOT LICENSED: this agent is not covered by the workspace's licenses\. The starter protections stay on, and 2 record\(s\) wait/);
+  assert.equal(report.lines.filter((l) => /NOT LICENSED|NOT DELIVERING|PAUSED/.test(l)).length, 1, "one message, not two");
+  assert.ok(!report.lines.some((l) => /next step\s+run .*flush/.test(l)), "no flush is suggested");
+  assert.ok(report.problems.some((p) => /not licensed/.test(p)));
+});

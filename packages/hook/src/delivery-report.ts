@@ -146,7 +146,13 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
     lines.push(`hook outages     ${outages} time(s) a Codex or Cursor hook entry could not start: actions then ran with no check and no record`);
   }
   const paused = /HTTP 402 \(agent_paused\)/.test(state.last_error ?? "");
-  if (state.invalid_since === null && paused && pending > 0) {
+  const notLicensed = /HTTP 402 \(not_licensed\)/.test(state.last_error ?? "");
+  if (state.invalid_since === null && notLicensed && pending > 0) {
+    // The workspace licenses fewer agents than it has, and this one holds no license. Sending again changes nothing; the
+    // starter protections stay on, and an owner decides.
+    lines.unshift(`NOT LICENSED: this agent is not covered by the workspace's licenses. The starter protections stay on, and ${pending} record(s) wait on this computer until an owner adds licenses (Settings, Billing).`);
+    problems.push(`this agent is not licensed in the workspace; ${pending} record(s) wait until an owner adds licenses`);
+  } else if (state.invalid_since === null && paused && pending > 0) {
     // The plan paused this agent: sending again changes nothing, so no flush is suggested.
     lines.unshift(`PAUSED BY THE WORKSPACE'S PLAN: ${pending} record(s) wait on this computer and send once an owner keeps this agent active or changes the plan (Settings, Plan and billing).`);
     problems.push(`the workspace's plan paused this agent; ${pending} record(s) wait until an owner keeps it active or changes the plan`);
