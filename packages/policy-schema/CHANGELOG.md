@@ -1,5 +1,12 @@
 # @scopebond/policy-schema
 
+## 0.9.0
+
+### Minor Changes
+
+- a71186a: Add the rule-pack format, `scopebond:pack/v1`: signed data (never code) that carries command grammars, MCP profiles, `action_allowlist` rules and conformance vectors. `schema/pack.schema.json` is the closed schema, and the new `./pack` subpath exports `validatePack`, `packSigningInput` (Ed25519 over `scopebond:pack/v1` plus LF and the RFC 8785 canonical pack without its signature), `packRef` and `comparePackVersions`. `vectors/example-pack.json` is a public pack built from made-up tools and signed with a test-only key, and `vectors/pack-format.json` holds valid and invalid documents.
+- 1af329c: Action Taxonomy 1.2 adds `software.install`: software a coding agent installs or runs from outside the project, by any route (package managers and runners, a script piped to a shell, a downloaded program, a cloned repository whose scripts run, a container image, an MCP server added to a tool's settings). It carries the route, ecosystem, verb, name, version, source URL and domain, and no verdict. `vectors/install-detection.json` holds the conformance cases for every route.
+
 ## 0.8.0
 
 ### Minor Changes

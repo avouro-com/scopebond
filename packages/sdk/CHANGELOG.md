@@ -1,5 +1,13 @@
 # @scopebond/sdk
 
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [a71186a]
+- Updated dependencies [1af329c]
+  - @scopebond/policy-schema@0.9.0
+
 ## 0.1.8
 
 ### Patch Changes

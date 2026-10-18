@@ -1,5 +1,21 @@
 # @scopebond/hook
 
+## 0.28.0
+
+### Minor Changes
+
+- 1af329c: Detect installs on every route and record each as a `software.install` action beside the command or file write that does it: npm, pnpm, yarn, bun and npx; pip, uv, poetry and pipx; cargo, go, gem and brew; `curl … | sh` and its variants, downloads that are run or are programs, `git clone` (and a clone whose scripts run), `docker pull` and `docker run`, and MCP servers added through `claude mcp add`, `codex mcp add`, `code --add-mcp` or a write to a coding tool's MCP settings file. Detection only: the action is visible to rules and rides in the signed receipt, and never carries file contents, credentials, query strings or a server's environment values. Reading a cached rule pack now checks the file's type and size on the descriptor it reads.
+- a71186a: Run signed rule packs. The hook reads the packs cached in its state directory (`packs/index.json` and `packs/<id>@<version>.json`), uses one only when its signature verifies with a trusted policy-signing key and the last check-in was no more than 30 days ago, and turns commands and MCP calls into taxonomy actions through the pack's grammars and profiles. The built-in readers still win where they derive anything; a missing, bad or expired pack only stops adding actions, so the open detection and the starter protections always apply. New `packs` command: `list`, `verify <file>`, `add <file>` and `remove <id>`. Every pack's vectors run through `runPackVectors`.
+
+### Patch Changes
+
+- 5fb6d83: Status, doctor and the tray say in one plain line when the workspace does not license an agent (its records are refused with `not_licensed`): the starter protections stay on, the records wait on the computer, and an owner adds licenses in Settings, Billing. No flush is suggested, since sending again changes nothing.
+- Updated dependencies [a71186a]
+- Updated dependencies [1af329c]
+  - @scopebond/policy-schema@0.9.0
+  - @scopebond/gateway@0.20.2
+  - @scopebond/sdk@0.1.9
+
 ## 0.27.0
 
 ### Minor Changes
