@@ -438,7 +438,7 @@ export function operationsForCall(
       ...(context.packageManagerVersion ? { packageManagerVersion: context.packageManagerVersion } : {}),
     });
   } catch { /* a derivation that fails leaves the plain operations */ }
-  // A derived intent (typed-targets.ts, mcp-profiles.ts) re-describes the call's own command or MCP call, whose operation is
+  // A derived intent (a rule pack's, packs.ts) re-describes the call's own command or MCP call, whose operation is
   // already recorded; its own types (cloud, Kubernetes, secret, identity) have no operation in the closed observation schema,
   // and a push or file write read from a remote API call is not about this working tree. It gets no operation of its own.
   return input.dispatched.map((item, index) => typed.get(index) ?? (item.action.params.derived_from !== undefined ? null : buildOperation(item.action, context)));

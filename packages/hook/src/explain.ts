@@ -49,7 +49,7 @@ export function describeAction(intent: ExplainIntent | undefined): string {
     : type === "mcp.tool.call" ? `${str(p.server)}/${str(p.tool)}`
     : type === "net.fetch" ? str(p.host)
     : type === "db.exec" ? `${str(p.scope)} ${str(p.provider)} ${str(p.verb)}`.trim()
-    // The target actions (typed-targets.ts, mcp-profiles.ts): the tool, then what it reaches.
+    // The target actions (derived by the rule packs in force, packs.ts): the tool, then what it reaches.
     : type.startsWith("cloud.resource.") || type === "iam.change" ? `${str(p.via)} ${str(p.provider)} ${str(p.service)} ${str(p.kind)} ${str(p.env)}`.replace(/\s+/g, " ").trim()
     : type.startsWith("k8s.") ? `${str(p.via)} ${str(p.context)} ${str(p.namespace)} ${str(p.kind)}`.replace(/\s+/g, " ").trim()
     : type === "db.migrate" ? `${str(p.provider)} ${str(p.direction)} ${str(p.env)}`.trim()

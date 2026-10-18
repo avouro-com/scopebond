@@ -78,7 +78,58 @@ const DENY = [
   "site/**", "web/**", "vercel.json", "**/*.html",
   // Secrets / local env
   ".env", ".env.*", ".dev.vars", ".dev.vars.*", "**/*.pem", "**/*.key",
+  // The vendor readers that rule packs replaced (SCOPE.md: knowledge lives in Scopebond Cloud rule packs).
+  "packages/hook/src/typed-targets.ts", "packages/hook/src/mcp-profiles.ts",
 ];
+
+// Vendor knowledge (SCOPE.md, "engine or knowledge?"): what a vendor's command-line tool or MCP server does belongs in a rule
+// pack, not in package source. A source file under packages/*/src that names one of these programs or MCP tools as a string
+// literal (`"kubectl"`, `'push_files'`) or as an alternative in a pattern (`(?:helm|kubectl)`) is refused, unless the file
+// and the name are listed in VENDOR_NAME_ALLOW with how many times the engine names it there. Tests and fixtures are outside
+// packages/*/src and are not checked. Keep both lists current: add a program or tool here when a pack starts describing it.
+const VENDOR_PROGRAMS = [
+  "aws", "gcloud", "az", "wrangler", "vercel", "fly", "flyctl", "gh", "eb", "serverless", "heroku", "vault", "doppler",
+  "kubectl", "helm", "terraform", "tofu", "terragrunt", "pulumi", "cdk", "sst",
+  "prisma", "drizzle-kit", "rails", "rake", "alembic", "flyway", "knex", "sequelize",
+];
+const VENDOR_MCP_TOOLS = [
+  "create_pull_request", "merge_pull_request", "push_files", "create_or_update_file", "delete_file",
+  "slack_post_message", "slack_reply_to_thread", "post_message", "send_message", "browser_navigate", "puppeteer_navigate",
+  "create_issue", "update_issue", "createJiraIssue", "editJiraIssue", "read_query", "write_query", "execute_sql",
+];
+const VENDOR_NAMES = [...VENDOR_PROGRAMS, ...VENDOR_MCP_TOOLS];
+// Engine code that names a vendor program for a reason that is not a pack's knowledge, with the count allowed in that file.
+const VENDOR_NAME_ALLOW = new Map([
+  // Programs that can send a file elsewhere (the starter protections: a secret file read by an uploader), and the copy
+  // commands whose file effects are read like `cp`, and the credential folders the starter protections keep from reads.
+  ["packages/hook/src/map.ts", { aws: 1, gcloud: 2, az: 1, gh: 2, kubectl: 1 }],
+  // The observation readers the pack format cannot express yet (it has no observation output): GitHub's CLI and API calls,
+  // and Wrangler's resource and D1 operations.
+  ["packages/hook/src/typed-ops.ts", { gh: 1, create_pull_request: 1, merge_pull_request: 1 }],
+  ["packages/hook/src/typed-wrangler.ts", { wrangler: 2 }],
+  // The remote-database guard falls back to a deny for a command that names a database tool when its reader fails.
+  ["packages/hook/src/cli-main.ts", { wrangler: 1 }],
+  // Package installs through GitHub's CLI extensions (install detection), and the Copilot CLI's own session (`gh copilot`).
+  ["packages/hook/src/typed-install.ts", { gh: 2 }],
+  ["packages/hook/src/session-budgets.ts", { gh: 1 }],
+]);
+const SOURCE_FILE = /^packages\/[^/]+\/src\/.*\.(?:ts|tsx|js|mjs|cjs)$/;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const VENDOR_ALTERNATIVES = VENDOR_NAMES.map(escapeRe).join("|");
+// A quoted string that is exactly the name, or the name as one alternative of a pattern group (`(?:name|…)`, `…|name)`).
+// eslint-disable-next-line security/detect-non-literal-regexp -- built once from the constant lists above
+const VENDOR_NAME_RE = new RegExp(`(?:["'](${VENDOR_ALTERNATIVES})["'])|(?:(?:\\(\\?:|\\|)(${VENDOR_ALTERNATIVES})(?=[|)]))`, "g");
+/** The vendor names a source file carries beyond what VENDOR_NAME_ALLOW lets it name, as `name ×count`. */
+function vendorNamesIn(path, content) {
+  if (!SOURCE_FILE.test(path)) return [];
+  const counts = new Map();
+  for (const m of content.matchAll(VENDOR_NAME_RE)) {
+    const name = m[1] ?? m[2];
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const allowed = VENDOR_NAME_ALLOW.get(path) ?? {};
+  return [...counts].filter(([name, n]) => n > (allowed[name] ?? 0)).map(([name, n]) => `${name} ×${n}`);
+}
 
 // Distinctive markers that flag private content pasted into an allowed path.
 // Built by concatenation so this file does not trip its own scanner.
@@ -340,6 +391,10 @@ for (const f of files) {
         break;
       }
     }
+  }
+  const vendor = vendorNamesIn(path, content);
+  if (vendor.length) {
+    violations.push({ path, kind: "VENDOR KNOWLEDGE", detail: `names ${vendor.join(", ")}: what a vendor's tool or MCP server does belongs in a Scopebond Cloud rule pack (SCOPE.md). If this is engine code, list it in VENDOR_NAME_ALLOW in scripts/oss-gate.mjs and say why.` });
   }
   for (const sig of PRIVATE_DOC_SIGNATURES) {
     if (content.includes(sig)) {

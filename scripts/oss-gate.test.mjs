@@ -85,3 +85,29 @@ test("look-alikes of internal references pass: hex, GUIDs, a D1 binding, version
   });
   assert.equal(r.status, 0, r.stderr);
 });
+
+// Vendor knowledge belongs in rule packs, not in package source (SCOPE.md). The names are assembled so this file stays plain.
+const tool = (...parts) => parts.join("");
+test("vendor tool and MCP server knowledge in package source is refused; tests, made-up tools and listed engine code pass", () => {
+  const refusedFiles = {
+    "packages/hook/src/typed-targets.ts": "export const x = 1;\n",
+    "packages/hook/src/reader-a.ts": `export const isTool = (p: string) => p === "${tool("kube", "ctl")}";\n`,
+    "packages/hook/src/reader-b.ts": `export const TOOLS = /^(?:${tool("he", "lm")}|${tool("terra", "form")})$/;\n`,
+    "packages/mcp/src/reader-c.ts": `export const PUSH = ['${tool("push", "_files")}'];\n`,
+    // A listed file may name the program only as often as the engine does.
+    "packages/hook/src/typed-wrangler.ts": Array.from({ length: 3 }, () => `"${tool("wran", "gler")}";`).join("\n"),
+  };
+  const r = gateOver(refusedFiles);
+  assert.equal(r.status, 1, r.stdout);
+  for (const path of Object.keys(refusedFiles)) assert.ok(r.stderr.includes(`${path}\n`), `${path} was not refused`);
+  assert.match(r.stderr, /VENDOR KNOWLEDGE/);
+  assert.match(r.stderr, /PRIVATE PATH/);
+
+  const passes = gateOver({
+    "packages/hook/test/fixture.test.mjs": `const command = "${tool("kube", "ctl")} delete pod web";\nconst p = "${tool("kube", "ctl")}";\n`,
+    "packages/hook/src/example.ts": 'export const EXAMPLE = ["examplectl", "rm", "git", "npm", "curl", "psql"];\n// A comment may name `' + tool("kube", "ctl") + "` in backticks.\n",
+    "packages/hook/src/typed-wrangler.ts": `"${tool("wran", "gler")}";\n"${tool("wran", "gler")}";\n`,
+    "packages/policy-schema/vectors/example.json": `{ "program": "${tool("kube", "ctl")}" }\n`,
+  });
+  assert.equal(passes.status, 0, passes.stderr);
+});

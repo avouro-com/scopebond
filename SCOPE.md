@@ -24,6 +24,17 @@ agent's verdict is only as good as this document.
 - **The exception: the starter protections.** Protected branches, destructive shell
   commands, secret files, and Scopebond's own settings stay here, because core safety
   is always free.
+- **Where vendor coverage comes from.** The hook carries no readers for vendor
+  command-line tools or MCP servers. What a cloud, Kubernetes, database, deployment or
+  secret tool's command does, or what a known MCP server's tool does, is read through
+  signed rule packs that Scopebond Cloud delivers; the packs also bring the rules for
+  those actions. Without a pack, the hook runs the open detection and the starter
+  protections. Two observation readers remain in the engine until the pack format can
+  describe observation output: Wrangler's resource and D1 operations, and GitHub's CLI
+  and API calls.
+- **Checked automatically.** The OSS gate (`scripts/oss-gate.mjs`) refuses package
+  source that names a known vendor program or MCP tool, outside the engine code it
+  lists with a reason.
 
 ## In scope
 

@@ -192,6 +192,12 @@ and evidence, administration, the API and billing.
   happen. The [hook capability manifest](packages/hook#what-this-hook-can-honestly-claim-capabilities)
   separates unsupported, inactive, configured, degraded, and verified-reporting
   states: a configured hook or a received signal alone is not verified coverage.
+- **Vendor tools are covered by rule packs.** What a cloud, Kubernetes, database,
+  deployment or secret tool's command does, and what an MCP server's tool does, is read
+  through signed rule packs from Scopebond Cloud. Without a pack, the hook checks shell
+  commands, git pushes, file reads and writes, web requests, package installs and SQL
+  run through `psql` and `sqlite3`, with the starter protections. See
+  [rule packs](packages/hook#rule-packs).
 - **A hook that cannot start fails open.** Coding agents treat a hook that cannot
   start as a non-blocking error and run the action unchecked. `scopebond status` and
   `scopebond doctor` report a hook entry that cannot start.

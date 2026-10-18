@@ -163,28 +163,6 @@ test("the mapper: with no pack in force, the same command is only the shell comm
   assert.deepEqual(derived(mapClaudeToolUse({ tool_name: "mcp__exampletracker__create_item", tool_input: {}, cwd: "/w" })), []);
 });
 
-test("precedence: where the built-in readers derive an action, the pack's is not used; where they derive none, it is", () => {
-  const s = signer();
-  // A pack that also reads a tool this release already knows, marking what it derives.
-  const pack = s.signPack({
-    format: "scopebond:pack/v1", id: "overlap", version: "1.0.0", issued_at: "2026-10-01T00:00:00Z",
-    grammars: [{ id: "overlap", programs: ["kubectl"], commands: [{ path: [{ var: "verb" }], emit: [{ action_type: "k8s.exec", params: { kind: { const: "from-pack" }, name_digest: { digest: ["overlap", { var: "verb" }] } } }] }] }],
-    profiles: [], rules: [], vectors: [{ id: "any", shell: { command: "kubectl get pods" }, expect: [{ action_type: "k8s.exec", params: { kind: "from-pack", name_digest: { digest_of: ["overlap", "get"] }, via: "kubectl", derived_from: "shell.exec" } }] }],
-  });
-  assert.deepEqual(runPackVectors(pack).failures, []);
-  setActivePacks([pack]);
-  try {
-    // The built-in reader derives a k8s.delete here: it wins.
-    const builtIn = derived(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "kubectl delete pod web" }, cwd: "/w" }));
-    assert.equal(builtIn.length, 1);
-    assert.equal(builtIn[0].action_type, "k8s.delete");
-    assert.notEqual(builtIn[0].params.kind, "from-pack");
-    // The built-in reader derives nothing from a listing: the pack's action is used.
-    const fromPack = derived(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "kubectl get pods" }, cwd: "/w" }));
-    assert.deepEqual(fromPack.map((i) => i.params.kind), ["from-pack"]);
-  } finally { setActivePacks([]); }
-});
-
 test("among packs, the first by id that derives anything wins, whatever order they were found in", () => {
   const s = signer();
   const make = (id, kind) => s.signPack({
@@ -267,4 +245,14 @@ test("cli: packs verify checks a file, packs add puts it in force, packs list sh
   assert.deepEqual(listed.problems, []);
   assert.equal(cliRun(dir, ["packs", "remove", "example", "--yes"]).status, 0);
   assert.deepEqual(JSON.parse(cliRun(dir, ["packs", "list", "--json"]).stdout).packs, []);
+});
+
+test("toolNames: the program a command runs, then the tool a package runner starts", async () => {
+  const { toolNames, decomposeShell } = await import("../dist/index.js");
+  const names = (command) => toolNames(decomposeShell(command)[0]);
+  assert.deepEqual(names("examplectl deploy"), ["examplectl"]);
+  assert.deepEqual(names("npx -y examplectl deploy"), ["npx", "examplectl"]);
+  assert.deepEqual(names("pnpm exec examplectl deploy"), ["pnpm", "examplectl"]);
+  assert.deepEqual(names("python -m exampledb upgrade"), ["python", "exampledb"]);
+  assert.deepEqual(names("$TOOL deploy"), []);
 });

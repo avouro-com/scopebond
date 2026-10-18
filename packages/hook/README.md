@@ -243,53 +243,29 @@ Codex has no native file-read event: reads it makes through shell commands are d
 from the command (`cat .env`) and checked, but a read that never goes through a shell
 is not seen. Run `capabilities` (below) for the exact per-cell picture.
 
-### What the hook understands about cloud, Kubernetes, databases, deployments and secrets
+### Cloud, Kubernetes, databases, deployments and secrets: rule packs
 
-A coding agent reaches production through command-line tools and MCP servers. When it runs a known tool, the hook reads
-the actual command line (or MCP tool call) and records the operation as an Action Taxonomy 1.1 action **beside** the
-command's own `shell.exec` (or `mcp.tool.call`), in the same action group. So one rule set governs `aws s3 rb`,
-`kubectl delete`, `vercel --prod` or `gh secret set` the same way whether Claude Code, Cursor, Codex or GitHub Copilot
+A coding agent reaches production through command-line tools and MCP servers. What a vendor's tool or server does is
+not built into this package: it is read through **rule packs** (below), signed data that Scopebond Cloud delivers to a
+connected computer. With a pack in force, when the agent runs a tool the pack describes, the hook reads the actual
+command line (or MCP tool call) and records the operation as an Action Taxonomy action **beside** the command's own
+`shell.exec` (or `mcp.tool.call`), in the same action group. So one rule set governs a cloud deletion, a cluster
+change, a production deployment or a secret change the same way whether Claude Code, Cursor, Codex or GitHub Copilot
 ran it. The reading is deterministic: no model, no network, no heuristics beyond the words of a name, and no content.
 
-| Tool | Subcommands read | Action |
-|---|---|---|
-| `aws` | `s3 rm`, `s3 rb`, `s3 sync` to a bucket (`--delete` deletes), `s3 mb`; `ec2 terminate/run/stop/start/reboot-instances`; `iam` (any change); `ssm put-parameter`; `secretsmanager create-secret/put-secret-value/update-secret`; `cloudformation deploy`, `deploy create-deployment`; any other `delete-*`, `terminate-*`, `deregister-*`, `create-*`, `update-*`/`put-*`/`modify-*`/… operation | `cloud.resource.delete/create/modify`, `iam.change`, `secret.write`, `deploy.release` |
-| `gcloud` | `… create/delete/update/patch/stop/start/reset/resize` (not the local groups `config`, `auth`, `components`), `storage rm`, `iam …`, `… add/remove-iam-policy-binding`, `set-iam-policy`, `run/functions/app deploy`, `secrets create`, `secrets versions add` | the same, and `deploy.release` |
-| `az` | `… create/delete/delete-batch/purge/update/stop/start/restart/deallocate/resize`, `role assignment/definition`, `ad sp create-for-rbac`, `ad … credential reset`, `ad user/group`, `keyvault secret set`, `webapp deploy/up`, `webapp/functionapp deployment source config-zip` | the same; a web app without `--slot` deploys to its production slot |
-| `kubectl` | `apply`, `create`, `replace`, `patch`, `scale`, `set`, `rollout restart/undo/pause/resume`, `label`, `annotate`, `autoscale`, `expose`, `edit`, `drain`, `cordon`, `uncordon`, `taint`; `delete`; `exec`, `attach`, `debug` | `k8s.apply`, `k8s.delete`, `k8s.exec` |
-| `helm` | `install`, `upgrade`, `rollback`; `uninstall` | `k8s.apply`, `k8s.delete` (kind `helm-release`) |
-| `terraform`, `tofu`, `terragrunt` | `apply` (with `-auto-approve`, `-target`), `apply` of a saved plan (`saved_plan`, risk class destructive: the command does not show whether it destroys), `apply -destroy`, `destroy`; Terragrunt's `run-all` | `cloud.resource.modify`, `cloud.resource.delete` (provider `unknown`) |
-| `pulumi`, `cdk`, `sst` | `pulumi destroy`, `cdk destroy`, `sst remove` | `cloud.resource.delete` |
-| `wrangler` | `deploy`, `versions deploy`, `pages deploy`; `secret put/bulk/delete`; `delete`, `d1/r2/kv/pages project/queues create/delete`; `d1 migrations apply` | `deploy.release`, `secret.write`, `cloud.resource.*`, `db.migrate` |
-| `vercel` | a deployment (`vercel`, `deploy`, `redeploy`; production with `--prod` or `--target production`, else preview), `promote`, `rollback`; `env add`, `env rm`; `remove`, `project rm` | `deploy.release`, `secret.write`, `cloud.resource.delete` |
-| `fly`, `flyctl` | `deploy`; `secrets set` (one per name), `secrets import`; `destroy`, `apps destroy`, `machine destroy`, `volumes destroy` | `deploy.release`, `secret.write`, `cloud.resource.delete` |
-| `gh` | `secret set`; `repo delete`; `api` with a method that changes something (`POST`, `PUT`, `PATCH`, `DELETE`; a read is not a fetch here) | `secret.write`, `cloud.resource.delete` (provider `github`), `net.fetch` |
-| migrations | `prisma migrate deploy/dev/reset`, `prisma db push`; `drizzle-kit push/migrate/drop`; `rails`/`rake db:migrate` (with `VERSION=`, down), `db:rollback`, `db:reset`, `db:migrate:reset`, `db:drop`, …; `alembic upgrade/downgrade`; `flyway migrate/undo/clean`; `knex migrate:latest/rollback`; `sequelize db:migrate[:undo]` | `db.migrate` (`up`, `down`, `reset`) |
-| more | `eb deploy/terminate`, `serverless deploy/remove` (no `--stage`: the default `dev` stage), `heroku config:set`, `heroku apps:destroy`, `vault kv put`, `vault write` (not a login, transit or PKI path), `doppler secrets set/upload`, `op item create/edit` | `deploy.release`, `cloud.resource.delete`, `secret.write` |
+With no pack in force, the hook checks what it reads itself: shell commands (with the starter protections), git
+pushes, file reads and writes, web requests, package installs (Safe Install), SQL run through `psql` and `sqlite3`
+(the remote-database rule), and MCP tool calls as `mcp.tool.call`.
 
-The tools are found directly or through `npx`, `pnpm`/`yarn`/`bun` (`exec`, `dlx`), `npm exec`, `uv`/`poetry`/`pipenv run`,
-`python -m` and `bundle exec`, past the runner's own options that take a value (`pnpm --filter db exec`, `uv run --env-file .env`).
-
-| MCP server (by a word of its configured name; in Cursor, also of its URL or launch command) | Tools read | Action |
-|---|---|---|
-| `github` | `create_pull_request`, `merge_pull_request`, `push_files`, `create_or_update_file`, `delete_file` | `pr.open`, `pr.merge`, `git.push` to the named branch, `file.write` per path (with `repo`; a file in that repository, recorded and not decided by this computer's file rules) |
-| `filesystem` | `write_file`, `edit_file`, `create_directory`, `move_file`; `read_file`, `read_text_file`, `read_media_file`, `read_multiple_files`, `list_directory`, `directory_tree`, `search_files`, `get_file_info` | `file.write`, `file.read` (paths resolved like any other) |
-| `postgres`, `sqlite`, `mysql` | `query`, `read_query`, `write_query`, `execute_sql`, … | `db.exec`: verb, predicate class and risk from the SQL classifier; the SQL itself is never recorded |
-| `slack` | `slack_post_message`, `slack_reply_to_thread`, `post_message`, `send_message` | `communication.send` |
-| `playwright`, `puppeteer` | `browser_navigate`, `puppeteer_navigate` | `net.fetch` (host only) |
-| `fetch` | `fetch` | `net.fetch` (host, `GET`) |
-| `linear`, `jira` | `create_issue`, `update_issue`, `createJiraIssue`, `editJiraIssue` | `work.item.create`, `work.item.update` |
-
-**What an action carries.** Identifiers and closed values only: provider, service, kind, region, Kubernetes context and
-namespace, a migration's direction, a secret store, and `env` or `environment` when the command names one (an AWS
-profile, a GCP project, a Terraform folder or var file, `--env`, a slot or stage whose words say prod, staging or dev).
-Names are keyed digests (`resource_digest`, `name_digest`, `target_digest`, `channel_digest`, `project_digest`) under
-this computer's digest key. Never a secret's value, a file's contents, SQL or message text, or a URL's path and query.
+**What an action carries.** Identifiers and closed values only: provider, service, kind, region, cluster context and
+namespace, a migration's direction, a secret store, and `env` or `environment` when the command names one. Names are
+keyed digests (`resource_digest`, `name_digest`, `target_digest`, `channel_digest`, `project_digest`) under this
+computer's digest key. Never a secret's value, a file's contents, SQL or message text, or a URL's path and query.
 Every action also carries `via` (the tool or server), `derived_from` (`shell.exec` or `mcp.tool.call`) and, for the
 1.1 types and `deploy.release`, `risk_class`.
 
-**What the rules do with them.** Five rules, all recording by default and never blocking until a person
-(`rules enforce <rule>`) or the workspace turns them on:
+**What the rules do with them.** A pack brings the rules for what it derives. Five of them can be switched: they
+record by default and block only once a person (`rules enforce <rule>`) or the workspace turns them on:
 
 | Rule | Blocks | Catalog class |
 |---|---|---|
@@ -299,36 +275,35 @@ Every action also carries `via` (the tool or server), `derived_from` (`shell.exe
 | `iam-change` | `iam.change` | H09 |
 | `database-migrate` | `db.migrate` going `down` or `reset`, except against a development database the command names (`up` is recorded) | H10 |
 
-Cloud creates and changes, `k8s.apply`, `db.exec`, messages, work items and pull requests are recorded
-(`observe-targets`). A rule of your own can bound any parameter, for example
+A pack's other rules always record (`observe-targets`: cloud creates and changes, `k8s.apply`, `db.exec`, messages,
+work items and pull requests). The rules are not written into `policy.json`: the packs in force add them each time the
+policy is loaded, on the modes this computer's rules or its workspace set, after the starter rules. A rule of your own
+can bound any parameter, for example
 `{ "action_types": ["cloud.resource.delete"], "param_bounds": { "env": { "pattern": "^(?!production$).+" } } }`.
+
 **Which policies decide them.** A policy decides derived actions only when it opts in: one of its clauses names an
-action type Action Taxonomy 1.1 introduced, other than `db.exec` (which policies named before 1.1). Every policy this
-version compiles opts in, through the target-rule clauses above. Under a policy that does not (one an earlier hook
-compiled, or a workspace policy that carries none of those types), the derived actions are recorded and never
-decided, so that policy decides every call exactly as it did before they existed: a `gh api` call, a GitHub MCP push
-or a fetch MCP call is not newly checked by a push, file, site or database rule it already has. Under a policy that
-opts in, a push or a file read or write read from an MCP call is decided by the rules for those types (a `push_files`
-to `main` is a push to `main`; a `filesystem` write to `.scopebond/` is refused like any other), and a `fetch` or
-browser MCP call by a site rule. A site rule's list is matched exactly: `github.com` does not cover `api.github.com`
-(write `*.github.com` for that). Derived actions have no observation operation of their own: the closed observation
-schema has no type for them yet, and the command's own operation is still recorded.
+action type Action Taxonomy 1.1 introduced, other than `db.exec` (which policies named before 1.1). A pack's rules do,
+so the policy in force opts in while a pack with rules is in force. Under a policy that does not, the derived actions
+are recorded and never decided, so that policy decides every call exactly as it did before they existed. Under a
+policy that opts in, a push or a file read or write read from an MCP call is decided by the rules for those types (a
+repository server's push to `main` is a push to `main`; a file server's write to `.scopebond/` is refused like any
+other), and a fetch or browser MCP call by a site rule. A file written through a repository API (`via: "github"`) is
+in that repository, not on this computer: it is recorded, not decided by this computer's file rules, and its push is
+decided by the push rules. A site rule's list is matched exactly: `github.com` does not cover `api.github.com` (write
+`*.github.com` for that). Derived actions have no observation operation of their own: the closed observation schema
+has no type for them yet, and the command's own operation is still recorded.
 
 **At most 20 per call.** Beyond 20 derived actions in one call, those of each type are recorded as one, with `count`
 and `members_digest` and the parameters they all share; a parameter they do not share is left out, so a rule that
 bounds it refuses the call. A file read or written on this computer is never folded: each path is checked.
 
-**Honest limits.** Only the subcommands above are read. A tool or subcommand not listed, a help (`--help`, or `help`
-in the subcommand slot), list or describe command, or a dry run (`--dry-run`, `--dryrun`, `-refresh-only`,
-`terraform plan`) derives nothing: the command stays the plain `shell.exec` it always was, still checked by
-`safe-shell`. An option the reader does not know does not hide a command: when it stops the reader but one of the
-tool's destructive words (`delete`, `destroy`, `uninstall`, `rb`, `rm`, `exec`, `deploy`, `reset`, `downgrade`,
-`drop`, `remove`, …) is among the command's words, the action is still recorded with its names left out and a
-deployment's environment `unknown` (`kubectl --warnings-as-errors delete ns prod` is a `k8s.delete`). A name read
-after such an option is left out (the action keeps its type). A name
-known only at run time (`$FN`, `$(…)`) is never digested as a name. `terraform`'s provider is the configuration's, so
-it is `unknown`; the environment of a command comes only from words it shows, never from a profile file, the current
-kube context or environment variables the command does not set itself.
+**Honest limits.** Only what a pack's grammar lists is read. A tool or subcommand no pack lists, a help, list or
+describe command, or a dry run derives nothing: the command stays the plain `shell.exec` it always was, still checked
+by `safe-shell`. A pack may say that an option it does not know does not hide a command: when one of the tool's
+destructive words is among the command's words, the action is still recorded with its names left out and a
+deployment's environment `unknown`. A name known only at run time (`$FN`, `$(…)`) is never digested as a name. The
+environment of a command comes only from words it shows, never from a profile file, the current cluster context or
+environment variables the command does not set itself.
 
 ### What the hook sees being installed
 
@@ -390,10 +365,11 @@ list and the check with it. The hook carries no list of packages or sites of its
 
 ### Rule packs
 
-What the hook knows about more tools and MCP servers can also come as **rule packs**: signed data in the
-`scopebond:pack/v1` format (`@scopebond/policy-schema`, "Rule packs"), never code. A pack's grammars read a tool's
-command line and its profiles read MCP calls, and they derive taxonomy actions exactly as the readers above do,
-beside the command's own `shell.exec` (or `mcp.tool.call`), decided by the rules like any other action.
+What the hook knows about vendor tools and MCP servers comes as **rule packs**: signed data in the
+`scopebond:pack/v1` format (`@scopebond/policy-schema`, "Rule packs"), never code. Scopebond Cloud maintains the
+curated packs and delivers them to connected computers. A pack's grammars read a tool's command line and its profiles
+read MCP calls; they derive taxonomy actions beside the command's own `shell.exec` (or `mcp.tool.call`), and its rules
+decide them like any other action.
 
 **Where they live.** In the `packs` folder of the hook's state directory (the folder that holds `policy.json`):
 `packs/index.json` is `{ "v": 1, "checked_at": "<RFC 3339>", "packs": [{ "id", "version", "sha256" }] }`, and each
@@ -418,11 +394,10 @@ fetched or checked leaves the version already held, and the cache keeps the time
 that does not verify, or an answer that names no list, changes nothing. The hook says it reads lists with the `packs`
 capability on its rules check.
 
-**Precedence, for now.** The readers built into this release (the tables above) and the packs run side by side. For
-each command and each MCP call, when the built-in readers derive any action, those are used and the packs' are not;
-the packs' are used only when the built-in readers derive none (`setBuiltinReaders(false)` turns the built-in readers off,
-for a test that checks a set of packs alone derives the same). Among packs, the first by id that derives anything
-wins.
+**Precedence.** The packs are the only readers of a vendor's tools and servers: this package carries none of its
+own. Among packs, the first by id that derives anything wins; for an MCP call, the first profile whose words name the
+server owns it. Among their rules, the first pack by id that defines a rule id wins, and a rule the policy already
+carries is kept as it is.
 
 **`packs`.** `scopebond packs` (or `packs list --json`) shows the packs in force, until when, and why any other is
 not used. `packs verify <file>` checks a pack file (format, signature and the pack's own vectors) and changes

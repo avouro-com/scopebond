@@ -1,13 +1,12 @@
 // The grammar options a pack may set to read a command line the way a tool does, and the switches a parity check needs:
 // path_options, strict_unknown, fallback_on_any_option, fallback_only_unread, double_dash, the unknown_option condition,
-// positionals past an unknown option, the MCP profile that owns a call, and turning the built-in readers off. Every tool and
-// server here is made up.
+// positionals past an unknown option, and the MCP profile that owns a call. Every tool and server here is made up.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { validatePack } from "@scopebond/policy-schema/pack";
 import {
-  decomposeShell, deriveFromGrammar, derivePackMcp, setBuiltinReaders, builtinReadersOn, setActivePacks, mapClaudeToolUse,
+  decomposeShell, deriveFromGrammar, derivePackMcp,
 } from "../dist/index.js";
 
 const one = (command) => { const [sc] = decomposeShell(command); return sc; };
@@ -96,16 +95,4 @@ test("MCP: the first profile whose words name the server owns the call; the hint
   assert.deepEqual(derivePackMcp("tracker-notes", "update", {}, undefined, [p]), [], "tracker owns it, and lists no update");
   assert.equal(derivePackMcp("notes", "create", {}, "tracker-url", [p])[0].params.provider, "notes", "the configured name wins over the hint");
   assert.equal(derivePackMcp("mine", "create", {}, "https://tracker.example/mcp", [p])[0].params.provider, "tracker", "the hint, when the name says nothing");
-});
-
-test("the built-in readers can be turned off (a parity check), and are on by default", () => {
-  assert.equal(builtinReadersOn(), true);
-  const command = "kubectl delete ns staging";
-  const withBuiltIns = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command } });
-  setActivePacks([]);
-  setBuiltinReaders(false);
-  try {
-    assert.deepEqual(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command } }).map((m) => m.intent.action_type), ["shell.exec"]);
-  } finally { setBuiltinReaders(true); }
-  assert.ok(withBuiltIns.length > 1);
 });
