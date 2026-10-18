@@ -55,14 +55,14 @@ export const packsDir = (dir: string): string => join(dir, PACKS_DIR);
 
 /** A regular file's text when it is at most `max` bytes: "too_large" past that, null when it cannot be read. The file is
  *  opened once and its type and size are checked on that descriptor, so what passed the check is what is read. */
-function readBounded(file: string, max: number): string | "too_large" | null {
+function readBounded(file: string, max: number): { text: string } | "too_large" | null {
   let fd: number;
   try { fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0)); } catch { return null; }
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) return null;
     if (st.size > max) return "too_large";
-    return readFileSync(fd, "utf8");
+    return { text: readFileSync(fd, "utf8") };
   } catch { return null; } finally { closeSync(fd); }
 }
 const fileOf = (dir: string, ref: string): string => join(packsDir(dir), `${ref}.json`);
@@ -71,9 +71,9 @@ const fileOf = (dir: string, ref: string): string => join(packsDir(dir), `${ref}
 export function readPackIndex(dir: string): PackIndex | null {
   try {
     const file = join(packsDir(dir), PACK_INDEX_FILE);
-    const text = readBounded(file, MAX_INDEX_BYTES);
-    if (text === null || text === "too_large") return null;
-    const doc = JSON.parse(text) as Record<string, unknown>;
+    const read = readBounded(file, MAX_INDEX_BYTES);
+    if (read === null || read === "too_large") return null;
+    const doc = JSON.parse(read.text) as Record<string, unknown>;
     if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
     if (Object.keys(doc).some((k) => !["v", "checked_at", "packs"].includes(k))) return null;
     if (doc.v !== 1 || typeof doc.checked_at !== "string" || !RFC3339.test(doc.checked_at) || !Number.isFinite(Date.parse(doc.checked_at))) return null;
@@ -149,9 +149,10 @@ export function loadPacks(dir: string, options: { keys?: PolicyKey[]; now?: Date
     const ref = `${entry.id}@${entry.version}`;
     if (seen.has(entry.id)) { problems.push({ ref, reason: "invalid", message: `the index lists ${entry.id} twice; only the first is used` }); continue; }
     seen.add(entry.id);
-    const text = readBounded(fileOf(dir, ref), PACK_LIMITS.maxBytes);
-    if (text === "too_large") { problems.push({ ref, reason: "too_large", message: "the pack file is too large" }); continue; }
-    if (text === null) { problems.push({ ref, reason: "missing", message: "the pack file is missing" }); continue; }
+    const read = readBounded(fileOf(dir, ref), PACK_LIMITS.maxBytes);
+    if (read === "too_large") { problems.push({ ref, reason: "too_large", message: "the pack file is too large" }); continue; }
+    if (read === null) { problems.push({ ref, reason: "missing", message: "the pack file is missing" }); continue; }
+    const text = read.text;
     if (createHash("sha256").update(text, "utf8").digest("hex") !== entry.sha256) { problems.push({ ref, reason: "digest_mismatch", message: "the pack file does not match the index" }); continue; }
     const checkedPack = checkPackText(text, options);
     if (!checkedPack.ok) { problems.push({ ref, reason: checkedPack.reason, message: checkedPack.message }); continue; }

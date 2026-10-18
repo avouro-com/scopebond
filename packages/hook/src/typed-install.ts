@@ -26,7 +26,7 @@
 //   - Unknown is not guessed: a fact the request does not show is left out (no default registry is assumed).
 
 import { canonProgram, decomposeShell, gitArgs, shellScriptArg, splitCommandLine, type SimpleCommand } from "./shell.js";
-import { scrubParam, scrubUrlPath } from "./minimize.js";
+import { scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { scan, flagValue } from "./scan.js";
 import { launched, skipOptions } from "./launchers.js";
 
@@ -66,7 +66,7 @@ function word(value: string | undefined, max = 200): string | undefined {
   if (value === undefined) return undefined;
   const v = value.trim();
   if (v === "" || v.includes(SUBST) || v.includes("$") || /[\s`]/.test(v)) return undefined;
-  return clip(scrubParam(v), max);
+  return clip(scrubSecrets(v), max);
 }
 
 const isLocalPath = (spec: string): boolean => /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~|[A-Za-z]:[\\/]|file:)/i.test(spec);
@@ -74,7 +74,9 @@ const isLocalPath = (spec: string): boolean => /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~|[
 /** A URL reduced to scheme, host and path: no credentials, query or fragment; token-like path parts masked. */
 function sourceOf(raw: string | undefined): { source_url: string; source_domain: string } | undefined {
   if (!raw) return undefined;
-  let text = raw.trim().replace(/^git\+/i, "");
+  // Secret-shaped parts (a token as userinfo, a blob anywhere) are masked before the URL is read, so none can land in a
+  // host or a path however the URL splits.
+  let text = scrubSecrets(raw.trim()).replace(/^git\+/i, "");
   if (text.includes(SUBST) || text.includes("$")) return undefined;
   // `git@host:owner/repo` reads as ssh.
   // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the user part cannot cross `@`, the host cannot cross `:` or `/`
@@ -109,6 +111,7 @@ type Spec = { name?: string; version?: string; source_url?: string; source_domai
 function jsSpec(spec: string): Spec | null {
   if (spec === "" || spec.length > MAX_SPEC || isLocalPath(spec) || /^(?:workspace|link|portal|patch|exec):/i.test(spec)) return null;
   // An alias: `my-alias@npm:real-name@1.2.3`.
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; each run stops at a character the next part starts with
   const alias = /^(?:@[^@/\s]+\/)?[^@/\s]+@npm:(.+)$/.exec(spec);
   if (alias) return jsSpec(alias[1]);
   if (/^(?:https?|git|git\+https?|git\+ssh|ssh):/i.test(spec) || /^[^@/\s]+@[^:/\s]+:/.test(spec)) {
@@ -209,6 +212,7 @@ function jsInstalls(sc: SimpleCommand, manager: "npm" | "pnpm" | "yarn" | "bun")
     if (target === undefined || isLocalPath(target)) return [];
     const parsed = jsSpec(target);
     if (!parsed?.name) return [];
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the scope cannot cross `/`
     const scoped = /^(@[^/]+)(?:\/(.+))?$/.exec(parsed.name);
     const name = scoped ? `${scoped[1]}/create${scoped[2] ? `-${scoped[2]}` : ""}` : parsed.name.startsWith("create-") ? parsed.name : `create-${parsed.name}`;
     return [{ ...base, verb: "run", name, ...(parsed.version ? { version: parsed.version } : {}) }];
@@ -377,7 +381,7 @@ function gemInstalls(sc: SimpleCommand): Facts[] {
   const version = word(flagValue(s, "-v", "--version"), 100);
   const src = sourceOf(flagValue(s, "--git")) ?? (flagValue(s, "-s", "--source") ? { source_domain: hostOf(flagValue(s, "-s", "--source")) } : undefined);
   return specs.slice(0, MAX_ACTIONS).filter((spec) => !isLocalPath(spec) && !spec.endsWith(".gem")).map((spec) => word(spec)).filter((n): n is string => n !== undefined).map((name) => ({
-    route: "gem" as const, ecosystem: "rubygems" as const, verb: (program === "bundle" ? "add" : sub === "update" ? "update" : "install") as Verb, via: program, name,
+    route: "gem" as const, ecosystem: "rubygems" as const, verb: (program === "bundle" ? "add" : sub === "update" ? "update" : "install"), via: program, name,
     ...(program === "gem" ? { global: true as const } : {}), ...(version ? { version } : {}), ...(src?.source_domain ? src : {}),
   }));
 }
@@ -395,7 +399,7 @@ function brewInstalls(sc: SimpleCommand): Facts[] {
   if (!["install", "reinstall", "upgrade"].includes(sub ?? "")) return [];
   // A formula's name is whole: `node@20` is a formula of its own, not a version of `node`.
   return specs.slice(0, MAX_ACTIONS).filter((spec) => !isLocalPath(spec)).map((spec) => word(spec)).filter((n): n is string => n !== undefined)
-    .map((name) => ({ route: "brew" as const, ecosystem: "homebrew" as const, verb: (sub === "upgrade" ? "update" : "install") as Verb, name, global: true as const, via: "brew" }));
+    .map((name) => ({ route: "brew" as const, ecosystem: "homebrew" as const, verb: (sub === "upgrade" ? "update" : "install"), name, global: true as const, via: "brew" }));
 }
 
 /** The package installs one simple command names. */
@@ -455,6 +459,7 @@ function readCurl(argv: readonly string[]): Fetch | null {
     }
     urls.push(t);
   }
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the host repeat backs off only to each dot
   const url = urls.find((u) => /^https?:\/\//i.test(u)) ?? urls.find((u) => /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d+)?(?:\/|$)/.test(u));
   if (!url) return null;
   const file = output !== undefined && output !== "-" ? output : remoteName ? lastSegment(url) : undefined;
@@ -496,6 +501,7 @@ function readWget(argv: readonly string[]): Fetch | null {
     }
     urls.push(t);
   }
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the host repeat backs off only to each dot
   const url = urls.find((u) => /^https?:\/\//i.test(u)) ?? urls.find((u) => /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d+)?(?:\/|$)/.test(u));
   if (!url) return null;
   if (output === "-") return { url, stdout: true, via: "wget" };
@@ -654,7 +660,8 @@ function imageOf(ref: string): Spec | null {
   const registry = parts.length > 1 && (/[.:]/.test(parts[0]) || parts[0] === "localhost") ? parts[0].toLowerCase() : undefined;
   const name = word(rest.toLowerCase());
   if (!name) return null;
-  const version = m[2] ? word(m[2], 100) : tag ? word(tag, 100) : undefined;
+  // A content digest is public and exactly what names the image: kept whole (the secret scrubber would mask its hex).
+  const version = m[2] ? m[2].toLowerCase() : tag ? word(tag, 100) : undefined;
   return { name, ...(version ? { version } : {}), ...(registry ? { source_domain: registry.replace(/:\d+$/, "") } : {}) };
 }
 
@@ -826,7 +833,7 @@ function settingsServers(text: string, via: string): Facts[] {
   // A patch's added lines, without their `+`.
   const lines = body.split(/\r?\n/).map((l) => (/^\+(?!\+\+)/.test(l) ? l.slice(1) : l)).join("\n");
   const strings = (list: string): string[] => [...list.matchAll(/"((?:[^"\\\n]|\\.){0,500})"|'([^'\n]{0,500})'/g)].map((m) => m[1] ?? m[2]);
-  // eslint-disable-next-line security/detect-unsafe-regex -- linear: each alternative is anchored on a fixed key and a bounded quoted value
+   
   const keyRe = /(?:"(command|url|serverUrl|httpUrl)"\s*:|\b(command|url)\s*=)\s*"((?:[^"\\\n]|\\.){0,1000})"/g;
   const matches = [...lines.matchAll(keyRe)];
   for (let i = 0; i < matches.length && out.length < MAX_ACTIONS; i++) {

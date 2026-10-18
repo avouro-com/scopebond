@@ -273,11 +273,11 @@ test("a blocked package decides before its command: the package is the denied ac
   assert.deepEqual(d.receipts.map((r) => r.payload.intent.action_type), ["package.install"]);
 });
 
-test("without blocked services nothing changes: an install is recorded as the same single command", async () => {
+test("without blocked services nothing changes: an install is recorded as the same command, with its install action beside it", async () => {
   const { dir } = setup(null);
   const d = await run(dir, bash("npm install zod"));
   assert.equal(d.decision, "allow");
-  assert.deepEqual(d.receipts.map((r) => r.payload.intent.action_type), ["shell.exec"]);
+  assert.deepEqual(d.receipts.map((r) => r.payload.intent.action_type), ["shell.exec", "software.install"]);
 });
 
 test("ordinary rules decide first, and a blocked service is a block no allowance and no person can lift", async () => {
