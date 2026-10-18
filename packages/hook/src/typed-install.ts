@@ -61,6 +61,12 @@ const SUBST = "__sb_subst";
 const MAX_SPEC = 500;
 
 const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
+/** `s` without trailing slashes (a scan, not a pattern: a long run of slashes cannot make it slow). */
+function trimSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end--;
+  return s.slice(0, end);
+}
 /** A value fit to record: scrubbed of anything token-shaped, never an unexpanded variable, bounded. */
 function word(value: string | undefined, max = 200): string | undefined {
   if (value === undefined) return undefined;
@@ -506,7 +512,7 @@ function readWget(argv: readonly string[]): Fetch | null {
   if (!url) return null;
   if (output === "-") return { url, stdout: true, via: "wget" };
   const name = output ?? lastSegment(url);
-  return { url, ...(name ? { output: dir && output === undefined ? `${dir.replace(/\/+$/, "")}/${name}` : name } : {}), stdout: false, via: "wget" };
+  return { url, ...(name ? { output: dir && output === undefined ? `${trimSlashes(dir)}/${name}` : name } : {}), stdout: false, via: "wget" };
 }
 
 function readPowerShellFetch(argv: readonly string[]): Fetch | null {
@@ -557,7 +563,7 @@ const READ_ONLY = new Set(["git", "ls", "dir", "cat", "type", "less", "more", "h
   "stat", "file", "du", "cd", "pushd", "popd", "get-childitem", "gci", "get-content", "gc", "set-location", "sl", "chdir", "test", "[", "true", "false", "printf", "sort", "diff"]);
 
 const sameFile = (a: string, b: string): boolean => {
-  const norm = (p: string): string => p.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+  const norm = (p: string): string => trimSlashes(p.replace(/\\/g, "/").replace(/^(?:\.\/)+/, ""));
   return norm(a) === norm(b);
 };
 
@@ -603,7 +609,7 @@ function readClone(sc: SimpleCommand): Clone | null {
     const end = rest.indexOf("--");
     const words = (end < 0 ? rest : rest.slice(0, end)).filter((w) => !w.startsWith("-"));
     [url, dir] = words;
-    if (url && !/[:/].*[:/]|^https?:/i.test(url) && /^[\w.-]+\/[\w.-]+$/.test(url)) url = `https://github.com/${url}`;
+    if (url && (url.match(/[:/]/g) ?? []).length < 2 && !/^https?:/i.test(url) && /^[\w.-]+\/[\w.-]+$/.test(url)) url = `https://github.com/${url}`;
     via = "gh";
   } else return null;
   if (!url) return null;
@@ -947,7 +953,7 @@ export function deriveInstalls(command: string, dialect: "posix" | "powershell" 
         for (const later of all.slice(i + 1)) {
           const p = canonProgram(later.program);
           if (/^(?:cd|pushd|chdir|set-location|sl)$/.test(p)) {
-            const target = (later.argv.find((a) => !a.startsWith("-")) ?? "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+            const target = trimSlashes((later.argv.find((a) => !a.startsWith("-")) ?? "").replace(/\\/g, "/").replace(/^\.\//, ""));
             inside = target === clone.dir || target.startsWith(`${clone.dir}/`) || (inside && !target.startsWith("/") && !target.startsWith(".."));
             continue;
           }
