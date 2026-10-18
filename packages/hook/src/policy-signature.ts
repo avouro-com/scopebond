@@ -46,7 +46,7 @@ export interface SignedPolicyPayload {
   issued_at: string;
   /** Only on a tool settings section's payload ("tool_settings") or a document's grants payload ("grants"); a rules payload
    *  never carries it. */
-  kind?: "tool_settings" | "grants";
+  kind?: "tool_settings" | "grants" | "packs";
 }
 
 export type SignatureCheck =
@@ -104,7 +104,7 @@ export interface SignatureContext {
   keys?: PolicyKey[];
   now?: Date;
   /** Set only by `checkToolSettingsSignature` / `checkGrantsSignature`: the payload then carries that `kind`. */
-  domain?: "tool_settings" | "grants";
+  domain?: "tool_settings" | "grants" | "packs";
 }
 
 /** Check a document's signature. Pure apart from reading the trusted keys (`keys` overrides them). */
@@ -233,6 +233,34 @@ export function checkGrantsSignature(doc: Record<string, unknown>, context: Tool
     workspace_id: doc.workspace_id, issued_at: doc.issued_at, key_id: doc.key_id, signature: doc.grants_signature,
   }, { workspace: context.workspace, computer: context.computer, managed: true, lastIssuedAt: context.lastIssuedAt, keys: context.keys, now: context.now, domain: "grants" });
   return check.result === "refused" ? { ...check, message: `grants signature: ${check.message}` } : check;
+}
+
+// --- signed pack references --------------------------------------------------------------------------------------------------
+//
+// A workspace answer (a rules document, or the "no rules for this computer" answer) may name the rule packs this computer should
+// hold: `packs`, a list of `{ id, version, sha256 }`, the sha256 being that of the pack file the workspace serves at
+// `/v1/packs/<id>@<version>`. The list is signed beside the rules, by the same key and at the same `issued_at`: `packs_digest` is
+// the sha256 of the canonical JSON of the list, and `packs_signature` is over the rules payload with that digest as
+// `rules_digest`, `local_changes` false, the answer's own `managed` and `kind: "packs"`. Each pack is signed data in its own
+// right (pack-store.ts); the signed list says which of them the workspace wants here, so it cannot be cut down or rolled back on
+// the way.
+
+/** The digest the packs signature covers: the sha256 (lowercase hex) of the canonical JSON of the answer's `packs`. */
+export const digestPacks = (doc: Record<string, unknown>): string => createHash("sha256").update(canonical(doc.packs ?? [])).digest("hex");
+
+/** Check the signature of an answer's pack list. `unsigned` when the answer names no packs; refused when the list, its digest
+ *  or its signature is missing, does not match, or does not verify. */
+export function checkPacksSignature(doc: Record<string, unknown>, context: ToolSettingsSignatureContext & { managed: boolean }): SignatureCheck {
+  if (doc.packs === undefined && doc.packs_digest === undefined && doc.packs_signature === undefined) return { result: "unsigned" };
+  if (!Array.isArray(doc.packs) || typeof doc.packs_digest !== "string" || !HEX64.test(doc.packs_digest) || typeof doc.packs_signature !== "string") {
+    return { result: "refused", reason: "malformed_signature", message: "the answer's pack list or its signature is incomplete or malformed" };
+  }
+  if (digestPacks(doc) !== doc.packs_digest) return { result: "refused", reason: "bad_signature", message: "the answer's pack list does not match its signed digest; it was changed or damaged" };
+  const check = checkPolicySignature({
+    revision: doc.revision, rules_digest: doc.packs_digest, local_changes: false, installation_id: doc.installation_id,
+    workspace_id: doc.workspace_id, issued_at: doc.issued_at, key_id: doc.key_id, signature: doc.packs_signature,
+  }, { workspace: context.workspace, computer: context.computer, managed: context.managed, lastIssuedAt: context.lastIssuedAt, keys: context.keys, now: context.now, domain: "packs" });
+  return check.result === "refused" ? { ...check, message: `packs signature: ${check.message}` } : check;
 }
 
 /** The whole signature check of a workspace answer: its rules signature and, for a rules document, its grants signature.

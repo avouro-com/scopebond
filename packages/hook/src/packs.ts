@@ -18,7 +18,8 @@
 // side. For each simple command (and each MCP call), when the built-in readers derive any action, those actions are used and
 // the packs' are not; the packs' actions are used only when the built-in readers derive none. With no pack in force, or a
 // pack that is missing, bad or expired, only the built-in detection and the starter protections apply. Among packs, the one
-// whose id sorts first and derives anything wins.
+// whose id sorts first and derives anything wins. For an MCP call, the first profile whose words name the server owns it
+// (derivePackMcp). `setBuiltinReaders(false)` turns the built-in readers off, for a parity check of a set of packs.
 
 import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
@@ -38,6 +39,7 @@ type Value = string | number | boolean | string[] | undefined;
 type Node = Record<string, unknown>;
 
 const SUBST = "__sb_subst";
+const EMPTY: ReadonlySet<string> = new Set();
 const IDENT = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
 /** Every word a pattern runs on is cut to this length first. */
 const MATCH_LIMIT = 512;
@@ -137,6 +139,8 @@ interface Reading {
   pos: string[];
   /** How many of `pos` were read before an option the grammar does not know. */
   certain: number;
+  /** How many of `pos` a command's path may match: `certain`, or fewer under the grammar's `path_options`. */
+  pathCertain: number;
   /** Every option seen, by name, with each value it was given (`true` for a switch). */
   flags: Map<string, Array<string | true>>;
   /** An option the grammar does not know was seen. */
@@ -146,28 +150,50 @@ interface Reading {
 }
 
 function readArgs(grammar: PackGrammar, argv: readonly string[]): Reading & { skipped: boolean } {
-  const valued = new Set(grammar.options?.valued ?? []);
-  const known = new Set([...valued, ...(grammar.options?.flags ?? [])]);
+  const valuedOptions: ReadonlySet<string> = new Set(grammar.options?.valued ?? []);
+  const knownOptions: ReadonlySet<string> = new Set([...valuedOptions, ...(grammar.options?.flags ?? [])]);
   const skip = new Set(grammar.skip?.options ?? []);
   const pos: string[] = [];
   const flags = new Map<string, Array<string | true>>();
   let certain = -1;
+  let pathEnd = -1;
   let uncertain = false;
   let stopped = false;
   let skipped = false;
   const put = (name: string, value: string | true): void => { const list = flags.get(name) ?? []; list.push(value); flags.set(name, list); };
   for (let i = 0; i < argv.length; i++) {
     let t = argv[i];
-    if (t === "--") break;
+    if (t === "--") {
+      // Some tools read the words after `--` as positionals too.
+      if (grammar.double_dash === "positionals") pos.push(...argv.slice(i + 1));
+      break;
+    }
     if (t.length > 1 && t.startsWith("-") && !/^-\d/.test(t)) {
       if (grammar.single_dash_long && t.startsWith("--")) t = t.slice(1);
       const eq = t.indexOf("=");
       const name = eq > 0 ? t.slice(0, eq) : t;
+      const isKnown = knownOptions.has(name) || (eq < 0 && !t.startsWith("--") && t.length > 2 && valuedOptions.has(t.slice(0, 2)));
+      // Which options may stand before a command's path: `none`, or only `known` ones (an unknown one ends it, `=value` too).
+      if (pathEnd < 0 && (grammar.path_options === "none" || (grammar.path_options === "known" && !isKnown))) pathEnd = pos.length;
+      if (grammar.fallback_on_any_option) uncertain = true;
+      // Under `path_options: none`, an option before the first positional is not read as one the grammar knows: it takes no
+      // value, and the words after it are uncertain.
+      const known = grammar.path_options === "none" && pos.length === 0 ? EMPTY : knownOptions;
+      const valued = known === EMPTY ? EMPTY : valuedOptions;
       if (skip.has(name)) {
         const value = eq > 0 ? t.slice(eq + 1).toLowerCase() : "";
         if (value !== "none" && value !== "false") skipped = true;
       }
-      if (eq > 0) { put(name, t.slice(eq + 1)); if (!known.has(name)) { uncertain = true; if (grammar.unknown_options === "stop") stopped = true; } continue; }
+      if (eq > 0) {
+        put(name, t.slice(eq + 1));
+        if (!known.has(name)) {
+          uncertain = true;
+          if (grammar.unknown_options === "stop") stopped = true;
+          // `strict_unknown`: an unknown option ends the certain positionals even when it carries its value.
+          if (grammar.strict_unknown && certain < 0) certain = pos.length;
+        }
+        continue;
+      }
       if (valued.has(t)) { put(t, argv[i + 1] ?? ""); i++; continue; }
       // An attached short value: `-nprod`.
       if (!t.startsWith("--") && t.length > 2 && valued.has(t.slice(0, 2))) { put(t.slice(0, 2), t.slice(2)); continue; }
@@ -183,11 +209,13 @@ function readArgs(grammar: PackGrammar, argv: readonly string[]): Reading & { sk
   }
   const strip = new Set(grammar.strip_words ?? []);
   let lead = 0;
-  while (lead < pos.length && lead < (certain < 0 ? pos.length : certain) && strip.has(pos[lead])) lead++;
+  const certainAll = certain < 0 ? pos.length : certain;
+  const pathAll = Math.min(certainAll, pathEnd < 0 ? pos.length : pathEnd);
+  while (lead < pos.length && lead < pathAll && strip.has(pos[lead])) lead++;
   const words = pos.slice(lead);
-  const certainCount = (certain < 0 ? pos.length : certain) - lead;
+  const certainCount = certainAll - lead;
   if (words[0] !== undefined && certainCount > 0 && (grammar.skip?.words ?? []).includes(words[0])) skipped = true;
-  return { tool: "", argv: [...argv], pos: words, certain: Math.max(0, certainCount), flags, uncertain, stopped, skipped };
+  return { tool: "", argv: [...argv], pos: words, certain: Math.max(0, certainCount), pathCertain: Math.max(0, pathAll - lead), flags, uncertain, stopped, skipped };
 }
 
 type Bindings = Map<string, string | string[]>;
@@ -313,8 +341,9 @@ function evaluate(e: Node, s: Scope, depth = 0): Value {
   if ("positional" in e) { const i = used + (e.positional as number); return r && i < r.certain ? r.pos[i] : undefined; }
   if ("positionals" in e) {
     if (!r) return [];
-    const spec = e.positionals as { from: number; to?: number };
-    const end = Math.min(r.certain, spec.to !== undefined ? used + spec.to : Number.MAX_SAFE_INTEGER);
+    const spec = e.positionals as { from: number; to?: number; past_unknown?: true };
+    // Past an option the grammar does not know, a word may be that option's value: only `past_unknown` reads on.
+    const end = Math.min(spec.past_unknown ? r.pos.length : r.certain, spec.to !== undefined ? used + spec.to : Number.MAX_SAFE_INTEGER);
     return r.pos.slice(used + spec.from, Math.max(used + spec.from, end));
   }
   if ("any_positional" in e) return r?.pos[used + (e.any_positional as number)];
@@ -445,6 +474,7 @@ function holds(c: Node, s: Scope, depth = 0): boolean {
   const sub = (x: unknown): Value => evaluate(x as Node, s, depth + 1);
   if ("has" in c) return present(s, c.has as string[]);
   if ("word" in c) { const words = new Set(s.reading?.pos ?? []); return (c.word as string[]).some((w) => words.has(w)); }
+  if ("unknown_option" in c) return s.reading?.uncertain === true || s.reading?.stopped === true;
   if ("defined" in c) return isDefined(sub(c.defined));
   if ("eq" in c) { const [a, b] = c.eq as [unknown, unknown]; return sub(a) === b; }
   if ("in" in c) { const [a, list] = c.in as [unknown, unknown[]]; const v = sub(a); return v !== undefined && !Array.isArray(v) && list.includes(v); }
@@ -506,19 +536,22 @@ export function deriveFromGrammar(sc: SimpleCommand, grammar: PackGrammar, probe
   if (reading.skipped) return [];
   const via = grammar.via ?? grammar.programs[0];
   const out: PackAction[] = [];
+  let matched = false;
   if (!reading.stopped) {
     for (const command of grammar.commands) {
-      const m = matchPath(command.path, reading.pos, reading.certain);
+      const m = matchPath(command.path, reading.pos, reading.pathCertain);
       if (!m) continue;
       if (command.max_positionals !== undefined && reading.pos.length - m.used > command.max_positionals) continue;
       const scope: Scope = { kind: "shell", sc, reading, used: m.used, bindings: m.bindings, probe };
       if (command.when && !holds(command.when, scope)) continue;
+      matched = true;
       emitAll(command.emit, scope, via, "shell.exec", out);
       break;
     }
   }
-  // Uncertain is not unknown: an option the grammar does not know may have hidden the subcommand.
-  if (out.length === 0 && (reading.uncertain || reading.stopped) && grammar.fallback) {
+  // Uncertain is not unknown: an option the grammar does not know may have hidden the subcommand. With
+  // `fallback_only_unread`, only a command line no command could read falls back.
+  if (out.length === 0 && (reading.uncertain || reading.stopped) && grammar.fallback && !(grammar.fallback_only_unread && matched)) {
     const scope: Scope = { kind: "shell", sc, reading, used: 0, bindings: new Map(), probe };
     for (const f of grammar.fallback) {
       if (!holds(f.when, scope)) continue;
@@ -549,6 +582,14 @@ export function deriveFromProfile(profile: PackProfile, server: string, tool: st
 // ---- the packs in force ------------------------------------------------------------------------------------------------------
 
 let active: readonly Pack[] = [];
+let builtIns = true;
+
+/** Whether the readers built into this release (typed-targets.ts, mcp-profiles.ts) run beside the packs. On by default. A
+ *  test turns them off to check that a set of packs alone derives what the built-in readers derive (a parity check). No
+ *  setting, file or environment variable reaches it: only code that loads this module can call it. */
+export function setBuiltinReaders(on: boolean): void { builtIns = on; }
+/** Whether the built-in readers are on (`setBuiltinReaders`). */
+export const builtinReadersOn = (): boolean => builtIns;
 
 /** Set the packs the mapper reads (pack-store.ts `activatePacks`, after verifying them). Sorted by id, so the result never
  *  depends on the order they were found in. An empty list switches every pack off. */
@@ -574,15 +615,18 @@ export function derivePackTargets(sc: SimpleCommand, probe: PackProbe = {}, pack
   return [];
 }
 
-/** What the packs in force derive from one MCP call: the first profile (packs by id, then profile order) that covers the
- *  server and tool. */
+/** What the packs in force derive from one MCP call. The first profile (packs by id, then profile order) whose server words
+ *  name the server's configured name owns the call; only when none does, the first whose words name the hint (the server's
+ *  URL or launch command). The owning profile derives what it lists for the tool, and nothing for a tool it does not list:
+ *  another profile is never asked, so a call is read the same way whichever tools a profile lists. */
 export function derivePackMcp(server: string, tool: string, args: unknown, hint?: string, packs: readonly Pack[] = active): PackAction[] {
-  for (const pack of packs) {
-    for (const profile of pack.profiles) {
-      try {
-        const out = deriveFromProfile(profile, server, tool, args, hint);
-        if (out !== null) return out;
-      } catch { return []; }
+  for (const by of hint === undefined ? [server] : [server, hint]) {
+    const words = serverWords(by);
+    for (const pack of packs) {
+      for (const profile of pack.profiles) {
+        if (!profile.servers.some((w) => words.has(w))) continue;
+        try { return deriveFromProfile(profile, server, tool, args, hint) ?? []; } catch { return []; }
+      }
     }
   }
   return [];

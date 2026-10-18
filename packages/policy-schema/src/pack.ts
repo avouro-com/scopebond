@@ -84,6 +84,17 @@ export interface PackGrammar {
   launchers?: boolean;
   options?: { valued?: string[]; flags?: string[] };
   unknown_options?: "uncertain" | "stop";
+  /** Which options may stand before a command's path words: any but an unknown switch (the default), only `known` ones, or
+   *  `none`. An option that may not ends the words a path can match; the positionals after the path are read as before. */
+  path_options?: "known" | "none";
+  /** An option the grammar does not know ends the certain positionals even when it carries its value (`--name=value`). */
+  strict_unknown?: boolean;
+  /** Every option, known or not, lets the fallback run (as an option the grammar does not know does). */
+  fallback_on_any_option?: boolean;
+  /** The fallback runs only when no command's path (and `when`) matched. */
+  fallback_only_unread?: boolean;
+  /** `positionals`: the words after `--` are positionals too (the default, `end`, stops reading there). */
+  double_dash?: "end" | "positionals";
   single_dash_long?: boolean;
   strip_words?: string[];
   skip?: { options?: string[]; words?: string[] };
@@ -156,7 +167,7 @@ export const EXPRESSION_OPERATORS = {
   sorted: [], count: [], split: ["sep", "index"], scrub: [], sql: ["field"], if: ["then", "else"],
 } as const satisfies Record<string, readonly string[]>;
 
-export const CONDITION_OPERATORS = ["has", "word", "defined", "eq", "in", "matches", "all", "any", "not", "count"] as const;
+export const CONDITION_OPERATORS = ["has", "word", "defined", "eq", "in", "matches", "all", "any", "not", "count", "unknown_option"] as const;
 
 const SHELL_ONLY = new Set(["flag", "flags", "present", "positional", "positionals", "any_positional", "word_after", "words_after", "assign", "arg_assign", "var", "tool",
   "file_sha256", "dir_sha256", "file_text", "dir_sql", "config_value"]);
@@ -268,9 +279,10 @@ class Checker {
       case "words_after": return this.string(v, here, OPTION) && ok;
       case "positional": case "any_positional": return this.integer(v, here, 0, 64) && ok;
       case "positionals":
-        if (this.object(v, here, ["from", "to"], ["from"])) {
+        if (this.object(v, here, ["from", "to", "past_unknown"], ["from"])) {
           if (!this.integer(v.from, `${here}.from`, 0, 64)) ok = false;
           if (v.to !== undefined && !this.integer(v.to, `${here}.to`, 0, 64)) ok = false;
+          if (v.past_unknown !== undefined && v.past_unknown !== true) ok = this.fail(`${here}.past_unknown`, "may only be true");
           return ok;
         }
         return false;
@@ -364,6 +376,9 @@ class Checker {
       case "word":
         if (ctx === "mcp") return this.fail(here, "reads a command line; it cannot be used in an MCP profile");
         return this.strings(v, here, undefined) && ok;
+      case "unknown_option":
+        if (ctx === "mcp") return this.fail(here, "reads a command line; it cannot be used in an MCP profile");
+        return (v === true || this.fail(here, "must be true")) && ok;
       case "defined": return sub(v, here) && ok;
       case "eq":
         if (!Array.isArray(v) || v.length !== 2) return this.fail(here, "must be [expression, value]");
@@ -431,7 +446,7 @@ class Checker {
   }
 
   grammar(value: unknown, at: string): boolean {
-    if (!this.object(value, at, ["id", "programs", "via", "launchers", "options", "unknown_options", "single_dash_long", "strip_words", "skip", "commands", "fallback"], ["id", "programs", "commands"])) return false;
+    if (!this.object(value, at, ["id", "programs", "via", "launchers", "options", "unknown_options", "strict_unknown", "path_options", "fallback_on_any_option", "fallback_only_unread", "double_dash", "single_dash_long", "strip_words", "skip", "commands", "fallback"], ["id", "programs", "commands"])) return false;
     let ok = true;
     if (!this.string(value.id, `${at}.id`, PACK_ID)) ok = false;
     if (!this.list(value.programs, `${at}.programs`, (v, a) => this.string(v, a, PROGRAM), 1, 20)) ok = false;
@@ -439,6 +454,11 @@ class Checker {
     if (value.launchers !== undefined && typeof value.launchers !== "boolean") ok = this.fail(`${at}.launchers`, "must be a boolean");
     if (value.single_dash_long !== undefined && typeof value.single_dash_long !== "boolean") ok = this.fail(`${at}.single_dash_long`, "must be a boolean");
     if (value.unknown_options !== undefined && value.unknown_options !== "uncertain" && value.unknown_options !== "stop") ok = this.fail(`${at}.unknown_options`, "must be uncertain or stop");
+    if (value.path_options !== undefined && value.path_options !== "known" && value.path_options !== "none") ok = this.fail(`${at}.path_options`, "must be known or none");
+    if (value.double_dash !== undefined && value.double_dash !== "end" && value.double_dash !== "positionals") ok = this.fail(`${at}.double_dash`, "must be end or positionals");
+    for (const key of ["strict_unknown", "fallback_on_any_option", "fallback_only_unread"] as const) {
+      if (value[key] !== undefined && typeof value[key] !== "boolean") ok = this.fail(`${at}.${key}`, "must be a boolean");
+    }
     if (value.options !== undefined && this.object(value.options, `${at}.options`, ["valued", "flags"])) {
       if (value.options.valued !== undefined && !this.strings(value.options.valued, `${at}.options.valued`, OPTION)) ok = false;
       if (value.options.flags !== undefined && !this.strings(value.options.flags, `${at}.options.flags`, OPTION)) ok = false;

@@ -31,6 +31,7 @@
 import { canonProgram, type SimpleCommand } from "./shell.js";
 import { digest, scrubParam } from "./minimize.js";
 import { readWrangler, type FileProbe } from "./typed-infra.js";
+import { launched } from "./launchers.js";
 
 export interface TargetOperation { action_type: string; params: Record<string, unknown> }
 
@@ -168,68 +169,14 @@ function act(action_type: string, params: Params): TargetOperation {
 // ---- launchers ------------------------------------------------------------------------------------------------------
 
 /** The tool a simple command runs and its arguments: the program itself, or a tool started through a package runner
- *  (`npx prisma`, `pnpm exec wrangler`, `uv run alembic`, `python -m alembic`, `bundle exec rails`). */
-/** A package runner: the options it takes before its subcommand that take a value, its subcommands that run a tool (none:
- *  the tool comes first; `optional`: the tool may also come first, as `pnpm wrangler`), and the options of those
- *  subcommands that take a value (a package to install, a workspace to run in, a file of variables). */
-interface Runner { pre: ReadonlySet<string>; subs: readonly string[]; optional?: true; post: ReadonlySet<string> }
-const NODE_RUN_VALUED = new Set(["-p", "--package", "-c", "--call", "--filter", "-F", "-C", "--dir", "--workspace-dir", "--prefix", "--cwd", "-w", "--workspace",
-  "--cache", "--userconfig", "--registry", "--loglevel", "--reporter", "--shell-mode"]);
-const PY_RUN_VALUED = new Set(["--env-file", "--with", "--with-requirements", "--with-editable", "--project", "--package", "--python", "-p", "--group", "--extra",
-  "--index", "--index-url", "--extra-index-url", "--find-links", "-f", "--directory", "-C", "-P", "--config-file", "--cache-dir", "--no-group", "--only-group", "-e", "--env"]);
-const RUNNERS: Readonly<Record<string, Runner>> = {
-  npx: { pre: NODE_RUN_VALUED, subs: [], post: NODE_RUN_VALUED },
-  pnpx: { pre: NODE_RUN_VALUED, subs: [], post: NODE_RUN_VALUED },
-  bunx: { pre: NODE_RUN_VALUED, subs: [], post: NODE_RUN_VALUED },
-  pnpm: { pre: NODE_RUN_VALUED, subs: ["exec", "dlx", "x"], optional: true, post: NODE_RUN_VALUED },
-  yarn: { pre: NODE_RUN_VALUED, subs: ["exec", "dlx", "x"], optional: true, post: NODE_RUN_VALUED },
-  bun: { pre: NODE_RUN_VALUED, subs: ["exec", "dlx", "x"], optional: true, post: NODE_RUN_VALUED },
-  npm: { pre: NODE_RUN_VALUED, subs: ["exec", "x"], post: NODE_RUN_VALUED },
-  uv: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
-  poetry: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
-  pipenv: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
-  pdm: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
-  hatch: { pre: PY_RUN_VALUED, subs: ["run"], post: PY_RUN_VALUED },
-  bundle: { pre: new Set(["--gemfile"]), subs: ["exec"], post: new Set(["--gemfile"]) },
-};
-/** The index of the first word at or after `i` that is not an option (or an option's value). */
-function skipOptions(words: readonly string[], i: number, valued: ReadonlySet<string>): number {
-  while (i < words.length && words[i].startsWith("-") && words[i] !== "-") {
-    if (words[i] === "--") return i + 1;
-    i += !words[i].includes("=") && valued.has(words[i]) ? 2 : 1;
-  }
-  return i;
-}
-
+ *  (`npx prisma`, `pnpm exec wrangler`, `uv run alembic`, `python -m alembic`, `bundle exec rails`), found by the same
+ *  launcher reader the rule packs use (launchers.ts). */
 export function toolOf(sc: SimpleCommand): { tool: string; argv: string[] } | null {
   if (sc.opaque) return null;
   const program = canonProgram(sc.program);
   if (TARGET_TOOLS.has(program)) return { tool: program, argv: sc.argv };
-  let rest: string[];
-  if (program === "python" || program === "python3" || program === "py") {
-    // `python -I -m alembic`, `python -X dev -m alembic`: the module after `-m`.
-    let k = 0;
-    while (k < sc.argv.length && sc.argv[k] !== "-m") { if (!sc.argv[k].startsWith("-")) return null; k += sc.argv[k] === "-X" || sc.argv[k] === "-W" ? 2 : 1; }
-    if (sc.argv[k] !== "-m") return null;
-    rest = sc.argv.slice(k + 1);
-  } else {
-    const runner = RUNNERS[program];
-    if (!runner) return null;
-    // The runner's own options first (`pnpm --filter db exec`, `uv --directory api run`), then its subcommand, then that
-    // subcommand's options (`uv run --env-file .env`, `npx -p prisma@5`); an option that takes a value takes the next word.
-    let k = skipOptions(sc.argv, 0, runner.pre);
-    if (runner.subs.length) {
-      if (runner.subs.includes(sc.argv[k] ?? "")) k = skipOptions(sc.argv, k + 1, runner.post);
-      else if (!runner.optional) return null;
-    }
-    rest = sc.argv.slice(k);
-  }
-  const word = rest[0];
-  if (word === undefined) return null;
-  // `prisma@5`, `wrangler@latest`, `@scope/name` is not one of these tools.
-  const at = word.lastIndexOf("@");
-  const tool = canonProgram(at > 0 ? word.slice(0, at) : word);
-  return TARGET_TOOLS.has(tool) ? { tool, argv: rest.slice(1) } : null;
+  const run = launched(sc);
+  return run && TARGET_TOOLS.has(run.tool) ? { tool: run.tool, argv: run.argv } : null;
 }
 
 // ---- aws ------------------------------------------------------------------------------------------------------------

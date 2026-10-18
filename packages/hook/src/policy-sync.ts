@@ -33,6 +33,7 @@ import { evidenceDetailFrom } from "./evidence-detail.js";
 import { receiptContextFrom } from "./receipt-context.js";
 import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
+import { restampPacks, syncPacks } from "./pack-sync.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
  *  the portal can say "checking in but not delivering" instead of "reporting". Counts and one
@@ -92,9 +93,9 @@ import { SERVICE_RULES_CAPABILITY } from "./service-rules.js";
 
 /** What this hook reads in a workspace's rules document beyond what its version implies, as `x-scopebond-hook-capabilities`
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
- *  unblock lasts and its review (`unblock_terms`), and "unlimited" for an override's `minutes` and `daily_limit`
- *  (`unlimited_terms`; an older hook gets numbers). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms"] as const;
+ *  unblock lasts and its review (`unblock_terms`), "unlimited" for an override's `minutes` and `daily_limit`
+ *  (`unlimited_terms`; an older hook gets numbers), and the signed list of rule packs to hold (`packs`, pack-sync.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs"] as const;
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";
@@ -171,7 +172,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   // full answer (200 or 204) without it turns it off again, so a workspace that stops reading it is not sent a key it would
   // refuse. A 304 or an error answer leaves it as it was.
   let receiptContext = meta.receipt_context ?? null;
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, ...patch, checked_at: now.toISOString() });
+  // And the rule packs the workspace names (pack-sync.ts).
+  let packState = meta.packs ?? null;
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch, checked_at: now.toISOString() });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
@@ -226,6 +229,14 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const workspaceId = workspaceIdOf(connection);
   const lastIssuedAt = (): string | null => (meta.policy_issued_workspace ?? null) === workspaceId ? meta.policy_issued_at ?? null : null;
   const issued = (issuedAt: string | null) => (issuedAt ? { policy_issued_at: issuedAt, policy_issued_workspace: workspaceId } : {});
+  /** Bring the pack cache in step with an answer whose rules signature was admitted. An answer that names no packs changes
+   *  nothing. Never throws. */
+  const syncPackList = async (raw: Record<string, unknown>): Promise<void> => {
+    const result = await syncPacks(dir, raw, { base, headers: auth, fetchImpl, workspace: workspaceId, computer: installationId, lastIssuedAt: lastIssuedAt(), now, timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
+    if (result.state === "not_named") return;
+    const error = result.state === "synced" ? null : result.state === "refused" ? result.message : result.failed.map((f) => `${f.ref}: ${f.message}`).join("; ");
+    packState = { at, digest: typeof raw.packs_digest === "string" ? raw.packs_digest : null, complete: result.state === "synced", error: error === null ? null : error.slice(0, 300) };
+  };
   const signed = (raw: Record<string, unknown>, managed: boolean) => {
     const check = checkAnswerSignature(raw, { workspace: workspaceId, computer: installationId, managed, lastIssuedAt: lastIssuedAt(), now }, mode);
     return { issuedAt: check.result === "verified" ? check.issuedAt : null, admitted: admitSigned(check, mode, at) };
@@ -244,13 +255,14 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     return { state: "disconnected" };
   }
   /** The workspace sets no rules for this computer (a 204, or its signed 200 form): back to its own rules, once admitted. */
-  const toOwnRules = async (admitted: ReturnType<typeof admitSigned>, issuedAt: string | null): Promise<SyncOutcome> => {
+  const toOwnRules = async (admitted: ReturnType<typeof admitSigned>, issuedAt: string | null, raw?: Record<string, unknown>): Promise<SyncOutcome> => {
     if (!admitted.ok) {
       const confirmed = await ack({ export_id: `rev-0-${installationId}`, revision: 0, rules_digest: UNMANAGED_DIGEST, result: "rejected", reason: ackReasonFor(admitted.reason) });
       save({ last_ack: confirmed, policy_signature: admitted.state, last_error: admitted.message });
       return { state: "refused", revision: null, reason: ackReasonFor(admitted.reason), message: admitted.message, signature: admitted.reason };
     }
     const changed = backToOwnRules();
+    if (raw) await syncPackList(raw);
     const last = meta.last_ack;
     const confirmed = changed || !last || last.revision !== 0 || last.result !== "loaded"
       ? await ack({ export_id: `rev-0-${installationId}`, revision: 0, rules_digest: UNMANAGED_DIGEST, result: "loaded" }) : last;
@@ -260,6 +272,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   };
   if (res.status === 204) return toOwnRules(admitSigned({ result: "unsigned" }, mode, at), null);
   if (res.status === 304 && isManaged(dir) && meta.revision !== null) {
+    // Not modified covers the pack list too: a complete cache is renewed by this check-in.
+    if (packState?.complete) restampPacks(dir, now);
     const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision, rules_digest: meta.rules_digest!, result: "loaded" });
     save({ last_ack: confirmed, last_error: null });
@@ -283,7 +297,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       return { state: "refused", revision: null, reason: "wrong_computer", message, signature: "wrong_computer" };
     }
     const { issuedAt, admitted } = signed(r, false);
-    return toOwnRules(admitted, issuedAt);
+    return toOwnRules(admitted, issuedAt, r);
   }
   // Whether people may change rules on this computer is outside the rules digest, so the same version can arrive
   // with only that switch changed; it is a change to install, not "unchanged".
@@ -306,6 +320,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       save({ last_ack: confirmed, policy_signature: again.admitted.state, last_error: again.admitted.message });
       return { state: "refused", revision: meta.revision, reason, message: again.admitted.message, signature: again.admitted.reason };
     }
+    await syncPackList(r);
     const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "loaded" });
     save({ etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, policy_signature: again.admitted.state, ...issued(again.issuedAt) });
@@ -337,6 +352,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     return { state: "refused", revision: doc.revision, reason: installed.reason, message: installed.message };
   }
   options.afterPolicyWrite?.(dir);
+  await syncPackList(r);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
   save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null,
     policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
