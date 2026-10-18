@@ -472,6 +472,9 @@
         { "name": "mcp_server", "type": "string", "required": false, "boundable": true, "description": "For an MCP server added to a tool's settings: the name it is configured under." },
         { "name": "via", "type": "string", "required": false, "boundable": true, "description": "The program the install was read from (npm, pip, curl, git, docker, claude), or the settings file's tool." },
         { "name": "derived_from", "type": "enum", "required": false, "boundable": false, "description": "The action this one re-describes, recorded beside it in the same action group: the shell command, or the file write that changes a tool's settings.", "enum": ["shell.exec", "file.write"] },
+        { "name": "verdict", "type": "enum", "required": false, "boundable": true, "description": "A verdict service's answer for this install, when the hook asked for one: block, ask or allow. Absent when none was asked for.", "enum": ["block", "ask", "allow"] },
+        { "name": "verdict_reasons", "type": "array", "required": false, "boundable": false, "description": "The verdict's reason codes (lower-case words joined by underscores), as the verdict service gave them or as the hook decided them offline." },
+        { "name": "verdict_source", "type": "enum", "required": false, "boundable": false, "description": "Where the verdict came from: the workspace (cloud), an earlier answer kept on the computer (cache), the signed block list kept on the computer (blocklist), or nowhere (offline).", "enum": ["cloud", "cache", "blocklist", "offline"] },
         { "name": "risk_class", "type": "enum", "required": false, "boundable": true, "description": "The risk class of this instance (sensitive).", "enum": ["routine", "sensitive", "destructive", "identity"] }
       ],
       "examples": [

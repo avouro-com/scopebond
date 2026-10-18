@@ -54,6 +54,9 @@ export interface Mapped {
    *  some and none can be read). Not part of the signed intent; the runtime reads it only to evaluate a package a workspace
    *  blocks (service-rules.ts). */
   packages?: { manager: string; names: string[]; unreadable?: true };
+  /** On a `software.install` intent Safe Install checked (install-verdicts.ts): its verdict and the message for it. Not part of
+   *  the signed intent (the intent carries the verdict and its reason codes); the runtime reads it to block, ask or go on. */
+  install?: { verdict: "block" | "ask" | "allow"; reasons: Array<{ code: string; text: string }>; source: string; message: string };
 }
 
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");

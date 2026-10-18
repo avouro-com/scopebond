@@ -318,7 +318,9 @@ export interface DispatchRequest {
 export type DispatchReason =
   | "ok" | "approval_required" | "approval_rejected" | "approval_replayed" | "approval_unavailable" | "delegation_unknown" | "delegation_revoked"
   | "delegation_expired" | "delegation_out_of_scope" | "delegation_wrong_actor" | "budget_exceeded" | "budget_unacknowledged"
-  | "budget_expired" | "budget_revoked" | "budget_capability_unsupported" | "clock_rollback" | "counter_unavailable";
+  | "budget_expired" | "budget_revoked" | "budget_capability_unsupported" | "clock_rollback" | "counter_unavailable"
+  // An install a verdict service refused (the hook's Safe Install check): blocked, or held for a person the host cannot ask.
+  | "install_refused";
 
 export interface BudgetObservation {
   budget_id: string;
