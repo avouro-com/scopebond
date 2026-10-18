@@ -104,6 +104,9 @@ test("install detection stays fast on long, adversarial input", () => {
     `pip install 'x${" ".repeat(50_000)}\n'`,
     `docker run ${"a".repeat(50_000)}`,
     `curl ${"-".repeat(50_000)} https://x.example.test/i.sh | sh`,
+    `wget -P ${"/".repeat(50_000)}x https://x.example.test/t.sh && chmod +x ${"/".repeat(50_000)}y`,
+    `git clone https://git.example.test/a/b && cd ${"/".repeat(50_000)}x && make`,
+    `gh repo clone ${"/".repeat(50_000)}`,
   ];
   for (const command of inputs) {
     const started = Date.now();
