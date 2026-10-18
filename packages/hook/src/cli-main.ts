@@ -58,7 +58,8 @@ import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { compileManaged, isManaged, readMeta, writeMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
 import { agentPresence, healthLines, recommendedFrom, NATIVE_DOWNLOAD_URL } from "./client-health.js";
 import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.js";
-import { createOverrideHandler, overrideHint } from "./override.js";
+import { createOverrideHandler, overrideHint, PROMPTING_MODES } from "./override.js";
+import { checkInstalls, VERDICT_TIMEOUT_MS } from "./install-verdicts.js";
 import { markRulesDroppedTold, rulesDroppedNotice, syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor, repositoryFacts } from "./receipt-context.js";
@@ -76,7 +77,7 @@ import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
 import { runPackVectors } from "./packs.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
-import { HOT_PATH_STORE_BUSY_MS, waitWithinDeadline } from "./hook-deadline.js";
+import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, waitWithinDeadline } from "./hook-deadline.js";
 import { policyKeyProblems } from "./policy-keys.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
 import { describeDelivery, flushOutcome } from "./delivery-report.js";
@@ -304,6 +305,24 @@ const copilotDeadlineMs = (): number => {
   return Number.isFinite(configured) && configured > 0 && configured < COPILOT_DECISION_DEADLINE_MS ? configured : COPILOT_DECISION_DEADLINE_MS;
 };
 
+/** How a host answers a Safe Install "ask": Claude Code asks the person in a permission mode that prompts, Cursor and GitHub
+ *  Copilot always do (Copilot's cloud agent treats "ask" as a deny); Codex cannot ask, so the install is refused with how to go
+ *  ahead. */
+function installAskFor(harness: Harness, permissionMode: string | null): "ask" | "deny" {
+  if (harness === "claude") return permissionMode !== null && PROMPTING_MODES.has(permissionMode) ? "ask" : "deny";
+  return harness === "cursor" || harness === "copilot" ? "ask" : "deny";
+}
+
+/** Safe Install: verdicts for the installs a call would run (install-verdicts.ts), within what is left of the hook's deadline.
+ *  Unchanged when the call installs nothing it checks or the check is off here. */
+async function withInstallVerdicts(dir: string, mapped: Mapped[], ask: "ask" | "deny"): Promise<Mapped[]> {
+  const left = hookDeadlineRemainingMs() - WAIT_RESERVE_MS;
+  return checkInstalls(dir, mapped, {
+    connection: loadConnection(dir), ask, headers: { "x-scopebond-hook-version": hookVersion() },
+    timeoutMs: Math.max(250, Math.min(VERDICT_TIMEOUT_MS, Number.isFinite(left) ? left : VERDICT_TIMEOUT_MS)),
+  });
+}
+
 /** For the tray: the rule, project and tool of a blocked call, noted on this computer (block-notes.ts). Never throws. */
 function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision): void {
   if (decision.decision !== "deny") return;
@@ -337,13 +356,15 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // Where these receipts come from (harness, model, keyed session id, repository, branch); null while a connected
     // workspace has not said it reads it. Never fails the call.
     const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+    const installAsk = installAskFor(harness, permissionMode);
+    const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], installAsk);
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
       const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
     if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; recordHookError("deadline", copilotDeadlineReason()); deny(copilotDeadlineReason()); }
-    const decision = await runtime.evaluate([...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], { groupKey: callId(input!) });
+    const decision = await runtime.evaluate(actions, { groupKey: callId(input!) });
     noteIfBlocked(dir, cwd, harness, decision);
     // Allowed: what is left is record delivery, which must not turn an allowed call into a "did not finish" deny.
     if (decision.decision === "allow" && copilotDeadlineTimer !== undefined) { clearTimeout(copilotDeadlineTimer); copilotDeadlineTimer = undefined; }
@@ -555,13 +576,13 @@ async function runCursor(): Promise<void> {
     activatePacks(dir);
     const permissionMode = typeof input.permission_mode === "string" ? input.permission_mode : null;
     const branch = currentBranch(cwd);
-    const mapped = fillPushBranch(mapCursorEvent(event, input), branch);
+    const mapped = await withInstallVerdicts(dir, fillPushBranch(mapCursorEvent(event, input), branch), "ask");
     // An edit Cursor reports after saving it cannot be overridden: it already happened.
     const overridable = !mapped.some((m) => m.postHoc);
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
       const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
     } });

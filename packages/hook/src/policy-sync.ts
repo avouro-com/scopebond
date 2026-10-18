@@ -34,6 +34,7 @@ import { receiptContextFrom } from "./receipt-context.js";
 import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
 import { restampPacks, syncPacks } from "./pack-sync.js";
+import { removeBlocklist, syncInstallBlocklist, SAFE_INSTALL_HEADER } from "./install-verdicts.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
  *  the portal can say "checking in but not delivering" instead of "reporting". Counts and one
@@ -223,6 +224,12 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   recordRulesCredential(dir, res.status !== 401, now.getTime());
   // A working connection renews its credential in its last 30 days (the workspace answers "not due" before that).
   if (res.status !== 401) await refreshIfDue(dir, connection, { fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
+  // Safe Install's signed block list (install-verdicts.ts): a workspace that offers this computer the check says so on every rules
+  // answer (`x-scopebond-safe-install: 1`); the list is then checked at most every six hours. An answer without the offer (the
+  // computer is not licensed for it, or an older workspace) or a refused connection drops the list, which turns the check off.
+  if (res.headers?.get?.(SAFE_INSTALL_HEADER) === "1" && res.status !== 401) {
+    await syncInstallBlocklist(dir, { base, headers: auth, fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
+  } else if (res.status === 401 || res.status === 200 || res.status === 204 || res.status === 304) removeBlocklist(dir);
   const at = now.toISOString();
   // Replay protection holds per workspace: a computer connected to another workspace starts again (an answer from the old
   // one can never verify here, since the signature binds the workspace id).

@@ -62,6 +62,9 @@ export interface RuntimeConfig {
   /** This session's budgets (session-budgets.ts): each tool call is counted before it runs, and one beyond a limit is denied
    *  with the reason "session budget". Absent or null: no budget applies. */
   sessionBudgets?: SessionBudgetGuard | null;
+  /** How this host handles a Safe Install "ask" (install-verdicts.ts): "ask", its own prompt asks the person; "deny" (the
+   *  default), it cannot ask, so the install is refused with the reason and how to go ahead. A "block" is always refused. */
+  installAsk?: "ask" | "deny";
 }
 
 export interface Decision {
@@ -72,7 +75,7 @@ export interface Decision {
   clauseId?: string | null;
   /** Why a deny was made, where a reason beyond the clause applies: `blocked_service` when the workspace blocks the MCP server,
    *  host, program or package the action names (service-rules.ts). */
-  code?: typeof BLOCKED_SERVICE_REASON;
+  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict";
   /** The deciding receipt (the denied one, or the first allow). */
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
@@ -470,6 +473,21 @@ export function createHookRuntime(config: RuntimeConfig) {
     async evaluateOne(input: Mapped, budget?: ReceiptBudget): Promise<Decision> {
       const mapped = masked(input);
       const signed = agent.sign(mapped.intent);
+      // Safe Install (install-verdicts.ts): an install the workspace's verdict blocks, or holds for a person this host cannot
+      // ask, is refused with a denied receipt whose intent carries the verdict and its reason codes; one held for a person a
+      // host can ask is recorded and answered "ask". An install that is allowed goes on to the rules below.
+      const check = mapped.install;
+      if (check && check.verdict !== "allow") {
+        if (check.verdict === "block" || (config.installAsk ?? "deny") === "deny") {
+          boundaryVerdict = { allow: false, reason: "install_refused", detail: check.reasons.map((r) => r.code).join(","), consumed_approvals: [], budgets: [] };
+          let refused;
+          try { refused = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(contextOption).length ? contextOption : undefined); }
+          finally { boundaryVerdict = null; }
+          return { decision: "deny", reason: check.message, clauseId: null, code: "install_verdict", receipt: refused.receipt };
+        }
+        const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);
+        return { decision: "ask", reason: check.message, receipt };
+      }
       // A derived intent (the taxonomy action a shell command or MCP call performs, beside the call itself) is evaluated only
       // under a policy that opts in (it names a type Action Taxonomy 1.1 introduced) and that names its action type. Under any
       // other policy it is recorded, so a policy written for the 1.0 vocabulary decides every call exactly as it did before:

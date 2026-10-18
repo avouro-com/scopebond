@@ -361,6 +361,33 @@ blocks scripts piped to a shell. The cases are public: `@scopebond/policy-schema
 Limits: an install inside a script file the agent runs (`./setup.sh`) or in a later tool call than its download or
 clone is not connected to it, and system package managers (`apt`, `dnf`, `winget`, `choco`) are not read yet.
 
+### Safe Install: verdicts before an install runs
+
+A computer connected to a workspace that offers Safe Install asks it about each install it detects, before the install
+runs: registry packages (npm, PyPI, crates.io, Go, RubyGems) by name and version, and scripts or programs fetched from
+a site by the site's host. Clones, containers, Homebrew formulas and installs from a manifest are not asked about. The
+workspace answers each one:
+
+| Verdict | What the hook does |
+|---|---|
+| `block` | Denies the call, saying what was blocked and why. |
+| `ask` | Claude Code (in a permission mode that prompts), Cursor and GitHub Copilot show their own prompt with the reason. Codex, and Claude Code in a mode that never prompts, cannot ask, so the call is denied with the reason and how to go ahead (run the install yourself in your own terminal). |
+| `allow` | The install goes on to the rules, as before. |
+
+The hook waits at most 2 seconds for the answer, and never past its own deadline. When the workspace cannot be reached,
+does not answer in time, or refuses the computer, the hook decides offline: the signed block list it keeps from the
+workspace (`install-blocklist.json`, `scopebond:install-blocklist/v1`, verified with the same pinned keys as signed
+rules and usable for 30 days after the last check) blocks what it names; an earlier answer kept on the computer
+(`install-verdicts.json`) applies, except that a package published less than 7 days ago is asked about; anything else
+is asked about. The verdict, its reason codes and where it came from (`cloud`, `cache`, `blocklist` or `offline`) are
+added to the install's `software.install` action as `verdict`, `verdict_reasons` and `verdict_source`, so they are signed
+into its receipt. The request carries the route, ecosystem, name, version and source host and URL (scheme, host and
+path) of each install, nothing else.
+
+Safe Install is on only while the workspace offers it on its rules answers (`x-scopebond-safe-install: 1`) and the
+computer holds a block list that verifies; a workspace that stops offering it, or a refused connection, removes the
+list and the check with it. The hook carries no list of packages or sites of its own.
+
 ### Rule packs
 
 What the hook knows about more tools and MCP servers can also come as **rule packs**: signed data in the
