@@ -9,7 +9,7 @@
 // and explained like any other rule block and can be checked again from the receipt and the policy it names:
 //
 //   mcp_server  an `mcp.tool.call` whose server's configured name contains the key as a word (or a run of words): the word
-//               rule that recognises a server (mcp-profiles.ts): the name is split at every character that is not a letter or
+//               rule a pack's MCP profile recognises a server by (packs.ts): the name is split at every character that is not a letter or
 //               a digit, case-insensitively. `github` blocks `github`, `github-mcp` and `plugin_github_github`, not `githubx`.
 //   host        a `net.fetch` whose host is the key, case-insensitively: a fetch by the coding agent's web-fetch tool (and a
 //               `gh api` call that changes something). `curl`, `wget` and similar are recorded, not blocked. A key with a

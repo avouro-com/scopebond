@@ -4,7 +4,7 @@
 // Detector ids follow the monitoring catalog: I03 ordinary read, I04 ordinary write,
 // I05 shell inventory; H01 protected push, H02 credential read, H03 CI write,
 // H04 destructive shell, H05 root-escape mutation; C01 protected history rewrite,
-// C02 guardrail modification. The target classes (typed-targets.ts, mcp-profiles.ts): H06 cloud or
+// C02 guardrail modification. The target classes (derived by the rule packs in force, packs.ts): H06 cloud or
 // Kubernetes destructive (cloud.resource.delete, k8s.delete, k8s.exec, a saved plan applied), H07 production deployment
 // (deploy.release whose environment is production or not shown), H08 secret write, H09 identity or
 // access change, H10 destructive database migration (db.migrate down or reset, not against a named development
@@ -75,7 +75,7 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
   } else if (intent.action_type === "cloud.resource.delete" || intent.action_type === "k8s.delete" || intent.action_type === "k8s.exec") {
     ids.push("H06");
   } else if (intent.action_type === "cloud.resource.modify") {
-    // A saved infrastructure plan applied without showing its changes may destroy (typed-targets.ts).
+    // A saved infrastructure plan applied without showing its changes may destroy (a pack marks it risk_class destructive).
     if (params.risk_class === "destructive") ids.push("H06");
   } else if (intent.action_type === "deploy.release") {
     // A deployment whose environment the command does not show counts as production.

@@ -84,3 +84,12 @@ export function launched(sc: SimpleCommand): Launched | null {
   const at = spec.lastIndexOf("@");
   return { runner: program, ...(sub ? { sub } : {}), spec, tool: canonProgram(at > 0 ? spec.slice(0, at) : spec), argv: sc.argv.slice(k + 1), runnerArgs: sc.argv.slice(0, k) };
 }
+
+/** The names a simple command may run a tool under: its own program (canonical), then the tool a package runner starts. Empty
+ *  for an opaque command. What a reader looks a tool up by: a rule pack's grammar names the programs it reads. */
+export function toolNames(sc: SimpleCommand): string[] {
+  if (sc.opaque) return [];
+  const program = canonProgram(sc.program);
+  const run = launched(sc);
+  return [...(program ? [program] : []), ...(run && run.tool !== program ? [run.tool] : [])];
+}

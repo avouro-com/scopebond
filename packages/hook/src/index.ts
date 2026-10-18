@@ -9,17 +9,18 @@ export {
   type CopilotSurface, type CopilotAnswer, type CopilotProbe, type ProbeEntry,
 } from "./copilot-surface.js";
 export type { Mapped, NormalizedIntent } from "./map.js";
-export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./runtime.js";
+export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./runtime.js";
 export type { TargetRule } from "./runtime.js";
 // The shell reader every derivation starts from: a command line as the simple commands it runs.
 export { decomposeShell } from "./shell.js";
+// The tool a command runs, directly or through a package runner (launchers.ts).
+export { launched, toolNames } from "./launchers.js";
 export type { SimpleCommand } from "./shell.js";
-export { deriveTargetOperations, toolOf, envOfName, targetDigest, TARGET_TOOLS } from "./typed-targets.js";
-export type { TargetOperation, TargetProbe } from "./typed-targets.js";
-export { deriveMcpOperations, mcpProfileOf } from "./mcp-profiles.js";
-// Rule packs: the interpreter (packs.ts) and the cache of signed packs on this computer (pack-store.ts).
-export { setActivePacks, activePackRefs, setBuiltinReaders, builtinReadersOn, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
+// Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
+// this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.
+export { setActivePacks, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
 export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
+export { packRuleClauses, switchablePackRules, withPackRules } from "./pack-rules.js";
 export {
   activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
 } from "./pack-store.js";
@@ -50,7 +51,7 @@ export { runProofFixtures, deliverProofReceipts, loadProofs, saveProofs, PROOF_F
 export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYPE } from "./budget-load.js";
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
-  inspectManaged, compileManaged, installManaged, restoreLocal, isManaged, readMeta, digestRules, digestManaged, ruleReport,
+  inspectManaged, compileManaged, managedEnforce, enforcedRuleIds, installManaged, restoreLocal, isManaged, readMeta, digestRules, digestManaged, ruleReport,
   MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
   inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
   MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY,

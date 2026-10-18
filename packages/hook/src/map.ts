@@ -13,9 +13,7 @@ import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from ".
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf } from "./text.js";
-import { deriveTargetOperations, type TargetOperation } from "./typed-targets.js";
-import { deriveMcpOperations } from "./mcp-profiles.js";
-import { builtinReadersOn, derivePackMcp, derivePackTargets } from "./packs.js";
+import { derivePackMcp, derivePackTargets, type PackAction } from "./packs.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
 import { packagesToCheck } from "./typed-ops.js";
 import { deriveInstalls, deriveSettingsInstalls, MCP_SETTINGS_FILE } from "./typed-install.js";
@@ -42,8 +40,8 @@ export interface Mapped {
    *  decision as prevention. */
   postHoc?: boolean;
   /** Set on an intent that re-describes the call's own shell command or MCP tool call as the taxonomy action it performs
-   *  (`aws s3 rb` as `cloud.resource.delete`, a GitHub MCP `push_files` as `git.push`): typed-targets.ts and
-   *  mcp-profiles.ts. It rides beside the `shell.exec` or `mcp.tool.call` intent in the same action group, which stays as
+   *  (a cloud tool's delete as `cloud.resource.delete`, a repository server's push as `git.push`), read through the grammars
+   *  and MCP profiles of the rule packs in force (packs.ts). It rides beside the `shell.exec` or `mcp.tool.call` intent in the same action group, which stays as
    *  it always was. The runtime evaluates it only under a policy that opts in (it names a type Action Taxonomy 1.1
    *  introduced: target-rules.ts) and has a clause for its action type, and records it otherwise, so a policy written for
    *  the 1.0 vocabulary decides exactly what it decided before. */
@@ -1471,11 +1469,9 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
   };
   const installs = packagesToCheck(sc);
   if (installs) exec.packages = installs;
-  // What the command reaches through a known command-line tool (a cloud, a cluster, a database migration, a deployment, a
-  // secret store), as taxonomy actions beside the command itself. Nothing when the tool or its words are not known.
-  // Precedence (packs.ts): the readers built into this release win; the rule packs in force are read only when they derive nothing.
-  const builtIn = builtinReadersOn() ? deriveTargetOperations(sc) : [];
-  const targets: Mapped[] = (builtIn.length ? builtIn : derivePackTargets(sc)).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
+  // What the command reaches through a command-line tool the rule packs in force describe (packs.ts), as taxonomy actions
+  // beside the command itself. Nothing when no pack is in force or none reads this command.
+  const targets: Mapped[] = derivePackTargets(sc).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
   // A command that writes files its text does not name (`patch`, `git apply`, `tar x`)
   // cannot be judged here: its writes are recorded as a file.write with no path, not
   // evaluated — observed in normal mode, denied by strict mode (like an apply_patch
@@ -1676,15 +1672,15 @@ function mapApplyPatch(command: string, cwd?: string): Mapped[] {
 
 const one = (intent: NormalizedIntent, evaluated: boolean, source: string): Mapped[] => [{ intent, evaluated, source }];
 
-/** An MCP tool call: the `mcp.tool.call` intent it always was, then the taxonomy actions a known server's tool performs
- *  (mcp-profiles.ts). A path on this computer (a `filesystem` server's) is resolved against the working folder like any
+/** An MCP tool call: the `mcp.tool.call` intent it always was, then the taxonomy actions the server's tool performs as a rule
+ *  pack's MCP profile describes it (packs.ts). A path on this computer (a `filesystem` server's) is resolved against the working folder like any
  *  other. A file written through the GitHub API (`via: "github"`) is in a remote repository, not on this computer: its path
  *  is kept as the call names it, beside `repo`, and it is recorded, not decided by the rules for this computer's files
  *  (Scopebond's own protection, the allowed folders); the push to its branch is decided by the push rules. `hint` names
- *  the server another way when its configured name is not one a profile knows (Cursor's server URL or launch command). */
+ *  the server another way when its configured name is not one a pack's profile names (Cursor's server URL or launch command). */
 function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | undefined, source: string, digestOf: unknown = args, hint?: string): Mapped[] {
   const call = one({ action_type: "mcp.tool.call", params: { server, tool, args_digest: digest(digestOf ?? {}) } }, true, source);
-  const derived = (op: TargetOperation): Mapped[] => {
+  const derived = (op: PackAction): Mapped[] => {
     if ((op.action_type === "file.read" || op.action_type === "file.write") && op.params.via === "github") {
       return [{ intent: op, evaluated: false, derived: true, source }];
     }
@@ -1694,9 +1690,7 @@ function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | u
     }
     return [{ intent: op, evaluated: true, derived: true, source }];
   };
-  // Precedence (packs.ts): the profiles built into this release win; the rule packs in force are read only when they derive nothing.
-  const builtIn = builtinReadersOn() ? deriveMcpOperations(server, tool, args, hint) : [];
-  return capDerived([...call, ...(builtIn.length ? builtIn : derivePackMcp(server, tool, args, hint)).flatMap(derived)]);
+  return capDerived([...call, ...derivePackMcp(server, tool, args, hint).flatMap(derived)]);
 }
 
 /** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,

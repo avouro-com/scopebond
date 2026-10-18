@@ -7,7 +7,8 @@
 //
 // A workspace may also set the target rules (`cloud-destructive`, `production-deploy`, `secret-write`, `iam-change`,
 // `database-migrate`: what a coding agent reaches through cloud, Kubernetes, database, deployment and secret tools). They are
-// optional in the document: one that leaves them out keeps them recording, as a document from before they existed does.
+// optional in the document: one that leaves them out keeps them recording, as a document from before they existed does. Their
+// clauses come from the rule packs in force (pack-rules.ts), which take each rule's mode from the document (`enforcedRuleIds`).
 //
 // A workspace may also name exact targets one rule skips: paths for the secret-read and CI-configuration rules, branches for the
 // push rule. An exclusion matches exactly (same case; a trailing `/**` covers a folder), so it is never broader than what was typed,
@@ -281,6 +282,40 @@ const withBranchExclusions = (pattern: string, branches: readonly string[]): str
 const boundPattern = (clause: Clause, key: string): string => String(((clause.param_bounds as Record<string, { pattern: string }> | undefined)?.[key])?.pattern ?? "");
 const withBound = (clause: Clause, key: string, pattern: string): Clause => ({ ...clause, param_bounds: { ...(clause.param_bounds as Record<string, unknown>), [key]: { pattern } } });
 
+/** The rules that block on this computer under workspace rules (the rest record), by the computer's own rule ids: the
+ *  workspace decides (Block, Override or Ask), and where it allows changes on computers a person's own choice for a rule wins.
+ *  Pure. */
+export function managedEnforce(local: RuleSet, doc: ManagedDocument): string[] {
+  const r = doc.rules;
+  const enforce = new Set<string>([
+    ...(r["push-protected"].mode !== "monitor" ? ["protect-branches"] : []),
+    ...(r["destructive-shell"].mode !== "monitor" ? ["safe-shell"] : []),
+    ...(r["ci-config-write"].mode !== "monitor" ? ["protect-write"] : []),
+    ...(r["secret-read"].mode !== "monitor" ? ["protect-read"] : []),
+    // A target rule the document leaves out records.
+    ...OPTIONAL_RULE_IDS.filter((id) => r[id] !== undefined && r[id].mode !== "monitor"),
+  ]);
+  if (doc.local_changes === true && local.local_overrides) {
+    for (const [id, mode] of Object.entries(local.local_overrides)) {
+      if (!SWITCHABLE_RULES.includes(id)) continue;
+      if (mode === "enforce") enforce.add(id); else if (mode === "monitor") enforce.delete(id);
+    }
+  }
+  return SWITCHABLE_RULES.filter((id) => enforce.has(id));
+}
+
+/** The rules that block on this computer now, from the files: its workspace's document when one is in force, else its own
+ *  rules. The rule packs' rules take their mode from it (pack-rules.ts). Unreadable files give the shipped defaults (every
+ *  switchable rule records). */
+export function enforcedRuleIds(dir: string, docOverride?: ManagedDocument): Set<string> {
+  const local = loadRules(dir) ?? defaultRules();
+  let doc: ManagedDocument | null = docOverride ?? null;
+  if (!doc && isManaged(dir)) {
+    try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { doc = null; }
+  }
+  return new Set(doc ? managedEnforce(local, doc) : local.enforce ?? []);
+}
+
 /** The policy this computer enforces under workspace rules: its own compiled rules, adjusted rule by rule. Pure. */
 export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: string): Record<string, unknown> {
   const r = doc.rules;
@@ -288,26 +323,9 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
     ...local,
     protected_branches: union(local.protected_branches, [...(r["push-protected"].protected_branches ?? []), ...(r["force-push-protected"].protected_branches ?? [])]),
     destructive_programs: union(local.destructive_programs, r["destructive-shell"].destructive_programs),
-    // The workspace decides which rules block (Block or Override); every other rule records (monitor). Scopebond's own
-    // protection is enforced by compile() whatever the workspace sets.
-    enforce: [
-      ...(r["push-protected"].mode !== "monitor" ? ["protect-branches"] : []),
-      ...(r["destructive-shell"].mode !== "monitor" ? ["safe-shell"] : []),
-      ...(r["ci-config-write"].mode !== "monitor" ? ["protect-write"] : []),
-      ...(r["secret-read"].mode !== "monitor" ? ["protect-read"] : []),
-      // A target rule the document leaves out records.
-      ...OPTIONAL_RULE_IDS.filter((id) => r[id] !== undefined && r[id].mode !== "monitor"),
-    ],
+    // Scopebond's own protection is enforced by compile() whatever the workspace sets.
+    enforce: managedEnforce(local, doc),
   };
-  // Where the workspace allows changes on computers, a person's own choice for a rule wins on this computer.
-  if (doc.local_changes === true && local.local_overrides) {
-    const enforce = new Set(rules.enforce);
-    for (const [id, mode] of Object.entries(local.local_overrides)) {
-      if (!SWITCHABLE_RULES.includes(id)) continue;
-      if (mode === "enforce") enforce.add(id); else if (mode === "monitor") enforce.delete(id);
-    }
-    rules.enforce = SWITCHABLE_RULES.filter((id) => enforce.has(id));
-  }
   const policy = compile(rules, agentKid) as { clauses: Clause[] } & Record<string, unknown>;
   const clauses: Clause[] = [];
   const historyGuard = (): Clause => ({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),

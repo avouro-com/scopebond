@@ -1,61 +1,36 @@
-// The target rules: what a coding agent reaches through cloud, Kubernetes, database, deployment and secret tools is
-// classified (H06–H10), recorded by default and blocked once a rule is turned on, and the catalog and the compiled policy
-// agree on every vector. A policy written before these types existed decides every call exactly as it did.
+// The target rules: what a coding agent reaches through the tools a rule pack describes is classified (H06–H10), recorded by
+// default and blocked once a rule is turned on, and the catalog and the policy in force agree on every vector. The engine
+// carries no tool of its own: the pack here is made up (target-pack.mjs), and its rules join the policy when it is loaded
+// (pack-rules.ts). With no pack in force nothing is derived and the policy holds only the starter rules.
 
 import { ENFORCE } from "./enforce-all.mjs";
-import { test, after } from "node:test";
+import { test, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, mapCodexToolUse, compile, defaultRules, classifyIntent, classificationBlocks, MONITORED_HIGH,
-  TARGET_RULES, SWITCHABLE_RULES, starterPolicy, namedActionTypes, inspectManaged, compileManaged, digestRules, RULE_OF_CLAUSE, describeRules,
+  TARGET_RULES, SWITCHABLE_RULES, starterPolicy, namedActionTypes, inspectManaged, compileManaged, managedEnforce, digestRules, RULE_OF_CLAUSE,
+  describeRules, setActivePacks, packRuleClauses, switchablePackRules, withPackRules, createOverrideHandler, overrideHint, MANAGED_DOC_FILE,
 } from "../dist/index.js";
+import { TARGET_PACK, TARGET_PACK_RULES, TARGET_VECTORS as VECTORS } from "./target-pack.mjs";
 
 const temps = [];
 after(() => { for (const d of temps) { try { rmSync(d, { recursive: true, force: true, maxRetries: 5 }); } catch { /* a handle still open on Windows */ } } });
+afterEach(() => setActivePacks([]));
 const temp = () => { const d = mkdtempSync(join(tmpdir(), "sb-targets-")); temps.push(d); return d; };
 
-/** A runtime over the given policy (or the one compiled from a rule set). */
-function runtimeWith(policyOf, opts = {}) {
+/** A runtime over the given policy (or the one compiled from a rule set), with the made-up pack in force unless told otherwise. */
+function runtimeWith(policyOf, opts = {}, { packs = [TARGET_PACK], enforce } = {}) {
   const dir = temp();
   const { agentKid } = scaffold(dir, ENFORCE);
   writeFileSync(join(dir, "policy.json"), JSON.stringify(policyOf(agentKid)));
+  if (enforce) writeFileSync(join(dir, "rules.json"), JSON.stringify({ ...defaultRules(), enforce }));
+  setActivePacks(packs);
   return createHookRuntime({ policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo", ...opts });
 }
 const bash = (command) => mapClaudeToolUse({ tool_name: "Bash", tool_input: { command }, cwd: "/repo" });
-
-// Each vector: a command, and the target classes it carries.
-const VECTORS = [
-  ["aws s3 rb s3://acme-old --force", ["H06"]],
-  ["aws ec2 terminate-instances --instance-ids i-0aaa", ["H06"]],
-  ["kubectl -n payments delete pod api-1", ["H06"]],
-  ["kubectl exec -it api-1 -- sh", ["H06"]],
-  ["helm uninstall web -n prod", ["H06"]],
-  ["terraform destroy -auto-approve", ["H06"]],
-  ["gh repo delete acme/old --yes", ["H06"]],
-  ["vercel --prod", ["H07"]],
-  ["wrangler deploy", ["H07"]],
-  ["fly deploy -a acme-prod", ["H07"]],
-  ["az webapp deploy -g rg -n web --slot staging --src-path a.zip", []],
-  ["vercel", []],
-  ["gh secret set NPM_TOKEN --body x", ["H08"]],
-  ["wrangler secret put API_KEY", ["H08"]],
-  ["aws iam attach-role-policy --role-name r --policy-arn arn:x", ["H09"]],
-  ["gcloud projects add-iam-policy-binding acme-prod --member=user:a@b.example --role=roles/owner", ["H09"]],
-  ["npx prisma migrate reset --force", ["H10"]],
-  ["bin/rails db:rollback", ["H10"]],
-  ["npx prisma migrate deploy", []],
-  ["RAILS_ENV=development bin/rails db:rollback", []],
-  ["terraform apply tfplan", ["H06"]],
-  ["kubectl --warnings-as-errors delete ns prod", ["H06"]],
-  ["wrangler deploy --x-unknown", ["H07"]],
-  ["terraform apply -auto-approve", []],
-  ["kubectl apply -f k8s/", []],
-  ["aws s3 ls", []],
-  ["pnpm test", []],
-];
 
 const classesOf = (mapped) => {
   const ids = new Set();
@@ -68,7 +43,7 @@ const classesOf = (mapped) => {
   return { ids: [...ids].sort(), blocks };
 };
 
-test("the target classes are monitored by default: never blocking in the catalog, recorded by the compiled policy", async () => {
+test("the target classes are monitored by default: never blocking in the catalog, recorded by the policy in force", async () => {
   const runtime = runtimeWith((kid) => compile({ ...defaultRules(), ...ENFORCE }, kid));
   try {
     for (const [command, classes] of VECTORS) {
@@ -78,14 +53,15 @@ test("the target classes are monitored by default: never blocking in the catalog
       assert.equal(blocks, false, `${command}: a target class never blocks by default`);
       const decision = await runtime.evaluate(mapped);
       assert.equal(decision.decision, "allow", `${command}: ${decision.reason}`);
-      // Every derived intent was evaluated (the compiled policy names its type), and recorded.
+      // Every derived intent was evaluated (the pack's rules name its type), and recorded.
       assert.equal(decision.receipts.length, mapped.length);
     }
   } finally { runtime.close(); }
 });
 
-test("with the target rules on, the compiled policy denies exactly what the catalog classes name", async () => {
-  const runtime = runtimeWith((kid) => compile({ ...defaultRules(), enforce: [...ENFORCE.enforce, ...TARGET_RULES] }, kid));
+test("with the target rules on, the policy in force denies exactly what the catalog classes name", async () => {
+  const enforce = [...ENFORCE.enforce, ...TARGET_RULES];
+  const runtime = runtimeWith((kid) => compile({ ...defaultRules(), enforce }, kid), {}, { enforce });
   try {
     for (const [command, classes] of VECTORS) {
       const decision = await runtime.evaluate(bash(command));
@@ -97,7 +73,7 @@ test("with the target rules on, the compiled policy denies exactly what the cata
 
 test("each rule blocks only its own class", async () => {
   for (const rule of TARGET_RULES) {
-    const runtime = runtimeWith((kid) => compile({ ...defaultRules(), enforce: [rule] }, kid));
+    const runtime = runtimeWith((kid) => compile({ ...defaultRules(), enforce: [rule] }, kid), {}, { enforce: [rule] });
     try {
       for (const [command, classes] of VECTORS) {
         const denied = (await runtime.evaluate(bash(command))).decision === "deny";
@@ -107,23 +83,30 @@ test("each rule blocks only its own class", async () => {
   }
 });
 
-test("a policy written before the target types existed decides every call as it did, and records the derived actions", async () => {
-  // The starter policy without the target clauses: what an earlier hook compiled.
-  const legacy = (kid) => {
-    const p = starterPolicy(kid, ENFORCE);
-    return { ...p, clauses: p.clauses.filter((c) => !TARGET_RULES.includes(c.id) && c.id !== "observe-targets") };
-  };
+test("with no pack in force, nothing is derived and every call is decided by the starter rules alone", async () => {
+  const runtime = runtimeWith((kid) => compile({ ...defaultRules(), enforce: [...ENFORCE.enforce, ...TARGET_RULES] }, kid), {}, { packs: [] });
+  try {
+    for (const [command] of VECTORS) {
+      const mapped = bash(command);
+      assert.deepEqual(mapped.filter((m) => m.derived), [], `${command}: nothing derived`);
+      assert.equal((await runtime.evaluate(mapped)).decision, "allow", command);
+    }
+    assert.equal((await runtime.evaluate(bash("rm -rf build"))).decision, "deny", "the starter rules still block");
+  } finally { runtime.close(); }
+});
+
+test("a pack that derives actions but brings no rules: the policy does not opt in, so they are recorded, never decided", async () => {
+  const noRules = { ...TARGET_PACK, id: "demo-no-rules", rules: [] };
   for (const strict of [false, true]) {
-    const runtime = runtimeWith(legacy, { strict });
+    const runtime = runtimeWith((kid) => starterPolicy(kid, ENFORCE), { strict }, { packs: [noRules] });
     try {
-      for (const command of ["aws s3 rb s3://acme-old --force", "vercel --prod", "npx prisma migrate reset --force"]) {
+      for (const command of ["demoinfra bucket delete logs", "demoinfra deploy", "demoinfra migrate down"]) {
         const decision = await runtime.evaluate(bash(command));
         assert.equal(decision.decision, "allow", `${command} (strict ${strict}): ${decision.reason}`);
         const derived = decision.receipts.map((r) => r.payload).filter((p) => p.intent.params.derived_from === "shell.exec");
         assert.ok(derived.length > 0, "the derived action is recorded");
         for (const p of derived) assert.equal(p.realtime_result, "not_evaluated", `${command}: recorded, not decided`);
       }
-      // A destructive program the legacy policy blocks is still blocked.
       assert.equal((await runtime.evaluate(bash("rm -rf build"))).decision, "deny");
     } finally { runtime.close(); }
   }
@@ -132,24 +115,56 @@ test("a policy written before the target types existed decides every call as it 
 test("an MCP call's derived push is evaluated by the push rule, under a policy that opts in", async () => {
   const runtime = runtimeWith((kid) => compile({ ...defaultRules(), ...ENFORCE }, kid));
   try {
-    const call = (branch) => mapCodexToolUse({ tool_name: "mcp__github__push_files", tool_input: { owner: "acme", repo: "web", branch, files: [{ path: "src/a.ts", content: "x" }] }, cwd: "/repo" });
+    const call = (branch) => mapCodexToolUse({ tool_name: "mcp__demorepo__push_change", tool_input: { branch }, cwd: "/repo" });
     assert.equal((await runtime.evaluate(call("main"))).decision, "deny");
     assert.equal((await runtime.evaluate(call("agent/fix"))).decision, "allow");
   } finally { runtime.close(); }
 });
 
-test("the starter policy and the compiled rules carry the same target clauses", () => {
+test("the starter policy and the compiled rules carry no target clauses: the packs in force add them, on monitor", () => {
   const compiled = compile({ ...defaultRules(), ...ENFORCE }, "key:abc");
   const shipped = starterPolicy("key:abc", ENFORCE);
-  const targets = (p) => p.clauses.filter((c) => TARGET_RULES.includes(c.id) || c.id === "observe-targets").map((c) => ({ id: c.id, mode: c.mode, action_types: c.action_types, param_bounds: c.param_bounds }));
-  assert.deepEqual(targets(compiled), targets(shipped));
-  for (const c of targets(compiled)) assert.equal(c.mode, "monitor", `${c.id} records by default`);
-  const types = namedActionTypes(compiled);
+  const targets = (p) => p.clauses.filter((c) => TARGET_RULES.includes(c.id) || c.id === "observe-targets");
+  assert.deepEqual(targets(compiled), []);
+  assert.deepEqual(targets(shipped), []);
+  const joined = withPackRules(compiled, new Set(), [TARGET_PACK]);
+  assert.deepEqual(targets(joined).map((c) => [c.id, c.mode]), TARGET_PACK_RULES.map((r) => [r.id, "monitor"]));
+  // Placed after the starter rules and before the key policy, as the built-in rules were.
+  const ids = joined.clauses.map((c) => c.id);
+  assert.ok(ids.indexOf("observe-net-mcp") < ids.indexOf("cloud-destructive") && ids.indexOf("observe-targets") < ids.indexOf("keys"));
+  const types = namedActionTypes(joined);
   for (const t of ["cloud.resource.delete", "cloud.resource.create", "cloud.resource.modify", "k8s.apply", "k8s.delete", "k8s.exec", "db.migrate", "deploy.release", "secret.write", "iam.change", "communication.send", "work.item.create", "work.item.update"]) {
-    assert.ok(types.has(t), `${t} is named by the default policy`);
+    assert.ok(types.has(t), `${t} is named once the pack is in force`);
   }
+  assert.equal(withPackRules(compiled, new Set(), []), compiled, "no pack: the same policy");
   assert.ok(SWITCHABLE_RULES.includes("production-deploy"));
+  setActivePacks([]);
+  assert.doesNotMatch(describeRules(defaultRules()), /\[records\] production-deploy/);
+  assert.match(describeRules(defaultRules()), /rule packs from Scopebond Cloud/);
+  setActivePacks([TARGET_PACK]);
   assert.match(describeRules(defaultRules()), /\[records\] production-deploy/);
+  assert.match(describeRules({ ...defaultRules(), enforce: ["production-deploy"] }), /\[blocks\] production-deploy/);
+});
+
+test("only a target rule with bounds can be turned on; a pack's other rules always record", () => {
+  const extra = { ...TARGET_PACK, id: "demo-extra", rules: [
+    { id: "demo-other", type: "action_allowlist", mode: "monitor", action_types: ["cloud.resource.delete"], param_bounds: { risk_class: { pattern: "^(?!destructive$).+" } } },
+    { id: "cloud-destructive", type: "action_allowlist", mode: "monitor", action_types: ["cloud.resource.delete"] },
+  ] };
+  const modes = Object.fromEntries(packRuleClauses(new Set(["demo-other", "cloud-destructive", "observe-targets"]), [extra, TARGET_PACK].sort((a, b) => (a.id < b.id ? -1 : 1))).map((c) => [c.id, c.mode]));
+  assert.equal(modes["demo-other"], "monitor", "not a target rule");
+  assert.equal(modes["cloud-destructive"], "monitor", "the first pack by id defines it, without bounds");
+  assert.equal(modes["observe-targets"], "monitor", "no bounds");
+  assert.deepEqual(switchablePackRules([TARGET_PACK]), [...TARGET_RULES]);
+  assert.deepEqual(switchablePackRules([]), []);
+});
+
+test("a clause the policy already carries is kept as it is (a policy compiled when the rule was built in)", () => {
+  const old = compile({ ...defaultRules(), ...ENFORCE }, "key:abc");
+  const legacy = { id: "cloud-destructive", type: "action_allowlist", mode: "enforce", action_types: ["cloud.resource.delete"], param_bounds: { risk_class: { pattern: "^(?!destructive$).+" } }, description: "an earlier wording" };
+  old.clauses.splice(old.clauses.length - 1, 0, legacy);
+  const joined = withPackRules(old, new Set(), [TARGET_PACK]);
+  assert.deepEqual(joined.clauses.filter((c) => c.id === "cloud-destructive"), [legacy]);
 });
 
 const INSTALLATION = "gw-target-1";
@@ -174,7 +189,11 @@ test("a workspace document may set the target rules, may leave them out, and may
 });
 
 test("a workspace turns a target rule on, and a rule it leaves out records", () => {
-  const modes = (rules) => Object.fromEntries(compileManaged(defaultRules(), doc(rules), "key:abc").clauses.map((c) => [c.id, c.mode]));
+  const modes = (rules) => {
+    const d = doc(rules);
+    const policy = withPackRules(compileManaged(defaultRules(), d, "key:abc"), new Set(managedEnforce(defaultRules(), d)), [TARGET_PACK]);
+    return Object.fromEntries(policy.clauses.map((c) => [c.id, c.mode]));
+  };
   const on = modes({ ...base(), "production-deploy": { mode: "block" }, "iam-change": { mode: "monitor" } });
   assert.equal(on["production-deploy"], "enforce");
   assert.equal(on["iam-change"], "monitor");
@@ -184,9 +203,51 @@ test("a workspace turns a target rule on, and a rule it leaves out records", () 
   for (const id of TARGET_RULES) assert.equal(RULE_OF_CLAUSE[id], id, `${id}: a denial names its workspace rule`);
 });
 
-test("the default policy file still compiles and parses after the target clauses were added", () => {
+test("on a computer its workspace manages, the runtime takes each pack rule's mode from the workspace document", async () => {
+  const dir = temp();
+  const { agentKid } = scaffold(dir, ENFORCE);
+  const d = doc({ ...base(), "secret-write": { mode: "block" } });
+  writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify(d));
+  writeFileSync(join(dir, "policy.json"), JSON.stringify(compileManaged(defaultRules(), d, agentKid)));
+  setActivePacks([TARGET_PACK]);
+  const runtime = createHookRuntime({ policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo" });
+  try {
+    const denied = await runtime.evaluate(bash("demoinfra secret set TOKEN"));
+    assert.equal(denied.decision, "deny");
+    assert.equal(denied.clauseId, "secret-write");
+    assert.equal((await runtime.evaluate(bash("demoinfra bucket delete logs"))).decision, "allow", "cloud-destructive records");
+  } finally { runtime.close(); }
+});
+
+test("a person may allow an action a pack's rule blocks when the workspace lets them (the floor carries the pack's rules)", async () => {
+  const dir = temp();
+  const { agentKid } = scaffold(dir, ENFORCE);
+  const terms = { reason_min: 10, minutes: 0, daily_limit: 5, harness_prompt: false };
+  const d = doc({ ...base(), "cloud-destructive": { mode: "override", override: terms } });
+  writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify(d));
+  writeFileSync(join(dir, "policy.json"), JSON.stringify(compileManaged(defaultRules(), d, agentKid)));
+  setActivePacks([TARGET_PACK]);
+  const asked = [];
+  const runtime = createHookRuntime({
+    policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo",
+    override: (kid) => {
+      const made = createOverrideHandler({ dir, home: dir, agentKid: kid, harness: "claude", permissionMode: "default", waitMs: 50,
+        ask: async (_home, request) => { asked.push(request); return { decision: "allow", reason: "Removing the old test bucket", os_user: "dev" }; } });
+      return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
+    },
+  });
+  try {
+    const decision = await runtime.evaluate(bash("demoinfra bucket delete logs"));
+    assert.equal(decision.decision, "allow", decision.reason);
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].rule, "cloud-destructive");
+  } finally { runtime.close(); }
+});
+
+test("the default policy file carries the starter rules only; the pack's rules join it when it is loaded", () => {
   const dir = temp();
   scaffold(dir, ENFORCE);
   const policy = JSON.parse(readFileSync(join(dir, "policy.json"), "utf8"));
-  assert.ok(policy.clauses.some((c) => c.id === "production-deploy"));
+  assert.ok(!policy.clauses.some((c) => c.id === "production-deploy"));
+  assert.ok(withPackRules(policy, new Set(), [TARGET_PACK]).clauses.some((c) => c.id === "production-deploy"));
 });

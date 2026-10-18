@@ -14,12 +14,11 @@
 //   - No content: a pack computes identifiers, closed values and keyed digests. Parameter values a pack computes are what it
 //     says; the engine adds `via` and `derived_from` to every action.
 //
-// Precedence, for now: the knowledge built into this release (typed-targets.ts, mcp-profiles.ts) and the packs run side by
-// side. For each simple command (and each MCP call), when the built-in readers derive any action, those actions are used and
-// the packs' are not; the packs' actions are used only when the built-in readers derive none. With no pack in force, or a
-// pack that is missing, bad or expired, only the built-in detection and the starter protections apply. Among packs, the one
-// whose id sorts first and derives anything wins. For an MCP call, the first profile whose words name the server owns it
-// (derivePackMcp). `setBuiltinReaders(false)` turns the built-in readers off, for a parity check of a set of packs.
+// The engine carries no vendor knowledge of its own: what a vendor's command-line tool or MCP server does is read only through
+// the packs in force. With no pack in force, or a pack that is missing, bad or expired, only the open detection (shell, git,
+// files, fetches, package installs, databases through psql and sqlite3) and the starter protections apply. Among packs, the
+// one whose id sorts first and derives anything wins. For an MCP call, the first profile whose words name the server owns it
+// (derivePackMcp). A pack's rules join the policy in force (pack-rules.ts).
 
 import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
@@ -46,7 +45,7 @@ const MATCH_LIMIT = 512;
 const MAX_ITEMS = 100;
 const MAX_ACTIONS = 64;
 
-// ---- shared readers (the same semantics the built-in readers use, so a pack can match them exactly) ------------------------
+// ---- shared readers (one meaning of an option, a value and a word for every grammar) ----------------------------------------
 
 /** A value fit to record as an identifier: a plain name the scrubber leaves alone, never an unexpanded variable. */
 function ident(value: string | undefined): string | undefined {
@@ -582,14 +581,6 @@ export function deriveFromProfile(profile: PackProfile, server: string, tool: st
 // ---- the packs in force ------------------------------------------------------------------------------------------------------
 
 let active: readonly Pack[] = [];
-let builtIns = true;
-
-/** Whether the readers built into this release (typed-targets.ts, mcp-profiles.ts) run beside the packs. On by default. A
- *  test turns them off to check that a set of packs alone derives what the built-in readers derive (a parity check). No
- *  setting, file or environment variable reaches it: only code that loads this module can call it. */
-export function setBuiltinReaders(on: boolean): void { builtIns = on; }
-/** Whether the built-in readers are on (`setBuiltinReaders`). */
-export const builtinReadersOn = (): boolean => builtIns;
 
 /** Set the packs the mapper reads (pack-store.ts `activatePacks`, after verifying them). Sorted by id, so the result never
  *  depends on the order they were found in. An empty list switches every pack off. */
@@ -599,6 +590,8 @@ export function setActivePacks(packs: readonly Pack[]): void {
 
 /** The packs in force, as `id@version`. */
 export const activePackRefs = (): string[] => active.map(packRef);
+/** The packs in force, sorted by id. */
+export const activePacks = (): readonly Pack[] => active;
 
 /** What the packs in force derive from one simple command: the first pack (by id) whose grammar for this program derives
  *  anything. Never throws: a pack that fails here derives nothing. */

@@ -18,7 +18,8 @@
 
 import { join } from "node:path";
 import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
-import { targetRuleClauses, TARGET_RULES } from "./target-rules.js";
+import { TARGET_RULES } from "./target-rules.js";
+import { switchablePackRules } from "./pack-rules.js";
 export { TARGET_RULES } from "./target-rules.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { createExclusive, replaceFile } from "./safe-fs.js";
@@ -45,7 +46,8 @@ export interface RuleSet {
   observe: string[];
   /** The rules that block. Every other rule records what it would have stopped and lets the action run (monitor).
    *  Ids: `protect-branches`, `safe-shell`, `protect-write`, `protect-read`, and the target rules `cloud-destructive`,
-   *  `production-deploy`, `secret-write`, `iam-change`, `database-migrate`. Absent or empty: nothing blocks except
+   *  `production-deploy`, `secret-write`, `iam-change`, `database-migrate` (their clauses come from the rule packs in force,
+   *  pack-rules.ts). Absent or empty: nothing blocks except
    *  Scopebond's own protection (its settings, keys and hook entries, and an agent switching it off), which always does. */
   enforce?: string[];
   /** On a computer its workspace manages: a person's own choice per rule (`rules enforce|monitor`), applied only while the
@@ -172,7 +174,6 @@ export function compile(rules: RuleSet, agentKid: string): Record<string, unknow
         action_types: rules.observe,
         description: `Observe ${sentence(rules.observe)} — recorded, not blocked. Add bounds to enforce. Change this list in .scopebond/${RULES_FILE}.`,
       },
-      ...targetRuleClauses(mode),
       ...(rules.allowed_roots?.length ? [{
         id: "protect-root", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
         param_bounds: { root_scope: { pattern: "^inside$" } },
@@ -318,6 +319,15 @@ export function isProtectedBranch(rules: RuleSet, ref: string): boolean {
   });
 }
 
+/** What each target rule covers, in plain words, for the rules its packs define. */
+const TARGET_SUMMARY: Readonly<Record<(typeof TARGET_RULES)[number], string>> = {
+  "cloud-destructive": "deleting cloud resources and Kubernetes objects, running commands in containers",
+  "production-deploy": "deployments to production, or whose environment the command does not show",
+  "secret-write": "storing or changing secrets in a secret store",
+  "iam-change": "identity and access changes (roles, policies, users, keys)",
+  "database-migrate": "migrations that go down, lose data or reset",
+};
+
 /** Plain English, for `scopebond-hook rules`. */
 export function describeRules(rules: RuleSet): string {
   const enforced = new Set(rules.enforce ?? []);
@@ -336,12 +346,13 @@ export function describeRules(rules: RuleSet): string {
   lines.push(`  [${how("protect-read")}] protect-read       reads of ${rules.protected_read.length} protected location(s):`);
   for (const rule of rules.protected_read) lines.push(`                       ${rule.label}`);
   lines.push("");
-  lines.push("What a coding agent reaches through cloud, Kubernetes, database, deployment and secret tools:");
-  lines.push(`  [${how("cloud-destructive")}] cloud-destructive  deleting cloud resources and Kubernetes objects, running commands in containers`);
-  lines.push(`  [${how("production-deploy")}] production-deploy  deployments to production, or whose environment the command does not show`);
-  lines.push(`  [${how("secret-write")}] secret-write       storing or changing secrets in a secret store`);
-  lines.push(`  [${how("iam-change")}] iam-change         identity and access changes (roles, policies, users, keys)`);
-  lines.push(`  [${how("database-migrate")}] database-migrate   migrations that go down, lose data or reset`);
+  const packRules = switchablePackRules();
+  if (packRules.length) {
+    lines.push("What a coding agent reaches through cloud, Kubernetes, database, deployment and secret tools (from your rule packs):");
+    for (const id of packRules) lines.push(`  [${how(id)}] ${id.padEnd(18)} ${TARGET_SUMMARY[id as keyof typeof TARGET_SUMMARY]}`);
+  } else {
+    lines.push("Cloud, Kubernetes, database, deployment and secret tools: covered by rule packs from Scopebond Cloud (none on this computer).");
+  }
   lines.push("");
   if (rules.protect_remote_database) {
     lines.push(`  [blocks] remote SQL that drops a table, deletes or updates every row, or cannot be read`);

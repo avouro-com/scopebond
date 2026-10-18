@@ -12,7 +12,8 @@ import type { Mapped } from "./map.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
 import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
-import { allowsLocalChanges, isManaged } from "./managed.js";
+import { allowsLocalChanges, enforcedRuleIds, isManaged } from "./managed.js";
+import { withPackRules } from "./pack-rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
@@ -23,9 +24,9 @@ import { dispatchIntentOf, type DispatchDecision, type DispatchGuard, type Overr
 import { homeFolders, maskHomeInPolicy, maskHomeInValue } from "./home-mask.js";
 import type { ReceiptBudget, ReceiptPayloadContext } from "@scopebond/gateway";
 import type { SessionBudgetGuard } from "./session-budgets.js";
-import { policyOptsIntoTargets, targetRuleClauses } from "./target-rules.js";
+import { policyOptsIntoTargets } from "./target-rules.js";
 import { blockedPackagePattern, blockedServiceKindOf, readBlockedServices, unreadablePackageKey, BLOCKED_SERVICE_REASON, type BlockedService } from "./service-rules.js";
-export { targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
+export { policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
 export interface RuntimeConfig {
@@ -270,7 +271,6 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
         action_types: ["net.fetch", "mcp.tool.call"],
         description: "Observe network fetches and MCP tool calls (recorded, not blocked) — add bounds to enforce.",
       },
-      ...targetRuleClauses(mode),
       { id: "keys", type: "key_policy", active_keys: [agentKid], description: "Only the enrolled machine key may sign." },
     ],
   };
@@ -319,7 +319,9 @@ export function createHookRuntime(config: RuntimeConfig) {
   // Paths are signed with the home folder masked (home-mask.ts), so a rule that names the home folder by its full path
   // is rewritten the same way to keep matching.
   const homes = config.homeFolders ?? homeFolders();
-  const policy = maskHomeInPolicy(upgradeStarterPolicy(readPolicyFile(config.policyPath)), homes);
+  // The rules of the packs in force (verified on this call) join the policy here, on the modes this computer's rules or its
+  // workspace's set (pack-rules.ts).
+  const policy = maskHomeInPolicy(withPackRules(upgradeStarterPolicy(readPolicyFile(config.policyPath)), enforcedRuleIds(dirname(config.policyPath))), homes);
   /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */

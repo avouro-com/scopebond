@@ -17,7 +17,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
-import { compileManaged, floorDocument, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms } from "./managed.js";
+import { compileManaged, floorDocument, managedEnforce, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms } from "./managed.js";
 import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem } from "./allowances.js";
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
@@ -25,6 +25,7 @@ import { agentCommand } from "./windows-hints.js";
 import { requestOverSocket } from "./local-socket.js";
 import { maskHomeInPolicy, unmaskHomeFolder, unmaskHomeInValue } from "./home-mask.js";
 import { ruleName } from "./rule-titles.js";
+import { withPackRules } from "./pack-rules.js";
 
 export const OVERRIDE_STATE_FILE = "overrides.json";
 const AGENT_FILE = "agent.json";
@@ -262,7 +263,10 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     // Would the action still be denied with every overridable rule only recorded? Then a Block rule or Scopebond's own
     // protection denies it too, and no one may override that.
     // The intent was signed with the home folder masked, so the floor's patterns are masked the same way (as the runtime's).
-    const floor = maskHomeInPolicy(compileManaged(loadRules(ctx.dir) ?? defaultRules(), floorDocument(doc, rule), ctx.agentKid));
+    // The rule packs' rules join the floor as they join the policy in force, on the floor document's modes.
+    const local = loadRules(ctx.dir) ?? defaultRules();
+    const floorDoc = floorDocument(doc, rule);
+    const floor = maskHomeInPolicy(withPackRules(compileManaged(local, floorDoc, ctx.agentKid), new Set(managedEnforce(local, floorDoc))));
     const atFloor = evaluate(floor, [], { intent, intent_hash }, new Date(now()).toISOString(), { cooperative: true });
     if (!atFloor.allow) { last = { rule, title, outcome: "not_overridable" }; return null; }
 
