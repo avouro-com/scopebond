@@ -14,6 +14,13 @@ export type { TargetRule } from "./runtime.js";
 export { deriveTargetOperations, toolOf, envOfName, targetDigest, TARGET_TOOLS } from "./typed-targets.js";
 export type { TargetOperation, TargetProbe } from "./typed-targets.js";
 export { deriveMcpOperations, mcpProfileOf } from "./mcp-profiles.js";
+// Rule packs: the interpreter (packs.ts) and the cache of signed packs on this computer (pack-store.ts).
+export { setActivePacks, activePackRefs, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
+export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
+export {
+  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
+} from "./pack-store.js";
+export type { PackIndex, PackIndexEntry, LoadedPacks, PackRefusal } from "./pack-store.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export {
   compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES, SWITCHABLE_RULES,

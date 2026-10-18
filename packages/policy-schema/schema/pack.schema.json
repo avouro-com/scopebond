@@ -1,0 +1,2384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scopebond.com/schema/pack-1.0.json",
+  "title": "Scopebond rule pack (scopebond:pack/v1)",
+  "description": "Closed schema: an unknown field or operator anywhere makes a pack invalid. A pack is signed data, never code: command grammars and MCP profiles that derive taxonomy actions, action_allowlist rules, and the vectors every engine runs. Cross-field rules a validator also enforces (validatePack): unique ids, no program read by two grammars, registered action types only, shell-only operators only in grammars and MCP-only ones only in profiles, patterns without nested repeats.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "id",
+    "version",
+    "issued_at",
+    "signature",
+    "grammars",
+    "profiles",
+    "rules",
+    "vectors"
+  ],
+  "properties": {
+    "format": {
+      "const": "scopebond:pack/v1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "pattern": "^(?:0|[1-9]\\d{0,5})\\.(?:0|[1-9]\\d{0,5})\\.(?:0|[1-9]\\d{0,5})$"
+    },
+    "issued_at": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "key_id",
+        "value"
+      ],
+      "properties": {
+        "alg": {
+          "const": "Ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9+/]{86}(?:==)?$"
+        }
+      }
+    },
+    "grammars": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/grammar"
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/profile"
+      }
+    },
+    "rules": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    },
+    "vectors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/vector"
+      }
+    }
+  },
+  "$defs": {
+    "pattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "actionType": {
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^(?!(?:shell\\.exec|mcp\\.tool\\.call)$)[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+    },
+    "shellExpr": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any_positional"
+          ],
+          "properties": {
+            "any_positional": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 64
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "arg_assign"
+          ],
+          "properties": {
+            "arg_assign": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "assign"
+          ],
+          "properties": {
+            "assign": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "concat"
+          ],
+          "properties": {
+            "concat": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "$ref": "#/$defs/shellExpr"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "config_value"
+          ],
+          "properties": {
+            "config_value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "key"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "files"
+                  ]
+                },
+                {
+                  "required": [
+                    "file"
+                  ]
+                }
+              ],
+              "properties": {
+                "files": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1000,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "pattern": "^[A-Za-z0-9._-]{1,64}$"
+                  }
+                },
+                "key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                },
+                "file": {
+                  "$ref": "#/$defs/shellExpr"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "const"
+          ],
+          "properties": {
+            "const": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count"
+          ],
+          "properties": {
+            "count": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "digest"
+          ],
+          "properties": {
+            "digest": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 12,
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "$ref": "#/$defs/shellExpr"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "digest_list"
+          ],
+          "properties": {
+            "digest_list": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "list"
+              ],
+              "properties": {
+                "label": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 8,
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "$ref": "#/$defs/shellExpr"
+                      }
+                    ]
+                  }
+                },
+                "list": {
+                  "$ref": "#/$defs/shellExpr"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "dir_sha256"
+          ],
+          "properties": {
+            "dir_sha256": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "dir_sql"
+          ],
+          "properties": {
+            "dir_sql": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env_class"
+          ],
+          "properties": {
+            "env_class": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env_of"
+          ],
+          "properties": {
+            "env_of": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env_var"
+          ],
+          "properties": {
+            "env_var": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file_sha256"
+          ],
+          "properties": {
+            "file_sha256": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file_text"
+          ],
+          "properties": {
+            "file_text": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "first"
+          ],
+          "properties": {
+            "first": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "$ref": "#/$defs/shellExpr"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "flag"
+          ],
+          "properties": {
+            "flag": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "flags"
+          ],
+          "properties": {
+            "flags": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host_of"
+          ],
+          "properties": {
+            "host_of": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ident"
+          ],
+          "properties": {
+            "ident": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "if",
+            "then"
+          ],
+          "properties": {
+            "if": {
+              "$ref": "#/$defs/shellCondition"
+            },
+            "then": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "else": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "item"
+          ],
+          "properties": {
+            "item": {
+              "anyOf": [
+                {
+                  "const": true
+                },
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "join"
+          ],
+          "properties": {
+            "join": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "sep": {
+              "type": "string",
+              "maxLength": 8
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "literal"
+          ],
+          "properties": {
+            "literal": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lower"
+          ],
+          "properties": {
+            "lower": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "map",
+            "table"
+          ],
+          "properties": {
+            "map": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "table": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1000,
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "integer",
+                  "boolean"
+                ]
+              }
+            },
+            "default": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "keep": {
+              "const": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "match",
+            "pattern"
+          ],
+          "properties": {
+            "match": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "pattern": {
+              "$ref": "#/$defs/pattern"
+            },
+            "group": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "positional"
+          ],
+          "properties": {
+            "positional": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 64
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "positionals"
+          ],
+          "properties": {
+            "positionals": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "from"
+              ],
+              "properties": {
+                "from": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                },
+                "to": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "present"
+          ],
+          "properties": {
+            "present": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+              }
+            },
+            "or": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "replace",
+            "pattern",
+            "with"
+          ],
+          "properties": {
+            "replace": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "pattern": {
+              "$ref": "#/$defs/pattern"
+            },
+            "with": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scrub"
+          ],
+          "properties": {
+            "scrub": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sorted"
+          ],
+          "properties": {
+            "sorted": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "split"
+          ],
+          "properties": {
+            "split": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "sep": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8
+            },
+            "index": {
+              "type": "integer",
+              "minimum": -8,
+              "maximum": 8
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sql"
+          ],
+          "properties": {
+            "sql": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "field": {
+              "enum": [
+                "verb",
+                "predicate_class",
+                "risk"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tool"
+          ],
+          "properties": {
+            "tool": {
+              "const": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "upper"
+          ],
+          "properties": {
+            "upper": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "var"
+          ],
+          "properties": {
+            "var": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "word_after"
+          ],
+          "properties": {
+            "word_after": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "words_after"
+          ],
+          "properties": {
+            "words_after": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+            }
+          }
+        }
+      ]
+    },
+    "shellCondition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "$ref": "#/$defs/shellCondition"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "$ref": "#/$defs/shellCondition"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count"
+          ],
+          "properties": {
+            "count": {
+              "$ref": "#/$defs/shellExpr"
+            },
+            "min": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "min"
+              ]
+            },
+            {
+              "required": [
+                "max"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "defined"
+          ],
+          "properties": {
+            "defined": {
+              "$ref": "#/$defs/shellExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "eq"
+          ],
+          "properties": {
+            "eq": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/shellExpr"
+                },
+                {
+                  "type": [
+                    "string",
+                    "integer",
+                    "boolean"
+                  ]
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "has"
+          ],
+          "properties": {
+            "has": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "in"
+          ],
+          "properties": {
+            "in": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/shellExpr"
+                },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1000,
+                  "items": {
+                    "type": [
+                      "string",
+                      "integer",
+                      "boolean"
+                    ]
+                  }
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "matches"
+          ],
+          "properties": {
+            "matches": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/shellExpr"
+                },
+                {
+                  "$ref": "#/$defs/pattern"
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/shellCondition"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "word"
+          ],
+          "properties": {
+            "word": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        }
+      ]
+    },
+    "shellEmit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_type",
+        "params"
+      ],
+      "properties": {
+        "action_type": {
+          "$ref": "#/$defs/actionType"
+        },
+        "params": {
+          "type": "object",
+          "maxProperties": 24,
+          "propertyNames": {
+            "pattern": "^(?!(?:via|derived_from)$)[a-z][a-z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/shellExpr"
+          }
+        },
+        "when": {
+          "$ref": "#/$defs/shellCondition"
+        },
+        "for_each": {
+          "$ref": "#/$defs/shellExpr"
+        },
+        "item_pattern": {
+          "$ref": "#/$defs/pattern"
+        }
+      }
+    },
+    "mcpExpr": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "arg"
+          ],
+          "properties": {
+            "arg": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "arg_items"
+          ],
+          "properties": {
+            "arg_items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "key",
+                "field"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+                },
+                "field": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "arg_list"
+          ],
+          "properties": {
+            "arg_list": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "concat"
+          ],
+          "properties": {
+            "concat": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "$ref": "#/$defs/mcpExpr"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "const"
+          ],
+          "properties": {
+            "const": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count"
+          ],
+          "properties": {
+            "count": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "digest"
+          ],
+          "properties": {
+            "digest": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 12,
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "$ref": "#/$defs/mcpExpr"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "digest_list"
+          ],
+          "properties": {
+            "digest_list": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "list"
+              ],
+              "properties": {
+                "label": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 8,
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "$ref": "#/$defs/mcpExpr"
+                      }
+                    ]
+                  }
+                },
+                "list": {
+                  "$ref": "#/$defs/mcpExpr"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env_class"
+          ],
+          "properties": {
+            "env_class": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env_of"
+          ],
+          "properties": {
+            "env_of": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env_var"
+          ],
+          "properties": {
+            "env_var": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "first"
+          ],
+          "properties": {
+            "first": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "$ref": "#/$defs/mcpExpr"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host_of"
+          ],
+          "properties": {
+            "host_of": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ident"
+          ],
+          "properties": {
+            "ident": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "if",
+            "then"
+          ],
+          "properties": {
+            "if": {
+              "$ref": "#/$defs/mcpCondition"
+            },
+            "then": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "else": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "item"
+          ],
+          "properties": {
+            "item": {
+              "anyOf": [
+                {
+                  "const": true
+                },
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "join"
+          ],
+          "properties": {
+            "join": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "sep": {
+              "type": "string",
+              "maxLength": 8
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "literal"
+          ],
+          "properties": {
+            "literal": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lower"
+          ],
+          "properties": {
+            "lower": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "map",
+            "table"
+          ],
+          "properties": {
+            "map": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "table": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1000,
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "integer",
+                  "boolean"
+                ]
+              }
+            },
+            "default": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "keep": {
+              "const": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "match",
+            "pattern"
+          ],
+          "properties": {
+            "match": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "pattern": {
+              "$ref": "#/$defs/pattern"
+            },
+            "group": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "replace",
+            "pattern",
+            "with"
+          ],
+          "properties": {
+            "replace": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "pattern": {
+              "$ref": "#/$defs/pattern"
+            },
+            "with": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scrub"
+          ],
+          "properties": {
+            "scrub": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "server"
+          ],
+          "properties": {
+            "server": {
+              "const": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sorted"
+          ],
+          "properties": {
+            "sorted": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "split"
+          ],
+          "properties": {
+            "split": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "sep": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8
+            },
+            "index": {
+              "type": "integer",
+              "minimum": -8,
+              "maximum": 8
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sql"
+          ],
+          "properties": {
+            "sql": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "field": {
+              "enum": [
+                "verb",
+                "predicate_class",
+                "risk"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "upper"
+          ],
+          "properties": {
+            "upper": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        }
+      ]
+    },
+    "mcpCondition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "$ref": "#/$defs/mcpCondition"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "$ref": "#/$defs/mcpCondition"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count"
+          ],
+          "properties": {
+            "count": {
+              "$ref": "#/$defs/mcpExpr"
+            },
+            "min": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "min"
+              ]
+            },
+            {
+              "required": [
+                "max"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "defined"
+          ],
+          "properties": {
+            "defined": {
+              "$ref": "#/$defs/mcpExpr"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "eq"
+          ],
+          "properties": {
+            "eq": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/mcpExpr"
+                },
+                {
+                  "type": [
+                    "string",
+                    "integer",
+                    "boolean"
+                  ]
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "in"
+          ],
+          "properties": {
+            "in": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/mcpExpr"
+                },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1000,
+                  "items": {
+                    "type": [
+                      "string",
+                      "integer",
+                      "boolean"
+                    ]
+                  }
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "matches"
+          ],
+          "properties": {
+            "matches": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/mcpExpr"
+                },
+                {
+                  "$ref": "#/$defs/pattern"
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/mcpCondition"
+            }
+          }
+        }
+      ]
+    },
+    "mcpEmit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_type",
+        "params"
+      ],
+      "properties": {
+        "action_type": {
+          "$ref": "#/$defs/actionType"
+        },
+        "params": {
+          "type": "object",
+          "maxProperties": 24,
+          "propertyNames": {
+            "pattern": "^(?!(?:via|derived_from)$)[a-z][a-z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/mcpExpr"
+          }
+        },
+        "when": {
+          "$ref": "#/$defs/mcpCondition"
+        },
+        "for_each": {
+          "$ref": "#/$defs/mcpExpr"
+        },
+        "item_pattern": {
+          "$ref": "#/$defs/pattern"
+        }
+      }
+    },
+    "pathWord": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "not": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "pattern": {
+              "$ref": "#/$defs/pattern"
+            },
+            "skip": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            },
+            "optional": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "var": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            }
+          },
+          "minProperties": 1
+        }
+      ]
+    },
+    "grammar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "programs",
+        "commands"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+        },
+        "programs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9._+-]{0,63}$"
+          }
+        },
+        "via": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._+-]{0,63}$"
+        },
+        "launchers": {
+          "type": "boolean"
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "valued": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+              }
+            },
+            "flags": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+              }
+            }
+          }
+        },
+        "unknown_options": {
+          "enum": [
+            "uncertain",
+            "stop"
+          ]
+        },
+        "single_dash_long": {
+          "type": "boolean"
+        },
+        "strip_words": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "skip": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "options": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^-{1,2}[A-Za-z0-9?][A-Za-z0-9._:-]{0,63}$"
+              }
+            },
+            "words": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "emit"
+            ],
+            "properties": {
+              "path": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                  "$ref": "#/$defs/pathWord"
+                }
+              },
+              "when": {
+                "$ref": "#/$defs/shellCondition"
+              },
+              "max_positionals": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 64
+              },
+              "emit": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 16,
+                "items": {
+                  "$ref": "#/$defs/shellEmit"
+                }
+              }
+            }
+          }
+        },
+        "fallback": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "when",
+              "emit"
+            ],
+            "properties": {
+              "when": {
+                "$ref": "#/$defs/shellCondition"
+              },
+              "emit": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                  "$ref": "#/$defs/shellEmit"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "servers",
+        "tools"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+        },
+        "servers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[a-z0-9]{1,64}$"
+          }
+        },
+        "via": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._+-]{0,63}$"
+        },
+        "tools": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "names",
+              "emit"
+            ],
+            "properties": {
+              "names": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1000,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+                }
+              },
+              "when": {
+                "$ref": "#/$defs/mcpCondition"
+              },
+              "emit": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                  "$ref": "#/$defs/mcpEmit"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "scalarBound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": [
+              "string",
+              "integer",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "pattern": {
+          "$ref": "#/$defs/pattern"
+        }
+      },
+      "minProperties": 1
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "action_types"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$"
+        },
+        "type": {
+          "const": "action_allowlist"
+        },
+        "mode": {
+          "enum": [
+            "enforce",
+            "monitor",
+            "require_approval"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "action_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+          }
+        },
+        "param_bounds": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/scalarBound"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "items"
+                ],
+                "properties": {
+                  "items": {
+                    "$ref": "#/$defs/scalarBound"
+                  },
+                  "match": {
+                    "enum": [
+                      "all",
+                      "any"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expected": {
+      "anyOf": [
+        {
+          "type": [
+            "string",
+            "integer",
+            "boolean"
+          ]
+        },
+        {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "digest_of"
+          ],
+          "properties": {
+            "digest_of": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "vector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "expect"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$"
+        },
+        "shell": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8000
+            },
+            "dialect": {
+              "enum": [
+                "posix",
+                "powershell"
+              ]
+            }
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "server",
+            "tool",
+            "args"
+          ],
+          "properties": {
+            "server": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "tool": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "args": {
+              "type": "object"
+            },
+            "hint": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        "expect": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action_type",
+              "params"
+            ],
+            "properties": {
+              "action_type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+              },
+              "params": {
+                "type": "object",
+                "propertyNames": {
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/expected"
+                }
+              }
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "shell"
+          ]
+        },
+        {
+          "required": [
+            "mcp"
+          ]
+        }
+      ]
+    }
+  }
+}

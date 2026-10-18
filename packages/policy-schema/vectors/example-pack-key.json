@@ -1,0 +1,7 @@
+{
+  "description": "The TEST-ONLY public key that signs example-pack.json. Its private half is derived from a published phrase (test/build-example-pack.mjs), so it proves nothing; never trust it outside tests.",
+  "key_id": "pack-test-vectors",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAJkej1xBRuUBQa+jif4D4Gp/QHZZzDmxaep3bvsFz0fc=\n-----END PUBLIC KEY-----\n",
+  "not_before": "2026-01-01T00:00:00Z",
+  "not_after": "2036-01-01T00:00:00Z"
+}
