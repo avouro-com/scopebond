@@ -1,5 +1,17 @@
 # @scopebond/agent
 
+## 0.11.1
+
+### Patch Changes
+
+- 5fb6d83: Status, doctor and the tray say in one plain line when the workspace does not license an agent (its records are refused with `not_licensed`): the starter protections stay on, the records wait on the computer, and an owner adds licenses in Settings, Billing. No flush is suggested, since sending again changes nothing.
+- Updated dependencies [1af329c]
+- Updated dependencies [5fb6d83]
+- Updated dependencies [a71186a]
+  - @scopebond/hook@0.28.0
+  - @scopebond/gateway@0.20.2
+  - @scopebond/sdk@0.1.9
+
 ## 0.11.0
 
 ### Minor Changes

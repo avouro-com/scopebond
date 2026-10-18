@@ -1,5 +1,15 @@
 # @scopebond/mcp
 
+## 2.0.16
+
+### Patch Changes
+
+- Updated dependencies [a71186a]
+- Updated dependencies [1af329c]
+  - @scopebond/policy-schema@0.9.0
+  - @scopebond/gateway@0.20.2
+  - @scopebond/verify@0.6.8
+
 ## 2.0.15
 
 ### Patch Changes
