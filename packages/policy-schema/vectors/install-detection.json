@@ -1933,6 +1933,152 @@
         }
       },
       "expect": []
+    },
+    {
+      "id": "npm-long-scoped-name-kept",
+      "input": {
+        "shell": {
+          "command": "npm install @galicia-toolkit-nestjs-20-lite/archetype@1.0.0"
+        }
+      },
+      "expect": [
+        {
+          "route": "npm",
+          "ecosystem": "npm",
+          "via": "npm",
+          "verb": "install",
+          "lifecycle_scripts": "unknown",
+          "name": "@galicia-toolkit-nestjs-20-lite/archetype",
+          "version": "1.0.0",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "pnpm-long-scoped-name-kept",
+      "input": {
+        "shell": {
+          "command": "pnpm add @angular-devkit/build-angular-webpack-plugin-extras"
+        }
+      },
+      "expect": [
+        {
+          "route": "pnpm",
+          "ecosystem": "npm",
+          "via": "pnpm",
+          "verb": "add",
+          "lifecycle_scripts": "unknown",
+          "name": "@angular-devkit/build-angular-webpack-plugin-extras",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "go-long-module-path-kept",
+      "input": {
+        "shell": {
+          "command": "go install github.com/example-organization/a-long-repository-name/cmd/tool@v1.2.3"
+        }
+      },
+      "expect": [
+        {
+          "route": "go",
+          "ecosystem": "go",
+          "verb": "install",
+          "via": "go",
+          "global": true,
+          "name": "github.com/example-organization/a-long-repository-name/cmd/tool",
+          "version": "v1.2.3",
+          "source_domain": "github.com",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "docker-long-image-name-kept",
+      "input": {
+        "shell": {
+          "command": "docker pull ghcr.io/example-organization/a-very-long-image-name-for-tests:1.0"
+        }
+      },
+      "expect": [
+        {
+          "route": "docker_pull",
+          "ecosystem": "container",
+          "verb": "pull",
+          "via": "docker",
+          "name": "ghcr.io/example-organization/a-very-long-image-name-for-tests",
+          "version": "1.0",
+          "source_domain": "ghcr.io",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "gem-long-name-kept",
+      "input": {
+        "shell": {
+          "command": "gem install a-really-long-ruby-gem-name-for-testing-x -v 2.1.0"
+        }
+      },
+      "expect": [
+        {
+          "route": "gem",
+          "ecosystem": "rubygems",
+          "verb": "install",
+          "via": "gem",
+          "name": "a-really-long-ruby-gem-name-for-testing-x",
+          "global": true,
+          "version": "2.1.0",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npm-key-like-name-masked",
+      "input": {
+        "shell": {
+          "command": "npm install a1b2c3d4e5f6g7h8i9j0k1l2m3"
+        }
+      },
+      "expect": [
+        {
+          "route": "npm",
+          "ecosystem": "npm",
+          "via": "npm",
+          "verb": "install",
+          "lifecycle_scripts": "unknown",
+          "name": "***",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npm-credential-url-still-scrubbed",
+      "input": {
+        "shell": {
+          "command": "npm install https://deploy:not-a-real-pass@git.example.test/team/a-long-package-repository-name.git"
+        }
+      },
+      "expect": [
+        {
+          "route": "npm",
+          "ecosystem": "npm",
+          "via": "npm",
+          "verb": "install",
+          "lifecycle_scripts": "unknown",
+          "source_url": "https://git.example.test/team/a-long-package-repository-name.git",
+          "source_domain": "git.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
     }
   ]
 }

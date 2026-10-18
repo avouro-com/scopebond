@@ -26,7 +26,7 @@
 //   - Unknown is not guessed: a fact the request does not show is left out (no default registry is assumed).
 
 import { canonProgram, decomposeShell, gitArgs, shellScriptArg, splitCommandLine, type SimpleCommand } from "./shell.js";
-import { scrubSecrets, scrubUrlPath } from "./minimize.js";
+import { scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { scan, flagValue } from "./scan.js";
 import { launched, skipOptions } from "./launchers.js";
 
@@ -75,14 +75,42 @@ function word(value: string | undefined, max = 200): string | undefined {
   return clip(scrubSecrets(v), max);
 }
 
+// A package name or version as a registry spells it: a name (`@scope/name`, `github.com/owner/repo/cmd`, `owner/tap/formula`,
+// `registry:5000/image`) or a version or range (`1.2.3`, `^1.2`, `>=1,<2`, `latest`).
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; `/` separates the repeats and is not in their class
+const PACKAGE_NAME = /^@?[A-Za-z0-9][A-Za-z0-9._~+!:-]*(?:\/[A-Za-z0-9._~+!:-]+)*$/;
+const PACKAGE_VERSION = /^[A-Za-z0-9^~<>=!*.,+_|-]+$/;
+/** One part of a name or version that reads like a key rather than a word: a long run mixing letters and digits, or long hex. */
+const keyLike = (part: string): boolean => (part.length >= 20 && /[0-9]/.test(part) && /[A-Za-z]/.test(part)) || /^[A-Fa-f0-9]{32,}$/.test(part);
+/** A package name or version fit to record. Names and versions are public, and the free-text blob rule (any 40-character run)
+ *  masked long ordinary names (`@a-long-scope-name-20-lite/archetype` became `@***`), so a value shaped like a registry name
+ *  keeps every character unless it carries a known token shape or a part that reads like a key, which masks it whole. Anything
+ *  else is read as free text (`word`). */
+function packageWord(value: string | undefined, kind: "name" | "version", max = kind === "name" ? 200 : 100): string | undefined {
+  if (value === undefined) return undefined;
+  const v = value.trim();
+  if (!(kind === "name" ? PACKAGE_NAME : PACKAGE_VERSION).test(v) || v.length > max) return word(value, max);
+  if (scrubParam(v) !== v || v.split(/[@/._~+!:,|<>=^*-]+/).some(keyLike)) return "***";
+  return v;
+}
+
 const isLocalPath = (spec: string): boolean => /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~|[A-Za-z]:[\\/]|file:)/i.test(spec);
+
+/** A run of 40 or more base64 characters, as free text masks it (minimize.ts). */
+const LONG_RUN = /[A-Za-z0-9+/_-]{40,}/;
+/** One `/`-free part of a URL with its long base64 and hex runs masked. */
+const maskLongRuns = (part: string): string => part.replace(/[A-Za-z0-9+_-]{40,}={0,2}/g, "***").replace(/\b[A-Fa-f0-9]{32,}\b/g, "***");
 
 /** A URL reduced to scheme, host and path: no credentials, query or fragment; token-like path parts masked. */
 function sourceOf(raw: string | undefined): { source_url: string; source_domain: string } | undefined {
   if (!raw) return undefined;
-  // Secret-shaped parts (a token as userinfo, a blob anywhere) are masked before the URL is read, so none can land in a
-  // host or a path however the URL splits.
-  let text = scrubSecrets(raw.trim()).replace(/^git\+/i, "");
+  // Token shapes and any userinfo are masked before the URL is read, so none can land in a host or a path however the URL
+  // splits. A long run before an `@` may be a token whose `/` hides it from the userinfo rule (`https://<base64>@host/…`): then
+  // the whole URL is scrubbed as free text. Otherwise a long run is masked within one `/`-separated part only: masked across
+  // the parts, it took the host's last label with the path (`example.test/team/a-long-repository-name`) and broke the host.
+  let text = scrubParam(raw.trim()).replace(/^git\+/i, "");
+  const at = text.indexOf("@");
+  text = at >= 0 && LONG_RUN.test(text.slice(0, at)) ? scrubSecrets(text) : text.split("/").map(maskLongRuns).join("/");
   if (text.includes(SUBST) || text.includes("$")) return undefined;
   // `git@host:owner/repo` reads as ssh.
   // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the user part cannot cross `@`, the host cannot cross `:` or `/`
@@ -134,9 +162,9 @@ function jsSpec(spec: string): Spec | null {
   // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored; the name repeat cannot cross the `@` that starts the version
   const m = /^((?:@[A-Za-z0-9._~-]+\/)?[A-Za-z0-9._~-]+)(?:@(.*))?$/.exec(spec);
   if (!m) return null;
-  const name = word(m[1]);
+  const name = packageWord(m[1], "name");
   if (!name) return null;
-  const version = m[2] ? word(m[2], 100) : undefined;
+  const version = m[2] ? packageWord(m[2], "version") : undefined;
   return { name, ...(version ? { version } : {}) };
 }
 
@@ -161,7 +189,7 @@ function pySpec(spec: string): Spec | null {
   }
   // `==1.2.3` / `===1.2.3` record the version; any other specifier is recorded as written.
   const exact = /^===?\s*([0-9A-Za-z.+!*-]{1,100})$/.exec(tail);
-  const version = exact && !exact[1].includes("*") ? exact[1] : tail !== "" ? word(tail.replace(/\s+/g, ""), 100) : undefined;
+  const version = exact && !exact[1].includes("*") ? exact[1] : tail !== "" ? packageWord(tail.replace(/\s+/g, ""), "version") : undefined;
   return { name, ...(version ? { version } : {}) };
 }
 
@@ -169,9 +197,9 @@ function pySpec(spec: string): Spec | null {
 function atSpec(spec: string): Spec | null {
   if (spec === "" || spec.length > MAX_SPEC || isLocalPath(spec)) return null;
   const at = spec.lastIndexOf("@");
-  const name = word(at > 0 ? spec.slice(0, at) : spec);
+  const name = packageWord(at > 0 ? spec.slice(0, at) : spec, "name");
   if (!name) return null;
-  const version = at > 0 ? word(spec.slice(at + 1), 100) : undefined;
+  const version = at > 0 ? packageWord(spec.slice(at + 1), "version") : undefined;
   return { name, ...(version ? { version } : {}) };
 }
 
@@ -353,7 +381,7 @@ function cargoInstalls(sc: SimpleCommand): Facts[] {
   if (flagValue(s, "--path") !== undefined) return [];
   const git = sourceOf(flagValue(s, "--git"));
   const registry = hostOf(flagValue(s, "--index"));
-  const version = word(flagValue(s, "--version", "--vers"), 100);
+  const version = packageWord(flagValue(s, "--version", "--vers"), "version");
   const base = { route: "cargo" as const, ecosystem: "cargo" as const, verb: (sub === "add" ? "add" : "install") as Verb, via: "cargo", ...(sub !== "add" ? { global: true as const } : {}), ...(git ?? (registry ? { source_domain: registry } : {})) };
   if (specs.length === 0) return git ? [base] : [];
   return specs.slice(0, MAX_ACTIONS).map(atSpec).filter((p): p is Spec => p !== null).map((p) => ({ ...base, ...p, ...(version && !p.version ? { version } : {}) }));
@@ -384,9 +412,9 @@ function gemInstalls(sc: SimpleCommand): Facts[] {
     if (sub === "install") return [{ route: "gem", ecosystem: "rubygems", verb: "install", from_manifest: true, via: "bundle" }];
     if (sub !== "add" || specs.length === 0) return [];
   } else if (sub !== "install" && sub !== "i" && sub !== "update") return [];
-  const version = word(flagValue(s, "-v", "--version"), 100);
+  const version = packageWord(flagValue(s, "-v", "--version"), "version");
   const src = sourceOf(flagValue(s, "--git")) ?? (flagValue(s, "-s", "--source") ? { source_domain: hostOf(flagValue(s, "-s", "--source")) } : undefined);
-  return specs.slice(0, MAX_ACTIONS).filter((spec) => !isLocalPath(spec) && !spec.endsWith(".gem")).map((spec) => word(spec)).filter((n): n is string => n !== undefined).map((name) => ({
+  return specs.slice(0, MAX_ACTIONS).filter((spec) => !isLocalPath(spec) && !spec.endsWith(".gem")).map((spec) => packageWord(spec, "name")).filter((n): n is string => n !== undefined).map((name) => ({
     route: "gem" as const, ecosystem: "rubygems" as const, verb: (program === "bundle" ? "add" : sub === "update" ? "update" : "install"), via: program, name,
     ...(program === "gem" ? { global: true as const } : {}), ...(version ? { version } : {}), ...(src?.source_domain ? src : {}),
   }));
@@ -397,14 +425,14 @@ function brewInstalls(sc: SimpleCommand): Facts[] {
   const [sub, ...specs] = s.positionals;
   if (sub === "bundle") return [{ route: "brew", ecosystem: "homebrew", verb: "install", from_manifest: true, global: true, via: "brew" }];
   if (sub === "tap") {
-    const name = word(specs[0]);
+    const name = packageWord(specs[0], "name");
     if (!name) return [];
     const src = sourceOf(specs[1]) ?? sourceOf(`https://github.com/${name.replace(/^([^/]+)\/(?!homebrew-)([^/]+)$/, "$1/homebrew-$2")}`);
     return [{ route: "brew", ecosystem: "homebrew", verb: "add", name, global: true, via: "brew", ...(src ?? {}) }];
   }
   if (!["install", "reinstall", "upgrade"].includes(sub ?? "")) return [];
   // A formula's name is whole: `node@20` is a formula of its own, not a version of `node`.
-  return specs.slice(0, MAX_ACTIONS).filter((spec) => !isLocalPath(spec)).map((spec) => word(spec)).filter((n): n is string => n !== undefined)
+  return specs.slice(0, MAX_ACTIONS).filter((spec) => !isLocalPath(spec)).map((spec) => packageWord(spec, "name")).filter((n): n is string => n !== undefined)
     .map((name) => ({ route: "brew" as const, ecosystem: "homebrew" as const, verb: (sub === "upgrade" ? "update" : "install"), name, global: true as const, via: "brew" }));
 }
 
@@ -664,10 +692,10 @@ function imageOf(ref: string): Spec | null {
   if (colon > rest.lastIndexOf("/")) { tag = rest.slice(colon + 1); rest = rest.slice(0, colon); }
   const parts = rest.split("/");
   const registry = parts.length > 1 && (/[.:]/.test(parts[0]) || parts[0] === "localhost") ? parts[0].toLowerCase() : undefined;
-  const name = word(rest.toLowerCase());
+  const name = packageWord(rest.toLowerCase(), "name");
   if (!name) return null;
   // A content digest is public and exactly what names the image: kept whole (the secret scrubber would mask its hex).
-  const version = m[2] ? m[2].toLowerCase() : tag ? word(tag, 100) : undefined;
+  const version = m[2] ? m[2].toLowerCase() : tag ? packageWord(tag, "version") : undefined;
   return { name, ...(version ? { version } : {}), ...(registry ? { source_domain: registry.replace(/:\d+$/, "") } : {}) };
 }
 
