@@ -35,6 +35,9 @@ evidence, and coverage all share.
   `actionRegistry`, `TAXONOMY_VERSION`, `getActionType(id)` and
   `validateActionParams(type, params)`. Parameters are carried under `intent.params`;
   bound-able ones are constrained by an `action_allowlist` clause's `param_bounds`.
+- `schema/pack.schema.json` and `src/pack.ts` — the closed rule-pack format (`scopebond:pack/v1`):
+  command grammars, MCP profiles, rules and vectors, signed as data (see "Rule packs"). Exposed
+  at the `./pack` subpath: `validatePack`, `packSigningInput`, `packRef`, `comparePackVersions`.
 - `src/canonical.ts` — the shared strict RFC-8785-target canonical serializer used
   by schema, verifier, gateway and SDK signature/hash boundaries.
 - `vectors/action-taxonomy.json` — schema conformance (valid/invalid parameter
@@ -119,6 +122,69 @@ only when a file path is resolved). Limits: at most 100 observations per batch, 
 observation and 1 MiB per request. An observation is evidence of its source's assertion,
 not proof of an external effect; the receiving service derives tenant and agent identity
 from the credential, never from the payload.
+
+## Rule packs
+
+A rule pack (`scopebond:pack/v1`, `schema/pack.schema.json`, `src/pack.ts`) is signed
+data that teaches an engine what a command-line tool or an MCP server does. It is never
+code: every operator in it is one of a closed set, and an engine refuses a pack with an
+unknown field or operator as a whole.
+
+```json
+{
+  "format": "scopebond:pack/v1",
+  "id": "example", "version": "1.0.0", "issued_at": "2026-10-01T00:00:00Z",
+  "title": "optional",
+  "signature": { "alg": "Ed25519", "key_id": "…", "value": "<base64>" },
+  "grammars": [], "profiles": [], "rules": [], "vectors": []
+}
+```
+
+- **Grammars** read one tool's command line: `programs` (canonical names; also read
+  through package runners such as `npx` or `uv run` unless `launchers` is false), the
+  options it knows (`options.valued`, `options.flags`), what an unknown option does
+  (`unknown_options`: `uncertain`, positionals after it are not trusted, or `stop`), help
+  and dry-run forms that derive nothing (`skip`), and `commands`. A command matches a
+  `path` of subcommand words (a literal word, `any`, `not`, `pattern`, `optional`, or
+  `skip` up to n words, each optionally bound to a `var`), an optional `when`
+  condition and `max_positionals`, and `emit`s taxonomy actions. The first command that
+  matches decides (an empty `emit` derives nothing). When nothing is derived and an
+  option the grammar does not know was seen, the first `fallback` whose condition holds
+  derives its actions with no names, so an option before the subcommand cannot hide it.
+- **Profiles** say which MCP servers (by the words of the configured server name, or of
+  its URL or launch command) and which tools perform which actions.
+- **Parameters** are expressions with one operator each. Sources: `const`, `flag`,
+  `flags`, `present`, `positional`, `positionals`, `any_positional`, `word_after`,
+  `words_after`, `assign` (the command's own `NAME=value` prefix), `arg_assign`, `var`,
+  `item` (in `for_each`), `tool`; local facts an engine may not have (`env_var`,
+  `file_sha256`, `dir_sha256`, `file_text`, `dir_sql`, `config_value`); MCP arguments
+  (`arg`, `arg_list`, `arg_items`, `server`). Transforms: `env_of`, `env_class`, `ident`,
+  `literal`, `digest`, `digest_list` (keyed digests; names are never recorded in the
+  clear), `host_of`, `match`, `replace`, `lower`, `upper`, `map`, `first`, `concat`,
+  `join`, `sorted`, `count`, `split`, `scrub`, `sql` (the open SQL classifier's verb,
+  predicate class or risk, never the text) and `if`. Conditions: `has`, `word`,
+  `defined`, `eq`, `in`, `matches`, `all`, `any`, `not`, `count`. A value that cannot be
+  read is left out, never guessed. The engine adds `via` and `derived_from` to every
+  action; a pack cannot set them, and cannot emit `shell.exec` or `mcp.tool.call`.
+- **Rules** are `action_allowlist` clauses of the policy language, exactly as
+  `policy.schema.json` defines them.
+- **Vectors** are inputs (a shell command, or an MCP server, tool and arguments) and the
+  exact actions the pack must derive. An expected `{ "digest_of": [...] }` stands for the
+  engine's keyed digest of those parts. Every engine runs a pack's vectors before it
+  trusts the pack, and in its own CI.
+
+**Signing.** Ed25519 over the UTF-8 bytes of `scopebond:pack/v1`, one LF, then the RFC 8785
+canonical pack without its `signature` member (`packSigningInput`), with a policy-signing
+key. Patterns are limited to 200 characters, may not repeat a group that holds a repeat,
+and run only on words cut to 512 characters. `validatePack` checks the shape and the
+cross-field rules (unique ids, no program read by two grammars, registered action types,
+command-line operators only in grammars and MCP ones only in profiles); the signature is
+the engine's to verify.
+
+`vectors/example-pack.json` is a small public pack built from made-up tools
+(`test/build-example-pack.mjs`), signed with a test-only key whose private half is derived
+from a published phrase (`vectors/example-pack-key.json`); nothing trusts it outside
+tests. `vectors/pack-format.json` holds valid and invalid documents.
 
 ## Status
 

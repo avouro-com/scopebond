@@ -73,6 +73,8 @@ import { describeAction, type ExplainIntent } from "./explain.js";
 import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-install.js";
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
+import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
+import { runPackVectors } from "./packs.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, waitWithinDeadline } from "./hook-deadline.js";
 import { policyKeyProblems } from "./policy-keys.js";
@@ -323,6 +325,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const dir = await repositoryConnectionDir(configFolder, { home: userHome(), repository: () => repositoryFacts(cwd).repository });
     configFolder = dir;
     setHookErrorContext(dir, harness, hookVersion());
+    // The rule packs cached here (pack-store.ts): verified now, used by the mapper below. A bad or expired pack is not used.
+    activatePacks(dir);
     // A repository run decides nothing before its workspace's rules are loaded once: in a fresh sandbox the starter rules
     // would let through what the workspace blocks. Tried again on every call until it succeeds.
     await requireRepositoryRules(dir);
@@ -548,6 +552,7 @@ async function runCursor(): Promise<void> {
     const dir = resolveConfigDir(cwd);
     configDir = dir;
     setHookErrorContext(dir, "cursor", hookVersion());
+    activatePacks(dir);
     const permissionMode = typeof input.permission_mode === "string" ? input.permission_mode : null;
     const branch = currentBranch(cwd);
     const mapped = fillPushBranch(mapCursorEvent(event, input), branch);
@@ -1228,6 +1233,7 @@ async function runTest(args: string[]): Promise<void> {
       attesterPath: join(dir, "attester.key"), dbPath: join(tmp, "receipts.db"),
       strict: process.argv.includes("--strict"),
     });
+    activatePacks(dir);
     const mapped = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command } }), currentBranch(process.cwd()));
     console.log(`command: ${command}`);
     for (const m of mapped) {
@@ -2276,6 +2282,59 @@ async function runLogin(args: string[]): Promise<void> {
 /** What each command does, its arguments, and one example. The whole help used to be a
  *  single usage line listing 15 command names, which told a reader nothing about what any
  *  of them did or what arguments they take. */
+/** `packs`: the rule packs cached on this computer (pack-store.ts). `list` (the default) shows what is in force and why
+ *  anything is not; `verify <file>` checks a pack file (format, signature, its own vectors) without installing it; `add <file>`
+ *  and `remove <id>` change the cache, so they are for a person at a terminal. */
+function runPacks(args: string[]): void {
+  const [sub = "list", target] = args.filter((a) => !a.startsWith("--"));
+  const dir = resolveConfigDir(process.cwd());
+  const json = args.includes("--json");
+  if (sub === "list") {
+    const loaded = loadPacks(dir);
+    if (json) {
+      console.log(JSON.stringify({ dir: packsDir(dir), expires_at: loaded.expiresAt, packs: loaded.packs.map((p) => ({ id: p.id, version: p.version, issued_at: p.issued_at, title: p.title ?? null })), problems: loaded.problems }, null, 2));
+      return;
+    }
+    if (loaded.packs.length === 0 && loaded.problems.length === 0) { console.log("No rule packs on this computer. The open detection and the starter protections apply."); return; }
+    for (const p of loaded.packs) console.log(`  ${p.id}@${p.version}  issued ${p.issued_at}${p.title ? `  ${p.title}` : ""}`);
+    if (loaded.expiresAt && loaded.packs.length) console.log(`In force until ${loaded.expiresAt} unless this computer checks in again.`);
+    for (const problem of loaded.problems) console.log(`  not used: ${problem.ref}: ${problem.message}`);
+    return;
+  }
+  if ((sub === "verify" || sub === "add") && target) {
+    let text = "";
+    try { text = readFileSync(target, "utf8"); } catch { console.error(`cannot read ${target}`); process.exit(1); }
+    if (sub === "verify") {
+      const result = checkPackFile(text);
+      if (!result.ok) { console.error(`not a usable pack: ${result.message}`); process.exit(1); }
+      console.log(`ok: ${result.ref}, signature verified, ${result.vectors} vectors pass`);
+      return;
+    }
+    requireInteractive("packs add", args);
+    const result = installPack(dir, text);
+    if (!result.ok) { console.error(`not added: ${result.message}`); process.exit(1); }
+    console.log(`added ${result.pack.id}@${result.pack.version}; it is in force for 30 days unless this computer checks in again.`);
+    return;
+  }
+  if (sub === "remove" && target) {
+    requireInteractive("packs remove", args);
+    if (!removePack(dir, target)) { console.error(`no pack ${target} here`); process.exit(1); }
+    console.log(`removed ${target}`);
+    return;
+  }
+  console.error("usage: scopebond packs [list|verify <file>|add <file>|remove <id>] [--json] [--yes]");
+  process.exit(1);
+}
+
+/** Check a pack file as `packs add` would, without changing anything. */
+function checkPackFile(text: string): { ok: true; ref: string; vectors: number } | { ok: false; message: string } {
+  const checked = checkPackText(text);
+  if (!checked.ok) return { ok: false, message: checked.message };
+  const run = runPackVectors(checked.pack);
+  if (run.failures.length) return { ok: false, message: `${run.failures.length} of ${checked.pack.vectors.length} vectors fail (first: ${run.failures[0].id})` };
+  return { ok: true, ref: `${checked.pack.id}@${checked.pack.version}`, vectors: run.passed };
+}
+
 const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: string[] }> = [
   { name: "init", args: "[--cursor|--codex|--copilot] [--shared] [--dry-run] [--no-install] [--npx] [--force] [--yes] | --repo [--dry-run] [--yes]",
     summary: "set this project up: keys, a starter policy, and your agent wired to the hook",
@@ -2354,6 +2413,16 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "what is pending and what the workspace refused (kept locally, never retried). flush",
       "sends now; retry re-checks a workspace that lacked the route; wire and unwire add or",
       "remove the Claude Code session and after-action hook entries.",
+    ] },
+  { name: "packs", args: "[list|verify <file>|add <file>|remove <id>] [--json] [--yes]",
+    summary: "the rule packs on this computer: what is in force, and checking or adding a pack file",
+    detail: [
+      "Rule packs are signed data from Scopebond Cloud that teach the hook what more command-line tools and MCP servers do.",
+      "list shows the packs in force and why any other is not used (bad signature, expired, damaged). A pack stays in force",
+      "for 30 days after this computer last checked in; without one, the open detection and the starter protections apply.",
+      "verify <file> checks a pack file (format, signature, its own vectors) and changes nothing.",
+      "add <file> checks it the same way, then puts it in force here; remove <id> takes one out. Both need a terminal or --yes.",
+      "Packs live in the packs folder of .scopebond/ (index.json and one <id>@<version>.json per pack).",
     ] },
   { name: "budget", args: "init|ack <id>|status|load <export.json>",
     summary: "per-agent action budgets: how many actions this agent may dispatch in a window",
@@ -2509,6 +2578,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   else if (cmd === "trust") { runTrust(rest); }
   else if (cmd === "prune") { await runPrune(rest); }
   else if (cmd === "rules") { await runRules(rest); }
+  else if (cmd === "packs") { runPacks(rest); }
   else if (cmd === "help" || cmd === "--help" || cmd === "-h" || cmd === undefined) { printHelp(rest[0]); }
   else {
     console.error(`unknown command: ${cmd}`);

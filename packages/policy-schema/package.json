@@ -50,7 +50,15 @@
     "./vectors/evidence-contract.json": "./vectors/evidence-contract.json",
     "./vectors/canonicalization.json": "./vectors/canonicalization.json",
     "./vectors/observation-contract.json": "./vectors/observation-contract.json",
-    "./vectors/session-budgets.json": "./vectors/session-budgets.json"
+    "./vectors/session-budgets.json": "./vectors/session-budgets.json",
+    "./pack": {
+      "types": "./dist/pack.d.ts",
+      "default": "./dist/pack.js"
+    },
+    "./pack.schema.json": "./schema/pack.schema.json",
+    "./vectors/pack-format.json": "./vectors/pack-format.json",
+    "./vectors/example-pack.json": "./vectors/example-pack.json",
+    "./vectors/example-pack-key.json": "./vectors/example-pack-key.json"
   },
   "files": [
     "dist",

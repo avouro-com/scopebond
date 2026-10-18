@@ -330,6 +330,37 @@ known only at run time (`$FN`, `$(…)`) is never digested as a name. `terraform
 it is `unknown`; the environment of a command comes only from words it shows, never from a profile file, the current
 kube context or environment variables the command does not set itself.
 
+### Rule packs
+
+What the hook knows about more tools and MCP servers can also come as **rule packs**: signed data in the
+`scopebond:pack/v1` format (`@scopebond/policy-schema`, "Rule packs"), never code. A pack's grammars read a tool's
+command line and its profiles read MCP calls, and they derive taxonomy actions exactly as the readers above do,
+beside the command's own `shell.exec` (or `mcp.tool.call`), decided by the rules like any other action.
+
+**Where they live.** In the `packs` folder of the hook's state directory (the folder that holds `policy.json`):
+`packs/index.json` is `{ "v": 1, "checked_at": "<RFC 3339>", "packs": [{ "id", "version", "sha256" }] }`, and each
+pack is `packs/<id>@<version>.json`, byte for byte as it was served. Whoever delivers packs writes the pack files
+first and the index last, with `checked_at` the time of the successful check-in and `sha256` the hex SHA-256 of
+each file. Only listed packs are read, one version per id.
+
+**When a pack is used.** On every tool call, and only when all of these hold: the index is readable and was checked
+in no more than 30 days ago; the file matches its `sha256`; it is a valid pack with the listed id and version; and its
+Ed25519 signature verifies with a policy-signing key this release trusts (the same keys as signed rules), inside that
+key's validity window. Otherwise the pack is not used, and only the open detection and the starter protections
+apply: a missing, damaged, unsigned or expired pack never allows anything, it only stops adding actions. No network
+is needed to use a cached pack.
+
+**Precedence, for now.** The readers built into this release (the tables above) and the packs run side by side. For
+each command and each MCP call, when the built-in readers derive any action, those are used and the packs' are not;
+the packs' are used only when the built-in readers derive none. Among packs, the first by id that derives anything
+wins.
+
+**`packs`.** `scopebond packs` (or `packs list --json`) shows the packs in force, until when, and why any other is
+not used. `packs verify <file>` checks a pack file (format, signature and the pack's own vectors) and changes
+nothing; `packs add <file>` checks it the same way and puts it in force for 30 days; `packs remove <id>` takes it
+out. `add` and `remove` need a terminal or `--yes`. Every pack's vectors run in this package's tests through
+`runPackVectors`; the public ones are `@scopebond/policy-schema/vectors/example-pack.json`.
+
 ### GitHub Copilot
 
 ```

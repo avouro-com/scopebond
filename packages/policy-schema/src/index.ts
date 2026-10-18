@@ -9,11 +9,19 @@ import legacyReceiptSchemaDocument from "../schema/receipt-legacy.schema.json" w
 import observationSchemaDocument from "../schema/observation.schema.json" with { type: "json" };
 import summarySchemaDocument from "../schema/summary.schema.json" with { type: "json" };
 import sessionBudgetsSchemaDocument from "../schema/session-budgets.schema.json" with { type: "json" };
+import packSchemaDocument from "../schema/pack.schema.json" with { type: "json" };
 import { canonical } from "./canonical.js";
 export { canonical } from "./canonical.js";
 export {
   actionRegistry, TAXONOMY_VERSION, getActionType, validateActionParams,
 } from "./registry.js";
+export {
+  PACK_FORMAT, PACK_SIGNATURE_DOMAIN, PACK_LIMITS, PACK_RESERVED_ACTION_TYPES, PACK_RESERVED_PARAMS, EXPRESSION_OPERATORS, CONDITION_OPERATORS,
+  packSigningInput, packRef, comparePackVersions, validatePack,
+} from "./pack.js";
+export type {
+  Pack, PackGrammar, PackCommand, PackEmit, PackProfile, PackProfileTool, PackVector, PackSignature, PackValidation, PathWord, Expr, Condition, ExpectedValue, Scalar,
+} from "./pack.js";
 export type {
   ActionRegistry, ActionType, ActionParameter, ParameterType, RiskClass, ParamValidation,
 } from "./registry.js";
@@ -25,6 +33,7 @@ export const legacyReceiptSchema = legacyReceiptSchemaDocument as Record<string,
 export const observationSchema = observationSchemaDocument as Record<string, unknown>;
 export const summarySchema = summarySchemaDocument as Record<string, unknown>;
 export const sessionBudgetsSchema = sessionBudgetsSchemaDocument as Record<string, unknown>;
+export const packSchema = packSchemaDocument as Record<string, unknown>;
 
 // Summary record (scopebond:summary v1, evidence class "summary"): a signed stand-in for routine receipts when they are
 // sent, with an RFC 9162 root over the receipts it covers. Receipts are unchanged and every action keeps its own. The

@@ -15,6 +15,7 @@ import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, git
 import { textOf } from "./text.js";
 import { deriveTargetOperations, type TargetOperation } from "./typed-targets.js";
 import { deriveMcpOperations } from "./mcp-profiles.js";
+import { derivePackMcp, derivePackTargets } from "./packs.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
 import { packagesToCheck } from "./typed-ops.js";
 
@@ -1468,7 +1469,9 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
   if (installs) exec.packages = installs;
   // What the command reaches through a known command-line tool (a cloud, a cluster, a database migration, a deployment, a
   // secret store), as taxonomy actions beside the command itself. Nothing when the tool or its words are not known.
-  const targets: Mapped[] = deriveTargetOperations(sc).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
+  // Precedence (packs.ts): the readers built into this release win; the rule packs in force are read only when they derive nothing.
+  const builtIn = deriveTargetOperations(sc);
+  const targets: Mapped[] = (builtIn.length ? builtIn : derivePackTargets(sc)).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
   // A command that writes files its text does not name (`patch`, `git apply`, `tar x`)
   // cannot be judged here: its writes are recorded as a file.write with no path, not
   // evaluated — observed in normal mode, denied by strict mode (like an apply_patch
@@ -1685,7 +1688,9 @@ function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | u
     }
     return [{ intent: op, evaluated: true, derived: true, source }];
   };
-  return capDerived([...call, ...deriveMcpOperations(server, tool, args, hint).flatMap(derived)]);
+  // Precedence (packs.ts): the profiles built into this release win; the rule packs in force are read only when they derive nothing.
+  const builtIn = deriveMcpOperations(server, tool, args, hint);
+  return capDerived([...call, ...(builtIn.length ? builtIn : derivePackMcp(server, tool, args, hint)).flatMap(derived)]);
 }
 
 /** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,

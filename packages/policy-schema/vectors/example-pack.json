@@ -1,0 +1,2150 @@
+{
+  "format": "scopebond:pack/v1",
+  "id": "example",
+  "version": "1.0.0",
+  "issued_at": "2026-10-01T00:00:00Z",
+  "title": "Example pack (test vectors; made-up tools)",
+  "grammars": [
+    {
+      "id": "examplectl",
+      "programs": [
+        "examplectl"
+      ],
+      "options": {
+        "valued": [
+          "--region",
+          "-r",
+          "--profile",
+          "--env",
+          "-e",
+          "--name",
+          "-n",
+          "--command",
+          "--file",
+          "-X",
+          "--method",
+          "--to"
+        ],
+        "flags": [
+          "--yes",
+          "-y",
+          "--force",
+          "--recursive",
+          "--local",
+          "--remote"
+        ]
+      },
+      "strip_words": [
+        "beta"
+      ],
+      "skip": {
+        "options": [
+          "--help",
+          "-h",
+          "--dry-run"
+        ],
+        "words": [
+          "help"
+        ]
+      },
+      "commands": [
+        {
+          "path": [
+            {
+              "any": [
+                "list",
+                "get",
+                "describe"
+              ]
+            }
+          ],
+          "emit": []
+        },
+        {
+          "path": [
+            "bucket",
+            {
+              "any": [
+                "delete",
+                "rm"
+              ]
+            }
+          ],
+          "emit": [
+            {
+              "action_type": "cloud.resource.delete",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "service": {
+                  "const": "storage"
+                },
+                "kind": {
+                  "const": "bucket"
+                },
+                "region": {
+                  "ident": {
+                    "first": [
+                      {
+                        "flag": [
+                          "--region",
+                          "-r"
+                        ]
+                      },
+                      {
+                        "assign": "EXAMPLE_REGION"
+                      }
+                    ]
+                  }
+                },
+                "env": {
+                  "env_of": {
+                    "first": [
+                      {
+                        "flag": [
+                          "--profile"
+                        ]
+                      },
+                      {
+                        "assign": "EXAMPLE_PROFILE"
+                      }
+                    ]
+                  }
+                },
+                "resource_digest": {
+                  "digest": [
+                    "example",
+                    "storage",
+                    {
+                      "match": {
+                        "positional": 0
+                      },
+                      "pattern": "^ex://([^/]+)",
+                      "group": 1
+                    }
+                  ]
+                },
+                "auto_approve": {
+                  "present": [
+                    "--yes",
+                    "-y",
+                    "--force"
+                  ]
+                },
+                "risk_class": {
+                  "const": "destructive"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "path": [
+            {
+              "pattern": "^(?:create|delete|update)-[a-z][a-z-]*$",
+              "var": "op"
+            }
+          ],
+          "emit": [
+            {
+              "action_type": "cloud.resource.delete",
+              "when": {
+                "matches": [
+                  {
+                    "var": "op"
+                  },
+                  "^delete-"
+                ]
+              },
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "service": {
+                  "const": "compute"
+                },
+                "kind": {
+                  "match": {
+                    "var": "op"
+                  },
+                  "pattern": "^delete-(.+)$",
+                  "group": 1
+                },
+                "resource_digest": {
+                  "digest": [
+                    "example",
+                    "compute",
+                    {
+                      "positional": 0
+                    }
+                  ]
+                },
+                "risk_class": {
+                  "const": "destructive"
+                }
+              }
+            },
+            {
+              "action_type": "cloud.resource.create",
+              "when": {
+                "matches": [
+                  {
+                    "var": "op"
+                  },
+                  "^create-"
+                ]
+              },
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "service": {
+                  "const": "compute"
+                },
+                "kind": {
+                  "match": {
+                    "var": "op"
+                  },
+                  "pattern": "^create-(.+)$",
+                  "group": 1
+                },
+                "risk_class": {
+                  "const": "sensitive"
+                }
+              }
+            },
+            {
+              "action_type": "cloud.resource.modify",
+              "when": {
+                "matches": [
+                  {
+                    "var": "op"
+                  },
+                  "^update-"
+                ]
+              },
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "service": {
+                  "const": "compute"
+                },
+                "kind": {
+                  "match": {
+                    "var": "op"
+                  },
+                  "pattern": "^update-(.+)$",
+                  "group": 1
+                },
+                "risk_class": {
+                  "const": "sensitive"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "path": [
+            {
+              "skip": 3,
+              "var": "group"
+            },
+            {
+              "any": [
+                "remove",
+                "rm"
+              ]
+            }
+          ],
+          "emit": [
+            {
+              "action_type": "cloud.resource.delete",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "service": {
+                  "split": {
+                    "join": {
+                      "var": "group"
+                    },
+                    "sep": " "
+                  },
+                  "sep": " ",
+                  "index": 0
+                },
+                "kind": {
+                  "map": {
+                    "split": {
+                      "join": {
+                        "var": "group"
+                      },
+                      "sep": " "
+                    },
+                    "sep": " ",
+                    "index": -1
+                  },
+                  "table": {
+                    "vol": "volume",
+                    "vols": "volume",
+                    "fw": "firewall"
+                  },
+                  "keep": true
+                },
+                "resource_digest": {
+                  "digest": [
+                    "example",
+                    {
+                      "join": {
+                        "var": "group"
+                      },
+                      "sep": "/"
+                    },
+                    {
+                      "positional": 0
+                    }
+                  ]
+                },
+                "risk_class": {
+                  "const": "destructive"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "path": [
+            "deploy"
+          ],
+          "emit": [
+            {
+              "action_type": "deploy.release",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "environment": {
+                  "first": [
+                    {
+                      "env_of": {
+                        "flag": [
+                          "--env",
+                          "-e"
+                        ]
+                      }
+                    },
+                    {
+                      "const": "unknown"
+                    }
+                  ]
+                },
+                "target_digest": {
+                  "digest": [
+                    "example",
+                    "app",
+                    {
+                      "flag": [
+                        "--name",
+                        "-n"
+                      ]
+                    }
+                  ]
+                },
+                "risk_class": {
+                  "if": {
+                    "in": [
+                      {
+                        "first": [
+                          {
+                            "env_of": {
+                              "flag": [
+                                "--env",
+                                "-e"
+                              ]
+                            }
+                          },
+                          {
+                            "const": "unknown"
+                          }
+                        ]
+                      },
+                      [
+                        "production",
+                        "unknown"
+                      ]
+                    ]
+                  },
+                  "then": {
+                    "const": "destructive"
+                  },
+                  "else": {
+                    "const": "sensitive"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "path": [
+            "secret",
+            "set"
+          ],
+          "emit": [
+            {
+              "action_type": "secret.write",
+              "for_each": {
+                "positionals": {
+                  "from": 0
+                }
+              },
+              "item_pattern": "^([A-Za-z_][A-Za-z0-9_]*)=",
+              "params": {
+                "store": {
+                  "const": "example"
+                },
+                "name_digest": {
+                  "digest": [
+                    "example",
+                    {
+                      "first": [
+                        {
+                          "flag": [
+                            "--env",
+                            "-e"
+                          ]
+                        },
+                        ""
+                      ]
+                    },
+                    {
+                      "item": 1
+                    }
+                  ]
+                },
+                "env": {
+                  "env_of": {
+                    "flag": [
+                      "--env",
+                      "-e"
+                    ]
+                  }
+                },
+                "risk_class": {
+                  "const": "sensitive"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "path": [
+            "db",
+            {
+              "any": [
+                "migrate",
+                "rollback",
+                "reset"
+              ],
+              "var": "verb"
+            }
+          ],
+          "emit": [
+            {
+              "action_type": "db.migrate",
+              "params": {
+                "provider": {
+                  "const": "example"
+                },
+                "direction": {
+                  "map": {
+                    "var": "verb"
+                  },
+                  "table": {
+                    "migrate": "up",
+                    "rollback": "down",
+                    "reset": "reset"
+                  }
+                },
+                "env": {
+                  "if": {
+                    "has": [
+                      "--local"
+                    ]
+                  },
+                  "then": {
+                    "const": "development"
+                  },
+                  "else": {
+                    "env_of": {
+                      "first": [
+                        {
+                          "flag": [
+                            "--env",
+                            "-e"
+                          ]
+                        },
+                        {
+                          "arg_assign": "APP_ENV"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "risk_class": {
+                  "if": {
+                    "any": [
+                      {
+                        "eq": [
+                          {
+                            "var": "verb"
+                          },
+                          "migrate"
+                        ]
+                      },
+                      {
+                        "has": [
+                          "--local"
+                        ]
+                      }
+                    ]
+                  },
+                  "then": {
+                    "const": "sensitive"
+                  },
+                  "else": {
+                    "const": "destructive"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "path": [
+            "db",
+            "exec"
+          ],
+          "when": {
+            "defined": {
+              "flag": [
+                "--command"
+              ]
+            }
+          },
+          "emit": [
+            {
+              "action_type": "db.exec",
+              "params": {
+                "provider": {
+                  "const": "example"
+                },
+                "verb": {
+                  "sql": {
+                    "flag": [
+                      "--command"
+                    ]
+                  },
+                  "field": "verb"
+                },
+                "risk": {
+                  "sql": {
+                    "flag": [
+                      "--command"
+                    ]
+                  },
+                  "field": "risk"
+                },
+                "predicate_class": {
+                  "sql": {
+                    "flag": [
+                      "--command"
+                    ]
+                  },
+                  "field": "predicate_class"
+                },
+                "scope": {
+                  "if": {
+                    "has": [
+                      "--local"
+                    ]
+                  },
+                  "then": {
+                    "const": "local"
+                  },
+                  "else": {
+                    "if": {
+                      "has": [
+                        "--remote"
+                      ]
+                    },
+                    "then": {
+                      "const": "remote"
+                    },
+                    "else": {
+                      "const": "unknown"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "path": [
+            "api",
+            {
+              "var": "endpoint"
+            }
+          ],
+          "when": {
+            "not": {
+              "in": [
+                {
+                  "upper": {
+                    "first": [
+                      {
+                        "flag": [
+                          "-X",
+                          "--method"
+                        ]
+                      },
+                      {
+                        "const": "GET"
+                      }
+                    ]
+                  }
+                },
+                [
+                  "GET",
+                  "HEAD"
+                ]
+              ]
+            }
+          },
+          "emit": [
+            {
+              "action_type": "net.fetch",
+              "params": {
+                "host": {
+                  "first": [
+                    {
+                      "host_of": {
+                        "var": "endpoint"
+                      }
+                    },
+                    {
+                      "const": "api.example.test"
+                    }
+                  ]
+                },
+                "method": {
+                  "upper": {
+                    "first": [
+                      {
+                        "flag": [
+                          "-X",
+                          "--method"
+                        ]
+                      },
+                      {
+                        "const": "GET"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "path": [
+            "iam",
+            {
+              "any": [
+                "grant",
+                "revoke"
+              ],
+              "var": "verb"
+            }
+          ],
+          "max_positionals": 1,
+          "emit": [
+            {
+              "action_type": "iam.change",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "kind": {
+                  "const": "role"
+                },
+                "name_digest": {
+                  "digest_list": {
+                    "label": [
+                      "example",
+                      "iam"
+                    ],
+                    "list": {
+                      "words_after": "--to"
+                    }
+                  }
+                },
+                "risk_class": {
+                  "const": "identity"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "fallback": [
+        {
+          "when": {
+            "word": [
+              "delete",
+              "rm",
+              "remove"
+            ]
+          },
+          "emit": [
+            {
+              "action_type": "cloud.resource.delete",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "risk_class": {
+                  "const": "destructive"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "when": {
+            "word": [
+              "deploy"
+            ]
+          },
+          "emit": [
+            {
+              "action_type": "deploy.release",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "environment": {
+                  "const": "unknown"
+                },
+                "risk_class": {
+                  "const": "destructive"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "exampledeploy",
+      "programs": [
+        "exampledeploy"
+      ],
+      "via": "exampledeploy",
+      "launchers": false,
+      "single_dash_long": true,
+      "unknown_options": "stop",
+      "options": {
+        "valued": [
+          "-target",
+          "-var-file",
+          "-chdir"
+        ],
+        "flags": [
+          "-auto-approve"
+        ]
+      },
+      "skip": {
+        "options": [
+          "-help",
+          "-version"
+        ]
+      },
+      "commands": [
+        {
+          "path": [
+            {
+              "any": [
+                "apply",
+                "destroy"
+              ],
+              "var": "verb"
+            }
+          ],
+          "emit": [
+            {
+              "action_type": "cloud.resource.delete",
+              "when": {
+                "eq": [
+                  {
+                    "var": "verb"
+                  },
+                  "destroy"
+                ]
+              },
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "service": {
+                  "const": "exampledeploy"
+                },
+                "env": {
+                  "first": [
+                    {
+                      "env_of": {
+                        "flag": [
+                          "-chdir"
+                        ]
+                      }
+                    },
+                    {
+                      "env_of": {
+                        "flag": [
+                          "-var-file"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "auto_approve": {
+                  "present": [
+                    "-auto-approve"
+                  ],
+                  "or": false
+                },
+                "targeted": {
+                  "if": {
+                    "defined": {
+                      "flags": [
+                        "-target"
+                      ]
+                    }
+                  },
+                  "then": {
+                    "const": true
+                  },
+                  "else": {
+                    "const": false
+                  }
+                },
+                "resource_digest": {
+                  "digest_list": {
+                    "label": [
+                      "exampledeploy"
+                    ],
+                    "list": {
+                      "flags": [
+                        "-target"
+                      ]
+                    }
+                  }
+                },
+                "risk_class": {
+                  "const": "destructive"
+                }
+              }
+            },
+            {
+              "action_type": "cloud.resource.modify",
+              "when": {
+                "eq": [
+                  {
+                    "var": "verb"
+                  },
+                  "apply"
+                ]
+              },
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "service": {
+                  "const": "exampledeploy"
+                },
+                "env": {
+                  "first": [
+                    {
+                      "env_of": {
+                        "flag": [
+                          "-chdir"
+                        ]
+                      }
+                    },
+                    {
+                      "env_of": {
+                        "flag": [
+                          "-var-file"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "auto_approve": {
+                  "present": [
+                    "-auto-approve"
+                  ],
+                  "or": false
+                },
+                "risk_class": {
+                  "if": {
+                    "defined": {
+                      "positional": 0
+                    }
+                  },
+                  "then": {
+                    "const": "destructive"
+                  },
+                  "else": {
+                    "const": "sensitive"
+                  }
+                },
+                "saved_plan": {
+                  "if": {
+                    "defined": {
+                      "positional": 0
+                    }
+                  },
+                  "then": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "fallback": [
+        {
+          "when": {
+            "word": [
+              "destroy"
+            ]
+          },
+          "emit": [
+            {
+              "action_type": "cloud.resource.delete",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "service": {
+                  "const": "exampledeploy"
+                },
+                "risk_class": {
+                  "const": "destructive"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "exampletracker",
+      "servers": [
+        "exampletracker",
+        "tracker"
+      ],
+      "tools": [
+        {
+          "names": [
+            "create_item",
+            "tracker_create_item"
+          ],
+          "emit": [
+            {
+              "action_type": "work.item.create",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "project_digest": {
+                  "digest": [
+                    "exampletracker",
+                    {
+                      "server": true
+                    },
+                    {
+                      "arg": [
+                        "project",
+                        "projectKey"
+                      ]
+                    }
+                  ]
+                },
+                "risk_class": {
+                  "const": "routine"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "names": [
+            "update_item"
+          ],
+          "emit": [
+            {
+              "action_type": "work.item.update",
+              "params": {
+                "provider": {
+                  "const": "unknown"
+                },
+                "risk_class": {
+                  "const": "routine"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "examplefs",
+      "servers": [
+        "examplefs"
+      ],
+      "via": "examplefs",
+      "tools": [
+        {
+          "names": [
+            "write"
+          ],
+          "when": {
+            "defined": {
+              "arg": [
+                "path"
+              ]
+            }
+          },
+          "emit": [
+            {
+              "action_type": "file.write",
+              "params": {
+                "path": {
+                  "arg": [
+                    "path"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "names": [
+            "write_many"
+          ],
+          "emit": [
+            {
+              "action_type": "file.write",
+              "for_each": {
+                "arg_items": {
+                  "key": "files",
+                  "field": "path"
+                }
+              },
+              "params": {
+                "path": {
+                  "item": true
+                }
+              }
+            }
+          ]
+        },
+        {
+          "names": [
+            "read_many"
+          ],
+          "emit": [
+            {
+              "action_type": "file.read",
+              "for_each": {
+                "arg_list": "paths"
+              },
+              "params": {
+                "path": {
+                  "item": true
+                }
+              }
+            }
+          ]
+        },
+        {
+          "names": [
+            "fetch_url"
+          ],
+          "emit": [
+            {
+              "action_type": "net.fetch",
+              "when": {
+                "defined": {
+                  "host_of": {
+                    "arg": [
+                      "url"
+                    ]
+                  }
+                }
+              },
+              "params": {
+                "host": {
+                  "host_of": {
+                    "arg": [
+                      "url"
+                    ]
+                  }
+                },
+                "method": {
+                  "const": "GET"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "exampledb",
+      "servers": [
+        "exampledb"
+      ],
+      "tools": [
+        {
+          "names": [
+            "run_sql"
+          ],
+          "emit": [
+            {
+              "action_type": "db.exec",
+              "params": {
+                "provider": {
+                  "const": "exampledb"
+                },
+                "verb": {
+                  "sql": {
+                    "arg": [
+                      "sql",
+                      "query"
+                    ]
+                  },
+                  "field": "verb"
+                },
+                "scope": {
+                  "const": "unknown"
+                },
+                "risk": {
+                  "sql": {
+                    "arg": [
+                      "sql",
+                      "query"
+                    ]
+                  },
+                  "field": "risk"
+                },
+                "predicate_class": {
+                  "sql": {
+                    "arg": [
+                      "sql",
+                      "query"
+                    ]
+                  },
+                  "field": "predicate_class"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "example-destructive",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": [
+        "cloud.resource.delete"
+      ],
+      "param_bounds": {
+        "risk_class": {
+          "pattern": "^(?!destructive$).+"
+        }
+      },
+      "description": "Record deleting example resources."
+    },
+    {
+      "id": "example-deploy",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": [
+        "deploy.release"
+      ],
+      "param_bounds": {
+        "environment": {
+          "pattern": "^(?!(?:production|unknown)$).+"
+        }
+      }
+    }
+  ],
+  "vectors": [
+    {
+      "id": "bucket-delete",
+      "shell": {
+        "command": "examplectl bucket delete ex://logs-prod --region eu-1 --profile prod --yes"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "storage",
+            "kind": "bucket",
+            "region": "eu-1",
+            "env": "production",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "storage",
+                "logs-prod"
+              ]
+            },
+            "auto_approve": true,
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bucket-delete-env-prefix",
+      "shell": {
+        "command": "EXAMPLE_PROFILE=staging EXAMPLE_REGION=us-2 examplectl bucket rm ex://b"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "storage",
+            "kind": "bucket",
+            "region": "us-2",
+            "env": "staging",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "storage",
+                "b"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bucket-delete-variable-name",
+      "shell": {
+        "command": "examplectl bucket delete ex://$BUCKET"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "storage",
+            "kind": "bucket",
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "strip-word",
+      "shell": {
+        "command": "examplectl beta bucket delete ex://x"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "storage",
+            "kind": "bucket",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "storage",
+                "x"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "launcher",
+      "shell": {
+        "command": "npx -y examplectl@2 bucket delete ex://x"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "storage",
+            "kind": "bucket",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "storage",
+                "x"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "and-chain",
+      "shell": {
+        "command": "cd infra && examplectl bucket delete ex://x --force && echo done"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "storage",
+            "kind": "bucket",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "storage",
+                "x"
+              ]
+            },
+            "auto_approve": true,
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bash-c",
+      "shell": {
+        "command": "bash -c 'examplectl bucket delete ex://x'"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "storage",
+            "kind": "bucket",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "storage",
+                "x"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "help-option",
+      "shell": {
+        "command": "examplectl bucket delete ex://x --help"
+      },
+      "expect": []
+    },
+    {
+      "id": "help-word",
+      "shell": {
+        "command": "examplectl help bucket delete"
+      },
+      "expect": []
+    },
+    {
+      "id": "dry-run",
+      "shell": {
+        "command": "examplectl bucket delete ex://x --dry-run"
+      },
+      "expect": []
+    },
+    {
+      "id": "listing",
+      "shell": {
+        "command": "examplectl list buckets --weird"
+      },
+      "expect": []
+    },
+    {
+      "id": "unknown-command",
+      "shell": {
+        "command": "examplectl bucket show ex://x"
+      },
+      "expect": []
+    },
+    {
+      "id": "verb-kind-delete",
+      "shell": {
+        "command": "examplectl delete-volume vol-1"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "compute",
+            "kind": "volume",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "compute",
+                "vol-1"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "verb-kind-create",
+      "shell": {
+        "command": "examplectl create-volume"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.create",
+          "params": {
+            "provider": "unknown",
+            "service": "compute",
+            "kind": "volume",
+            "risk_class": "sensitive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "skip-group",
+      "shell": {
+        "command": "examplectl net fw rm web"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "net",
+            "kind": "firewall",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "net/fw",
+                "web"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "deploy-prod",
+      "shell": {
+        "command": "examplectl deploy --env prod -n web"
+      },
+      "expect": [
+        {
+          "action_type": "deploy.release",
+          "params": {
+            "provider": "unknown",
+            "environment": "production",
+            "target_digest": {
+              "digest_of": [
+                "example",
+                "app",
+                "web"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "deploy-staging-attached",
+      "shell": {
+        "command": "examplectl deploy -estaging"
+      },
+      "expect": [
+        {
+          "action_type": "deploy.release",
+          "params": {
+            "provider": "unknown",
+            "environment": "staging",
+            "risk_class": "sensitive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "deploy-unknown",
+      "shell": {
+        "command": "examplectl deploy"
+      },
+      "expect": [
+        {
+          "action_type": "deploy.release",
+          "params": {
+            "provider": "unknown",
+            "environment": "unknown",
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "secrets",
+      "shell": {
+        "command": "examplectl secret set API_KEY=abc OTHER=def notapair --env dev"
+      },
+      "expect": [
+        {
+          "action_type": "secret.write",
+          "params": {
+            "store": "example",
+            "name_digest": {
+              "digest_of": [
+                "example",
+                "dev",
+                "API_KEY"
+              ]
+            },
+            "env": "development",
+            "risk_class": "sensitive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        },
+        {
+          "action_type": "secret.write",
+          "params": {
+            "store": "example",
+            "name_digest": {
+              "digest_of": [
+                "example",
+                "dev",
+                "OTHER"
+              ]
+            },
+            "env": "development",
+            "risk_class": "sensitive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "migrate-up",
+      "shell": {
+        "command": "examplectl db migrate APP_ENV=production"
+      },
+      "expect": [
+        {
+          "action_type": "db.migrate",
+          "params": {
+            "provider": "example",
+            "direction": "up",
+            "env": "production",
+            "risk_class": "sensitive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "migrate-rollback-local",
+      "shell": {
+        "command": "examplectl db rollback --local"
+      },
+      "expect": [
+        {
+          "action_type": "db.migrate",
+          "params": {
+            "provider": "example",
+            "direction": "down",
+            "env": "development",
+            "risk_class": "sensitive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "migrate-reset",
+      "shell": {
+        "command": "examplectl db reset"
+      },
+      "expect": [
+        {
+          "action_type": "db.migrate",
+          "params": {
+            "provider": "example",
+            "direction": "reset",
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sql-delete-all",
+      "shell": {
+        "command": "examplectl db exec --remote --command 'DELETE FROM users'"
+      },
+      "expect": [
+        {
+          "action_type": "db.exec",
+          "params": {
+            "provider": "example",
+            "verb": "delete_all",
+            "risk": "destructive",
+            "predicate_class": "all",
+            "scope": "remote",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sql-bounded",
+      "shell": {
+        "command": "examplectl db exec --command \"UPDATE t SET a = 1 WHERE id = 3\""
+      },
+      "expect": [
+        {
+          "action_type": "db.exec",
+          "params": {
+            "provider": "example",
+            "verb": "update",
+            "risk": "ordinary",
+            "predicate_class": "bounded",
+            "scope": "unknown",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sql-missing",
+      "shell": {
+        "command": "examplectl db exec --file x.sql"
+      },
+      "expect": []
+    },
+    {
+      "id": "api-post",
+      "shell": {
+        "command": "examplectl api https://API.example.test/v1/items -X post"
+      },
+      "expect": [
+        {
+          "action_type": "net.fetch",
+          "params": {
+            "host": "api.example.test",
+            "method": "POST",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "api-get",
+      "shell": {
+        "command": "examplectl api /v1/items"
+      },
+      "expect": []
+    },
+    {
+      "id": "iam-grant",
+      "shell": {
+        "command": "examplectl iam grant --to bob alice"
+      },
+      "expect": [
+        {
+          "action_type": "iam.change",
+          "params": {
+            "provider": "unknown",
+            "kind": "role",
+            "name_digest": {
+              "digest_of": [
+                "example",
+                "iam",
+                "alice",
+                "bob"
+              ]
+            },
+            "risk_class": "identity",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "iam-too-many",
+      "shell": {
+        "command": "examplectl iam grant admin extra"
+      },
+      "expect": []
+    },
+    {
+      "id": "fallback-unknown-option",
+      "shell": {
+        "command": "examplectl --weird-option x bucket delete ex://x"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fallback-deploy",
+      "shell": {
+        "command": "examplectl --weird deploy"
+      },
+      "expect": [
+        {
+          "action_type": "deploy.release",
+          "params": {
+            "provider": "unknown",
+            "environment": "unknown",
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "powershell",
+      "shell": {
+        "command": "examplectl bucket delete ex://x --profile prod",
+        "dialect": "powershell"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "storage",
+            "kind": "bucket",
+            "env": "production",
+            "resource_digest": {
+              "digest_of": [
+                "example",
+                "storage",
+                "x"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "examplectl",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "single-dash-destroy",
+      "shell": {
+        "command": "exampledeploy destroy --auto-approve -target=a -target b -chdir=envs/prod"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "exampledeploy",
+            "env": "production",
+            "auto_approve": true,
+            "targeted": true,
+            "resource_digest": {
+              "digest_of": [
+                "exampledeploy",
+                "a",
+                "b"
+              ]
+            },
+            "risk_class": "destructive",
+            "via": "exampledeploy",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "single-dash-apply-plan",
+      "shell": {
+        "command": "exampledeploy apply plan.out -var-file=dev.vars"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.modify",
+          "params": {
+            "provider": "unknown",
+            "service": "exampledeploy",
+            "env": "development",
+            "auto_approve": false,
+            "risk_class": "destructive",
+            "saved_plan": true,
+            "via": "exampledeploy",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "stop-at-unknown",
+      "shell": {
+        "command": "exampledeploy destroy -lock=false"
+      },
+      "expect": [
+        {
+          "action_type": "cloud.resource.delete",
+          "params": {
+            "provider": "unknown",
+            "service": "exampledeploy",
+            "risk_class": "destructive",
+            "via": "exampledeploy",
+            "derived_from": "shell.exec"
+          }
+        }
+      ]
+    },
+    {
+      "id": "no-launcher",
+      "shell": {
+        "command": "npx exampledeploy destroy"
+      },
+      "expect": []
+    },
+    {
+      "id": "tracker-create",
+      "mcp": {
+        "server": "my-tracker",
+        "tool": "create_item",
+        "args": {
+          "project": "OPS",
+          "title": "hello"
+        }
+      },
+      "expect": [
+        {
+          "action_type": "work.item.create",
+          "params": {
+            "provider": "unknown",
+            "project_digest": {
+              "digest_of": [
+                "exampletracker",
+                "my-tracker",
+                "OPS"
+              ]
+            },
+            "risk_class": "routine",
+            "via": "exampletracker",
+            "derived_from": "mcp.tool.call"
+          }
+        }
+      ]
+    },
+    {
+      "id": "tracker-hint",
+      "mcp": {
+        "server": "work",
+        "tool": "update_item",
+        "args": {},
+        "hint": "npx exampletracker-server"
+      },
+      "expect": [
+        {
+          "action_type": "work.item.update",
+          "params": {
+            "provider": "unknown",
+            "risk_class": "routine",
+            "via": "exampletracker",
+            "derived_from": "mcp.tool.call"
+          }
+        }
+      ]
+    },
+    {
+      "id": "tracker-other-tool",
+      "mcp": {
+        "server": "exampletracker",
+        "tool": "search",
+        "args": {
+          "q": "x"
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "fs-write",
+      "mcp": {
+        "server": "examplefs",
+        "tool": "write",
+        "args": {
+          "path": "src/a.ts",
+          "content": "never read"
+        }
+      },
+      "expect": [
+        {
+          "action_type": "file.write",
+          "params": {
+            "path": "src/a.ts",
+            "via": "examplefs",
+            "derived_from": "mcp.tool.call"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fs-write-no-path",
+      "mcp": {
+        "server": "examplefs",
+        "tool": "write",
+        "args": {
+          "content": "x"
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "fs-write-many",
+      "mcp": {
+        "server": "examplefs",
+        "tool": "write_many",
+        "args": {
+          "files": [
+            {
+              "path": "a"
+            },
+            {
+              "path": "b"
+            },
+            {
+              "other": 1
+            }
+          ]
+        }
+      },
+      "expect": [
+        {
+          "action_type": "file.write",
+          "params": {
+            "path": "a",
+            "via": "examplefs",
+            "derived_from": "mcp.tool.call"
+          }
+        },
+        {
+          "action_type": "file.write",
+          "params": {
+            "path": "b",
+            "via": "examplefs",
+            "derived_from": "mcp.tool.call"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fs-read-many",
+      "mcp": {
+        "server": "examplefs",
+        "tool": "read_many",
+        "args": {
+          "paths": [
+            "x",
+            3,
+            "y"
+          ]
+        }
+      },
+      "expect": [
+        {
+          "action_type": "file.read",
+          "params": {
+            "path": "x",
+            "via": "examplefs",
+            "derived_from": "mcp.tool.call"
+          }
+        },
+        {
+          "action_type": "file.read",
+          "params": {
+            "path": "y",
+            "via": "examplefs",
+            "derived_from": "mcp.tool.call"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fs-fetch",
+      "mcp": {
+        "server": "examplefs",
+        "tool": "fetch_url",
+        "args": {
+          "url": "https://Docs.Example.test/a?b=c"
+        }
+      },
+      "expect": [
+        {
+          "action_type": "net.fetch",
+          "params": {
+            "host": "docs.example.test",
+            "method": "GET",
+            "via": "examplefs",
+            "derived_from": "mcp.tool.call"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fs-fetch-not-http",
+      "mcp": {
+        "server": "examplefs",
+        "tool": "fetch_url",
+        "args": {
+          "url": "file:///etc/passwd"
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "db-drop",
+      "mcp": {
+        "server": "exampledb",
+        "tool": "run_sql",
+        "args": {
+          "sql": "DROP TABLE users"
+        }
+      },
+      "expect": [
+        {
+          "action_type": "db.exec",
+          "params": {
+            "provider": "exampledb",
+            "verb": "drop",
+            "scope": "unknown",
+            "risk": "destructive",
+            "predicate_class": "not_applicable",
+            "via": "exampledb",
+            "derived_from": "mcp.tool.call"
+          }
+        }
+      ]
+    },
+    {
+      "id": "db-unreadable",
+      "mcp": {
+        "server": "exampledb",
+        "tool": "run_sql",
+        "args": {
+          "query": 7
+        }
+      },
+      "expect": [
+        {
+          "action_type": "db.exec",
+          "params": {
+            "provider": "exampledb",
+            "verb": "unknown",
+            "scope": "unknown",
+            "risk": "unknown",
+            "via": "exampledb",
+            "derived_from": "mcp.tool.call"
+          }
+        }
+      ]
+    },
+    {
+      "id": "unknown-server",
+      "mcp": {
+        "server": "something",
+        "tool": "run_sql",
+        "args": {
+          "sql": "DROP TABLE x"
+        }
+      },
+      "expect": []
+    }
+  ],
+  "signature": {
+    "alg": "Ed25519",
+    "key_id": "pack-test-vectors",
+    "value": "rUvlKVEsRGwQOyVHqLCrJdqnVuwQwsa4vUShEZ1ZC/n2VdoIHCP7geCVIbRLscce50qwKabNuJxZ/QUYlqrBCw=="
+  }
+}
