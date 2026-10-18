@@ -381,9 +381,20 @@ key's validity window. Otherwise the pack is not used, and only the open detecti
 apply: a missing, damaged, unsigned or expired pack never allows anything, it only stops adding actions. No network
 is needed to use a cached pack.
 
+**Delivery from a workspace.** A computer connected to Scopebond Cloud asks for its rules every few minutes; the
+answer (a rules document, or the "no rules for this computer" answer) may name the packs it should hold, as a list of
+`{ id, version, sha256 }` signed with the rules (`packs_digest`, `packs_signature`). When the list's signature verifies,
+the hook fetches each pack it does not already hold from `GET /v1/packs/<id>@<version>` with the computer's own
+credential, uses it only when its bytes match the listed `sha256` and it passes every check above (format, signature,
+its own vectors), and writes the index with exactly the listed packs: an empty list leaves none. A pack that cannot be
+fetched or checked leaves the version already held, and the cache keeps the time of its last complete check-in. A list
+that does not verify, or an answer that names no list, changes nothing. The hook says it reads lists with the `packs`
+capability on its rules check.
+
 **Precedence, for now.** The readers built into this release (the tables above) and the packs run side by side. For
 each command and each MCP call, when the built-in readers derive any action, those are used and the packs' are not;
-the packs' are used only when the built-in readers derive none. Among packs, the first by id that derives anything
+the packs' are used only when the built-in readers derive none (`setBuiltinReaders(false)` turns the built-in readers off,
+for a test that checks a set of packs alone derives the same). Among packs, the first by id that derives anything
 wins.
 
 **`packs`.** `scopebond packs` (or `packs list --json`) shows the packs in force, until when, and why any other is

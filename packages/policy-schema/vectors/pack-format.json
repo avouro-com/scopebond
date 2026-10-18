@@ -36,6 +36,19 @@
     { "name": "a vector with a shell command and an MCP call", "set": ["vectors", 0, "mcp"], "value": { "server": "s", "tool": "t", "args": {} }, "valid": false },
     { "name": "an expected value that is not a digest", "set": ["vectors", 0, "expect", 0, "params", "region"], "value": { "hash": "x" }, "valid": false },
     { "name": "no grammar and no profile", "set": ["grammars"], "value": [], "also": [{ "set": ["profiles"], "value": [] }, { "set": ["vectors"], "value": [{ "id": "nothing", "shell": { "command": "true" }, "expect": [] }] }], "valid": false, "schema": true },
-    { "name": "nesting deeper than the limit", "set": ["grammars", 0, "commands", 1, "emit", 0, "params", "provider"], "value": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "const": "x" } } } } } } } } } } } } }, "valid": false, "schema": true }
+    { "name": "nesting deeper than the limit", "set": ["grammars", 0, "commands", 1, "emit", 0, "params", "provider"], "value": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "lower": { "const": "x" } } } } } } } } } } } } }, "valid": false, "schema": true },
+    { "name": "path_options known", "set": ["grammars", 0, "path_options"], "value": "known", "valid": true },
+    { "name": "path_options none", "set": ["grammars", 0, "path_options"], "value": "none", "valid": true },
+    { "name": "path_options is known or none", "set": ["grammars", 0, "path_options"], "value": "any", "valid": false },
+    { "name": "strict_unknown is a boolean", "set": ["grammars", 0, "strict_unknown"], "value": true, "valid": true },
+    { "name": "strict_unknown is not a string", "set": ["grammars", 0, "strict_unknown"], "value": "yes", "valid": false },
+    { "name": "fallback_on_any_option is a boolean", "set": ["grammars", 0, "fallback_on_any_option"], "value": true, "valid": true },
+    { "name": "fallback_only_unread is a boolean", "set": ["grammars", 0, "fallback_only_unread"], "value": 1, "valid": false },
+    { "name": "double_dash positionals", "set": ["grammars", 0, "double_dash"], "value": "positionals", "valid": true },
+    { "name": "double_dash is end or positionals", "set": ["grammars", 0, "double_dash"], "value": "keep", "valid": false },
+    { "name": "unknown_option is a condition", "set": ["grammars", 0, "commands", 1, "when"], "value": { "unknown_option": true }, "valid": true },
+    { "name": "unknown_option is only true", "set": ["grammars", 0, "commands", 1, "when"], "value": { "unknown_option": false }, "valid": false },
+    { "name": "positionals past an unknown option", "set": ["grammars", 0, "commands", 1, "emit", 0, "params", "provider"], "value": { "join": { "positionals": { "from": 0, "past_unknown": true } }, "sep": ", " }, "valid": true },
+    { "name": "past_unknown is only true", "set": ["grammars", 0, "commands", 1, "emit", 0, "params", "provider"], "value": { "join": { "positionals": { "from": 0, "past_unknown": false } }, "sep": ", " }, "valid": false }
   ]
 }

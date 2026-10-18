@@ -11,16 +11,22 @@ export {
 export type { Mapped, NormalizedIntent } from "./map.js";
 export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, targetRuleClauses, policyOptsIntoTargets, TARGET_RULES, OBSERVED_TARGET_TYPES, TARGET_OPT_IN_TYPES } from "./runtime.js";
 export type { TargetRule } from "./runtime.js";
+// The shell reader every derivation starts from: a command line as the simple commands it runs.
+export { decomposeShell } from "./shell.js";
+export type { SimpleCommand } from "./shell.js";
 export { deriveTargetOperations, toolOf, envOfName, targetDigest, TARGET_TOOLS } from "./typed-targets.js";
 export type { TargetOperation, TargetProbe } from "./typed-targets.js";
 export { deriveMcpOperations, mcpProfileOf } from "./mcp-profiles.js";
 // Rule packs: the interpreter (packs.ts) and the cache of signed packs on this computer (pack-store.ts).
-export { setActivePacks, activePackRefs, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
+export { setActivePacks, activePackRefs, setBuiltinReaders, builtinReadersOn, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
 export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
 export {
   activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
 } from "./pack-store.js";
 export type { PackIndex, PackIndexEntry, LoadedPacks, PackRefusal } from "./pack-store.js";
+// Pack delivery: the signed list a workspace answer names, and the cache brought in step with it on each rules check.
+export { syncPacks, restampPacks, packRefsOf, MAX_PACK_REFS } from "./pack-sync.js";
+export type { PackSyncOptions, PackSyncResult } from "./pack-sync.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export {
   compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES, SWITCHABLE_RULES,
@@ -58,7 +64,7 @@ export {
   BLOCKED_SERVICE_KINDS, BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, BLOCKED_SERVICE_REASON, SERVICE_RULES_CAPABILITY, MAX_BLOCKED_SERVICES, MAX_BLOCKED_SERVICE_KEY,
 } from "./service-rules.js";
 export type { BlockedService, BlockedServiceKind } from "./service-rules.js";
-export { checkPolicySignature, checkToolSettingsSignature, checkGrantsSignature, checkAnswerSignature, digestGrants, carriesGrants, GRANT_FIELDS, workspaceIdOf, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload, type ToolSettingsSignatureContext } from "./policy-signature.js";
+export { checkPolicySignature, checkToolSettingsSignature, checkPacksSignature, digestPacks, checkGrantsSignature, checkAnswerSignature, digestGrants, carriesGrants, GRANT_FIELDS, workspaceIdOf, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload, type ToolSettingsSignatureContext } from "./policy-signature.js";
 export { policyKeys, policyKeyProblems, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
 export { versionedFetch, withHookVersion, HOOK_VERSION_HEADER } from "./workspace-fetch.js";
 export {

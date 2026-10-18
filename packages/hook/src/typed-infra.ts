@@ -22,6 +22,7 @@ import { isAbsolute, join } from "node:path";
 import { canonProgram, decomposeShell, type SimpleCommand } from "./shell.js";
 import { classifySql, type SqlClass } from "./sql-classify.js";
 import { scan, flagValue, type Scanned } from "./scan.js";
+import { launched } from "./launchers.js";
 import type { BindingKey } from "./observation.js";
 
 type Operation = Record<string, unknown>;
@@ -315,21 +316,12 @@ function fetchFromCommand(sc: SimpleCommand, dialect: "posix" | "powershell"): F
 /** Blanks at the start of a line, not crossing a line end (a regular-expression source). */
 const LINE_BLANKS = String.raw`[^\S\n\r\u2028\u2029]*`;
 
-/** The argument list of a `wrangler` invocation, through the usual launchers. */
+/** The argument list of a `wrangler` invocation: the program itself, or Wrangler started through a package runner, found by the
+ *  same launcher reader every other derivation uses (launchers.ts). */
 function wranglerArgv(sc: SimpleCommand): string[] | null {
-  const program = canonProgram(sc.program);
-  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, a fixed word then one repeat
-  const isWrangler = (t: string | undefined): boolean => t !== undefined && /^wrangler(?:@[^\s]+)?$/i.test(t);
-  if (program === "wrangler") return sc.argv;
-  let rest: string[];
-  if (program === "npx" || program === "bunx" || program === "pnpx") rest = sc.argv;
-  else if (program === "pnpm" || program === "yarn" || program === "bun") { const [sub, ...r] = sc.argv; if (sub !== "exec" && sub !== "dlx" && sub !== "x") return null; rest = r; }
-  else if (program === "npm") { const [sub, ...r] = sc.argv; if (sub !== "exec") return null; rest = r; }
-  else return null;
-  const at = rest.findIndex((t) => !t.startsWith("-") || t === "--");
-  if (at < 0) return null;
-  const start = rest[at] === "--" ? at + 1 : at;
-  return isWrangler(rest[start]) ? rest.slice(start + 1) : null;
+  if (canonProgram(sc.program) === "wrangler") return sc.argv;
+  const run = launched(sc);
+  return run && run.tool === "wrangler" ? run.argv : null;
 }
 
 const WR_VALUED = ["--env", "-e", "--config", "-c", "--name", "--command", "--file", "--project-name", "--branch", "--commit-hash", "--commit-message", "--compatibility-date", "--compatibility-flags",

@@ -148,18 +148,24 @@ unknown field or operator as a whole.
 - **Grammars** read one tool's command line: `programs` (canonical names; also read
   through package runners such as `npx` or `uv run` unless `launchers` is false), the
   options it knows (`options.valued`, `options.flags`), what an unknown option does
-  (`unknown_options`: `uncertain`, positionals after it are not trusted, or `stop`), help
-  and dry-run forms that derive nothing (`skip`), and `commands`. A command matches a
+  (`unknown_options`: `uncertain`, positionals after it are not trusted, or `stop`; with
+  `strict_unknown`, an unknown `--name=value` ends the trusted positionals too), which options
+  may stand before a command's path (`path_options`: `known` ones only, or `none`), whether
+  the words after `--` are positionals (`double_dash`), help and dry-run forms that derive
+  nothing (`skip`), and `commands`. A command matches a
   `path` of subcommand words (a literal word, `any`, `not`, `pattern`, `optional`, or
   `skip` up to n words, each optionally bound to a `var`), an optional `when`
   condition and `max_positionals`, and `emit`s taxonomy actions. The first command that
   matches decides (an empty `emit` derives nothing). When nothing is derived and an
   option the grammar does not know was seen, the first `fallback` whose condition holds
-  derives its actions with no names, so an option before the subcommand cannot hide it.
+  derives its actions with no names, so an option before the subcommand cannot hide it
+  (`fallback_on_any_option`: any option lets it run; `fallback_only_unread`: only when no
+  command's path matched).
 - **Profiles** say which MCP servers (by the words of the configured server name, or of
   its URL or launch command) and which tools perform which actions.
 - **Parameters** are expressions with one operator each. Sources: `const`, `flag`,
-  `flags`, `present`, `positional`, `positionals`, `any_positional`, `word_after`,
+  `flags`, `present`, `positional`, `positionals` (`past_unknown` reads on past an unknown
+  option), `any_positional`, `word_after`,
   `words_after`, `assign` (the command's own `NAME=value` prefix), `arg_assign`, `var`,
   `item` (in `for_each`), `tool`; local facts an engine may not have (`env_var`,
   `file_sha256`, `dir_sha256`, `file_text`, `dir_sql`, `config_value`); MCP arguments
@@ -168,7 +174,7 @@ unknown field or operator as a whole.
   clear), `host_of`, `match`, `replace`, `lower`, `upper`, `map`, `first`, `concat`,
   `join`, `sorted`, `count`, `split`, `scrub`, `sql` (the open SQL classifier's verb,
   predicate class or risk, never the text) and `if`. Conditions: `has`, `word`,
-  `defined`, `eq`, `in`, `matches`, `all`, `any`, `not`, `count`. A value that cannot be
+  `defined`, `eq`, `in`, `matches`, `all`, `any`, `not`, `count`, `unknown_option`. A value that cannot be
   read is left out, never guessed. The engine adds `via` and `derived_from` to every
   action; a pack cannot set them, and cannot emit `shell.exec` or `mcp.tool.call`.
 - **Rules** are `action_allowlist` clauses of the policy language, exactly as

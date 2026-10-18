@@ -663,6 +663,9 @@
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 64
+                },
+                "past_unknown": {
+                  "const": true
                 }
               }
             }
@@ -1064,6 +1067,18 @@
                 "minLength": 1,
                 "maxLength": 200
               }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unknown_option"
+          ],
+          "properties": {
+            "unknown_option": {
+              "const": true
             }
           }
         }
@@ -1946,6 +1961,27 @@
           "enum": [
             "uncertain",
             "stop"
+          ]
+        },
+        "strict_unknown": {
+          "type": "boolean"
+        },
+        "path_options": {
+          "enum": [
+            "known",
+            "none"
+          ]
+        },
+        "fallback_on_any_option": {
+          "type": "boolean"
+        },
+        "fallback_only_unread": {
+          "type": "boolean"
+        },
+        "double_dash": {
+          "enum": [
+            "end",
+            "positionals"
           ]
         },
         "single_dash_long": {
