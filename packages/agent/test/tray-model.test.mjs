@@ -184,6 +184,14 @@ test("an agent the workspace's plan paused says so, with Open workspace as the f
   assert.equal(m.fix.id, "open_workspace");
 });
 
+test("an agent the workspace does not license says so in one plain line, with Open workspace as the fix", () => {
+  const m = trayModel(input(status({ pending: 4, oldest_pending_age_s: 3 * 60 * 60, last_error: "ingest failed: HTTP 402 (not_licensed): This agent is not licensed." }), { awakeSince: NOW - 3 * 60 * MIN }));
+  assert.equal(m.state, "attention");
+  assert.match(m.headline, /^Not licensed: 4 records waiting$/);
+  assert.match(m.hint, /starter protections stay on/);
+  assert.equal(m.fix.id, "open_workspace");
+});
+
 test("today: an edit recorded after it ran is shown apart from blocks, never added to them", () => {
   const m = trayModel(input(status(), { today: { actions: 10, blocked: 2, recorded_after: 1, allowed_by_person: 0 } }));
   assert.equal(m.rows.find((r) => r.label === "Today").value, "10 actions · 2 blocked · 1 recorded, not prevented");

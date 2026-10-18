@@ -152,6 +152,11 @@ function planPaused(error: string | null | undefined): boolean {
   return !!error && /HTTP 402 \(agent_paused\)/.test(error);
 }
 
+/** The workspace licenses fewer agents than it has, and this one holds no license (HTTP 402 not_licensed). */
+function notLicensed(error: string | null | undefined): boolean {
+  return !!error && /HTTP 402 \(not_licensed\)/.test(error);
+}
+
 /** The HTTP status of a refusal the workspace answered (not "unreachable"), or null. */
 function refusedStatus(error: string | null | undefined): number | null {
   const m = error ? /HTTP (\d{3})/.exec(error) : null;
@@ -230,6 +235,11 @@ export function trayModel(input: TrayInput): TrayModel {
     hint = liftsTo !== null
       ? `Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows, or sooner if a workspace owner moves to a plan that allows ${liftsTo.toLocaleString("en-US")} records a month.`
       : "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows.";
+    fix = ACTIONS.open_workspace;
+  } else if (pending > 0 && notLicensed(d.last_error) && health.fix?.route !== "/repair") {
+    // Not a delivery problem to retry: this agent holds no license. Sending again changes nothing; an owner decides.
+    state = "attention"; headline = `Not licensed: ${pending} record${pending === 1 ? "" : "s"} waiting`;
+    hint = "This agent is not covered by your workspace's licenses. The starter protections stay on, and this computer keeps its records; they send once an owner adds licenses in Settings, Billing.";
     fix = ACTIONS.open_workspace;
   } else if (pending > 0 && planPaused(d.last_error) && health.fix?.route !== "/repair") {
     // Not a delivery problem to retry: the plan paused this agent. Sending again changes nothing; an owner decides.
