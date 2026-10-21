@@ -1,7 +1,9 @@
 // For reviewing the panel in a browser only: a stand-in for the tray's `window.__TAURI__.core.invoke`, answering
 // `panel_state` with made-up scenes. Never built into the program (build.rs copies only ui/panel.css and ui/panel.js).
 // Run `node packages/tray/dev/preview.mjs` and open the page it prints; one scene alone is dist/panel-frame.html#scene=protected
-// (add &view=settings, &tab=allowed or &open=<action id>).
+// (add &view=settings, &tab=allowed or &open=<action id>; the lists: blocks=n, outcomes=1, groups=1 with expand=1 or
+// details=<action id>, older=1; the form: choice=, why=, reason=, ask=1, quiet=1, submit=1, required=1, mode=approval|automatic|
+// admin30|legacy|final; Settings: packs=1, notify=off).
 "use strict";
 
 (function () {
@@ -233,7 +235,7 @@
     panel_action: ({ id }) => { say(id === "send_now" ? "Sent 312 records; nothing is waiting" : id === "open_workspace" ? "Opened this computer's page in your workspace" : "Checked just now: all good"); if (id === "send_now") model = scenes.protected(); return true; },
     panel_command: ({ id }) => {
       if (id.startsWith("notifications:")) notifications = id.slice(14);
-      else say({ get_help: "Support report copied (no keys, records or commands) · the Help page is opening", copy_diagnostics: "Diagnostics copied (no keys or credentials)", open_logs: "(The logs folder would open.)", about: "(About Scopebond would open.)", hide_icon: "(The icon would hide.)", autostart: "(Start with Windows would change.)", start_agent: "Starting the Scopebond Agent…" }[id] || "Done");
+      else say({ get_help: "Support report copied (no keys, records or commands) · the Help page is opening", about: "(About Scopebond would open.)", hide_icon: "(The icon would hide.)", autostart: "(Start with Windows would change.)", start_agent: "Starting the Scopebond Agent…" }[id] || "Done");
       if (id === "start_agent") model = scenes.protected();
       return true;
     },

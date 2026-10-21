@@ -139,7 +139,7 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
         _ => {}
     }
     if let Some(update) = offered.iter().find(|a| a.id == UPDATE_NOW && fix.is_none_or(|f| f.id != a.id)) {
-        out.push(action(update));
+        out.push(action(*update));
     }
     out.push(Entry::Separator);
     if let Some(open) = offered.iter().find(|a| a.id == OPEN_WORKSPACE && fix.is_none_or(|f| f.id != a.id)) {
