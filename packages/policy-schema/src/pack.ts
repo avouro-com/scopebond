@@ -24,6 +24,7 @@
 
 import { canonical } from "./canonical.js";
 import { getActionType } from "./registry.js";
+import { allowPatternErrors } from "./allow-patterns.js";
 
 export const PACK_FORMAT = "scopebond:pack/v1";
 /** The pack engine level this release implements (see "Engine levels" above). */
@@ -237,40 +238,8 @@ const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const NESTED_REPEAT = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)[+*{]/;
 
 // ---- a rule's allow patterns ----------------------------------------------------------------------------------------------
-// The recipes a rule carries for pattern allowances ("Similar commands in this project"). The shape and its check belong to the
-// pattern allowances module (`allow-patterns.ts`, `allowPatternErrors`); until that module is in this tree, the same check is
-// kept here, word for word, and is replaced by an import of it.
-
-const ALLOW_PATTERN_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const ALLOW_PATTERN_PARAM = /^[a-z_][a-z0-9_]{0,63}$/;
-/** Control characters (and line breaks), and the bidirectional and invisible formatting characters: never in a title. */
-const hasHiddenCharacter = (v: string): boolean => [...v].some((ch) => {
-  const c = ch.codePointAt(0)!;
-  return c < 0x20 || c === 0x7f || (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2060 && c <= 0x2069) || c === 0xfeff || c === 0x2028 || c === 0x2029;
-});
-const plainText = (v: unknown, max: number): v is string => typeof v === "string" && v.length >= 1 && v.length <= max && v.trim() === v && !hasHiddenCharacter(v);
-
-/** What is wrong with a rule's `allow_patterns`, one sentence each (none when it is well formed). */
-export function allowPatternErrors(v: unknown, where: string): string[] {
-  if (!Array.isArray(v)) return [`${where} must be a list`];
-  if (v.length === 0 || v.length > PACK_RULE_LIMITS.allowPatterns) return [`${where} must hold 1 to ${PACK_RULE_LIMITS.allowPatterns} recipes`];
-  const errors: string[] = [];
-  const ids = new Set<string>();
-  v.forEach((p: unknown, i) => {
-    const at = `${where}[${i}]`;
-    if (typeof p !== "object" || p === null || Array.isArray(p)) { errors.push(`${at} must be an object`); return; }
-    const r = p as Record<string, unknown>;
-    const unknown = Object.keys(r).filter((k) => !["id", "title", "param", "kind"].includes(k));
-    if (unknown.length) errors.push(`${at} has unknown field ${unknown[0]}`);
-    if (typeof r.id !== "string" || !ALLOW_PATTERN_ID.test(r.id)) errors.push(`${at}.id must be a lower-case id`);
-    else if (ids.has(r.id)) errors.push(`${at}.id repeats ${r.id}`);
-    else ids.add(r.id);
-    if (!plainText(r.title, PACK_RULE_LIMITS.title)) errors.push(`${at}.title must be 1 to ${PACK_RULE_LIMITS.title} characters of plain text`);
-    if (typeof r.param !== "string" || !ALLOW_PATTERN_PARAM.test(r.param)) errors.push(`${at}.param must name a parameter`);
-    if (typeof r.kind !== "string" || !(PACK_ALLOW_PATTERN_KINDS as readonly string[]).includes(r.kind)) errors.push(`${at}.kind must be one of ${PACK_ALLOW_PATTERN_KINDS.join(", ")}`);
-  });
-  return errors;
-}
+// The recipes a rule carries for pattern allowances ("Similar commands in this project"): their shape and check are the pattern
+// allowances module's (allow-patterns.ts).
 
 type Ctx = "shell" | "mcp";
 
