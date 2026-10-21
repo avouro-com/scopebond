@@ -19,9 +19,9 @@ const lastsFor = (a) => Date.parse(a.expires_at) - Date.parse(a.created_at);
 test("the form's new choices are read, and say how long", () => {
   assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "hour", reason: REASON }), { action_id: "act-1", choice: "hour", reason: REASON });
   assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "tomorrow", reason: REASON }), { action_id: "act-1", choice: "tomorrow", reason: REASON });
-  assert.equal(answerText("allowed", "hour", 30, "Acme", true), "Allowed for 1 hour · Recorded and sent to Acme");
-  assert.equal(answerText("allowed", "tomorrow", 30, "Acme", true), "Allowed until tomorrow · Recorded and sent to Acme");
-  assert.equal(answerText("allowed", "always", 30, "Acme", true), "Always allowed on this computer for 30 days · Recorded and sent to Acme");
+  assert.equal(answerText("allowed", "hour", 30, "Acme", true), "Allowed for 1 hour · recorded in Acme");
+  assert.equal(answerText("allowed", "tomorrow", 30, "Acme", true), "Allowed until tomorrow · recorded in Acme");
+  assert.equal(answerText("allowed", "always", 30, "Acme", true), "Allowed for 30 days · recorded in Acme");
   const now = Date.UTC(2026, 9, 14, 20, 52);
   assert.match(answerText("allowed", "hour", 30, "Acme", true, true, now), /^Unblocked until \d{1,2}:\d\d [AP]M · an admin will review it$/);
 });
@@ -39,7 +39,7 @@ test("the workspace's lengths: offered in the tray, applied for 1 hour and until
     assert.equal((await answer(dir, { action_id: a.id, choice: "fifteen", reason: REASON })).outcome, "not_offered");
     const hour = await answer(dir, { action_id: a.id, choice: "hour", reason: REASON });
     assert.equal(hour.outcome, "allowed");
-    assert.equal(hour.text, "Allowed for 1 hour · Recorded on this computer");
+    assert.match(hour.text, /^Allowed for 1 hour: .+ · recorded on this computer$/);
     assert.ok(Math.abs(lastsFor(readAllowances(dir).at(-1)) - HOUR) < 1000);
     const tomorrow = await answer(dir, { action_id: b.id, choice: "tomorrow", reason: REASON });
     assert.equal(tomorrow.outcome, "allowed");

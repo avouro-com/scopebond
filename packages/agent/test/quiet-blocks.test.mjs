@@ -19,7 +19,7 @@ const answer = (dir, body) => callAgent(dir, "POST", "/blocked/answer", body, 10
 
 test("the form's quiet answer is read strictly and says what happened", () => {
   assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "quiet" }), { action_id: "act-1", choice: "quiet", reason: "" });
-  assert.equal(answerText("quiet", "quiet", 30, "Acme", true), "Kept blocked for 30 days · you won't be asked about it again");
+  assert.equal(answerText("quiet", "quiet", 30, "Acme", true), "Kept blocked without asking you · undo it under Allowed");
 });
 
 test("keep blocking from the tray: no reason needed, listed as kept blocked, and Undo ends it", async () => {
@@ -29,7 +29,7 @@ test("keep blocking from the tray: no reason needed, listed as kept blocked, and
   const service = await serviceFor(dir);
   try {
     const done = await answer(dir, { action_id: id, choice: "quiet" });
-    assert.deepEqual(done, { outcome: "quiet", choice: "quiet", text: "Kept blocked for 30 days · you won't be asked about it again" });
+    assert.deepEqual(done, { outcome: "quiet", choice: "quiet", text: "Kept blocked without asking you: rm -rf ../build (in /repo) · undo it under Allowed" });
     assert.equal(readBlocked(dir).at(-1).acted, "quiet");
     const quiet = readAllowances(dir).find((a) => a.kind === "quiet");
     assert.ok(quiet);

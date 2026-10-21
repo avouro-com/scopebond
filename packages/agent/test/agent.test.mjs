@@ -371,7 +371,7 @@ test("from the tray, an earlier block is allowed or sent to an admin only throug
     assert.equal((await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000)).outcome, "declined");
     const allowed = await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000);
     assert.deepEqual(allowed, { outcome: "allowed", text: "Allowed. Run it again, or let the coding agent retry." });
-    assert.deepEqual(shown[1].offers, { allow: true, always: false, ask: true, fifteen: true });
+    assert.deepEqual(shown[1].offers, { allow: true, always: false, ask: true, fifteen: true, hour: false, tomorrow: false });
     assert.ok(windowsScript(shown[1]).includes(Buffer.from("Allow for 15 minutes", "utf8").toString("base64")), "the tray's window offers 15 minutes too");
     assert.equal(shown[1].summary, "rm -rf build");
     assert.equal(readAllowances(dir).filter((a) => a.once).length, 1);
