@@ -19,4 +19,6 @@ A rule pack's grammar can now read local facts (an environment variable, a file'
 
 Each rules check now reports the packs on the computer in `x-scopebond-packs` (`id@version,…;rejected=id@version:reason,…;engine=2`): the packs in force, the ones not taken and why, and the engine level.
 
+The hook now reads and pins a next policy-signing key from a document the current key signs (`scopebond:policy-next-key/v1`, sent as `policy_next_key` on a rules answer), so the key can be rotated without a release, and a computer its workspace manages enforces signed rules when that document says `managed_signature_mode: "enforce"`.
+
 A rule id the hook does not know in a workspace document, or a malformed `pack_rules` entry, is now skipped and reported (`skipped_rules` on the rules confirmation and in `managed-meta.json`) instead of refusing the whole document.

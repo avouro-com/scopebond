@@ -5,9 +5,10 @@
 // that is not listed, or that is outside its validity window, is refused like a bad signature.
 //
 // This release pins Scopebond Cloud's policy signing key. It still runs in `dual` mode by default (signed documents are
-// verified against the pinned keys, unsigned ones are accepted and recorded); `enforce` stays opt-in. Rotation is a release
-// too: the next key is added ahead of time, with a `not_before` in the future, so computers already have it when the
-// workspace starts signing with it; the old key is removed once its `not_after` has passed.
+// verified against the pinned keys, unsigned ones are accepted and recorded); `enforce` stays opt-in, except where a pinned
+// next-key document says computers a workspace manages default to it. Rotation needs no release: the workspace hands each
+// computer the next key in a document signed by the current one (policy-next-key.ts), well before the current key's
+// `not_after`, and this computer trusts it from then on. A release may still add the next key here ahead of time.
 //
 // Scopebond Cloud names its key `pol_` followed by the first 16 hex digits of the SHA-256 of the key's SPKI DER in base64
 // (the PEM body on one line), and publishes the same entries at https://cloud.scopebond.com/.well-known/scopebond-policy-keys.json.
@@ -104,10 +105,28 @@ function readKeys(env: NodeJS.ProcessEnv): { keys: PolicyKey[]; problems: string
   return { keys, problems };
 }
 
-/** The keys this computer trusts: the pinned ones, then the valid entries of `SCOPEBOND_POLICY_KEYS_JSON`. An entry that
- *  cannot be a key (see `policyKeyProblems`) is left out. */
-export function policyKeys(env: NodeJS.ProcessEnv = process.env): PolicyKey[] {
+/** The next key a signed next-key document pinned on this computer (policy-next-key.ts puts it in force). */
+let pinnedNext: readonly PolicyKey[] = [];
+
+/** Put the next keys a checked next-key document names in force (an empty list removes them). */
+export function setPinnedNextKeys(keys: readonly PolicyKey[]): void {
+  pinnedNext = keys.filter((k) => keyProblem(k) === null);
+}
+
+/** Why an entry cannot be a trusted key, or null when it can (see `keyProblem`). */
+export const baseKeyProblem = (value: unknown): string | null => keyProblem(value);
+
+/** The keys this release trusts on its own: the pinned ones, then the valid entries of `SCOPEBOND_POLICY_KEYS_JSON`. Only these
+ *  may sign a next-key document. */
+export function basePolicyKeys(env: NodeJS.ProcessEnv = process.env): PolicyKey[] {
   return readKeys(env).keys;
+}
+
+/** The keys this computer trusts: the pinned ones, then the valid entries of `SCOPEBOND_POLICY_KEYS_JSON`, then the next key a
+ *  signed next-key document pinned here. An entry that cannot be a key (see `policyKeyProblems`) is left out. */
+export function policyKeys(env: NodeJS.ProcessEnv = process.env): PolicyKey[] {
+  const keys = readKeys(env).keys;
+  return [...keys, ...pinnedNext.filter((k) => !keys.some((t) => t.key_id === k.key_id))];
 }
 
 /** What is wrong with the configured keys, for `doctor`: the entries left out, and why. */

@@ -43,6 +43,7 @@ import { policyKeys, publicKeyFrom, type PolicyKey } from "./policy-keys.js";
 import { writeAtomic } from "./managed.js";
 import { runPackVectors, setActivePacks } from "./packs.js";
 import { activateTaxonomyExtension } from "./pack-taxonomy.js";
+import { useNextKey } from "./policy-next-key.js";
 
 export const PACKS_DIR = "packs";
 export const PACK_INDEX_FILE = "index.json";
@@ -229,6 +230,8 @@ export function writePackFlags(dir: string, flags: PackFlags): void {
  *  force first (pack-taxonomy.ts), so a pack that requires one of its action types can be read. Never throws. */
 export function loadPacks(dir: string, options: PackCheckOptions = {}): LoadedPacks {
   const problems: LoadedPacks["problems"] = [];
+  // The next policy-signing key pinned here may have signed the packs (policy-next-key.ts).
+  useNextKey(dir);
   activateTaxonomyExtension(dir, options);
   const flags = readPackFlags(dir);
   const killed = new Set(flags.killed);

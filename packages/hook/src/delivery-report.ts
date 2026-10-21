@@ -8,7 +8,8 @@ import type { CloudExporterStatus, CloudHeldStatus } from "@scopebond/gateway";
 import type { HookConnection } from "./cloud.js";
 import { ago, readDeliveryState, waitingUntil, type DeliveryState } from "./delivery-state.js";
 import { cliCommand } from "./version.js";
-import { readSignatureState, signatureMode } from "./policy-signature.js";
+import { readSignatureState } from "./policy-signature.js";
+import { signatureModeAt } from "./policy-next-key.js";
 import { readMeta } from "./managed.js";
 
 export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
@@ -178,7 +179,7 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
 function signatureLines(dir: string, connection: Pick<HookConnection, "url">, lines: string[], problems: string[]): void {
   const state = readSignatureState(dir);
   if (!state) return;
-  const mode = signatureMode(connection);
+  const mode = signatureModeAt(dir, connection);
   if (state.last === "verified") lines.push(`rules signature  verified (${mode} mode)`);
   else if (state.last === "unsigned") lines.push(`rules signature  unsigned_policy: the workspace's last rules answer was not signed; accepted (${mode} mode)`);
   else {

@@ -31,7 +31,8 @@ import { recommendedFrom } from "./client-health.js";
 import { retentionDaysFrom } from "./store-upkeep.js";
 import { evidenceDetailFrom } from "./evidence-detail.js";
 import { receiptContextFrom } from "./receipt-context.js";
-import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
+import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
+import { pinNextKey, signatureModeAt, useNextKey } from "./policy-next-key.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
 import { packsHeaderValue, restampPacks, syncPacks, PACK_ENGINE_HEADER, PACKS_HEADER } from "./pack-sync.js";
 import { packEngineLevel } from "./pack-store.js";
@@ -174,7 +175,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const fetchImpl = versionedFetch(options.fetchImpl ?? fetch, options.hookVersion);
   const now = (options.now ?? (() => new Date()))();
   const installationId = (connection as { installation_id?: string }).installation_id ?? connection.gateway_id;
-  const mode = signatureMode(connection);
+  // The next policy-signing key pinned here is trusted with the pinned ones; it may also make this computer enforce signatures.
+  useNextKey(dir);
+  const mode = signatureModeAt(dir, connection);
   const base = connection.url.replace(/\/+$/, "");
   // This computer's machine id (a hash; machine-id.ts) rides on the rules check and its confirmation.
   const auth = { authorization: `Bearer ${connection.credential}`, ...machineIdHeaders(() => machineIdFor(dir, connection.organization_id)) };
@@ -193,10 +196,12 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let receiptContext = meta.receipt_context ?? null;
   // And the rule packs the workspace names (pack-sync.ts).
   let packState = meta.packs ?? null;
+  // And what became of the last next-key document the workspace sent.
+  let nextKey = meta.next_key ?? null;
   // Every check records when it was tried; only a successful one (it clears the error: rules applied, unchanged, or the
   // workspace's own-rules answer) moves `checked_at`, so "Rules updated" is the last check that worked. A failed one keeps
   // `checked_at` and says why in `last_error`.
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch,
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, next_key: nextKey, ...patch,
     last_attempt_at: now.toISOString(), ...(patch.last_error === null ? { checked_at: now.toISOString(), checked_ok_at: now.toISOString() } : {}) });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason; skipped_rules?: string[] }): Promise<ManagedMeta["last_ack"]> => {
@@ -321,6 +326,12 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let raw: unknown;
   try { raw = await res.json(); } catch { raw = null; }
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  // The next policy-signing key, signed by the current one (policy-next-key.ts): checked on its own and pinned, whatever the
+  // rest of the answer turns out to be. It takes effect from the next check.
+  if (r.policy_next_key !== undefined) {
+    const pinned = pinNextKey(dir, r.policy_next_key, { now });
+    nextKey = { state: pinned.state, at, ...(pinned.state === "refused" ? { message: pinned.message.slice(0, 300) } : {}) };
+  }
   const etag = res.headers.get("etag");
   // "No rules for this computer" as a (signed) body: the same as a 204 once its signature is admitted.
   if (isUnmanagedAnswer(raw)) {

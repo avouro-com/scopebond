@@ -563,6 +563,8 @@ export interface ManagedMeta {
   last_error: string | null;
   /** What the document in force says that this computer reads differently (an always-on rule set to anything but Block). */
   rule_notes?: string[] | null;
+  /** The last next-key document the workspace sent (policy-next-key.ts): pinned, already pinned, or refused and why. */
+  next_key?: { state: "pinned" | "unchanged" | "refused"; at: string; message?: string } | null;
   /** The rule ids the document in force named that this version skipped (managed.ts `inspectManaged`). */
   skipped_rules?: string[] | null;
   /** When the last rules check was tried, whether it worked or not. */
