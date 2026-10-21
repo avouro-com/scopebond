@@ -69,3 +69,42 @@ test("the tray model gives every listed block an outcome; a block an admin appro
     assert.match(read.outcome_text, /Ask an admin to change the rule\.$/);
   } finally { await service.stop(); }
 });
+
+test("a block the workspace keeps quiet: listed as kept blocked, with nothing to answer and no notification", async () => {
+  const quiet = blockOutcome({ ...base, clause: "safe-shell", rule: "destructive-shell", offers: { once: true, fifteen: false, always: false, ask: true }, workspace_quiet: true });
+  assert.equal(quiet.outcome, "quiet");
+  assert.equal(quiet.outcome_text, "Kept blocked without asking you. Set by Avouro.");
+  assert.equal(quiet.copy_details, "rm -rf /data\nRule: Delete files\nRecord: a1");
+  assert.equal(blockOutcome({ ...base, workspace: null, workspace_quiet: true }).outcome_text, "Kept blocked without asking you. Set by your workspace.");
+  // A request or an allowance in force says where it stands first.
+  assert.equal(blockOutcome({ ...base, workspace_quiet: true, allowed: true }).outcome, "allowed");
+
+  const { tuneDigestOfReceipt } = await import("@scopebond/hook");
+  const dir = computer();
+  // The workspace lists the digest of `rm -rf /data/cache` as it would compute it from the record.
+  const probe = computer();
+  const { createHookRuntime, mapClaudeToolUse } = await import("@scopebond/hook");
+  const runtime = createHookRuntime({ policyPath: join(probe, "policy.json"), keyPath: join(probe, "agent.key"), attesterPath: join(probe, "attester.key"), dbPath: join(probe, "receipts.db"), cwd: "/repo" });
+  let digest;
+  try { digest = tuneDigestOfReceipt((await runtime.evaluate(mapClaudeToolUse({ cwd: "/repo", tool_name: "Bash", tool_input: { command: "rm -rf /data/cache" } }))).receipts.at(-1)); }
+  finally { runtime.close(); }
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  const fs = await import("node:fs");
+  const doc = JSON.parse(fs.readFileSync(join(dir, MANAGED_DOC_FILE), "utf8"));
+  writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ ...doc, quiet_patterns: [digest] }));
+  await blockActions(dir, [
+    { tool_name: "Read", tool_input: { file_path: "/repo/.env.production" } },
+    { tool_name: "Bash", tool_input: { command: "rm -rf /data/cache" } },
+  ], { note: { project: "checkout" } });
+  const service = await serviceFor(dir);
+  try {
+    const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
+    const [rm, read] = tray.recent_blocks;
+    assert.equal(rm.outcome, "quiet");
+    assert.equal(rm.outcome_text, "Kept blocked without asking you. Set by your workspace.");
+    assert.equal(rm.acted, "quiet", "the tray shows no notification for it");
+    assert.equal(rm.offers, null, "nothing to answer");
+    assert.equal(rm.can_act, false);
+    assert.equal(read.outcome, "workspace_rule", "another block is shown as before");
+  } finally { await service.stop(); }
+});

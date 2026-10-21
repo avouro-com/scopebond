@@ -5,7 +5,8 @@
 /** `unblock`: the person may let it through; `ask`: an admin decides; `always_on`: Scopebond's own protection, never
  *  unblocked; `workspace_rule`: a rule the workspace set with no unblocking; `safe_install`: Safe Install refused the
  *  install; `requested`: the person asked an admin (waiting, approved or declined); `allowed`: an allowance in force already
- *  covers it; `quiet`: the person chose to keep it blocked without being asked again (Undo is under Allowed). */
+ *  covers it; `quiet`: the person chose to keep it blocked without being asked again (Undo is under Allowed), or the
+ *  workspace keeps blocks like it quiet (blocked, nobody asked, no notification). */
 export type BlockOutcome = "unblock" | "ask" | "always_on" | "workspace_rule" | "safe_install" | "requested" | "allowed" | "quiet";
 
 /** The state of the person's request for a block, as the workspace last said. */
@@ -30,6 +31,8 @@ export interface OutcomeInput {
   allowed: boolean;
   /** The person chose to keep it blocked without being asked (a quiet block in force, or this block's own answer). */
   quiet?: boolean;
+  /** The workspace keeps blocks like this one quiet (the hook's block note says so): blocked, nobody asked. */
+  workspace_quiet?: boolean;
   /** The workspace's name, the coding tool's name, the action in words, the rule's name and the record's id (for Copy
    *  details). */
   workspace: string | null;
@@ -62,6 +65,7 @@ export function blockOutcome(b: OutcomeInput): OutcomeOutput {
   }
   if (b.allowed) return { outcome: "allowed", outcome_text: `Allowed: ask ${tool} to try again`, copy_details: null };
   if (b.quiet) return { outcome: "quiet", outcome_text: "Kept blocked: you won't be asked about it again. Undo it under Allowed.", copy_details: null };
+  if (b.workspace_quiet) return { outcome: "quiet", outcome_text: `Kept blocked without asking you. ${b.workspace ? `Set by ${b.workspace}` : "Set by your workspace"}.`, copy_details: copy };
   if (b.offers && (b.offers.once || b.offers.fifteen || b.offers.always || b.offers.hour || b.offers.tomorrow)) return { outcome: "unblock", outcome_text: null, copy_details: null };
   if (b.offers?.ask) return { outcome: "ask", outcome_text: null, copy_details: null };
   if (b.clause && ALWAYS_ON_CLAUSES.has(b.clause)) {
