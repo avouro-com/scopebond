@@ -270,3 +270,26 @@ test("the queue keeps its totals, records acknowledgements, and status() correct
     assert.ok(statSync(path).size > 0);
   } finally { cleanup(); }
 });
+
+test("an older file gains the index of denials from upkeep, never from opening it", () => {
+  const { dir, cleanup } = tmp();
+  try {
+    const path = join(dir, "r.db");
+    const old = new DatabaseSync(path);
+    old.exec(`CREATE TABLE receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, intent_hash TEXT NOT NULL, policy_hash TEXT NOT NULL,
+      realtime_result TEXT NOT NULL, executed INTEGER NOT NULL, timestamp TEXT NOT NULL, receipt_json TEXT NOT NULL);
+      CREATE TABLE store_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+      INSERT INTO store_metadata (key, value) VALUES ('layout', '2');
+      INSERT INTO receipts (intent_hash, policy_hash, realtime_result, executed, timestamp, receipt_json) VALUES ('h','p','deny',0,'2026-01-01T00:00:00Z','{}');`);
+    old.close();
+    const indexes = () => {
+      const db = new DatabaseSync(path);
+      try { return db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'receipts'`).all().map((r) => r.name); } finally { db.close(); }
+    };
+    const store = new SqliteReceiptStore(path);
+    assert.ok(!indexes().includes("receipts_denied"), "opening an older file (a tool call) does not build it");
+    store.maintain({ budgetMs: 5_000 });
+    store.close();
+    assert.ok(indexes().includes("receipts_denied"), "upkeep builds it");
+  } finally { cleanup(); }
+});

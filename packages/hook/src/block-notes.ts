@@ -11,7 +11,7 @@ import { revealHidden } from "./override.js";
 import { ruleOfClause } from "./rule-titles.js";
 
 export const BLOCK_NOTES_FILE = "block-notes.json";
-const KEEP = 100;
+const KEEP = 500;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface BlockNote {
@@ -26,6 +26,14 @@ export interface BlockNote {
   harness: string;
   /** The project's name: the repository's (`checkout` for `github.com/acme/checkout`), else the folder's. */
   project: string | null;
+  /** The coding agent's session, as a key that names no session (the same key the hook's other state uses); absent from an
+   *  older hook. Blocks of the same action in one session a few minutes apart are retries of one block. */
+  session?: string | null;
+  /** What blocked it, when it was not a rule's clause: Safe Install's verdict (`install`), a service the workspace blocks
+   *  (`service`) or a session budget (`budget`). Absent for a rule. */
+  kind?: "install" | "service" | "budget" | null;
+  /** Safe Install's verdict in words ("known malware", "published 2 hours ago"), for an install it refused. */
+  verdict?: string | null;
 }
 
 /** The project's name for a person: the repository's last part, else the working folder's name. Never the home folder or a
@@ -57,15 +65,39 @@ function deniedActionId(decision: { receipt?: unknown; receipts?: unknown[] }): 
 
 /** Note a blocked call (the newest 100 of the last week). Nothing for any other decision. Never throws: the receipt is the
  *  record, the note only names it for the tray. */
-export function noteBlock(dir: string, decision: { decision: string; clauseId?: string | null; receipt?: unknown; receipts?: unknown[] },
-  where: { harness: string; project: string | null }, now = Date.now()): void {
+export function noteBlock(dir: string, decision: { decision: string; clauseId?: string | null; code?: string; reason?: string; receipt?: unknown; receipts?: unknown[] },
+  where: { harness: string; project: string | null; session?: string | null }, now = Date.now()): void {
   try {
     if (decision.decision !== "deny") return;
     const id = deniedActionId(decision);
     if (!id) return;
     const clause = decision.clauseId ?? null;
-    const note: BlockNote = { id, at: new Date(now).toISOString(), clause, rule: ruleOfClause(clause), harness: where.harness, project: where.project };
+    const kind = blockKind(decision.code);
+    const note: BlockNote = {
+      id, at: new Date(now).toISOString(), clause, rule: ruleOfClause(clause), harness: where.harness, project: where.project,
+      ...(where.session ? { session: where.session } : {}),
+      ...(kind ? { kind } : {}),
+      ...(kind === "install" ? { verdict: installVerdictWords(decision.reason) } : {}),
+    };
     const notes = [...readBlockNotes(dir).filter((n) => n.id !== id), note].filter((n) => now - Date.parse(n.at) < WEEK_MS).slice(-KEEP);
     writeAtomic(join(dir, BLOCK_NOTES_FILE), `${JSON.stringify({ notes })}\n`);
   } catch { /* the tray shows the block without the rule's name */ }
 }
+
+/** What blocked a call that no rule's clause denied, from the decision's code. */
+function blockKind(code: string | undefined): BlockNote["kind"] {
+  if (code === "install_verdict") return "install";
+  if (code === "blocked_service") return "service";
+  if (code === "session_budget") return "budget";
+  return null;
+}
+
+/** Safe Install's verdict in words, from its message ("Scopebond Safe Install blocked installing left-pad 1.0.0 (npm). It is
+ *  on your workspace's list of known malware."): the first sentence after the one naming the install, at most 160
+ *  characters; null when the message has no such sentence. */
+export function installVerdictWords(message: string | null | undefined): string | null {
+  if (!message) return null;
+  const why = message.split(/\.\s+/)[1]?.replace(/\.$/, "").trim();
+  return why ? why.slice(0, 160) : null;
+}
+

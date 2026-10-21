@@ -76,7 +76,7 @@ export interface Decision {
   clauseId?: string | null;
   /** Why a deny was made, where a reason beyond the clause applies: `blocked_service` when the workspace blocks the MCP server,
    *  host, program or package the action names (service-rules.ts). */
-  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict";
+  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict" | "session_budget";
   /** The deciding receipt (the denied one, or the first allow). */
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
@@ -567,7 +567,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           if (result.receipt !== undefined) receipts.push(result.receipt);
           dispatched.push({ action: { action_type: target.intent.action_type, params: target.intent.params }, ...(result.receipt !== undefined ? { receipt: result.receipt } : {}) });
         } finally { boundaryVerdict = null; }
-        return { decision: "deny", reason: reservation.reason, receipts, dispatched };
+        return { decision: "deny", reason: reservation.reason, code: "session_budget", receipts, dispatched };
       }
       const release = (): void => { if (reservation?.allow) reservation.release(); };
       for (const m of list) {

@@ -62,7 +62,7 @@ export type {
 } from "./managed.js";
 export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked, plainAction, offersFor, allowsAny, offeredLength } from "./override.js";
 export { ruleTitle, ruleName, blockTitle, GENERIC_RULE_TITLE } from "./rule-titles.js";
-export { noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
+export { installVerdictWords, noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
 export type { BlockNote } from "./block-notes.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES } from "./policy-sync.js";
@@ -150,7 +150,7 @@ export { sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, readSessionB
 export type { SessionBudget, SessionBudgetLimit, SessionBudgetGuard, BudgetReservation, BudgetIntent } from "./session-budgets.js";
 export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requests.js";
 export type { AdminRequest } from "./requests.js";
-export { localActivity } from "./local-activity.js";
+export { foldRetries, localActivity, RECENT_BLOCKS_LIMIT, RETRY_WINDOW_MS } from "./local-activity.js";
 export { noteUnresolvableHooks, HOOK_OUTAGE_FILE } from "./hook-outage.js";
 export type { LocalActivity, RecentBlockRecord } from "./local-activity.js";
 export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEFAULT_RETENTION_DAYS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./store-upkeep.js";

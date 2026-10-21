@@ -324,9 +324,9 @@ async function withInstallVerdicts(dir: string, mapped: Mapped[], ask: "ask" | "
 }
 
 /** For the tray: the rule, project and tool of a blocked call, noted on this computer (block-notes.ts). Never throws. */
-function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision): void {
+function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision, input?: Record<string, unknown>): void {
   if (decision.decision !== "deny") return;
-  try { noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd) }); } catch { /* the receipt is the record */ }
+  try { noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd), session: input ? sessionKeyOf(decisionStateDir(dir), input) : null }); } catch { /* the receipt is the record */ }
 }
 
 /** `deadlineAt`: a time after which the call is denied rather than evaluated (GitHub Copilot, whose hook timeouts fail
@@ -365,7 +365,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     useDigestKey(loadOrCreateDigestKey(dir));
     if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; recordHookError("deadline", copilotDeadlineReason()); deny(copilotDeadlineReason()); }
     const decision = await runtime.evaluate(actions, { groupKey: callId(input!) });
-    noteIfBlocked(dir, cwd, harness, decision);
+    noteIfBlocked(dir, cwd, harness, decision, input!);
     // Allowed: what is left is record delivery, which must not turn an allowed call into a "did not finish" deny.
     if (decision.decision === "allow" && copilotDeadlineTimer !== undefined) { clearTimeout(copilotDeadlineTimer); copilotDeadlineTimer = undefined; }
     const observer = recordObservations(dir, cwd, input!, decision, harness);
@@ -588,7 +588,7 @@ async function runCursor(): Promise<void> {
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
-    noteIfBlocked(dir, cwd, "cursor", decision);
+    noteIfBlocked(dir, cwd, "cursor", decision, input);
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
     observer?.close();
