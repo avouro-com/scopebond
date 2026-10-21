@@ -26,6 +26,7 @@ export { TARGET_RULES } from "./target-rules.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { createExclusive, replaceFile } from "./safe-fs.js";
 import { maskHomeFolder, maskHomeInPattern } from "./home-mask.js";
+import type { PolicyKey } from "./policy-keys.js";
 
 /** One protected location. `under`/`named`/`dir` are the readable, editable shapes;
  *  `raw` carries the few patterns with bespoke exceptions (`.env` templates are allowed,
@@ -65,6 +66,9 @@ export interface RuleSet {
    *  runs if the SQL drops a table, deletes or updates every row, drops or renames in an ALTER, or
    *  cannot be read. Absent = not enforced, which is the default. */
   protect_remote_database?: boolean;
+  /** Optional. Local rule packs (pack-local.ts): `local` names pack files, each relative to this file's folder; `trusted_keys`,
+   *  when set, are the keys every local pack's signature must verify with. A local pack only adds rules. */
+  packs?: { local?: string[]; trusted_keys?: PolicyKey[] };
 }
 
 export const RULES_FILE = "rules.json";

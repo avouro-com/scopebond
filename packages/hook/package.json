@@ -39,7 +39,8 @@
     "scopebond-hook": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "packs"
   ],
   "dependencies": {
     "@scopebond/gateway": "workspace:^",

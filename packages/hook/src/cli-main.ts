@@ -76,10 +76,13 @@ import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
+import { describeLocalPacks, loadLocalPacks } from "./pack-local.js";
+import { packTestLines, testPackFiles } from "./pack-test.js";
+import { exampleRecord, intelShowJson, intelShowLines, previewNextUpload } from "./intel-show.js";
 import { switchablePackRules } from "./pack-rules.js";
 import { runPackVectors } from "./packs.js";
 import { loadIntelPlugin } from "./intel-plugin.js";
-import { validatePack, type Pack } from "@scopebond/policy-schema/pack";
+import type { Pack } from "@scopebond/policy-schema/pack";
 import { describePackSync } from "./pack-sync.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, waitWithinDeadline } from "./hook-deadline.js";
@@ -1874,6 +1877,9 @@ function runStatus(args: string[] = []): void {
     if (meta.last_error) console.log(`                   last problem: ${meta.last_error}`);
     for (const note of meta.rule_notes ?? []) console.log(`                   note: ${note}`);
     for (const line of describePackSync(meta.packs)) console.log(`  rule packs       ${line}`);
+    const local = describeLocalPacks(loadLocalPacks(activeDir, loadPacks(activeDir).packs));
+    for (const line of local.inForce) console.log(`  rule packs       local: ${line}`);
+    for (const line of local.notUsed) console.log(`  rule packs       local, not used: ${line}`);
   }
   {
     const activeDir = resolveConfigDir(process.cwd());
@@ -2071,6 +2077,13 @@ async function runDoctor(): Promise<void> {
   if (hasPolicy) {
     try { readPolicyFile(join(active, "policy.json")); }
     catch (error) { problems.push(`${(error as Error).message}: ${repairFor(error)}`); }
+    // Local rule packs the rules file names (pack-local.ts): one that is not used leaves its rules out, so it is a problem.
+    const local = describeLocalPacks(loadLocalPacks(active, loadPacks(active).packs));
+    for (const line of local.inForce) console.log(`  local pack       ${line} ok`);
+    for (const line of local.notUsed) {
+      console.log(`  local pack       ${line} NOT USED`);
+      problems.push(`a local rule pack is not used, so its rules are not in force: ${line}`);
+    }
   }
   const ignored = untrustedProjectPolicy(process.cwd());
   const shadowed = shadowedUserConnection(active);
@@ -2326,21 +2339,25 @@ async function runLogin(args: string[]): Promise<void> {
 /** What each command does, its arguments, and one example. The whole help used to be a
  *  single usage line listing 15 command names, which told a reader nothing about what any
  *  of them did or what arguments they take. */
-/** `packs`: the rule packs cached on this computer (pack-store.ts). `list` (the default) shows what is in force and why
- *  anything is not; `verify <file>` checks a pack file (format, signature, its own vectors) without installing it; `add <file>`
- *  and `remove <id>` change the cache, so they are for a person at a terminal. */
-function runPacks(args: string[]): void {
+/** `packs`: the rule packs cached on this computer (pack-store.ts) and the local packs its rules file names (pack-local.ts).
+ *  `list` (the default) shows what is in force and why anything is not; `test` runs pack vectors (pack-test.ts); `verify <file>`
+ *  checks a pack file (format, signature, its own vectors) without installing it; `add <file>` and `remove <id>` change the
+ *  cache, so they are for a person at a terminal. */
+async function runPacks(args: string[]): Promise<void> {
   const [sub = "list", target] = args.filter((a) => !a.startsWith("--"));
   const dir = resolveConfigDir(process.cwd());
   const json = args.includes("--json");
   if (sub === "list") {
     const loaded = loadPacks(dir);
+    const local = loadLocalPacks(dir, loaded.packs);
     if (json) {
-      console.log(JSON.stringify({ dir: packsDir(dir), expires_at: loaded.expiresAt, packs: loaded.packs.map((p) => ({ id: p.id, version: p.version, issued_at: p.issued_at, title: p.title ?? null, expires_at: loaded.expires[`${p.id}@${p.version}`] ?? null })), problems: loaded.problems, not_updated: readMeta(dir).packs?.failed ?? [] }, null, 2));
+      console.log(JSON.stringify({ dir: packsDir(dir), expires_at: loaded.expiresAt, packs: loaded.packs.map((p) => ({ id: p.id, version: p.version, issued_at: p.issued_at, title: p.title ?? null, expires_at: loaded.expires[`${p.id}@${p.version}`] ?? null })), problems: loaded.problems, not_updated: readMeta(dir).packs?.failed ?? [],
+        local: local.packs.map((p) => ({ id: p.id, version: p.version, title: p.title ?? null, file: local.files[`${p.id}@${p.version}`] })), local_problems: local.problems }, null, 2));
       return;
     }
     const notUpdated = describePackSync(readMeta(dir).packs);
-    if (loaded.packs.length === 0 && loaded.problems.length === 0 && notUpdated.length === 0) { console.log("No rule packs on this computer. The open detection and the starter protections apply."); return; }
+    const localLines = describeLocalPacks(local);
+    if (loaded.packs.length === 0 && loaded.problems.length === 0 && notUpdated.length === 0 && local.packs.length === 0 && local.problems.length === 0) { console.log("No rule packs on this computer. The open detection and the starter protections apply."); return; }
     for (const p of loaded.packs) {
       const until = loaded.expires[`${p.id}@${p.version}`];
       console.log(`  ${p.id}@${p.version}  issued ${p.issued_at}${p.title ? `  ${p.title}` : ""}${until ? `  in force until ${until}` : ""}`);
@@ -2348,9 +2365,11 @@ function runPacks(args: string[]): void {
     if (loaded.packs.length) console.log("Each pack stays in force for 30 days after this computer last confirmed it with the workspace.");
     for (const problem of loaded.problems) console.log(`  not used: ${problem.ref}: ${problem.message}`);
     for (const line of notUpdated) console.log(`  not updated: ${line}`);
+    for (const line of localLines.inForce) console.log(`  local: ${line}`);
+    for (const line of localLines.notUsed) console.log(`  local, not used: ${line}`);
     return;
   }
-  if (sub === "test") { runPacksTest(args, dir, json); return; }
+  if (sub === "test") { await runPacksTest(args, dir, json); return; }
   if ((sub === "verify" || sub === "add") && target) {
     let text = "";
     try { text = readFileSync(target, "utf8"); } catch { console.error(`cannot read ${target}`); process.exit(1); }
@@ -2372,31 +2391,27 @@ function runPacks(args: string[]): void {
     console.log(`removed ${target}`);
     return;
   }
-  console.error("usage: scopebond packs [list|test --all|test <file>|verify <file>|add <file>|remove <id>] [--json] [--yes]");
+  console.error("usage: scopebond packs [list|test --all|test <file|folder>...|verify <file>|add <file>|remove <id>] [--json] [--yes]");
   process.exit(1);
 }
 
-/** `packs test --all`: run every vector of every pack in force here with this engine; `packs test <file>`: the vectors of one
- *  pack file (its shape is checked, its signature is `packs verify`'s job). Exit 1 when any vector fails. This is the check an
- *  engine update runs with the new engine before it is used, so it reports the engine's version and the packs it ran. */
-function runPacksTest(args: string[], dir: string, json: boolean): void {
-  const file = args.filter((a) => !a.startsWith("--"))[1];
-  let packs: Pack[];
-  let notUsed: Array<{ ref: string; reason: string }> = [];
-  if (args.includes("--all")) {
-    const loaded = loadPacks(dir);
-    packs = loaded.packs;
-    notUsed = loaded.problems.map((p) => ({ ref: p.ref, reason: p.reason }));
-  } else if (file) {
-    let doc: unknown;
-    try { doc = JSON.parse(readFileSync(file, "utf8")); } catch { console.error(`cannot read ${file} as JSON`); process.exit(1); }
-    const shape = validatePack(doc);
-    if (!shape.valid) { console.error(`not a valid pack: ${shape.errors.slice(0, 3).join("; ")}`); process.exit(1); }
-    packs = [doc as Pack];
-  } else {
-    console.error("usage: scopebond packs test --all | <file> [--json]");
-    process.exit(1);
+/** `packs test --all`: run every vector of every pack in force here with this engine (the check an engine update runs with the
+ *  new engine before it is used, so it reports the engine's version and the packs it ran). `packs test <file|folder>…`: check
+ *  pack files as local packs and run each vector through the real engine (pack-test.ts), with a pass/fail line per vector and
+ *  what the runtime decided. Exit 1 when any vector fails or a file is not a usable pack. */
+async function runPacksTest(args: string[], dir: string, json: boolean): Promise<void> {
+  const files = args.filter((a) => !a.startsWith("--")).slice(1);
+  if (!args.includes("--all")) {
+    if (!files.length) { console.error("usage: scopebond packs test --all | <file|folder>... [--json]"); process.exit(1); }
+    const report = await testPackFiles(files);
+    if (json) console.log(JSON.stringify(report));
+    else for (const line of packTestLines(report)) console.log(line);
+    if (report.failures.length || report.invalid.length || (!report.packs.length)) process.exit(1);
+    return;
   }
+  const loaded = loadPacks(dir);
+  const packs: Pack[] = loaded.packs;
+  const notUsed = loaded.problems.map((p) => ({ ref: p.ref, reason: p.reason }));
   let vectors = 0;
   const failures: Array<{ pack: string; vector: string }> = [];
   const lines: string[] = [];
@@ -2407,13 +2422,25 @@ function runPacksTest(args: string[], dir: string, json: boolean): void {
     for (const failure of run.failures) failures.push({ pack: ref, vector: failure.id });
     lines.push(run.failures.length ? `${ref}: ${run.failures.length} of ${pack.vectors.length} vectors fail (first: ${run.failures[0].id})` : `${ref}: ${run.passed} vectors pass`);
   }
-  if (json) console.log(JSON.stringify({ engine: hookVersion(), packs: packs.map((p) => `${p.id}@${p.version}`), vectors, failures, ...(file && !args.includes("--all") ? {} : { not_used: notUsed }) }));
+  if (json) console.log(JSON.stringify({ engine: hookVersion(), packs: packs.map((p) => `${p.id}@${p.version}`), vectors, failures, not_used: notUsed }));
   else {
     console.log(`engine ${hookVersion()}`);
     for (const line of lines) console.log(`  ${line}`);
     if (!packs.length) console.log("  no rule packs to test");
   }
   if (failures.length) process.exit(1);
+}
+
+/** `intel show [--json] [--raw]`: what the next upload of records to the workspace will contain (intel-show.ts). Sends
+ *  nothing and changes nothing. */
+async function runIntel(args: string[]): Promise<void> {
+  const [sub] = args.filter((a) => !a.startsWith("--"));
+  if (sub !== "show") { console.error("usage: scopebond intel show [--json] [--raw]"); process.exit(1); }
+  const raw = args.includes("--raw");
+  const preview = await previewNextUpload(resolveConfigDir(process.cwd()));
+  const example = preview.requests.length ? null : await exampleRecord();
+  if (args.includes("--json")) console.log(JSON.stringify(intelShowJson(preview, example, raw), null, 2));
+  else for (const line of intelShowLines(preview, example, raw)) console.log(line);
 }
 
 /** Check a pack file as `packs add` would, without changing anything. */
@@ -2504,7 +2531,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "sends now; retry re-checks a workspace that lacked the route; wire and unwire add or",
       "remove the Claude Code session and after-action hook entries.",
     ] },
-  { name: "packs", args: "[list|test --all|test <file>|verify <file>|add <file>|remove <id>] [--json] [--yes]",
+  { name: "packs", args: "[list|test --all|test <file|folder>...|verify <file>|add <file>|remove <id>] [--json] [--yes]",
     summary: "the rule packs on this computer: what is in force, and checking or adding a pack file",
     detail: [
       "Rule packs are signed data from Scopebond Cloud that teach the hook what more command-line tools and MCP servers do.",
@@ -2512,10 +2539,21 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "for 30 days after this computer last confirmed it; a pack whose update could not be used keeps its last good version on",
       "its own clock, and the others renew as usual. Without one, the open detection and the starter protections apply.",
       "verify <file> checks a pack file (format, signature, its own vectors) and changes nothing.",
-      "test --all runs the vectors of every pack in force with this engine (an engine update runs it before use); test <file>",
-      "runs one pack file's vectors. Both exit non-zero when a vector fails; --json reports the engine, packs and failures.",
+      "test --all runs the vectors of every pack in force with this engine (an engine update runs it before use). test <file|folder>",
+      "checks pack files (a folder: its .json files) as local packs and runs each vector through the engine, with a pass/fail",
+      "line and what the hook would decide (allow, deny, ask) under the starter rules. Both exit non-zero when a vector fails;",
+      "--json reports the engine, packs, failures and each vector's result.",
       "add <file> checks it the same way, then puts it in force here; remove <id> takes one out. Both need a terminal or --yes.",
-      "Packs live in the packs folder of .scopebond/ (index.json and one <id>@<version>.json per pack).",
+      "Packs live in the packs folder of .scopebond/ (index.json and one <id>@<version>.json per pack). Local packs you write",
+      "are named in rules.json (\"packs\": { \"local\": [\"team-packs/my-team.json\"] }) and only add rules; list shows them too.",
+    ] },
+  { name: "intel", args: "show [--json] [--raw]",
+    summary: "what the next upload of records to your workspace will contain",
+    detail: [
+      "show runs this computer's own record uploader against a copy of its delivery queue and prints what it would send,",
+      "without sending or changing anything: a summary (action kinds, parameters, rule results, coding tools, counts), then",
+      "the first request's body. A plugin's opaque slot is shown as its size; --raw adds its base64. --json gives every request.",
+      "When nothing is waiting it says so and shows the fields one record carries.",
     ] },
   { name: "budget", args: "init|ack <id>|status|load <export.json>",
     summary: "per-agent action budgets: how many actions this agent may dispatch in a window",
@@ -2671,7 +2709,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   else if (cmd === "trust") { runTrust(rest); }
   else if (cmd === "prune") { await runPrune(rest); }
   else if (cmd === "rules") { await runRules(rest); }
-  else if (cmd === "packs") { runPacks(rest); }
+  else if (cmd === "packs") { await runPacks(rest); }
+  else if (cmd === "intel") { await runIntel(rest); }
   else if (cmd === "help" || cmd === "--help" || cmd === "-h" || cmd === undefined) { printHelp(rest[0]); }
   else {
     console.error(`unknown command: ${cmd}`);

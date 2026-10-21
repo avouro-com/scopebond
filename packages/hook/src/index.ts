@@ -22,10 +22,13 @@ export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, RESTORABLE_SUFFIX, isC
 export { gitRestorable, repositoryTop, realEnginePath, GIT_RESTORE_TIMEOUT_MS, GIT_RESTORE_MAX_TARGETS, type GitRun } from "./git-restore.js";
 export type { DeleteScope, DeleteVerdict } from "./delete-scope.js";
 // Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
-// this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.
-export { setActivePacks, shadowPackIds, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
+// this computer (pack-store.ts), and the local packs a rules file names (pack-local.ts). Every vendor command-line tool and MCP
+// server is read through them.
+export { setActivePacks, shadowPackIds, localPackIds, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
 export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
-export { packRuleClauses, switchablePackRules, withPackRules, packRuleOf, packRuleSaferWay } from "./pack-rules.js";
+export { packRuleClauses, switchablePackRules, withPackRules, packRuleOf, packRuleSaferWay, localRuleProblem, localPackRuleIds, coveredTypes } from "./pack-rules.js";
+export { loadLocalPacks, checkLocalPackText, localPackConfig, describeLocalPacks, MAX_LOCAL_PACKS } from "./pack-local.js";
+export type { LocalPacks, LocalPackProblem, LocalPackRefusal, LocalPackConfig, LocalPackCheckOptions } from "./pack-local.js";
 export type { PackRuleSettings, PackRuleMode } from "./pack-rules.js";
 export {
   activatePacks, loadPacks, installPack, removePack, verifyPackSignature, verifySignedData, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
@@ -134,11 +137,14 @@ export {
   ensureDurableRuntime, isEphemeralPath, nodeModulesRootOf, runtimeRoot, runtimeDirFor, pinnedCliPath,
 } from "./runtime-install.js";
 export type { PinResult } from "./runtime-install.js";
-export { connectCloud, ingestUrl, loadConnection, attachExporter, sequenceProofFor, flushBounded, connectionPath, reportUninstall, uninstallReportLine, UNINSTALL_NOT_TOLD_EXIT, UNINSTALL_CALLER_ENV } from "./cloud.js";
+export { connectCloud, ingestUrl, loadConnection, attachExporter, exporterOptions, openDeliveryQueue, sequenceProofFor, flushBounded, connectionPath, reportUninstall, uninstallReportLine, UNINSTALL_NOT_TOLD_EXIT, UNINSTALL_CALLER_ENV } from "./cloud.js";
 export { checkChains } from "./chain-verify.js";
 export { machineIdFor, machineIdField, approvedWorkspaceId, MACHINE_ID_FILE } from "./machine-id.js";
 export type { ChainCheckOptions, ChainCheckReport } from "./chain-verify.js";
 export type { HookConnection, UninstallReport } from "./cloud.js";
+// What the next upload of records will contain (`intel show`): the uploader run against a copy of the queue.
+export { previewNextUpload, uploadCategories, shownReceipt, shownBody, exampleRecord, intelShowLines, intelShowJson } from "./intel-show.js";
+export type { UploadPreview, UploadRequest, UploadCategories } from "./intel-show.js";
 export { scrubSecrets, scrubParam, scrubUrlPath, redactCommand, digest, sha256, keyedDigest, useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 export {
   AGENT_KINDS, assertAgentKind, observationSigner, signObservation, observationHash, sourceReceiptHash, signingBytes,

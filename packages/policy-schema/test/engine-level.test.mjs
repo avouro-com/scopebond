@@ -102,3 +102,14 @@ test("the registry reads an extension after the built-in types", () => {
   setActionTypeExtension([]);
   assert.equal(getActionType("example.widget.delete"), undefined);
 });
+
+test("an unsigned reading lets a pack leave out its signature, and still checks one that is there", () => {
+  const unsigned = structuredClone(example);
+  delete unsigned.signature;
+  assert.equal(validatePack(unsigned).valid, false, "a delivered pack must carry a signature");
+  assert.equal(validatePack(unsigned, { unsigned: true }).valid, true);
+  assert.equal(validatePack(example, { unsigned: true }).valid, true);
+  const broken = { ...example, signature: { alg: "RSA", key_id: "x", value: "y" } };
+  assert.equal(validatePack(broken, { unsigned: true }).valid, false, "a signature that is there keeps its shape");
+  assert.equal(validatePack({ ...unsigned, extra: 1 }, { unsigned: true }).valid, false, "the format stays closed");
+});

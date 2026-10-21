@@ -1,0 +1,91 @@
+{
+  "format": "scopebond:pack/v1",
+  "id": "ci-guard",
+  "version": "1.0.0",
+  "issued_at": "2026-10-21T00:00:00Z",
+  "title": "CI guard: pipeline files and the checks that run before a commit",
+  "requires": { "engine": 2 },
+  "grammars": [
+    {
+      "id": "git-checks",
+      "programs": ["git"],
+      "via": "ci-guard",
+      "double_dash": "positionals",
+      "options": {
+        "valued": ["-C", "-c", "--git-dir", "--work-tree", "--file", "-f"],
+        "flags": ["--skip-worktree", "--assume-unchanged", "--no-skip-worktree", "--no-assume-unchanged", "--global", "--system", "--local", "--unset", "--unset-all", "--add", "--replace-all", "--refresh", "--really-refresh", "-q"]
+      },
+      "commands": [
+        {
+          "path": ["update-index"],
+          "when": { "has": ["--skip-worktree", "--assume-unchanged"] },
+          "emit": [{ "action_type": "file.write", "for_each": { "positionals": { "from": 0 } },
+            "params": { "path": { "item": true }, "operation": { "const": "hide-changes" } } }]
+        },
+        {
+          "path": ["config", { "pattern": "^core\\.[hH][oO][oO][kK][sS][pP][aA][tT][hH]$" }],
+          "when": { "any": [{ "has": ["--unset", "--unset-all"] }, { "count": { "positionals": { "from": 0 } }, "min": 1 }] },
+          "emit": [{ "action_type": "file.write", "params": {
+            "path": { "first": [
+              { "flag": ["--file", "-f"] },
+              { "if": { "has": ["--global"] }, "then": { "const": "~/.gitconfig" } },
+              { "if": { "has": ["--system"] }, "then": { "const": "/etc/gitconfig" } },
+              { "concat": [{ "flag": ["-C"] }, "/.git/config"] },
+              { "const": ".git/config" }
+            ] },
+            "operation": { "const": "hooks-path" } } }]
+        }
+      ]
+    }
+  ],
+  "profiles": [],
+  "rules": [
+    {
+      "id": "ci-config-edit",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": ["file.write"],
+      "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?(?:\\.github/(?:workflows|actions)/.*|\\.gitlab-ci\\.ya?ml|\\.circleci/.*|\\.buildkite/.*|Jenkinsfile|[a-z-]*pipelines\\.ya?ml|\\.travis\\.yml|\\.drone\\.yml)$)" } },
+      "title": "CI pipeline changed",
+      "blockable": true,
+      "default_mode": "monitor",
+      "safer_way": "Describe the pipeline change to the person, who can make it and have it reviewed.",
+      "description": "Record writes to CI pipeline files (.github/workflows and actions, .gitlab-ci.yml, .circleci, .buildkite, Jenkinsfile, *-pipelines.yml, .travis.yml, .drone.yml), and marking one so git stops showing its changes."
+    },
+    {
+      "id": "commit-checks-edit",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": ["file.write"],
+      "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?(?:\\.pre-commit-config\\.ya?ml|\\.husky/.*|\\.githooks/.*|\\.git/hooks/.*|\\.git/config|\\.gitconfig|lefthook\\.ya?ml)$)" } },
+      "title": "Commit checks changed",
+      "blockable": true,
+      "default_mode": "monitor",
+      "safer_way": "Fix what the check reports instead of changing or switching off the check.",
+      "description": "Record changes to the checks that run before a commit or push: pre-commit, Husky, lefthook and git hook folders, and the git setting that says where hooks live (core.hooksPath)."
+    }
+  ],
+  "vectors": [
+    { "id": "skip-worktree-workflow", "shell": { "command": "git update-index --skip-worktree .github/workflows/ci.yml" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".github/workflows/ci.yml", "operation": "hide-changes", "via": "ci-guard", "derived_from": "shell.exec" } }] },
+    { "id": "assume-unchanged-two", "shell": { "command": "git update-index --assume-unchanged .gitlab-ci.yml Jenkinsfile" },
+      "expect": [
+        { "action_type": "file.write", "params": { "path": ".gitlab-ci.yml", "operation": "hide-changes", "via": "ci-guard", "derived_from": "shell.exec" } },
+        { "action_type": "file.write", "params": { "path": "Jenkinsfile", "operation": "hide-changes", "via": "ci-guard", "derived_from": "shell.exec" } }
+      ] },
+    { "id": "skip-worktree-after-dashes", "shell": { "command": "git update-index --skip-worktree -- .circleci/config.yml" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".circleci/config.yml", "operation": "hide-changes", "via": "ci-guard", "derived_from": "shell.exec" } }] },
+    { "id": "unhide", "shell": { "command": "git update-index --no-skip-worktree .github/workflows/ci.yml" }, "expect": [] },
+    { "id": "refresh-index", "shell": { "command": "git update-index --refresh" }, "expect": [] },
+    { "id": "hooks-path-off", "shell": { "command": "git config core.hooksPath /dev/null" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git/config", "operation": "hooks-path", "via": "ci-guard", "derived_from": "shell.exec" } }] },
+    { "id": "hooks-path-global", "shell": { "command": "git config --global core.hooksPath ~/no-hooks" },
+      "expect": [{ "action_type": "file.write", "params": { "path": "~/.gitconfig", "operation": "hooks-path", "via": "ci-guard", "derived_from": "shell.exec" } }] },
+    { "id": "hooks-path-unset", "shell": { "command": "git -C ../app config --unset core.hookspath" },
+      "expect": [{ "action_type": "file.write", "params": { "path": "../app/.git/config", "operation": "hooks-path", "via": "ci-guard", "derived_from": "shell.exec" } }] },
+    { "id": "hooks-path-read", "shell": { "command": "git config core.hooksPath" }, "expect": [] },
+    { "id": "other-setting", "shell": { "command": "git config user.name 'A Person'" }, "expect": [] },
+    { "id": "status", "shell": { "command": "git status" }, "expect": [] },
+    { "id": "workflow-edit-is-read-by-the-open-detection", "shell": { "command": "sed -i s/main/trunk/ .github/workflows/ci.yml" }, "expect": [] }
+  ]
+}

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAttester, createGateway, createCloudExporter, seqRanges } from "../dist/index.js";
+import { createAttester, createGateway, createCloudExporter, createMemoryCloudOutbox, seqRanges } from "../dist/index.js";
 import { SqliteCloudOutbox } from "../dist/node.js";
 import { verifySummaryCoverage, verifySummarySignature, validateSummary } from "@scopebond/verify/summary";
 
@@ -280,4 +280,19 @@ test("held(): a routine record stamped further ahead than one window and its gra
     assert.equal(exporter.pending(), 1);
     assert.deepEqual(exporter.held(), { routine: 1, until: W0 + 15 * 60_000 + 30_000 });
   } finally { exporter.stop(); }
+});
+
+test("peekWindow answers what claimWindow would, and changes nothing", () => {
+  const lossless = { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER };
+  for (const outbox of [new SqliteCloudOutbox(join(mkdtempSync(join(tmpdir(), "sb-sum-peek-")), "outbox.db"), lossless), createMemoryCloudOutbox(lossless)]) {
+    assert.deepEqual(outbox.peekWindow(W0, W0), { state: "claimed", summaryId: null });
+    assert.deepEqual(outbox.peekWindow(W0, W0), { state: "claimed", summaryId: null }, "peeking claims nothing");
+    assert.deepEqual(outbox.claimWindow(W0, "sum-1", W0), { state: "claimed", summaryId: "sum-1" });
+    assert.deepEqual(outbox.peekWindow(W0, W0 + 1000), { state: "busy", summaryId: "sum-1" });
+    assert.deepEqual(outbox.peekWindow(W0, W0 + 10 * 60_000), { state: "claimed", summaryId: "sum-1" }, "an abandoned lease is free under its id");
+    assert.deepEqual(outbox.claimWindow(W0, "sum-2", W0 + 1000), { state: "busy", summaryId: "sum-1" }, "the lease peeking saw is still held");
+    outbox.markWindowSent(W0);
+    assert.deepEqual(outbox.peekWindow(W0, W0 + 2000), { state: "sent", summaryId: "sum-1" });
+    outbox.close?.();
+  }
 });

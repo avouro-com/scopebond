@@ -1,0 +1,119 @@
+{
+  "format": "scopebond:pack/v1",
+  "id": "git-safety",
+  "version": "1.0.0",
+  "issued_at": "2026-10-21T00:00:00Z",
+  "title": "Git safety: history rewrites and force pushes",
+  "requires": { "engine": 2 },
+  "grammars": [
+    {
+      "id": "git-history",
+      "programs": ["git"],
+      "via": "git-safety",
+      "options": {
+        "valued": ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--expire", "--expire-unreachable", "--prune", "-m", "--message"],
+        "flags": ["--hard", "--soft", "--mixed", "--keep", "--merge", "-q", "--quiet", "-D", "-d", "--delete", "-f", "--force", "--all", "--aggressive", "--no-pager", "--bare"]
+      },
+      "commands": [
+        {
+          "path": ["reset"],
+          "when": { "has": ["--hard"] },
+          "emit": [{ "action_type": "file.write", "params": { "path": { "first": [{ "concat": [{ "flag": ["-C"] }, "/.git"] }, { "const": ".git" }] }, "operation": { "const": "reset-hard" } } }]
+        },
+        {
+          "path": [{ "any": ["filter-branch", "filter-repo"], "var": "op" }],
+          "emit": [{ "action_type": "file.write", "params": { "path": { "first": [{ "concat": [{ "flag": ["-C"] }, "/.git"] }, { "const": ".git" }] }, "operation": { "var": "op" } } }]
+        },
+        {
+          "path": ["branch"],
+          "when": { "any": [{ "has": ["-D"] }, { "all": [{ "has": ["-d", "--delete"] }, { "has": ["-f", "--force"] }] }] },
+          "emit": [{ "action_type": "file.write", "params": { "path": { "first": [{ "concat": [{ "flag": ["-C"] }, "/.git"] }, { "const": ".git" }] }, "operation": { "const": "branch-force-delete" } } }]
+        },
+        {
+          "path": ["tag"],
+          "when": { "has": ["-d", "--delete"] },
+          "emit": [{ "action_type": "file.write", "params": { "path": { "first": [{ "concat": [{ "flag": ["-C"] }, "/.git"] }, { "const": ".git" }] }, "operation": { "const": "tag-delete" } } }]
+        },
+        {
+          "path": ["reflog", { "any": ["expire", "delete"] }],
+          "emit": [{ "action_type": "file.write", "params": { "path": { "first": [{ "concat": [{ "flag": ["-C"] }, "/.git"] }, { "const": ".git" }] }, "operation": { "const": "reflog-expire" } } }]
+        },
+        {
+          "path": ["gc"],
+          "when": { "defined": { "flag": ["--prune"] } },
+          "emit": [{ "action_type": "file.write", "params": { "path": { "first": [{ "concat": [{ "flag": ["-C"] }, "/.git"] }, { "const": ".git" }] }, "operation": { "const": "gc-prune" } } }]
+        },
+        {
+          "path": ["update-ref"],
+          "when": { "has": ["-d"] },
+          "emit": [{ "action_type": "file.write", "params": { "path": { "first": [{ "concat": [{ "flag": ["-C"] }, "/.git"] }, { "const": ".git" }] }, "operation": { "const": "ref-delete" } } }]
+        },
+        {
+          "path": ["stash", { "any": ["clear", "drop"], "var": "op" }],
+          "emit": [{ "action_type": "file.write", "params": { "path": { "first": [{ "concat": [{ "flag": ["-C"] }, "/.git"] }, { "const": ".git" }] }, "operation": { "concat": ["stash-", { "var": "op" }] } } }]
+        }
+      ]
+    }
+  ],
+  "profiles": [],
+  "rules": [
+    {
+      "id": "git-history-rewrite",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": ["file.write"],
+      "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?\\.git(?:/(?:refs|logs|objects|packed-refs)(?:/.*)?)?$)" } },
+      "title": "Git history rewritten or deleted",
+      "blockable": true,
+      "default_mode": "monitor",
+      "safer_way": "Make a new commit or a new branch instead of resetting, deleting or rewriting what git already holds.",
+      "description": "Record commands that rewrite or delete what git holds (reset --hard, filter-branch, filter-repo, force-deleting a branch, deleting a tag, expiring the reflog, pruning, deleting a ref, dropping stashes) and direct writes into the repository's refs, logs and objects."
+    },
+    {
+      "id": "git-force-push",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": ["git.push"],
+      "param_bounds": { "force": { "enum": [false] } },
+      "title": "Force push",
+      "blockable": true,
+      "default_mode": "monitor",
+      "safer_way": "Pull and merge, or push to a new branch, instead of overwriting the remote's history.",
+      "description": "Record pushes that overwrite the remote's history (--force, -f, --force-with-lease, a +refspec)."
+    }
+  ],
+  "vectors": [
+    { "id": "reset-hard", "shell": { "command": "git reset --hard HEAD~3" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "reset-hard", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "reset-hard-other-folder", "shell": { "command": "git -C ../other reset --hard origin/main" },
+      "expect": [{ "action_type": "file.write", "params": { "path": "../other/.git", "operation": "reset-hard", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "reset-hard-after-fetch", "shell": { "command": "git fetch origin && git reset --hard origin/main" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "reset-hard", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "reset-soft", "shell": { "command": "git reset --soft HEAD~1" }, "expect": [] },
+    { "id": "reset-help", "shell": { "command": "git reset --hard --help" }, "expect": [] },
+    { "id": "filter-branch", "shell": { "command": "git filter-branch --index-filter 'git rm --cached secrets.txt' HEAD" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "filter-branch", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "filter-repo", "shell": { "command": "git filter-repo --path secrets.txt --invert-paths" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "filter-repo", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "branch-force-delete", "shell": { "command": "git branch -D feature/old" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "branch-force-delete", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "branch-delete-force-long", "shell": { "command": "git branch --delete --force feature/old" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "branch-force-delete", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "branch-safe-delete", "shell": { "command": "git branch -d feature/merged" }, "expect": [] },
+    { "id": "branch-list", "shell": { "command": "git branch --all" }, "expect": [] },
+    { "id": "tag-delete", "shell": { "command": "git tag -d v1.0.0" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "tag-delete", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "reflog-expire", "shell": { "command": "git reflog expire --expire=now --all" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "reflog-expire", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "gc-prune-now", "shell": { "command": "git gc --prune=now --aggressive" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "gc-prune", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "gc-plain", "shell": { "command": "git gc" }, "expect": [] },
+    { "id": "update-ref-delete", "shell": { "command": "git update-ref -d refs/heads/old" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "ref-delete", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "stash-clear", "shell": { "command": "git stash clear" },
+      "expect": [{ "action_type": "file.write", "params": { "path": ".git", "operation": "stash-clear", "via": "git-safety", "derived_from": "shell.exec" } }] },
+    { "id": "stash-push", "shell": { "command": "git stash push -m wip" }, "expect": [] },
+    { "id": "status", "shell": { "command": "git status --short" }, "expect": [] },
+    { "id": "force-push-is-read-by-the-open-detection", "shell": { "command": "git push --force origin feature" }, "expect": [] }
+  ]
+}

@@ -14,7 +14,7 @@ import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection }
 import { explainDeny, FINAL_INSTRUCTION } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
 import { allowsLocalChanges, enforcedRuleIds, isManaged, packRuleAdjustmentsAt } from "./managed.js";
-import { withPackRules } from "./pack-rules.js";
+import { localPackRuleIds, withPackRules } from "./pack-rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
@@ -466,8 +466,10 @@ export function createHookRuntime(config: RuntimeConfig) {
     return Object.keys(intel).length ? { ...contextOption, intel } : contextOption;
   };
   const named = namedActionTypes(policy);
-  // A policy decides derived actions only when it opts in (target-rules.ts): it names a type Action Taxonomy 1.1 introduced.
-  const optedIn = policyOptsIntoTargets(policy);
+  // A policy decides derived actions only when it opts in (target-rules.ts): it names a type Action Taxonomy 1.1 introduced,
+  // or it carries a local pack's rule (pack-local.ts), which a person added to decide what that pack derives.
+  const localRules = localPackRuleIds();
+  const optedIn = policyOptsIntoTargets(policy) || (localRules.size > 0 && (policy.clauses ?? []).some((c: { id?: unknown }) => localRules.has(String(c?.id))));
   // Packages the workspace blocks (service-rules.ts): an install that names one is also evaluated as that package's
   // `package.install`, which the policy's blocked-packages clause denies. Every other install is recorded as before.
   // Records and the workspace know a blocked service by the clause id (`blocked-*`); `code` is this decision's own label.
