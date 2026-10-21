@@ -1377,7 +1377,8 @@ script, a variable) is treated as an attempt to change its settings and denied.
 **Removing Scopebond.** `uninstall` tells each workspace this computer is connected to before
 anything is removed. Unless an owner or admin disconnected the computer or allowed its removal
 in the workspace first, the workspace raises a critical alert. A workspace that cannot be
-reached never stops the uninstall; the command says it could not tell it.
+reached never stops the uninstall (it waits a few seconds at most); the command says it could
+not tell it and, once everything else is removed, exits with code 75 instead of 0.
 
 **Limits.** The hook sees the command text, not what a program does at run time. A
 variable set earlier in the same command (`x=.claude; rm -rf $x`, `export`, a `for` loop, cmd
