@@ -33,8 +33,10 @@ export interface Classification {
   coverage?: "program_only";
 }
 
-/** The CI locations: a write to one is H03; any other protected write is C02. */
-const CI_LOCATION = /github\/(?:workflows|actions)|gitlab-ci|circleci|azure-pipelines|jenkinsfile|bitbucket-pipelines|travis|drone|cloudbuild|buildkite/i;
+/** The CI locations, and the agent configuration a workspace may relax with them (Claude Code's sub-agent definitions and a
+ *  project's `.mcp.json`, which are not in the always-on floor): a write to one is H03; any other protected write is C02.
+ *  Tested against the protected-write rule's own (escaped) value. */
+const CI_LOCATION = /github\/(?:workflows|actions)|gitlab-ci|circleci|azure-pipelines|jenkinsfile|bitbucket-pipelines|travis|drone|cloudbuild|buildkite|claude\/agents|^\\\.mcp\\\.json$/i;
 
 /** Ids whose match the default policy blocks. I-classes are inventory only. */
 export const BLOCKING: readonly CatalogId[] = ["H01", "H02", "H03", "H04", "H05", "C01", "C02"];

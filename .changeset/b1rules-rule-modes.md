@@ -13,3 +13,5 @@ An `action_allowlist` clause may carry `exceptions`, sets of bounds that excuse 
 A bare `git push` or `git push --force-with-lease` whose current branch cannot be read is now judged by the branch git names as its upstream, and is still denied when git cannot tell.
 
 safe-shell now also denies a file-system maker by its family name (`mkfs.<type>`), the PowerShell disk cmdlets `Format-Volume` and `Clear-Disk`, removing every scheduled job (`crontab -r`), and a recursive `chmod`, `chown` or `chgrp` of the whole disk, the home folder or a system folder, while their everyday forms stay allowed.
+
+The always-on protection now refuses reading a `cloud.json` only in a Scopebond folder (any project's own `config/cloud.json` reads as usual), and the coding agents' sub-agent definitions (`.claude/agents`) and `.mcp.json` move from it to the configuration rule a workspace can relax, while `.git/hooks`, `.git/config` and `.husky` stay always protected.

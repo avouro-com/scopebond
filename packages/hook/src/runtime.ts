@@ -149,16 +149,28 @@ export const INSTALL_FOLDER = `(?!(?:.*/)?${INSTALL_PARENT}/(?:${ci("scopebond")
 const GUARDRAIL_WRITE_PATTERN_PREV = "^" + GUARDRAIL_WRITE_PREV2.join("") + ".+";
 /** What it compiled to before it covered GitHub Copilot's hook settings: upgraded on load too. */
 const GUARDRAIL_WRITE_PATTERN_PREV2 = "^" + GUARDRAIL_WRITE_PREV2.join("") + INSTALL_FOLDER + ".+";
+/** The agent settings the floor held until sub-agent definitions and MCP settings moved to the configuration rule. */
+const GUARDRAIL_WRITE_WITH_CONFIG = "^" + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER + ".+";
 /** The current agent settings without the install folder: weaker than the floor, so upgraded to it as well. */
 const GUARDRAIL_WRITE_PATTERN_NO_INSTALL = "^" + GUARDRAIL_WRITE.join("") + ".+";
-/** The write protection that is always on, whoever manages the rules: the hook's own settings and those of the agents it
- *  guards, and the installed program. A workspace can relax CI-configuration writes; it can never relax these. */
-export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER + ".+";
+// What the floor holds: everything above except the coding agents' sub-agent definitions (`.claude/agents`) and MCP settings
+// (`.mcp.json`). Those configure what the agent may do, which a workspace may manage; they stay protected by the configuration
+// rule (protect-write, `PROTECTED_WRITE`), which a workspace can relax. Git hooks, git config and Husky run code: they stay.
+const MOVED_TO_CONFIG = new Set([under("\\.claude/agents"), named("\\.mcp\\.json")]);
+const GUARDRAIL_FLOOR = GUARDRAIL_WRITE.filter((p) => !MOVED_TO_CONFIG.has(p));
+/** The write protection that is always on, whoever manages the rules: the hook's own settings and the coding agents' hook
+ *  settings, the hooks git runs, and the installed program. A workspace can relax configuration writes; never these. */
+export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_FLOOR.join("") + INSTALL_FOLDER + ".+";
+/** The current floor without the install folder: weaker than the floor, so upgraded to it. */
+const GUARDRAIL_FLOOR_NO_INSTALL = "^" + GUARDRAIL_FLOOR.join("") + ".+";
 /** The always-on floor as bare lookaheads, for a pattern that must also refuse these paths (the hook's own folder included). */
-export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER;
+export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_FLOOR.join("") + INSTALL_FOLDER;
 /** The read protection that is always on, whoever manages the rules: the hook's own folder, which holds this computer's
- *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
-const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
+ *  signing key and connection, and the connection file in a Scopebond folder of another name (`…/Scopebond/cloud.json`). A
+ *  workspace can record other protected reads instead of blocking them; never this one. Any other `cloud.json` is a project's. */
+const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("scopebond/cloud\\.json") + ".+";
+/** What it compiled to while it refused every file named cloud.json: narrowed on load. */
+const GUARDRAIL_READ_PATTERN_PREV = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
 
 /** Scopebond's own protection, always enforced and never relaxed by a rule set or a workspace: the hook's folder (its keys,
  *  connection and policy) and the coding agents' hook settings can be neither changed nor read by the coding agent, and an
@@ -169,12 +181,12 @@ export function selfProtectionClauses(): Array<Record<string, unknown>> {
     {
       id: "protect-scopebond-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
       param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
-      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files), or the coding agents' hook settings, and never switch Scopebond off (always on; it cannot be relaxed).",
+      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files), the coding agents' hook settings, or the hooks git runs (.git/hooks, .git/config, .husky), and never switch Scopebond off (always on; it cannot be relaxed).",
     },
     {
       id: "protect-scopebond-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
       param_bounds: { path: { pattern: GUARDRAIL_READ_PATTERN } },
-      description: "Never read Scopebond's own folder, which holds this computer's key and connection, or a copy of the connection file (cloud.json) anywhere (always on; it cannot be relaxed).",
+      description: "Never read Scopebond's own folder, which holds this computer's key and connection, or the connection file (cloud.json) in a Scopebond folder (always on; it cannot be relaxed).",
     },
   ];
 }
@@ -232,6 +244,9 @@ const LEGACY_STARTER_PATTERNS: Record<string, string> = {
   [GUARDRAIL_WRITE_PATTERN_PREV]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_WRITE_PATTERN_PREV2]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_WRITE_PATTERN_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_WITH_CONFIG]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_FLOOR_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_READ_PATTERN_PREV]: GUARDRAIL_READ_PATTERN,
   [SAFE_SHELL_PREV]: SAFE_SHELL,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+": SAFE_SHELL,

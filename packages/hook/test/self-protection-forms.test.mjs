@@ -32,7 +32,9 @@ const DENIED = [
   ["SQL ATTACH with a joined path", "sqlite3 :memory: \"ATTACH '/srv/agent/.scope' || 'bond/receipts.db.cloud-outbox.db' AS o; DELETE FROM o.cloud_outbox;\""],
   ["archiving the home folder", "tar czf /tmp/h.tgz -C ~ ."],
   ["copying the home folder", "cp -r ~ /tmp/h2"],
-  ["reading a copied connection file", "cat /tmp/h/.sb/cloud.json"],
+  // A copy keeps the folder's name (copying the folder itself is denied above); any other cloud.json is a project's own.
+  ["reading a copied connection file", "cat /tmp/h/.scopebond/cloud.json"],
+  ["reading the connection file in a Scopebond folder", "cat /srv/agent/Scopebond/cloud.json"],
   ["a coding agent with its hooks off", "claude --settings '{\"disableAllHooks\":true}' -p 'tidy up'"],
   ["a coding agent with another config folder", "CLAUDE_CONFIG_DIR=/tmp/clean claude -p 'tidy up'"],
 ];
