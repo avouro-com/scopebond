@@ -1815,13 +1815,15 @@ function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | u
 /** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,
  *  so the runtime resolves it and fills it in here, before evaluation — otherwise the
  *  starter policy's ref bound would fail-closed on every plain push. Only git.push
- *  intents with no ref are touched. */
-export function fillPushBranch(mapped: Mapped[], branch: string | null | undefined): Mapped[] {
-  if (!branch) return mapped;
-  return mapped.map((m) =>
-    m.intent.action_type === "git.push" && m.intent.params.ref === undefined
-      ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, ref: scrubParam(branch) } } }
-      : m);
+ *  intents with no ref are touched. `upstream`, when the branch is unknown, names the
+ *  branch the upstream points at (or null: the ref stays unknown and fails closed). */
+export function fillPushBranch(mapped: Mapped[], branch: string | null | undefined, upstream?: () => string | null): Mapped[] {
+  const bare = (m: Mapped): boolean => m.intent.action_type === "git.push" && m.intent.params.ref === undefined;
+  // The current branch could not be read: before a bare push is judged as one whose destination is unknown, the branch its
+  // upstream names is asked for (git-upstream.ts), only then; when that cannot be read either, the ref stays unknown.
+  const fill = branch || (upstream && mapped.some(bare) ? upstream() : null);
+  if (!fill) return mapped;
+  return mapped.map((m) => (bare(m) ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, ref: scrubParam(fill) } } } : m));
 }
 
 // VS Code's own settings can switch hooks off: `chat.useHooks` (Local hooks at all), `chat.hookFilesLocations` (which hook

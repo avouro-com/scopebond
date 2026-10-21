@@ -27,6 +27,7 @@ import { copilotCloudAgent, copilotSurface, surfaceSignals, recordCopilotProbe, 
 import { copilotAnswer, type CopilotAnswer } from "./copilot-answer.js";
 import { createHash } from "node:crypto";
 import { createHookRuntime, readPolicyFile, type Decision } from "./runtime.js";
+import { upstreamBranch } from "./git-upstream.js";
 import { hookErrorLine, recordHookError, setHookErrorContext } from "./hook-errors.js";
 import { useDigestKey, loadOrCreateDigestKey } from "./minimize.js";
 import { replaceFile } from "./safe-fs.js";
@@ -358,7 +359,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // workspace has not said it reads it. Never fails the call.
     const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
     const installAsk = installAskFor(harness, permissionMode);
-    const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], installAsk);
+    const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch, () => upstreamBranch(cwd)), ...databaseGuard(dir, cwd, input!)], installAsk);
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
       const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
@@ -579,7 +580,7 @@ async function runCursor(): Promise<void> {
     activatePacks(dir);
     const permissionMode = typeof input.permission_mode === "string" ? input.permission_mode : null;
     const branch = currentBranch(cwd);
-    const mapped = await withInstallVerdicts(dir, fillPushBranch(mapCursorEvent(event, input), branch), "ask");
+    const mapped = await withInstallVerdicts(dir, fillPushBranch(mapCursorEvent(event, input), branch, () => upstreamBranch(cwd)), "ask");
     // An edit Cursor reports after saving it cannot be overridden: it already happened.
     const overridable = !mapped.some((m) => m.postHoc);
     // Rules written before monitor became the default move to it once (never fails the call).
@@ -1258,7 +1259,7 @@ async function runTest(args: string[]): Promise<void> {
       strict: process.argv.includes("--strict"),
     });
     activatePacks(dir);
-    const mapped = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command } }), currentBranch(process.cwd()));
+    const mapped = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command } }), currentBranch(process.cwd()), () => upstreamBranch(process.cwd()));
     console.log(`command: ${command}`);
     for (const m of mapped) {
       const d = await runtime.evaluateOne(m);
