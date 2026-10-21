@@ -21,9 +21,14 @@
 //   - Among packs, the first by id that defines a rule id wins.
 //   - The packs' rules come after the starter rules and before the clauses that follow them (the allowed folders, the
 //     remote-database guard, a workspace's allowed sites and blocked services, the key policy), as the built-in rules did.
+//   - A local pack (pack-local.ts) only adds rules: its rule joins only when its id is not the policy's, a delivered pack's or
+//     a target rule's, and every action type it names is one the hook only ever derives, or one the policy (with the delivered
+//     packs' rules) already covers (`localRuleProblem`). An action of a type no clause covers is denied when it is evaluated,
+//     so a rule that covered a new type of call could let through what the policy denies; one that only adds bounds cannot.
 
 import { PACK_LEVEL2_FIELDS, type Pack } from "@scopebond/policy-schema/pack";
-import { activePacks, shadowPackIds } from "./packs.js";
+import { getActionType } from "@scopebond/policy-schema/registry";
+import { activePacks, localPackIds, shadowPackIds } from "./packs.js";
 import { TARGET_RULES } from "./target-rules.js";
 
 type Clause = Record<string, unknown> & { id: string };
@@ -111,12 +116,61 @@ export function packRuleSaferWay(id: string | null | undefined, packs: readonly 
   return typeof hint === "string" && hint.trim() !== "" ? hint.trim() : null;
 }
 
+/** Whether the hook maps a coding agent's own calls to this action type (a command, a file read or write, a push, a fetch, an
+ *  install, an MCP call: the built-in 1.0 types a coding agent's harness emits), or does not know it. Every other type is one
+ *  the hook only ever derives beside a call. */
+function callType(type: string): boolean {
+  const known = getActionType(type);
+  return !known || (known.taxonomy_version === "1.0" && known.emitted_by.some((e) => e === "claude_code_cursor" || e === "codex"));
+}
+
+/** The action types the clauses of a policy (or a list of rules) cover. */
+export function coveredTypes(clauses: readonly unknown[]): Set<string> {
+  const out = new Set<string>();
+  for (const clause of clauses) {
+    const types = (clause as { action_types?: unknown } | null)?.action_types;
+    if (Array.isArray(types)) for (const t of types) if (typeof t === "string") out.add(t);
+  }
+  return out;
+}
+
+/** Why a local pack's rule cannot join (its id is taken, or it would cover a type of call the policy does not), or null.
+ *  `taken`: the rule ids of the policy and of the delivered packs; `covered`: the action types they cover. */
+export function localRuleProblem(rule: Record<string, unknown>, taken: ReadonlySet<string>, covered: ReadonlySet<string>): string | null {
+  const id = String(rule.id);
+  if (taken.has(id) || (TARGET_RULES as readonly string[]).includes(id)) return `rule ${id} is already defined by the policy or a delivered pack; a local pack cannot replace it`;
+  const types = Array.isArray(rule.action_types) ? rule.action_types.map(String) : [];
+  const uncovered = types.find((t) => callType(t) && !covered.has(t));
+  return uncovered === undefined ? null
+    : `rule ${id} names ${uncovered}, which no rule of the policy covers; a local pack may only add bounds to a type of call the policy already covers`;
+}
+
+/** The ids of the rules the local packs among `packs` define (the first definition of each id, as `packRuleClauses` joins them). */
+export function localPackRuleIds(packs: readonly Pack[] = activePacks()): Set<string> {
+  const localIds = localPackIds();
+  const seen = new Set<string>();
+  const out = new Set<string>();
+  for (const pack of packs) for (const rule of pack.rules) {
+    const id = String(rule.id);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (localIds.has(pack.id)) out.add(id);
+  }
+  return out;
+}
+
 /** `policy` with the rules of the packs in force that it does not carry yet. The same object when there are none to add. */
 export function withPackRules<T>(policy: T, enforced: ReadonlySet<string>, packs: readonly Pack[] = activePacks(), settings: PackRuleSettings = {}): T {
   const clauses = (policy as { clauses?: unknown } | null)?.clauses;
   if (!Array.isArray(clauses) || packs.length === 0) return policy;
   const have = new Set(clauses.map((c) => String((c as { id?: unknown })?.id)));
-  const add = packRuleClauses(enforced, packs, settings).filter((c) => !have.has(c.id));
+  const all = packRuleClauses(enforced, packs, settings).filter((c) => !have.has(c.id));
+  // A local pack's rule joins only when it adds to what the policy and the delivered packs do (`localRuleProblem`).
+  const local = localPackRuleIds(packs);
+  const delivered = all.filter((c) => !local.has(c.id));
+  const covered = coveredTypes([...clauses, ...delivered]);
+  const taken = new Set([...have, ...delivered.map((c) => c.id)]);
+  const add = local.size ? all.filter((c) => !local.has(c.id) || localRuleProblem(c, taken, covered) === null) : all;
   if (add.length === 0) return policy;
   const ids = clauses.map((c) => String((c as { id?: unknown })?.id));
   const after = ids.indexOf("observe-net-mcp");

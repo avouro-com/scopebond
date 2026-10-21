@@ -411,6 +411,16 @@ nothing; `packs add <file>` checks it the same way and puts it in force for 30 d
 out. `add` and `remove` need a terminal or `--yes`. Every pack's vectors run in this package's tests through
 `runPackVectors`; the public ones are `@scopebond/policy-schema/vectors/example-pack.json`.
 
+**Local packs.** You can write packs of your own and name them in `rules.json`
+(`"packs": { "local": ["team-packs/my-team.json"] }`, paths relative to that file's folder). They use the same format
+and engine and are checked the same way on every call (format, engine level, action types, every vector), but need
+no signature: the rules file is their trust root (optionally `"trusted_keys"` makes each one carry a signature by one
+of your keys). A local pack only adds: a delivered pack with the same id, grammar or MCP server comes first, and its
+rules may neither reuse a rule id nor cover a type of call the policy does not. A pack that fails is skipped and named
+by `packs list`, `status` and `doctor`; the others stay in force. `scopebond packs test <file|folder>` checks pack files
+and runs each vector through the engine, with what the hook would decide. Four general packs (`git-safety`,
+`secrets-hygiene`, `build-hygiene`, `ci-guard`) and the authoring guide are in [`packs/`](packs/README.md).
+
 ### GitHub Copilot
 
 ```

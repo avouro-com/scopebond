@@ -22,10 +22,13 @@ export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, RESTORABLE_SUFFIX, isC
 export { gitRestorable, repositoryTop, realEnginePath, GIT_RESTORE_TIMEOUT_MS, GIT_RESTORE_MAX_TARGETS, type GitRun } from "./git-restore.js";
 export type { DeleteScope, DeleteVerdict } from "./delete-scope.js";
 // Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
-// this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.
-export { setActivePacks, shadowPackIds, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
+// this computer (pack-store.ts), and the local packs a rules file names (pack-local.ts). Every vendor command-line tool and MCP
+// server is read through them.
+export { setActivePacks, shadowPackIds, localPackIds, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
 export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
-export { packRuleClauses, switchablePackRules, withPackRules, packRuleOf, packRuleSaferWay } from "./pack-rules.js";
+export { packRuleClauses, switchablePackRules, withPackRules, packRuleOf, packRuleSaferWay, localRuleProblem, localPackRuleIds, coveredTypes } from "./pack-rules.js";
+export { loadLocalPacks, checkLocalPackText, localPackConfig, describeLocalPacks, MAX_LOCAL_PACKS } from "./pack-local.js";
+export type { LocalPacks, LocalPackProblem, LocalPackRefusal, LocalPackConfig, LocalPackCheckOptions } from "./pack-local.js";
 export type { PackRuleSettings, PackRuleMode } from "./pack-rules.js";
 export {
   activatePacks, loadPacks, installPack, removePack, verifyPackSignature, verifySignedData, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,

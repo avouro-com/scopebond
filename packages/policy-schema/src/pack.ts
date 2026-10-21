@@ -654,6 +654,9 @@ export interface PackValidationOptions {
   /** The engine level to read the pack at (default `PACK_ENGINE_LEVEL`). At level 1 every level-2 field is unknown, so a
    *  pack that uses one is invalid, exactly as an engine that predates level 2 reads it. */
   engine?: number;
+  /** Read the pack as a local one, whose trust root is the policy that names it: `signature` may be left out (one
+   *  that is there must still have its shape). A delivered pack is always read signed. */
+  unsigned?: boolean;
 }
 
 /** Check a pack document against the closed format. It checks the shape only; the signature is the engine's to verify, and
@@ -662,7 +665,7 @@ export function validatePack(doc: unknown, options: PackValidationOptions = {}):
   const level = options.engine ?? PACK_ENGINE_LEVEL;
   const c = new Checker(level, level >= 2 ? requiredTypesOf(doc) : new Set());
   if (!c.object(doc, "pack", ["format", "id", "version", "issued_at", "title", ...(level >= 2 ? PACK_LEVEL2_FIELDS.pack : []), "signature", "grammars", "profiles", "rules", "vectors"],
-    ["format", "id", "version", "issued_at", "signature", "grammars", "profiles", "rules", "vectors"])) return { valid: false, errors: c.errors };
+    ["format", "id", "version", "issued_at", ...(options.unsigned ? [] : ["signature"]), "grammars", "profiles", "rules", "vectors"])) return { valid: false, errors: c.errors };
   if (doc.format !== PACK_FORMAT) c.fail("pack.format", `must be "${PACK_FORMAT}"`);
   if (doc.requires !== undefined && c.object(doc.requires, "pack.requires", ["engine", "action_types"], ["engine"])) {
     c.integer(doc.requires.engine, "pack.requires.engine", 1, PACK_RULE_LIMITS.maxEngine);
@@ -674,7 +677,7 @@ export function validatePack(doc: unknown, options: PackValidationOptions = {}):
   c.string(doc.version, "pack.version", VERSION, 40);
   if (c.string(doc.issued_at, "pack.issued_at", ISSUED_AT, 40) && !Number.isFinite(Date.parse(doc.issued_at))) c.fail("pack.issued_at", "is not a real time");
   if (doc.title !== undefined) c.string(doc.title, "pack.title", undefined, 120);
-  if (c.object(doc.signature, "pack.signature", ["alg", "key_id", "value"], ["alg", "key_id", "value"])) {
+  if ((doc.signature !== undefined || !options.unsigned) && c.object(doc.signature, "pack.signature", ["alg", "key_id", "value"], ["alg", "key_id", "value"])) {
     if (doc.signature.alg !== "Ed25519") c.fail("pack.signature.alg", "must be Ed25519");
     c.string(doc.signature.key_id, "pack.signature.key_id", KEY_ID, 128);
     c.string(doc.signature.value, "pack.signature.value", SIG, 100);

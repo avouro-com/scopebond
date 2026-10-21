@@ -1,0 +1,154 @@
+{
+  "format": "scopebond:pack/v1",
+  "id": "build-hygiene",
+  "version": "1.0.0",
+  "issued_at": "2026-10-21T00:00:00Z",
+  "title": "Build hygiene: package publishes, global installs, lockfiles",
+  "requires": { "engine": 2 },
+  "grammars": [
+    {
+      "id": "node-package-managers",
+      "programs": ["npm", "pnpm", "yarn", "bun"],
+      "via": "build-hygiene",
+      "launchers": false,
+      "options": {
+        "valued": ["--registry", "--tag", "--access", "--otp", "--prefix", "-C", "--dir", "--filter", "--workspace", "-w", "--cwd", "--location"],
+        "flags": ["-g", "--global", "--save-dev", "-D", "--save", "-S", "--save-exact", "-E", "--ignore-scripts", "--no-git-checks", "--provenance", "--frozen-lockfile", "-y", "--yes"]
+      },
+      "commands": [
+        {
+          "path": [{ "optional": "npm" }, "publish"],
+          "emit": [{ "action_type": "deploy.release", "params": {
+            "provider": { "const": "package-registry" },
+            "environment": { "const": "production" },
+            "registry_host": { "host_of": { "flag": ["--registry"] } },
+            "tool": { "tool": true },
+            "operation": { "const": "package-publish" } } }]
+        },
+        {
+          "path": [{ "optional": "global" }, { "any": ["install", "i", "add"], "var": "verb" }],
+          "when": { "any": [{ "has": ["-g", "--global"] }, { "eq": [{ "flag": ["--location"] }, "global"] }, { "word": ["global"] }] },
+          "emit": [{ "action_type": "software.install",
+            "for_each": { "positionals": { "from": 0 } },
+            "params": {
+              "route": { "tool": true }, "ecosystem": { "const": "npm" }, "verb": { "map": { "var": "verb" }, "table": { "i": "install" }, "keep": true },
+              "name": { "ident": { "item": true } }, "global": { "const": true }, "risk_class": { "const": "sensitive" },
+              "operation": { "const": "global-install" } } }]
+        }
+      ]
+    },
+    {
+      "id": "cargo",
+      "programs": ["cargo"],
+      "via": "build-hygiene",
+      "launchers": false,
+      "options": { "valued": ["--registry", "--index", "--token", "--version", "--git", "--branch", "--tag", "--root", "-p", "--package"], "flags": ["--locked", "--force", "-f", "--allow-dirty", "--no-verify"] },
+      "commands": [
+        {
+          "path": ["publish"],
+          "emit": [{ "action_type": "deploy.release", "params": {
+            "provider": { "const": "package-registry" }, "environment": { "const": "production" }, "tool": { "const": "cargo" },
+            "operation": { "const": "package-publish" } } }]
+        },
+        {
+          "path": ["install"],
+          "when": { "not": { "defined": { "flag": ["--root"] } } },
+          "emit": [{ "action_type": "software.install",
+            "for_each": { "positionals": { "from": 0 } },
+            "params": {
+              "route": { "const": "cargo" }, "ecosystem": { "const": "cargo" }, "verb": { "const": "install" },
+              "name": { "ident": { "item": true } }, "global": { "const": true }, "risk_class": { "const": "sensitive" },
+              "operation": { "const": "global-install" } } }]
+        }
+      ]
+    },
+    {
+      "id": "package-uploaders",
+      "programs": ["twine", "gem", "poetry"],
+      "via": "build-hygiene",
+      "launchers": false,
+      "options": { "valued": ["--repository", "-r", "--repository-url", "--username", "-u", "--key", "--host"], "flags": ["--skip-existing", "--build", "--dry-run", "--non-interactive"] },
+      "commands": [
+        {
+          "path": [{ "any": ["upload", "push", "publish"] }],
+          "emit": [{ "action_type": "deploy.release", "params": {
+            "provider": { "const": "package-registry" }, "environment": { "const": "production" }, "tool": { "tool": true },
+            "operation": { "const": "package-publish" } } }]
+        }
+      ]
+    }
+  ],
+  "profiles": [],
+  "rules": [
+    {
+      "id": "package-publish",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": ["deploy.release"],
+      "param_bounds": { "via": { "pattern": "^(?!build-hygiene$)" } },
+      "title": "Package published to a registry",
+      "blockable": true,
+      "default_mode": "block",
+      "safer_way": "Leave publishing to the person or to the project's release workflow; a dry run (--dry-run) shows what would be published.",
+      "description": "Block publishing a package to a registry (npm, pnpm, yarn and bun publish, cargo publish, twine upload, gem push, poetry publish). A dry run is not matched."
+    },
+    {
+      "id": "global-install",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": ["software.install"],
+      "param_bounds": { "via": { "pattern": "^(?!build-hygiene$)" } },
+      "title": "Global install",
+      "blockable": true,
+      "default_mode": "monitor",
+      "safer_way": "Add the tool to the project's dev dependencies and run it with npx, pnpm exec or cargo run instead of installing it for the whole computer.",
+      "description": "Record installs for the whole computer rather than the project (npm, pnpm, yarn and bun with -g or global, cargo install)."
+    },
+    {
+      "id": "lockfile-edit",
+      "type": "action_allowlist",
+      "mode": "monitor",
+      "action_types": ["file.write"],
+      "param_bounds": { "path": { "pattern": "^(?!(?:.*/)?(?:package-lock\\.json|npm-shrinkwrap\\.json|pnpm-lock\\.yaml|yarn\\.lock|bun\\.lockb?|Cargo\\.lock|poetry\\.lock|Pipfile\\.lock|uv\\.lock|Gemfile\\.lock|composer\\.lock|go\\.sum)$)" } },
+      "title": "Lockfile edited or deleted",
+      "blockable": true,
+      "default_mode": "monitor",
+      "safer_way": "Let the package manager change the lockfile (install, add, update) instead of editing or deleting it.",
+      "description": "Record a lockfile written by hand or deleted (package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock, Cargo.lock, poetry.lock, Pipfile.lock, uv.lock, Gemfile.lock, composer.lock, go.sum)."
+    }
+  ],
+  "vectors": [
+    { "id": "npm-publish", "shell": { "command": "npm publish --access public" },
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "package-registry", "environment": "production", "tool": "npm", "operation": "package-publish", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "npm-publish-dry-run", "shell": { "command": "npm publish --dry-run" }, "expect": [] },
+    { "id": "pnpm-publish-registry", "shell": { "command": "pnpm publish --no-git-checks --registry https://registry.example.com/" },
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "package-registry", "environment": "production", "registry_host": "registry.example.com", "tool": "pnpm", "operation": "package-publish", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "yarn-npm-publish", "shell": { "command": "yarn npm publish --tag next" },
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "package-registry", "environment": "production", "tool": "yarn", "operation": "package-publish", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "npm-global-install", "shell": { "command": "npm install -g typescript" },
+      "expect": [{ "action_type": "software.install", "params": { "route": "npm", "ecosystem": "npm", "verb": "install", "name": "typescript", "global": true, "risk_class": "sensitive", "operation": "global-install", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "pnpm-global-add-two", "shell": { "command": "pnpm add --global serve http-server" },
+      "expect": [
+        { "action_type": "software.install", "params": { "route": "pnpm", "ecosystem": "npm", "verb": "add", "name": "serve", "global": true, "risk_class": "sensitive", "operation": "global-install", "via": "build-hygiene", "derived_from": "shell.exec" } },
+        { "action_type": "software.install", "params": { "route": "pnpm", "ecosystem": "npm", "verb": "add", "name": "http-server", "global": true, "risk_class": "sensitive", "operation": "global-install", "via": "build-hygiene", "derived_from": "shell.exec" } }
+      ] },
+    { "id": "yarn-global-add", "shell": { "command": "yarn global add serve" },
+      "expect": [{ "action_type": "software.install", "params": { "route": "yarn", "ecosystem": "npm", "verb": "add", "name": "serve", "global": true, "risk_class": "sensitive", "operation": "global-install", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "npm-i-location-global", "shell": { "command": "npm i --location=global eslint" },
+      "expect": [{ "action_type": "software.install", "params": { "route": "npm", "ecosystem": "npm", "verb": "install", "name": "eslint", "global": true, "risk_class": "sensitive", "operation": "global-install", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "npm-project-install", "shell": { "command": "npm install --save-dev vitest" }, "expect": [] },
+    { "id": "pnpm-install-frozen", "shell": { "command": "pnpm install --frozen-lockfile" }, "expect": [] },
+    { "id": "npm-run-build", "shell": { "command": "npm run build" }, "expect": [] },
+    { "id": "cargo-publish", "shell": { "command": "cargo publish --allow-dirty" },
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "package-registry", "environment": "production", "tool": "cargo", "operation": "package-publish", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "cargo-install", "shell": { "command": "cargo install ripgrep --locked" },
+      "expect": [{ "action_type": "software.install", "params": { "route": "cargo", "ecosystem": "cargo", "verb": "install", "name": "ripgrep", "global": true, "risk_class": "sensitive", "operation": "global-install", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "cargo-install-into-project", "shell": { "command": "cargo install --root ./tools ripgrep" }, "expect": [] },
+    { "id": "cargo-build", "shell": { "command": "cargo build --release" }, "expect": [] },
+    { "id": "twine-upload", "shell": { "command": "twine upload --skip-existing dist/pkg-1.0.0.tar.gz" },
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "package-registry", "environment": "production", "tool": "twine", "operation": "package-publish", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "gem-push", "shell": { "command": "gem push pkg-1.0.0.gem" },
+      "expect": [{ "action_type": "deploy.release", "params": { "provider": "package-registry", "environment": "production", "tool": "gem", "operation": "package-publish", "via": "build-hygiene", "derived_from": "shell.exec" } }] },
+    { "id": "poetry-publish-dry-run", "shell": { "command": "poetry publish --build --dry-run" }, "expect": [] }
+  ]
+}

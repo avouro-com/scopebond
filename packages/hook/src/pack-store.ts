@@ -44,6 +44,7 @@ import { writeAtomic } from "./managed.js";
 import { runPackVectors, setActivePacks } from "./packs.js";
 import { activateTaxonomyExtension } from "./pack-taxonomy.js";
 import { useNextKey } from "./policy-next-key.js";
+import { loadLocalPacks, type LocalPacks } from "./pack-local.js";
 
 export const PACKS_DIR = "packs";
 export const PACK_INDEX_FILE = "index.json";
@@ -84,6 +85,9 @@ export interface LoadedPacks {
   expires: Record<string, string>;
   /** The ids of the packs in force that the workspace's signed list put in shadow (they record, never block). */
   shadow?: string[];
+  /** The local packs the rules file names (pack-local.ts): those put in force beside these, and those not used. Set by
+   *  `activatePacks`. */
+  local?: LocalPacks;
 }
 
 /** When an index entry's version was last confirmed. */
@@ -280,13 +284,15 @@ export function loadPacks(dir: string, options: PackCheckOptions = {}): LoadedPa
   return { packs, problems, expiresAt: first ?? indexExpiresAt, expires, ...(shadow.length ? { shadow } : {}) };
 }
 
-/** Load the packs in this state directory and put them in force for the mapper (those in shadow record only). Never throws;
- *  on any failure no pack is in force. Returns what was loaded. */
+/** Load the packs in this state directory, and the local packs its rules file names (pack-local.ts), and put them in force for
+ *  the mapper (those in shadow record only; the local ones after the delivered ones). Never throws; on any failure no pack is
+ *  in force. Returns what was loaded. */
 export function activatePacks(dir: string, options: PackCheckOptions = {}): LoadedPacks {
   try {
     const loaded = loadPacks(dir, options);
-    setActivePacks(loaded.packs, loaded.shadow ?? []);
-    return loaded;
+    const local = loadLocalPacks(dir, loaded.packs, options);
+    setActivePacks(loaded.packs, loaded.shadow ?? [], local.packs);
+    return { ...loaded, local };
   } catch {
     setActivePacks([]);
     return { packs: [], problems: [{ ref: PACK_INDEX_FILE, reason: "invalid", message: "the packs could not be read" }], expiresAt: null, expires: {} };

@@ -227,7 +227,8 @@ blockable), `safer_way` (at most 160 characters, a hint for the coding agent) an
 `requires.engine: 2`; an engine that predates level 2 reads such a field as unknown and
 refuses that pack alone. `packEngineProblem` says why an engine cannot run a valid pack
 (`engine_too_old`, or `unknown_action_type` for a type `requires.action_types` names that
-it does not know); `validatePack(doc, { engine: 1 })` reads a pack as a level-1 engine does.
+it does not know); `validatePack(doc, { engine: 1 })` reads a pack as a level-1 engine does. `validatePack(doc, { unsigned: true })` reads a
+local pack, whose trust root is the policy that names it: its `signature` may be left out.
 
 **Taxonomy extensions.** `scopebond:taxonomy-ext/v1` (`src/taxonomy-ext.ts`, at the
 `./taxonomy-ext` subpath) adds action types as signed data:

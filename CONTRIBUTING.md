@@ -50,6 +50,14 @@ The CLA check must pass before a PR is merged.
 - Fail closed; no PII in receipts/anchors/evidence.
 - Add tests; keep schema and generated JSON Schema in agreement.
 
+## Contributing a rule pack
+
+General rule packs (data that teaches the hook what a common tool does, and rules for it) live in
+[`packages/hook/packs/`](packages/hook/packs/README.md), whose README is the authoring guide. A pack here must not
+describe a single vendor's tool or service. Give it at least ten vectors, run
+`scopebond packs test packages/hook/packs/` and the hook's tests, and explain each rule's default mode in the pull
+request. Packs are contributed under the same CLA as code.
+
 ## Trademarks
 
 "Scopebond", "Scopebond Gateway", and "Scopebond-compatible" are trademarks of

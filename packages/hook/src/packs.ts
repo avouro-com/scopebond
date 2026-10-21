@@ -599,25 +599,35 @@ export function deriveFromProfile(profile: PackProfile, server: string, tool: st
 
 let active: readonly Pack[] = [];
 let shadow: ReadonlySet<string> = new Set();
+let local: ReadonlySet<string> = new Set();
+
+const byId = (a: Pack, b: Pack): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : comparePackVersions(a.version, b.version));
 
 /** Set the packs the mapper reads (pack-store.ts `activatePacks`, after verifying them). Sorted by id, so the result never
  *  depends on the order they were found in. An empty list switches every pack off. `shadowIds` names the packs whose signed
- *  list says `shadow`: their rules record what they would block and never block (pack-rules.ts). */
-export function setActivePacks(packs: readonly Pack[], shadowIds: Iterable<string> = []): void {
-  active = [...packs].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : comparePackVersions(a.version, b.version)));
+ *  list says `shadow`: their rules record what they would block and never block (pack-rules.ts). `localPacks` are the local
+ *  packs the policy names (pack-local.ts): they come after every delivered pack, so a delivered pack reads a command, owns an
+ *  MCP server and defines a rule id first, and a local pack only adds to what the delivered packs do. */
+export function setActivePacks(packs: readonly Pack[], shadowIds: Iterable<string> = [], localPacks: readonly Pack[] = []): void {
+  const delivered = new Set(packs.map((p) => p.id));
+  const added = localPacks.filter((p) => !delivered.has(p.id));
+  active = [...[...packs].sort(byId), ...[...added].sort(byId)];
   shadow = new Set(shadowIds);
+  local = new Set(added.map((p) => p.id));
 }
 
 /** The ids of the packs in force that are in shadow. */
 export const shadowPackIds = (): ReadonlySet<string> => shadow;
+/** The ids of the packs in force that are local packs (pack-local.ts). */
+export const localPackIds = (): ReadonlySet<string> => local;
 
 /** The packs in force, as `id@version`. */
 export const activePackRefs = (): string[] => active.map(packRef);
 /** The packs in force, sorted by id. */
 export const activePacks = (): readonly Pack[] => active;
 
-/** What the packs in force derive from one simple command: the first pack (by id) whose grammar for this program derives
- *  anything. Never throws: a pack that fails here derives nothing. */
+/** What the packs in force derive from one simple command: the first pack (the delivered packs by id, then the local packs
+ *  by id) whose grammar for this program derives anything. Never throws: a pack that fails here derives nothing. */
 export function derivePackTargets(sc: SimpleCommand, probe: PackProbe = {}, packs: readonly Pack[] = active): PackAction[] {
   if (sc.opaque || packs.length === 0) return [];
   for (const pack of packs) {
@@ -634,14 +644,18 @@ export function derivePackTargets(sc: SimpleCommand, probe: PackProbe = {}, pack
 /** What the packs in force derive from one MCP call. The first profile (packs by id, then profile order) whose server words
  *  name the server's configured name owns the call; only when none does, the first whose words name the hint (the server's
  *  URL or launch command). The owning profile derives what it lists for the tool, and nothing for a tool it does not list:
- *  another profile is never asked, so a call is read the same way whichever tools a profile lists. */
+ *  another profile is never asked, so a call is read the same way whichever tools a profile lists. A local pack is asked only
+ *  when no delivered pack's profile names the server or the hint, so it can never take a call from a delivered pack. */
 export function derivePackMcp(server: string, tool: string, args: unknown, hint?: string, packs: readonly Pack[] = active, probe: PackProbe = {}): PackAction[] {
-  for (const by of hint === undefined ? [server] : [server, hint]) {
-    const words = serverWords(by);
-    for (const pack of packs) {
-      for (const profile of pack.profiles) {
-        if (!profile.servers.some((w) => words.has(w))) continue;
-        try { return deriveFromProfile(profile, server, tool, args, hint, probe) ?? []; } catch { return []; }
+  const groups = local.size ? [packs.filter((p) => !local.has(p.id)), packs.filter((p) => local.has(p.id))] : [packs];
+  for (const group of groups) {
+    for (const by of hint === undefined ? [server] : [server, hint]) {
+      const words = serverWords(by);
+      for (const pack of group) {
+        for (const profile of pack.profiles) {
+          if (!profile.servers.some((w) => words.has(w))) continue;
+          try { return deriveFromProfile(profile, server, tool, args, hint, probe) ?? []; } catch { return []; }
+        }
       }
     }
   }
