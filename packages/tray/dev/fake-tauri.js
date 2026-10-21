@@ -27,6 +27,49 @@
       what: "Reach https://pastebin.com/raw/x1", action_text: "https://pastebin.com/raw/x1", rule_title: "Contact websites and online services",
       project: "checkout", tool: "Codex", offers: null, reason_min: null },
   ];
+  // One block of each outcome the agent sends (block-outcome.ts), for the outcomes scene and the generated lists.
+  const outcomeBlocks = () => [
+    { action_id: "act-out-unblock-000001", summary: "file.read .env.production", at: ago(3), rule: "secret-read", can_act: true, acted: null,
+      what: "Read .env.production", action_text: ".env.production", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
+      offers: offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true }), reason_min: 0, outcome: "unblock", outcome_text: null, tries: 1 },
+    { action_id: "act-out-ask-0000000001", summary: "git.push origin main", at: ago(9), rule: "push-protected", can_act: true, acted: null,
+      what: "git push origin main", action_text: "git push origin main", rule_title: "Push straight to a protected branch", project: "checkout", tool: "Claude Code",
+      offers: offers({ ask: true }), reason_min: 0, outcome: "ask", outcome_text: null, tries: 3 },
+    { action_id: "act-out-always-000001", summary: "file.read receipts.db", at: ago(15), rule: "secret-read", can_act: false, acted: null,
+      what: "Read ~/.scopebond/receipts.db", action_text: "~/.scopebond/receipts.db", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
+      offers: null, reason_min: null, outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", tries: 12 },
+    { action_id: "act-out-rule-00000001", summary: "file.write .github/workflows/release.yml", at: ago(31), rule: "ci-config-write", can_act: false, acted: null,
+      what: "Edit .github/workflows/release.yml", action_text: ".github/workflows/release.yml", rule_title: "Change build and release settings", project: "billing-api",
+      tool: "Cursor", offers: null, reason_min: null, outcome: "workspace_rule", outcome_text: "Set by Acme. Ask an admin to change the rule.",
+      copy_details: "Edit .github/workflows/release.yml\nRule: Change build and release settings\nRecord: act-out-rule-00000001", tries: 1 },
+    { action_id: "act-out-install-00001", summary: "software.install left-pad", at: ago(47), rule: null, can_act: false, acted: null,
+      what: "Install left-pad 9.9.9 (npm)", action_text: "npm install left-pad@9.9.9", rule_title: "Install a package Safe Install flagged", project: "checkout",
+      tool: "Claude Code", offers: null, reason_min: null, outcome: "safe_install", outcome_text: "Blocked by Safe Install: it is on your workspace's list of known malware.",
+      copy_details: "Install left-pad 9.9.9 (npm)\nRule: Install a package Safe Install flagged\nRecord: act-out-install-00001", tries: 1 },
+    { action_id: "act-out-waiting-00001", summary: "shell.exec rm", at: ago(64), rule: "destructive-shell", can_act: false, acted: "asked",
+      what: "rm -rf D:/work/old-worktree", action_text: "rm -rf D:/work/old-worktree", rule_title: "Run a command that deletes data or shuts down the computer",
+      project: "checkout", tool: "Claude Code", offers: null, reason_min: null, outcome: "requested", outcome_text: "Waiting for an admin",
+      request: { state: "waiting", answered_by: null, answered_at: null }, tries: 1 },
+    { action_id: "act-out-approved-0001", summary: "file.write .github/workflows/ci.yml", at: ago(80), rule: "ci-config-write", can_act: false, acted: "asked",
+      what: "Edit .github/workflows/ci.yml", action_text: ".github/workflows/ci.yml", rule_title: "Change build and release settings", project: "checkout", tool: "Claude Code",
+      offers: null, reason_min: null, outcome: "requested", outcome_text: "Approved by Morgan: ask Claude Code to try again",
+      request: { state: "approved", answered_by: "Morgan", answered_at: ago(70) }, tries: 1 },
+    { action_id: "act-out-declined-0001", summary: "net.fetch pastebin.com", at: ago(120), rule: "network-egress", can_act: false, acted: "asked",
+      what: "Reach https://pastebin.com/raw/x1", action_text: "https://pastebin.com/raw/x1", rule_title: "Contact websites and online services", project: "checkout",
+      tool: "Codex", offers: null, reason_min: null, outcome: "requested", outcome_text: "Declined by Morgan", request: { state: "declined", answered_by: "Morgan", answered_at: ago(110) }, tries: 1 },
+    { action_id: "act-out-allowed-00001", summary: "file.read .env.staging", at: ago(150), rule: "secret-read", can_act: false, acted: "allowed",
+      what: "Read .env.staging", action_text: ".env.staging", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
+      offers: null, reason_min: null, outcome: "allowed", outcome_text: "Allowed: ask Claude Code to try again", tries: 1 },
+  ];
+  /** n blocks over the last week, cycling through every outcome (blocks=n in the address). */
+  const manyBlocks = (n) => {
+    const kinds = outcomeBlocks();
+    return Array.from({ length: n }, (_, i) => {
+      const b = kinds[i % kinds.length];
+      const minutes = Math.round(i * (n > 40 ? 7 * 24 * 60 / n : 12));
+      return { ...b, action_id: "act-gen-" + String(i).padStart(14, "0"), at: ago(minutes), what: b.what + (i >= kinds.length ? " #" + i : ""), tries: i % 7 === 0 ? 1 + (i % 5) : 1 };
+    });
+  };
   const actions = [
     { id: "check_now", label: "Check now", route: "/check" },
     { id: "open_workspace", label: "Open workspace", route: "/open-workspace" },
@@ -79,6 +122,15 @@
   // Only the scenes above: the name from the address is compared with each, never used to look one up.
   const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected : scenes.protected;
   let model = scene === "not_answering" ? null : make();
+  // blocks=n: the list of n blocks over the week, every outcome (0, 3, 40 and 200 are the reviewed sizes); outcomes=1: one of each.
+  if (model && (params.get("blocks") !== null || params.get("outcomes"))) {
+    const list = params.get("outcomes") ? outcomeBlocks() : manyBlocks(Math.max(0, Math.min(500, Number(params.get("blocks")) || 0)));
+    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    const today = list.filter((b) => Date.parse(b.at) >= midnight.getTime()).length;
+    model.recent_blocks = list;
+    model.today = { actions: 16867, blocked: today };
+    model.detail = "Rules checked 3 min ago · " + (today ? today.toLocaleString("en-US") + " blocked today" : "nothing blocked today");
+  }
   // What the workspace lets a person do (mode=self, the default; approval: only ask to unblock, an admin decides;
   // automatic: one length the workspace set, applied at once and reviewed by an admin later; final: nothing): the agent
   // says it per block in `offers`, and `can_ask` says whether asking is on under any rule.
@@ -121,6 +173,7 @@
   const handlers = new Map(Object.entries({
     panel_state: () => state(),
     panel_close: () => { say("(The panel would close here.)"); return null; },
+    panel_ready: () => null,
     panel_action: ({ id }) => { say(id === "send_now" ? "Sent 312 records; nothing is waiting" : id === "open_workspace" ? "Opened this computer's page in your workspace" : "Checked just now: all good"); if (id === "send_now") model = scenes.protected(); return true; },
     panel_command: ({ id }) => {
       if (id.startsWith("notifications:")) notifications = id.slice(14);

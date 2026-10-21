@@ -5,6 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { toolName } from "./tray-model.js";
 import { MANAGED_DOC_FILE, mergeWorkspaceAllowances, readActionText, readAllowances, readBlocked, readRequests, ruleName, type Allowance } from "@scopebond/hook";
 
 /** An allowance in force or waiting for an admin. `choice`: once (the next try), fifteen (15 minutes) or always (until
@@ -42,6 +43,8 @@ export interface AskedItem {
   answered_by: string | null;
   note: string | null;
   answered_at: string | null;
+  /** The coding tool that asked ("Claude Code"), for "Approved: ask Claude Code to try again"; null when unknown. */
+  tool: string | null;
 }
 
 const MAX_ITEMS = 50;
@@ -148,6 +151,7 @@ export function askedList(dir: string): AskedItem[] {
         answered_by: said?.by ?? (approved ? extra(approved, "approved_by", 120) : null),
         note: said?.note ?? (approved ? extra(approved, "note", 300) : null),
         answered_at: said?.at ?? (state === "approved" && approved ? approved.created_at : null),
+        tool: toolName(r.harness),
       };
     });
 }

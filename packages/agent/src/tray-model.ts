@@ -72,7 +72,7 @@ export interface RecentBlock {
   /** Newer still (an older tray leaves them out): how many times the coding agent tried it (retries folded, 1 for a single
    *  block) and when it first did; the one outcome the row shows (block-outcome.ts), the sentence that stands in for a
    *  button, the text "Copy details" copies, and the person's request for it, when they asked. */
-  tries?: number; first_at?: string;
+  tries?: number; first_at?: string; group_id?: string | null;
   outcome?: BlockOutcome; outcome_text?: string | null; copy_details?: string | null; request?: BlockRequest | null;
 }
 

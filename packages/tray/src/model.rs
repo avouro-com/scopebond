@@ -81,6 +81,13 @@ pub struct RecentBlock {
     /// What may be done now (none when nothing can be, or from an older agent).
     pub offers: Option<BlockOffers>,
     pub reason_min: Option<u32>,
+    /// How many times the coding agent tried it (retries folded; 0 from an older agent, read as 1).
+    pub tries: u32,
+    /// The first try's action id, the same for every retry, so a retry is not announced again (none from an older agent).
+    pub group_id: Option<String>,
+    /// The one outcome the row shows, and the sentence that stands in for a button (none from an older agent).
+    pub outcome: Option<String>,
+    pub outcome_text: Option<String>,
 }
 
 /// The rule's name when the agent sends none (an older agent): never an empty line, never a rule id.
@@ -189,6 +196,8 @@ pub struct AskedItem {
     pub answered_by: Option<String>,
     pub note: Option<String>,
     pub answered_at: Option<String>,
+    /// The coding tool that asked ("Claude Code"); none from an older agent.
+    pub tool: Option<String>,
 }
 
 impl TrayModel {

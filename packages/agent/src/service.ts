@@ -597,7 +597,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         project: projectName(b.repository) ?? b.project ?? null, tool,
         offers,
         reason_min: q ? q.reason_min : null,
-        tries: b.tries ?? 1, first_at: b.first_at ?? b.at,
+        tries: b.tries ?? 1, first_at: b.first_at ?? b.at, group_id: b.group_id ?? b.action_id,
         ...outcome,
         request,
       };

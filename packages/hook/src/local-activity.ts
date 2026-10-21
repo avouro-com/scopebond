@@ -35,6 +35,8 @@ export interface RecentBlockRecord {
   project?: string | null;
   tries?: number;
   first_at?: string;
+  /** The first try's action id: the same for every retry of the block, so the tray announces it once. */
+  group_id?: string | null;
   clause?: string | null;
   kind?: BlockNote["kind"];
   verdict?: string | null;
@@ -153,11 +155,12 @@ export function foldRetries(newestFirst: Array<RecentBlockRecord & { session: st
     if (group && Number.isFinite(at) && group.earliest - at <= RETRY_WINDOW_MS) {
       group.tries = (group.tries ?? 1) + 1;
       group.first_at = b.at;
+      group.group_id = b.action_id;
       group.earliest = at;
       continue;
     }
     const { session: _session, ...shown } = b;
-    const made = { ...shown, tries: 1, first_at: b.at, earliest: Number.isFinite(at) ? at : 0 };
+    const made = { ...shown, tries: 1, first_at: b.at, group_id: b.action_id, earliest: Number.isFinite(at) ? at : 0 };
     open.set(key, made);
     groups.push(made);
   }
