@@ -120,6 +120,18 @@ export function validatePolicy(value: unknown): ValidationResult {
           (clause as Record<string, unknown>).min_approvals !== 1) {
         errors.push(`/clauses/${clause.id}/min_approvals only one approval is supported before DEV10`);
       }
+      if (clause.type === "action_allowlist" && (clause as Record<string, unknown>).exceptions) {
+        // An exception's patterns are compiled by violates() too: an invalid one is an invalid policy, never a throw.
+        for (const exception of (clause as Record<string, unknown>).exceptions as Array<Record<string, ParamBound>>) {
+          for (const [field, bound] of Object.entries(exception)) {
+            for (const pattern of [bound.pattern, bound.items?.pattern]) {
+              if (typeof pattern !== "string") continue;
+              // eslint-disable-next-line security/detect-non-literal-regexp -- compiles the policy author's own exception pattern only to check that it is a valid regular expression
+              try { new RegExp(pattern); } catch { errors.push(`/clauses/${clause.id}/exceptions/${field} has an invalid pattern`); }
+            }
+          }
+        }
+      }
       if (clause.type === "action_allowlist" && clause.param_bounds) {
         for (const [field, bound] of Object.entries(clause.param_bounds as Record<string, ParamBound>)) {
           if (typeof bound.min === "number" && typeof bound.max === "number" && bound.min > bound.max) {
@@ -174,6 +186,8 @@ interface EvalClause extends Clause {
   max_count: number;
   approvers: string[];
   param_bounds?: Record<string, ParamBound>;
+  // action_allowlist: sets of bounds that excuse an action from `param_bounds`
+  exceptions?: Array<Record<string, ParamBound>>;
   // sequence
   first_action_types: string[];
   then_action_types: string[];
@@ -222,6 +236,22 @@ function elementSatisfiesBound(el: unknown, b: ScalarBound): boolean {
   // eslint-disable-next-line security/detect-non-literal-regexp -- the policy author's own param_bounds pattern, already compiled once by validatePolicy(); never built from action text
   if (b.pattern && (typeof el !== "string" || !new RegExp(b.pattern).test(el))) return false;
   return true;
+}
+
+/** Whether a param value meets a whole bound: a scalar bound, or an array bound (`items`, every element by default or any
+ *  one with `match: "any"`). An absent value, or one of another type, never does; an empty array never meets an array bound
+ *  here, so an exception that names a list is met only by a list that holds something. */
+function meetsBound(val: unknown, b: ParamBound): boolean {
+  if (b.items) {
+    if (!Array.isArray(val) || val.length === 0) return false;
+    return b.match === "any" ? val.some((el) => elementSatisfiesBound(el, b.items!)) : val.every((el) => elementSatisfiesBound(el, b.items!));
+  }
+  return val !== undefined && elementSatisfiesBound(val, b);
+}
+
+/** Whether an action is excused from an action allowlist clause's bounds: it meets every bound of one of its exceptions. */
+function excepted(clause: EvalClause, p: Record<string, unknown>): boolean {
+  return (clause.exceptions ?? []).some((exception) => Object.entries(exception).every(([field, b]) => meetsBound(p[field], b)));
 }
 
 // Minimal ISO-8601 duration → milliseconds (days/hours/minutes/seconds).
@@ -644,7 +674,8 @@ export function violates(
     }
 
     else if (t === "action_allowlist") {
-      if (listHas(clause.action_types, c.intent?.action_type) && clause.param_bounds) {
+      // An action one of the clause's exceptions describes is covered by the clause and not checked against its bounds.
+      if (listHas(clause.action_types, c.intent?.action_type) && clause.param_bounds && !excepted(clause, p)) {
         for (const [field, b] of Object.entries(clause.param_bounds)) {
           const val = p[field];
           const items = b.items;

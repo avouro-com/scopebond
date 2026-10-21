@@ -30,6 +30,11 @@ export interface DeleteVerdict {
   /** For a contained delete: each target as a path (relative to the working folder, or under the temp folder), so the
    *  file rules judge it as a write. */
   paths: string[];
+  /** For a delete that reaches outside the working folder: each target that is not contained, as a full path (`/x/y`,
+   *  `c:/x/y`, `~/x/y`) with `.` and `..` resolved, when every one of them could be read and none is a root, holds a
+   *  wildcard or names a protected place. What a workspace's exception for the program compares with its folders; absent,
+   *  no exception can apply. */
+  targets?: string[];
 }
 
 // cmd's own deleters read `/s`, `/q`, `/a:h` as switches, not paths.
@@ -83,6 +88,9 @@ const isProtectedName = (seg: string): boolean => {
   if (PROTECTED_ANYWHERE.has(s) || PROTECTED_NAMED.has(s) || SECRET_FILE.test(s)) return true;
   return (s === ".env" || s.startsWith(".env.")) && !ENV_TEMPLATE.test(s);
 };
+/** Whether path segments name a protected place (the repository's history, Scopebond's folder, credentials, CI and the coding
+ *  agents' settings): a delete never reaches one, and no workspace exception names one. */
+export const namesProtectedPlace = (segs: string[]): boolean => segs.some(isProtectedName) || inProtectedPlace(segs);
 const isWildcard = (seg: string): boolean => /[*?[]/.test(seg);
 /** A segment of wildcards (and dots) alone: `*`, `*.*`, `.*`, `**`, `?`, `[a-z]*`. */
 const wildcardOnly = (seg: string): boolean => isWildcard(seg) && seg.replace(/\[[^\]]*\]|[*?.]/g, "") === "";
@@ -202,8 +210,23 @@ function moved(base: Base, target: string | undefined, cwd: string | undefined):
   return segs[0] === ".." ? null : segs.join("/");
 }
 
+/** A target outside the working folder as a full path, for a workspace's exception to compare: `prefix` (`/`, `c:/` or
+ *  `~/`) and the resolved segments after it. Null when there is nothing after the root, a segment holds a wildcard, or one
+ *  names a protected place: no exception reaches those. */
+function fullTarget(prefix: string, segs: string[]): string | null {
+  if (segs.length === 0 || segs[0] === ".." || segs.some((s) => s.length > MAX_NAME || isWildcard(s) || isProtectedName(s))) return null;
+  if (inProtectedPlace(segs)) return null;
+  return prefix + segs.join("/");
+}
+/** The full path of an absolute target (`/x`, `C:/x`), its drive letter in lower case. */
+function absoluteTarget(w: string): string | null {
+  const drive = /^([A-Za-z]):/.exec(w);
+  if (drive) return fullTarget(`${drive[1].toLowerCase()}:/`, resolve(w.slice(2)));
+  return fullTarget("/", resolve(w));
+}
+
 /** One target word (a brace alternative, a comma part) where the command runs. */
-function judgeTarget(word: string, base: Base, cwd: string | undefined): { scope: DeleteScope; path?: string } {
+function judgeTarget(word: string, base: Base, cwd: string | undefined): { scope: DeleteScope; path?: string; target?: string | null } {
   const w = word.replace(/\\/g, "/");
   if (w === "" || w.length > MAX_TARGET) return { scope: "unknown" };
   const temp = TEMP_VARIABLE.exec(w) ?? TEMP_FOLDER.exec(w);
@@ -212,10 +235,11 @@ function judgeTarget(word: string, base: Base, cwd: string | undefined): { scope
     return scope === "contained" ? { scope, path: w } : { scope };
   }
   if (RUNTIME_VALUE.test(w) || SHORT_NAME.test(w) || providerPath(w)) return { scope: "unknown" };
-  if (w.startsWith("~")) return { scope: "outside" };
+  // `~user` is another account's home: never a target an exception names.
+  if (w.startsWith("~")) return { scope: "outside", target: w === "~" || w.startsWith("~/") ? fullTarget("~/", resolve(w.slice(1))) : null };
   if (isRooted(w)) {
     const rest = below(w, cwd);
-    if (!rest) return { scope: "outside" };
+    if (!rest) return { scope: "outside", target: absoluteTarget(w) };
     const scope = judgeInside(rest);
     return scope === "contained" ? { scope, path: rest.join("/") } : { scope };
   }
@@ -224,7 +248,9 @@ function judgeTarget(word: string, base: Base, cwd: string | undefined): { scope
   if (base !== "" && w.split("/").includes("..")) return { scope: "unknown" };
   const segs = resolve(base ? `${base}/${w}` : w);
   const scope = judgeInside(segs);
-  return scope === "contained" ? { scope, path: segs.join("/") } : { scope };
+  if (scope === "contained") return { scope, path: segs.join("/") };
+  // A path that climbs out of the working folder is named by where it lands.
+  return { scope, target: scope === "outside" && segs[0] === ".." && cwd && isRooted(slashed(cwd)) ? absoluteTarget(`${slashed(cwd)}/${segs.join("/")}`) : null };
 }
 
 /** The words a delete names as targets: its operands, `-Path`/`-LiteralPath` values, with options, cmd switches and the
@@ -272,15 +298,24 @@ function judgeDelete(sc: SimpleCommand, base: Base, cwd: string | undefined, exp
   const words = targetWords(prog, sc.argv);
   if (!words.some((w) => w.replace(/,/g, "") !== "")) return { scope: "none", paths: [] };
   const paths: string[] = [];
+  // The first target that is not contained decides the scope; every such target is read on, for an exception to compare.
+  let scope: DeleteScope = "contained";
+  let targets: string[] | null = [];
   for (const word of words) {
     // Brace lists first (`{dist,build}`), then a PowerShell list (`Remove-Item dist, build`) names each part.
     for (const alt of expand(word).flatMap((w) => w.split(",")).filter((w) => w !== "")) {
       const judged = judgeTarget(alt, base, cwd);
-      if (judged.scope !== "contained") return { scope: judged.scope, paths: [] };
-      if (judged.path !== undefined && !paths.includes(judged.path)) paths.push(judged.path);
+      if (judged.scope === "contained") {
+        if (judged.path !== undefined && !paths.includes(judged.path)) paths.push(judged.path);
+        continue;
+      }
+      if (scope === "contained") scope = judged.scope;
+      if (targets !== null && judged.scope === "outside" && judged.target) { if (!targets.includes(judged.target)) targets.push(judged.target); }
+      else targets = null;
     }
   }
-  return { scope: "contained", paths };
+  if (scope === "contained") return { scope, paths };
+  return { scope, paths: [], ...(targets?.length ? { targets } : {}) };
 }
 
 /** Walk the simple commands of one call in order, following `cd`, and judge each delete. */
@@ -310,6 +345,8 @@ export function deleteVerdicts(commands: SimpleCommand[], text: string, cwd: str
       for (const [sc, v] of verdicts) if (v.scope === "contained") verdicts.set(sc, { scope: "unknown", paths: [] });
     }
   }
+  // A call read two ways names no target an exception could rely on.
+  if (windowsText !== null) for (const [sc, v] of verdicts) if (v.targets) verdicts.set(sc, { scope: v.scope, paths: v.paths });
   return verdicts;
 }
 

@@ -186,3 +186,15 @@ test("a deleter removed from the list is not judged by its targets either", asyn
     assert.equal(d.decision, "allow");
   } finally { rt.close(); }
 });
+
+test("a delete that reaches outside the working folder records where, for a workspace's exception to compare", () => {
+  const targets = (command, tool = "Bash", cwd = POSIX) => [mapClaudeToolUse({ tool_name: tool, tool_input: { command }, cwd })].flat()
+    .find((m) => m.intent.action_type === "shell.exec").intent.params.delete_targets;
+  assert.deepEqual(targets("rm -rf ~/scratch/a/../b"), ["~/scratch/b"]);
+  assert.deepEqual(targets("rm -rf dist ../shared/cache /srv/x"), ["/shared/cache", "/srv/x"], "a contained target needs no exception and is left out");
+  assert.deepEqual(targets("Remove-Item -Recurse -Force C:\\Builds\\old", "PowerShell", WINDOWS), ["c:/Builds/old"]);
+  // Nothing an exception could rely on: a protected place, a root, a wildcard, a value known only at run time, another account.
+  for (const command of ["rm -rf ~/.ssh", "rm -rf ~/x/../.scopebond", "rm -rf /", "rm -rf ~", "rm -rf ~/x/*", "rm -rf ~/$X", "rm -rf ~other/x", "rm -rf ~/x ~/.aws", "rm -rf dist"]) {
+    assert.equal(targets(command), undefined, command);
+  }
+});

@@ -98,6 +98,8 @@ export function validateAction(value: unknown): ValidationResult {
 
 const POLICY_KEYS = ["vocabulary_version", "assets", "policy_id", "version", "agent_id", "clauses"] as const;
 const CLAUSE_BASE_KEYS = ["id", "type", "mode", "description"] as const;
+/** The most exceptions one action allowlist clause may carry. */
+const MAX_EXCEPTIONS = 50;
 
 // A scalar bound: min / max / enum / pattern. Used both at the top level and as
 // the `items` of an array bound.
@@ -180,12 +182,18 @@ const CLAUSE_VALIDATORS: Record<string, (c: Obj) => boolean> = {
     isNonEmptyStringArray(c.hosts) && (!("paths" in c) || isStringArray(c.paths)) &&
     (!("methods" in c) || isStringArray(c.methods)),
   action_allowlist: (c) => {
-    if (!onlyKeys(c, [...CLAUSE_BASE_KEYS, "action_types", "param_bounds"])) return false;
+    if (!onlyKeys(c, [...CLAUSE_BASE_KEYS, "action_types", "param_bounds", "exceptions"])) return false;
     if (!isNonEmptyStringArray(c.action_types)) return false;
     if ("param_bounds" in c) {
       const pb = c.param_bounds;
       if (!isPlainObject(pb) || Object.keys(pb).length < 1) return false;
       if (!Object.values(pb).every(isParamBound)) return false;
+    }
+    // Each exception is a set of bounds (1 to 16), and there are 1 to 50 of them: an empty set would excuse every action.
+    if ("exceptions" in c) {
+      const ex = c.exceptions;
+      if (!Array.isArray(ex) || ex.length < 1 || ex.length > MAX_EXCEPTIONS) return false;
+      if (!ex.every((e) => isPlainObject(e) && Object.keys(e).length >= 1 && Object.keys(e).length <= 16 && Object.values(e).every(isParamBound))) return false;
     }
     return true;
   },

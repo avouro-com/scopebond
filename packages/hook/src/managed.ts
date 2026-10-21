@@ -41,6 +41,7 @@ import type { Recommended } from "./client-health.js";
 import type { SignatureState } from "./policy-signature.js";
 import { validSessionBudgets } from "./session-budget-shape.js";
 import { blockedServiceClauses, validBlockedServices, type BlockedService } from "./service-rules.js";
+import { exceptionHosts, packExceptionBounds, shellExceptionBounds, validRuleExceptions, type ExceptionBounds, type RuleException } from "./rule-exceptions.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
 export const MANAGED_META_FILE = "managed-meta.json";
@@ -115,7 +116,8 @@ export interface OverrideTerms {
 }
 /**  rule modes, in the workspace's words: off = Off (sent only to a hook that reports `rule_off`), monitor = Monitor,
  *  block = Block, override = "Block, person may allow", ask = "Block, person may ask". */
-export type ManagedRule = { mode: "off" | "monitor" | "block" | "override" | "ask"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
+export type ManagedRule = { mode: "off" | "monitor" | "block" | "override" | "ask"; override?: OverrideTerms; exceptions?: RuleException[] }
+  & Partial<Record<ListKey | ExclusionKey, string[]>>;
 const MODES = new Set(["off", "monitor", "block", "override", "ask"]);
 /** Whether a rule in this mode stops what it matches (Block, or Block with a person's answer). */
 const blocks = (rule: ManagedRule | undefined): boolean => rule !== undefined && rule.mode !== "monitor" && rule.mode !== "off";
@@ -158,6 +160,7 @@ export function floorDocument(doc: ManagedDocument, decided?: string): ManagedDo
     delete rest.override;
     delete rest.excluded_paths;
     delete rest.excluded_branches;
+    delete rest.exceptions;
     return [id, { ...rest, mode: "monitor" }];
   })) as ManagedDocument["rules"];
   return { ...doc, rules };
@@ -265,6 +268,8 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
     if (acts !== ("override" in rule) || (acts && !validTerms(rule.override))) return bad(`rule ${id} has invalid override terms`);
     for (const key of Object.keys(rule)) {
       if (key === "mode" || key === "override") continue;
+      // Exceptions (rule-exceptions.ts): the rule's own kind, checked whole.
+      if (key === "exceptions") { if (!validRuleExceptions(id, rule.exceptions)) return bad(`rule ${id} has invalid exceptions`); continue; }
       const listKey = LIST_OF[id as ManagedRuleId];
       const exclusionKey = EXCLUSIONS_OF[id as ManagedRuleId];
       const pattern = key === listKey ? LIST_PATTERN[listKey] : key === exclusionKey ? EXCLUSION_PATTERN[exclusionKey] : null;
@@ -320,11 +325,11 @@ const withBound = (clause: Clause, key: string, pattern: string): Clause => ({ .
  *  or is only known when it runs) is still denied. */
 function offClause(clause: Clause): Clause {
   const what = clause.id === "safe-shell" ? "Destructive programs run" : "These actions are allowed";
-  const off: Clause = { id: clause.id, type: "action_allowlist", mode: "monitor", action_types: clause.action_types as string[],
-    description: `${what} and are not recorded as matches: your workspace switched this rule off.` };
+  const description = `${what} and are not recorded as matches: your workspace switched this rule off.`;
+  const off: Clause = { id: clause.id, type: "action_allowlist", mode: "monitor", action_types: clause.action_types, description };
   if (clause.id !== "safe-shell") return off;
   return { ...off, mode: "enforce", param_bounds: { [SAFE_SHELL_PARAM]: { pattern: "^.+" } },
-    description: `${off.description} A command that could not be read, or whose program is only known when it runs ($VAR, $(…), eval of a variable), is still denied.` };
+    description: `${description} A command that could not be read, or whose program is only known when it runs ($VAR, $(…), eval of a variable), is still denied.` };
 }
 
 /** The rules that block on this computer under workspace rules (the rest record), by the computer's own rule ids: the
@@ -368,11 +373,17 @@ export function offRuleIds(local: RuleSet, doc: ManagedDocument): Set<string> {
 }
 
 /** What the workspace document changes in the rule packs' clauses (pack-rules.ts), which join the policy when it is loaded:
- *  the target rules it switched Off. Pure. */
-export interface PackRuleAdjustments { off: ReadonlySet<string> }
+ *  the target rules it switched Off, and each target rule's exceptions as bounds on the actions the packs derive. */
+export interface PackRuleAdjustments { off: ReadonlySet<string>; exceptions: Readonly<Record<string, ExceptionBounds[]>> }
+/** `PackRuleAdjustments` from a workspace document (none: nothing changes). Pure. */
 export function packRuleAdjustments(doc: ManagedDocument | null, local: RuleSet = defaultRules()): PackRuleAdjustments {
-  if (!doc) return { off: new Set() };
-  return { off: new Set([...offRuleIds(local, doc)].filter((id) => (OPTIONAL_RULE_IDS as readonly string[]).includes(id))) };
+  if (!doc) return { off: new Set(), exceptions: {} };
+  const exceptions: Record<string, ExceptionBounds[]> = {};
+  for (const id of OPTIONAL_RULE_IDS) {
+    const bounds = packExceptionBounds(doc.rules[id]?.exceptions ?? []);
+    if (bounds.length) exceptions[id] = bounds;
+  }
+  return { off: new Set([...offRuleIds(local, doc)].filter((id) => (OPTIONAL_RULE_IDS as readonly string[]).includes(id))), exceptions };
 }
 
 /** The workspace document in force on this computer, or null (none, or unreadable). */
@@ -422,6 +433,8 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
       // History protection is its own setting: it blocks when the workspace turned it on, whether ordinary pushes block or record,
       // and skipping ordinary pushes to a branch never skips it.
       if (blocks(r["force-push-protected"]) && (!blocks(r["push-protected"]) || excluded.length)) clauses.push(historyGuard());
+    } else if (clause.id === "safe-shell" && r["destructive-shell"].exceptions?.length) {
+      clauses.push({ ...clause, exceptions: shellExceptionBounds(r["destructive-shell"].exceptions) });
     } else if (clause.id === "protect-read" && r["secret-read"].excluded_paths?.length) {
       clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["secret-read"].excluded_paths))));
     } else if (clause.id === "protect-write" && r["ci-config-write"].excluded_paths?.length) {
@@ -430,10 +443,12 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
   }
   if (blocks(r["network-egress"])) {
     const keysAt = clauses.findIndex((c) => c.id === "keys");
+    // A site the workspace excepts is allowed like the sites it lists.
+    const hosts = union(r["network-egress"].allowed_hosts ?? [], exceptionHosts(r["network-egress"].exceptions));
     clauses.splice(keysAt < 0 ? clauses.length : keysAt, 0, {
       id: "allowed-sites", type: "action_allowlist", mode: "enforce", action_types: ["net.fetch"],
-      param_bounds: { host: { pattern: hostPattern(r["network-egress"].allowed_hosts ?? []) } },
-      description: `Deny web requests to sites other than ${r["network-egress"].allowed_hosts!.join(", ")}. Set by your workspace.`,
+      param_bounds: { host: { pattern: hostPattern(hosts) } },
+      description: `Deny web requests to sites other than ${hosts.join(", ")}. Set by your workspace.`,
     });
   }
   // Blocked services come after every ordinary rule (an action an ordinary rule blocks is explained by that rule) and before

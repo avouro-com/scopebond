@@ -24,8 +24,9 @@ const switchable = (rule: Record<string, unknown>): boolean =>
   (TARGET_RULES as readonly string[]).includes(String(rule.id))
   && typeof rule.param_bounds === "object" && rule.param_bounds !== null && Object.keys(rule.param_bounds).length > 0;
 
-/** What a workspace changes in the packs' rules (managed.ts `packRuleAdjustments`): the target rules it switched Off. */
-export interface PackRuleSettings { off?: ReadonlySet<string> }
+/** What a workspace changes in the packs' rules (managed.ts `packRuleAdjustments`): the target rules it switched Off, and
+ *  exceptions (rule-exceptions.ts) a rule's clause takes beside its own. */
+export interface PackRuleSettings { off?: ReadonlySet<string>; exceptions?: Readonly<Record<string, readonly Record<string, unknown>[]>> }
 
 /** A target rule switched Off: an allow clause with no bounds for its action types, so they stay covered and nothing matches. */
 const offClause = (rule: Record<string, unknown>, id: string): Clause => ({
@@ -44,7 +45,9 @@ export function packRuleClauses(enforced: ReadonlySet<string>, packs: readonly P
       if (seen.has(id)) continue;
       seen.add(id);
       if (settings.off?.has(id) && switchable(rule) && rule.type === "action_allowlist" && Array.isArray(rule.action_types)) { out.push(offClause(rule, id)); continue; }
-      out.push({ ...rule, id, mode: switchable(rule) && enforced.has(id) ? "enforce" : "monitor" });
+      const extra = switchable(rule) && rule.type === "action_allowlist" ? settings.exceptions?.[id] ?? [] : [];
+      const own = Array.isArray(rule.exceptions) ? rule.exceptions : [];
+      out.push({ ...rule, id, mode: switchable(rule) && enforced.has(id) ? "enforce" : "monitor", ...(extra.length ? { exceptions: [...own, ...extra] } : {}) });
     }
   }
   return out;

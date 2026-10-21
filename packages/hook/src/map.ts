@@ -1577,8 +1577,9 @@ const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
  *  every target is contained also records each target as a write, so the file rules (protected places, workspace roots) judge
  *  what it removes. */
 function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, cwd?: string): Mapped[] {
+  // A delete that reaches outside the working folder also carries those targets, for a workspace's exception to compare.
   const out = mapped.map((m) => (m.intent.action_type === "shell.exec"
-    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict) } } }
+    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict), ...(verdict?.targets ? { delete_targets: verdict.targets } : {}) } } }
     : m));
   if (verdict?.scope !== "contained") return out;
   const seen = new Set(out.filter((m) => m.intent.action_type === "file.write").map((m) => String(m.intent.params.path)));
