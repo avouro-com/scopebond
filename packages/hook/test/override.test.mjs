@@ -6,7 +6,7 @@ import { ENFORCE } from "./enforce-all.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, inspectManaged, compileManaged, digestRules, defaultRules,
@@ -285,4 +285,59 @@ test("the one-line summary writes out control, bidi and zero-width characters, s
   assert.equal(summary.includes(rlo), false);
   assert.equal(revealHidden("git push origin main"), "git push origin main");
   assert.equal(actionSummary({ action_type: "repo.write", params: { path: `src/${String.fromCharCode(0x2066)}a.ts` } }), "src/⟨U+2066⟩a.ts");
+});
+
+test("a reason is optional where the workspace's minimum is 0: the unblock is recorded with no reason digest", async () => {
+  const { validateOverrideRecord } = await import("@scopebond/gateway");
+  const { readAllowances, readRequests, readBlocked, actOnBlocked } = await import("../dist/index.js");
+  const at = (t) => inspectManaged(doc(3, { "destructive-shell": { mode: "override", override: t } }), { installationId: INSTALLATION, currentRevision: 2 }).ok;
+  assert.equal(at(terms({ reason_min: 0 })), true, "no reason needed");
+  for (const bad of [-1, 201, 1.5, "0", null]) assert.equal(at(terms({ reason_min: bad })), false, `reason_min ${String(bad)}`);
+
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ reason_min: 0, always: "at_once", requests: true }) } });
+  const allowed = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "", os_user: userInfo().username, lasts: "always" }] });
+  assert.equal(allowed.decision, "allow");
+  assert.equal(allowed.asked[0].reason_min, 0, "the window is told no reason is needed");
+  assert.equal(allowed.override.reason_digest, null, "no reason, no digest");
+  assert.equal(allowed.override.reason_length, 0);
+  assert.equal(validateOverrideRecord(allowed.override), true, "a valid record");
+  const state = JSON.parse(readFileSync(join(dir, "overrides.json"), "utf8")).entries.at(-1);
+  assert.equal(state.reason_length, 0);
+  assert.equal(state.reason_digest, null);
+  const [made] = readAllowances(dir);
+  assert.equal(made.reason_length, 0, "the allowance is kept, with no reason");
+  assert.equal(made.reason_digest, null);
+  const next = await run(dir, bash("rm -rf build"));
+  assert.equal(next.override.method, "allowance");
+  assert.equal(next.override.reason_digest, null);
+  assert.equal(validateOverrideRecord(next.override), true);
+  // Asking an admin needs no reason either; from the tray too.
+  const asked = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "ask", reason: "  ", os_user: "dev" }] });
+  assert.equal(asked.decision, "deny");
+  assert.equal(readRequests(dir).at(-1).reason, "");
+  await run(dir, bash("rm -rf out"));
+  const block = readBlocked(dir).at(-1);
+  assert.deepEqual(actOnBlocked(dir, block.id, { decision: "allow", lasts: "once" }), { outcome: "allowed" }, "the tray's answer with no reason");
+});
+
+test("a workspace minimum above 0 still requires a reason, in the window and from the tray", async () => {
+  const { readBlocked, actOnBlocked } = await import("../dist/index.js");
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ requests: true }) } });
+  const refused = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "", os_user: "dev" }] });
+  assert.equal(refused.decision, "deny");
+  const ask = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "ask", reason: "short", os_user: "dev" }] });
+  assert.equal(ask.decision, "deny");
+  const block = readBlocked(dir).at(-1);
+  assert.deepEqual(actOnBlocked(dir, block.id, { decision: "allow", reason: "" }), { outcome: "declined" });
+  assert.deepEqual(actOnBlocked(dir, block.id, { decision: "allow", reason: "Cleaning the dist output" }), { outcome: "allowed" });
+});
+
+test("the agent's answer with no reason reads as an empty reason; a reason that is not text is no answer", async () => {
+  const { askAgent } = await import("../dist/index.js");
+  const home = mkdtempSync(join(tmpdir(), "scopebond-ask-"));
+  writeFileSync(join(home, "agent.json"), JSON.stringify({ port: 9, token: "t" }));
+  const answering = (body) => async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  assert.deepEqual(await askAgent(home, {}, 1000, answering({ decision: "allow", lasts: "always" })), { decision: "allow", reason: "", lasts: "always" });
+  assert.deepEqual(await askAgent(home, {}, 1000, answering({ decision: "ask" })), { decision: "ask", reason: "" });
+  assert.deepEqual(await askAgent(home, {}, 1000, answering({ decision: "allow", reason: 42 })), { decision: "unavailable" });
 });

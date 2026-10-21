@@ -24,9 +24,11 @@ const answer = (dir, body) => callAgent(dir, "POST", "/blocked/answer", body, 10
 test("an answer from the form is read strictly", () => {
   assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "fifteen", reason: `  ${REASON}  ` }), { action_id: "act-1", choice: "fifteen", reason: REASON });
   for (const bad of [null, {}, { action_id: "act-1", choice: "forever", reason: REASON }, { action_id: "a b", choice: "once", reason: REASON },
-    { action_id: "act-1", choice: "once", reason: "x".repeat(501) }, { action_id: "act-1", choice: "once", reason: "ok\u0007bell" }, { action_id: "act-1", choice: "once" }]) {
+    { action_id: "act-1", choice: "once", reason: "x".repeat(501) }, { action_id: "act-1", choice: "once", reason: "ok\u0007bell" }, { action_id: "act-1", choice: "once", reason: 42 }]) {
     assert.equal(parseBlockedAnswer(bad), null, JSON.stringify(bad));
   }
+  // No reason is an empty one; the workspace's minimum decides whether that is enough.
+  assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "once" }), { action_id: "act-1", choice: "once", reason: "" });
   assert.equal(answerText("allowed", "once", 30, "Acme", true), "Allowed once · Recorded and sent to Acme");
   assert.equal(answerText("allowed", "always", 14, null, true), "Always allowed on this computer for 14 days · Recorded and sent to your workspace");
   assert.equal(answerText("asked", "ask", 30, "Acme", true), "Request sent · you'll see the answer under Requests");
@@ -219,4 +221,22 @@ test("stop allowing from the tray: the person's allowance ends at once and leave
     writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ ...doc, allowances: [admins] }));
     assert.equal((await callAgent(dir, "POST", "/allowances/stop", { id: admins.id }, 10_000)).outcome, "gone");
   } finally { await service.stop(); }
+});
+
+test("where the workspace asks for no reason, the tray's answer needs none; a minimum above 0 still needs one", async () => {
+  const { dir, id } = await blockedComputer({ "destructive-shell": { mode: "override", override: { reason_min: 0, minutes: 0, daily_limit: 5, harness_prompt: false, always: "at_once", requests: true } } });
+  const service = await serviceFor(dir);
+  try {
+    const done = await answer(dir, { action_id: id, choice: "always" });
+    assert.equal(done.outcome, "allowed");
+    const made = readAllowances(dir).at(-1);
+    assert.equal(made.reason_length, 0, "recorded with no reason");
+    assert.equal(made.reason_digest, null);
+    assert.equal("reason" in made, false, "no text to send");
+  } finally { await service.stop(); }
+  const { dir: strict, id: blocked } = await blockedComputer();
+  const again = await serviceFor(strict);
+  try {
+    assert.equal((await answer(strict, { action_id: blocked, choice: "once" })).outcome, "reason_short", "the workspace's minimum (12)");
+  } finally { await again.stop(); }
 });

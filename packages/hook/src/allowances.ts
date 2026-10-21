@@ -42,7 +42,8 @@ export interface Allowance {
   state: "active" | "proposed" | "revoked";
   /** One use only (an action allowed after it was blocked, for the next try). */
   once: boolean;
-  reason_digest: string;
+  /** The reason's digest and length; null and 0 when the person gave none (the workspace asks for none). */
+  reason_digest: string | null;
   reason_length: number;
   created_by: "person" | "workspace";
   created_at: string;
@@ -93,7 +94,8 @@ function validAllowance(a: unknown): a is Allowance {
     && typeof x.action_key === "string" && HEX64.test(x.action_key)
     && (x.scope === "computer" || x.scope === "person" || x.scope === "session") && (x.os_user_digest === null || (typeof x.os_user_digest === "string" && HEX64.test(x.os_user_digest)))
     && (x.state === "active" || x.state === "proposed" || x.state === "revoked") && typeof x.once === "boolean"
-    && typeof x.reason_digest === "string" && HEX64.test(x.reason_digest) && Number.isInteger(x.reason_length) && (x.reason_length as number) >= 1 && (x.reason_length as number) <= 500
+    && ((x.reason_digest === null && x.reason_length === 0)
+      || (typeof x.reason_digest === "string" && HEX64.test(x.reason_digest) && Number.isInteger(x.reason_length) && (x.reason_length as number) >= 1 && (x.reason_length as number) <= 500))
     && (x.created_by === "person" || x.created_by === "workspace") && typeof x.created_at === "string" && Number.isFinite(Date.parse(x.created_at))
     && typeof x.expires_at === "string" && Number.isFinite(Date.parse(x.expires_at)) && Number.isInteger(x.uses) && (x.uses as number) >= 0
     && (x.scope !== "person" || typeof x.os_user_digest === "string")
@@ -123,7 +125,8 @@ export function makeAllowance(input: {
     id: newAllowanceId(), rule: input.rule, action_key: input.actionKey,
     scope: input.osUserDigest ? "person" : "computer", os_user_digest: input.osUserDigest,
     state: input.lasts === "always" && input.needsAdmin ? "proposed" : "active", once: input.lasts === "once",
-    reason_digest: digestOf(reason), reason_length: reason.length, reason, created_by: "person",
+    // No reason given: no digest, and no text to send.
+    reason_digest: reason ? digestOf(reason) : null, reason_length: reason.length, ...(reason ? { reason } : {}), created_by: "person",
     created_at: new Date(now).toISOString(), expires_at: new Date(expires).toISOString(), uses: 0, sent_at: null,
     ...(input.unblocked ? { unblocked: input.unblocked } : {}),
   };

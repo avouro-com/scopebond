@@ -38,7 +38,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const digestOf = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
 /** One unblock a person made. `lasting`: made while the rule's unblock had no time limit (`minutes: "unlimited"`). */
-interface StateEntry { rule: string; action_key: string; action_id: string; at: number; reason_digest: string; reason_length: number; lasting?: true }
+interface StateEntry { rule: string; action_key: string; action_id: string; at: number; reason_digest: string | null; reason_length: number; lasting?: true }
 interface OverrideState { entries: StateEntry[] }
 
 function readState(dir: string): OverrideState {
@@ -243,8 +243,10 @@ export async function askAgent(home: string, request: Record<string, unknown>, t
     }
     const user = typeof body.os_user === "string" ? { os_user: body.os_user } : {};
     const lasts = body.lasts === "15m" || body.lasts === "always" ? body.lasts : "once";
-    if (body.decision === "allow" && typeof body.reason === "string") return { decision: "allow", reason: body.reason, lasts, ...user };
-    if (body.decision === "ask" && typeof body.reason === "string") return { decision: "ask", reason: body.reason, ...user };
+    // No reason is an empty one: the length the workspace asks for is checked by the caller.
+    const reason = typeof body.reason === "string" ? body.reason : body.reason === undefined ? "" : null;
+    if (body.decision === "allow" && reason !== null) return { decision: "allow", reason, lasts, ...user };
+    if (body.decision === "ask" && reason !== null) return { decision: "ask", reason, ...user };
     if (body.decision === "deny") return { decision: "deny" };
     const link = body.later === true ? safeLink(body.link) : null;
     return { decision: "unavailable", ...(body.later === true ? { later: true as const } : {}), ...(link ? { link } : {}) };
@@ -364,9 +366,10 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     if (answer.decision === "allow" && length) {
       const reason = (answer.reason ?? "").trim();
       if (reason.length < terms.reason_min || reason.length > 500) { last = { rule, title, outcome: "declined" }; return null; }
-      const record: OverrideRecord = { version: 1, rule, method: "agent_dialog", state: "allowed", repeat_of: null, reason_digest: digestOf(reason),
+      // No reason given (the workspace asks for none): no digest, length 0.
+      const record: OverrideRecord = { version: 1, rule, method: "agent_dialog", state: "allowed", repeat_of: null, reason_digest: reason ? digestOf(reason) : null,
         reason_length: reason.length, os_user_digest: answer.os_user ? digestOf(answer.os_user) : osUserDigest(), decided_at: new Date(t).toISOString() };
-      state.entries.push({ rule, action_key: key, action_id, at: t, reason_digest: record.reason_digest!, reason_length: reason.length,
+      state.entries.push({ rule, action_key: key, action_id, at: t, reason_digest: record.reason_digest, reason_length: reason.length,
         ...(terms.minutes === "unlimited" ? { lasting: true as const } : {}) });
       try { writeState(ctx.dir, state, t); } catch { /* the receipt still records it; the count is checked again in the workspace */ }
       // "Allow for 15 min" and "Always allow this here…" also stand for the same action afterwards.

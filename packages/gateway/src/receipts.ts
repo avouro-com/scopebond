@@ -102,7 +102,7 @@ export interface OverrideRecord {
   state: "allowed" | "offered";
   /** The action an earlier override allowed, when this one is the same action inside the time that override allowed. */
   repeat_of: string | null;
-  /** SHA-256 of the trimmed reason text; null for harness_prompt. */
+  /** SHA-256 of the trimmed reason text; null for harness_prompt, and with reason_length 0 when the person gave no reason. */
   reason_digest: string | null;
   reason_length: number | null;
   /** SHA-256 of the operating-system account name, when known. */
@@ -122,9 +122,11 @@ export function validateOverrideRecord(o: unknown): o is OverrideRecord {
   if (o.os_user_digest !== null && (typeof o.os_user_digest !== "string" || !HEX_64.test(o.os_user_digest))) return false;
   if (typeof o.decided_at !== "string" || !Number.isFinite(Date.parse(o.decided_at))) return false;
   if (o.method === "agent_dialog" || o.method === "allowance") {
-    return o.state === "allowed" && typeof o.reason_digest === "string" && HEX_64.test(o.reason_digest)
-      && Number.isInteger(o.reason_length) && (o.reason_length as number) >= 1 && (o.reason_length as number) <= 500
-      && (o.method === "agent_dialog" || typeof o.repeat_of === "string");
+    // A reason, by its digest and length; or none (where the workspace asks for none): no digest, length 0.
+    const reason = (typeof o.reason_digest === "string" && HEX_64.test(o.reason_digest)
+      && Number.isInteger(o.reason_length) && (o.reason_length as number) >= 1 && (o.reason_length as number) <= 500)
+      || (o.reason_digest === null && o.reason_length === 0);
+    return o.state === "allowed" && reason && (o.method === "agent_dialog" || typeof o.repeat_of === "string");
   }
   return o.state === "offered" && o.reason_digest === null && o.reason_length === null && o.repeat_of === null;
 }

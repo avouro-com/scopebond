@@ -45,7 +45,8 @@ export function parseQuestion(raw: unknown): OverrideQuestion | null {
   if (typeof r.action_id !== "string" || !ID.test(r.action_id) || typeof r.rule !== "string" || !/^[a-z0-9-]{1,64}$/.test(r.rule)) return null;
   const reasonMin = Number(r.reason_min);
   const timeout = Number(r.timeout_ms);
-  if (!Number.isInteger(reasonMin) || reasonMin < 10 || reasonMin > 200) return null;
+  // 0: the workspace asks for no reason.
+  if (!Number.isInteger(reasonMin) || reasonMin < 0 || reasonMin > 200) return null;
   const mode = r.mode === "ask" ? "ask" : "override";
   const o = (r.offers && typeof r.offers === "object" ? r.offers : {}) as Record<string, unknown>;
   // An older hook sends no offers: the window offers "Allow once", as it always did.
@@ -70,9 +71,10 @@ export function parseQuestion(raw: unknown): OverrideQuestion | null {
 const allowsAny = (q: OverrideQuestion): boolean => q.offers.allow || !!q.offers.fifteen || q.offers.always;
 
 export function questionText(q: OverrideQuestion): string {
+  const why = q.reason_min > 0 ? `Say why, in at least ${q.reason_min} characters.` : "You may say why.";
   const head = `Scopebond blocked this. Your workspace's rule "${q.title}" blocked this action:\n\n${q.summary}\n\n`;
-  if (!allowsAny(q)) return `${head}You may ask to unblock it; an admin decides. Say why, in at least ${q.reason_min} characters. The action stays blocked until an admin answers; your name, the reason and the action are recorded in your workspace.`;
-  return `${head}You may allow it. Say why, in at least ${q.reason_min} characters. Your name, the reason and the action are recorded in your workspace.`;
+  if (!allowsAny(q)) return `${head}You may ask to unblock it; an admin decides. ${why} The action stays blocked until an admin answers; your name, the reason and the action are recorded in your workspace.`;
+  return `${head}You may allow it. ${why} Your name, the reason and the action are recorded in your workspace.`;
 }
 
 function run(command: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string }> {
@@ -125,7 +127,7 @@ function Btn($label, $width, $decision, $lasts, $needs) {
   $script:x0 = $x - $width
   $b.SetBounds($x - $width, 200, $width, 30)
   $b.Add_Click({ $script:answer = $decision; $script:lasts = $lasts; $f.Close() }.GetNewClosure())
-  if ($needs) { $b.Enabled = $false; $script:needReason += $b }
+  if ($needs) { $b.Enabled = ($min -le 0); $script:needReason += $b }
   $f.Controls.Add($b)
   $b
 }

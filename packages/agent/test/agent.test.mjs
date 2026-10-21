@@ -11,7 +11,7 @@ import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_D
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
-  parseQuestion, windowsScript, serialized, queueReason, pendingReasons, acquireAgentLock, releaseAgentLock, AGENT_LOCK,
+  parseQuestion, questionText, windowsScript, serialized, queueReason, pendingReasons, acquireAgentLock, releaseAgentLock, AGENT_LOCK,
   compareVersions, commandHookVersion, maintainHookEntries, maintainedHookCommand, fetchClientVersion, localChecks, runSelfCheck, selfCheckProof,
 } from "../dist/index.js";
 
@@ -312,7 +312,15 @@ const question = (extra = {}) => ({ action_id: "action-0000000000001", rule: "de
 
 test("an override request is checked before any window opens, and its text reaches PowerShell only as data", () => {
   assert.equal(parseQuestion(question()).rule, "destructive-shell");
-  for (const bad of [null, {}, question({ action_id: "short" }), question({ rule: "Not A Rule" }), question({ reason_min: 3 })]) assert.equal(parseQuestion(bad), null);
+  for (const bad of [null, {}, question({ action_id: "short" }), question({ rule: "Not A Rule" }), question({ reason_min: -1 }), question({ reason_min: 201 })]) assert.equal(parseQuestion(bad), null);
+  // A workspace may ask for no reason (0): the window says so, and its buttons need no text.
+  const optional = parseQuestion(question({ reason_min: 0 }));
+  assert.equal(optional.reason_min, 0);
+  const text = questionText(optional);
+  assert.match(text, /You may say why\./);
+  assert.doesNotMatch(text, /at least 0/);
+  assert.ok(windowsScript(optional).includes("$b.Enabled = ($min -le 0)"), "the buttons start enabled when no reason is needed");
+  assert.match(questionText(parseQuestion(question())), /Say why, in at least 10 characters\./, "a minimum above 0 is still asked for");
   assert.equal(parseQuestion(question({ timeout_ms: 999_999 })).timeout_ms, 55_000, "never longer than the hook waits");
   const script = windowsScript(parseQuestion(question({ summary: "x'; Remove-Item -Recurse C:\\ ;'$(evil)" })));
   assert.doesNotMatch(script, /Remove-Item|\$\(evil\)/, "the summary is base64, never code");

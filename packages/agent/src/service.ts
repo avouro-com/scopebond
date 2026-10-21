@@ -953,14 +953,15 @@ function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "g
 export type BlockedChoice = "once" | "fifteen" | "always" | "ask";
 
 /** Check an answer from the tray's form: an action id, one of the four choices, and a reason of at most 500 characters
- *  (control characters other than line breaks are refused). The rest (offered, long enough) is checked against the block. */
+ *  (control characters other than line breaks are refused; none is an empty one, enough where the workspace asks for none).
+ *  The rest (offered, long enough) is checked against the block. */
 export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: BlockedChoice; reason: string } | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.action_id !== "string" || !/^[A-Za-z0-9._:-]{1,200}$/.test(r.action_id)) return null;
   if (r.choice !== "once" && r.choice !== "fifteen" && r.choice !== "always" && r.choice !== "ask") return null;
-  if (typeof r.reason !== "string") return null;
-  const reason = r.reason.trim();
+  if (r.reason !== undefined && typeof r.reason !== "string") return null;
+  const reason = (r.reason ?? "").trim();
   if (reason.length > 500 || [...reason].some((c) => { const n = c.charCodeAt(0); return (n < 32 && n !== 10 && n !== 13) || n === 127; })) return null;
   return { action_id: r.action_id, choice: r.choice, reason };
 }

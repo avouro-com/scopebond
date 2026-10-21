@@ -207,3 +207,22 @@ test("receipt budget: an optional, closed payload member; valid ones validate, i
   for (const vector of sessionVectors.receipt_budget.valid) assert.equal(conforms(receiptSchema, withBudget(vector.budget)), true, vector.name);
   for (const vector of sessionVectors.receipt_budget.invalid) assert.equal(conforms(receiptSchema, withBudget(vector.budget)), false, vector.name);
 });
+
+test("an override record carries a reason by its digest and length, or none: no digest and length 0", () => {
+  const AT = "2026-01-01T00:00:00.000Z";
+  const record = (extra = {}) => ({ version: 1, rule: "destructive-shell", method: "agent_dialog", state: "allowed", repeat_of: null,
+    reason_digest: "a".repeat(64), reason_length: 36, os_user_digest: null, decided_at: AT, ...extra });
+  const withOverride = (override) => {
+    const receipt = structuredClone(evidence.receipt_context.receipt);
+    receipt.payload.realtime_result = "approved";
+    receipt.payload.override = override;
+    return receipt;
+  };
+  assert.equal(conforms(receiptSchema, withOverride(record())), true, "with a reason");
+  assert.equal(conforms(receiptSchema, withOverride(record({ reason_digest: null, reason_length: 0 }))), true, "no reason given");
+  assert.equal(conforms(receiptSchema, withOverride(record({ method: "allowance", repeat_of: "alw_0123456789abcdefghij", reason_digest: null, reason_length: 0 }))), true);
+  for (const bad of [
+    record({ reason_length: 0 }), record({ reason_digest: null }), record({ reason_digest: null, reason_length: null }),
+    record({ method: "harness_prompt", state: "offered", reason_digest: null, reason_length: 0 }),
+  ]) assert.equal(conforms(receiptSchema, withOverride(bad)), false, JSON.stringify(bad));
+});
