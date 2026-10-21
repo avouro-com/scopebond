@@ -293,6 +293,13 @@ and an override. An allowed action carries neither. `receiptMatch(verdict, realt
 returns the two members for a verdict; `validateEvidencePayload` checks them. A receipt check
 older than this release reports a receipt carrying them as invalid.
 
+`handleAction(req, { intel })` and `observeAction(req, { intel })` sign what a signed plugin
+gave the action as the optional `payload.pattern_id` (64 lowercase hex) and `payload.intel` (an
+opaque slot, padded base64 of 1 to 4096 bytes). `validateReceiptIntel` checks their shape and
+nothing else: the gateway never reads the slot. Without the option the receipt is unchanged,
+byte for byte. A receipt check older than this release reports a receipt carrying them as
+invalid.
+
 Swappable interfaces (each an interface with a local implementation):
 `ReceiptStore` and `Executor`. Node-only durable stores and the key loader live
 under the `@scopebond/gateway/node` subpath (they use `node:fs` / `node:sqlite`):

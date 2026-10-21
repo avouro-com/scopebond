@@ -120,6 +120,18 @@ approval, then a monitored one, and among clauses of one mode the first by polic
 Receipts without them are unchanged. `vectors/evidence-contract.json` (`receipt_match`) holds
 valid and invalid examples.
 
+## Plugin slot
+
+A hook that loaded a signed plugin may sign what it gave an action into two optional members:
+`payload.pattern_id` (64 lowercase hex, `RECEIPT_PATTERN_ID_PATTERN`) and `payload.intel`, an
+opaque slot of standard padded base64 carrying 1 to 4096 bytes (`RECEIPT_INTEL_PATTERN`,
+`RECEIPT_INTEL_MAX_BYTES`, `RECEIPT_INTEL_MAX_LENGTH`). What the slot holds is not described:
+the open code stores it, covers it with the signature and verifies it as bytes.
+`isReceiptIntel` and `isReceiptPatternId` check the shapes. A receipt made without a plugin
+carries neither and is unchanged. `vectors/evidence-contract.json` (`receipt_intel`) holds
+valid and invalid examples. A receipt check older than this release reports a receipt carrying
+them as invalid.
+
 ## Observation envelope
 
 An observation is signed as Ed25519 over the UTF-8 bytes of the literal domain

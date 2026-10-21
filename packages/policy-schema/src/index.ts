@@ -124,6 +124,35 @@ export const RECEIPT_FAILED_BOUND_PATTERN = "^[A-Za-z0-9_.-]{1,64}:[a-z_]{1,32}$
 /** The realtime results a receipt naming a matched clause may carry. */
 export const RECEIPT_MATCH_RESULTS = ["deny", "approved", "timeout"] as const;
 
+// Optional plugin slot (payload.pattern_id, payload.intel): what a signed plugin the hook loaded gave an action, a pattern id
+// (64 lowercase hex) and an opaque slot (standard base64 of 1 to 4096 bytes). Both are optional and independent, covered by
+// the signature like the rest of the payload, and never interpreted by the open code. A receipt made without a plugin
+// carries neither.
+export const RECEIPT_PATTERN_ID_PATTERN = "^[0-9a-f]{64}$";
+export const RECEIPT_INTEL_PATTERN = "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$";
+/** The most bytes the slot may carry, decoded. */
+export const RECEIPT_INTEL_MAX_BYTES = 4096;
+/** The longest the slot may be as text: base64 of RECEIPT_INTEL_MAX_BYTES (4096 bytes end in one byte, so `==`; a slot this
+ *  long without it would be 4097 or 4098 bytes). */
+export const RECEIPT_INTEL_MAX_LENGTH = 5464;
+// eslint-disable-next-line security/detect-non-literal-regexp -- a constant of this module
+const INTEL_SLOT = new RegExp(RECEIPT_INTEL_PATTERN);
+
+/** Whether `value` is a slot the receipt schema accepts: standard padded base64 of 1 to RECEIPT_INTEL_MAX_BYTES bytes. */
+export function isReceiptIntel(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 4 || value.length > RECEIPT_INTEL_MAX_LENGTH) return false;
+  if (!INTEL_SLOT.test(value)) return false;
+  return value.length < RECEIPT_INTEL_MAX_LENGTH || value.endsWith("==");
+}
+
+/** Whether `value` is a pattern id the receipt schema accepts: 64 lowercase hex. */
+export function isReceiptPatternId(value: unknown): value is string {
+  return typeof value === "string" && value.length === 64 && /^[0-9a-f]{64}$/.test(value);
+}
+
+/** The plugin slot members a receipt may carry; both optional. */
+export interface ReceiptIntel { pattern_id?: string; intel?: string }
+
 // Session budgets (session-budgets.schema.json): limits on what one coding-agent session may do, sent by a workspace in its
 // rules document as `session_budgets` (at most so many actions of the listed types, 0 = none, until the budget expires). The
 // words follow the gateway's action budgets. A receipt an action budget counted or refused carries `payload.budget`.

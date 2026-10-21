@@ -207,6 +207,29 @@ export function validateReceiptBudget(value: unknown): value is ReceiptBudget {
     && int(value.count, 0, 1_000_001) && int(value.max, 0, 1_000_000) && BUDGET_STATES.has(value.state as string);
 }
 
+/** What a signed plugin the hook loaded gave an action, signed into the receipt as `payload.pattern_id` and `payload.intel`.
+ *  Both optional. The gateway checks their shape only: what the slot holds is never read. */
+export interface ReceiptIntel { pattern_id?: string; intel?: string }
+const PATTERN_ID = /^[0-9a-f]{64}$/;
+// The receipt schema's slot (RECEIPT_INTEL_PATTERN): standard padded base64. Linear: fixed-width groups.
+const INTEL_SLOT = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+/** Base64 of 4096 bytes (RECEIPT_INTEL_MAX_LENGTH); a slot this long ends in `==` (one byte in its last group). */
+const INTEL_MAX_LENGTH = 5464;
+const validPatternId = (v: unknown): boolean => typeof v === "string" && PATTERN_ID.test(v);
+const validIntelSlot = (v: unknown): boolean => typeof v === "string" && v.length >= 4 && v.length <= INTEL_MAX_LENGTH
+  && INTEL_SLOT.test(v) && (v.length < INTEL_MAX_LENGTH || v.endsWith("=="));
+/** The shape a plugin's members must have (the receipt schema's): a closed object of an optional 64-hex `pattern_id` and an
+ *  optional `intel`, standard padded base64 of 1 to 4096 bytes. */
+export function validateReceiptIntel(value: unknown): value is ReceiptIntel {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["pattern_id", "intel"])) return false;
+  return (value.pattern_id === undefined || validPatternId(value.pattern_id)) && (value.intel === undefined || validIntelSlot(value.intel));
+}
+/** The payload members for a plugin's answer: only those it gave. */
+export function receiptIntelMembers(value: ReceiptIntel | undefined): ReceiptIntel {
+  if (!value) return {};
+  return { ...(value.pattern_id !== undefined ? { pattern_id: value.pattern_id } : {}), ...(value.intel !== undefined ? { intel: value.intel } : {}) };
+}
+
 export interface ReceiptPayload {
   type: "scopebond:receipt";
   evidence_version: typeof EVIDENCE_VERSION;
@@ -244,6 +267,10 @@ export interface ReceiptPayload {
   clause_id?: string;
   /** The bound of `clause_id` that failed, as `<param>:<bound>`; never the param's value (optional; see receiptMatch). */
   failed_bound?: string;
+  /** A pattern id a signed plugin gave this action (optional; see ReceiptIntel). */
+  pattern_id?: string;
+  /** The plugin's opaque slot, base64 of at most 4 KiB (optional; see ReceiptIntel). */
+  intel?: string;
 }
 
 /** The payload members that name the policy clause a verdict matched and the bound of it that failed. */
@@ -498,9 +525,11 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
     "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result",
     "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp",
-    "evidence_class", "principal", "boundary", "override", "context", "budget", "clause_id", "failed_bound",
+    "evidence_class", "principal", "boundary", "override", "context", "budget", "clause_id", "failed_bound", "pattern_id", "intel",
   ]) && evidenceClassValid(payload as unknown as ReceiptPayload) &&
     validateReceiptMatch(payload) &&
+    (payload.pattern_id === undefined || validPatternId(payload.pattern_id)) &&
+    (payload.intel === undefined || validIntelSlot(payload.intel)) &&
     (payload.context === undefined || validateReceiptContext(payload.context)) &&
     (payload.budget === undefined || validateReceiptBudget(payload.budget)) &&
     (payload.override === undefined || (validateOverrideRecord(payload.override) && payload.realtime_result === "approved")) &&

@@ -74,3 +74,17 @@ test("a receipt carrying the optional context verifies; the context is covered b
   delete removed.payload.context;
   assert.equal((await verifyReceiptSignature(removed, pem)).signature_valid, false);
 });
+
+test("a plugin's pattern_id and opaque intel slot are verified as bytes: covered by the signature, never read", async () => {
+  const slot = Buffer.from([0x00, 0xff, 0x10, 0x80, 0x7f, 0x01]).toString("base64");
+  const { receipt, pem } = signed({ pattern_id: "a".repeat(64), intel: slot });
+  assert.equal((await verifyReceiptSignature(receipt, pem)).valid, true);
+  for (const change of [{ intel: Buffer.from([0x00, 0xff, 0x10, 0x80, 0x7f, 0x02]).toString("base64") }, { pattern_id: "b".repeat(64) }]) {
+    const tampered = structuredClone(receipt);
+    Object.assign(tampered.payload, change);
+    assert.equal((await verifyReceiptSignature(tampered, pem)).signature_valid, false, Object.keys(change)[0]);
+  }
+  const dropped = structuredClone(receipt);
+  delete dropped.payload.intel;
+  assert.equal((await verifyReceiptSignature(dropped, pem)).signature_valid, false, "removing the slot breaks the signature too");
+});
