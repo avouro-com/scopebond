@@ -1,5 +1,20 @@
 # @scopebond/verify
 
+## 0.6.11
+
+### Patch Changes
+
+- a879854: Receipts now name the policy clause that matched and the bound that failed, and Monitor is silent in Cursor.
+  
+  - policy-schema: the receipt schema adds two optional payload members, `clause_id` and `failed_bound` (`<param>:<bound>`, never the param's value), with valid and invalid examples in `vectors/evidence-contract.json`; receipts without them are unchanged.
+  - verify: a verdict that names a clause now also names the bound that failed (`failed_bound`), and among matching clauses of one mode it names the first by policy order; the conformance vectors check the bound too.
+  - gateway: denied, monitored, held and overridden receipts carry `clause_id` and `failed_bound`, an allowed one carries neither, and `validateEvidencePayload` checks them.
+  - hook: in Cursor, an action a monitored rule matches is now answered `allow` (recorded, with no approval prompt); `ask` is kept only for actions Scopebond could not evaluate or holds for a person.
+- Updated dependencies [8ed768b]
+- Updated dependencies [09e5726]
+- Updated dependencies [a879854]
+  - @scopebond/policy-schema@0.11.2
+
 ## 0.6.10
 
 ### Patch Changes

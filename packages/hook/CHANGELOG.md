@@ -1,5 +1,55 @@
 # @scopebond/hook
 
+## 0.31.1
+
+### Patch Changes
+
+- 8ed768b: A workspace may now ask for no reason to unblock an action or to ask an admin (`reason_min` 0, accepted by a hook that reports the `optional_reason` capability); an unblock with no reason is recorded with no reason digest and a reason length of 0, while a workspace minimum above 0 still requires a reason as before.
+  The Scopebond window and the tray's form accept an answer with no reason where the workspace asks for none, and say a reason is optional.
+  An override record with no reason (no digest, length 0) is now a valid receipt member.
+  The receipt schema allows an override record with no reason: `reason_digest` null and `reason_length` 0.
+- 5756ef9: An unblock now covers exactly the command the Scopebond window showed: the same command passes again in another line, after a `cd`, with a redirection such as `2>&1`, other quoting or a trailing slash, while a different target, a relative target in another folder, or another project still asks. The window shows that command, with the folder when a target is relative to it, and unblocks made before still apply.
+- f083dbb: The safe-shell rule now lets a delete (`rm`, `rmdir`, `unlink`, `del`, `rd`, `erase`, `deltree`, `Remove-Item`) run when every target it names is inside the working folder, is build or cache output such as `node_modules`, `dist` or `*.log`, or is under the temp folder, and still blocks a delete of `~`, `/`, a drive root, anything outside the working folder, the folder itself, `.git`, a protected file, a whole-folder wildcard, a target known only at run time or no target, as well as `sudo`, `mkfs`, `dd`, `shred`, `format`, `shutdown` and the other non-delete programs whatever their arguments.
+  Each shell command's record carries a new `program_scope` value (`rm/contained` for an allowed delete) beside the unchanged `program`, and an allowed delete also records each of its targets as a file write so the protected-path rules judge them.
+  A policy written by an earlier version of the starter rules is read with the new safe-shell rule without running `init` again.
+- 09e5726: A response fetched with `curl`, `wget` or `iwr` and piped to an interpreter that is given its code another way (`| python -c "…"`, `| python -m json.tool`, `| node -e`, `| ruby -e`, `| perl -e`, `| php -r`, `| deno eval`, `| bun -e`, or a local script such as `| node script.mjs`) is no longer recorded as running a fetched script, since the fetched text is only data; a bare interpreter (`| python`, `| node -`) and a shell still are, also when the text reaches them through filters (`| tee log | bash`), and the install-detection vectors cover each case.
+  
+  A package runner's command arguments are no longer read as packages: `npx vite --port 4333`, `npx tsc -p tsconfig.json` and `pnpm dlx shadcn@latest add button` record only the command's package, `-y`/`--yes` after the command no longer marks the run as auto-confirmed, and every `-p`/`--package` before the command (or `--from`/`--spec` for `uvx` and `pipx run`) is recorded as a package of its own.
+- 14648fa: Each rule pack now keeps its own 30-day clock: when the workspace names a pack version this computer cannot fetch or check, that pack keeps its last good version until it expires on its own, every other pack renews as usual, and `scopebond status` and `scopebond packs list` name the pack, the version and why it was not used.
+- 409298d: Every rule the hook ships now has its own plain name in the tray and the Scopebond window: the always-on protections, the starter rules (including the allowed folders, the remote-database guard and the signing-key check), each kind of blocked service, Safe Install blocks, session budget and approval/budget refusals, and rule pack rules (named from the rule's description, or from what its actions do), so a block no longer shows "A Scopebond rule" for any of them.
+- 4d63a6e: - The Scopebond window now shows a command containing `&` exactly as it runs (for example `2>&1` and `a && b`); before, Windows hid each `&` as a keyboard-shortcut mark.
+  - When the Scopebond tray is listening, a blocked action is asked about only in the tray, for the hook's whole wait; the Scopebond window no longer also opens after ten seconds.
+  - On Windows the old Scopebond window no longer opens for a block when no tray is listening; set `SCOPEBOND_PROMPT_WINDOW=1` to bring it back for this release (it will be removed after that). macOS and Linux keep their dialog.
+  - When no one could be asked at the moment of a block but the workspace lets the person act, the denial's "For the person" line now says to allow it (or ask an admin) from the Scopebond icon's recent blocks, or on this computer's page in the workspace, instead of saying the agent is not running.
+- a879854: Receipts now name the policy clause that matched and the bound that failed, and Monitor is silent in Cursor.
+  
+  - policy-schema: the receipt schema adds two optional payload members, `clause_id` and `failed_bound` (`<param>:<bound>`, never the param's value), with valid and invalid examples in `vectors/evidence-contract.json`; receipts without them are unchanged.
+  - verify: a verdict that names a clause now also names the bound that failed (`failed_bound`), and among matching clauses of one mode it names the first by policy order; the conformance vectors check the bound too.
+  - gateway: denied, monitored, held and overridden receipts carry `clause_id` and `failed_bound`, an allowed one carries neither, and `validateEvidencePayload` checks them.
+  - hook: in Cursor, an action a monitored rule matches is now answered `allow` (recorded, with no approval prompt); `ask` is kept only for actions Scopebond could not evaluate or holds for a person.
+- 356a8e1: PowerShell assignments, `foreach`/`if`/`while`/`switch` statements, script blocks and bare variable expressions are no longer blocked as commands that could not be read: the commands inside them (a `Remove-Item` in a `ForEach-Object` block included) are judged as usual, and only a program known at run time (`& $x`, `iex $cmd`, `. $x`) is still refused.
+  
+  A command that only prints its help or version or rehearses (`rm --help`, `rm -h` on its own, `sudo --version`, `git push --dry-run origin main`, `--help` or a `help` subcommand of a tool a rule pack reads) is recorded and no longer refused as the deletion or push it names; `shutdown -h`, a `--help` after a file operand and an option's value are still read as before.
+  
+  A path that names the home folder through `$HOME`, `${HOME}`, `~`, `%USERPROFILE%`, `$env:USERPROFILE` or `$env:HOME` is recorded as a path in the home folder (`~/…`) even after a `cd`, a path that still holds a variable is no longer joined to the folder a `cd` moved to, and after `cd` into Scopebond's own folder a relative file handed to any program is read there.
+- 391c3f7: The tray lists every block of the last seven days (up to 200), not only those among the newest 5,000 records, so a busy day no longer shows a blocked count over an empty list. The local store keeps an index of denied records for this (built by the agent's upkeep on an existing store).
+  
+  An agent's retries of one block (the same action, rule, project and session, each within 10 minutes) are one row with the number of tries, are announced once, and count once: the header, the Blocked tab, the menu and the Today row all show the same number of distinct blocks.
+  
+  Every block carries one outcome: Unblock, Ask an admin, or a plain sentence saying why it stays blocked (Scopebond's own protection, a rule set by the workspace, Safe Install's verdict in words, or Safe Install holding an install for the person), with "Copy details" where it helps. A block the person asked about follows the request (waiting, approved by whom, declined) and offers nothing more once a request or an allowance covers it; while a request waits, the agent checks for the answer every 10 seconds for 10 minutes, and the answer is announced unless notifications are off.
+  
+  "Check now" checks the rules and packs again and runs the self-check; it never installs an update. A failed self-check is kept until a check passes.
+  
+  The npm tray icon's menu shows `&` in commands as it is.
+  
+  The coding agent trying a blocked action again within 10 minutes, before the person answered, is not asked about again: the denial tells the agent not to retry and to tell the person, who acts on it from the tray.
+- Updated dependencies [8ed768b]
+- Updated dependencies [09e5726]
+- Updated dependencies [a879854]
+- Updated dependencies [391c3f7]
+  - @scopebond/gateway@0.20.5
+  - @scopebond/policy-schema@0.11.2
+
 ## 0.31.0
 
 ### Minor Changes
