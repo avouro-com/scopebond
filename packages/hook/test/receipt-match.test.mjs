@@ -27,7 +27,7 @@ test("a denied rm -rf / names safe-shell and a program bound", async () => {
     const p = shellReceipt(d).payload;
     assert.equal(p.realtime_result, "deny");
     assert.equal(p.clause_id, "safe-shell");
-    assert.match(p.failed_bound, /^program:/);
+    assert.match(p.failed_bound, /^program_scope:/);
     assert.equal(JSON.stringify(p.failed_bound).includes("rm"), false, "the bound never carries the program");
   } finally { rt.close(); }
 });
@@ -40,7 +40,7 @@ test("a monitored rm -rf / carries them too, with its monitor state", async () =
     assert.equal(p.realtime_result, "deny", "would have blocked");
     assert.equal(p.execution.state, "cooperative_allow", "safe-shell only records");
     assert.equal(p.clause_id, "safe-shell");
-    assert.match(p.failed_bound, /^program:/);
+    assert.match(p.failed_bound, /^program_scope:/);
     // Deleting / would delete the hook's own folder, which is always protected: that receipt names its own rule.
     assert.equal(d.decision, "deny");
     const own = d.receipts.find((r) => r.payload.clause_id === "protect-scopebond-write");
@@ -48,15 +48,15 @@ test("a monitored rm -rf / carries them too, with its monitor state", async () =
   } finally { rt.close(); }
 });
 
-test("a monitored rm of a build folder is let through and still names the rule", async () => {
+test("a monitored rm outside the working folder is let through and still names the rule", async () => {
   const rt = runtime({});
   try {
-    const d = await rt.evaluate(bash("rm -rf build"));
+    const d = await rt.evaluate(bash("rm -rf ../build"));
     assert.equal(d.decision, "allow");
     const p = shellReceipt(d).payload;
     assert.equal(p.realtime_result, "deny");
     assert.equal(p.clause_id, "safe-shell");
-    assert.equal(p.failed_bound, "program:pattern");
+    assert.equal(p.failed_bound, "program_scope:pattern");
   } finally { rt.close(); }
 });
 

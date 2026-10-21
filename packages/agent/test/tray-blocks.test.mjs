@@ -73,9 +73,9 @@ test("a block by Scopebond's own protection, from a receipt with no context, sti
     assert.equal(rm.rule, "destructive-shell");
     assert.equal(rm.rule_title, "Run a command that deletes data or shuts down the computer");
     assert.equal(rm.tool, "Claude Code");
-    // Nothing noted and no context: a plain name, never empty and never a rule id.
+    // Nothing noted and no context: the receipt names the clause that matched, so the rule still has its name.
     assert.equal(unnoted.what, "Read .env");
-    assert.equal(unnoted.rule_title, "A Scopebond rule");
+    assert.equal(unnoted.rule_title, "Read passwords, keys or secrets");
     assert.equal(unnoted.project, null);
     assert.equal(unnoted.tool, null);
   } finally { await service.stop(); }
