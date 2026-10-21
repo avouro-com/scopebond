@@ -63,6 +63,8 @@ export {
   inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
   MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY, ANSWER_LENGTHS,
 } from "./managed.js";
+export { ruleSummary } from "./rule-summary.js";
+export type { RuleSummary } from "./rule-summary.js";
 export type {
   ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnswerLength, AnyManagedRuleId, OptionalRuleId,
   ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,

@@ -177,7 +177,11 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let receiptContext = meta.receipt_context ?? null;
   // And the rule packs the workspace names (pack-sync.ts).
   let packState = meta.packs ?? null;
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch, checked_at: now.toISOString() });
+  // Every check records when it was tried; only a successful one (it clears the error: rules applied, unchanged, or the
+  // workspace's own-rules answer) moves `checked_at`, so "Rules updated" is the last check that worked. A failed one keeps
+  // `checked_at` and says why in `last_error`.
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch,
+    last_attempt_at: now.toISOString(), ...(patch.last_error === null ? { checked_at: now.toISOString() } : {}) });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
@@ -380,8 +384,11 @@ export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, bud
   try {
     if (process.env.SCOPEBOND_POLICY_SYNC === "off") return null;
     if (!existsSync(connectionPath(dir))) return null;
-    const checked = readMeta(dir).checked_at;
-    if (checked && now - Date.parse(checked) < SYNC_INTERVAL_MS) return null;
+    // Due five minutes after the last attempt, whether it worked or not: a workspace that cannot be reached is not tried again
+    // on every tool call.
+    const meta = readMeta(dir);
+    const last = Math.max(meta.checked_at ? Date.parse(meta.checked_at) : 0, meta.last_attempt_at ? Date.parse(meta.last_attempt_at) : 0);
+    if (last && now - last < SYNC_INTERVAL_MS) return null;
     if (!claimSyncLock(join(dir, LOCK_FILE), now)) return null;
     const budget = Number.isFinite(budgetMs) && budgetMs > 0 ? budgetMs : INLINE_BUDGET_MS;
     const work = Promise.resolve()

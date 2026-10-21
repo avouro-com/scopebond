@@ -480,11 +480,15 @@ export interface ManagedMeta {
   rules_digest: string | null;
   export_id: string | null;
   etag: string | null;
+  /** When the last successful rules check finished (rules applied, unchanged, or the workspace's own-rules answer). */
   checked_at: string | null;
   last_ack: { revision: number; result: "loaded" | "rejected"; at: string } | null;
+  /** Why the last rules check failed; null after one that worked. */
   last_error: string | null;
   /** What the document in force says that this computer reads differently (an always-on rule set to anything but Block). */
   rule_notes?: string[] | null;
+  /** When the last rules check was tried, whether it worked or not. */
+  last_attempt_at?: string | null;
   /** The Scopebond versions the workspace recommends for its computers, as its last rules check said. */
   recommended?: Recommended | null;
   /** How many days this computer keeps receipts the workspace acknowledged, as its last rules check said. */

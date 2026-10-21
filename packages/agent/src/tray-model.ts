@@ -57,6 +57,22 @@ export interface TrayModel {
    *  agent. */
   computer_rows?: ComputerRow[];
   version_label?: string;
+  /** What this computer enforces, for Settings' "This computer" row; null before the rules can be read. Absent from an older
+   *  agent. */
+  rules?: TrayRules | null;
+}
+
+/** The rules in force: how many block and how many only record (every starter, workspace and pack rule, and each service the
+ *  workspace blocks by name), the packs in force, and the rules check: `checked_at` is the last successful one ("Rules
+ *  updated"), `last_attempt_at` the last try and `last_error` why it failed (null after one that worked). Times in ms. */
+export interface TrayRules {
+  managed: boolean;
+  blocking: number;
+  monitoring: number;
+  packs: Array<{ id: string; version: string; title: string }>;
+  checked_at: number | null;
+  last_attempt_at: number | null;
+  last_error: string | null;
 }
 
 /** A fact about this computer for Settings; `items` are what the row lists when opened (the rule packs in force). */
@@ -175,7 +191,13 @@ export interface TrayInput {
   awakeSince: number;
   /** A long step the agent is running (an update, a sign-in, a repair), or null. */
   working: string | null;
-  rules: { checked_at: number | null; managed: boolean; block: number; monitor: number } | null;
+  /** `checked_at`: the last successful rules check. `block`/`monitor`: the rules that block and that record. Newer (an older
+   *  agent leaves them out): the same counts as `blocking`/`monitoring` (every starter, workspace and pack rule, each service
+   *  the workspace blocks by name counted as one), the packs in force, and the last attempt and its error when it failed. */
+  rules: {
+    checked_at: number | null; managed: boolean; block: number; monitor: number;
+    blocking?: number; monitoring?: number; packs?: TrayRules["packs"]; last_attempt_at?: number | null; last_error?: string | null;
+  } | null;
   /** `recorded_after`: out of policy but reported only after it ran (a Cursor edit); never counted as blocked. */
   today: { actions: number; blocked: number; recorded_after?: number; allowed_by_person: number } | null;
   recentBlocks?: RecentBlock[];
@@ -410,6 +432,10 @@ export function trayModel(input: TrayInput): TrayModel {
     workspace: input.workspace?.name ?? null,
     today: input.today ? { actions: input.today.actions, blocked: input.today.blocked } : null,
     can_ask: input.canAsk ?? false,
+    rules: input.rules ? {
+      managed: input.rules.managed, blocking: input.rules.blocking ?? input.rules.block, monitoring: input.rules.monitoring ?? input.rules.monitor,
+      packs: input.rules.packs ?? [], checked_at: input.rules.checked_at, last_attempt_at: input.rules.last_attempt_at ?? null, last_error: input.rules.last_error ?? null,
+    } : null,
     computer_rows: computerRows(input, state, updatedAt, updateAvailable),
     version_label: `Scopebond ${input.version.agent}`,
   };

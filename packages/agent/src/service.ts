@@ -8,7 +8,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
+  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleSummary, ruleName, ruleTitle,
   writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -634,12 +634,16 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const now = Date.now();
     const status = computerStatus(options.dir);
     const meta = readMeta(options.dir);
-    const report = ruleReport(options.dir);
-    const modes = report ? Object.values(report).map(([mode]) => mode) : [];
+    // Every rule in force, counted (the hook's rule summary): the older `block`/`monitor` carry the same counts.
+    const counted = ruleSummary(options.dir);
+    const at = (iso: string | null | undefined): number | null => (iso && Number.isFinite(Date.parse(iso)) ? Date.parse(iso) : null);
     const activity = localActivity(options.dir, { limit: RECENT_BLOCKS_MAX });
     const model = trayModel({
       status, health: health(), now, awakeSince, working,
-      rules: report ? { checked_at: meta.checked_at ? Date.parse(meta.checked_at) : null, managed: isManaged(options.dir), block: modes.filter((m) => m === "enforce").length, monitor: modes.filter((m) => m === "monitor").length } : null,
+      rules: counted ? {
+        checked_at: at(meta.checked_at), managed: isManaged(options.dir), block: counted.blocking, monitor: counted.monitoring,
+        blocking: counted.blocking, monitoring: counted.monitoring, packs: counted.packs, last_attempt_at: at(meta.last_attempt_at), last_error: meta.last_error ?? null,
+      } : null,
       today: activity?.today ?? null,
       recentBlocks: actionable(activity?.recent_blocks ?? [], now),
       version: { agent: agentVersion(), hook: hookVersion(), policy: lastMaintenance?.policy ?? "unknown", ...offeredVersions(), failedUpdate: failedUpdate(options.dir) },
