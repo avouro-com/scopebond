@@ -45,6 +45,7 @@ export {
 export type { RuleSet, PathRule } from "./rules.js";
 export { pathRuleMatches, isDestructiveProgram, isProtectedBranch } from "./rules.js";
 export { DESTRUCTIVE_FORMS, destructiveForm } from "./destructive-forms.js";
+export { EXCEPTION_FIELDS, EXCEPTIONS_CAPABILITY, MAX_EXCEPTIONS, validRuleExceptions, localDatabaseUrl, type RuleException, type ExceptionField } from "./rule-exceptions.js";
 export { classifyIntent, classificationBlocks, BLOCKING, MONITORED_HIGH } from "./classify.js";
 export type { CatalogId, Classification } from "./classify.js";
 export { classifyRoot, applyRootScope } from "./paths.js";

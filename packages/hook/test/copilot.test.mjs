@@ -321,7 +321,11 @@ test("a policy written before Copilot was covered gets Copilot's hook settings o
   const copilotPart = under("\\.copilot/hooks") + named("\\.copilot/settings\\.json") + named("\\.copilot/mcp-config\\.json") + under("\\.github/hooks")
     + named("\\.github/copilot/settings\\.json") + named("\\.github/copilot/settings\\.local\\.json");
   assert.ok(GUARDRAIL_WRITE_PATTERN.includes(copilotPart), "the always-on floor covers them");
-  const before = GUARDRAIL_WRITE_PATTERN.replace(copilotPart, "");
+  // The floor as it was then: without Copilot's settings, and still holding the sub-agent definitions and .mcp.json, which
+  // have since moved to the configuration rule.
+  const before = GUARDRAIL_WRITE_PATTERN.replace(copilotPart, "")
+    .replace(under("\\.claude/hooks"), under("\\.claude/hooks") + under("\\.claude/agents"))
+    .replace(named("\\.codex/config\\.toml"), named("\\.codex/config\\.toml") + named("\\.mcp\\.json"));
   const policy = compile(defaultRules(), "kid");
   const floor = policy.clauses.find((c) => c.id === "protect-scopebond-write");
   floor.param_bounds.path.pattern = before;
