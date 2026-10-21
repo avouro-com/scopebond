@@ -36,7 +36,7 @@ export const PACK_LEVEL2_FIELDS = {
 /** What a rule's `allow_patterns` entry may widen an allowance by. */
 export const PACK_ALLOW_PATTERN_KINDS = ["path_prefix", "path_glob", "package_name", "host", "mcp_tool"] as const;
 /** The longest texts a level-2 rule carries, and the most allow patterns one rule lists. */
-export const PACK_RULE_LIMITS = { title: 80, saferWay: 160, allowPatterns: 16, requiredTypes: 64, maxEngine: 1000 } as const;
+export const PACK_RULE_LIMITS = { title: 80, saferWay: 160, allowPatterns: 8, requiredTypes: 64, maxEngine: 1000 } as const;
 /** What a pack signature covers: these bytes, then the canonical pack without `signature`. */
 export const PACK_SIGNATURE_DOMAIN = "scopebond:pack/v1\n";
 
@@ -235,6 +235,42 @@ const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 // exponentially. Patterns run only on words the engine first cuts to a bounded length, and a pack is signed data; this is
 // the static check on top.
 const NESTED_REPEAT = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)[+*{]/;
+
+// ---- a rule's allow patterns ----------------------------------------------------------------------------------------------
+// The recipes a rule carries for pattern allowances ("Similar commands in this project"). The shape and its check belong to the
+// pattern allowances module (`allow-patterns.ts`, `allowPatternErrors`); until that module is in this tree, the same check is
+// kept here, word for word, and is replaced by an import of it.
+
+const ALLOW_PATTERN_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const ALLOW_PATTERN_PARAM = /^[a-z_][a-z0-9_]{0,63}$/;
+/** Control characters (and line breaks), and the bidirectional and invisible formatting characters: never in a title. */
+const hasHiddenCharacter = (v: string): boolean => [...v].some((ch) => {
+  const c = ch.codePointAt(0)!;
+  return c < 0x20 || c === 0x7f || (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2060 && c <= 0x2069) || c === 0xfeff || c === 0x2028 || c === 0x2029;
+});
+const plainText = (v: unknown, max: number): v is string => typeof v === "string" && v.length >= 1 && v.length <= max && v.trim() === v && !hasHiddenCharacter(v);
+
+/** What is wrong with a rule's `allow_patterns`, one sentence each (none when it is well formed). */
+export function allowPatternErrors(v: unknown, where: string): string[] {
+  if (!Array.isArray(v)) return [`${where} must be a list`];
+  if (v.length === 0 || v.length > PACK_RULE_LIMITS.allowPatterns) return [`${where} must hold 1 to ${PACK_RULE_LIMITS.allowPatterns} recipes`];
+  const errors: string[] = [];
+  const ids = new Set<string>();
+  v.forEach((p: unknown, i) => {
+    const at = `${where}[${i}]`;
+    if (typeof p !== "object" || p === null || Array.isArray(p)) { errors.push(`${at} must be an object`); return; }
+    const r = p as Record<string, unknown>;
+    const unknown = Object.keys(r).filter((k) => !["id", "title", "param", "kind"].includes(k));
+    if (unknown.length) errors.push(`${at} has unknown field ${unknown[0]}`);
+    if (typeof r.id !== "string" || !ALLOW_PATTERN_ID.test(r.id)) errors.push(`${at}.id must be a lower-case id`);
+    else if (ids.has(r.id)) errors.push(`${at}.id repeats ${r.id}`);
+    else ids.add(r.id);
+    if (!plainText(r.title, PACK_RULE_LIMITS.title)) errors.push(`${at}.title must be 1 to ${PACK_RULE_LIMITS.title} characters of plain text`);
+    if (typeof r.param !== "string" || !ALLOW_PATTERN_PARAM.test(r.param)) errors.push(`${at}.param must name a parameter`);
+    if (typeof r.kind !== "string" || !(PACK_ALLOW_PATTERN_KINDS as readonly string[]).includes(r.kind)) errors.push(`${at}.kind must be one of ${PACK_ALLOW_PATTERN_KINDS.join(", ")}`);
+  });
+  return errors;
+}
 
 type Ctx = "shell" | "mcp";
 
@@ -576,20 +612,8 @@ class Checker {
     if (value.blockable === true && value.param_bounds === undefined) ok = this.fail(`${at}.blockable`, "a rule that may block needs param_bounds");
     if (value.default_mode !== undefined && value.default_mode !== "monitor" && value.default_mode !== "block") ok = this.fail(`${at}.default_mode`, "must be monitor or block");
     if (value.default_mode === "block" && value.blockable !== true) ok = this.fail(`${at}.default_mode`, "only a blockable rule may block by default");
-    if (value.allow_patterns !== undefined) {
-      if (!this.list(value.allow_patterns, `${at}.allow_patterns`, (p, a) => {
-        if (!this.object(p, a, ["id", "title", "param", "kind"], ["id", "title", "param", "kind"])) return false;
-        let good = this.string(p.id, `${a}.id`, PACK_ID);
-        if (!this.string(p.title, `${a}.title`, undefined, PACK_RULE_LIMITS.title)) good = false;
-        if (!this.string(p.param, `${a}.param`, PARAM, 64)) good = false;
-        if (!(PACK_ALLOW_PATTERN_KINDS as readonly unknown[]).includes(p.kind)) good = this.fail(`${a}.kind`, `must be one of ${PACK_ALLOW_PATTERN_KINDS.join(", ")}`);
-        return good;
-      }, 1, PACK_RULE_LIMITS.allowPatterns, false)) ok = false;
-      else {
-        const ids = (value.allow_patterns as Array<{ id: string }>).map((p) => p.id);
-        if (new Set(ids).size !== ids.length) ok = this.fail(`${at}.allow_patterns`, "an id is used twice");
-      }
-    }
+    // The recipes' shape is the pattern allowances' own (allowPatternErrors); what each recipe matches is the engine's.
+    if (value.allow_patterns !== undefined) for (const error of allowPatternErrors(value.allow_patterns, `${at}.allow_patterns`)) ok = this.fail(at, error);
     if (!this.string(value.id, `${at}.id`, RULE_ID, 100)) ok = false;
     if (value.type !== "action_allowlist") ok = this.fail(`${at}.type`, "a pack rule is an action_allowlist clause");
     if (value.mode !== undefined && !["enforce", "monitor", "require_approval"].includes(value.mode as string)) ok = this.fail(`${at}.mode`, "must be enforce, monitor or require_approval");
