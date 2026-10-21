@@ -557,11 +557,8 @@ fn draw(app: &AppHandle, shared: &Arc<Shared>) {
         (AgentLink::Starting | AgentLink::Waiting, _) | (AgentLink::Answering, None) => IconState::Working,
         _ => IconState::Problem,
     };
-    let tooltip = match (link, &answer) {
-        (AgentLink::Answering, Some(a)) if !a.tray.tooltip.is_empty() => a.tray.tooltip.clone(),
-        _ => menu::header(answer.as_ref(), link),
-    };
-    let tooltip: String = tooltip.chars().take(120).collect();
+    // A sign-in waiting shows its code whole; at most 63 characters.
+    let tooltip = menu::tooltip(answer.as_ref(), link);
     let mut drawn = lock(&shared.drawn);
     if drawn.icon != Some(state) {
         let _ = tray.set_icon(Some(icon_image(state)));

@@ -109,6 +109,30 @@ pub fn header(answer: Option<&TrayAnswer>, link: AgentLink) -> String {
     format!("Scopebond — {line}")
 }
 
+/// Windows shows at most this many characters of the tray icon's tooltip.
+pub const TOOLTIP_MAX: usize = 63;
+
+/// The icon's tooltip, one line of at most TOOLTIP_MAX characters: while a sign-in waits for approval, its code whole
+/// ("Scopebond: approve code ABCD-EFGH"); else the agent's own tooltip, or the header while the agent does not answer.
+pub fn tooltip(answer: Option<&TrayAnswer>, link: AgentLink) -> String {
+    let model = match (link, answer) {
+        (AgentLink::Answering, Some(a)) => Some(&a.tray),
+        _ => None,
+    };
+    let code = model.and_then(|m| m.sign_in_code.as_deref()).map(str::trim).filter(|c| !c.is_empty());
+    let text = match (code, model) {
+        (Some(code), _) => format!("Scopebond: approve code {code}"),
+        (None, Some(m)) if !m.tooltip.trim().is_empty() => m.tooltip.clone(),
+        _ => header(answer, link),
+    };
+    let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= TOOLTIP_MAX {
+        one_line
+    } else {
+        one_line.chars().take(TOOLTIP_MAX - 1).chain(std::iter::once('…')).collect()
+    }
+}
+
 /// "Open <workspace> in Scopebond Cloud", or without the name when the agent does not know it.
 pub fn open_cloud_label(workspace: Option<&str>) -> String {
     match workspace.map(str::trim).filter(|w| !w.is_empty()) {
@@ -380,6 +404,36 @@ mod tests {
         c.autostart = Autostart::Off;
         assert!(labels(&menu_spec(Some(&a), &c)).contains(&"[ ] Start with Windows".to_string()));
         assert_eq!(Autostart::Managed.as_str(), "managed");
+    }
+
+    #[test]
+    fn the_tooltip_shows_a_waiting_sign_in_code_whole_and_is_cut_at_63_characters() {
+        let mut a = answer(fixtures::PROTECTED);
+        assert_eq!(tooltip(Some(&a), AgentLink::Answering), "Scopebond — Protected · Acme · Laptops");
+        // A sign-in waiting: the code, whole, even where the agent's own tooltip (the headline) would cut it off.
+        a.tray.sign_in_code = Some("BCDF-GHJK".into());
+        a.tray.tooltip = format!("Scopebond — Approve this computer in your workspace {}: code BCDF-GHJK", "x".repeat(40));
+        assert_eq!(tooltip(Some(&a), AgentLink::Answering), "Scopebond: approve code BCDF-GHJK");
+        a.tray.sign_in_code = Some("  ".into());
+        assert!(!tooltip(Some(&a), AgentLink::Answering).contains("approve code"), "no code: the agent's tooltip");
+        // Long text is cut to 63 characters, the last one an ellipsis.
+        a.tray.sign_in_code = None;
+        a.tray.tooltip = format!("Scopebond — Protected · {}", "x".repeat(200));
+        let long = tooltip(Some(&a), AgentLink::Answering);
+        assert_eq!(long.chars().count(), TOOLTIP_MAX);
+        assert!(long.ends_with('…'));
+        let exact = "y".repeat(TOOLTIP_MAX);
+        a.tray.tooltip = exact.clone();
+        assert_eq!(tooltip(Some(&a), AgentLink::Answering), exact, "63 characters fit");
+        a.tray.tooltip = "two\nlines".into();
+        assert_eq!(tooltip(Some(&a), AgentLink::Answering), "two lines");
+        // No tooltip from the agent: the header.
+        a.tray.tooltip = String::new();
+        assert_eq!(tooltip(Some(&a), AgentLink::Answering), "Scopebond — Protected");
+        // While the agent does not answer, the header; a code it gave earlier is not shown.
+        a.tray.sign_in_code = Some("BCDF-GHJK".into());
+        assert_eq!(tooltip(Some(&a), AgentLink::Starting), "Scopebond — Starting the Scopebond Agent…");
+        assert_eq!(tooltip(None, AgentLink::NotAnswering), "Scopebond — The Scopebond Agent is not answering");
     }
 
     #[test]

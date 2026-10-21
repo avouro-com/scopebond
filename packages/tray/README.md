@@ -12,6 +12,8 @@ PowerShell tray.
   attention; a red cross for a problem; a slate tile with a slash when the computer is not connected to its workspace.
   Shape and colour both say the state. The icon is drawn in code (`src/icon.rs`, the same grid and colours as the
   PowerShell tray), so the repository holds no image files; the build writes the program's .ico from the same code.
+  The tooltip says how things stand in one line of at most 63 characters; while a sign-in waits for approval it shows
+  the code whole: "Scopebond: approve code ABCD-EFGH".
 - **Right-click menu**, short, in this order: *Open Scopebond*, *Blocked today (N)*, the one fix when the agent's model
   offers one (*Send records now*, *Reconnect…*, *Repair*…; or *Start the Scopebond Agent* when it is not answering),
   *Open <workspace> in Scopebond Cloud* (when the model offers the workspace's page), *Notifications* ▸ *Blocks and
