@@ -190,6 +190,29 @@ const LAYOUT_VERSION = 2;
  *  from a tool call (building it reads the whole file once). */
 const DENIED_INDEX = "CREATE INDEX IF NOT EXISTS receipts_denied ON receipts (id) WHERE realtime_result = 'deny';";
 const HELD_STATES = "('reserved','dispatching','outcome_unknown')";
+/** The request and approval ids stored receipts name, for the replay check. The trigger fills it with each receipt, so
+ *  a writer that predates it (an older version sharing the file) still keeps it complete; a later use of an id keeps
+ *  the row for as long as that receipt. */
+const AUTHORIZATION_INDEX = `
+  CREATE TABLE IF NOT EXISTS authorization_ids (
+    kind TEXT NOT NULL,
+    value TEXT NOT NULL,
+    action_id TEXT,
+    at TEXT NOT NULL,
+    PRIMARY KEY (kind, value)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS authorization_ids_at ON authorization_ids (at);
+  CREATE TRIGGER IF NOT EXISTS receipts_authorization_ids AFTER INSERT ON receipts BEGIN
+    INSERT INTO authorization_ids (kind, value, action_id, at)
+      SELECT kind, value, NEW.action_id, NEW.timestamp FROM (
+        SELECT 'request_id' AS kind, json_extract(NEW.receipt_json, '$.payload.authorization.agent.request_id') AS value
+        UNION ALL
+        SELECT 'approval_id', json_extract(NEW.receipt_json, '$.payload.authorization.approval.approval_id'))
+      WHERE value IS NOT NULL
+      ON CONFLICT (kind, value) DO UPDATE SET at = MAX(at, excluded.at);
+  END;`;
+/** The `store_metadata` key holding since when `authorization_ids` covers every receipt. */
+const INDEXED_SINCE = "authorization_ids_since";
 
 /** SQLite-backed receipt store using Node's built-in `node:sqlite` (no native
  *  dependency). Durable and queryable; mirrors the store used at the edge.
@@ -201,6 +224,9 @@ const HELD_STATES = "('reserved','dispatching','outcome_unknown')";
 export class SqliteReceiptStore implements ReceiptStore {
   private readonly db: SqliteDb;
   private readonly snapshots = new Map<string, string>();
+  /** Since when every receipt's request and approval ids are in `authorization_ids` (milliseconds; the epoch for a store
+   *  that had them from its first receipt). */
+  private readonly indexedSince: number;
   /** `busyTimeoutMs`: how long a statement waits for another process's write lock (15 s by default; upkeep that must
    *  not hold up a tool call passes a short one and skips the pass when the file is busy). */
   constructor(path: string, options: { busyTimeoutMs?: number } = {}) {
@@ -266,6 +292,7 @@ export class SqliteReceiptStore implements ReceiptStore {
         this.db.exec(DENIED_INDEX);
         this.db.prepare("INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('layout', ?)").run(String(LAYOUT_VERSION));
       }
+      this.indexedSince = this.authorizationIndex();
     } catch (error) {
       try { this.db.close(); } catch { /* already failing */ }
       throw error;
@@ -300,14 +327,45 @@ export class SqliteReceiptStore implements ReceiptStore {
     ).all() as { candidate_json: string }[];
     return [...receipts, ...rows.map((row) => JSON.parse(row.candidate_json) as Receipt)];
   }
-  /** One indexed lookup instead of the whole log: the authority table holds every id an action consumed, and the
-   *  receipt tail since `since` covers a receipt written without a reservation. */
+  /** Indexed lookups instead of the log: the authority table holds every id an action consumed, and `authorization_ids`
+   *  every id a stored receipt names (one written without a reservation too). An id either holds is refused, however
+   *  old. Receipts stored before the index existed are read only while the window since `since` reaches back before it
+   *  (the first hour after an upgrade), or when `since` is not a time. */
   authorizationUsed(kind: "request_id" | "approval_id", id: string, since: string): boolean {
     if (this.db.prepare(`SELECT 1 FROM authority_consumptions WHERE kind = ? AND value = ? LIMIT 1`).all(kind, id).length > 0) return true;
+    if (this.db.prepare(`SELECT 1 FROM authorization_ids WHERE kind = ? AND value = ? LIMIT 1`).all(kind, id).length > 0) return true;
+    if (Date.parse(since) > this.indexedSince) return false;
     const path = kind === "request_id" ? "$.payload.authorization.agent.request_id" : "$.payload.authorization.approval.approval_id";
     return this.db.prepare(
       `SELECT 1 FROM receipts INDEXED BY receipts_timestamp WHERE timestamp >= ? AND json_extract(receipt_json, ?) = ? LIMIT 1`,
     ).all(since, path, id).length > 0;
+  }
+  /** Make the index of the ids receipts name, once, and return since when it holds every receipt's. A trigger writes a
+   *  receipt's ids in the same statement (and so the same transaction) as the receipt, whichever process or version
+   *  inserts it. A store with no receipt yet is covered from the start; one with receipts records the time the index was
+   *  made, and `authorizationUsed` reads the receipts from before it until the replay window has passed it. */
+  private authorizationIndex(): number {
+    const made = () => this.db.prepare(`SELECT value FROM store_metadata WHERE key = '${INDEXED_SINCE}'`).all() as { value: string }[];
+    let rows = made();
+    if (!rows[0]) {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.db.exec(AUTHORIZATION_INDEX);
+        // Read inside the transaction that made the trigger: a receipt not seen here is written after it, with its ids.
+        // A receipt stamped later than now (a clock set back since) moves the time to its own.
+        const newest = (this.db.prepare(`SELECT MAX(timestamp) AS at FROM receipts`).all() as { at: string | null }[])[0]?.at ?? null;
+        const since = newest === null ? 0 : Math.max(Date.now(), Date.parse(newest) || 0);
+        this.db.prepare(`INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('${INDEXED_SINCE}', ?)`).run(new Date(since).toISOString());
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+      rows = made();
+    }
+    const since = Date.parse(rows[0]?.value ?? "");
+    // An unreadable time reads the receipts on every check, as before the index.
+    return Number.isFinite(since) ? since : Number.POSITIVE_INFINITY;
   }
   /** Keep a policy once and return the reference stored in its place. */
   private policyRef(snapshot: string): string {
@@ -545,6 +603,7 @@ export class SqliteReceiptStore implements ReceiptStore {
       // replay protection.
       const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       this.removeFinishedState(isoTimestamp < dayAgo ? isoTimestamp : dayAgo, Number.MAX_SAFE_INTEGER);
+      this.removeAuthorizationIds(isoTimestamp < dayAgo ? isoTimestamp : dayAgo, Number.MAX_SAFE_INTEGER);
       if (removed > 0) this.db.prepare(`DELETE FROM receipts WHERE timestamp < ?`).run(isoTimestamp);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -577,6 +636,13 @@ export class SqliteReceiptStore implements ReceiptStore {
     this.db.prepare(`DELETE FROM authority_lifecycle WHERE action_id IN (SELECT value FROM json_each(?))`).run(ids);
     this.db.prepare(`DELETE FROM authority_actions WHERE action_id IN (SELECT value FROM json_each(?))`).run(ids);
     return doomed.length;
+  }
+  /** Index rows of ids last named before `isoTimestamp`, at most `limit`. */
+  private removeAuthorizationIds(isoTimestamp: string, limit: number): number {
+    const removed = this.db.prepare(
+      `DELETE FROM authorization_ids WHERE (kind, value) IN (SELECT kind, value FROM authorization_ids WHERE at < ? LIMIT ?)`,
+    ).run(isoTimestamp, limit) as { changes?: number | bigint };
+    return Number(removed.changes ?? 0);
   }
   /** Whether every row is in the current layout. */
   layoutCurrent(): boolean {
@@ -618,6 +684,10 @@ export class SqliteReceiptStore implements ReceiptStore {
     for (let n = batch, first = true; n === batch && (first || timeLeft()); first = false) {
       n = step(() => this.removeFinishedState(stateCutoff, batch));
       report.stateRemoved += n;
+    }
+    // 2b. The index of the ids receipts named, after the same time (the receipts themselves follow their own retention).
+    for (let n = batch, first = true; n === batch && (first || timeLeft()); first = false) {
+      n = step(() => this.removeAuthorizationIds(stateCutoff, batch));
     }
 
     // 3. Receipts the workspace acknowledged before the retention window. Never one it has not acknowledged, never in
