@@ -1,5 +1,36 @@
 # @scopebond/gateway
 
+## 0.20.5
+
+### Patch Changes
+
+- 8ed768b: A workspace may now ask for no reason to unblock an action or to ask an admin (`reason_min` 0, accepted by a hook that reports the `optional_reason` capability); an unblock with no reason is recorded with no reason digest and a reason length of 0, while a workspace minimum above 0 still requires a reason as before.
+  The Scopebond window and the tray's form accept an answer with no reason where the workspace asks for none, and say a reason is optional.
+  An override record with no reason (no digest, length 0) is now a valid receipt member.
+  The receipt schema allows an override record with no reason: `reason_digest` null and `reason_length` 0.
+- a879854: Receipts now name the policy clause that matched and the bound that failed, and Monitor is silent in Cursor.
+  
+  - policy-schema: the receipt schema adds two optional payload members, `clause_id` and `failed_bound` (`<param>:<bound>`, never the param's value), with valid and invalid examples in `vectors/evidence-contract.json`; receipts without them are unchanged.
+  - verify: a verdict that names a clause now also names the bound that failed (`failed_bound`), and among matching clauses of one mode it names the first by policy order; the conformance vectors check the bound too.
+  - gateway: denied, monitored, held and overridden receipts carry `clause_id` and `failed_bound`, an allowed one carries neither, and `validateEvidencePayload` checks them.
+  - hook: in Cursor, an action a monitored rule matches is now answered `allow` (recorded, with no approval prompt); `ask` is kept only for actions Scopebond could not evaluate or holds for a person.
+- 391c3f7: The tray lists every block of the last seven days (up to 200), not only those among the newest 5,000 records, so a busy day no longer shows a blocked count over an empty list. The local store keeps an index of denied records for this (built by the agent's upkeep on an existing store).
+  
+  An agent's retries of one block (the same action, rule, project and session, each within 10 minutes) are one row with the number of tries, are announced once, and count once: the header, the Blocked tab, the menu and the Today row all show the same number of distinct blocks.
+  
+  Every block carries one outcome: Unblock, Ask an admin, or a plain sentence saying why it stays blocked (Scopebond's own protection, a rule set by the workspace, Safe Install's verdict in words, or Safe Install holding an install for the person), with "Copy details" where it helps. A block the person asked about follows the request (waiting, approved by whom, declined) and offers nothing more once a request or an allowance covers it; while a request waits, the agent checks for the answer every 10 seconds for 10 minutes, and the answer is announced unless notifications are off.
+  
+  "Check now" checks the rules and packs again and runs the self-check; it never installs an update. A failed self-check is kept until a check passes.
+  
+  The npm tray icon's menu shows `&` in commands as it is.
+  
+  The coding agent trying a blocked action again within 10 minutes, before the person answered, is not asked about again: the denial tells the agent not to retry and to tell the person, who acts on it from the tray.
+- Updated dependencies [8ed768b]
+- Updated dependencies [09e5726]
+- Updated dependencies [a879854]
+  - @scopebond/policy-schema@0.11.2
+  - @scopebond/verify@0.6.11
+
 ## 0.20.4
 
 ### Patch Changes

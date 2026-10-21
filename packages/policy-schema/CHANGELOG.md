@@ -1,5 +1,23 @@
 # @scopebond/policy-schema
 
+## 0.11.2
+
+### Patch Changes
+
+- 8ed768b: A workspace may now ask for no reason to unblock an action or to ask an admin (`reason_min` 0, accepted by a hook that reports the `optional_reason` capability); an unblock with no reason is recorded with no reason digest and a reason length of 0, while a workspace minimum above 0 still requires a reason as before.
+  The Scopebond window and the tray's form accept an answer with no reason where the workspace asks for none, and say a reason is optional.
+  An override record with no reason (no digest, length 0) is now a valid receipt member.
+  The receipt schema allows an override record with no reason: `reason_digest` null and `reason_length` 0.
+- 09e5726: A response fetched with `curl`, `wget` or `iwr` and piped to an interpreter that is given its code another way (`| python -c "…"`, `| python -m json.tool`, `| node -e`, `| ruby -e`, `| perl -e`, `| php -r`, `| deno eval`, `| bun -e`, or a local script such as `| node script.mjs`) is no longer recorded as running a fetched script, since the fetched text is only data; a bare interpreter (`| python`, `| node -`) and a shell still are, also when the text reaches them through filters (`| tee log | bash`), and the install-detection vectors cover each case.
+  
+  A package runner's command arguments are no longer read as packages: `npx vite --port 4333`, `npx tsc -p tsconfig.json` and `pnpm dlx shadcn@latest add button` record only the command's package, `-y`/`--yes` after the command no longer marks the run as auto-confirmed, and every `-p`/`--package` before the command (or `--from`/`--spec` for `uvx` and `pipx run`) is recorded as a package of its own.
+- a879854: Receipts now name the policy clause that matched and the bound that failed, and Monitor is silent in Cursor.
+  
+  - policy-schema: the receipt schema adds two optional payload members, `clause_id` and `failed_bound` (`<param>:<bound>`, never the param's value), with valid and invalid examples in `vectors/evidence-contract.json`; receipts without them are unchanged.
+  - verify: a verdict that names a clause now also names the bound that failed (`failed_bound`), and among matching clauses of one mode it names the first by policy order; the conformance vectors check the bound too.
+  - gateway: denied, monitored, held and overridden receipts carry `clause_id` and `failed_bound`, an allowed one carries neither, and `validateEvidencePayload` checks them.
+  - hook: in Cursor, an action a monitored rule matches is now answered `allow` (recorded, with no approval prompt); `ask` is kept only for actions Scopebond could not evaluate or holds for a person.
+
 ## 0.11.1
 
 ### Patch Changes
