@@ -113,7 +113,18 @@ export interface OverrideTerms {
   /** (with `unblock_terms`) Every unblock a person makes applies at once and is listed for an admin to review later, who
    *  may undo it (the workspace then sends it among its revoked allowances). The window and the tray say so. */
   review?: boolean;
+  /** (sent only to a hook that reports the `answer_lengths` capability) The lengths a person's unblock may last: "once" (the
+   *  next try), "1h", "tomorrow" (24 hours) and "30d" (30 days; it waits for an admin where `always` is "needs_admin", and is
+   *  not offered where it is "off"). When present it decides the lengths offered, and 15 minutes is not one of them. Absent:
+   *  the lengths the other terms allow (once, 15 minutes, always for `always_days`). */
+  lengths?: AnswerLength[];
 }
+/** A length a workspace may offer for a person's unblock (`lengths`). */
+export type AnswerLength = "once" | "1h" | "tomorrow" | "30d";
+export const ANSWER_LENGTHS: readonly AnswerLength[] = ["once", "1h", "tomorrow", "30d"];
+/** A list of lengths: one to four known ones, none twice. Anything else makes the terms invalid. */
+const validLengths = (v: unknown): v is AnswerLength[] => Array.isArray(v) && v.length >= 1 && v.length <= ANSWER_LENGTHS.length
+  && v.every((x) => (ANSWER_LENGTHS as readonly unknown[]).includes(x)) && new Set(v).size === v.length;
 /**  rule modes, in the workspace's words: off = Off (sent only to a hook that reports `rule_off`), monitor = Monitor,
  *  block = Block, override = "Block, person may allow", ask = "Block, person may ask". */
 export type ManagedRule = { mode: "off" | "monitor" | "block" | "override" | "ask"; override?: OverrideTerms; exceptions?: RuleException[] }
@@ -129,7 +140,7 @@ const LOCAL_ID: Readonly<Record<string, string>> = {
 const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 /** An integer in the range, or the string "unlimited" (`unlimited_terms`); anything else fails closed. */
 const intOrUnlimited = (v: unknown, min: number, max: number): boolean => v === "unlimited" || intIn(v, min, max);
-const TERM_KEYS = new Set(["reason_min", "minutes", "daily_limit", "harness_prompt", "always", "always_days", "requests", "lasts", "review"]);
+const TERM_KEYS = new Set(["reason_min", "minutes", "daily_limit", "harness_prompt", "always", "always_days", "requests", "lasts", "review", "lengths"]);
 function validTerms(t: unknown): t is OverrideTerms {
   return isObject(t) && Object.keys(t).every((k) => TERM_KEYS.has(k)) && intIn(t.reason_min, 0, 200)
     && intOrUnlimited(t.minutes, 0, 60) && intOrUnlimited(t.daily_limit, 1, 50)
@@ -138,7 +149,8 @@ function validTerms(t: unknown): t is OverrideTerms {
     && (t.always_days === undefined || intIn(t.always_days, 1, 365))
     && (t.requests === undefined || typeof t.requests === "boolean")
     && (t.lasts === undefined || t.lasts === "once" || t.lasts === "15m" || t.lasts === "always")
-    && (t.review === undefined || typeof t.review === "boolean");
+    && (t.review === undefined || typeof t.review === "boolean")
+    && (t.lengths === undefined || validLengths(t.lengths));
 }
 /** Whether a person at the computer may act on a block under this rule (allow it, or ask an admin). */
 export const personMayAct = (rule: ManagedRule | undefined): boolean => rule?.mode === "override" || rule?.mode === "ask";

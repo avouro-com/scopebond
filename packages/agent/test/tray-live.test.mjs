@@ -36,7 +36,7 @@ test("a listening tray gets the question, and the person's answer from its form 
   assert.equal(q.what, ".env.production");
   assert.equal(q.rule_title, "Read passwords, keys or secrets");
   assert.equal(q.tool, "Claude Code");
-  assert.deepEqual(q.offers, { once: true, fifteen: true, always: true, always_days: 30, always_needs_admin: false, ask: true, reviewed: false });
+  assert.deepEqual(q.offers, { once: true, fifteen: true, hour: false, tomorrow: false, always: true, always_days: 30, always_needs_admin: false, ask: true, reviewed: false });
   assert.ok(Date.parse(q.deadline) > Date.now() + 40_000, "the hook's own wait");
   assert.equal(live.open(q.action_id), true);
   assert.deepEqual(live.answer({ action_id: q.action_id, choice: "once", reason: "too short" }), { ok: false, outcome: "reason_short", text: "Say why in at least 12 characters." });
@@ -130,7 +130,7 @@ test("through the agent: the hook's POST /override waits for the tray's answer; 
     const hook = callAgent(dir, "POST", "/override", body, 25_000);
     const { question: q } = await waited;
     assert.equal(q.tool, "Codex");
-    assert.deepEqual(q.offers, { once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false });
+    assert.deepEqual(q.offers, { once: false, fifteen: false, hour: false, tomorrow: false, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false });
     assert.equal((await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray.pending.action_id, q.action_id);
     assert.equal((await callAgent(dir, "POST", "/override/open", { action_id: q.action_id }, 10_000)).opened, true);
     assert.equal((await callAgent(dir, "POST", "/override/answer", { action_id: q.action_id, choice: "once", reason: REASON }, 10_000)).outcome, "not_offered");

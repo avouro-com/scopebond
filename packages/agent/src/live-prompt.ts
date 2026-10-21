@@ -10,7 +10,8 @@
 import { toolName } from "./tray-model.js";
 import type { OverrideAnswer, OverrideQuestion, Prompter } from "./prompt.js";
 
-/** What the tray shows for a question waiting now. `offers` reads like a recent block's (once, fifteen, always, ask). */
+/** What the tray shows for a question waiting now. `offers` reads like a recent block's (once, fifteen, hour, tomorrow, always,
+ *  ask). */
 export interface LiveQuestion {
   action_id: string;
   what: string;
@@ -20,7 +21,7 @@ export interface LiveQuestion {
   tool: string | null;
   project: string | null;
   reason_min: number;
-  offers: { once: boolean; fifteen: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean; reviewed: boolean };
+  offers: { once: boolean; fifteen: boolean; hour: boolean; tomorrow: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean; reviewed: boolean };
   /** When the hook stops waiting (RFC 3339). */
   deadline: string;
   /** The person opened it in the tray. */
@@ -28,7 +29,7 @@ export interface LiveQuestion {
 }
 
 /** quiet: keep it blocked without asking again (a quiet block); always offered, and needs no reason. */
-type LiveChoice = "once" | "fifteen" | "always" | "ask" | "quiet";
+type LiveChoice = "once" | "fifteen" | "hour" | "tomorrow" | "always" | "ask" | "quiet";
 
 export interface LivePrompt {
   /** Ask the person: in the tray when one is listening (only there), else in the window where it may open, else no one now. */
@@ -92,12 +93,12 @@ export function livePrompt(options: { fallback: Prompter; now?: () => number; wi
   };
 
   const publish = (q: OverrideQuestion, deadline: number): LiveQuestion => {
-    const allowing = q.offers.allow || !!q.offers.fifteen || q.offers.always;
+    const allowing = q.offers.allow || !!q.offers.fifteen || !!q.offers.hour || !!q.offers.tomorrow || q.offers.always;
     return {
       action_id: q.action_id, what: q.summary, action_text: q.summary, rule: q.rule, rule_title: q.title,
       tool: toolName(q.harness ?? null), project: q.project ?? null, reason_min: q.reason_min,
       offers: {
-        once: q.offers.allow, fifteen: !!q.offers.fifteen, always: q.offers.always,
+        once: q.offers.allow, fifteen: !!q.offers.fifteen, hour: !!q.offers.hour, tomorrow: !!q.offers.tomorrow, always: q.offers.always,
         always_days: q.offers.always ? q.always_days ?? 30 : null, always_needs_admin: q.offers.always && !!q.always_needs_admin,
         ask: q.offers.ask, reviewed: allowing && !!q.reviewed,
       },
@@ -156,13 +157,13 @@ export function livePrompt(options: { fallback: Prompter; now?: () => number; wi
         finish(p, { decision: "quiet", ...user });
         return { ok: true, choice, reviewed: p.published.offers.reviewed, always_days: p.published.offers.always_days ?? 30 };
       }
-      if (choice !== "once" && choice !== "fifteen" && choice !== "always" && choice !== "ask") return { ok: false, outcome: "invalid", text: "That answer could not be read." };
+      if (choice !== "once" && choice !== "fifteen" && choice !== "hour" && choice !== "tomorrow" && choice !== "always" && choice !== "ask") return { ok: false, outcome: "invalid", text: "That answer could not be read." };
       if (!p.published.offers[choice]) return { ok: false, outcome: "not_offered", text: "Your workspace does not offer that choice for this action." };
       const reason = typeof r.reason === "string" ? r.reason.trim() : "";
       if (reason.length > 500 || [...reason].some((c) => { const n = c.charCodeAt(0); return (n < 32 && n !== 10 && n !== 13) || n === 127; })) return { ok: false, outcome: "invalid", text: "That answer could not be read." };
       if (reason.length < p.question.reason_min) return { ok: false, outcome: "reason_short", text: `Say why in at least ${p.question.reason_min} characters.` };
       finish(p, choice === "ask" ? { decision: "ask", reason, ...user }
-        : { decision: "allow", reason, lasts: choice === "fifteen" ? "15m" : choice === "always" ? "always" : "once", ...user });
+        : { decision: "allow", reason, lasts: choice === "fifteen" ? "15m" : choice === "hour" ? "1h" : choice === "tomorrow" ? "tomorrow" : choice === "always" ? "always" : "once", ...user });
       return { ok: true, choice, reviewed: p.published.offers.reviewed, always_days: p.published.offers.always_days ?? 30 };
     },
     close() {

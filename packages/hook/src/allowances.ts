@@ -143,20 +143,23 @@ export function makeQuietBlock(input: { rule: string; actionKey: string; osUserD
   };
 }
 
-/** Make an allowance on this computer. `lasts`: once (the next try), 15 minutes, or `always` (the workspace's default expiry;
- *  "proposed" when the workspace wants an admin to confirm first). */
+/** Make an allowance on this computer. `lasts`: once (the next try), 15 minutes, an hour, until tomorrow (24 hours), 30 days,
+ *  or `always` (the workspace's default expiry). The long lengths (30 days, always) are "proposed" when the workspace wants
+ *  an admin to confirm first. */
 export function makeAllowance(input: {
-  rule: string; actionKey: string; reason: string; osUserDigest: string | null; lasts: "once" | "15m" | "always";
+  rule: string; actionKey: string; reason: string; osUserDigest: string | null; lasts: "once" | "15m" | "1h" | "tomorrow" | "30d" | "always";
   alwaysDays?: number; needsAdmin?: boolean; now?: number; unblocked?: "automatic" | "person";
 }): Allowance {
   const now = input.now ?? Date.now();
   const reason = input.reason.trim().slice(0, 500);
   const days = Math.min(ALLOWANCE_MAX_DAYS, Math.max(1, Math.round(input.alwaysDays ?? ALLOWANCE_DEFAULT_DAYS)));
-  const expires = input.lasts === "15m" ? now + 15 * 60_000 : input.lasts === "once" ? now + DAY_MS : now + days * DAY_MS;
+  const expires = input.lasts === "15m" ? now + 15 * 60_000 : input.lasts === "1h" ? now + 60 * 60_000
+    : input.lasts === "once" || input.lasts === "tomorrow" ? now + DAY_MS : input.lasts === "30d" ? now + 30 * DAY_MS : now + days * DAY_MS;
+  const long = input.lasts === "always" || input.lasts === "30d";
   return {
     id: newAllowanceId(), rule: input.rule, action_key: input.actionKey,
     scope: input.osUserDigest ? "person" : "computer", os_user_digest: input.osUserDigest,
-    state: input.lasts === "always" && input.needsAdmin ? "proposed" : "active", once: input.lasts === "once",
+    state: long && input.needsAdmin ? "proposed" : "active", once: input.lasts === "once",
     // No reason given: no digest, and no text to send.
     reason_digest: reason ? digestOf(reason) : null, reason_length: reason.length, ...(reason ? { reason } : {}), created_by: "person",
     created_at: new Date(now).toISOString(), expires_at: new Date(expires).toISOString(), uses: 0, sent_at: null,
