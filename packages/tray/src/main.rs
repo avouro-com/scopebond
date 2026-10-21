@@ -510,6 +510,15 @@ fn open_question(shared: &Arc<Shared>, action_id: &str) {
 /// thread; a failure (no Start-menu entry, notifications turned off in Windows) is only logged. A block notification opens
 /// the panel when it is clicked, and its *Unblock…* button opens the panel on that block's form.
 fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
+    // Each block notification is counted for the day (the agent sends the day's counts with its rules check: fatigue).
+    if matches!(toast.kind, Kind::Block) {
+        if let Some((_, shared)) = panel.as_ref() {
+            let s = shared.clone();
+            thread::spawn(move || {
+                let _ = s.client.call("POST", "/fatigue", Some(&json!({ "kind": "toast" })), Duration::from_secs(5));
+            });
+        }
+    }
     thread::spawn(move || {
         let mut t = tauri_winrt_notification::Toast::new("Avouro.Scopebond").title(&toast.title).text1(&toast.text);
         if matches!(toast.kind, Kind::Recovered | Kind::Block | Kind::Request | Kind::Connected | Kind::Updated) {
