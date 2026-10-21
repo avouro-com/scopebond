@@ -29,7 +29,7 @@ import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { allowedList, askedList, blockStates } from "./allowed-asked.js";
 import { blockOutcome } from "./block-outcome.js";
-import { checkResult, projectName, RECENT_BLOCKS_MAX, supportBundle, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
+import { checkResult, projectName, RECENT_BLOCKS_MAX, RULES_STALE_MS, supportBundle, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
@@ -47,6 +47,7 @@ import { withoutNodeInjection } from "./child-env.js";
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
+const MIN_MS = 60_000;
 const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const SUMMARY_EVERY_MS = 5 * 60 * 1000;
@@ -407,8 +408,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // runs no self-check does not clear it).
   let lastSelfCheck: MaintenanceResult["selfCheck"] = null;
   let failures = 0;
-  // When the last cycle that could not deliver ended.
+  // When the last cycle that could not deliver ended; and rules checks that failed in a row.
   let failedAt = 0;
+  let rulesFailures = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   let running: Promise<CycleResult> | null = null;
@@ -527,6 +529,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       try { noticeHealth(); } catch { /* status is best effort */ }
       last = result;
       failures = result.deliveryError ? failures + 1 : 0;
+      rulesFailures = result.rules === "unavailable" || result.rules === "refused" ? rulesFailures + 1 : result.rules === "skipped" ? rulesFailures : 0;
       if (result.deliveryError) failedAt = Date.now();
       if (result.delivered) log(`delivered ${result.delivered} record(s); ${result.pending} waiting`);
       if (result.deliveryError) log(`delivery problem: ${result.deliveryError}`);
@@ -649,8 +652,12 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     if (stopped) return;
     // While a request to an admin waits (asked in the last 10 minutes), the rules are checked every 10 seconds, so an answer
     // shows in the tray at once; then at the usual interval.
-    const delay = failures ? Math.min(MAX_BACKOFF_MS, interval * 2 ** Math.min(failures, 6))
+    // Rules not checked for over an hour (the last-known ones stay in force): checked again at once, then after 1, 2, 4, 8
+    // and at most 15 minutes, never later than the usual interval.
+    const rulesRetry = rulesFailures > 0 && rulesStale() ? Math.min(interval, rulesFailures <= 1 ? 0 : Math.min(MAX_BACKOFF_MS, MIN_MS * 2 ** (rulesFailures - 2))) : null;
+    const usual = failures ? Math.min(MAX_BACKOFF_MS, interval * 2 ** Math.min(failures, 6))
       : requestWaiting(options.dir, Date.now()) ? Math.min(interval, ANSWER_POLL_MS) : interval;
+    const delay = rulesRetry === null ? usual : Math.min(usual, rulesRetry);
     timerWaiting = true;
     const due = Date.now() + delay;
     let lastTick = Date.now();
@@ -666,6 +673,13 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       void cycle().finally(schedule);
     };
     timer = setTimeout(tick, failures ? Math.min(delay, interval) : delay);
+  };
+  /** Connected, and the last rules check that worked was over an hour ago (or none is known). Only a check that failed
+   *  makes the agent try again sooner, so a computer whose check is skipped is never asked in a loop. */
+  const rulesStale = (): boolean => {
+    if (!loadConnection(options.dir)) return false;
+    const good = lastGoodCheck(readMeta(options.dir));
+    return good === null || Date.now() - good > RULES_STALE_MS;
   };
   /** A delivery that worked after `at` (any process: the hook delivers on its own too). */
   const deliveredSince = (at: number): boolean => {

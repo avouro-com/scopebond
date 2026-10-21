@@ -247,8 +247,9 @@ const HOUR = 60 * MIN;
 export const RECORDS_STUCK_MS = 24 * HOUR;
 /** Offline (the workspace unreachable) this long needs attention. */
 const OFFLINE_ATTENTION_MS = 4 * HOUR;
-/** Rules not checked for this long while online need attention. */
-const RULES_STALE_MS = HOUR;
+/** Rules not checked for this long: the agent checks again at once and keeps trying; the last-known rules stay in force, so
+ *  the person sees nothing (Settings' "Rules updated" says when). */
+export const RULES_STALE_MS = HOUR;
 
 /** A delivery error that means the workspace could not be reached (no answer at all), not a refusal. */
 export function unreachable(error: string | null | undefined): boolean {
@@ -390,8 +391,6 @@ export function trayModel(input: TrayInput): TrayModel {
     headline = pending ? `Workspace unreachable: ${pending} record${pending === 1 ? "" : "s"} waiting` : "Workspace unreachable: still checking actions";
   } else if (health.level === "amber" && health.fix?.route === "/maintain") {
     state = "attention"; headline = health.headline; fix = ACTIONS.check_now;
-  } else if (input.rules?.checked_at && d.connected && now - input.rules.checked_at > RULES_STALE_MS) {
-    state = "attention"; headline = `Rules not checked for ${ago(input.rules.checked_at, now).replace(" ago", "")}`; fix = ACTIONS.check_now;
   } else {
     state = "protected"; headline = "Protected";
   }
@@ -401,7 +400,7 @@ export function trayModel(input: TrayInput): TrayModel {
     const when = input.rules.checked_at ? ` · checked ${ago(input.rules.checked_at, now)}` : "";
     const source = input.rules.managed ? "Up to date" : "Using this computer's own rules";
     const counts = input.rules.block + input.rules.monitor > 0 ? ` · ${input.rules.block} block · ${input.rules.monitor} monitor` : "";
-    rows.push({ label: "Rules", value: `${input.rules.managed && input.rules.checked_at && now - input.rules.checked_at > RULES_STALE_MS ? `Not checked for ${ago(input.rules.checked_at, now).replace(" ago", "")}` : source}${when}${counts}` });
+    rows.push({ label: "Rules", value: `${input.rules.managed && input.rules.checked_at && now - input.rules.checked_at > RULES_STALE_MS ? "Using the last rules" : source}${when}${counts}` });
   }
   if (d.connected) {
     const value = pending === 0
