@@ -235,6 +235,9 @@ export interface TrayInput {
   rulesUpdatedAt?: number | null;
   /** The update this computer took, while the tray should still name it (version-seen.ts `recentUpdate`). */
   updated?: { from: string; to: string; at: string } | null;
+  /** The coding tools whose Scopebond hook the agent could not put back ("Claude Code"): the one setup problem the person
+   *  sees (the agent repairs the rest by itself, at once). */
+  repairFailed?: string[] | null;
 }
 
 const MIN = 60_000;
@@ -357,6 +360,9 @@ export function trayModel(input: TrayInput): TrayModel {
   } else if (health.level === "red" && d.connection_refused_since !== null) {
     state = "disconnected"; headline = "Not connected to your workspace: using this computer's own rules";
     if (input.canReconnect) fix = ACTIONS.reconnect; else hint = health.hint;
+  } else if (input.repairFailed?.length) {
+    // The agent repaired at once and checked again; this one did not take. Repair tries again, as the person asks.
+    state = "problem"; headline = `Scopebond couldn't reconnect to ${input.repairFailed.join(" and ")}`; fix = ACTIONS.repair;
   } else if (pending > 0 && overQuota(d.last_error) && health.fix?.route !== "/repair") {
     // Not "sending": the workspace refuses them until its limit allows. Nothing is lost; say so. A plan change is named only
     // when the workspace said one lifts the limit, with the limit it gives: on some plans none does.

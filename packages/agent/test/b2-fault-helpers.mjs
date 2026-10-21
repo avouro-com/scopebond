@@ -90,7 +90,7 @@ export async function waitingRecords(dir, connection, n) {
 /** The agent for `dir`, with the test's workspace and, when given, its clock. */
 export function serve(dir, ws, extra = {}) {
   return agent.startService({ dir, intervalMs: 60 * MIN, fetchImpl: ws.fetchImpl, log: () => {}, maintenance: false, tray: false,
-    installKind: "npm", autoSignIn: false, migrate: false, ...extra });
+    installKind: "npm", autoSignIn: false, migrate: false, upkeep: async () => null, ...extra });
 }
 
 export const tray = async (dir) => (await agent.callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;

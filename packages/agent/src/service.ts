@@ -9,7 +9,7 @@ import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
-  readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
+  dedupeHooks, duplicateHooks, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -18,7 +18,7 @@ import {
   clearUpdatePending, fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind, nativeTrayPath, readUpdatePending, removeOldHelpers, takeInstallResult, UPDATE_PENDING_MS,
   writeUpdatePending, type InstallKind,
 } from "./native-update.js";
-import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
+import { AGENT_LOG_ENV, autostartHealth, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
@@ -134,7 +134,51 @@ export interface ServiceOptions {
   signIn?: { registry?: RegistryReader; open?: (url: string) => void; autostart?: () => string };
   /** A signed install takes over from an npm install of the agent before it starts (default on; tests turn it off). */
   migrate?: boolean;
+  /** The agent puts a lost hook entry back, takes a second copy out and starts broken autostart again as soon as it sees them
+   *  (default: on with maintenance; a test turns it on with a temp home). The person's Repair works either way. */
+  selfRepair?: boolean;
+  /** This computer's autostart, for that repair (tests replace it). */
+  autostart?: AutostartRepair;
 }
+
+/** Whether autostart is on and works, and how to turn it on again. */
+export interface AutostartRepair { health: () => { on: boolean; ok: boolean; detail: string }; enable: () => string }
+
+/** What one repair of this computer's setup did, checked again afterwards. `failed`: the coding agents still without a
+ *  Scopebond hook (shown to the person); `duplicates`: those still running it more than once (an enabled plugin, which only
+ *  the person can turn off; reported by the self-check). `autostart`: repaired, failed, or null when it needed nothing (or
+ *  the person turned it off). */
+export interface SetupRepair { at: number; repaired: Harness[]; deduped: Harness[]; failed: Harness[]; duplicates: Harness[]; autostart: "repaired" | "failed" | null }
+
+/** Repair this computer's setup at once: the hook entry put back where a coding agent's settings lost it, a second copy of it
+ *  taken out (the user settings keep theirs), and autostart that is on but broken started again (autostart the person turned
+ *  off stays off). Each step is checked again afterwards. */
+export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostart: AutostartRepair | null = null, now = Date.now()): SetupRepair {
+  const home = homedir();
+  const repaired = repairHookEntries(missingHookEntries(harnesses)).map((r) => r.harness);
+  const deduped: Harness[] = [];
+  for (const harness of harnesses) {
+    try {
+      if (!duplicateHooks(harness, home, home)) continue;
+      if (dedupeHooks(harness, "user", home, home).removed.length) deduped.push(harness);
+    } catch (error) {
+      process.stderr.write(`Scopebond Agent: could not take the second Scopebond hook out for ${harness}: ${(error as Error).message}\n`);
+    }
+  }
+  let fixedAutostart: SetupRepair["autostart"] = null;
+  if (autostart) {
+    try {
+      const before = autostart.health();
+      if (before.on && !before.ok) { autostart.enable(); fixedAutostart = autostart.health().ok ? "repaired" : "failed"; }
+    } catch { fixedAutostart = "failed"; }
+  }
+  const failed = missingHookEntries(harnesses);
+  const duplicates = harnesses.filter((h) => { try { return duplicateHooks(h, home, home) !== null; } catch { return false; } });
+  return { at: now, repaired: repaired.filter((h) => !failed.includes(h)), deduped, failed, duplicates, autostart: fixedAutostart };
+}
+
+/** The self-check items a setup repair can fix. */
+const SETUP_CHECKS = new Set(["hook_entry", "hook_duplicates", "autostart"]);
 
 /** The agent's own delivery problem, kept apart from a hook call's cut-off. */
 function recordAgentError(dir: string, message: string): void {
@@ -372,6 +416,39 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const cycleLimit = options.cycleLimitMs ?? CYCLE_LIMIT_MS;
   let stopped = false;
   let lastSelfCheckAt = 0;
+  // Repairs of this computer's setup: done as soon as they are seen (each cycle, when the tray asks, before each self-check),
+  // recorded, and shown only while one fails.
+  const selfRepair = options.selfRepair ?? options.maintenance !== false;
+  const autostart: AutostartRepair = options.autostart ?? { health: () => autostartHealth(options.dir), enable: () => enableAutostart(options.dir, agentCliPath()) };
+  let lastRepair: SetupRepair | null = null;
+  /** `thorough`: autostart too (a registry read on Windows), as before a self-check; `asked`: the person's Repair. A look
+   *  reads a few small settings files and writes only what is broken. */
+  const heal = (thorough = false, asked = false): SetupRepair | null => {
+    const at = Date.now();
+    if (!asked && !selfRepair) return lastRepair;
+    let done: SetupRepair;
+    try { done = repairSetup(expectedHarnesses(), thorough || asked ? autostart : null, at); } catch (error) { log(`setup repair failed: ${(error as Error).message}`); return lastRepair; }
+    const acted = done.repaired.length || done.deduped.length || done.failed.length || done.autostart;
+    for (const h of done.repaired) log(`repaired: the Scopebond hook entry was missing for ${h}; put back and checked again`);
+    for (const h of done.deduped) log(`repaired: the Scopebond hook ran more than once for ${h}; the second copy was taken out`);
+    if (done.autostart) log(`autostart was on but broken: ${done.autostart === "repaired" ? "started again and checked" : "could not be repaired"}`);
+    if (done.failed.length && !(lastRepair?.failed.length)) log(`could not put the Scopebond hook back for ${done.failed.join(", ")}`);
+    // Kept while it says something: the last repair made, or one that failed until it no longer does.
+    if (acted || asked || lastRepair?.failed.length) lastRepair = done;
+    return done;
+  };
+  /** The end-to-end self-check, after a repair of anything it would find broken; when it still finds a setup problem, that
+   *  is repaired and the check runs once more. */
+  const selfCheck = async (connection: NonNullable<ReturnType<typeof loadConnection>>): Promise<MaintenanceResult["selfCheck"]> => {
+    heal(true);
+    const run = () => runSelfCheck(options.dir, connection, expectedHarnesses(), agentVersion(), { fetchImpl: options.fetchImpl });
+    const first = await run();
+    if (!selfRepair || !first || first.ok || !first.checks.some((c) => !c.ok && SETUP_CHECKS.has(c.id))) return first;
+    const fixed = heal(true);
+    if (!fixed || !(fixed.repaired.length || fixed.deduped.length || fixed.autostart === "repaired")) return first;
+    log("self-check: repaired what it found and checked again");
+    return run();
+  };
   // Time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
   // computer slept (or the agent was stopped); waiting is counted again from the next cycle. The wake time is kept across
   // restarts of the agent alone (awake.ts), so a restart never hides a backlog; after a long gap the waiting records decide.
@@ -445,6 +522,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (limitTimer) clearTimeout(limitTimer);
       if (result.deliveryError?.startsWith("a delivery cycle did not finish")) recordAgentError(options.dir, result.deliveryError);
       await sendReasons();
+      // A hook entry a coding agent's settings lost (an update or a reset can remove it), or a second copy: put right now.
+      heal();
       try { noticeHealth(); } catch { /* status is best effort */ }
       last = result;
       failures = result.deliveryError ? failures + 1 : 0;
@@ -548,7 +627,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         }
       } catch (error) { log(`local store upkeep failed: ${(error as Error).message}`); }
       if (connection && (forceSelfCheck || Date.now() - lastSelfCheckAt >= SELF_CHECK_EVERY_MS)) {
-        result.selfCheck = await runSelfCheck(options.dir, connection, harnesses, current, { fetchImpl: options.fetchImpl });
+        result.selfCheck = await selfCheck(connection);
         lastSelfCheck = result.selfCheck;
         lastSelfCheckAt = Date.now();
         log(`self-check ${result.selfCheck?.ok ? "passed" : `failed: ${result.selfCheck?.failed.join(", ") ?? "no result"}`}`);
@@ -655,6 +734,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
 
   const trayState = (): TrayModel => {
     const now = Date.now();
+    // Seen now, repaired now: the tray shows a setup problem only while its repair fails.
+    heal();
     const status = computerStatus(options.dir);
     const meta = readMeta(options.dir);
     // Every rule in force, counted (the hook's rule summary): the older `block`/`monitor` carry the same counts.
@@ -682,6 +763,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       packs: packsInForce(),
       rulesUpdatedAt: lastGoodCheck(meta),
       updated: recentUpdate(updatedHere, now),
+      repairFailed: (lastRepair?.failed ?? []).map((h) => toolName(h) ?? h),
     });
     // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
     return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
@@ -802,15 +884,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         if (cycled.rules === "refused" || cycled.rules === "unavailable") error = "the rules could not be checked; this computer keeps its last rules";
       } catch (e) { error = (e as Error).message; }
       const connection = loadConnection(options.dir);
-      let selfCheck: MaintenanceResult["selfCheck"] = null;
+      let checked: MaintenanceResult["selfCheck"] = null;
       if (connection) {
         try {
-          selfCheck = await runSelfCheck(options.dir, connection, expectedHarnesses(), agentVersion(), { fetchImpl: options.fetchImpl });
-          lastSelfCheck = selfCheck;
+          checked = await selfCheck(connection);
+          lastSelfCheck = checked;
           lastSelfCheckAt = Date.now();
         } catch (e) { error = error ?? (e as Error).message; }
       }
-      return { text: checkResult(selfCheck, error), tray: trayState() };
+      return { text: checkResult(checked, error), tray: trayState() };
     },
     // Install the version the workspace recommends now, instead of at the next six-hourly check.
     "POST /update": async () => {
@@ -914,14 +996,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
-      failed_update: failedUpdate(options.dir), signing_in: reconnecting,
+      failed_update: failedUpdate(options.dir), signing_in: reconnecting, last_repair: lastRepair,
     } }),
     "POST /flush": async () => ({ cycle: await cycle() }),
-    "POST /repair": () => {
-      const repaired = repairHookEntries();
-      for (const r of repaired) log(`repaired the Scopebond hook entry in ${r.file}`);
-      return { repaired };
-    },
+    // The person's Repair: the same repair the agent makes by itself, whatever its setting, with what it did and what failed.
+    "POST /repair": () => heal(true, true) ?? { repaired: [], deduped: [], failed: [], duplicates: [], autostart: null },
     "POST /maintain": async () => ({ maintenance: await maintain(true) }),
     // `scopebond-agent stop` and `autostart off`: answer first, then stop, so the caller hears back.
     "POST /stop": () => {
