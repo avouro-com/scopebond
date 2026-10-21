@@ -63,7 +63,7 @@ function wireItem(i: BlockFeedback): Record<string, string> {
 export async function sendBlockFeedback(dir: string, connection: Pick<HookConnection, "url" | "credential">, fetchImpl: typeof fetch = fetch, now = Date.now()): Promise<number> {
   const waiting = readBlockFeedback(dir).filter((i) => !i.sent_at).slice(0, BATCH);
   if (!waiting.length) return 0;
-  let answer: { rejected?: Array<{ index?: number }> } | null = null;
+  let answer: { rejected?: Array<{ index?: number }> } | null;
   try {
     const res = await fetchImpl(new URL("/v1/block-feedback", connection.url).toString(), {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),

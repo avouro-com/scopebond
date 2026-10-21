@@ -37,7 +37,7 @@ export function noteRunningVersion(dir: string, running: string, now = Date.now(
 function readSeen(dir: string): { version?: unknown; updated?: Partial<Updated> | null } | null {
   try {
     const raw: unknown = JSON.parse(readFileSync(join(dir, VERSION_SEEN_FILE), "utf8"));
-    return raw && typeof raw === "object" ? raw as { version?: unknown; updated?: Partial<Updated> | null } : null;
+    return raw && typeof raw === "object" ? raw : null;
   } catch { return null; } // first start here
 }
 
