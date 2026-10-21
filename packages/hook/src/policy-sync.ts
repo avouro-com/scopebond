@@ -97,8 +97,9 @@ import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
  *  unblock lasts and its review (`unblock_terms`), "unlimited" for an override's `minutes` and `daily_limit`
  *  (`unlimited_terms`; an older hook gets numbers), and the signed list of rule packs to hold (`packs`, pack-sync.ts), and the
- *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths"] as const;
+ *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts), and who may allow "Similar
+ *  commands in this project" (`pattern_allowances`: an override's `patterns`, pattern-recipes.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances"] as const;
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";

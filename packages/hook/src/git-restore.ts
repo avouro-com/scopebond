@@ -13,6 +13,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { programPath } from "@scopebond/gateway/node";
+import { maskHomeFolder } from "./home-mask.js";
 
 /** How long the whole check may take, at most: it is on a tool call's path. */
 export const GIT_RESTORE_TIMEOUT_MS = 1_500;
@@ -23,7 +24,7 @@ export const GIT_RESTORE_MAX_TARGETS = 8;
 export type GitRun = (args: string[], cwd: string, timeoutMs: number) => string | null;
 
 /** The real git, read-only: no file monitor, no optional locks (`git status` writes no index), no prompt, literal pathspecs. */
-export const runGit: GitRun = (args, cwd, timeoutMs) => {
+const runGit: GitRun = (args, cwd, timeoutMs) => {
   try {
     return execFileSync(programPath("git"), ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", ...args], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024,
@@ -51,6 +52,40 @@ function onDisk(target: string, home: string): string | null {
   if (/^[A-Za-z]:\//.test(target)) return win ? target : null;
   if (target.startsWith("/")) return win ? null : target;
   return null;
+}
+
+/** A path in engine form (forward slashes, a drive letter in lower case, the home folder as `~`). */
+function engineForm(native: string, homes?: readonly string[]): string {
+  const s = native.replace(/\\/g, "/");
+  return maskHomeFolder(/^[A-Za-z]:\//.test(s) ? s[0].toLowerCase() + s.slice(1) : s, homes);
+}
+
+/** The real path of a path in engine form (`~/x`, `c:/x`, `/x`), in engine form: links followed, the spelling on disk; null
+ *  when it does not exist or cannot be read. */
+export function realEnginePath(path: string, options: { home?: string; homes?: readonly string[] } = {}): string | null {
+  const home = options.home ?? homedir();
+  const native = path === "~" ? home : onDisk(path, home);
+  if (!native) return null;
+  try { return engineForm(realpathSync.native(native), options.homes); } catch { return null; }
+}
+
+/** The top folder of the git repository a path (engine form) is in, in engine form; null when it is in none, git cannot tell
+ *  in time, or git fails. The path need not exist: the nearest folder above it that does is asked. */
+export function repositoryTop(path: string, options: { run?: GitRun; timeoutMs?: number; home?: string; homes?: readonly string[] } = {}): string | null {
+  const home = options.home ?? homedir();
+  let folder = onDisk(path, home);
+  if (!folder) return null;
+  try {
+    for (let i = 0; i < 64; i++) {
+      const stat = lstatSync(folder, { throwIfNoEntry: false });
+      if (stat?.isDirectory()) break;
+      const up = dirname(folder);
+      if (up === folder) return null;
+      folder = up;
+    }
+    const top = (options.run ?? runGit)(["rev-parse", "--show-toplevel"], folder, options.timeoutMs ?? GIT_RESTORE_TIMEOUT_MS)?.trim();
+    return top ? engineForm(realpathSync.native(top), options.homes) : null;
+  } catch { return null; }
 }
 
 /** Whether git can restore every target a delete names. `targets` are full paths as delete-scope.ts writes them. False when

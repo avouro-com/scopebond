@@ -118,6 +118,10 @@ export interface OverrideTerms {
    *  not offered where it is "off"). When present it decides the lengths offered, and 15 minutes is not one of them. Absent:
    *  the lengths the other terms allow (once, 15 minutes, always for `always_days`). */
   lengths?: AnswerLength[];
+  /** (sent only to a hook that reports the `pattern_allowances` capability) Who may allow "Similar commands in this project"
+   *  (pattern-recipes.ts): the person, the person with an admin's approval, or no one. Absent, or a value this version does
+   *  not know: no one ("off"); never a reason to refuse the document. */
+  patterns?: "person" | "needs_admin" | "off";
 }
 /** A length a workspace may offer for a person's unblock (`lengths`). */
 export type AnswerLength = "once" | "1h" | "tomorrow" | "30d";
@@ -140,7 +144,8 @@ const LOCAL_ID: Readonly<Record<string, string>> = {
 const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 /** An integer in the range, or the string "unlimited" (`unlimited_terms`); anything else fails closed. */
 const intOrUnlimited = (v: unknown, min: number, max: number): boolean => v === "unlimited" || intIn(v, min, max);
-const TERM_KEYS = new Set(["reason_min", "minutes", "daily_limit", "harness_prompt", "always", "always_days", "requests", "lasts", "review", "lengths"]);
+// `patterns` takes any value: one this version does not know reads as "off" (pattern-recipes.ts `patternSetting`).
+const TERM_KEYS = new Set(["reason_min", "minutes", "daily_limit", "harness_prompt", "always", "always_days", "requests", "lasts", "review", "lengths", "patterns"]);
 function validTerms(t: unknown): t is OverrideTerms {
   return isObject(t) && Object.keys(t).every((k) => TERM_KEYS.has(k)) && intIn(t.reason_min, 0, 200)
     && intOrUnlimited(t.minutes, 0, 60) && intOrUnlimited(t.daily_limit, 1, 50)

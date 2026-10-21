@@ -56,6 +56,10 @@
       "default": "./dist/pack.js"
     },
     "./pack.schema.json": "./schema/pack.schema.json",
+    "./allow-patterns": {
+      "types": "./dist/allow-patterns.d.ts",
+      "default": "./dist/allow-patterns.js"
+    },
     "./vectors/pack-format.json": "./vectors/pack-format.json",
     "./vectors/example-pack.json": "./vectors/example-pack.json",
     "./vectors/example-pack-key.json": "./vectors/example-pack-key.json",

@@ -19,7 +19,7 @@ export { launched, toolNames } from "./launchers.js";
 export type { SimpleCommand } from "./shell.js";
 // What a delete reaches: the safe-shell rule lets a delete through when every target is inside the working folder.
 export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, RESTORABLE_SUFFIX, isContainedDelete, isRestorableDelete, withRestorableScope } from "./delete-scope.js";
-export { gitRestorable, GIT_RESTORE_TIMEOUT_MS, GIT_RESTORE_MAX_TARGETS, type GitRun } from "./git-restore.js";
+export { gitRestorable, repositoryTop, realEnginePath, GIT_RESTORE_TIMEOUT_MS, GIT_RESTORE_MAX_TARGETS, type GitRun } from "./git-restore.js";
 export type { DeleteScope, DeleteVerdict } from "./delete-scope.js";
 // Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
 // this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.
@@ -154,8 +154,10 @@ export { hookVersion, hookCommand, cliCommand } from "./version.js";
 export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
 export type { HookEntry, HookScope } from "./duplicates.js";
 export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";
-export { readAllowances, writeAllowances, makeAllowance, matchAllowance, matchQuietBlock, makeQuietBlock, QUIET_BLOCK_DAYS, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance } from "./allowances.js";
-export type { Allowance, BlockedItem } from "./allowances.js";
+export { readAllowances, writeAllowances, makeAllowance, matchAllowance, matchQuietBlock, makeQuietBlock, QUIET_BLOCK_DAYS, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance, matchPatternAllowance, patternCovers, patternKey } from "./allowances.js";
+export type { Allowance, BlockedItem, PatternQuery } from "./allowances.js";
+export { similarFor, patternSetting, packRecipesFor, rulePatternable } from "./pattern-recipes.js";
+export type { SimilarOffer, SimilarProposal, PatternSetting, RecipeContext } from "./pattern-recipes.js";
 export { sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, readSessionBudgets, validSessionBudget, validSessionBudgets, isPackageInstall, isAgentLaunch, SESSION_BUDGETS_FILE } from "./session-budgets.js";
 export type { SessionBudget, SessionBudgetLimit, SessionBudgetGuard, BudgetReservation, BudgetIntent } from "./session-budgets.js";
 export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requests.js";

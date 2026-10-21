@@ -361,7 +361,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const installAsk = installAskFor(harness, permissionMode);
     const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch, () => upstreamBranch(cwd)), ...databaseGuard(dir, cwd, input!)], installAsk);
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
+      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -587,7 +587,7 @@ async function runCursor(): Promise<void> {
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
+      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));

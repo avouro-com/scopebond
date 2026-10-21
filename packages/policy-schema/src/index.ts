@@ -22,6 +22,10 @@ export {
 export type {
   Pack, PackGrammar, PackCommand, PackEmit, PackProfile, PackProfileTool, PackVector, PackSignature, PackValidation, PathWord, Expr, Condition, ExpectedValue, Scalar,
 } from "./pack.js";
+export {
+  ALLOW_PATTERN_KINDS, ALLOW_PATTERN_LIMITS, DELETE_RECIPE, validAllowPatterns, allowPatternErrors, validAllowanceMatch, validBounds,
+} from "./allow-patterns.js";
+export type { AllowPattern, AllowPatternKind, AllowanceMatch, AllowanceBounds } from "./allow-patterns.js";
 export type {
   ActionRegistry, ActionType, ActionParameter, ParameterType, RiskClass, ParamValidation,
 } from "./registry.js";
