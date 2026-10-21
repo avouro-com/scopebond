@@ -153,18 +153,20 @@ add({ rule: "C02", agent: "claude", dialect: "powershell", input: claude("PowerS
 add({ rule: "C02", agent: "claude", dialect: "posix", input: claude("Bash", { command: "echo x > .claude/settings.json" }), expect: "deny", catalog: ["C02"] });
 
 // R09 destruction ------------------------------------------------------------------------
-// Coverage is by program name (`program_only`): the catalog says so, and a generated-output
-// cleanup is allowed only by removing the program from the rule set, not by target.
+// Coverage is by program name (`program_only`), except a delete: one whose every target is inside
+// the working folder (a generated-output cleanup) is allowed by target (delete-scope.ts).
 const shell = (rule: string, command: string, expect: "allow" | "deny", catalog: CatalogId[], extra: Partial<Vector> = {}, dialect: Dialect = "posix", agent: VectorAgent = "claude"): void => {
   if (agent === "cursor") add({ rule, agent, dialect, event: "beforeShellExecution", input: { command, cwd: dialect === "powershell" ? WIN : "/w" }, expect, catalog, ...extra });
   else add({ rule, agent, dialect, input: agent === "codex" ? { tool_name: dialect === "powershell" ? "PowerShell" : "Bash", tool_input: { command }, cwd: "/w" } : claude(dialect === "powershell" ? "PowerShell" : "Bash", { command }, dialect === "powershell" ? WIN : "/w"), expect, catalog, ...extra });
 };
 shell("R09", "rm -rf /", "deny", ["H04", "C02"], { cell: { action_type: "shell.exec", role: "deny" } });
-shell("R09", "rm -rf node_modules", "deny", ["H04"], { gap: "program-only: a cleanup of generated output is blocked like any rm until the program is allowed in the rule set" });
+shell("R09", "rm -rf node_modules", "allow", []);
+shell("R09", "rm -rf ../other-repo", "deny", ["H04"]);
 shell("R09", "sudo apt install x", "deny", ["H04"]);
 shell("R09", "dd if=/dev/zero of=/dev/sda", "deny", ["H04"]);
 shell("R09", "Remove-Item -Recurse -Force .", "deny", ["H04", "C02"], {}, "powershell");
-shell("R09", "Remove-Item -Recurse dist", "deny", ["H04"], { gap: "program-only: generated-output cleanup is blocked by program" }, "powershell");
+shell("R09", "Remove-Item -Recurse dist", "allow", [], {}, "powershell");
+shell("R09", "Remove-Item -Recurse C:\\Users\\x", "deny", ["H04", "C02"], {}, "powershell");
 shell("R09", "del /s /q *.*", "deny", ["H04"], {}, "powershell");
 shell("R09", "ls -la", "allow", [], { cell: { action_type: "shell.exec", role: "allow" } });
 shell("R09", "pnpm run clean", "allow", []);

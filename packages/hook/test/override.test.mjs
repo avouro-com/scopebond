@@ -80,11 +80,11 @@ test("a person allows one action in the Scopebond window: approved, with the rea
   const { dir } = setup({ "destructive-shell": { mode: "override", override: terms() } });
   try {
     const reason = "Cleaning the build output before release";
-    const allowed = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason, os_user: "dev" }] });
+    const allowed = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason, os_user: "dev" }] });
     assert.equal(allowed.decision, "allow");
     assert.equal(allowed.asked.length, 1);
     assert.equal(allowed.asked[0].rule, "destructive-shell");
-    assert.equal(allowed.asked[0].summary, "rm -rf build (in /repo)", "the command, and the folder its relative target is in");
+    assert.equal(allowed.asked[0].summary, "rm -rf ../build (in /repo)");
     assert.equal(allowed.asked[0].title, "Run a command that deletes data or shuts down the computer", "the workspace's name for the rule");
     assert.equal(allowed.asked[0].harness, "claude");
     assert.equal(allowed.asked[0].project, undefined, "no project when the hook cannot read one");
@@ -93,11 +93,11 @@ test("a person allows one action in the Scopebond window: approved, with the rea
       reason_digest: digestOf(reason), reason_length: reason.length, os_user_digest: digestOf("dev"), decided_at: "x",
     });
     // A reason shorter than the workspace accepts is no override.
-    const short = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "allow", reason: "because" }] });
+    const short = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "allow", reason: "because" }] });
     assert.equal(short.decision, "deny");
     assert.match(short.reason, /not given/);
     // The person says no.
-    const declined = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "deny" }], project: () => "checkout" });
+    const declined = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "deny" }], project: () => "checkout" });
     assert.equal(declined.decision, "deny");
     assert.equal(declined.asked[0].project, "checkout", "the window and the tray name the project");
     // Other commands are untouched: an ordinary one never asks.
@@ -118,7 +118,7 @@ test("Scopebond's own protection and other Block rules are never overridable", a
     const hooks = await run(dir, write("/repo/.claude/settings.json"), { answers: [{ decision: "allow", reason: "Updating the release workflow" }] });
     assert.equal(hooks.decision, "deny");
     assert.equal(hooks.asked.length, 0);
-    const blocked = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "Updating the release workflow" }] });
+    const blocked = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason: "Updating the release workflow" }] });
     assert.equal(blocked.decision, "deny");
     assert.equal(blocked.asked.length, 0, "a rule on Block is not offered");
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -130,20 +130,20 @@ test("the daily limit holds, and a repeat inside the allowed time is recorded as
   const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ daily_limit: 1, minutes: 15 }) } });
   try {
     const reason = "Cleaning the build output before release";
-    const first = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    const first = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason }], now });
     assert.equal(first.decision, "allow");
     clock += 5 * 60_000;
-    const again = await run(dir, bash("rm -rf build"), { now });
+    const again = await run(dir, bash("rm -rf ../build"), { now });
     assert.equal(again.decision, "allow");
     assert.equal(again.asked.length, 0);
     assert.equal(again.override.repeat_of, first.override && first.receipts[0].payload.action_ref.action_id);
     assert.equal(again.override.reason_digest, digestOf(reason));
-    const other = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "allow", reason }], now });
+    const other = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "allow", reason }], now });
     assert.equal(other.decision, "deny", "beyond today's limit of one");
     assert.equal(other.asked.length, 0);
     assert.match(other.reason, /today's overrides/);
     clock += 24 * 60 * 60_000;
-    const tomorrow = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "allow", reason }], now });
+    const tomorrow = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "allow", reason }], now });
     assert.equal(tomorrow.decision, "allow");
     assert.ok(existsSync(join(dir, "overrides.json")));
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -155,24 +155,24 @@ test("with no time limit, an allowed action stays allowed from then on: after an
   const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ minutes: "unlimited" }) } });
   try {
     const reason = "Cleaning the build output before release";
-    const first = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    const first = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason }], now });
     assert.equal(first.decision, "allow");
     assert.equal(first.asked[0].lasts, "the same action from now on", "the window says how long it lasts");
     const firstId = first.receipts[0].payload.action_ref.action_id;
     clock += 61 * 60_000;
-    const later = await run(dir, bash("rm -rf build"), { now });
+    const later = await run(dir, bash("rm -rf ../build"), { now });
     assert.equal(later.decision, "allow", "beyond any numbered window");
     assert.equal(later.asked.length, 0);
     assert.equal(later.override.repeat_of, firstId);
     assert.equal(later.override.reason_digest, digestOf(reason));
-    const other = await run(dir, bash("rm -rf dist"), { now });
+    const other = await run(dir, bash("rm -rf ../dist"), { now });
     assert.equal(other.decision, "deny", "another action still asks");
     // Three days on, another unblock rewrites the hook's state; the earlier unblock is kept and still applies.
     clock += 3 * 24 * 60 * 60_000;
-    assert.equal((await run(dir, bash("rm -rf dist"), { answers: [{ decision: "allow", reason }], now })).decision, "allow");
+    assert.equal((await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "allow", reason }], now })).decision, "allow");
     const kept = JSON.parse(readFileSync(join(dir, "overrides.json"), "utf8")).entries;
     assert.ok(kept.some((e) => e.action_id === firstId && e.lasting === true));
-    const days = await run(dir, bash("rm -rf build"), { now });
+    const days = await run(dir, bash("rm -rf ../build"), { now });
     assert.equal(days.decision, "allow");
     assert.equal(days.asked.length, 0);
     assert.equal(days.override.repeat_of, firstId);
@@ -185,10 +185,10 @@ test("with a numbered time window, the same action asks again once it has passed
   const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ minutes: 60 }) } });
   try {
     const reason = "Cleaning the build output before release";
-    const first = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    const first = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason }], now });
     assert.equal(first.asked[0].lasts, "the same action for 60 minutes");
     clock += 61 * 60_000;
-    const later = await run(dir, bash("rm -rf build"), { now });
+    const later = await run(dir, bash("rm -rf ../build"), { now });
     assert.equal(later.decision, "deny");
     assert.equal(later.asked.length, 1, "asked again");
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -205,12 +205,12 @@ test("with no daily limit, a person may allow more than 50 in a day; the highest
   const fifty = setup({ "destructive-shell": { mode: "override", override: terms({ daily_limit: 50 }) } });
   try {
     for (const { dir } of [unlimited, fifty]) writeFileSync(join(dir, "overrides.json"), JSON.stringify({ entries: today }));
-    const more = await run(unlimited.dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    const more = await run(unlimited.dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason }], now });
     assert.equal(more.decision, "allow");
     assert.equal(more.asked.length, 1);
     const kept = JSON.parse(readFileSync(join(unlimited.dir, "overrides.json"), "utf8")).entries;
     assert.equal(kept.length, 61, "the 61st of the day is counted");
-    const stopped = await run(fifty.dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason }], now });
+    const stopped = await run(fifty.dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason }], now });
     assert.equal(stopped.decision, "deny");
     assert.equal(stopped.asked.length, 0);
     assert.match(stopped.reason, /today's overrides/);
@@ -226,17 +226,17 @@ test("without the window, Claude Code's prompt is offered only where allowed and
   const off = setup({ "destructive-shell": { mode: "override", override: terms() } });
   const on = setup({ "destructive-shell": { mode: "override", override: terms({ harness_prompt: true }) } });
   try {
-    const noAgent = await run(off.dir, bash("rm -rf build"));
+    const noAgent = await run(off.dir, bash("rm -rf ../build"));
     assert.equal(noAgent.decision, "deny");
     assert.match(noAgent.reason, /Scopebond Agent is not running/);
-    const asked = await run(on.dir, bash("rm -rf build"), { permissionMode: "default" });
+    const asked = await run(on.dir, bash("rm -rf ../build"), { permissionMode: "default" });
     assert.equal(asked.decision, "ask");
     assert.deepEqual({ ...asked.override, decided_at: "x", os_user_digest: null }, {
       version: 1, rule: "destructive-shell", method: "harness_prompt", state: "offered", repeat_of: null,
       reason_digest: null, reason_length: null, os_user_digest: null, decided_at: "x",
     });
     for (const mode of ["bypassPermissions", "dontAsk", "auto", null]) {
-      const auto = await run(on.dir, bash("rm -rf build"), { permissionMode: mode });
+      const auto = await run(on.dir, bash("rm -rf ../build"), { permissionMode: mode });
       assert.equal(auto.decision, "deny", `permission mode ${mode}`);
     }
   } finally { for (const s of [off, on]) rmSync(s.dir, { recursive: true, force: true }); }
@@ -247,7 +247,7 @@ test("no tray and no window: the denial's line for the person says where to allo
   const ask = setup({ "destructive-shell": { mode: "ask", override: terms({ requests: true }) } });
   try {
     const link = "https://app.scopebond.example/computers/c-1";
-    const later = await run(allow.dir, bash("rm -rf build"), { answers: [{ decision: "unavailable", later: true, link }] });
+    const later = await run(allow.dir, bash("rm -rf ../build"), { answers: [{ decision: "unavailable", later: true, link }] });
     assert.equal(later.decision, "deny");
     assert.equal(later.asked.length, 1, "the agent was asked once");
     const person = later.reason.split("\n").find((l) => l.startsWith("For the person: "));
@@ -255,12 +255,12 @@ test("no tray and no window: the denial's line for the person says where to allo
     assert.ok(person.includes(link), "the computer's page in the workspace, when the agent knows it");
     assert.match(later.reason, /\nRecord: \S+/, "the record the person picks");
     assert.doesNotMatch(later.reason, /not running/);
-    const asking = await run(ask.dir, bash("rm -rf build"), { answers: [{ decision: "unavailable", later: true }] });
+    const asking = await run(ask.dir, bash("rm -rf ../build"), { answers: [{ decision: "unavailable", later: true }] });
     const askLine = asking.reason.split("\n").find((l) => l.startsWith("For the person: "));
     assert.match(askLine, /ask an admin to unblock it from the Scopebond icon in the notification area \(its recent blocks: choose the record below\)/);
     assert.doesNotMatch(askLine, /https:/, "no link the agent did not give");
     // An agent that is not running: as before, the denial says to start it, and the line for the person is the workspace's.
-    const down = await run(allow.dir, bash("rm -rf dist"), { answers: [{ decision: "unavailable" }] });
+    const down = await run(allow.dir, bash("rm -rf ../dist"), { answers: [{ decision: "unavailable" }] });
     assert.match(down.reason, /Scopebond Agent is not running/);
     assert.doesNotMatch(down.reason, /recent blocks/);
   } finally { for (const s of [allow, ask]) rmSync(s.dir, { recursive: true, force: true }); }
@@ -295,7 +295,7 @@ test("a reason is optional where the workspace's minimum is 0: the unblock is re
   for (const bad of [-1, 201, 1.5, "0", null]) assert.equal(at(terms({ reason_min: bad })), false, `reason_min ${String(bad)}`);
 
   const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ reason_min: 0, always: "at_once", requests: true }) } });
-  const allowed = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "", os_user: userInfo().username, lasts: "always" }] });
+  const allowed = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason: "", os_user: userInfo().username, lasts: "always" }] });
   assert.equal(allowed.decision, "allow");
   assert.equal(allowed.asked[0].reason_min, 0, "the window is told no reason is needed");
   assert.equal(allowed.override.reason_digest, null, "no reason, no digest");
@@ -307,15 +307,15 @@ test("a reason is optional where the workspace's minimum is 0: the unblock is re
   const [made] = readAllowances(dir);
   assert.equal(made.reason_length, 0, "the allowance is kept, with no reason");
   assert.equal(made.reason_digest, null);
-  const next = await run(dir, bash("rm -rf build"));
+  const next = await run(dir, bash("rm -rf ../build"));
   assert.equal(next.override.method, "allowance");
   assert.equal(next.override.reason_digest, null);
   assert.equal(validateOverrideRecord(next.override), true);
   // Asking an admin needs no reason either; from the tray too.
-  const asked = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "ask", reason: "  ", os_user: "dev" }] });
+  const asked = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "ask", reason: "  ", os_user: "dev" }] });
   assert.equal(asked.decision, "deny");
   assert.equal(readRequests(dir).at(-1).reason, "");
-  await run(dir, bash("rm -rf out"));
+  await run(dir, bash("rm -rf ../out"));
   const block = readBlocked(dir).at(-1);
   assert.deepEqual(actOnBlocked(dir, block.id, { decision: "allow", lasts: "once" }), { outcome: "allowed" }, "the tray's answer with no reason");
 });
@@ -323,9 +323,9 @@ test("a reason is optional where the workspace's minimum is 0: the unblock is re
 test("a workspace minimum above 0 still requires a reason, in the window and from the tray", async () => {
   const { readBlocked, actOnBlocked } = await import("../dist/index.js");
   const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ requests: true }) } });
-  const refused = await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "", os_user: "dev" }] });
+  const refused = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason: "", os_user: "dev" }] });
   assert.equal(refused.decision, "deny");
-  const ask = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "ask", reason: "short", os_user: "dev" }] });
+  const ask = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "ask", reason: "short", os_user: "dev" }] });
   assert.equal(ask.decision, "deny");
   const block = readBlocked(dir).at(-1);
   assert.deepEqual(actOnBlocked(dir, block.id, { decision: "allow", reason: "" }), { outcome: "declined" });

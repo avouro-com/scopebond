@@ -27,6 +27,7 @@ import type { ReceiptBudget, ReceiptPayloadContext } from "@scopebond/gateway";
 import type { SessionBudgetGuard } from "./session-budgets.js";
 import { policyOptsIntoTargets } from "./target-rules.js";
 import { blockedPackagePattern, blockedServiceKindOf, readBlockedServices, unreadablePackageKey, BLOCKED_SERVICE_REASON, type BlockedService } from "./service-rules.js";
+import { containedDeletesSentence, withProgramScope } from "./delete-scope.js";
 export { policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
@@ -199,7 +200,12 @@ export const DESTRUCTIVE = [
   "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "shred", "truncate", "unlink", "wipe", "srm",
   "del", "rd", "rmdir", "erase", "deltree", "format", "diskpart", "remove-item", "ri", "clear-content", "clc", "stop-computer", "restart-computer",
 ];
+// Bound on `program_scope` (delete-scope.ts): the program, with `/contained` after it for a delete whose every target is
+// inside the working folder. The pattern denies a listed program alone, so a contained delete is the one form that passes.
 const SAFE_SHELL = `^(?!(?:${DESTRUCTIVE.map(ci).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?$).+`;
+/** The parameter safe-shell bounds. Earlier policies bound `program` with the same pattern. */
+export const SAFE_SHELL_PARAM = "program_scope";
+const CONTAINED_DELETES = containedDeletesSentence(DESTRUCTIVE);
 
 // A push destination the starter policy refuses: main, master, release/*, the
 // "every branch" flags (`--all`, `--mirror`, `--branches`) and a push whose
@@ -230,10 +236,16 @@ const LEGACY_STARTER_PATTERNS: Record<string, string> = {
  *  installed an earlier version gets the current protections without re-running init.
  *  Only exact legacy strings are replaced; any other pattern is the operator's own. */
 export function upgradeStarterPolicy<T>(policy: T): T {
-  const p = policy as { clauses?: Array<{ param_bounds?: Record<string, { pattern?: string }> }> };
+  const p = policy as { clauses?: Array<{ id?: unknown; param_bounds?: Record<string, { pattern?: string }> }> };
   for (const clause of p?.clauses ?? []) {
     for (const bound of Object.values(clause?.param_bounds ?? {})) {
       if (bound && typeof bound.pattern === "string" && LEGACY_STARTER_PATTERNS[bound.pattern]) bound.pattern = LEGACY_STARTER_PATTERNS[bound.pattern];
+    }
+    // The starter's safe-shell bound its pattern to `program`, which refused every delete; the same pattern on
+    // `program_scope` lets a delete inside the working folder through.
+    const bounds = clause?.param_bounds;
+    if (clause?.id === "safe-shell" && bounds && Object.keys(bounds).length === 1 && bounds.program?.pattern === SAFE_SHELL) {
+      clause.param_bounds = { [SAFE_SHELL_PARAM]: bounds.program };
     }
   }
   return policy;
@@ -255,8 +267,8 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
       },
       {
         id: "safe-shell", type: "action_allowlist", mode: mode("safe-shell"), action_types: ["shell.exec"],
-        param_bounds: { program: { pattern: SAFE_SHELL } },
-        description: "Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.",
+        param_bounds: { [SAFE_SHELL_PARAM]: { pattern: SAFE_SHELL } },
+        description: `Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. ${CONTAINED_DELETES} An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.`,
       },
       {
         id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],
@@ -327,7 +339,9 @@ export function createHookRuntime(config: RuntimeConfig) {
   /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */
-  const masked = (m: Mapped): Mapped => {
+  const masked = (input: Mapped): Mapped => {
+    // A shell command built without `program_scope` (by hand, or by an older mapper) is judged by its program alone.
+    const m = withProgramScope(input);
     const params = maskHomeInValue(m.intent.params, homes);
     return params === m.intent.params ? m : { ...m, intent: { ...m.intent, params } };
   };

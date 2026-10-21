@@ -56,7 +56,7 @@ test("a per-tool-call writer leaves no write-ahead log behind", () => {
 test("log reads a tail, filters by decision, and filters by age", () => {
   const { dir, config } = project("log");
   toolCall(config, dir, "npm test");   // allow
-  toolCall(config, dir, "rm -rf src"); // deny
+  toolCall(config, dir, "rm -rf ../src"); // deny
   toolCall(config, dir, "npm run build"); // allow
   const run = (args) => execFileSync(process.execPath, [cli, ...args], {
     cwd: dir, encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: config },

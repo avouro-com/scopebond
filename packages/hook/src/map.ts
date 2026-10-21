@@ -18,6 +18,7 @@ import { derivePackMcp, derivePackTargets, type PackAction } from "./packs.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
 import { packagesToCheck } from "./typed-ops.js";
 import { deriveInstalls, deriveSettingsInstalls, MCP_SETTINGS_FILE } from "./typed-install.js";
+import { deleteVerdicts, programScope, type DeleteVerdict } from "./delete-scope.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -1572,6 +1573,23 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
 
 const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 
+/** A simple command's intents with `program_scope` on its shell.exec (what safe-shell judges: delete-scope.ts). A delete whose
+ *  every target is contained also records each target as a write, so the file rules (protected places, workspace roots) judge
+ *  what it removes. */
+function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, cwd?: string): Mapped[] {
+  const out = mapped.map((m) => (m.intent.action_type === "shell.exec"
+    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict) } } }
+    : m));
+  if (verdict?.scope !== "contained") return out;
+  const seen = new Set(out.filter((m) => m.intent.action_type === "file.write").map((m) => String(m.intent.params.path)));
+  for (const path of verdict.paths) {
+    for (const w of fileIntent("file.write", path, "", cwd)) {
+      if (!seen.has(String(w.intent.params.path))) { seen.add(String(w.intent.params.path)); out.push(w); }
+    }
+  }
+  return out;
+}
+
 /** Decompose a shell command into the intents it will run. A `cd` earlier in the same
  *  call changes the directory later relative operands resolve against
  *  (`cd .scopebond && cp x policy.json` writes `.scopebond/policy.json`). An empty
@@ -1630,6 +1648,8 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
   // Variables the call sets, in order: git configuration an earlier `export GIT_CONFIG_PARAMETERS=…` gives a later git command
   // (as `-c` would), and a coding agent started with its config folder moved.
   const scan = scanCall(commands);
+  // What each delete reaches (delete-scope.ts): read once for the call, in both readings of a "Bash" command holding `\`.
+  const deletes = deleteVerdicts(commands, src, cwd, dialect === "posix" && src.includes("\\") ? src.replace(/\\/g, "/") : null, expandBraces);
   const isFile = (m: Mapped) => m.intent.action_type.startsWith("file.");
   const key = (m: Mapped) => `${m.intent.action_type} ${String(m.intent.params.path)}`;
   const into = (base: string, target: string | undefined): string => {
@@ -1648,7 +1668,7 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
     const vars: Variables = new Map();
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir);
+      const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir), deletes.get(sc), cwd);
       const kept = filesOnly ? mapped.filter(isFile) : mapped;
       out.push(...kept);
       // The command read with the values its variables may hold, and in each other folder it may run in: the file effects and

@@ -53,9 +53,9 @@ const STILL_REFUSED = [
   "shutdown -h",
   "halt -h",
   // A POSIX program stops reading options at its first operand: there `--help` is a file to remove (BSD rm).
-  "rm -rf build --help",
-  "rm -- --help",
-  "rm help",
+  "rm -rf ../build --help",
+  "rm -- ../--help",
+  "rm ../help",
   // An option's value is not one of its own options.
   "git push -o --dry-run origin main",
   "git push --repo --dry-run origin main",
@@ -64,7 +64,7 @@ const STILL_REFUSED = [
   "git push --dry-run=none origin main",
   // A program after a wrapper's own help is still judged.
   "sudo --help rm -rf /",
-  "rm -rf x; git --help",
+  "rm -rf ../x; git --help",
 ];
 
 for (const command of STILL_REFUSED) {

@@ -13,7 +13,10 @@ const readPaths = (mapped) => mapped.filter((m) => m.intent.action_type === "fil
 const writePaths = (mapped) => mapped.filter((m) => m.intent.action_type === "file.write").map((m) => m.intent.params.path);
 
 test("Bash maps to shell.exec with the program basename and a redacted command", () => {
-  const m = only(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/other" } }));
+  // A delete under the temp folder is contained: its target is also recorded as a write.
+  const mapped = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/other" } });
+  assert.deepEqual(types(mapped), ["shell.exec", "file.write"]);
+  const m = mapped[0];
   assert.equal(m.intent.action_type, "shell.exec");
   assert.equal(m.intent.params.program, "rm");
   assert.equal(m.evaluated, true);
@@ -125,8 +128,9 @@ test("Codex apply_patch with no recognizable path is not trusted", () => {
 // ---- Decomposition: a shell call is split into every simple command it runs ----
 
 test("chained commands each become their own intent", () => {
-  assert.deepEqual(types(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "echo hi && rm -rf x" } })), ["shell.exec", "shell.exec"]);
-  const progs = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "echo hi && rm -rf x" } }).map((m) => m.intent.params.program);
+  // The delete of `x` is inside the working folder, so its target is recorded as a write too.
+  assert.deepEqual(types(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "echo hi && rm -rf x" } })), ["shell.exec", "shell.exec", "file.write"]);
+  const progs = shellProgs(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "echo hi && rm -rf x" } }));
   assert.deepEqual(progs, ["echo", "rm"]);
 });
 
@@ -211,7 +215,7 @@ test("command substitution and subshells are decomposed", () => {
 });
 
 test("an env-prefixed destructive command still resolves the real program", () => {
-  const progs = mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "FOO=1 rm -rf x" } }).map((m) => m.intent.params.program);
+  const progs = shellProgs(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command: "FOO=1 rm -rf x" } }));
   assert.deepEqual(progs, ["rm"]);
 });
 

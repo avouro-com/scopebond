@@ -27,8 +27,36 @@ function readSmall(path, max) {
   try { return fstatSync(fd).size < max ? readFileSync(fd, "utf8") : null; } finally { closeSync(fd); }
 }
 
-/** Programs the starter policy denies by name (the oracle's notion of destructive). */
+/** Programs the starter policy denies by name (the oracle's notion of destructive)… */
 export const DESTRUCTIVE = ["rm", "rmdir", "shred", "dd", "truncate", "unlink", "wipe", "srm", "sudo", "doas", "mkfs", "shutdown", "reboot", "halt", "poweroff"];
+/** …except a delete whose every target, as bash passed it, is inside the working folder: not the folder itself, not above
+ *  it, not `.git`, Scopebond's folder or a secret. Their stubs also log where they ran, relative to the working folder. */
+export const DELETERS = ["rm", "rmdir", "unlink"];
+// eslint-disable-next-line security/detect-unsafe-regex -- test-only, run on one short path segment; each optional group starts with a fixed dot
+const PROTECTED_SEGMENT = /^(?:\.git|\.scopebond|\.ssh|\.aws|\.gnupg|\.azure|\.kube|\.docker|\.claude|\.cursor|\.codex|\.github|\.husky|\.githooks|\.npmrc|\.netrc|\.envrc|\.mcp\.json)$|^\.env(?!(?:\.[^/]*)?\.(?:example|sample|template|dist)$)(?:\.[^/]*)?$|\.(?:key|pem|p12|pfx|jks|keystore)$/i;
+
+/** Whether a delete bash ran (`at`: where, relative to the working folder; `/` when outside it) removed only places inside
+ *  the working folder. A delete with no target is not contained. */
+export function containedDelete({ at, argv }) {
+  const targets = [];
+  let options = true;
+  for (const a of argv) {
+    if (options && a === "--") { options = false; continue; }
+    if (options && a.length > 1 && a.startsWith("-")) continue;
+    targets.push(a);
+  }
+  if (targets.length === 0 || at === undefined || at === "/") return false;
+  return targets.every((t) => {
+    if (t === "" || t.startsWith("/") || t.startsWith("~")) return false;
+    const segs = [];
+    for (const seg of `${at}/${t}`.split("/")) {
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") { if (!segs.length) return false; segs.pop(); continue; }
+      segs.push(seg);
+    }
+    return segs.length > 0 && !segs.some((seg) => PROTECTED_SEGMENT.test(seg));
+  });
+}
 
 // Stubs that read the content of the files they are given: they check each operand
 // (also `@file`, `--flag=file`, `name=@file`) for a marker file and log a read.
@@ -92,7 +120,9 @@ function stubScript(bashPath, name, kind, real) {
     // One record, one `printf`: a single write(2) to an O_APPEND fd cannot interleave
     // with a concurrent stub's. Building the line with several printfs let the stages of
     // a pipeline (`cat list.txt | head -n 2`) tear each other's records apart.
-    `rec='X${FS}${name}'; for a in "$@"; do rec="$rec${FS}$a"; done; printf '%s${RS}' "$rec" ${log}`,
+    DELETERS.includes(name)
+      ? `case $PWD in "$SB_ORACLE_WORK") at=.;; "$SB_ORACLE_WORK"/*) at=\${PWD#"$SB_ORACLE_WORK"/};; *) at=/;; esac; rec="D${FS}$at${FS}${name}"; for a in "$@"; do rec="$rec${FS}$a"; done; printf '%s${RS}' "$rec" ${log}`
+      : `rec='X${FS}${name}'; for a in "$@"; do rec="$rec${FS}$a"; done; printf '%s${RS}' "$rec" ${log}`,
     `for a in "$@"; do case $a in *${MARK}*) printf 'A${RS}' ${log};; esac; done`,
   ];
   if (kind === "reader") {
@@ -128,6 +158,7 @@ export function parseLog(text, command = "") {
   for (const rec of text.split(RS).filter(Boolean)) {
     const x = rec.split(FS);
     if (x[0] === "X") execs.push({ program: x[1], argv: x.slice(2) });
+    else if (x[0] === "D" && x.length >= 3) execs.push({ program: x[2], argv: x.slice(3), at: x[1] });
     else if (x[0] === "R") leaks.push(`read ${x[1]}`);
     else if (x[0] === "A") leaks.push("marker in argv");
     else if (x[0] === "S") leaks.push("marker on stdin");
@@ -183,7 +214,8 @@ export function createOracle() {
     return { box, work, home };
   }
 
-  const PRELUDE = "shopt -s expand_aliases\n";
+  // Where the run starts, as bash spells it: a delete's stub logs where it ran relative to it.
+  const PRELUDE = "shopt -s expand_aliases\nexport SB_ORACLE_WORK=\"$PWD\"\n";
 
   /** Run one command; returns what bash actually executed and whether it was harmful. */
   function run(command, { branch = "feature/work" } = {}) {
@@ -213,7 +245,7 @@ export function createOracle() {
     scan(work, "bin");
     scan(home);
     rmSync(box, { recursive: true, force: true });
-    const destructive = execs.filter((e) => DESTRUCTIVE.includes(e.program)).map((e) => e.program);
+    const destructive = execs.filter((e) => DESTRUCTIVE.includes(e.program) && !(DELETERS.includes(e.program) && containedDelete(e))).map((e) => e.program);
     const pushes = execs.filter((e) => e.program === "git").map((e) => protectedPush(e.argv, branch)).filter(Boolean);
     return { execs, destructive, pushes, leaks: [...new Set(leaks)], secretRead: leaks.length > 0, exit: r.status };
   }

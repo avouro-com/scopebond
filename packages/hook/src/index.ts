@@ -16,6 +16,9 @@ export { decomposeShell } from "./shell.js";
 // The tool a command runs, directly or through a package runner (launchers.ts).
 export { launched, toolNames } from "./launchers.js";
 export type { SimpleCommand } from "./shell.js";
+// What a delete reaches: the safe-shell rule lets a delete through when every target is inside the working folder.
+export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, isContainedDelete } from "./delete-scope.js";
+export type { DeleteScope, DeleteVerdict } from "./delete-scope.js";
 // Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
 // this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.
 export { setActivePacks, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";

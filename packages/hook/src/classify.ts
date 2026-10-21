@@ -21,6 +21,7 @@
 import type { NormalizedIntent } from "./map.js";
 import { UNKNOWN_REF } from "./shell.js";
 import { isDestructiveProgram, isProtectedBranch, pathRuleMatches, type RuleSet } from "./rules.js";
+import { isContainedDelete } from "./delete-scope.js";
 
 export type CatalogId = "I03" | "I04" | "I05" | "H01" | "H02" | "H03" | "H04" | "H05" | "H06" | "H07" | "H08" | "H09" | "H10" | "C01" | "C02";
 
@@ -93,7 +94,8 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
     if (program === "") unknown.push("program not resolved");
     else {
       ids.push("I05");
-      if (isDestructiveProgram(rules, program)) { ids.push("H04"); coverage = "program_only"; }
+      // A delete whose every target is inside the working folder (delete-scope.ts) is not destructive here.
+      if (isDestructiveProgram(rules, program) && !isContainedDelete(params)) { ids.push("H04"); coverage = "program_only"; }
     }
   }
   return { ids, unknown, ...(coverage ? { coverage } : {}) };

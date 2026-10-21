@@ -83,7 +83,7 @@ function home(mode) {
 test("default (monitored) rules: Cursor gets no opinion for an out-of-policy action, like Claude Code and Codex", () => {
   const { env, dir, cwd } = home("default");
   const violations = [
-    cursorShell("rm -rf src", cwd, "g1"),
+    cursorShell("rm -rf ../src", cwd, "g1"),
     cursorShell("git push origin main", cwd, "g2"),
     cursorShell("cat .env", cwd, "g3"),
     { hook_event_name: "beforeReadFile", conversation_id: "k1", generation_id: "g4", file_path: join(cwd, ".env"), content: "", cwd },
@@ -94,7 +94,7 @@ test("default (monitored) rules: Cursor gets no opinion for an out-of-policy act
     assert.equal(r.decision, "ask");
     assert.ok(r.receipts.some((x) => x.result === "deny"), "the violation is still recorded");
   }
-  for (const [harness, payload] of [["claude", claude("Bash", { command: "rm -rf src" }, cwd)], ["codex", codex("Bash", { command: "rm -rf src" }, cwd)], ["copilot", copilot("Bash", { command: "rm -rf src" }, cwd)]]) {
+  for (const [harness, payload] of [["claude", claude("Bash", { command: "rm -rf ../src" }, cwd)], ["codex", codex("Bash", { command: "rm -rf ../src" }, cwd)], ["copilot", copilot("Bash", { command: "rm -rf ../src" }, cwd)]]) {
     const r = exercise(env, dir, harness, payload, cwd);
     assert.equal(r.exit, 0);
     assert.equal(r.decision, "(silent)", `${harness} stays silent so its own approval decides`);
