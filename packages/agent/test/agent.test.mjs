@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
-import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readAllowances, readBlocked, noteQueueMiss, OUTBOX_FILE as OUTBOX_FILE_NAME } from "@scopebond/hook";
+import { scaffold, createHookRuntime, mapClaudeToolUse, STATUS_SCHEMA, MANAGED_DOC_FILE, recordBlocked, readFatigue, readAllowances, readBlocked, noteQueueMiss, OUTBOX_FILE as OUTBOX_FILE_NAME } from "@scopebond/hook";
 import {
   runCycle, startService, callAgent, readEndpoint, repairHookEntries, missingHookEntries,
   windowsRunCommand, windowsLauncher, posixLauncher, launcherPath, macLaunchAgent, linuxUserUnit, AGENT_FILE,
@@ -349,6 +349,23 @@ test("the agent answers an override only from its window, and sends the reason t
     await service.cycleNow();
     assert.deepEqual(ws.reasons, [{ action_id: "action-0000000000001", reason: "Cleaning the build folder" }]);
     assert.equal(pendingReasons(dir), 0);
+  } finally { await service.stop(); ws.close(); }
+});
+
+test("the agent counts each question a person is asked, and each notification the tray says it showed", async () => {
+  const ws = await workspace();
+  const dir = await computerWithQueue(ws.url, 0);
+  const service = await startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false, promptWindow: true,
+    prompter: async () => ({ decision: "deny" }) });
+  try {
+    await callAgent(dir, "POST", "/override", question(), 10_000);
+    await callAgent(dir, "POST", "/override", question({ summary: "rm -rf /" }), 10_000);
+    await callAgent(dir, "POST", "/override", { rule: "x" }, 10_000);
+    assert.deepEqual(await callAgent(dir, "POST", "/fatigue", { kind: "toast" }, 10_000), { counted: true });
+    assert.deepEqual(await callAgent(dir, "POST", "/fatigue", { kind: "banner" }, 10_000), { counted: false });
+    const counts = readFatigue(dir);
+    assert.equal(counts.prompts, 2, "a malformed request asks no one");
+    assert.equal(counts.toasts, 1);
   } finally { await service.stop(); ws.close(); }
 });
 

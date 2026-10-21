@@ -6,6 +6,11 @@
 // the workspace allows more), and is recorded: the receipt of an action an allowance lets through says `method: "allowance"`
 // and names it.
 //
+// A pattern allowance ("Similar commands in this project", pattern-recipes.ts) carries `match` instead: the same rule and
+// action type, and bounds on the parameter the rule matched (a folder of one project or repository, a file pattern in it, a
+// package in any version, a host, an MCP server's tool). It is matched here (`matchPatternAllowance`) and never outside its
+// bounds; its `action_key` is a digest of the match, which no action has, so it never matches as an exact allowance.
+//
 // Nothing here can allow Scopebond's own protection: the override handler checks the floor before any allowance.
 //
 // Files in the Scopebond home (the coding agent cannot write them; the hook refuses any write there):
@@ -14,9 +19,15 @@
 
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { canonical } from "@scopebond/policy-schema/canonical";
+import { DELETE_RECIPE, fullPathSegments, relativeSegments, validAllowanceMatch, withinSegments, type AllowanceBounds, type AllowanceMatch } from "@scopebond/policy-schema/allow-patterns";
 import { digestOf } from "./override.js";
 import { writeAtomic } from "./managed.js";
+import { enginePath, foldCase, pathKey, rulePatternable, type SimilarProposal } from "./pattern-recipes.js";
+import { namesProtectedPlace } from "./delete-scope.js";
+import { canonProgram } from "./shell.js";
 
 export const ALLOWANCES_FILE = "allowances.json";
 export const BLOCKED_FILE = "blocked.json";
@@ -65,7 +76,13 @@ export interface Allowance {
    *  keep this action blocked, so it is denied at once and no one is asked. It never lets anything through. Absent (or
    *  "allow"): an allowance. */
   kind?: "allow" | "quiet";
+  /** A pattern allowance: what it lets through (pattern-recipes.ts). Absent: an exact allowance for `action_key`. A hook that
+   *  predates it finds an `action_key` no action has, so it can only allow less. */
+  match?: AllowanceMatch;
 }
+
+/** The `action_key` of a pattern allowance: a digest of its match, which no action's key equals. */
+export const patternKey = (match: AllowanceMatch): string => digestOf(`pattern:${canonical(match)}`);
 
 interface AllowanceFile { version: 1; items: Allowance[] }
 
@@ -104,7 +121,9 @@ function validAllowance(a: unknown): a is Allowance {
     && typeof x.expires_at === "string" && Number.isFinite(Date.parse(x.expires_at)) && Number.isInteger(x.uses) && (x.uses as number) >= 0
     && (x.scope !== "person" || typeof x.os_user_digest === "string")
     && (x.scope === "session" ? typeof x.session_id === "string" && x.session_id.length >= 1 && x.session_id.length <= 200 : x.session_id === undefined)
-    && (x.kind === undefined || x.kind === "allow" || x.kind === "quiet");
+    && (x.kind === undefined || x.kind === "allow" || x.kind === "quiet")
+    // A pattern allowance: well-formed narrow bounds, for its own rule, never an always-on protection, never a quiet block.
+    && (x.match === undefined || (validAllowanceMatch(x.match) && x.match.rule === x.rule && rulePatternable(x.rule) && x.kind !== "quiet"));
 }
 
 /** Whether an entry applies to this person or session (its scope): the same test for an allowance and a quiet block. */
@@ -115,8 +134,113 @@ const inScope = (a: Allowance, query: { osUserDigest: string | null; sessionId?:
 /** The allowance in force for this rule and action, for this person, now; or null. Revoked, proposed, expired and used
  *  one-time allowances never match, and neither does a quiet block. */
 export function matchAllowance(items: Allowance[], query: { rule: string; actionKey: string; osUserDigest: string | null; now: number; sessionId?: string | null }): Allowance | null {
-  return items.find((a) => a.kind !== "quiet" && a.state === "active" && !a.ended_at && a.rule === query.rule && a.action_key === query.actionKey
+  return items.find((a) => a.kind !== "quiet" && a.match === undefined && a.state === "active" && !a.ended_at && a.rule === query.rule && a.action_key === query.actionKey
     && Date.parse(a.expires_at) > query.now && !(a.once && a.uses > 0) && inScope(a, query)) ?? null;
+}
+
+/** What a pattern allowance is asked about: the rule that blocked, the action (as signed: the home folder masked), and the
+ *  call's working folder (engine form, home masked). `real`: the real path of a path in engine form, or null when it does not
+ *  exist (a link is followed); a delete pattern then also holds for where the targets really are. `home`: the home folder,
+ *  unmasked (the operating system's by default). */
+export interface PatternQuery {
+  rule: string; action: { action_type?: string; params?: Record<string, unknown> }; project: string | null;
+  osUserDigest: string | null; now: number; sessionId?: string | null;
+  real?: (path: string) => string | null; home?: string;
+}
+
+/** The pattern allowance in force that covers this action under this rule, for this person, now; or null. Revoked, proposed,
+ *  ended, expired and used one-time ones never match. */
+export function matchPatternAllowance(items: Allowance[], query: PatternQuery): Allowance | null {
+  return items.find((a) => a.kind !== "quiet" && a.match !== undefined && a.state === "active" && !a.ended_at && a.rule === query.rule
+    && Date.parse(a.expires_at) > query.now && !(a.once && a.uses > 0) && inScope(a, query) && patternCovers(a.match, query)) ?? null;
+}
+
+const rootOf = (path: string): string => (path.startsWith("~/") ? "~/" : /^[a-z]:\//i.test(path) ? path.slice(0, 3).toLowerCase() : "/");
+
+/** Whether a pattern covers an action: the same rule and action type, and the widened parameter inside the bounds. Fails
+ *  closed: a match or an action that is not well formed covers nothing. */
+export function patternCovers(match: AllowanceMatch, query: Pick<PatternQuery, "rule" | "action" | "project" | "real" | "home">): boolean {
+  try {
+    if (!validAllowanceMatch(match) || match.rule !== query.rule || !rulePatternable(match.rule) || match.action_type !== query.action.action_type) return false;
+    const params = query.action.params ?? {};
+    const b = match.bounds;
+    if (match.recipe === DELETE_RECIPE) return deleteCovered(b, params, query);
+    // Every other recipe holds in the project it was made in, and only there.
+    if (!query.project || pathKey(query.project) !== pathKey(b.project)) return false;
+    if (b.with && !Object.entries(b.with).every(([k, w]) => params[k] === w)) return false;
+    const v = params[b.param];
+    if (typeof v !== "string" || v === "") return false;
+    const fold = foldCase(b.project);
+    switch (b.kind) {
+      case "path_prefix": {
+        const segs = relativeSegments(v);
+        const folder = relativeSegments(b.value);
+        return !!segs && !!folder && segs.length > 0 && !namesProtectedPlace(segs) && withinSegments(segs, folder, fold);
+      }
+      case "path_glob": {
+        const segs = relativeSegments(v);
+        const glob = b.value.split("/");
+        if (!segs || segs.length !== glob.length || namesProtectedPlace(segs)) return false;
+        return withinSegments(segs.slice(0, -1), glob.slice(0, -1), fold) && wildcard(glob[glob.length - 1], segs[segs.length - 1], fold);
+      }
+      case "package_name": return v === b.value;
+      case "host": return v.toLowerCase() === b.value;
+      case "mcp_tool": return v === b.value;
+    }
+    return false;
+  } catch { return false; }
+}
+
+/** The built-in delete recipe: the same program, a plain delete (not a destructive form), every target inside the folder (or
+ *  the folder itself), the folder inside its project, and the project never the home folder or a folder holding it. Where the
+ *  real paths can be read, they must agree: a target reached through a link to elsewhere is not covered. */
+function deleteCovered(b: AllowanceBounds, params: Record<string, unknown>, query: Pick<PatternQuery, "real" | "home">): boolean {
+  if (typeof params.program !== "string" || canonProgram(params.program) !== b.program || params.program_scope !== params.program) return false;
+  const targets = params.delete_targets;
+  if (!Array.isArray(targets) || targets.length === 0) return false;
+  const folder = fullPathSegments(b.value);
+  const project = fullPathSegments(b.project);
+  if (!folder || !project) return false;
+  // The project holds the home folder (`c:/Users`): never. A project under `~/` is inside it.
+  const home = enginePath(query.home ?? homedir());
+  const homeSegs = fullPathSegments(home);
+  if (homeSegs && rootOf(b.project) !== "~/" && rootOf(home) === rootOf(b.project) && withinSegments(homeSegs, project, foldCase(b.project))) return false;
+  const fold = foldCase(b.value);
+  const realFolder = query.real ? query.real(b.value) : null;
+  const realProject = query.real ? query.real(b.project) : null;
+  for (const t of targets) {
+    if (typeof t !== "string") return false;
+    const segs = fullPathSegments(t);
+    if (!segs || namesProtectedPlace(segs) || rootOf(t) !== rootOf(b.value) || !withinSegments(segs, folder, fold)) return false;
+    const real = query.real?.(t) ?? null;
+    if (real === null) continue;
+    // Where it really is: inside where the folder really is, inside where the project really is.
+    const realSegs = fullPathSegments(real);
+    const folderSegs = realFolder ? fullPathSegments(realFolder) : null;
+    const projectSegs = realProject ? fullPathSegments(realProject) : null;
+    if (!realSegs || !folderSegs || !projectSegs || rootOf(real) !== rootOf(realFolder!) || rootOf(real) !== rootOf(realProject!)
+      || !withinSegments(realSegs, folderSegs, foldCase(real)) || !withinSegments(folderSegs, projectSegs, foldCase(real))) return false;
+  }
+  return true;
+}
+
+/** Whether a file name matches a pattern with `*` (any run of characters) and `?` (one character): the usual two-pointer
+ *  walk, on names of at most a few hundred characters. */
+function wildcard(pattern: string, name: string, fold: boolean): boolean {
+  const p = fold ? pattern.toLowerCase() : pattern;
+  const n = fold ? name.toLowerCase() : name;
+  let i = 0;
+  let j = 0;
+  let star = -1;
+  let mark = 0;
+  while (j < n.length) {
+    if (i < p.length && (p[i] === "?" || p[i] === n[j])) { i++; j++; }
+    else if (i < p.length && p[i] === "*") { star = i++; mark = j; }
+    else if (star >= 0) { i = star + 1; j = ++mark; }
+    else return false;
+  }
+  while (i < p.length && p[i] === "*") i++;
+  return i === p.length;
 }
 
 /** The quiet block in force for this rule and action, for this person, now; or null. Revoked, ended and expired ones never
@@ -149,7 +273,15 @@ export function makeQuietBlock(input: { rule: string; actionKey: string; osUserD
 export function makeAllowance(input: {
   rule: string; actionKey: string; reason: string; osUserDigest: string | null; lasts: "once" | "15m" | "1h" | "tomorrow" | "30d" | "always";
   alwaysDays?: number; needsAdmin?: boolean; now?: number; unblocked?: "automatic" | "person";
+  /** A pattern allowance ("Similar commands in this project"): its match, and whether it waits for an admin whatever its
+   *  length (`override.patterns: "needs_admin"`). Its key is `patternKey(match)`, whatever `actionKey` says. */
+  match?: AllowanceMatch; patternNeedsAdmin?: boolean;
 }): Allowance {
+  if (input.match) {
+    const { match, patternNeedsAdmin, ...rest } = input;
+    const made = makeAllowance({ ...rest, actionKey: patternKey(match) });
+    return { ...made, match, ...(patternNeedsAdmin ? { state: "proposed" as const } : {}) };
+  }
   const now = input.now ?? Date.now();
   const reason = input.reason.trim().slice(0, 500);
   const days = Math.min(ALLOWANCE_MAX_DAYS, Math.max(1, Math.round(input.alwaysDays ?? ALLOWANCE_DEFAULT_DAYS)));
@@ -198,6 +330,9 @@ export interface BlockedItem {
    *  again (a quiet block; also noted on each later block a quiet block denies). */
   acted?: "allowed" | "asked" | "quiet";
   acted_at?: string;
+  /** What "Similar commands in this project" would allow for it (pattern-recipes.ts), when a recipe fits: kept with the
+   *  block, because the action itself is not. */
+  similar?: SimilarProposal;
 }
 
 export function readBlocked(dir: string): BlockedItem[] {

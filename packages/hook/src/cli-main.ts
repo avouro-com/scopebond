@@ -76,7 +76,10 @@ import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
+import { switchablePackRules } from "./pack-rules.js";
 import { runPackVectors } from "./packs.js";
+import { loadIntelPlugin } from "./intel-plugin.js";
+import { validatePack, type Pack } from "@scopebond/policy-schema/pack";
 import { describePackSync } from "./pack-sync.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, waitWithinDeadline } from "./hook-deadline.js";
@@ -360,8 +363,10 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
     const installAsk = installAskFor(harness, permissionMode);
     const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch, () => upstreamBranch(cwd)), ...databaseGuard(dir, cwd, input!)], installAsk);
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
+    // The signed plugin in this computer's home, when there is one that verifies (intel-plugin.ts); none: receipts unchanged.
+    const intel = await loadIntelPlugin();
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, intel, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -586,8 +591,9 @@ async function runCursor(): Promise<void> {
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
+    const intel = await loadIntelPlugin();
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", intel, sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -990,8 +996,11 @@ async function runRules(args: string[]): Promise<void> {
     case "monitor": {
       // Monitor is the default: a rule records what it would have stopped. "enforce" makes it block.
       const id = String(value ?? "");
-      if (!SWITCHABLE_RULES.includes(id)) {
-        console.error(`rules ${verb} <rule>: one of ${SWITCHABLE_RULES.join(", ")}`);
+      // A rule pack's own rule that may block can be switched too, while its pack is in force.
+      activatePacks(dir);
+      const packOnly = switchablePackRules().filter((r) => !SWITCHABLE_RULES.includes(r));
+      if (!SWITCHABLE_RULES.includes(id) && !packOnly.includes(id)) {
+        console.error(`rules ${verb} <rule>: one of ${[...SWITCHABLE_RULES, ...packOnly].join(", ")}`);
         process.exit(1);
       }
       if (isManaged(dir)) {
@@ -1012,6 +1021,8 @@ async function runRules(args: string[]): Promise<void> {
         await reportRules(dir);
         process.exit(0);
       }
+      // A rule pack's own rule keeps the person's choice by its id (it wins over the rule's default).
+      if (packOnly.includes(id)) rules.local_overrides = { ...(rules.local_overrides ?? {}), [id]: verb };
       const set = new Set(rules.enforce ?? []);
       if (verb === "enforce") set.add(id); else set.delete(id);
       rules.enforce = SWITCHABLE_RULES.filter((r) => set.has(r));
@@ -2339,6 +2350,7 @@ function runPacks(args: string[]): void {
     for (const line of notUpdated) console.log(`  not updated: ${line}`);
     return;
   }
+  if (sub === "test") { runPacksTest(args, dir, json); return; }
   if ((sub === "verify" || sub === "add") && target) {
     let text = "";
     try { text = readFileSync(target, "utf8"); } catch { console.error(`cannot read ${target}`); process.exit(1); }
@@ -2360,8 +2372,48 @@ function runPacks(args: string[]): void {
     console.log(`removed ${target}`);
     return;
   }
-  console.error("usage: scopebond packs [list|verify <file>|add <file>|remove <id>] [--json] [--yes]");
+  console.error("usage: scopebond packs [list|test --all|test <file>|verify <file>|add <file>|remove <id>] [--json] [--yes]");
   process.exit(1);
+}
+
+/** `packs test --all`: run every vector of every pack in force here with this engine; `packs test <file>`: the vectors of one
+ *  pack file (its shape is checked, its signature is `packs verify`'s job). Exit 1 when any vector fails. This is the check an
+ *  engine update runs with the new engine before it is used, so it reports the engine's version and the packs it ran. */
+function runPacksTest(args: string[], dir: string, json: boolean): void {
+  const file = args.filter((a) => !a.startsWith("--"))[1];
+  let packs: Pack[];
+  let notUsed: Array<{ ref: string; reason: string }> = [];
+  if (args.includes("--all")) {
+    const loaded = loadPacks(dir);
+    packs = loaded.packs;
+    notUsed = loaded.problems.map((p) => ({ ref: p.ref, reason: p.reason }));
+  } else if (file) {
+    let doc: unknown;
+    try { doc = JSON.parse(readFileSync(file, "utf8")); } catch { console.error(`cannot read ${file} as JSON`); process.exit(1); }
+    const shape = validatePack(doc);
+    if (!shape.valid) { console.error(`not a valid pack: ${shape.errors.slice(0, 3).join("; ")}`); process.exit(1); }
+    packs = [doc as Pack];
+  } else {
+    console.error("usage: scopebond packs test --all | <file> [--json]");
+    process.exit(1);
+  }
+  let vectors = 0;
+  const failures: Array<{ pack: string; vector: string }> = [];
+  const lines: string[] = [];
+  for (const pack of packs) {
+    const ref = `${pack.id}@${pack.version}`;
+    const run = runPackVectors(pack);
+    vectors += run.passed;
+    for (const failure of run.failures) failures.push({ pack: ref, vector: failure.id });
+    lines.push(run.failures.length ? `${ref}: ${run.failures.length} of ${pack.vectors.length} vectors fail (first: ${run.failures[0].id})` : `${ref}: ${run.passed} vectors pass`);
+  }
+  if (json) console.log(JSON.stringify({ engine: hookVersion(), packs: packs.map((p) => `${p.id}@${p.version}`), vectors, failures, ...(file && !args.includes("--all") ? {} : { not_used: notUsed }) }));
+  else {
+    console.log(`engine ${hookVersion()}`);
+    for (const line of lines) console.log(`  ${line}`);
+    if (!packs.length) console.log("  no rule packs to test");
+  }
+  if (failures.length) process.exit(1);
 }
 
 /** Check a pack file as `packs add` would, without changing anything. */
@@ -2452,7 +2504,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "sends now; retry re-checks a workspace that lacked the route; wire and unwire add or",
       "remove the Claude Code session and after-action hook entries.",
     ] },
-  { name: "packs", args: "[list|verify <file>|add <file>|remove <id>] [--json] [--yes]",
+  { name: "packs", args: "[list|test --all|test <file>|verify <file>|add <file>|remove <id>] [--json] [--yes]",
     summary: "the rule packs on this computer: what is in force, and checking or adding a pack file",
     detail: [
       "Rule packs are signed data from Scopebond Cloud that teach the hook what more command-line tools and MCP servers do.",
@@ -2460,6 +2512,8 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "for 30 days after this computer last confirmed it; a pack whose update could not be used keeps its last good version on",
       "its own clock, and the others renew as usual. Without one, the open detection and the starter protections apply.",
       "verify <file> checks a pack file (format, signature, its own vectors) and changes nothing.",
+      "test --all runs the vectors of every pack in force with this engine (an engine update runs it before use); test <file>",
+      "runs one pack file's vectors. Both exit non-zero when a vector fails; --json reports the engine, packs and failures.",
       "add <file> checks it the same way, then puts it in force here; remove <id> takes one out. Both need a terminal or --yes.",
       "Packs live in the packs folder of .scopebond/ (index.json and one <id>@<version>.json per pack).",
     ] },

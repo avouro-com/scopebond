@@ -31,9 +31,12 @@ import { recommendedFrom } from "./client-health.js";
 import { retentionDaysFrom } from "./store-upkeep.js";
 import { evidenceDetailFrom } from "./evidence-detail.js";
 import { receiptContextFrom } from "./receipt-context.js";
-import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
+import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
+import { pinNextKey, signatureModeAt, useNextKey } from "./policy-next-key.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
-import { restampPacks, syncPacks } from "./pack-sync.js";
+import { packsHeaderValue, restampPacks, syncPacks, PACK_ENGINE_HEADER, PACKS_HEADER } from "./pack-sync.js";
+import { packEngineLevel } from "./pack-store.js";
+import { fatigueHeaderValue, FATIGUE_HEADER } from "./fatigue.js";
 import { removeBlocklist, syncInstallBlocklist, SAFE_INSTALL_HEADER } from "./install-verdicts.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
@@ -60,6 +63,10 @@ function deliveryHeaders(dir: string): Record<string, string> {
       ...rulesHeader(dir),
       // How the last answer's signature was checked (verified, unsigned and accepted, or refused, and why).
       ...signatureHeader(dir),
+      // The packs in force, those not taken and why, and this engine's level (pack-sync.ts).
+      ...packsHeader(dir),
+      // How often the person was interrupted today: toasts and prompts, counts only (fatigue.ts).
+      ...fatigueHeader(dir),
     };
   } catch { return {}; }
 }
@@ -80,6 +87,14 @@ function rulesHeader(dir: string): Record<string, string> {
   const report = ruleReport(dir);
   return report ? { "x-scopebond-rules": JSON.stringify(report) } : {};
 }
+function fatigueHeader(dir: string): Record<string, string> {
+  const value = fatigueHeaderValue(dir);
+  return value !== null ? { [FATIGUE_HEADER]: value } : {};
+}
+function packsHeader(dir: string): Record<string, string> {
+  const value = packsHeaderValue(dir);
+  return value !== null ? { [PACKS_HEADER]: value } : {};
+}
 function signatureHeader(dir: string): Record<string, string> {
   const state = readSignatureState(dir);
   return state ? { "x-scopebond-policy-signature": JSON.stringify({ mode: state.mode, last: state.last, reason: state.reason }) } : {};
@@ -97,8 +112,17 @@ import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
  *  unblock lasts and its review (`unblock_terms`), "unlimited" for an override's `minutes` and `daily_limit`
  *  (`unlimited_terms`; an older hook gets numbers), and the signed list of rule packs to hold (`packs`, pack-sync.ts), and the
- *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths"] as const;
+ *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts), who may allow "Similar commands in this project"
+ *  (`pattern_allowances`: an override's `patterns`, pattern-recipes.ts), and the modes of the rule packs'
+ *  rules (`pack_rules`, managed.ts; an unknown rule id is skipped and reported, never a refusal), and pack engine level 2
+ *  (`pack_engine_2`: a pack list's `requires_engine`, `shadow` and `killed`, and the taxonomy extension, pack-sync.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules", "pack_engine_2"] as const;
+
+/** The capabilities this hook reports now: `HOOK_CAPABILITIES`, without `pack_engine_2` while the pack engine level is lowered
+ *  below 2 (`SCOPEBOND_PACK_ENGINE_LEVEL`, pack-store.ts). */
+export function hookCapabilities(level: number = packEngineLevel()): string[] {
+  return HOOK_CAPABILITIES.filter((c) => c !== "pack_engine_2" || level >= 2);
+}
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";
@@ -158,7 +182,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const fetchImpl = versionedFetch(options.fetchImpl ?? fetch, options.hookVersion);
   const now = (options.now ?? (() => new Date()))();
   const installationId = (connection as { installation_id?: string }).installation_id ?? connection.gateway_id;
-  const mode = signatureMode(connection);
+  // The next policy-signing key pinned here is trusted with the pinned ones; it may also make this computer enforce signatures.
+  useNextKey(dir);
+  const mode = signatureModeAt(dir, connection);
   const base = connection.url.replace(/\/+$/, "");
   // This computer's machine id (a hash; machine-id.ts) rides on the rules check and its confirmation.
   const auth = { authorization: `Bearer ${connection.credential}`, ...machineIdHeaders(() => machineIdFor(dir, connection.organization_id)) };
@@ -177,19 +203,22 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let receiptContext = meta.receipt_context ?? null;
   // And the rule packs the workspace names (pack-sync.ts).
   let packState = meta.packs ?? null;
+  // And what became of the last next-key document the workspace sent.
+  let nextKey = meta.next_key ?? null;
   // Every check records when it was tried; only a successful one (it clears the error: rules applied, unchanged, or the
   // workspace's own-rules answer) moves `checked_at`, so "Rules updated" is the last check that worked. A failed one keeps
   // `checked_at` and says why in `last_error`.
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch,
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, next_key: nextKey, ...patch,
     last_attempt_at: now.toISOString(), ...(patch.last_error === null ? { checked_at: now.toISOString(), checked_ok_at: now.toISOString() } : {}) });
 
-  const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
+  const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason; skipped_rules?: string[] }): Promise<ManagedMeta["last_ack"]> => {
     try {
       const res = await fetchImpl(`${base}/v1/policy/ack`, {
         // The same capabilities as the rules check: the workspace rebuilds the document it expects from them to compare the
         // digest this confirms (with blocked services, the digest covers the list).
-        method: "POST", headers: { ...auth, "content-type": "application/json", "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(",") }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
-        body: JSON.stringify({ ...body, reason: body.reason ?? null, hook_version: options.hookVersion }),
+        method: "POST", headers: { ...auth, "content-type": "application/json", "x-scopebond-hook-capabilities": hookCapabilities().join(",") }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        // The rule ids the document named that this version skipped are sent only when there are some.
+        body: JSON.stringify({ ...body, reason: body.reason ?? null, hook_version: options.hookVersion, skipped_rules: body.skipped_rules?.length ? body.skipped_rules : undefined }),
       });
       return res.ok ? { revision: body.revision, result: body.result, at: now.toISOString() } : meta.last_ack;
     } catch { return meta.last_ack; }
@@ -211,7 +240,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // and the always/requests terms, session budgets and blocked services only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
-      headers: { ...auth, "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(","), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag && meta.grants_digest && intact ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
+      headers: { ...auth, "x-scopebond-hook-capabilities": hookCapabilities().join(","), [PACK_ENGINE_HEADER]: String(packEngineLevel()), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag && meta.grants_digest && intact ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -250,7 +279,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     const error = result.state === "synced" ? null : result.state === "refused" ? result.message : result.failed.map((f) => `${f.ref}: ${f.message}`).join("; ");
     packState = {
       at, digest: typeof raw.packs_digest === "string" ? raw.packs_digest : null, complete: result.state === "synced", error: error === null ? null : error.slice(0, 300),
-      ...(result.state === "partial" ? { failed: result.failed.map((f) => ({ id: f.id, version: f.version, reason: f.message.slice(0, 300), held: f.held, held_until: f.held_until })) } : {}),
+      ...(result.state === "partial" ? { failed: result.failed.map((f) => ({ id: f.id, version: f.version, reason: f.message.slice(0, 300), code: f.code, ...(f.needs !== undefined ? { needs: f.needs } : {}), held: f.held, held_until: f.held_until })) } : {}),
     };
   };
   const signed = (raw: Record<string, unknown>, managed: boolean) => {
@@ -304,6 +333,12 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let raw: unknown;
   try { raw = await res.json(); } catch { raw = null; }
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  // The next policy-signing key, signed by the current one (policy-next-key.ts): checked on its own and pinned, whatever the
+  // rest of the answer turns out to be. It takes effect from the next check.
+  if (r.policy_next_key !== undefined) {
+    const pinned = pinNextKey(dir, r.policy_next_key, { now });
+    nextKey = { state: pinned.state, at, ...(pinned.state === "refused" ? { message: pinned.message.slice(0, 300) } : {}) };
+  }
   const etag = res.headers.get("etag");
   // "No rules for this computer" as a (signed) body: the same as a 204 once its signature is admitted.
   if (isUnmanagedAnswer(raw)) {
@@ -370,8 +405,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   }
   options.afterPolicyWrite?.(dir);
   await syncPackList(r);
-  const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
-  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, rule_notes: inspected.notes.length ? inspected.notes : null,
+  const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded", skipped_rules: inspected.skipped });
+  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, rule_notes: inspected.notes.length ? inspected.notes : null, skipped_rules: inspected.skipped.length ? inspected.skipped : null,
     policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
   return { state: "applied", revision: doc.revision };
 }

@@ -131,3 +131,27 @@ test("on Windows, the signature check refuses an unsigned program and one signed
   // Node is signed by its own publisher (an unsigned build says NotSigned instead).
   assert.match(`${b.stdout}${b.stderr}`, /unexpected publisher|NotSigned/);
 });
+
+test("the engine bundle is built where nothing can sign, signed with the updater key before the sums, attested and released", () => {
+  const all = jobs(workflow("native-release.yml"));
+  assert.match(all.build, /node packages\/native\/hook-bundle\.mjs build packages\/native\/dist\/hook-bundle "\$env:COMMIT"/);
+  assert.match(all.build, /name: unsigned-hook-bundle/);
+  assert.ok(!all.build.includes("UPDATER_SIGNING_KEY"), "the build job has no signing key");
+  const signJob = all["sign-installer"];
+  assert.match(signJob, /name: unsigned-hook-bundle/);
+  const signStep = signJob.indexOf("node packages/native/hook-bundle.mjs sign out");
+  assert.ok(signStep > 0, "the sign-installer job signs the bundle manifest");
+  assert.ok(signStep < signJob.indexOf("SHA256SUMS"), "before the sums, so they list the signed manifest");
+  assert.match(signJob.slice(signJob.lastIndexOf("- name:", signStep)), /UPDATER_SIGNING_KEY: \$\{\{ secrets\.UPDATER_SIGNING_KEY \}\}/);
+  assert.match(signJob, /out\/scopebond-hook-bundle-\*\.tgz/, "the bundle is attested");
+  const on = workflow("native-release.yml").split("\npermissions:")[0];
+  for (const path of ["packages/native/hook-bundle.mjs", "packages/native/src/hook-bundle-main.mjs"]) assert.ok(on.includes(`- ${path}`), path);
+});
+
+test("signing the bundle without the updater key fails instead of releasing an unsigned one", () => {
+  const env = { ...process.env };
+  delete env.UPDATER_SIGNING_KEY;
+  const out = spawnSync(process.execPath, [join(native, "hook-bundle.mjs"), "sign", mkdtempSync(join(tmpdir(), "sb-bundle-cli-")), "0123456789abcdef0123456789abcdef01234567"], { encoding: "utf8", env });
+  assert.equal(out.status, 1);
+  assert.match(out.stderr, /UPDATER_SIGNING_KEY is not set/);
+});

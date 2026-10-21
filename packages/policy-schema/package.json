@@ -55,7 +55,15 @@
       "types": "./dist/pack.d.ts",
       "default": "./dist/pack.js"
     },
+    "./taxonomy-ext": {
+      "types": "./dist/taxonomy-ext.d.ts",
+      "default": "./dist/taxonomy-ext.js"
+    },
     "./pack.schema.json": "./schema/pack.schema.json",
+    "./allow-patterns": {
+      "types": "./dist/allow-patterns.d.ts",
+      "default": "./dist/allow-patterns.js"
+    },
     "./vectors/pack-format.json": "./vectors/pack-format.json",
     "./vectors/example-pack.json": "./vectors/example-pack.json",
     "./vectors/example-pack-key.json": "./vectors/example-pack-key.json",

@@ -177,13 +177,13 @@ const doc = (rules) => ({
   installation_id: INSTALLATION, rules, rules_digest: digestRules(rules),
 });
 
-test("a workspace document may set the target rules, may leave them out, and may not name rules this version does not know", () => {
+test("a workspace document may set the target rules, may leave them out, and a rule this version does not know is skipped and reported", () => {
   const check = (rules) => inspectManaged(doc(rules), { installationId: INSTALLATION, currentRevision: null });
   assert.equal(check(base()).ok, true, "a document without them is accepted, as before");
   assert.equal(check({ ...base(), "production-deploy": { mode: "block" }, "cloud-destructive": { mode: "monitor" } }).ok, true);
   const unknown = check({ ...base(), "quantum-rule": { mode: "block" } });
-  assert.equal(unknown.ok, false);
-  assert.equal(unknown.reason, "unsupported");
+  assert.equal(unknown.ok, true, "never a reason to refuse the document");
+  assert.deepEqual(unknown.skipped, ["quantum-rule"]);
   assert.equal(check({ ...base(), "secret-write": { mode: "block", protected_branches: ["main"] } }).ok, false, "a target rule takes no lists");
   assert.equal(check({ ...base(), "iam-change": { mode: "sometimes" } }).ok, false);
 });

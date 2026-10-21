@@ -13,15 +13,26 @@ import packSchemaDocument from "../schema/pack.schema.json" with { type: "json" 
 import { canonical } from "./canonical.js";
 export { canonical } from "./canonical.js";
 export {
-  actionRegistry, TAXONOMY_VERSION, getActionType, validateActionParams,
+  actionRegistry, TAXONOMY_VERSION, getActionType, getBuiltinActionType, setActionTypeExtension, extensionActionTypes, validateActionParams,
 } from "./registry.js";
 export {
   PACK_FORMAT, PACK_SIGNATURE_DOMAIN, PACK_LIMITS, PACK_RESERVED_ACTION_TYPES, PACK_RESERVED_PARAMS, EXPRESSION_OPERATORS, CONDITION_OPERATORS,
-  packSigningInput, packRef, comparePackVersions, validatePack,
+  PACK_ENGINE_LEVEL, PACK_LEVEL2_FIELDS, PACK_ALLOW_PATTERN_KINDS, PACK_RULE_LIMITS,
+  packSigningInput, packRef, comparePackVersions, validatePack, packEngineProblem, packRequiredEngine,
 } from "./pack.js";
 export type {
   Pack, PackGrammar, PackCommand, PackEmit, PackProfile, PackProfileTool, PackVector, PackSignature, PackValidation, PathWord, Expr, Condition, ExpectedValue, Scalar,
+  PackRequires, PackRule, PackAllowPattern, PackValidationOptions,
 } from "./pack.js";
+export {
+  ALLOW_PATTERN_KINDS, ALLOW_PATTERN_LIMITS, DELETE_RECIPE, validAllowPatterns, allowPatternErrors, validAllowanceMatch, validBounds,
+} from "./allow-patterns.js";
+export type { AllowPattern, AllowPatternKind, AllowanceMatch, AllowanceBounds } from "./allow-patterns.js";
+export {
+  TAXONOMY_EXT_FORMAT, TAXONOMY_EXT_SIGNATURE_DOMAIN, TAXONOMY_EXT_ID, TAXONOMY_EXT_LIMITS,
+  taxonomyExtSigningInput, validateTaxonomyExtension, actionTypesOfExtension,
+} from "./taxonomy-ext.js";
+export type { TaxonomyExtension, TaxonomyExtType, TaxonomyExtParamKind } from "./taxonomy-ext.js";
 export type {
   ActionRegistry, ActionType, ActionParameter, ParameterType, RiskClass, ParamValidation,
 } from "./registry.js";
@@ -112,6 +123,34 @@ export type ReceiptContext = Partial<Record<ReceiptContextKey, string | null>>;
 export const RECEIPT_FAILED_BOUND_PATTERN = "^[A-Za-z0-9_.-]{1,64}:[a-z_]{1,32}$";
 /** The realtime results a receipt naming a matched clause may carry. */
 export const RECEIPT_MATCH_RESULTS = ["deny", "approved", "timeout"] as const;
+
+// Optional plugin slot (payload.pattern_id, payload.intel): what a signed plugin the hook loaded gave an action, a pattern id
+// (64 lowercase hex) and an opaque slot (standard base64 of 1 to 4096 bytes). Both are optional and independent, covered by
+// the signature like the rest of the payload, and never interpreted by the open code. A receipt made without a plugin
+// carries neither.
+export const RECEIPT_PATTERN_ID_PATTERN = "^[0-9a-f]{64}$";
+export const RECEIPT_INTEL_PATTERN = "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$";
+/** The most bytes the slot may carry, decoded. */
+export const RECEIPT_INTEL_MAX_BYTES = 4096;
+/** The longest the slot may be as text: base64 of RECEIPT_INTEL_MAX_BYTES (4096 bytes end in one byte, so `==`; a slot this
+ *  long without it would be 4097 or 4098 bytes). */
+export const RECEIPT_INTEL_MAX_LENGTH = 5464;
+const INTEL_SLOT = new RegExp(RECEIPT_INTEL_PATTERN);
+
+/** Whether `value` is a slot the receipt schema accepts: standard padded base64 of 1 to RECEIPT_INTEL_MAX_BYTES bytes. */
+export function isReceiptIntel(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 4 || value.length > RECEIPT_INTEL_MAX_LENGTH) return false;
+  if (!INTEL_SLOT.test(value)) return false;
+  return value.length < RECEIPT_INTEL_MAX_LENGTH || value.endsWith("==");
+}
+
+/** Whether `value` is a pattern id the receipt schema accepts: 64 lowercase hex. */
+export function isReceiptPatternId(value: unknown): value is string {
+  return typeof value === "string" && value.length === 64 && /^[0-9a-f]{64}$/.test(value);
+}
+
+/** The plugin slot members a receipt may carry; both optional. */
+export interface ReceiptIntel { pattern_id?: string; intel?: string }
 
 // Session budgets (session-budgets.schema.json): limits on what one coding-agent session may do, sent by a workspace in its
 // rules document as `session_budgets` (at most so many actions of the listed types, 0 = none, until the budget expires). The

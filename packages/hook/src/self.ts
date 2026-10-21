@@ -10,8 +10,13 @@ export function isSingleExecutable(): boolean {
   try { return (process.getBuiltinModule("node:sea") as { isSea?: () => boolean } | undefined)?.isSea?.() === true; } catch { return false; }
 }
 
-/** This package's command-line program (npm installs; meaningless in the single executable). */
+/** Set to true by the engine bundle's build (esbuild `define`): the bundle is one file that is also the command line. */
+declare const __SCOPEBOND_HOOK_BUNDLE__: boolean | undefined;
+
+/** This package's command-line program (npm installs; meaningless in the single executable). In the engine bundle it is
+ *  the bundle file itself, which Node runs as the command line. */
 export function hookCliPath(): string {
+  if (typeof __SCOPEBOND_HOOK_BUNDLE__ === "boolean" && __SCOPEBOND_HOOK_BUNDLE__) return fileURLToPath(import.meta.url);
   return fileURLToPath(new URL("./cli.js", import.meta.url));
 }
 

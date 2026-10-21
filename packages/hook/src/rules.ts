@@ -21,7 +21,7 @@ import { ci, under, named, dir, DESTRUCTIVE, SAFE_SHELL_PARAM, safeShellPattern,
 import { DESTRUCTIVE_FORMS, DESTRUCTIVE_FORMS_SENTENCE } from "./destructive-forms.js";
 import { containedDeletesSentence } from "./delete-scope.js";
 import { TARGET_RULES } from "./target-rules.js";
-import { switchablePackRules } from "./pack-rules.js";
+import { packRuleOf, switchablePackRules } from "./pack-rules.js";
 export { TARGET_RULES } from "./target-rules.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { createExclusive, replaceFile } from "./safe-fs.js";
@@ -336,7 +336,19 @@ const TARGET_SUMMARY: Readonly<Record<(typeof TARGET_RULES)[number], string>> = 
 /** Plain English, for `scopebond-hook rules`. */
 export function describeRules(rules: RuleSet): string {
   const enforced = new Set(rules.enforce ?? []);
-  const how = (id: string) => (enforced.has(id) ? "blocks" : "records");
+  // A rule pack's own rule (beyond the target rules) blocks by a person's choice, else by its default.
+  const packBlocks = (id: string): boolean => {
+    const chosen = rules.local_overrides?.[id];
+    return chosen !== undefined ? chosen === "enforce" : packRuleOf(id)?.default_mode === "block";
+  };
+  const how = (id: string) => (enforced.has(id) || (!SWITCHABLE_RULES.includes(id) && packBlocks(id)) ? "blocks" : "records");
+  /** What a rule pack's rule covers: a target rule's summary, else the rule's own title or description. */
+  const covers = (id: string): string => {
+    if (Object.prototype.hasOwnProperty.call(TARGET_SUMMARY, id)) return TARGET_SUMMARY[id as keyof typeof TARGET_SUMMARY];
+    const rule = packRuleOf(id);
+    const text = typeof rule?.title === "string" ? rule.title : typeof rule?.description === "string" ? rule.description : "";
+    return text.slice(0, 120);
+  };
   const lines: string[] = [];
   lines.push("Always blocked (Scopebond's own protection; cannot be relaxed):");
   lines.push("  changing or reading Scopebond's folder, its keys and connection, or the coding agents' hook settings,");
@@ -355,7 +367,7 @@ export function describeRules(rules: RuleSet): string {
   const packRules = switchablePackRules();
   if (packRules.length) {
     lines.push("What a coding agent reaches through cloud, Kubernetes, database, deployment and secret tools (from your rule packs):");
-    for (const id of packRules) lines.push(`  [${how(id)}] ${id.padEnd(18)} ${TARGET_SUMMARY[id as keyof typeof TARGET_SUMMARY]}`);
+    for (const id of packRules) lines.push(`  [${how(id)}] ${id.padEnd(18)} ${covers(id)}`);
   } else {
     lines.push("Cloud, Kubernetes, database, deployment and secret tools: covered by rule packs from Scopebond Cloud (none on this computer).");
   }

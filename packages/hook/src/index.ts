@@ -18,26 +18,33 @@ export { decomposeShell } from "./shell.js";
 export { launched, toolNames } from "./launchers.js";
 export type { SimpleCommand } from "./shell.js";
 // What a delete reaches: the safe-shell rule lets a delete through when every target is inside the working folder.
-export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, isContainedDelete } from "./delete-scope.js";
+export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, RESTORABLE_SUFFIX, isContainedDelete, isRestorableDelete, withRestorableScope } from "./delete-scope.js";
+export { gitRestorable, repositoryTop, realEnginePath, GIT_RESTORE_TIMEOUT_MS, GIT_RESTORE_MAX_TARGETS, type GitRun } from "./git-restore.js";
 export type { DeleteScope, DeleteVerdict } from "./delete-scope.js";
 // Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
 // this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.
-export { setActivePacks, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
+export { setActivePacks, shadowPackIds, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
 export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
-export { packRuleClauses, switchablePackRules, withPackRules } from "./pack-rules.js";
+export { packRuleClauses, switchablePackRules, withPackRules, packRuleOf, packRuleSaferWay } from "./pack-rules.js";
+export type { PackRuleSettings, PackRuleMode } from "./pack-rules.js";
 export {
-  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
+  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, verifySignedData, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
+  packEngineLevel, readPackFlags, writePackFlags, packSidecarDir, packFallbackFile, PACK_ENGINE_ENV, PACK_SIDECAR_DIR, PACK_FLAGS_FILE,
 } from "./pack-store.js";
-export type { PackIndex, PackIndexEntry, LoadedPacks, PackRefusal } from "./pack-store.js";
+export type { PackIndex, PackIndexEntry, LoadedPacks, PackRefusal, PackCheckOptions, PackFlags } from "./pack-store.js";
+export {
+  checkTaxonomyExtText, activateTaxonomyExtension, installTaxonomyExtension, removeTaxonomyExtension, heldTaxonomyDigest, setTaxonomyExtension, TAXONOMY_EXT_FILE,
+} from "./pack-taxonomy.js";
+export { targetOptInTypes, setExtensionOptInTypes } from "./target-rules.js";
 // Pack delivery: the signed list a workspace answer names, and the cache brought in step with it on each rules check.
-export { syncPacks, restampPacks, describePackSync, packRefsOf, MAX_PACK_REFS } from "./pack-sync.js";
+export { syncPacks, restampPacks, describePackSync, packRefsOf, taxonomyRefOf, killedOf, packsHeaderValue, MAX_PACK_REFS, PACK_ENGINE_HEADER, PACKS_HEADER } from "./pack-sync.js";
 // Safe Install: verdicts on detected installs from the workspace, and the signed block list used offline.
 export {
   checkInstalls, checkable, checkBlocklistText, loadBlocklist, safeInstallOn, syncInstallBlocklist, removeBlocklist, comparableName,
   INSTALL_BLOCKLIST_FILE, INSTALL_STATE_FILE, INSTALL_VERDICTS_FILE, BLOCKLIST_FORMAT, SAFE_INSTALL_HEADER, BLOCKLIST_TTL_MS, BLOCKLIST_CHECK_MS, VERDICT_TIMEOUT_MS, AGE_GATE_MS,
 } from "./install-verdicts.js";
 export type { InstallVerdict, VerdictReason, VerdictSource, InstallCheck, CheckOptions, BlocklistSyncOptions, BlocklistSyncResult } from "./install-verdicts.js";
-export type { PackSyncOptions, PackSyncResult, PackSyncFailure } from "./pack-sync.js";
+export type { PackSyncOptions, PackSyncResult, PackSyncFailure, PackRef } from "./pack-sync.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export {
   compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES, SWITCHABLE_RULES,
@@ -59,7 +66,7 @@ export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLIC
 export {
   inspectManaged, compileManaged, managedEnforce, enforcedRuleIds, installManaged, restoreLocal, isManaged, readMeta, digestRules, digestManaged, ruleReport,
   MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, NEVER_OFF_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
-  offRuleIds, packRuleAdjustments, packRuleAdjustmentsAt,
+  offRuleIds, packRuleAdjustments, packRuleAdjustmentsAt, packRulesOf, managedSetting,
   inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
   MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY, ANSWER_LENGTHS,
 } from "./managed.js";
@@ -74,14 +81,27 @@ export { ruleTitle, ruleName, blockTitle, packRuleTitle, checkOfCode, GENERIC_RU
 export { installVerdictWords, noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
 export type { BlockNote } from "./block-notes.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion, Offers, UnblockLength } from "./override.js";
-export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES } from "./policy-sync.js";
+export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES, hookCapabilities } from "./policy-sync.js";
 export {
   validBlockedService, validBlockedServices, blockedServiceClauses, servicePattern, serviceMatches, blockedServiceKindOf, blockedServiceOf,
   BLOCKED_SERVICE_KINDS, BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, BLOCKED_SERVICE_REASON, SERVICE_RULES_CAPABILITY, MAX_BLOCKED_SERVICES, MAX_BLOCKED_SERVICE_KEY,
 } from "./service-rules.js";
 export type { BlockedService, BlockedServiceKind } from "./service-rules.js";
 export { checkPolicySignature, checkToolSettingsSignature, checkPacksSignature, digestPacks, checkGrantsSignature, checkAnswerSignature, digestGrants, carriesGrants, GRANT_FIELDS, workspaceIdOf, signedPolicyBytes, signatureMode, publicKeyFrom, readSignatureState, SIGNATURE_MODE_ENV, type SignatureMode, type SignatureReason, type SignatureState, type SignedPolicyPayload, type ToolSettingsSignatureContext } from "./policy-signature.js";
-export { policyKeys, policyKeyProblems, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
+export { policyKeys, basePolicyKeys, setPinnedNextKeys, policyKeyProblems, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
+export { recordFatigue, readFatigue, fatigueHeaderValue, localDay, FATIGUE_FILE, FATIGUE_HEADER, type FatigueKind, type FatigueCounts } from "./fatigue.js";
+export { checkNextKey, pinNextKey, readNextKey, useNextKey, signatureModeAt, nextKeySigningInput, NEXT_KEY_FORMAT, NEXT_KEY_SIGNATURE_DOMAIN, NEXT_KEY_FILE, type NextKeyDocument } from "./policy-next-key.js";
+export {
+  loadIntelPlugin, intelComponentState, checkIntelComponent, readIntelManifest, pluginFrom, importVerifiedModule, intelDir, intelCurrentDir,
+  INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_MODULE, INTEL_MANIFEST, INTEL_MAX_BYTES,
+  type IntelPlugin, type IntelManifest, type IntelAction, type IntelMembers, type IntelCheck,
+} from "./intel-plugin.js";
+export {
+  engineToRun, readCurrentEngine, writeCurrentEngine, engineStartFailures, recordEngineStartFailure, checkStagedEngine, verifyEngineManifest, compileEngine,
+  engineHome, engineDir, engineVersionDir, engineKeysFrom, engineStaged, isEngineVersion, compareEngineVersions,
+  ENGINE_MANIFEST_DOMAIN, ENGINE_FILE, ENGINE_MANIFEST, ENGINE_SIGNATURE, ENGINE_CURRENT, ENGINE_START_FAILURES, ENGINE_CANDIDATE_ENV, MAX_ENGINE_START_FAILURES, ENGINE_MAX_BYTES,
+  type EngineKey, type EngineManifest, type CurrentEngine, type StagedEngine, type LoadedEngine,
+} from "./engine-shim.js";
 export { versionedFetch, withHookVersion, HOOK_VERSION_HEADER } from "./workspace-fetch.js";
 export {
   receiptContextFor, receiptContextAllowed, receiptContextFrom, noteReceiptContext, canonicalRepository, repositoryFacts,
@@ -153,8 +173,10 @@ export { hookVersion, hookCommand, cliCommand } from "./version.js";
 export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
 export type { HookEntry, HookScope } from "./duplicates.js";
 export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";
-export { readAllowances, writeAllowances, makeAllowance, matchAllowance, matchQuietBlock, makeQuietBlock, QUIET_BLOCK_DAYS, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance } from "./allowances.js";
-export type { Allowance, BlockedItem } from "./allowances.js";
+export { readAllowances, writeAllowances, makeAllowance, matchAllowance, matchQuietBlock, makeQuietBlock, QUIET_BLOCK_DAYS, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance, matchPatternAllowance, patternCovers, patternKey } from "./allowances.js";
+export type { Allowance, BlockedItem, PatternQuery } from "./allowances.js";
+export { similarFor, patternSetting, packRecipesFor, rulePatternable } from "./pattern-recipes.js";
+export type { SimilarOffer, SimilarProposal, PatternSetting, RecipeContext } from "./pattern-recipes.js";
 export { sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, readSessionBudgets, validSessionBudget, validSessionBudgets, isPackageInstall, isAgentLaunch, SESSION_BUDGETS_FILE } from "./session-budgets.js";
 export type { SessionBudget, SessionBudgetLimit, SessionBudgetGuard, BudgetReservation, BudgetIntent } from "./session-budgets.js";
 export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requests.js";

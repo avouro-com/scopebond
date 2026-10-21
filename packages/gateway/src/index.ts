@@ -15,6 +15,7 @@ export {
   buildReceipt, canonical, sha256, intentHash, ed25519JwkToSpkiPem, deriveKid,
   minimizeIntentForEvidence, EVIDENCE_VERSION, REDACTION_PROFILE, EXECUTION_STATES,
   CANONICALIZATION, validateEvidencePayload, validateOverrideRecord, validateReceiptContext, RECEIPT_CONTEXT_KEYS, validateReceiptBudget, RECEIPT_BUDGET_KEYS, receiptMatch,
+  validateReceiptIntel, receiptIntelMembers,
   classifyEvidenceClass, EVIDENCE_CLASSES, BOUNDARY_GATES, buildBoundaryReceipt, buildPepReceipt,
 } from "./receipts.js";
 export type {
@@ -23,7 +24,7 @@ export type {
   AuthorityReservation, AuthorityFinalState, AuthorityReservationResult, ReceiptContext,
   AuthorityLifecycleState, ActionLifecycleRecord, StopState, PriorScope,
   EvidenceClass, BoundaryGate, AttributionKind, PepPrincipal, BoundaryEvidence, BoundaryReceiptInput, PepReceiptInput,
-  OverrideRecord, ReceiptPayloadContext, ReceiptBudget,
+  OverrideRecord, ReceiptPayloadContext, ReceiptBudget, ReceiptIntel,
 } from "./receipts.js";
 export {
   AUTHORIZATION_VERSION, AuthorizationError, StaticPrincipalKeyRegistry,

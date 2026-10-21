@@ -3,7 +3,7 @@
 // Run `node packages/tray/dev/preview.mjs` and open the page it prints; one scene alone is dist/panel-frame.html#scene=protected
 // (add &view=settings, &tab=allowed or &open=<action id>; the lists: blocks=n, outcomes=1, groups=1 with expand=1 or
 // details=<action id>, older=1; the form: choice=, why=, reason=, ask=1, quiet=1, submit=1, required=1, mode=approval|automatic|
-// admin30|legacy|final; Settings: packs=1, notify=off).
+// admin30|legacy|final, similar=1 (with scope=similar, and similar=admin when it needs an admin); Settings: packs=1, notify=off).
 "use strict";
 
 (function () {
@@ -200,6 +200,12 @@
       if (mode === "legacy" && b.can_act && b.offers && b.offers.once) b.offers = offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true });
       if (params.get("required") && b.can_act) b.reason_min = 10;
     }
+    // "Similar commands in this project", offered for the first block a person may unblock (similar=1; similar=admin waits for an admin).
+    const first = model.recent_blocks.find((b) => b.can_act && b.offers && b.offers.always);
+    if (params.get("similar") && first) {
+      first.offers.similar = { recipe_id: "delete-in-folder", words: "Deleting folders inside D:/src/scopebond-trayreview with rm",
+        covers: ["rm -r D:/src/scopebond-trayreview/dist"], not_covers: ["rm -rf D:/src"], ...(params.get("similar") === "admin" ? { needs_admin: true } : {}) };
+    }
     if (mode === "automatic" && model.allowed) model.allowed[0].unblocked = "automatic";
     for (const b of model.recent_blocks) {
       if (mode === "final") { b.can_act = false; b.offers = null; if (b.acted === "asked") b.acted = null; }
@@ -337,6 +343,7 @@
       if (params.get("expand")) click('[data-key^="tries-"]');
       if (params.get("details")) setTimeout(() => click('[data-key="what-' + params.get("details") + '"], [data-key="try-' + params.get("details") + '"]'), 30);
       // Fill the form as a person would: a choice, a reason, and (with submit) the button.
+      if (params.get("scope")) click('[data-key="scope-' + params.get("scope") + '"]');
       if (params.get("choice")) click('[data-key="choice-' + params.get("choice") + '"]');
       if (params.get("ask")) click('[data-key^="mode-"]');
       if (params.get("why")) click('[data-key="why-' + params.get("why") + '"]');

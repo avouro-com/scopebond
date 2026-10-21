@@ -18,7 +18,8 @@
   // `shown`: how many rows the list shows (50 at a time).
   // `details`: the block whose details are open; `expanded`: the group whose tries are listed.
   // `mode`, `why`: the form is the request to an admin ("ask") or the unblock ("allow"), and the quick reason chosen.
-  const ui = { view: "list", tab: "blocked", open: null, mode: "allow", choice: null, why: null, reason: "", stopping: null, shown: PAGE, details: null, expanded: null };
+  // `scope`: what the unblock covers, "exact" (just this command) or "similar" (similar commands in this project).
+  const ui = { view: "list", tab: "blocked", open: null, mode: "allow", choice: null, why: null, reason: "", scope: "exact", stopping: null, shown: PAGE, details: null, expanded: null };
   let last = null;
   let lastJson = "";
   // Whether the tray was told the page has drawn (it made the window hidden, and shows it then).
@@ -117,6 +118,7 @@
     // Where an admin decides, the form is the request; otherwise the shortest length is chosen to start with.
     ui.mode = allowsAny(b.offers) ? "allow" : "ask";
     ui.choice = lengthsOf(b)[0] || null;
+    ui.scope = "exact";
     ui.why = null;
     ui.reason = "";
     ui.view = "list";
@@ -126,6 +128,7 @@
   function closeForm() {
     ui.open = null;
     ui.choice = null;
+    ui.scope = "exact";
     ui.why = null;
     ui.reason = "";
     hold(false);
@@ -138,10 +141,13 @@
     const chosen = REASONS.find(([k]) => k === ui.why && k !== "other");
     return chosen ? (note ? chosen[1] + ": " + note : chosen[1]) : note;
   }
-  async function submit(b, choice) {
+  async function submit(b, choice, scope) {
     let sent = false;
     const reason = choice === "quiet" ? "" : reasonText();
-    try { sent = await invoke(b.live ? "panel_live" : "panel_block", { actionId: b.action_id, choice, reason }); } catch (_) { /* the note says why */ }
+    const args = { actionId: b.action_id, choice, reason };
+    // Similar commands: only for a block the tray answers afterwards (the waiting question is about this command alone).
+    if (scope === "similar" && !b.live) args.scope = "similar";
+    try { sent = await invoke(b.live ? "panel_live" : "panel_block", args); } catch (_) { /* the note says why */ }
     if (sent) closeForm();
     setTimeout(refresh, 150);
   }
@@ -151,7 +157,11 @@
     return { once: "Once", fifteen: "15 minutes", hour: "1 hour", tomorrow: "Until tomorrow", always: days + (days === 1 ? " day" : " days") }[c] || "";
   }
   /** The one button, named for the result. */
-  function buttonText(b, c) {
+  function buttonText(b, c, scope) {
+    if (scope === "similar") {
+      const span = c === "tomorrow" ? "until tomorrow" : "for " + lengthName(b, c);
+      return (b.offers.similar.needs_admin || (c === "always" && b.offers.always_needs_admin) ? "Ask to allow similar commands " : "Allow similar commands ") + span;
+    }
     if (c === "always" && b.offers.always_needs_admin) return "Ask for " + lengthName(b, c);
     return { once: "Allow once", fifteen: "Allow for 15 minutes", hour: "Allow for 1 hour", tomorrow: "Allow until tomorrow", always: "Allow for " + lengthName(b, c) }[c] || "Allow";
   }
@@ -189,24 +199,49 @@
     const id = b.action_id;
     const o = b.offers || {};
     const busy = s.busy === "answer:" + id;
-    const lengths = lengthsOf(b);
-    const allows = lengths.length > 0;
+    const allLengths = lengthsOf(b);
+    const allows = allLengths.length > 0;
     const asking = ui.mode === "ask" || !allows;
+    // "Similar commands in this project", where offered: for a length longer than once, never for the waiting question.
+    const similarLengths = allLengths.filter((c) => c !== "once");
+    const similar = !asking && !b.live && o.similar && similarLengths.length ? o.similar : null;
+    const scope = similar && ui.scope === "similar" ? "similar" : "exact";
+    const lengths = scope === "similar" ? similarLengths : allLengths;
     const enough = reasonText().length >= minReason(b);
     // Where the workspace set the one length (and, it may be, reviews every unblock later), nothing to choose: one line says it.
     const oneLength = !asking && lengths.length === 1;
     const reviewed = !!o.reviewed;
     const choice = asking ? "ask" : lengths.indexOf(ui.choice) >= 0 ? ui.choice : lengths[0];
-    const waitsForAdmin = !asking && choice === "always" && o.always_needs_admin;
+    const waitsForAdmin = !asking && ((choice === "always" && o.always_needs_admin) || (scope === "similar" && similar.needs_admin));
     const where = asking ? "An admin decides; the answer shows on the block"
       : "Recorded in " + (model.workspace || "your workspace");
     const label = (asking ? "Ask to unblock " : "Unblock ") + (b.what || b.summary);
-    return el("div", { class: "form", role: "group", "aria-label": label }, [
-      el("div", { class: "step" }, [
+    const command = b.action_text || b.what || b.summary;
+    // What to allow: just this command, or (where offered) similar commands in this project, in words, with an example of
+    // what it covers and one of what it does not.
+    const scopeOption = (value, title, lines) => el("label", { class: "scope" }, [
+      el("input", { type: "radio", name: "scope-" + id, value, "data-key": "scope-" + value, checked: scope === value,
+        onchange: () => { ui.scope = value; hold(true); draw("scope-" + value); } }),
+      el("span", { class: "fixed", text: title }),
+    ].concat(lines));
+    const what = similar
+      ? el("fieldset", { class: "scopes" }, [
+        el("legend", { class: "step-h", text: "What to allow" }),
+        scopeOption("exact", "Just this command", [el("div", { class: "cmd ex", text: command })]),
+        scopeOption("similar", "Similar commands in this project", [
+          el("span", { class: "ex", text: similar.words }),
+          (similar.covers || []).length ? el("span", { class: "ex" }, ["Covers ", el("code", { text: similar.covers.join(", ") })]) : null,
+          (similar.not_covers || []).length ? el("span", { class: "ex" }, ["Not ", el("code", { text: similar.not_covers.join(", ") })]) : null,
+          similar.needs_admin ? el("small", { class: "ex admin", text: "needs admin approval" }) : null,
+        ]),
+      ])
+      : el("div", { class: "step" }, [
         el("span", { class: "step-h", text: asking ? "What to ask for" : "What to allow" }),
         el("span", { class: "fixed", text: "Just this command" }),
-        el("div", { class: "cmd", text: b.action_text || b.what || b.summary }),
-      ]),
+        el("div", { class: "cmd", text: command }),
+      ]);
+    return el("div", { class: "form", role: "group", "aria-label": label }, [
+      what,
       asking ? null : oneLength
         ? el("p", { class: "fixed", text: lengthName(b, lengths[0]) + (reviewed ? ", set by your workspace; an admin reviews it later" : "") })
         : el("fieldset", { class: "lengths" }, [el("legend", { class: "step-h", text: "For how long" }), el("div", { class: "pills" }, lengths.map((c) => {
@@ -221,7 +256,7 @@
     ].concat(whyChoices(b, id), [
       el("div", { class: "acts" }, [
         el("button", { class: "btn primary", type: "button", "data-key": "confirm-" + id, disabled: !enough || !!s.busy, "aria-busy": busy ? "true" : null,
-          text: busy ? "Sending…" : asking ? "Send request" : oneLength && reviewed ? "Unblock now" : buttonText(b, choice), onclick: () => submit(b, choice) }),
+          text: busy ? "Sending…" : asking ? "Send request" : oneLength && reviewed && scope !== "similar" ? "Unblock now" : buttonText(b, choice, scope), onclick: () => submit(b, choice, scope) }),
         el("button", { class: "btn", type: "button", "data-key": "cancel-" + id, text: "Cancel", onclick: () => { closeForm(); draw("block-" + id); } }),
       ]),
       el("span", { class: "meta", text: where }),

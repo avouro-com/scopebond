@@ -2,7 +2,7 @@
 // state, one headline, the rows that have data, the one fix when something is wrong, and the actions that apply now. It never
 // works out health itself, so the tray, `status` and the workspace's computer page say the same thing.
 
-import type { StatusJson } from "@scopebond/hook";
+import type { SimilarOffer, StatusJson } from "@scopebond/hook";
 import type { Health } from "./health.js";
 import type { AllowedItem, AskedItem } from "./allowed-asked.js";
 import type { LiveQuestion } from "./live-prompt.js";
@@ -98,6 +98,10 @@ export interface BlockOffers {
   /** Newer: allow it for 1 hour or until tomorrow, and keep it blocked without being asked again ("Keep blocking without
    *  asking me"); absent or false from an older hook. */
   hour?: boolean; tomorrow?: boolean; quiet?: boolean;
+  /** Newer still: "Similar commands in this project" (the hook's pattern recipes): what it allows in words, an example it
+   *  covers and one it does not, and whether it waits for an admin; null (or absent from an older agent) where none is
+   *  offered. The tray answers it with `scope: "similar"` and a length. */
+  similar?: SimilarOffer | null;
 }
 
 /** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did ("quiet":

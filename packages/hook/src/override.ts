@@ -17,8 +17,12 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
-import { compileManaged, floorDocument, managedEnforce, packRuleAdjustments, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms } from "./managed.js";
-import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem, makeQuietBlock, matchQuietBlock, type Allowance } from "./allowances.js";
+import { compileManaged, floorDocument, managedEnforce, packRuleAdjustments, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms, managedSetting, packRulesOf } from "./managed.js";
+import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, matchPatternAllowance, mergeWorkspaceAllowances, patternKey, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem, makeQuietBlock, matchQuietBlock, type Allowance } from "./allowances.js";
+import { validAllowanceMatch } from "@scopebond/policy-schema/allow-patterns";
+import { enginePath, packRecipesFor, patternSetting, rulePatternable, similarFor, type SimilarOffer, type SimilarProposal } from "./pattern-recipes.js";
+import { realEnginePath, repositoryTop } from "./git-restore.js";
+import { maskHomeFolder } from "./home-mask.js";
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
@@ -198,8 +202,9 @@ export type ShownOverrideHandler = (ctx: Parameters<OverrideHandler>[0] & { show
  *  "Ask an admin" with the reason; the action stays blocked. quiet: keep it blocked without asking again (a quiet block, for
  *  30 days or until the person undoes it). unavailable with `later`: the agent runs but had no one to ask now (no tray
  *  listening, no window), so the person acts on the block afterwards; `link` is this computer's page in the workspace, when
- *  the agent knows it. */
-export interface AgentAnswer { decision: "allow" | "deny" | "unavailable" | "ask" | "quiet"; reason?: string; os_user?: string; lasts?: UnblockLength; later?: true; link?: string }
+ *  the agent knows it. `scope`: what an allow covers, the action itself (the default) or "Similar commands in this project"
+ *  (`similar`, only where it was offered). */
+export interface AgentAnswer { decision: "allow" | "deny" | "unavailable" | "ask" | "quiet"; reason?: string; os_user?: string; lasts?: UnblockLength; later?: true; link?: string; scope?: "exact" | "similar" }
 const UNBLOCK_LENGTHS: readonly string[] = ["once", "15m", "1h", "tomorrow", "30d", "always"];
 
 /** A link the denial may show: https, short, nothing a terminal would read as more than one word. */
@@ -236,7 +241,7 @@ export async function askAgent(home: string, request: Record<string, unknown>, t
     const lasts: UnblockLength = typeof body.lasts === "string" && UNBLOCK_LENGTHS.includes(body.lasts) ? body.lasts : "once";
     // No reason is an empty one: the length the workspace asks for is checked by the caller.
     const reason = typeof body.reason === "string" ? body.reason : body.reason === undefined ? "" : null;
-    if (body.decision === "allow" && reason !== null) return { decision: "allow", reason, lasts, ...user };
+    if (body.decision === "allow" && reason !== null) return { decision: "allow", reason, lasts, ...user, ...(body.scope === "similar" ? { scope: "similar" as const } : {}) };
     if (body.decision === "ask" && reason !== null) return { decision: "ask", reason, ...user };
     if (body.decision === "deny") return { decision: "deny" };
     if (body.decision === "quiet") return { decision: "quiet", ...user };
@@ -263,11 +268,45 @@ export interface OverrideContext {
    *  asked, so the wait can shrink to what is left of the hook call's deadline (hook-deadline.ts). */
   waitMs?: number | (() => number);
   ask?: typeof askAgent;
+  /** The working folder of the call, for "Similar commands in this project" (pattern-recipes.ts): a pattern allowance holds
+   *  in the project it was made in. Absent: only the built-in delete recipe, which names its own repository, can be offered. */
+  cwd?: string | null;
+  /** The repository a path is in, and a path's real place (git-restore.ts `repositoryTop`, `realEnginePath`, by default);
+   *  tests pass their own. */
+  repositoryTop?: (path: string) => string | null;
+  real?: (path: string) => string | null;
 }
 
 /** The project for the question, when it can be read. */
 function projectOfCall(ctx: OverrideContext): { project?: string } {
   try { const project = ctx.project?.(); return project ? { project } : {}; } catch { return {}; }
+}
+
+/** The call's working folder as an action's paths are signed: engine form, the home folder as `~`. */
+const workingFolder = (cwd: string | null | undefined): string | null => (cwd ? maskHomeFolder(enginePath(cwd)) : null);
+
+/** "Similar commands in this project" as the Unblock form shows it: the offer, and whether it waits for an admin. Null when no
+ *  recipe fits, the workspace lets no one make one, or nothing may be allowed. */
+function similarOfferOf(proposal: SimilarProposal | null | undefined, rule: string, terms: OverrideTerms, allowing: boolean): SimilarOffer | null {
+  const setting = patternSetting(terms);
+  if (!proposal || setting === "off" || !allowing || !proposal.match || proposal.match.rule !== rule || !rulePatternable(rule) || !validAllowanceMatch(proposal.match)) return null;
+  const o = proposal.offer as Partial<SimilarOffer> | undefined;
+  const texts = (v: unknown): v is string[] => Array.isArray(v) && v.length <= 3 && v.every((s) => typeof s === "string" && s.length <= 300);
+  if (!o || typeof o.recipe_id !== "string" || o.recipe_id !== proposal.match.recipe || typeof o.words !== "string" || o.words.length > 300 || !texts(o.covers) || !texts(o.not_covers)) return null;
+  return { recipe_id: o.recipe_id, words: o.words, covers: o.covers, not_covers: o.not_covers, ...(setting === "needs_admin" ? { needs_admin: true } : {}) };
+}
+
+/** Make the allowance a person chose for "Similar commands in this project": the pattern for `lasts` (waiting for an admin
+ *  where the workspace says so, the action itself covered for 15 minutes meanwhile). Returns the new entries and whether the
+ *  pattern waits. */
+function similarAllowances(input: { rule: string; actionKey: string; proposal: SimilarProposal; reason: string; osUserDigest: string | null; lasts: UnblockLength; terms: OverrideTerms; now: number }): { made: Allowance[]; proposed: boolean } {
+  const needsAdmin = patternSetting(input.terms) === "needs_admin";
+  const pattern = makeAllowance({ rule: input.rule, actionKey: input.actionKey, reason: input.reason, osUserDigest: input.osUserDigest, lasts: input.lasts,
+    alwaysDays: input.terms.always_days, needsAdmin: input.terms.always === "needs_admin", now: input.now, unblocked: unblockedBy(input.terms),
+    match: input.proposal.match, patternNeedsAdmin: needsAdmin });
+  const made = [pattern];
+  if (pattern.state === "proposed") made.push(makeAllowance({ rule: input.rule, actionKey: input.actionKey, reason: input.reason, osUserDigest: input.osUserDigest, lasts: "15m", now: input.now }));
+  return { made, proposed: pattern.state === "proposed" };
 }
 
 /** What happened when the last override was considered, so a denial can say how an override would be possible. */
@@ -284,12 +323,13 @@ const RETRY_MS = 10 * 60 * 1000;
 export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOverrideHandler; note(): OverrideNote | null } | null {
   let doc: ManagedDocument;
   try { doc = JSON.parse(readFileSync(join(ctx.dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
-  if (!Object.values(doc.rules ?? {}).some((r) => personMayAct(r))) return null;
+  if (![...Object.values(doc.rules ?? {}), ...Object.values(packRulesOf(doc))].some((r) => personMayAct(r))) return null;
   const now = ctx.now ?? Date.now;
   let last: OverrideNote | null = null;
   const handler: ShownOverrideHandler = async ({ verdict, action_id, intent, intent_hash, shown }) => {
-    const rule = RULE_OF_CLAUSE[verdict.clause_id ?? ""];
-    const setting = rule ? doc.rules[rule] : undefined;
+    // A rule pack's rule the workspace sets in `pack_rules` carries its own id as its clause's.
+    const rule = (RULE_OF_CLAUSE[verdict.clause_id ?? ""] ?? (packRulesOf(doc)[verdict.clause_id ?? ""] ? verdict.clause_id : undefined)) as AnyManagedRuleId | undefined;
+    const setting = managedSetting(doc, rule);
     if (!rule || !personMayAct(setting) || !setting?.override) return null;
     // Keyed on what the window shows, the project among it; an allowance or unblock made under an older key still counts.
     // The project is read only for a key that has it, or when a person is asked.
@@ -315,15 +355,26 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     let allowances = readAllowances(ctx.dir);
     if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, doc.allowances, doc.revoked_allowances);
     const query = (k: string) => ({ rule, actionKey: k, osUserDigest: osDigest, now: t, sessionId: ctx.sessionId ?? null });
+    // A pattern allowance ("Similar commands in this project") covers it when it is inside the pattern's bounds.
+    const project = workingFolder(ctx.cwd);
+    const patternQuery = { rule, action: intent, project, osUserDigest: osDigest, now: t, sessionId: ctx.sessionId ?? null, real: ctx.real ?? ((p: string) => realEnginePath(p)) };
+    // What "Similar commands in this project" would allow for it: worked out once, and only where the workspace lets someone
+    // make one (it may ask git which repository a delete's targets are in).
+    let proposal: SimilarProposal | null | undefined;
+    const similar = (): SimilarProposal | null => (proposal !== undefined ? proposal : (proposal = patternSetting(terms) === "off" ? null
+      : similarFor(rule, intent, { project, repositoryTop: ctx.repositoryTop ?? ((p) => repositoryTop(p)), packRecipes: (r) => packRecipesFor(r) })));
     const summary = shownSummary(intent, shown);
-    const blocked = (acted?: "quiet") => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness,
-      ...(acted ? { acted, acted_at: new Date(t).toISOString() } : {}) }, t);
+    const blocked = (acted?: "quiet") => {
+      const kept = acted ? null : similar();
+      recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness,
+        ...(acted ? { acted, acted_at: new Date(t).toISOString() } : {}), ...(kept ? { similar: kept } : {}) }, t);
+    };
     // The person chose to keep this action blocked without being asked (a quiet block): denied at once, no one is asked. An
     // allowance made after it (an admin's answer) wins; one made before it does not.
     const quiet = keys.reduce<Allowance | null>((found, k) => found ?? matchQuietBlock(allowances, query(k)), null);
     const standing = quiet
-      ? allowances.find((a) => Date.parse(a.created_at) > Date.parse(quiet.created_at) && keys.some((k) => matchAllowance([a], query(k)))) ?? null
-      : keys.reduce<Allowance | null>((found, k) => found ?? matchAllowance(allowances, query(k)), null);
+      ? allowances.find((a) => Date.parse(a.created_at) > Date.parse(quiet.created_at) && (keys.some((k) => matchAllowance([a], query(k))) || !!matchPatternAllowance([a], patternQuery))) ?? null
+      : keys.reduce<Allowance | null>((found, k) => found ?? matchAllowance(allowances, query(k)), null) ?? matchPatternAllowance(allowances, patternQuery);
     if (quiet && !standing) {
       last = { rule, title, outcome: "quiet" };
       blocked("quiet");
@@ -356,8 +407,9 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     if (retryOf) { last = { rule, title, outcome: "retry" }; blocked(); return null; }
 
     const waitMs = typeof ctx.waitMs === "function" ? ctx.waitMs() : ctx.waitMs ?? 45_000;
+    const similarOffer = allowing ? similarOfferOf(similar(), rule, terms, allowing) : null;
     let answer = await (ctx.ask ?? askAgent)(ctx.home, {
-      action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting.mode, offers,
+      action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting.mode, offers, ...(similarOffer ? { similar: similarOffer } : {}),
       // For the tray, which shows the question too: the coding tool, and what the workspace set about the length.
       harness: ctx.harness, ...projectShown(), reviewed: terms.review === true, always_days: terms.lengths ? longDays(terms) : terms.always_days ?? ALLOWANCE_DEFAULT_DAYS, always_needs_admin: terms.always === "needs_admin",
       lasts: coverText(terms), timeout_ms: waitMs,
@@ -393,7 +445,17 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
       try { writeState(ctx.dir, state, t); } catch { /* the receipt still records it; the count is checked again in the workspace */ }
       // Any length but once ("Allow for 15 min", an hour, until tomorrow, 30 days, "Always allow this here…") also stands for the
       // same action afterwards.
-      if (length !== "once") {
+      // "Similar commands in this project", where it was offered: the pattern for the length chosen. Asked for where it was not
+      // offered, the action alone is allowed (less, never more).
+      const pattern = answer.scope === "similar" && similarOffer && length !== "once" ? similar() : null;
+      if (pattern) {
+        try {
+          const { made } = similarAllowances({ rule, actionKey: key, proposal: pattern, reason, osUserDigest: record.os_user_digest, lasts: length, terms, now: t });
+          writeAllowances(ctx.dir, [...allowances, ...made], t);
+          rememberActionText(ctx.dir, patternKey(pattern.match), pattern.offer.words, t);
+          rememberActionText(ctx.dir, key, summary, t);
+        } catch { /* this action is allowed by the receipt; the next one asks again */ }
+      } else if (length !== "once") {
         try {
           const made = makeAllowance({ rule, actionKey: key, reason, osUserDigest: record.os_user_digest, lasts: length,
             alwaysDays: terms.always_days, needsAdmin: terms.always === "needs_admin", now: t, unblocked: unblockedBy(terms) });
@@ -437,6 +499,9 @@ export interface BlockedQuestion {
   always_needs_admin: boolean;
   /** The workspace reviews every unblock later, and may undo it (its `review` term). */
   reviewed: boolean;
+  /** "Similar commands in this project" (pattern-recipes.ts): what it would allow, in words with examples, when a recipe fits
+   *  the block, the workspace lets a person make one (`needs_admin` when it waits for an admin) and a length is offered. */
+  similar: SimilarOffer | null;
 }
 
 /** What the window may offer for an earlier block, under the rules as they are now; null when it is gone, was already acted
@@ -446,7 +511,7 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
   if (!item || item.acted || !(now - Date.parse(item.at) < 7 * DAY_MS)) return null;
   let doc: ManagedDocument;
   try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
-  const setting = doc.rules?.[item.rule as AnyManagedRuleId];
+  const setting = managedSetting(doc, item.rule);
   if (!personMayAct(setting) || !setting?.override) return null;
   const terms = setting.override;
   const dayStart = now - (now % DAY_MS);
@@ -459,12 +524,15 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
     always_days: longDays(terms),
     always_needs_admin: terms.always === "needs_admin",
     reviewed: terms.review === true,
+    similar: similarOfferOf(item.similar, item.rule, terms, allowsAny(offers)),
   };
 }
 
 /** Act on an earlier block with the window's answer. Allowing makes an allowance (once: the next try; 15 minutes; an hour;
  *  until tomorrow; or 30 days or always, waiting for an admin when the workspace says so) and counts as one of today's overrides; asking queues "Ask an admin";
- *  `quiet` keeps the action blocked without asking again (a quiet block, undone with `endAllowance`).
+ *  `quiet` keeps the action blocked without asking again (a quiet block, undone with `endAllowance`). An allow with
+ *  `scope: "similar"` makes the pattern allowance "Similar commands in this project" offered for the block instead (declined
+ *  where it is not offered).
  *  Scopebond never runs the action itself: the person or the coding agent runs it again. */
 export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now = Date.now()): { outcome: "allowed" | "proposed" | "asked" | "quiet" | "declined" | "gone" } {
   const q = blockedQuestion(dir, id, now);
@@ -491,12 +559,23 @@ export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now =
   const terms = doc?.rules?.[q.item.rule as AnyManagedRuleId]?.override;
   const lasts = offeredLength(answer.lasts, q.offers, terms);
   if (!lasts) return { outcome: "declined" };
-  const made = makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts,
-    alwaysDays: terms?.always_days, needsAdmin: terms?.always === "needs_admin", now, unblocked: terms ? unblockedBy(terms) : undefined });
-  const allowances = [...readAllowances(dir), made];
-  // Waiting for an admin, the person is still covered for 15 minutes.
-  if (made.state === "proposed") allowances.push(makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts: "15m", now }));
-  writeAllowances(dir, allowances, now);
+  // "Similar commands in this project": only where it is offered now, and for a length (the next try alone is this action).
+  const pattern = answer.scope === "similar" ? (q.similar && terms && q.item.similar ? q.item.similar : null) : null;
+  if (answer.scope === "similar" && !pattern) return { outcome: "declined" };
+  let made: Allowance;
+  if (pattern && terms && lasts !== "once") {
+    const similar = similarAllowances({ rule: q.item.rule, actionKey: q.item.action_key, proposal: pattern, reason, osUserDigest: osDigest, lasts, terms, now });
+    made = similar.made[0];
+    writeAllowances(dir, [...readAllowances(dir), ...similar.made], now);
+    rememberActionText(dir, patternKey(pattern.match), pattern.offer.words, now);
+  } else {
+    made = makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts,
+      alwaysDays: terms?.always_days, needsAdmin: terms?.always === "needs_admin", now, unblocked: terms ? unblockedBy(terms) : undefined });
+    const allowances = [...readAllowances(dir), made];
+    // Waiting for an admin, the person is still covered for 15 minutes.
+    if (made.state === "proposed") allowances.push(makeAllowance({ rule: q.item.rule, actionKey: q.item.action_key, reason, osUserDigest: osDigest, lasts: "15m", now }));
+    writeAllowances(dir, allowances, now);
+  }
   rememberActionText(dir, q.item.action_key, q.item.summary, now);
   const state = readState(dir);
   state.entries.push({ rule: q.item.rule, action_key: q.item.action_key, action_id: q.item.id, at: now, reason_digest: made.reason_digest, reason_length: made.reason_length,

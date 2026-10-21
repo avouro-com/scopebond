@@ -120,6 +120,18 @@ approval, then a monitored one, and among clauses of one mode the first by polic
 Receipts without them are unchanged. `vectors/evidence-contract.json` (`receipt_match`) holds
 valid and invalid examples.
 
+## Plugin slot
+
+A hook that loaded a signed plugin may sign what it gave an action into two optional members:
+`payload.pattern_id` (64 lowercase hex, `RECEIPT_PATTERN_ID_PATTERN`) and `payload.intel`, an
+opaque slot of standard padded base64 carrying 1 to 4096 bytes (`RECEIPT_INTEL_PATTERN`,
+`RECEIPT_INTEL_MAX_BYTES`, `RECEIPT_INTEL_MAX_LENGTH`). What the slot holds is not described:
+the open code stores it, covers it with the signature and verifies it as bytes.
+`isReceiptIntel` and `isReceiptPatternId` check the shapes. A receipt made without a plugin
+carries neither and is unchanged. `vectors/evidence-contract.json` (`receipt_intel`) holds
+valid and invalid examples. A receipt check older than this release reports a receipt carrying
+them as invalid.
+
 ## Observation envelope
 
 An observation is signed as Ed25519 over the UTF-8 bytes of the literal domain
@@ -204,6 +216,25 @@ and run only on words cut to 512 characters. `validatePack` checks the shape and
 cross-field rules (unique ids, no program read by two grammars, registered action types,
 command-line operators only in grammars and MCP ones only in profiles); the signature is
 the engine's to verify.
+
+**Engine levels.** The format grows only by adding fields, and each addition raises the
+engine level (`PACK_ENGINE_LEVEL`, now 2). Level 2 adds `requires: { engine, action_types? }`
+on the pack and, on a rule, `title` (at most 80 characters), `blockable` (the rule may
+block; it needs `param_bounds`), `default_mode` (`monitor` or `block`, block only when
+blockable), `safer_way` (at most 160 characters, a hint for the coding agent) and
+`allow_patterns` (`{ id, title, param, kind }`, kind one of `path_prefix`, `path_glob`,
+`package_name`, `host`, `mcp_tool`). A pack that uses a level-2 field says
+`requires.engine: 2`; an engine that predates level 2 reads such a field as unknown and
+refuses that pack alone. `packEngineProblem` says why an engine cannot run a valid pack
+(`engine_too_old`, or `unknown_action_type` for a type `requires.action_types` names that
+it does not know); `validatePack(doc, { engine: 1 })` reads a pack as a level-1 engine does.
+
+**Taxonomy extensions.** `scopebond:taxonomy-ext/v1` (`src/taxonomy-ext.ts`, at the
+`./taxonomy-ext` subpath) adds action types as signed data:
+`{ format, issued_at, types: [{ action_type, params: { name: "string" | "number" | "boolean" }, mutating, target_opt_in }], signature }`,
+signed like a pack over `scopebond:taxonomy-ext/v1`, one LF, then the canonical document
+without `signature`. An extension never redefines a built-in type. `getActionType` reads
+the extension in force (`setActionTypeExtension`) after the built-in registry.
 
 `vectors/example-pack.json` is a small public pack built from made-up tools
 (`test/build-example-pack.mjs`), signed with a test-only key whose private half is derived

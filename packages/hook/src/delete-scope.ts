@@ -5,7 +5,9 @@
 // temp folder, the command's `program_scope` carries `<program>/contained`, which the safe-shell pattern lets through. Any
 // other delete keeps `program_scope` equal to its program and is refused as before: `~`, `/`, a drive root, an absolute
 // path outside the working folder, a `..` that climbs out, a whole-folder wildcard at its top (`rm -rf *`), a target only
-// known at run time (`$VAR`, `$(…)`, `{}` from find or xargs) and a delete with no target at all.
+// known at run time (`$VAR`, `$(…)`, `{}` from find or xargs) and a delete with no target at all. A delete outside it
+// whose every target git can restore (tracked and committed) is recorded instead of blocked: the runtime asks git
+// (git-restore.ts, `withRestorableScope`) and the scope becomes `<program>/git_restorable`.
 //
 // Pure and deterministic, like the mapper: it reads the command text and the working folder it is given, never the disk.
 
@@ -23,7 +25,13 @@ export const CONTAINED_SUFFIX = "/contained";
 /** Build and cache output a delete may remove anywhere inside the working folder (a log file by its `.log` ending). */
 export const BUILD_OUTPUT: readonly string[] = ["node_modules", "dist", "build", "out", ".next", "coverage", "target", ".turbo", ".cache", "tmp"];
 
-export type DeleteScope = "contained" | "outside" | "protected" | "unknown" | "none";
+/** What follows the program in `program_scope` when every target of a delete outside the working folder is one git can
+ *  restore (git-restore.ts): recorded instead of blocked. */
+export const RESTORABLE_SUFFIX = "/git_restorable";
+
+/** `git_restorable` is never the mapper's verdict (it reads no disk): the runtime gives it to an `outside` delete whose
+ *  targets git vouches for (`withRestorableScope`). */
+export type DeleteScope = "contained" | "outside" | "protected" | "unknown" | "none" | "git_restorable";
 
 export interface DeleteVerdict {
   scope: DeleteScope;
@@ -355,17 +363,35 @@ export function deleteVerdicts(commands: SimpleCommand[], text: string, cwd: str
 export function containedDeletesSentence(programs: readonly string[]): string {
   const deleters = programs.filter((p) => DELETE_PROGRAMS.has(p.toLowerCase()));
   if (deleters.length === 0) return "";
-  return `A delete (${deleters.join(", ")}) is allowed when every target it names is inside the working folder (after any cd in the same command) and is not the folder itself, .git or a protected place; build and cache output (${BUILD_OUTPUT.join(", ")}, *.log) anywhere inside it and paths under the temp folder count as inside. A delete of ~, /, a drive root, a path outside the working folder, a whole-folder wildcard (rm -rf *), a target known only at run time ($VAR, $(…), {} from find or xargs) or no target is denied.`;
+  return `A delete (${deleters.join(", ")}) is allowed when every target it names is inside the working folder (after any cd in the same command) and is not the folder itself, .git or a protected place; build and cache output (${BUILD_OUTPUT.join(", ")}, *.log) anywhere inside it and paths under the temp folder count as inside. A delete of ~, /, a drive root, a path outside the working folder, a whole-folder wildcard (rm -rf *), a target known only at run time ($VAR, $(…), {} from find or xargs) or no target is denied. A delete outside the working folder whose every target is tracked and committed in a git repository (nothing changed, untracked or ignored under it) is recorded and runs: git can restore it.`;
 }
 
 /** The value safe-shell judges: the program, with `/contained` after it when it is a delete whose every target is contained.
  *  A program name never holds a `/` (the mapper keeps its last path segment), so the two cannot be confused. */
 export const programScope = (program: string, verdict: DeleteVerdict | undefined): string =>
-  verdict?.scope === "contained" ? `${program}${CONTAINED_SUFFIX}` : program;
+  verdict?.scope === "contained" ? `${program}${CONTAINED_SUFFIX}` : verdict?.scope === "git_restorable" ? `${program}${RESTORABLE_SUFFIX}` : program;
 
 /** Whether a shell command's `program_scope` marks a delete whose every target is contained. */
 export const isContainedDelete = (params: Record<string, unknown>): boolean =>
   typeof params.program === "string" && params.program !== "" && params.program_scope === `${params.program}${CONTAINED_SUFFIX}`;
+
+/** Whether a shell command's `program_scope` marks a delete git can restore. */
+export const isRestorableDelete = (params: Record<string, unknown>): boolean =>
+  typeof params.program === "string" && params.program !== "" && params.program_scope === `${params.program}${RESTORABLE_SUFFIX}`;
+
+/** A delete that reaches outside the working folder, with `program_scope` `<program>/git_restorable` when `restorable` says
+ *  git can restore every target it names (git-restore.ts). Only a plain delete (its scope is its program: not contained, not a
+ *  destructive form) whose targets were all read (`delete_targets`) is considered; anything else is returned as it is, and
+ *  `restorable` is not asked. */
+export function withRestorableScope(m: Mapped, restorable: (targets: string[]) => boolean): Mapped {
+  const params = m.intent.params;
+  if (m.intent.action_type !== "shell.exec" || typeof params.program !== "string" || !DELETE_PROGRAMS.has(canonProgram(params.program))) return m;
+  if (params.program_scope !== params.program) return m;
+  const targets = params.delete_targets;
+  if (!Array.isArray(targets) || targets.length === 0 || !targets.every((t): t is string => typeof t === "string" && t !== "")) return m;
+  if (!restorable([...targets])) return m;
+  return { ...m, intent: { ...m.intent, params: { ...params, program_scope: `${params.program}${RESTORABLE_SUFFIX}` } } };
+}
 
 /** A shell command intent with `program_scope` filled in when the mapper did not set it (an intent built by hand, or by an
  *  older mapper): the program alone, so it is judged by name as before. */

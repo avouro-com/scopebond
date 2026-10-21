@@ -9,7 +9,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
+  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, recordFatigue, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
   dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -19,6 +19,8 @@ import {
   clearUpdatePending, fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind, nativeTrayPath, readUpdatePending, removeOldHelpers, takeInstallResult, UPDATE_PENDING_MS,
   writeUpdatePending, type InstallKind,
 } from "./native-update.js";
+import { maintainEngine } from "./engine-update.js";
+import { maintainIntel } from "./intel-install.js";
 import { AGENT_LOG_ENV, autostartHealth, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
@@ -653,6 +655,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         }
         log(result.error);
       }
+      // Components that need no installer: a newer engine for the signed install (engine-update.ts: verified, its pack
+      // vectors run, rolled back when it does not start) and the plugin component (intel-install.ts). Neither throws.
+      await maintainEngine({ dir: options.dir, kind, target, fetchImpl: options.fetchImpl, log });
+      await maintainIntel({ dir: options.dir, connection, target, fetchImpl: options.fetchImpl, log });
       // The local store: older rows rewritten, acknowledged receipts past the retention window removed, space returned.
       // The agent may rewrite the whole file once (the hook never does that during a tool call).
       try {
@@ -755,6 +761,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const offers = q ? {
         once: q.offers.allow, fifteen: q.offers.fifteen, hour: q.offers.hour, tomorrow: q.offers.tomorrow, quiet: true, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
         always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
+        // "Similar commands in this project", where the hook offers it: the words and the examples the form shows.
+        similar: q.similar ?? null,
       } : null;
       const what = b.what ?? b.summary;
       const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
@@ -921,6 +929,12 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const seen = typeof (body as { seen?: unknown } | null)?.seen === "string" ? String((body as { seen: string }).seen) : null;
       return { question: await live.wait(seen, 20_000) };
     },
+    // The tray says it showed a notification: counted for the workspace's view of how often people are interrupted (fatigue.ts).
+    "POST /fatigue": (body) => {
+      const kind = (body as { kind?: unknown } | null)?.kind;
+      if (kind !== "toast") return { counted: false };
+      return { counted: recordFatigue(options.dir, "toast") !== null };
+    },
     "POST /override/open": (body) => {
       const id = (body as { action_id?: unknown } | null)?.action_id;
       return { opened: typeof id === "string" && live.open(id) };
@@ -1010,18 +1024,23 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const offered = parsed.choice === "once" ? q.offers.allow : parsed.choice === "fifteen" ? q.offers.fifteen : parsed.choice === "always" ? q.offers.always
         : parsed.choice === "hour" ? q.offers.hour : parsed.choice === "tomorrow" ? q.offers.tomorrow : parsed.choice === "quiet" ? true : q.offers.ask;
       if (!offered) return { outcome: "not_offered", text: "Your workspace does not offer that choice for this block now." };
+      // "Similar commands in this project": only where the hook offers it for this block now.
+      if (parsed.scope === "similar" && !q.similar) return { outcome: "not_offered", text: "Your workspace does not offer similar commands for this block now." };
       if (parsed.choice !== "quiet" && parsed.reason.length < q.reason_min) return { outcome: "reason_short", text: `Say why in at least ${q.reason_min} characters.` };
       let os_user: string | undefined;
       try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
       const lasts = LASTS_OF_CHOICE[parsed.choice] ?? "once";
       const answer = parsed.choice === "ask" ? { decision: "ask" as const, reason: parsed.reason, ...(os_user ? { os_user } : {}) }
         : parsed.choice === "quiet" ? { decision: "quiet" as const, ...(os_user ? { os_user } : {}) }
-        : { decision: "allow" as const, reason: parsed.reason, lasts, ...(os_user ? { os_user } : {}) };
+        : { decision: "allow" as const, reason: parsed.reason, lasts, ...(os_user ? { os_user } : {}), ...(parsed.scope === "similar" ? { scope: "similar" as const } : {}) };
       const done = actOnBlocked(options.dir, parsed.action_id, answer);
       if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked" || done.outcome === "quiet") setTimeout(() => { void sendReasons(); }, 1_000);
       if (done.outcome === "asked") pollAnswers();
-      log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
-      return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed, Date.now(), q.item.summary || null) };
+      log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice}${parsed.scope === "similar" ? ", similar" : ""})`);
+      // The result line says what was allowed: the command, or the similar commands in words.
+      const what = parsed.scope === "similar" && q.similar ? q.similar.words.charAt(0).toLowerCase() + q.similar.words.slice(1) : q.item.summary || null;
+      return { outcome: done.outcome, choice: parsed.choice, ...(parsed.scope === "similar" ? { scope: "similar" } : {}),
+        text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed, Date.now(), what) };
     },
     // "Get help…": a support report the tray copies for the person (tray-model.ts supportBundle: no keys, records, commands
     // or reasons; failures in the log with the folders and anything token-shaped masked).
@@ -1095,6 +1114,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (!question) return { decision: "unavailable" };
       log(`asking whether to allow "${question.title}"`);
       const answer = await prompt(question);
+      // A person was asked (not "later", not unavailable): one prompt today.
+      if (answer.decision !== "unavailable" && !answer.later) recordFatigue(options.dir, "prompt");
       log(`override ${answer.decision === "allow" ? "given" : answer.decision === "deny" ? "not given" : answer.later ? "not asked (no tray listening, no window): the person acts on it later" : "not available"} for "${question.title}"`);
       if (answer.decision === "allow" && answer.reason) { queueReason(options.dir, question.action_id, answer.reason); setTimeout(() => { void sendReasons(); }, 1_000); }
       // The hook writes the request or allowance after this answer; send it shortly after.
@@ -1229,9 +1250,10 @@ export const LASTS_OF_CHOICE: Readonly<Partial<Record<BlockedChoice, "once" | "1
 const CHOICES: readonly string[] = ["once", "fifteen", "hour", "tomorrow", "always", "ask", "quiet"];
 
 /** Check an answer from the tray's form: an action id, one of the choices, and a reason of at most 500 characters
- *  (control characters other than line breaks are refused; none is an empty one, enough where the workspace asks for none).
- *  The rest (offered, long enough) is checked against the block. */
-export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: BlockedChoice; reason: string } | null {
+ *  (control characters other than line breaks are refused; none is an empty one, enough where the workspace asks for none),
+ *  and what it covers (`scope`: "exact", the default, or "similar" for "Similar commands in this project", only with a length
+ *  longer than once). The rest (offered, long enough) is checked against the block. */
+export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: BlockedChoice; reason: string; scope?: "similar" } | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.action_id !== "string" || !/^[A-Za-z0-9._:-]{1,200}$/.test(r.action_id)) return null;
@@ -1239,7 +1261,10 @@ export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: B
   if (r.reason !== undefined && typeof r.reason !== "string") return null;
   const reason = (r.reason ?? "").trim();
   if (reason.length > 500 || [...reason].some((c) => { const n = c.charCodeAt(0); return (n < 32 && n !== 10 && n !== 13) || n === 127; })) return null;
-  return { action_id: r.action_id, choice: r.choice as BlockedChoice, reason };
+  if (r.scope !== undefined && r.scope !== "exact" && r.scope !== "similar") return null;
+  // Similar commands are allowed for a length; the next try alone, asking an admin and keeping it blocked are about this action.
+  if (r.scope === "similar" && (r.choice === "ask" || r.choice === "quiet" || r.choice === "once")) return null;
+  return { action_id: r.action_id, choice: r.choice as BlockedChoice, reason, ...(r.scope === "similar" ? { scope: "similar" as const } : {}) };
 }
 
 /** A choice in the tray's form: the lengths (once, 15 minutes for older terms, 1 hour, until tomorrow, 30 days or the

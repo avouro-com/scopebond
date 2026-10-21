@@ -146,6 +146,16 @@ h1 { margin: 0; font: 600 16px/1.25 "Segoe UI Variable Display", "Segoe UI", san
 .pill input:checked + span { background: var(--violet); border-color: var(--violet); color: var(--on-violet); }
 .pill input:checked + span small { color: inherit; }
 .pill input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* What to allow, where similar commands are offered: two cards, each a radio with its words and examples. */
+.scopes { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 6px; }
+.scope { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer; }
+.scope:has(input:checked) { border-color: var(--violet); }
+.scope input { margin: 2px 0 0; accent-color: var(--violet); }
+.scope input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.scope .ex { grid-column: 2; font-size: 11px; color: var(--ink-2); overflow-wrap: anywhere; }
+.scope .cmd.ex { color: inherit; padding: 4px 8px; }
+.scope code { font: 11px/1.4 "Cascadia Mono", Consolas, monospace; user-select: text; }
+.scope .admin { color: var(--warn); }
 .links { display: flex; flex-wrap: wrap; gap: 0 12px; margin-top: -4px; }
 .reason { display: grid; gap: 4px; }
 .reason textarea { font-weight: 400; background: var(--field); border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: none; min-height: 56px; user-select: text; }

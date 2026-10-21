@@ -34,7 +34,7 @@ test("the workspace's lengths: offered in the tray, applied for 1 hour and until
   try {
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
     const row = tray.recent_blocks.find((r) => r.action_id === a.id);
-    assert.deepEqual(row.offers, { once: true, fifteen: false, hour: true, tomorrow: true, quiet: true, always: true, always_days: 30, always_needs_admin: false, ask: true, reviewed: false });
+    assert.deepEqual(row.offers, { once: true, fifteen: false, hour: true, tomorrow: true, quiet: true, always: true, always_days: 30, always_needs_admin: false, ask: true, reviewed: false, similar: null });
     assert.equal(row.outcome, "unblock");
     assert.equal((await answer(dir, { action_id: a.id, choice: "fifteen", reason: REASON })).outcome, "not_offered");
     const hour = await answer(dir, { action_id: a.id, choice: "hour", reason: REASON });
@@ -56,7 +56,7 @@ test("legacy terms: hour and tomorrow are offered as false and refused", async (
   const service = await serviceFor(dir);
   try {
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
-    assert.deepEqual(tray.recent_blocks[0].offers, { once: true, fifteen: true, hour: false, tomorrow: false, quiet: true, always: true, always_days: 14, always_needs_admin: true, ask: true, reviewed: false });
+    assert.deepEqual(tray.recent_blocks[0].offers, { once: true, fifteen: true, hour: false, tomorrow: false, quiet: true, always: true, always_days: 14, always_needs_admin: true, ask: true, reviewed: false, similar: null });
     assert.equal((await answer(dir, { action_id: id, choice: "hour", reason: REASON })).outcome, "not_offered");
     assert.equal((await answer(dir, { action_id: id, choice: "tomorrow", reason: REASON })).outcome, "not_offered");
   } finally { await service.stop(); }

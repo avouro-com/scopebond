@@ -139,6 +139,35 @@ private half to a file, which goes into the `signing` environment as `UPDATER_SI
 release workflow signs the manifest with it (`manifest.mjs`); without it the release fails, because signed installs
 update themselves only to a release with a signed manifest.
 
+## Engine updates without an installer
+
+The installer carries a baseline engine: the hook inside `scopebond-agent.exe`, so a fresh install works offline and a
+computer always has an engine that needs nothing else. A newer engine can reach signed installs, per user and for every
+user, without a new installer:
+
+- **The bundle.** Each signed release also carries `scopebond-hook-bundle-<hook version>.tgz` (`hook-bundle.mjs build`:
+  `scopebond-hook.cjs`, the hook as one CommonJS file from `src/hook-bundle-main.mjs`, with LICENSE and NOTICE) and
+  `scopebond-hook-bundle-<v>.manifest.json` (`{ type, version, kid, sha256, files, built_from }`), signed in the
+  `signing` environment with the updater key (`hook-bundle.mjs sign`, the same key and keyring as the release manifest,
+  over `scopebond:hook-bundle/v1\n` and the manifest's bytes) as `<manifest>.sig`.
+- **Taking it.** When the workspace's `/v1/client-version` answer names `hook_bundle: { version, url, sha256, signature }`,
+  the agent downloads the archive and the manifest beside it, checks the signature against the updater keys it was built
+  with, the archive's and each file's SHA-256 and size, and that the version is newer than the engine in use (never an
+  older bundle; only back to the baseline, or by rolling back). It stages it under `<home>/engine/<version>/`, runs
+  `packs test --all` with the new engine against the rule packs in force (all vectors pass, and at least as many packs
+  run as with the engine in use), and only then writes `<home>/engine/current.json`.
+- **Running it.** The hook entry stays `"<exe>" hook <harness>`: the executable is the stable shim (a computer with the
+  signed install may have no Node.js to run a script). On each call it reads `current.json`, checks the bundle's
+  signature and digest again, and runs it when it is newer than the baseline; otherwise, or when it fails to start, the
+  baseline decides the call and the failure is recorded in `<home>/engine/start-failures.log`.
+- **Rolling back.** A bundle that failed to start twice since it became current is no longer loaded; the agent's next pass
+  rolls back to the bundle before it (when it still checks out) or to the baseline, and lists it in
+  `<home>/engine/bad.json` so it is never taken again. A bundle that fails its pack vectors is removed and listed the same
+  way. An installer that brings a newer baseline makes an older bundle unused.
+- **For every user.** The bundle goes to the Scopebond folder of the person the agent runs for, like the rest of their
+  data; the executable in Program Files loads only a bundle signed by the updater key it carries, so nothing put there by
+  anyone else runs. npm installs take no bundle: npm brings their hook.
+
 ## Release checklist (owner)
 
 1. Publishing a new `@scopebond/agent` to npm starts *Native release (signed)* on `main` (or: Actions → *Native release

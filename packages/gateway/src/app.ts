@@ -12,11 +12,11 @@ import type { DispatchGuard } from "./dispatch.js";
 import {
   buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash,
   minimizeIntentForEvidence, REDACTION_PROFILE,
-  CANONICALIZATION, validateReceiptContext, validateReceiptBudget, receiptMatch,
+  CANONICALIZATION, validateReceiptContext, validateReceiptBudget, validateReceiptIntel, receiptIntelMembers, receiptMatch,
 } from "./receipts.js";
 import type {
   Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
-  ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord, ReceiptPayloadContext, ReceiptBudget,
+  ActionLifecycleRecord, ReceiptContext, PriorScope, OverrideRecord, ReceiptPayloadContext, ReceiptBudget, ReceiptIntel,
 } from "./receipts.js";
 import { handleMcp } from "./mcp.js";
 import { merkleProof } from "./anchor.js";
@@ -130,12 +130,17 @@ export interface ActionOptions {
   /** A session budget's decision for this action, signed into the receipt as payload.budget (see ReceiptBudget). Checked
    *  like the context: an invalid one is refused, never signed. */
   budget?: ReceiptBudget;
+  /** What a signed plugin gave this action, signed into the receipt as `payload.pattern_id` and `payload.intel` (see
+   *  ReceiptIntel). Checked like the context: one of the wrong shape is refused, never signed. Absent: neither member. */
+  intel?: ReceiptIntel;
 }
 
 /** Options for recording a passive observation. */
 export interface ObserveOptions {
   /** Signed into the receipt as `payload.context`, as for ActionOptions. */
   context?: ReceiptPayloadContext;
+  /** Signed into the receipt as `payload.pattern_id` and `payload.intel`, as for ActionOptions. */
+  intel?: ReceiptIntel;
 }
 
 export interface Gateway {
@@ -261,6 +266,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     const deniedState: ExecutionState = observedAfter ? "observed_after" : "denied";
     assertValidIntent(req.intent);
     assertValidContext(opts?.context);
+    assertValidIntel(opts?.intel);
     if (opts?.budget !== undefined && !validateReceiptBudget(opts.budget)) throw new TypeError("invalid receipt budget: a closed object of version, scope, budget_id, budget_version, mode, operation, count, max and state");
     const ts = now();
     const ih = intentHash(req.intent);
@@ -299,6 +305,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       ...(authenticated.evidence.agent ? { evidence_class: "signed_intent" as const } : {}),
       ...(opts?.context ? { context: opts.context } : {}),
       ...(opts?.budget ? { budget: opts.budget } : {}),
+      ...receiptIntelMembers(opts?.intel),
     };
     const receiptFields = (
       realtimeResult: RealtimeResult,
@@ -561,6 +568,7 @@ export function createGateway(config: GatewayConfig): Gateway {
   async function observeAction(req: ActionRequest, options?: ObserveOptions): Promise<ObservationResult> {
     assertValidIntent(req.intent);
     assertValidContext(options?.context);
+    assertValidIntel(options?.intel);
     const ts = now();
     const ih = intentHash(req.intent);
     const minimized = minimizeIntentForEvidence(req.intent);
@@ -596,6 +604,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       attester: { kind: "gateway", kid: attester.kid },
       timestamp: ts,
       ...(options?.context ? { context: options.context } : {}),
+      ...receiptIntelMembers(options?.intel),
     }, attester);
     await store.put(receipt);
     return { observed: true, receipt };
@@ -920,6 +929,10 @@ function assertValidIntent(intent: unknown): asserts intent is Intent {
 
 function assertValidContext(context: unknown): void {
   if (context !== undefined && !validateReceiptContext(context)) throw new TypeError("invalid receipt context: a closed object of harness, harness_version, model, session_id, repository and branch (strings or null)");
+}
+
+function assertValidIntel(intel: unknown): void {
+  if (intel !== undefined && !validateReceiptIntel(intel)) throw new TypeError("invalid receipt intel: a closed object of pattern_id (64 lowercase hex) and intel (padded base64 of 1 to 4096 bytes), both optional");
 }
 
 function deriveAttesterKid(jwk: Record<string, unknown>): string {

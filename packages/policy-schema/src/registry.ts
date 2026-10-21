@@ -40,10 +40,30 @@ export const actionRegistry = registryDocument as unknown as ActionRegistry;
 export const TAXONOMY_VERSION = actionRegistry.taxonomy_version;
 
 const byId = new Map<string, ActionType>(actionRegistry.actions.map((a) => [a.id, a]));
+/** Types a signed taxonomy extension adds (taxonomy-ext.ts), consulted after the built-in registry. Empty until an engine
+ *  puts a verified extension in force. */
+let extension = new Map<string, ActionType>();
 
-/** The registered type for an id, or undefined if the id is not in the taxonomy. */
+/** The registered type for an id: the built-in registry first, then the taxonomy extension in force; undefined if neither
+ *  has it. */
 export function getActionType(id: string): ActionType | undefined {
+  return byId.get(id) ?? extension.get(id);
+}
+
+/** The built-in type for an id, ignoring any extension. */
+export function getBuiltinActionType(id: string): ActionType | undefined {
   return byId.get(id);
+}
+
+/** Put the types of a verified taxonomy extension in force (an empty list removes them). A type the built-in registry
+ *  already defines is never replaced. */
+export function setActionTypeExtension(types: readonly ActionType[]): void {
+  extension = new Map(types.filter((t) => !byId.has(t.id)).map((t) => [t.id, t]));
+}
+
+/** The extension types in force. */
+export function extensionActionTypes(): ActionType[] {
+  return [...extension.values()];
 }
 
 export interface ParamValidation {
@@ -73,7 +93,7 @@ export function validateActionParams(
   actionType: string,
   params: Record<string, unknown> = {},
 ): ParamValidation {
-  const def = byId.get(actionType);
+  const def = getActionType(actionType);
   if (!def) return { known: false, valid: false, errors: [`unknown action type "${actionType}"`] };
   const errors: string[] = [];
   for (const parameter of def.parameters) {

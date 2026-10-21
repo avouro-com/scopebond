@@ -21,7 +21,7 @@
 import type { NormalizedIntent } from "./map.js";
 import { UNKNOWN_REF } from "./shell.js";
 import { isDestructiveProgram, isProtectedBranch, pathRuleMatches, type RuleSet } from "./rules.js";
-import { isContainedDelete } from "./delete-scope.js";
+import { isContainedDelete, isRestorableDelete } from "./delete-scope.js";
 
 export type CatalogId = "I03" | "I04" | "I05" | "H01" | "H02" | "H03" | "H04" | "H05" | "H06" | "H07" | "H08" | "H09" | "H10" | "C01" | "C02";
 
@@ -96,10 +96,11 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
     if (program === "") unknown.push("program not resolved");
     else {
       ids.push("I05");
-      // A delete whose every target is inside the working folder (delete-scope.ts) is not destructive here; a destructive form
-      // of a program (destructive-forms.ts) is judged as safe-shell judges it, by `program_scope`.
+      // A delete whose every target is inside the working folder (delete-scope.ts), or that git can restore (git-restore.ts), is
+      // not destructive here; a destructive form of a program (destructive-forms.ts) is judged as safe-shell judges it, by
+      // `program_scope`.
       const scope = typeof params.program_scope === "string" && params.program_scope !== "" ? params.program_scope : program;
-      if ((isDestructiveProgram(rules, program) || isDestructiveProgram(rules, scope)) && !isContainedDelete(params)) { ids.push("H04"); coverage = "program_only"; }
+      if ((isDestructiveProgram(rules, program) || isDestructiveProgram(rules, scope)) && !isContainedDelete(params) && !isRestorableDelete(params)) { ids.push("H04"); coverage = "program_only"; }
     }
   }
   return { ids, unknown, ...(coverage ? { coverage } : {}) };

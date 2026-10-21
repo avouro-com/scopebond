@@ -13,11 +13,31 @@
 // `signature` member, so a pack signature never verifies as anything else and the reverse.
 //
 // This module defines the shape and checks it (`validatePack`). It does not interpret a pack: the hook does.
+//
+// Engine levels. The format grows only by adding fields, and each addition raises the engine level. Level 1 is the format as
+// first published. Level 2 adds `requires` on the pack, and on a rule `title`, `blockable`, `default_mode`, `safer_way` and
+// `allow_patterns`, and lets a pack emit action types a signed taxonomy extension defines (named in `requires.action_types`).
+// A pack that uses a level-2 field says `requires: { engine: 2 }`. A level-1 engine reads every such field as unknown and
+// refuses the pack as invalid, so a level-1 pack is read the same way by every engine, and a level-2 pack is never read
+// halfway. An engine skips a pack whose `requires.engine` is above its own level, or that names an action type it does not
+// know, and keeps the others (`packEngineProblem`).
 
 import { canonical } from "./canonical.js";
 import { getActionType } from "./registry.js";
+import { allowPatternErrors } from "./allow-patterns.js";
 
 export const PACK_FORMAT = "scopebond:pack/v1";
+/** The pack engine level this release implements (see "Engine levels" above). */
+export const PACK_ENGINE_LEVEL = 2;
+/** The fields only a level-2 engine reads: on the pack, and on a pack rule. */
+export const PACK_LEVEL2_FIELDS = {
+  pack: ["requires"],
+  rule: ["title", "blockable", "default_mode", "safer_way", "allow_patterns"],
+} as const;
+/** What a rule's `allow_patterns` entry may widen an allowance by. */
+export const PACK_ALLOW_PATTERN_KINDS = ["path_prefix", "path_glob", "package_name", "host", "mcp_tool"] as const;
+/** The longest texts a level-2 rule carries, and the most allow patterns one rule lists. */
+export const PACK_RULE_LIMITS = { title: 80, saferWay: 160, allowPatterns: 8, requiredTypes: 64, maxEngine: 1000 } as const;
 /** What a pack signature covers: these bytes, then the canonical pack without `signature`. */
 export const PACK_SIGNATURE_DOMAIN = "scopebond:pack/v1\n";
 
@@ -115,12 +135,35 @@ export interface PackVector {
 
 export interface PackSignature { alg: "Ed25519"; key_id: string; value: string }
 
+/** (level 2) What an engine needs to read a pack: its level, and the action types beyond the built-in registry it emits. */
+export interface PackRequires { engine: number; action_types?: string[] }
+
+/** (level 2) A bounded way a person's allowance under a rule may cover similar actions. The format checks the shape only;
+ *  what each kind matches is the engine's. */
+export interface PackAllowPattern { id: string; title: string; param: string; kind: (typeof PACK_ALLOW_PATTERN_KINDS)[number] }
+
+/** A pack rule: an `action_allowlist` clause, and (level 2) what a person reads about it and whether it may block. */
+export interface PackRule {
+  id: string;
+  type: "action_allowlist";
+  mode?: "enforce" | "monitor" | "require_approval";
+  description?: string;
+  action_types: string[];
+  param_bounds?: Record<string, unknown>;
+  title?: string;
+  blockable?: boolean;
+  default_mode?: "monitor" | "block";
+  safer_way?: string;
+  allow_patterns?: PackAllowPattern[];
+}
+
 export interface Pack {
   format: typeof PACK_FORMAT;
   id: string;
   version: string;
   issued_at: string;
   title?: string;
+  requires?: PackRequires;
   signature: PackSignature;
   grammars: PackGrammar[];
   profiles: PackProfile[];
@@ -194,10 +237,18 @@ const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 // the static check on top.
 const NESTED_REPEAT = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)[+*{]/;
 
+// ---- a rule's allow patterns ----------------------------------------------------------------------------------------------
+// The recipes a rule carries for pattern allowances ("Similar commands in this project"): their shape and check are the pattern
+// allowances module's (allow-patterns.ts).
+
 type Ctx = "shell" | "mcp";
 
 class Checker {
   readonly errors: string[] = [];
+  /** The engine level the pack is read at, and the action types its `requires` names (level 2). */
+  constructor(readonly level: number = PACK_ENGINE_LEVEL, readonly requiredTypes: ReadonlySet<string> = new Set()) {}
+  /** Level-2 fields a rule used, by where. */
+  readonly level2: string[] = [];
   fail(at: string, message: string): false { if (this.errors.length < 200) this.errors.push(`${at}: ${message}`); return false; }
 
   object(value: unknown, at: string, allowed: readonly string[], required: readonly string[] = []): value is Record<string, unknown> {
@@ -407,7 +458,7 @@ class Checker {
     if (this.string(value.action_type, `${at}.action_type`, ACTION_TYPE, 100)) {
       const type = value.action_type;
       if (PACK_RESERVED_ACTION_TYPES.includes(type)) ok = this.fail(`${at}.action_type`, `"${type}" is the call itself; a pack cannot emit it`);
-      else if (!getActionType(type)) ok = this.fail(`${at}.action_type`, `"${type}" is not a registered action type`);
+      else if (!getActionType(type) && !this.requiredTypes.has(type)) ok = this.fail(`${at}.action_type`, `"${type}" is not a registered action type (nor one the pack's requires.action_types names)`);
     } else ok = false;
     const params = value.params;
     if (typeof params !== "object" || params === null || Array.isArray(params)) ok = this.fail(`${at}.params`, "must be an object");
@@ -517,9 +568,21 @@ class Checker {
   }
 
   rule(value: unknown, at: string): boolean {
-    // Only the `action_allowlist` clause of the rule language, exactly as the policy schema defines it.
-    if (!this.object(value, at, ["id", "type", "mode", "description", "action_types", "param_bounds"], ["id", "type", "action_types"])) return false;
+    // Only the `action_allowlist` clause of the rule language, exactly as the policy schema defines it; at level 2, with
+    // what a person reads about the rule and whether it may block.
+    const fields = ["id", "type", "mode", "description", "action_types", "param_bounds", ...(this.level >= 2 ? PACK_LEVEL2_FIELDS.rule : [])];
+    if (!this.object(value, at, fields, ["id", "type", "action_types"])) return false;
     let ok = true;
+    for (const key of PACK_LEVEL2_FIELDS.rule) if (value[key] !== undefined) this.level2.push(`${at}.${key}`);
+    if (value.title !== undefined && !this.string(value.title, `${at}.title`, undefined, PACK_RULE_LIMITS.title)) ok = false;
+    if (value.safer_way !== undefined && !this.string(value.safer_way, `${at}.safer_way`, undefined, PACK_RULE_LIMITS.saferWay)) ok = false;
+    if (value.blockable !== undefined && typeof value.blockable !== "boolean") ok = this.fail(`${at}.blockable`, "must be a boolean");
+    // A rule without bounds would block every action of its types: only a rule with bounds may block.
+    if (value.blockable === true && value.param_bounds === undefined) ok = this.fail(`${at}.blockable`, "a rule that may block needs param_bounds");
+    if (value.default_mode !== undefined && value.default_mode !== "monitor" && value.default_mode !== "block") ok = this.fail(`${at}.default_mode`, "must be monitor or block");
+    if (value.default_mode === "block" && value.blockable !== true) ok = this.fail(`${at}.default_mode`, "only a blockable rule may block by default");
+    // The recipes' shape is the pattern allowances' own (allowPatternErrors); what each recipe matches is the engine's.
+    if (value.allow_patterns !== undefined) for (const error of allowPatternErrors(value.allow_patterns, `${at}.allow_patterns`)) ok = this.fail(at, error);
     if (!this.string(value.id, `${at}.id`, RULE_ID, 100)) ok = false;
     if (value.type !== "action_allowlist") ok = this.fail(`${at}.type`, "a pack rule is an action_allowlist clause");
     if (value.mode !== undefined && !["enforce", "monitor", "require_approval"].includes(value.mode as string)) ok = this.fail(`${at}.mode`, "must be enforce, monitor or require_approval");
@@ -580,12 +643,33 @@ class Checker {
   }
 }
 
-/** Check a pack document against the closed format. It checks the shape only; the signature is the engine's to verify. */
-export function validatePack(doc: unknown): PackValidation {
-  const c = new Checker();
-  if (!c.object(doc, "pack", ["format", "id", "version", "issued_at", "title", "signature", "grammars", "profiles", "rules", "vectors"],
+/** The action types a pack's `requires` names, when the member has that shape; empty otherwise. */
+function requiredTypesOf(doc: unknown): Set<string> {
+  const types = (doc as { requires?: { action_types?: unknown } } | null)?.requires?.action_types;
+  return new Set(Array.isArray(types) ? types.filter((t): t is string => typeof t === "string") : []);
+}
+
+/** What `validatePack` reads a pack as. */
+export interface PackValidationOptions {
+  /** The engine level to read the pack at (default `PACK_ENGINE_LEVEL`). At level 1 every level-2 field is unknown, so a
+   *  pack that uses one is invalid, exactly as an engine that predates level 2 reads it. */
+  engine?: number;
+}
+
+/** Check a pack document against the closed format. It checks the shape only; the signature is the engine's to verify, and
+ *  whether an engine can run the pack is `packEngineProblem`'s. */
+export function validatePack(doc: unknown, options: PackValidationOptions = {}): PackValidation {
+  const level = options.engine ?? PACK_ENGINE_LEVEL;
+  const c = new Checker(level, level >= 2 ? requiredTypesOf(doc) : new Set());
+  if (!c.object(doc, "pack", ["format", "id", "version", "issued_at", "title", ...(level >= 2 ? PACK_LEVEL2_FIELDS.pack : []), "signature", "grammars", "profiles", "rules", "vectors"],
     ["format", "id", "version", "issued_at", "signature", "grammars", "profiles", "rules", "vectors"])) return { valid: false, errors: c.errors };
   if (doc.format !== PACK_FORMAT) c.fail("pack.format", `must be "${PACK_FORMAT}"`);
+  if (doc.requires !== undefined && c.object(doc.requires, "pack.requires", ["engine", "action_types"], ["engine"])) {
+    c.integer(doc.requires.engine, "pack.requires.engine", 1, PACK_RULE_LIMITS.maxEngine);
+    if (doc.requires.action_types !== undefined && c.list(doc.requires.action_types, "pack.requires.action_types", (t, a) => c.string(t, a, ACTION_TYPE, 100), 1, PACK_RULE_LIMITS.requiredTypes)) {
+      for (const t of doc.requires.action_types as string[]) if (PACK_RESERVED_ACTION_TYPES.includes(t)) c.fail("pack.requires.action_types", `"${t}" is the call itself; a pack cannot emit it`);
+    }
+  }
   c.string(doc.id, "pack.id", PACK_ID);
   c.string(doc.version, "pack.version", VERSION, 40);
   if (c.string(doc.issued_at, "pack.issued_at", ISSUED_AT, 40) && !Number.isFinite(Date.parse(doc.issued_at))) c.fail("pack.issued_at", "is not a real time");
@@ -624,5 +708,30 @@ export function validatePack(doc: unknown): PackValidation {
       }
     }
   }
+  // A level-2 field makes a pack level 2, and the pack says so: an engine that reads `requires` then knows what it needs.
+  const used = [...c.level2, ...(requiredTypesOf(doc).size ? ["pack.requires.action_types"] : [])];
+  const engine = (doc.requires as { engine?: unknown } | undefined)?.engine;
+  if (used.length && !(typeof engine === "number" && engine >= 2)) c.fail("pack.requires", `the pack uses level-2 fields (${used.slice(0, 3).join(", ")}) and must say requires.engine 2 or more`);
   return { valid: c.errors.length === 0, errors: c.errors };
+}
+
+/** Why an engine at `level` cannot run a (valid) pack, or null when it can: its `requires.engine` is above the engine's level
+ *  (`engine_too_old`, `needs` the level it asks for), or it names an action type `knows` does not (`unknown_action_type`,
+ *  `needs` the first such type). A pack without `requires` is level 1. */
+export function packEngineProblem(pack: { requires?: PackRequires }, level: number = PACK_ENGINE_LEVEL, knows: (type: string) => boolean = (t) => getActionType(t) !== undefined):
+  { reason: "engine_too_old"; needs: number } | { reason: "unknown_action_type"; needs: string } | null {
+  const needs = pack.requires?.engine ?? 1;
+  if (needs > level) return { reason: "engine_too_old", needs };
+  const unknown = (pack.requires?.action_types ?? []).find((t) => !knows(t));
+  return unknown === undefined ? null : { reason: "unknown_action_type", needs: unknown };
+}
+
+/** The engine level a pack document asks for (`requires.engine`; 1 without it), read before the pack is validated, so an
+ *  engine can tell "too new for me" from "broken". Null when the member is there but is not a level. */
+export function packRequiredEngine(doc: unknown): number | null {
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return null;
+  const requires = (doc as { requires?: { engine?: unknown } | null }).requires;
+  if (requires === undefined) return 1;
+  const engine = requires?.engine;
+  return Number.isInteger(engine) && (engine as number) >= 1 && (engine as number) <= PACK_RULE_LIMITS.maxEngine ? engine as number : null;
 }

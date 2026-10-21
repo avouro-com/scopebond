@@ -10,10 +10,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Pack } from "@scopebond/policy-schema/pack";
-import { enforcedRuleIds, isManaged, MANAGED_DOC_FILE, type ManagedDocument, type RuleSource } from "./managed.js";
+import { enforcedRuleIds, packRuleAdjustmentsAt, isManaged, MANAGED_DOC_FILE, type ManagedDocument, type RuleSource } from "./managed.js";
 import { ENFORCEABLE_RULES, loadRules } from "./rules.js";
 import { TARGET_RULES } from "./target-rules.js";
-import { packRuleClauses, withPackRules } from "./pack-rules.js";
+import { packRuleClauses, switchablePackRules, withPackRules } from "./pack-rules.js";
 import { loadPacks } from "./pack-store.js";
 import { readBlockedServices } from "./service-rules.js";
 
@@ -38,15 +38,16 @@ export function ruleSummary(dir: string, packs?: readonly Pack[]): RuleSummary |
   try {
     const inForce = packs ?? loadPacks(dir).packs;
     const enforced = enforcedRuleIds(dir);
-    const policy = withPackRules(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8")) as { clauses?: Array<{ id?: unknown; mode?: unknown }> }, enforced, inForce);
+    const settings = packRuleAdjustmentsAt(dir);
+    const policy = withPackRules(JSON.parse(readFileSync(join(dir, "policy.json"), "utf8")) as { clauses?: Array<{ id?: unknown; mode?: unknown }> }, enforced, inForce, settings);
     const managed = isManaged(dir);
     const doc = managed ? JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument : null;
     const overrides = (loadRules(dir)?.local_overrides ?? {}) as Record<string, string>;
     const source = (id: string): RuleSource => (!managed ? "computer" : doc?.local_changes === true && overrides[id] ? "computer" : "workspace");
     // The rules a person or a workspace can turn on: the starter rules, the workspace's own, the target rules, and any pack
     // rule that blocks (a pack rule that only records counts when it is one that can be turned on).
-    const counted = new Set<string>([...ENFORCEABLE_RULES, ...WORKSPACE_CLAUSES, ...TARGET_RULES,
-      ...packRuleClauses(enforced, inForce).filter((c) => c.mode === "enforce").map((c) => c.id)]);
+    const counted = new Set<string>([...ENFORCEABLE_RULES, ...WORKSPACE_CLAUSES, ...TARGET_RULES, ...switchablePackRules(inForce),
+      ...packRuleClauses(enforced, inForce, settings).filter((c) => c.mode === "enforce").map((c) => c.id)]);
     const rules: RuleSummary["rules"] = {};
     for (const clause of policy.clauses ?? []) {
       const id = typeof clause?.id === "string" ? clause.id : "";

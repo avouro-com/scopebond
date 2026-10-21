@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scopebond.com/schema/pack-1.0.json",
   "title": "Scopebond rule pack (scopebond:pack/v1)",
-  "description": "Closed schema: an unknown field or operator anywhere makes a pack invalid. A pack is signed data, never code: command grammars and MCP profiles that derive taxonomy actions, action_allowlist rules, and the vectors every engine runs. Cross-field rules a validator also enforces (validatePack): unique ids, no program read by two grammars, registered action types only, shell-only operators only in grammars and MCP-only ones only in profiles, patterns without nested repeats.",
+  "description": "Closed schema: an unknown field or operator anywhere makes a pack invalid. A pack is signed data, never code: command grammars and MCP profiles that derive taxonomy actions, action_allowlist rules, and the vectors every engine runs. Cross-field rules a validator also enforces (validatePack): unique ids, no program read by two grammars, registered action types only, shell-only operators only in grammars and MCP-only ones only in profiles, patterns without nested repeats. Engine levels: requires and a rule's title, blockable, default_mode, safer_way and allow_patterns are level 2; a pack that uses one says requires.engine 2, and an action type it emits beyond the built-in registry is named in requires.action_types.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -41,6 +41,33 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 120
+    },
+    "requires": {
+      "description": "Level 2: what an engine needs to read this pack. A pack that uses any level-2 field says engine 2 or more (validatePack checks it).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine"
+      ],
+      "properties": {
+        "engine": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "action_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^(?!(?:shell\\.exec|mcp\\.tool\\.call)$)[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+          }
+        }
+      }
     },
     "signature": {
       "type": "object",
@@ -2267,6 +2294,72 @@
                 }
               }
             ]
+          }
+        },
+        "title": {
+          "description": "Level 2: the rule's name as a person reads it.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "blockable": {
+          "description": "Level 2: the rule may block (it needs param_bounds).",
+          "type": "boolean"
+        },
+        "default_mode": {
+          "description": "Level 2: what the rule does until a person or the workspace sets it (block only when blockable).",
+          "enum": [
+            "monitor",
+            "block"
+          ]
+        },
+        "safer_way": {
+          "description": "Level 2: a plain hint for the coding agent, added to a denial's final instruction.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "allow_patterns": {
+          "description": "Level 2: bounded ways an allowance under this rule may cover similar actions.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "title",
+              "param",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "param": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z_][a-z0-9_]{0,63}$"
+              },
+              "kind": {
+                "enum": [
+                  "path_prefix",
+                  "path_glob",
+                  "package_name",
+                  "host",
+                  "mcp_tool"
+                ]
+              }
+            }
           }
         }
       }

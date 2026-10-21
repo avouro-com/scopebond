@@ -7,7 +7,8 @@ import {
   policySchema, actionSchema, receiptSchema, legacyReceiptSchema, CLAUSE_TYPES, CLAUSE_MODES,
   VOCABULARY_VERSION, EVIDENCE_VERSION, CANONICALIZATION, EXECUTION_STATES, REALTIME_RESULTS,
   canonical, RECEIPT_CONTEXT_KEYS, sessionBudgetsSchema, SESSION_BUDGET_DEFAULT_SECONDS, SESSION_BUDGET_MODES, RECEIPT_BUDGET_STATES,
-  RECEIPT_FAILED_BOUND_PATTERN,
+  RECEIPT_FAILED_BOUND_PATTERN, RECEIPT_PATTERN_ID_PATTERN, RECEIPT_INTEL_PATTERN, RECEIPT_INTEL_MAX_BYTES, RECEIPT_INTEL_MAX_LENGTH,
+  isReceiptIntel, isReceiptPatternId,
 } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -254,6 +255,47 @@ test("receipt match vectors: valid matches validate, invalid ones do not", () =>
   for (const vector of vectors.invalid) assert.equal(conforms(receiptSchema, withMatch(vector.fields, vector.realtime_result)), false, vector.name);
   for (const name of ["bound-without-clause", "allow-with-clause", "bound-with-value", "empty-clause"]) {
     assert.ok(vectors.invalid.some((vector) => vector.name === name), name);
+  }
+});
+
+const withIntel = (fields) => {
+  const receipt = structuredClone(evidence.receipt_context.receipt);
+  Object.assign(receipt.payload, fields);
+  return receipt;
+};
+
+test("receipt pattern_id and intel are optional payload members: 64 hex, and an opaque base64 slot of at most 4 KiB", () => {
+  const payload = receiptSchema.properties.payload;
+  assert.equal(payload.required.includes("pattern_id"), false);
+  assert.equal(payload.required.includes("intel"), false);
+  assert.equal(payload.properties.pattern_id.pattern, RECEIPT_PATTERN_ID_PATTERN);
+  assert.equal(payload.properties.intel.pattern, RECEIPT_INTEL_PATTERN);
+  assert.equal(payload.properties.intel.maxLength, RECEIPT_INTEL_MAX_LENGTH);
+  assert.equal(RECEIPT_INTEL_MAX_BYTES, 4096);
+  assert.equal(RECEIPT_INTEL_MAX_LENGTH, Buffer.alloc(RECEIPT_INTEL_MAX_BYTES).toString("base64").length);
+  // The slot's contents are not described: a string, nothing more.
+  assert.equal(payload.properties.intel.type, "string");
+  assert.equal(payload.properties.intel.properties, undefined);
+  // A receipt without them (every receipt made before them) is unchanged and still valid.
+  assert.equal(conforms(receiptSchema, evidence.receipt_context.receipt), true);
+});
+
+test("receipt intel vectors: valid slots validate, invalid ones do not", () => {
+  const vectors = evidence.receipt_intel;
+  assert.ok(vectors.valid.length > 0 && vectors.invalid.length > 0);
+  for (const vector of vectors.valid) assert.equal(conforms(receiptSchema, withIntel(vector.fields)), true, vector.name);
+  for (const vector of vectors.invalid) assert.equal(conforms(receiptSchema, withIntel(vector.fields)), false, vector.name);
+  for (const name of ["slot-over-limit", "slot-not-base64", "pattern-uppercase", "slot-empty"]) {
+    assert.ok(vectors.invalid.some((vector) => vector.name === name), name);
+  }
+  assert.equal(Buffer.from(vectors.valid.find((v) => v.name === "slot-at-limit").fields.intel, "base64").length, RECEIPT_INTEL_MAX_BYTES);
+});
+
+test("isReceiptIntel and isReceiptPatternId agree with the schema on every vector", () => {
+  for (const vector of [...evidence.receipt_intel.valid, ...evidence.receipt_intel.invalid]) {
+    const schemaSays = conforms(receiptSchema, withIntel(vector.fields));
+    const ok = ("intel" in vector.fields ? isReceiptIntel(vector.fields.intel) : true) && ("pattern_id" in vector.fields ? isReceiptPatternId(vector.fields.pattern_id) : true);
+    assert.equal(ok, schemaSays, vector.name);
   }
 });
 

@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { loadConnection } from "./cloud.js";
 import { readDeliveryState, waitingUntil } from "./delivery-state.js";
 import { deliveryStalled, queueStatus } from "./delivery-report.js";
-import { readSignatureState, signatureMode, type SignatureMode, type SignatureState } from "./policy-signature.js";
+import { readSignatureState, type SignatureMode, type SignatureState } from "./policy-signature.js";
+import { signatureModeAt } from "./policy-next-key.js";
 import { samePath } from "./install.js";
 
 export const STATUS_SCHEMA = "scopebond.status.v1";
@@ -115,5 +116,5 @@ export function buildStatusJson(input: {
 
 function policySignature(dir: string, connection: ReturnType<typeof loadConnection>): StatusJson["policy_signature"] {
   const last = connection ? readSignatureState(dir) : null;
-  return { mode: signatureMode(connection), last: last?.last ?? null, reason: last?.reason ?? null };
+  return { mode: signatureModeAt(dir, connection), last: last?.last ?? null, reason: last?.reason ?? null };
 }

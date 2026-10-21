@@ -21,17 +21,29 @@
 //   - the file is there, at most 4 MiB, and its SHA-256 matches the index;
 //   - it is a valid pack (closed format; @scopebond/policy-schema `validatePack`) with the id and version the index names;
 //   - its signature verifies with a policy-signing key this release trusts (policy-keys.ts), the key's validity window holds
-//     both the pack's `issued_at` and now, and `issued_at` is not more than an hour ahead of this clock.
+//     both the pack's `issued_at` and now, and `issued_at` is not more than an hour ahead of this clock;
+//   - this engine can run it: its `requires.engine` is not above this engine's level (`packEngineLevel`), and every action
+//     type its `requires.action_types` names is known (built in, or added by the signed taxonomy extension in force,
+//     pack-taxonomy.ts); otherwise it is skipped as `engine_too_old` or `unknown_action_type`;
+//   - the workspace's signed pack list has not killed that version (`packs/sidecar/flags.json`, written by pack-sync.ts).
+//
+// The sidecar folder (`packs/sidecar`) holds what an engine that reads level 2 adds beside the index, so the index keeps the
+// shape every engine reads: `flags.json` (`{ "v": 1, "shadow": [ids], "killed": ["id@version"], "fallback": [entries] }`) and
+// `fallback/<id>@<version>.json`, the version of a pack held before the one in force, kept to fall back to when the one in
+// force is killed.
 //
 // Nothing here uses the network. `packs add` (cli-main.ts) puts a local pack file into this cache for a person at a terminal.
 
 import { createHash, verify } from "node:crypto";
 import { closeSync, constants as fsConstants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { PACK_LIMITS, packRef, packSigningInput, validatePack, type Pack } from "@scopebond/policy-schema/pack";
+import { PACK_ENGINE_LEVEL, PACK_LIMITS, packEngineProblem, packRef, packRequiredEngine, packSigningInput, validatePack, type Pack } from "@scopebond/policy-schema/pack";
+import { getActionType } from "@scopebond/policy-schema/registry";
 import { policyKeys, publicKeyFrom, type PolicyKey } from "./policy-keys.js";
 import { writeAtomic } from "./managed.js";
 import { runPackVectors, setActivePacks } from "./packs.js";
+import { activateTaxonomyExtension } from "./pack-taxonomy.js";
+import { useNextKey } from "./policy-next-key.js";
 
 export const PACKS_DIR = "packs";
 export const PACK_INDEX_FILE = "index.json";
@@ -44,7 +56,22 @@ const MAX_INDEX_BYTES = 64 * 1024;
 export interface PackIndexEntry { id: string; version: string; sha256: string; checked_at?: string }
 export interface PackIndex { v: 1; checked_at: string; packs: PackIndexEntry[] }
 
-export type PackRefusal = "invalid" | "unknown_key" | "key_not_valid" | "bad_signature" | "issued_in_future" | "missing" | "too_large" | "digest_mismatch" | "wrong_ref" | "expired";
+export type PackRefusal = "invalid" | "unknown_key" | "key_not_valid" | "bad_signature" | "issued_in_future" | "missing" | "too_large" | "digest_mismatch" | "wrong_ref" | "expired"
+  | "engine_too_old" | "unknown_action_type" | "killed";
+
+/** The environment variable that lowers the pack engine level this hook reads at (tests, and trying what an older engine
+ *  sees): an integer from 1 to `PACK_ENGINE_LEVEL`. It can never raise it. */
+export const PACK_ENGINE_ENV = "SCOPEBOND_PACK_ENGINE_LEVEL";
+
+/** The pack engine level this hook reads packs at: `PACK_ENGINE_LEVEL`, or lower when `SCOPEBOND_PACK_ENGINE_LEVEL` says so. */
+export function packEngineLevel(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[PACK_ENGINE_ENV];
+  const n = raw !== undefined && /^\d{1,4}$/.test(raw.trim()) ? Number(raw.trim()) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= PACK_ENGINE_LEVEL ? n : PACK_ENGINE_LEVEL;
+}
+
+/** What a pack check takes: the trusted keys (tests), the clock, and the engine level (default `packEngineLevel()`). */
+export interface PackCheckOptions { keys?: PolicyKey[]; now?: Date; engine?: number }
 
 export interface LoadedPacks {
   packs: Pack[];
@@ -55,6 +82,8 @@ export interface LoadedPacks {
   expiresAt: string | null;
   /** When each pack in force stops being usable, by `<id>@<version>`. */
   expires: Record<string, string>;
+  /** The ids of the packs in force that the workspace's signed list put in shadow (they record, never block). */
+  shadow?: string[];
 }
 
 /** When an index entry's version was last confirmed. */
@@ -116,41 +145,96 @@ export function readPackIndex(dir: string): PackIndex | null {
 
 export type SignatureResult = { ok: true; keyId: string } | { ok: false; reason: PackRefusal; message: string };
 
-/** Verify a pack's signature against the trusted policy-signing keys. Pure apart from reading those keys (`keys` overrides). */
-export function verifyPackSignature(pack: Pack, options: { keys?: PolicyKey[]; now?: Date } = {}): SignatureResult {
+/** Verify signed data (a pack, a taxonomy extension) against the trusted policy-signing keys: `input` is what the signature
+ *  covers, `what` names the document in messages. Pure apart from reading those keys (`keys` overrides). */
+export function verifySignedData(input: string, issuedAt: string, signature: { key_id: string; value: string }, what: string, options: { keys?: PolicyKey[]; now?: Date } = {}): SignatureResult {
   const now = (options.now ?? new Date()).getTime();
-  const issued = Date.parse(pack.issued_at);
+  const issued = Date.parse(issuedAt);
   if (!Number.isFinite(issued)) return { ok: false, reason: "invalid", message: "issued_at is not a time" };
-  if (issued > now + FUTURE_SKEW_MS) return { ok: false, reason: "issued_in_future", message: `the pack says it was issued at ${pack.issued_at}, more than an hour ahead of this computer's clock` };
-  const key = (options.keys ?? policyKeys()).find((k) => k.key_id === pack.signature.key_id);
-  if (!key) return { ok: false, reason: "unknown_key", message: `the pack names a signing key this version does not trust (${pack.signature.key_id}); update Scopebond` };
+  if (issued > now + FUTURE_SKEW_MS) return { ok: false, reason: "issued_in_future", message: `the ${what} says it was issued at ${issuedAt}, more than an hour ahead of this computer's clock` };
+  const key = (options.keys ?? policyKeys()).find((k) => k.key_id === signature.key_id);
+  if (!key) return { ok: false, reason: "unknown_key", message: `the ${what} names a signing key this version does not trust (${signature.key_id}); update Scopebond` };
   const notBefore = Date.parse(key.not_before);
   const notAfter = Date.parse(key.not_after);
   if (!(issued >= notBefore && issued <= notAfter && now >= notBefore && now <= notAfter)) {
-    return { ok: false, reason: "key_not_valid", message: `signing key ${key.key_id} is not valid for this pack (valid ${key.not_before} to ${key.not_after})` };
+    return { ok: false, reason: "key_not_valid", message: `signing key ${key.key_id} is not valid for this ${what} (valid ${key.not_before} to ${key.not_after})` };
   }
   const publicKey = publicKeyFrom(key.public_key);
   if (!publicKey) return { ok: false, reason: "unknown_key", message: `signing key ${key.key_id} could not be read` };
   let ok: boolean;
-  try { ok = verify(null, Buffer.from(packSigningInput(pack as unknown as Record<string, unknown>), "utf8"), publicKey, Buffer.from(pack.signature.value, "base64")); } catch { ok = false; }
-  return ok ? { ok: true, keyId: key.key_id } : { ok: false, reason: "bad_signature", message: "the pack's signature does not verify; it was changed, damaged or not issued by Scopebond" };
+  try { ok = verify(null, Buffer.from(input, "utf8"), publicKey, Buffer.from(signature.value, "base64")); } catch { ok = false; }
+  return ok ? { ok: true, keyId: key.key_id } : { ok: false, reason: "bad_signature", message: `the ${what}'s signature does not verify; it was changed, damaged or not issued by Scopebond` };
 }
 
-/** Check a pack document from text: the closed format, then its signature. */
-export function checkPackText(text: string, options: { keys?: PolicyKey[]; now?: Date } = {}): { ok: true; pack: Pack } | { ok: false; reason: PackRefusal; message: string } {
+/** Verify a pack's signature against the trusted policy-signing keys. Pure apart from reading those keys (`keys` overrides). */
+export function verifyPackSignature(pack: Pack, options: { keys?: PolicyKey[]; now?: Date } = {}): SignatureResult {
+  return verifySignedData(packSigningInput(pack as unknown as Record<string, unknown>), pack.issued_at, pack.signature, "pack", options);
+}
+
+/** Check a pack document from text: whether this engine's level can read it, the closed format at that level, whether it knows
+ *  every action type the pack requires, then its signature. */
+export function checkPackText(text: string, options: PackCheckOptions = {}): { ok: true; pack: Pack } | { ok: false; reason: PackRefusal; message: string } {
   if (Buffer.byteLength(text, "utf8") > PACK_LIMITS.maxBytes) return { ok: false, reason: "too_large", message: `the pack is larger than ${PACK_LIMITS.maxBytes} bytes` };
   let doc: unknown;
   try { doc = JSON.parse(text); } catch { return { ok: false, reason: "invalid", message: "the pack is not JSON" }; }
-  const shape = validatePack(doc);
+  const level = options.engine ?? packEngineLevel();
+  // A pack for a newer engine is told apart from a broken one before its shape is read at this level.
+  const needs = packRequiredEngine(doc);
+  if (needs !== null && needs > level) return { ok: false, reason: "engine_too_old", message: `the pack needs pack engine level ${needs}; this version reads level ${level}; update Scopebond` };
+  const shape = validatePack(doc, { engine: level });
   if (!shape.valid) return { ok: false, reason: "invalid", message: `the pack is not a valid scopebond:pack/v1 document (${shape.errors.slice(0, 3).join("; ")})` };
   const pack = doc as Pack;
+  const problem = packEngineProblem(pack, level, (type) => getActionType(type) !== undefined);
+  if (problem?.reason === "unknown_action_type") return { ok: false, reason: "unknown_action_type", message: `the pack emits action type ${problem.needs}, which this computer does not know (no signed taxonomy extension in force names it)` };
   const signature = verifyPackSignature(pack, options);
   return signature.ok ? { ok: true, pack } : signature;
 }
 
-/** The packs this computer may use now, and why any other was not used. Never throws. */
-export function loadPacks(dir: string, options: { keys?: PolicyKey[]; now?: Date } = {}): LoadedPacks {
+// ---- the sidecar: what level 2 adds beside the index -------------------------------------------------------------------
+
+export const PACK_SIDECAR_DIR = "sidecar";
+export const PACK_FLAGS_FILE = "flags.json";
+/** The flags the last signed pack list set: the packs in shadow, the versions it killed, and the versions to fall back to. */
+export interface PackFlags { v: 1; shadow: string[]; killed: string[]; fallback: PackIndexEntry[] }
+const EMPTY_FLAGS: PackFlags = { v: 1, shadow: [], killed: [], fallback: [] };
+export const packSidecarDir = (dir: string): string => join(packsDir(dir), PACK_SIDECAR_DIR);
+export const packFallbackFile = (dir: string, ref: string): string => join(packSidecarDir(dir), "fallback", `${ref}.json`);
+const REF = /^[a-z0-9-]{1,64}@\d{1,6}\.\d{1,6}\.\d{1,6}$/;
+
+/** The flags, or none set when the file is missing or not exactly the documented shape. */
+export function readPackFlags(dir: string): PackFlags {
+  try {
+    const read = readBounded(join(packSidecarDir(dir), PACK_FLAGS_FILE), MAX_INDEX_BYTES);
+    if (read === null || read === "too_large") return { ...EMPTY_FLAGS };
+    const doc = JSON.parse(read.text) as Record<string, unknown>;
+    const strings = (v: unknown, pattern: RegExp): string[] | null => (Array.isArray(v) && v.length <= 200 && v.every((x) => typeof x === "string" && pattern.test(x)) ? v as string[] : null);
+    const shadow = strings(doc?.shadow, /^[a-z0-9-]{1,64}$/);
+    const killed = strings(doc?.killed, REF);
+    const fallback = Array.isArray(doc?.fallback) && doc.fallback.length <= 200 ? (doc.fallback as unknown[]).filter((e): e is PackIndexEntry => {
+      const x = e as Record<string, unknown>;
+      return !!x && typeof x.id === "string" && typeof x.version === "string" && REF.test(`${x.id}@${x.version}`) && typeof x.sha256 === "string" && HEX64.test(x.sha256)
+        && typeof x.checked_at === "string" && RFC3339.test(x.checked_at);
+    }).map((x) => ({ id: x.id, version: x.version, sha256: x.sha256, checked_at: x.checked_at })) : null;
+    if (doc?.v !== 1 || !shadow || !killed || !fallback) return { ...EMPTY_FLAGS };
+    return { v: 1, shadow, killed, fallback };
+  } catch { return { ...EMPTY_FLAGS }; }
+}
+
+/** Write the flags. */
+export function writePackFlags(dir: string, flags: PackFlags): void {
+  mkdirSync(packSidecarDir(dir), { recursive: true });
+  writeAtomic(join(packSidecarDir(dir), PACK_FLAGS_FILE), `${JSON.stringify(flags, null, 2)}\n`);
+}
+
+/** The packs this computer may use now, and why any other was not used. The signed taxonomy extension held here is put in
+ *  force first (pack-taxonomy.ts), so a pack that requires one of its action types can be read. Never throws. */
+export function loadPacks(dir: string, options: PackCheckOptions = {}): LoadedPacks {
   const problems: LoadedPacks["problems"] = [];
+  // The next policy-signing key pinned here may have signed the packs (policy-next-key.ts).
+  useNextKey(dir);
+  activateTaxonomyExtension(dir, options);
+  const flags = readPackFlags(dir);
+  const killed = new Set(flags.killed);
   const index = readPackIndex(dir);
   if (!index) {
     if (existsSync(join(packsDir(dir), PACK_INDEX_FILE))) problems.push({ ref: PACK_INDEX_FILE, reason: "invalid", message: "the pack index cannot be read; no pack is used" });
@@ -170,6 +254,8 @@ export function loadPacks(dir: string, options: { keys?: PolicyKey[]; now?: Date
     const ref = `${entry.id}@${entry.version}`;
     if (seen.has(entry.id)) { problems.push({ ref, reason: "invalid", message: `the index lists ${entry.id} twice; only the first is used` }); continue; }
     seen.add(entry.id);
+    // A version the workspace's signed list killed is never used, even one held here while offline.
+    if (killed.has(ref)) { problems.push({ ref, reason: "killed", message: "the workspace withdrew this version of the pack; it is not used" }); continue; }
     // Each pack on its own clock: one that could not be renewed expires alone.
     const own = Date.parse(packCheckedAt(index, entry));
     const ownExpiresAt = new Date(own + PACK_TTL_MS).toISOString();
@@ -190,15 +276,16 @@ export function loadPacks(dir: string, options: { keys?: PolicyKey[]; now?: Date
     expires[ref] = ownExpiresAt;
   }
   const first = Object.values(expires).sort()[0];
-  return { packs, problems, expiresAt: first ?? indexExpiresAt, expires };
+  const shadow = packs.map((p) => p.id).filter((id) => flags.shadow.includes(id));
+  return { packs, problems, expiresAt: first ?? indexExpiresAt, expires, ...(shadow.length ? { shadow } : {}) };
 }
 
-/** Load the packs in this state directory and put them in force for the mapper. Never throws; on any failure no pack is in
- *  force. Returns what was loaded. */
-export function activatePacks(dir: string, options: { keys?: PolicyKey[]; now?: Date } = {}): LoadedPacks {
+/** Load the packs in this state directory and put them in force for the mapper (those in shadow record only). Never throws;
+ *  on any failure no pack is in force. Returns what was loaded. */
+export function activatePacks(dir: string, options: PackCheckOptions = {}): LoadedPacks {
   try {
     const loaded = loadPacks(dir, options);
-    setActivePacks(loaded.packs);
+    setActivePacks(loaded.packs, loaded.shadow ?? []);
     return loaded;
   } catch {
     setActivePacks([]);
@@ -208,7 +295,7 @@ export function activatePacks(dir: string, options: { keys?: PolicyKey[]; now?: 
 
 /** Put a checked pack into the cache, replacing any other version of its id, and stamp its `checked_at` (`packs add`, after a
  *  person loads a file). Every other pack keeps its own clock. The pack's own vectors must all pass first. */
-export function installPack(dir: string, text: string, options: { keys?: PolicyKey[]; now?: Date } = {}): { ok: true; pack: Pack } | { ok: false; reason: PackRefusal | "vectors_failed"; message: string } {
+export function installPack(dir: string, text: string, options: PackCheckOptions = {}): { ok: true; pack: Pack } | { ok: false; reason: PackRefusal | "vectors_failed"; message: string } {
   const checked = checkPackText(text, options);
   if (!checked.ok) return checked;
   const run = runPackVectors(checked.pack);
