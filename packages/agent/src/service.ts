@@ -394,8 +394,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     summary = connection ? await fetchComputerSummary(connection, options.fetchImpl) : null;
   };
 
-  // The Scopebond window, one at a time; and the hook's questions, asked in the tray first when one is listening (the window
-  // is their fallback).
+  // The Scopebond window, one at a time; and the hook's questions, asked only in the tray when one is listening (else the window).
   const windowPrompt = serialized(options.prompter ?? systemPrompter);
   const live = livePrompt({ fallback: windowPrompt });
   const prompt = serialized(live.prompter);
@@ -712,7 +711,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // What the tray draws, and the person's tray settings.
     "GET /tray": () => ({ tray: { ...trayState(), pending: live.current() }, settings: readTraySettings(options.dir) }),
     // The live prompt: the tray waits here for the hook's question (the one waiting now, at once when it is not the one the
-    // tray last saw), says when the person opened it (then no window opens for it), and sends the person's answer, which
+    // tray last saw), says when the person opened it, and sends the person's answer, which
     // the hook's waiting call receives. Checked as the window's answer would be; only the person at the computer sees the
     // tray's panel.
     "POST /override/wait": async (body) => {

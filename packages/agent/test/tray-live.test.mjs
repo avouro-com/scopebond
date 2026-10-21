@@ -1,9 +1,8 @@
-// The live prompt: when the hook asks during a coding session and a tray is listening, the question waits in the tray; the
-// person answers there, or, when they do not open it in time, the Scopebond window opens for the time left. With no tray
-// listening the window opens at once, as before.
+// The live prompt: when the hook asks during a coding session and a tray is listening, the question waits in the tray for the
+// hook's whole wait and the person answers there; no Scopebond window ever opens for it. One block, one question.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { livePrompt } from "../dist/live-prompt.js";
+import { livePrompt, promptRoute } from "../dist/live-prompt.js";
 import { parseQuestion, singleChoice, questionText, windowsScript } from "../dist/prompt.js";
 import { callAgent } from "../dist/index.js";
 import { computer, serviceFor } from "./tray-helpers.mjs";
@@ -48,21 +47,28 @@ test("a listening tray gets the question, and the person's answer from its form 
   assert.equal(live.answer({ action_id: q.action_id, choice: "once", reason: REASON }).outcome, "gone", "answered once");
 });
 
-test("not opened in the tray in time: withdrawn, and the window opens for the time that is left", async () => {
+test("where the question goes: a listening tray always, and the window never beside it", () => {
+  assert.equal(promptRoute({ trayListening: true, windowAllowed: true }), "tray");
+  assert.equal(promptRoute({ trayListening: true, windowAllowed: false }), "tray");
+  assert.equal(promptRoute({ trayListening: false, windowAllowed: true }), "window");
+});
+
+test("not opened in the tray: it stays there for the hook's whole wait, no window opens, and nothing is allowed", async () => {
   const shown = [];
-  const live = livePrompt({ fallback: async (q) => { shown.push(q); return { decision: "allow", reason: REASON, lasts: "once" }; }, openWithin: () => 50, minWindowMs: 1_000 });
+  const live = livePrompt({ fallback: async (q) => { shown.push(q); return { decision: "allow", reason: REASON, lasts: "once" }; } });
   const waited = live.wait(null, 5_000);
-  const asked = live.prompter(question({ timeout_ms: 20_000 }));
-  await waited;
-  assert.deepEqual(await asked, { decision: "allow", reason: REASON, lasts: "once" });
-  assert.equal(shown.length, 1);
-  assert.ok(shown[0].timeout_ms > 19_000 && shown[0].timeout_ms <= 20_000, `the time left: ${shown[0].timeout_ms}`);
-  assert.equal(live.current(), null, "the tray no longer shows it");
+  const asked = live.prompter(question({ timeout_ms: 600 }));
+  const q = await waited;
+  await later(400);
+  assert.equal(live.current()?.action_id, q.action_id, "still waiting in the tray after a third of the wait");
+  assert.deepEqual(await asked, { decision: "deny" });
+  assert.equal(shown.length, 0, "never a window beside the tray");
+  assert.equal(live.current(), null);
 });
 
 test("opened in the tray: no window; unanswered at the hook's deadline, nothing is allowed", async () => {
   let shown = 0;
-  const live = livePrompt({ fallback: async () => { shown += 1; return { decision: "allow", reason: REASON }; }, openWithin: () => 30 });
+  const live = livePrompt({ fallback: async () => { shown += 1; return { decision: "allow", reason: REASON }; }});
   const waited = live.wait(null, 5_000);
   const asked = live.prompter({ ...question(), timeout_ms: 300 });
   const q = await waited;

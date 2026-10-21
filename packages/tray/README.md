@@ -56,9 +56,8 @@ PowerShell tray.
     the hook asks the agent, and the agent hands the question to the tray: a notification ("Blocked: git push --force
     origin release/2.4 · Claude Code is waiting for your answer") with *Unblock…* or *Ask to unblock…*, and at the top of
     *Blocked* the question with the seconds left and the same form. The answer goes back to the hook's waiting call, so
-    the coding agent goes on at once. If the person does not open the question in the tray soon (a third of the hook's
-    wait, ten seconds at most), the Scopebond window opens for the time left, as it always did; with no tray running it
-    opens at once. Unanswered when the hook stops waiting, nothing is allowed.
+    the coding agent goes on at once. The question stays in the tray for the hook's whole wait, and no Scopebond window
+    opens beside it. Unanswered when the hook stops waiting, nothing is allowed.
   - The footer says how many actions were checked today and opens the workspace in Scopebond Cloud.
   - **Settings** (the gear): notifications, *Start with Windows*, *This computer* (the rows the agent reports: rules,
     delivery, today, version), the model's other actions (*Check now*, *Send records now*…), *Copy diagnostics*, *Open logs

@@ -1,9 +1,8 @@
 // The live prompt in the tray. When the hook asks the agent during a coding session (`POST /override`) and a tray is
-// listening, the agent publishes the question to it instead of opening the Scopebond window at once: the tray shows a
-// notification and its panel's form, and the person answers there. If the person has not opened the question in the tray
-// soon (a third of the hook's wait, ten seconds at most), the agent withdraws it and opens the Scopebond window for the time
-// that is left, as it always did. With no tray listening (an npm install, a tray not running) nothing changes: the window
-// opens at once. Either way the answer comes only from the person: the tray's form or the window.
+// listening, the agent publishes the question to it and never opens the Scopebond window for it: the tray shows a
+// notification and its panel's form, and the person answers there for the hook's whole wait. One block is one question, in
+// one place. With no tray listening (an npm install, a tray not running) the window opens at once instead. Either way the
+// answer comes only from the person: the tray's form or the window.
 
 import { toolName } from "./tray-model.js";
 import type { OverrideAnswer, OverrideQuestion, Prompter } from "./prompt.js";
@@ -21,19 +20,19 @@ export interface LiveQuestion {
   offers: { once: boolean; fifteen: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean; reviewed: boolean };
   /** When the hook stops waiting (RFC 3339). */
   deadline: string;
-  /** The person opened it in the tray (so the window does not open). */
+  /** The person opened it in the tray. */
   opened: boolean;
 }
 
 type LiveChoice = "once" | "fifteen" | "always" | "ask";
 
 export interface LivePrompt {
-  /** Ask the person: in the tray when one is listening, else (or when they do not open it in time) in the window. */
+  /** Ask the person: in the tray when one is listening (only there), else in the window. */
   prompter: Prompter;
   /** The tray's long wait: the question waiting now, at once if it is not the one the tray last saw (`seen`), else when it
    *  changes or `ms` pass. */
   wait(seen: string | null, ms: number): Promise<LiveQuestion | null>;
-  /** The person opened the question in the tray: no window for it. */
+  /** The person opened the question in the tray. */
   open(actionId: string): boolean;
   /** The person's answer from the tray's form, checked against the question. */
   answer(body: unknown, osUser?: string): { ok: true; choice: LiveChoice; reviewed: boolean; always_days: number } | { ok: false; outcome: "gone" | "invalid" | "not_offered" | "reason_short"; text: string };
@@ -41,10 +40,18 @@ export interface LivePrompt {
   close(): void;
 }
 
-/** How long the tray has to show that the person opened the question before the window opens instead. */
-const openWithinMs = (timeoutMs: number): number => Math.min(10_000, Math.round(timeoutMs / 3));
 /** A tray counts as listening while it waits, and for this long after its last wait returned (it waits again at once). */
 const LISTENING_GRACE_MS = 5_000;
+
+/** Where the hook's question goes: `tray` when a tray is listening (for the hook's whole wait; no window ever opens beside
+ *  it, so one block never asks twice), else `window` when the Scopebond window may open. */
+export type PromptRoute = "tray" | "window";
+
+/** Decide where to ask the person about one block. A listening tray always wins. */
+export function promptRoute(input: { trayListening: boolean; windowAllowed: boolean }): PromptRoute {
+  if (input.trayListening) return "tray";
+  return "window";
+}
 
 interface Pending {
   question: OverrideQuestion;
@@ -53,9 +60,8 @@ interface Pending {
   timers: Array<ReturnType<typeof setTimeout>>;
 }
 
-export function livePrompt(options: { fallback: Prompter; now?: () => number; openWithin?: (timeoutMs: number) => number; minWindowMs?: number }): LivePrompt {
-  const openBy = options.openWithin ?? openWithinMs;
-  const minWindow = options.minWindowMs ?? 5_000;
+export function livePrompt(options: { fallback: Prompter; now?: () => number; window?: () => boolean }): LivePrompt {
+  const windowAllowed = options.window ?? (() => true);
   const now = options.now ?? Date.now;
   let pending: Pending | null = null;
   let waiting = 0;
@@ -85,23 +91,14 @@ export function livePrompt(options: { fallback: Prompter; now?: () => number; op
   };
 
   const prompter: Prompter = async (q) => {
-    if (!listening()) return options.fallback(q);
+    if (promptRoute({ trayListening: listening(), windowAllowed: windowAllowed() }) === "window") return options.fallback(q);
     const start = now();
     const deadline = start + q.timeout_ms;
     return new Promise<OverrideAnswer>((resolve) => {
       const p: Pending = { question: q, published: publish(q, deadline), resolve, timers: [] };
       pending = p;
       changed();
-      // Not opened in the tray in time: the window, for the time that is left.
-      p.timers.push(setTimeout(() => {
-        if (pending !== p || p.published.opened) return;
-        pending = null;
-        changed();
-        const left = deadline - now();
-        if (left < minWindow) { finish(p, { decision: "deny" }); return; }
-        options.fallback({ ...q, timeout_ms: left }).then((answer) => finish(p, answer), () => finish(p, { decision: "unavailable" }));
-      }, openBy(q.timeout_ms)));
-      // Opened but not answered: as the window does at its timeout, nothing is allowed.
+      // Not answered in the tray by the hook's deadline: as the window does at its timeout, nothing is allowed.
       p.timers.push(setTimeout(() => { if (pending === p) finish(p, { decision: "deny" }); }, q.timeout_ms));
     });
   };

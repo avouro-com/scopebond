@@ -279,17 +279,16 @@ The tray's own panel answers earlier blocks and lists what came of them, over th
   workspace that does not take it refuses it once and is not asked again; the allowance stays ended here.
 
 The live prompt: when the hook asks during a coding session (`POST /override`) and a tray is listening, the question waits
-in the tray first.
+in the tray, and only there: no Scopebond window opens beside it, so one block asks once.
 
 - `POST /override/wait` with `{ seen }`: the tray's long wait. It answers `{ question }` at once when the question waiting
   now is not the one the tray last saw, else when it changes or after 20 s. The question has the action as the window
   shows it, the rule's name, the coding tool, what the workspace lets the person do (`offers`, with `reviewed`), the
   shortest reason and the `deadline` (when the hook stops waiting). `GET /tray` carries it as `pending`.
-- `POST /override/open` with `{ action_id }`: the person opened it in the tray; no window opens for it.
+- `POST /override/open` with `{ action_id }`: the person opened it in the tray.
 - `POST /override/answer` with `{ action_id, choice, reason }`: the person's answer, checked as the window's would be,
-  becomes the hook's answer. If the person does not open the question in the tray within a third of the hook's wait (ten
-  seconds at most), it is withdrawn and the Scopebond window opens for the time left; with no tray listening the window
-  opens at once, as before. Unanswered at the deadline, nothing is allowed.
+  becomes the hook's answer. The question stays in the tray for the hook's whole wait; unanswered at the deadline,
+  nothing is allowed. With no tray listening the window opens at once, as before.
 
 ## Status
 
