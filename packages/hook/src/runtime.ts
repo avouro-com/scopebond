@@ -28,6 +28,7 @@ import type { SessionBudgetGuard } from "./session-budgets.js";
 import { policyOptsIntoTargets } from "./target-rules.js";
 import { blockedPackagePattern, blockedServiceKindOf, readBlockedServices, unreadablePackageKey, BLOCKED_SERVICE_REASON, type BlockedService } from "./service-rules.js";
 import { containedDeletesSentence, withProgramScope } from "./delete-scope.js";
+import { DESTRUCTIVE_FORMS, DESTRUCTIVE_FORMS_SENTENCE } from "./destructive-forms.js";
 export { policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
@@ -199,10 +200,19 @@ const PROTECTED_READ = "^" + [
 export const DESTRUCTIVE = [
   "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "shred", "truncate", "unlink", "wipe", "srm",
   "del", "rd", "rmdir", "erase", "deltree", "format", "diskpart", "remove-item", "ri", "clear-content", "clc", "stop-computer", "restart-computer",
+  "format-volume", "clear-disk",
 ];
+/** The list before it held the PowerShell disk cmdlets: a policy that carries its pattern is upgraded on load. */
+const DESTRUCTIVE_PREV = DESTRUCTIVE.slice(0, -2);
+/** The safe-shell pattern for a list of programs: deny a listed program alone (any case, with or without an executable suffix)
+ *  and the destructive forms (destructive-forms.ts), which are always on it; an empty program fails `.+`. */
+export const safeShellPattern = (programs: readonly string[], forms: readonly string[] = DESTRUCTIVE_FORMS): string =>
+  `^(?!(?:${programs.map(ci).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?$)${forms.length ? `(?!(?:${forms.map(ci).join("|")})$)` : ""}.+`;
 // Bound on `program_scope` (delete-scope.ts): the program, with `/contained` after it for a delete whose every target is
 // inside the working folder. The pattern denies a listed program alone, so a contained delete is the one form that passes.
-const SAFE_SHELL = `^(?!(?:${DESTRUCTIVE.map(ci).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?$).+`;
+const SAFE_SHELL = safeShellPattern(DESTRUCTIVE);
+/** What the starter's safe-shell pattern was before the destructive forms and the disk cmdlets joined it. */
+const SAFE_SHELL_PREV = safeShellPattern(DESTRUCTIVE_PREV, []);
 /** The parameter safe-shell bounds. Earlier policies bound `program` with the same pattern. */
 export const SAFE_SHELL_PARAM = "program_scope";
 const CONTAINED_DELETES = containedDeletesSentence(DESTRUCTIVE);
@@ -222,6 +232,7 @@ const LEGACY_STARTER_PATTERNS: Record<string, string> = {
   [GUARDRAIL_WRITE_PATTERN_PREV]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_WRITE_PATTERN_PREV2]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_WRITE_PATTERN_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
+  [SAFE_SHELL_PREV]: SAFE_SHELL,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+": SAFE_SHELL,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+": SAFE_SHELL,
@@ -268,7 +279,7 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
       {
         id: "safe-shell", type: "action_allowlist", mode: mode("safe-shell"), action_types: ["shell.exec"],
         param_bounds: { [SAFE_SHELL_PARAM]: { pattern: SAFE_SHELL } },
-        description: `Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. ${CONTAINED_DELETES} An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.`,
+        description: `Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content, Format-Volume, Clear-Disk) — in any case and with or without .exe. ${CONTAINED_DELETES} ${DESTRUCTIVE_FORMS_SENTENCE} An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.`,
       },
       {
         id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],

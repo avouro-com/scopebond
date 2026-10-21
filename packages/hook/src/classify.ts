@@ -94,8 +94,10 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
     if (program === "") unknown.push("program not resolved");
     else {
       ids.push("I05");
-      // A delete whose every target is inside the working folder (delete-scope.ts) is not destructive here.
-      if (isDestructiveProgram(rules, program) && !isContainedDelete(params)) { ids.push("H04"); coverage = "program_only"; }
+      // A delete whose every target is inside the working folder (delete-scope.ts) is not destructive here; a destructive form
+      // of a program (destructive-forms.ts) is judged as safe-shell judges it, by `program_scope`.
+      const scope = typeof params.program_scope === "string" && params.program_scope !== "" ? params.program_scope : program;
+      if ((isDestructiveProgram(rules, program) || isDestructiveProgram(rules, scope)) && !isContainedDelete(params)) { ids.push("H04"); coverage = "program_only"; }
     }
   }
   return { ids, unknown, ...(coverage ? { coverage } : {}) };

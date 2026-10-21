@@ -11,3 +11,5 @@ A workspace can now name exceptions for every rule that takes them, in Monitor a
 An `action_allowlist` clause may carry `exceptions`, sets of bounds that excuse an action from the clause's `param_bounds` when it meets every bound of one set; a delete that reaches outside the working folder records those targets as `delete_targets`.
 
 A bare `git push` or `git push --force-with-lease` whose current branch cannot be read is now judged by the branch git names as its upstream, and is still denied when git cannot tell.
+
+safe-shell now also denies a file-system maker by its family name (`mkfs.<type>`), the PowerShell disk cmdlets `Format-Volume` and `Clear-Disk`, removing every scheduled job (`crontab -r`), and a recursive `chmod`, `chown` or `chgrp` of the whole disk, the home folder or a system folder, while their everyday forms stay allowed.

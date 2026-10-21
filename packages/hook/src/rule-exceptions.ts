@@ -117,10 +117,11 @@ export function validRuleExceptions(ruleId: string, value: unknown): value is Ru
 }
 
 /** The bounds destructive-shell's exceptions put on a shell command: its program as safe-shell judges it (`program_scope`, in
- *  any case, with or without an executable suffix), and every target a delete reaches outside the working folder. */
+ *  any case, with or without an executable suffix, and its destructive forms: `crontab` covers `crontab/remove-all`), and
+ *  every target a delete reaches outside the working folder. */
 export function shellExceptionBounds(list: readonly RuleException[]): ExceptionBounds[] {
   return list.filter((e) => e.programs?.length).map((e) => ({
-    program_scope: { pattern: `^(?:${e.programs!.map((p) => ci(escapeRegex(p))).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?$` },
+    program_scope: { pattern: `^(?:${e.programs!.map((p) => ci(escapeRegex(p))).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?(?:/(?:remove-all|system))?$` },
     ...(e.targets?.length ? { delete_targets: { items: { pattern: `^(?:${e.targets.map(folderPattern).join("|")})$` }, match: "all" as const } } : {}),
   }));
 }

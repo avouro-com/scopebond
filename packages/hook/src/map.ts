@@ -19,6 +19,7 @@ import { derivePackMcp, derivePackTargets, type PackAction } from "./packs.js";
 import { packagesToCheck } from "./typed-ops.js";
 import { deriveInstalls, deriveSettingsInstalls, MCP_SETTINGS_FILE } from "./typed-install.js";
 import { deleteVerdicts, programScope, type DeleteVerdict } from "./delete-scope.js";
+import { destructiveForm } from "./destructive-forms.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -1575,11 +1576,12 @@ const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 
 /** A simple command's intents with `program_scope` on its shell.exec (what safe-shell judges: delete-scope.ts). A delete whose
  *  every target is contained also records each target as a write, so the file rules (protected places, workspace roots) judge
- *  what it removes. */
-function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, cwd?: string): Mapped[] {
+ *  what it removes. A destructive form of a program (destructive-forms.ts: `mkfs.ext4`, `crontab -r`, a recursive `chmod`
+ *  of a system folder) is judged as that form. */
+function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, cwd?: string, form?: string | null): Mapped[] {
   // A delete that reaches outside the working folder also carries those targets, for a workspace's exception to compare.
   const out = mapped.map((m) => (m.intent.action_type === "shell.exec"
-    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict), ...(verdict?.targets ? { delete_targets: verdict.targets } : {}) } } }
+    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: form ?? programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict), ...(verdict?.targets ? { delete_targets: verdict.targets } : {}) } } }
     : m));
   if (verdict?.scope !== "contained") return out;
   const seen = new Set(out.filter((m) => m.intent.action_type === "file.write").map((m) => String(m.intent.params.path)));
@@ -1669,7 +1671,7 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
     const vars: Variables = new Map();
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir), deletes.get(sc), cwd);
+      const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir), deletes.get(sc), cwd, destructiveForm(sc, dir, cwd));
       const kept = filesOnly ? mapped.filter(isFile) : mapped;
       out.push(...kept);
       // The command read with the values its variables may hold, and in each other folder it may run in: the file effects and
