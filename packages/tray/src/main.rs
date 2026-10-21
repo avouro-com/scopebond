@@ -15,7 +15,7 @@ use scopebond_tray::icon::{self, IconState};
 use scopebond_tray::menu::{self, AgentLink, Autostart, Command, Entry, MenuContext};
 use scopebond_tray::live::{self, LiveWatch};
 use scopebond_tray::model::{LiveQuestion, Notifications, TrayAction, TrayAnswer};
-use scopebond_tray::notify::{Kind, Notifier, RequestWatch, Situation, Toast};
+use scopebond_tray::notify::{update_toast, Kind, Notifier, RequestWatch, Situation, Toast};
 use scopebond_tray::panel::{self, Area, PANEL_HEIGHT, PANEL_WIDTH};
 use scopebond_tray::supervise::{self, Decision, Observation, Supervisor};
 use scopebond_tray::{log, win};
@@ -156,10 +156,26 @@ fn autostart_state() -> Autostart {
 /// The person's own choice about starting with Windows, kept in the Scopebond folder: an upgrade of the installer puts
 /// the Run value back, and the tray takes it out again when the person had turned it off.
 const TRAY_SETTINGS: &str = "tray-settings.json";
+/// In the tray's settings file: the version whose "Updated to …" was told (once per version).
+const TOLD_UPDATE: &str = "told_update";
+
+/// The tray's settings file as a JSON object (empty when there is none, or it cannot be read).
+fn tray_settings(home: &Path) -> serde_json::Map<String, Value> {
+    match std::fs::read(home.join(TRAY_SETTINGS)).ok().and_then(|text| serde_json::from_slice::<Value>(&text).ok()) {
+        Some(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// Set one value in the tray's settings file, keeping the others.
+fn save_tray_setting(home: &Path, key: &str, value: Value) {
+    let mut settings = tray_settings(home);
+    settings.insert(key.to_string(), value);
+    let _ = std::fs::write(home.join(TRAY_SETTINGS), format!("{}\n", Value::Object(settings)));
+}
 
 fn start_with_windows_choice(home: &Path) -> Option<bool> {
-    let text = std::fs::read(home.join(TRAY_SETTINGS)).ok()?;
-    serde_json::from_slice::<Value>(&text).ok()?.get("start_with_windows")?.as_bool()
+    tray_settings(home).get("start_with_windows")?.as_bool()
 }
 
 fn set_start_with_windows(home: &Path, on: bool) -> bool {
@@ -170,7 +186,7 @@ fn set_start_with_windows(home: &Path, on: bool) -> bool {
     } else {
         win::delete_user_value(win::RUN_KEY, "Scopebond")
     };
-    let _ = std::fs::write(home.join(TRAY_SETTINGS), format!("{}\n", json!({ "start_with_windows": on })));
+    save_tray_setting(home, "start_with_windows", json!(on));
     done
 }
 
@@ -419,7 +435,12 @@ fn notify(app: &AppHandle, shared: &Arc<Shared>, answer: Option<&TrayAnswer>, li
             (IconState::Working, String::new(), Vec::new())
         }
     };
-    let situation = Situation { protection_off: off };
+    // The first sign-in: nothing about the state while it waits, "Connected to …" once it is done.
+    let situation = Situation {
+        protection_off: off,
+        first_sign_in: answer.is_some_and(|a| a.tray.first_sign_in),
+        workspace: answer.and_then(|a| a.tray.workspace.as_deref()),
+    };
     for toast in lock(&shared.notifier).observe(state, &headline, &blocks, setting, situation, now) {
         show_toast(toast, Some((app.clone(), shared.clone())));
     }
@@ -427,6 +448,18 @@ fn notify(app: &AppHandle, shared: &Arc<Shared>, answer: Option<&TrayAnswer>, li
     if let Some(a) = answer {
         for toast in lock(&shared.request_watch).observe(&a.tray.asked, setting) {
             show_toast(toast, Some((app.clone(), shared.clone())));
+        }
+    }
+    // "Updated to Scopebond 0.11.5", once per version (remembered in the tray's settings file, so a restart of the tray does
+    // not tell it again).
+    if let Some(updated) = answer.and_then(|a| a.tray.updated.as_ref()) {
+        let home = shared.client.home();
+        let told = tray_settings(home).get(TOLD_UPDATE).and_then(Value::as_str).map(str::to_string);
+        if let Some((version, toast)) = update_toast(Some(updated), told.as_deref(), setting) {
+            save_tray_setting(home, TOLD_UPDATE, json!(version));
+            if let Some(toast) = toast {
+                show_toast(toast, None);
+            }
         }
     }
 }
@@ -479,7 +512,7 @@ fn open_question(shared: &Arc<Shared>, action_id: &str) {
 fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
     thread::spawn(move || {
         let mut t = tauri_winrt_notification::Toast::new("Avouro.Scopebond").title(&toast.title).text1(&toast.text);
-        if matches!(toast.kind, Kind::Recovered | Kind::Block | Kind::Request) {
+        if matches!(toast.kind, Kind::Recovered | Kind::Block | Kind::Request | Kind::Connected | Kind::Updated) {
             t = t.sound(None);
         }
         match (toast.kind, panel) {

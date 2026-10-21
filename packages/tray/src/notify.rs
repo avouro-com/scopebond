@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use crate::icon::IconState;
 use std::collections::HashMap;
 
-use crate::model::{AskedItem, Notifications, RecentBlock};
+use crate::model::{AskedItem, Notifications, RecentBlock, Updated};
 use crate::panel::block_button;
 
 /// "Needs attention" must last this long before it is worth a notification.
@@ -43,6 +43,10 @@ pub enum Kind {
     Block,
     /// An admin answered one of the person's requests.
     Request,
+    /// The first sign-in finished: "Connected to <workspace>".
+    Connected,
+    /// The client was updated: "Updated to Scopebond 0.11.5".
+    Updated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,10 +62,28 @@ pub struct Toast {
 
 /// What the tray knows besides the state, for the notifications about it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Situation {
+pub struct Situation<'a> {
     /// Supervision could not bring the agent back (two failed restarts within ten minutes): the problem told is that
     /// protection is off, with *Restart it*.
     pub protection_off: bool,
+    /// This computer's first sign-in is still to come (the agent's `first_sign_in`): nothing about the state is told.
+    pub first_sign_in: bool,
+    /// The workspace's name, for "Connected to …".
+    pub workspace: Option<&'a str>,
+}
+
+/// After the first sign-in, "Connected to …" waits at most this long for the workspace's name.
+pub const NAME_WAIT: Duration = Duration::from_secs(60);
+
+/// The one notification after the first sign-in, in place of "Scopebond is protecting again".
+pub fn connected_toast(workspace: Option<&str>) -> Toast {
+    Toast {
+        kind: Kind::Connected,
+        title: cut(&format!("Connected to {}", workspace.unwrap_or("your workspace")), 120),
+        text: "Scopebond is set up on this computer and uses your workspace's rules.".into(),
+        unblock: None,
+        button: None,
+    }
 }
 
 /// The button of the "protection is off" notification: it starts the agent at once.
@@ -135,6 +157,26 @@ fn cut(s: &str, max: usize) -> String {
     if s.chars().count() <= max { s.to_string() } else { s.chars().take(max - 1).chain(std::iter::once('…')).collect() }
 }
 
+/// The one notification after an update, once per version: "Updated to Scopebond 0.11.5". `told` is the version already
+/// told about (the tray keeps it in its own settings file). The version to remember comes back with it, also when
+/// notifications are off: nothing is shown then, nor later.
+pub fn update_toast(updated: Option<&Updated>, told: Option<&str>, setting: Notifications) -> Option<(String, Option<Toast>)> {
+    let updated = updated?;
+    let to = updated.to.trim();
+    if to.is_empty() || told == Some(to) {
+        return None;
+    }
+    let from = updated.from.trim();
+    let toast = Toast {
+        kind: Kind::Updated,
+        title: cut(&format!("Updated to Scopebond {to}"), 120),
+        text: if from.is_empty() { "Nothing for you to do.".into() } else { cut(&format!("Updated from {from}. Nothing for you to do."), 200) },
+        unblock: None,
+        button: None,
+    };
+    Some((to.to_string(), (setting != Notifications::Off).then_some(toast)))
+}
+
 #[derive(Debug, Default)]
 pub struct Notifier {
     /// The worse state last told about, until protected again.
@@ -150,6 +192,10 @@ pub struct Notifier {
     over_since: Option<Instant>,
     /// When the last summary was shown.
     last_summary: Option<Instant>,
+    /// This computer's first sign-in was seen waiting, and "Connected to …" is not told yet.
+    signing_in: bool,
+    /// Since when the first sign-in has been done (waiting to be protected, and for the workspace's name).
+    connected_since: Option<Instant>,
 }
 
 impl Notifier {
@@ -158,9 +204,26 @@ impl Notifier {
     }
 
     /// Look at the state now; the notifications to show, if any.
-    pub fn observe(&mut self, state: IconState, headline: &str, blocks: &[RecentBlock], setting: Notifications, situation: Situation, now: Instant) -> Vec<Toast> {
+    pub fn observe(&mut self, state: IconState, headline: &str, blocks: &[RecentBlock], setting: Notifications, situation: Situation<'_>, now: Instant) -> Vec<Toast> {
         let mut out = Vec::new();
-        if rank(state) >= 2 {
+        if situation.first_sign_in {
+            // Not signed in yet is not a problem (the panel says what to do): nothing about the state is told meanwhile.
+            self.signing_in = true;
+            self.connected_since = None;
+            self.worse_since = None;
+        } else if self.signing_in {
+            // The first sign-in finished: "Connected to …" once, in place of "protecting again", once it is protected (with
+            // the workspace's name, which may come a moment later).
+            let since = *self.connected_since.get_or_insert(now);
+            let workspace = situation.workspace.map(str::trim).filter(|w| !w.is_empty());
+            if state == IconState::Protected && (workspace.is_some() || now.duration_since(since) >= NAME_WAIT) {
+                out.push(connected_toast(workspace));
+                self.signing_in = false;
+                self.connected_since = None;
+                self.told = None;
+            }
+        }
+        if rank(state) >= 2 && !situation.first_sign_in {
             self.worse_since.get_or_insert(now);
         } else {
             self.worse_since = None;
@@ -177,7 +240,7 @@ impl Notifier {
                 }
             }
             self.told = Some(state);
-        } else if state == IconState::Protected && self.told.is_some() {
+        } else if state == IconState::Protected && self.told.is_some() && !situation.first_sign_in {
             out.push(Toast { kind: Kind::Recovered, title: "Scopebond".into(), text: "Scopebond is protecting again".into(), unblock: None, button: None });
             self.told = None;
         }
@@ -208,7 +271,7 @@ impl Notifier {
             self.over_since = None;
         }
         if setting == Notifications::Off {
-            out.retain(|t| matches!(t.kind, Kind::Problem | Kind::Recovered));
+            out.retain(|t| matches!(t.kind, Kind::Problem | Kind::Recovered | Kind::Connected));
         }
         out
     }
@@ -371,6 +434,94 @@ mod tests {
         // Any other problem is told in the agent's words.
         let mut other = Notifier::new();
         assert_eq!(other.observe(Problem, "Not connected to your workspace", &[], Blocks, Situation::default(), at(0))[0].text, "Not connected to your workspace");
+    }
+
+    fn kinds(toasts: &[Toast]) -> Vec<Kind> {
+        toasts.iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn nothing_about_the_state_while_the_first_sign_in_waits_then_connected_once() {
+        let mut n = Notifier::new();
+        let start = Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        let first = Situation { first_sign_in: true, ..Default::default() };
+        // Not signed in yet (shown as not connected): no problem told, however long.
+        for s in 0..1000 {
+            assert!(n.observe(Disconnected, "Not signed in to a workspace yet", &[], Blocks, first, at(s)).is_empty(), "{s}");
+        }
+        // Signing in (working), then signed in: "Connected to Avouro" once it is protected, and no "protecting again".
+        assert!(n.observe(Working, "Approve this computer in your workspace: code BCDF-GHJK", &[], Blocks, first, at(1000)).is_empty());
+        let done = Situation { workspace: Some("Avouro"), ..Default::default() };
+        assert!(n.observe(Working, "Checking the rules", &[], Blocks, done, at(1010)).is_empty(), "not protected yet");
+        let t = n.observe(Protected, "Protected", &[], Blocks, done, at(1020));
+        assert_eq!(kinds(&t), [Kind::Connected]);
+        assert_eq!(t[0].title, "Connected to Avouro");
+        assert_eq!(t[0], connected_toast(Some("Avouro")));
+        for s in 1021..1100 {
+            assert!(n.observe(Protected, "Protected", &[], Blocks, done, at(s)).is_empty(), "once");
+        }
+        // Later problems are told as usual.
+        assert_eq!(kinds(&n.observe(Problem, "Not connected to your workspace", &[], Blocks, done, at(1200))), [Kind::Problem]);
+    }
+
+    #[test]
+    fn connected_waits_a_moment_for_the_workspaces_name_and_is_told_with_notifications_off() {
+        let start = Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        let first = Situation { first_sign_in: true, ..Default::default() };
+        let mut n = Notifier::new();
+        n.observe(Disconnected, "", &[], Blocks, first, at(0));
+        let unnamed = Situation::default();
+        assert!(n.observe(Protected, "Protected", &[], Blocks, unnamed, at(10)).is_empty(), "the name may come a moment later");
+        assert!(n.observe(Protected, "Protected", &[], Blocks, unnamed, at(10 + NAME_WAIT.as_secs() - 1)).is_empty());
+        let t = n.observe(Protected, "Protected", &[], Blocks, unnamed, at(10 + NAME_WAIT.as_secs()));
+        assert_eq!(t[0].title, "Connected to your workspace");
+        // A blank name is no name.
+        assert_eq!(connected_toast(Some("Avouro")).title, "Connected to Avouro");
+        let mut blank = Notifier::new();
+        blank.observe(Disconnected, "", &[], Blocks, first, at(0));
+        assert!(blank.observe(Protected, "", &[], Blocks, Situation { workspace: Some("  "), ..Default::default() }, at(1)).is_empty());
+        // Notifications off: told all the same, it answers the person's own sign-in.
+        let mut off = Notifier::new();
+        off.observe(Disconnected, "", &[], Off, first, at(0));
+        let named = Situation { workspace: Some("Avouro"), ..Default::default() };
+        assert_eq!(kinds(&off.observe(Protected, "Protected", &[], Off, named, at(5))), [Kind::Connected]);
+        // A computer already connected when the tray started is never told.
+        let mut already = Notifier::new();
+        assert!(already.observe(Protected, "Protected", &[], Blocks, named, at(0)).is_empty());
+    }
+
+    #[test]
+    fn a_problem_told_while_the_first_sign_in_waited_ends_with_connected_not_protecting_again() {
+        let start = Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        let mut n = Notifier::new();
+        n.observe(Disconnected, "", &[], Blocks, Situation { first_sign_in: true, ..Default::default() }, at(0));
+        // The agent could not be brought back meanwhile: that is told.
+        let off = Situation { protection_off: true, ..Default::default() };
+        assert_eq!(n.observe(Problem, "", &[], Blocks, off, at(10)), vec![protection_off_toast()]);
+        // Back, and signed in: one notification, "Connected to Avouro".
+        let named = Situation { workspace: Some("Avouro"), ..Default::default() };
+        assert_eq!(kinds(&n.observe(Protected, "Protected", &[], Blocks, named, at(20))), [Kind::Connected]);
+        assert!(n.observe(Protected, "Protected", &[], Blocks, named, at(30)).is_empty());
+    }
+
+    #[test]
+    fn an_update_is_told_once_per_version() {
+        let u = |from: &str, to: &str| Updated { from: from.into(), to: to.into(), at: "2026-10-21T12:00:00.000Z".into() };
+        let (version, toast) = update_toast(Some(&u("0.11.4", "0.11.5")), None, Blocks).expect("told");
+        assert_eq!(version, "0.11.5");
+        let toast = toast.expect("shown");
+        assert_eq!((toast.kind, toast.title.as_str(), toast.text.as_str()), (Kind::Updated, "Updated to Scopebond 0.11.5", "Updated from 0.11.4. Nothing for you to do."));
+        assert_eq!((toast.unblock, toast.button), (None, None));
+        assert_eq!(update_toast(Some(&u("0.11.4", "0.11.5")), Some("0.11.5"), Blocks), None, "once");
+        assert_eq!(update_toast(Some(&u("0.11.5", "0.11.6")), Some("0.11.5"), Blocks).map(|(v, _)| v).as_deref(), Some("0.11.6"), "the next update is told");
+        assert_eq!(update_toast(None, None, Blocks), None);
+        assert_eq!(update_toast(Some(&u("0.11.4", " ")), None, Blocks), None);
+        assert_eq!(update_toast(Some(&u("", "0.11.5")), None, Blocks).and_then(|(_, t)| t).map(|t| t.text).as_deref(), Some("Nothing for you to do."));
+        // Notifications off: nothing shown, but remembered, so it is not shown later either.
+        assert_eq!(update_toast(Some(&u("0.11.4", "0.11.5")), None, Off), Some(("0.11.5".to_string(), None)));
     }
 
     #[test]

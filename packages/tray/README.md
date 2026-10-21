@@ -83,7 +83,11 @@ PowerShell tray.
   with nothing in its place without a word; only when two restarts in a row fail within ten minutes is the person told,
   once and whatever the notification setting: "Protection is off on this computer" with *Restart it*, which starts the
   agent at once (and "Scopebond is protecting again" once it answers). One stopped on purpose is not told about; a
-  missing agent program is a problem once it has lasted two minutes. *Check now* chosen from the menu says what it found. They carry
+  missing agent program is a problem once it has lasted two minutes. Before a new install's first sign-in nothing about
+  the state is told (not being signed in yet is not a problem; the panel offers *Sign in…*), and once it is done and
+  protected, "Connected to <workspace>" is told once in place of "Scopebond is protecting again". After an update,
+  "Updated to Scopebond 0.11.5" is told once per version (the agent names the update for a day; the tray keeps the version
+  it told in `tray-settings.json`, so a restart does not tell it again). *Check now* chosen from the menu says what it found. They carry
   the AppUserModelID `Avouro.Scopebond`, the one the installer's Start-menu entry sets. The rules are plain decisions in
   `src/notify.rs` with unit tests.
 

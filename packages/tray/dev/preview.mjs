@@ -62,6 +62,8 @@ const SCENES = [
   ["protected&groups=1&older=1", "An older agent: no groups"],
   ["attention", "Something needs fixing"],
   ["disconnected", "Not connected"],
+  ["first_sign_in", "A new install: Sign in…"],
+  ["signing_in", "The first sign-in waits for approval (tooltip: the code)"],
   ["not_answering", "The agent is not answering"],
   ["protected&tab=allowed", "Allowed"],
   ["protected&view=settings", "Settings"],

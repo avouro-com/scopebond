@@ -157,10 +157,25 @@
       hint: "Sign in again to connect this computer: the approval page opens in your browser.",
       fix: { id: "reconnect", label: "Reconnect…", route: "/reconnect" }, actions: [actions[0]], workspace: null,
     }),
+    // A new install before its first sign-in (the tray tells no problem meanwhile), and while the sign-in waits for approval
+    // (the tooltip shows the code whole: "Scopebond: approve code BCDF-GHJK").
+    first_sign_in: () => ({
+      ...base(), state: "disconnected", headline: "Not signed in to a workspace yet: records stay on this computer", detail: null,
+      hint: "Sign in to connect this computer to your workspace: the approval page opens in your browser, and Scopebond sets up your coding agents.",
+      fix: { id: "reconnect", label: "Sign in…", route: "/reconnect" }, actions: [actions[0]], workspace: null,
+      recent_blocks: [], allowed: [], asked: [], today: { actions: 0, blocked: 0 }, tooltip: "Scopebond — Not signed in to a workspace yet: records stay on th…",
+      first_sign_in: true, sign_in_code: null,
+    }),
+    signing_in: () => ({
+      ...scenes.first_sign_in(), state: "working", headline: "Approve this computer in your workspace: code BCDF-GHJK",
+      hint: "The approval page opened in your browser. Check that it shows the code BCDF-GHJK, then approve this computer.",
+      tooltip: "Scopebond: approve code BCDF-GHJK", sign_in_code: "BCDF-GHJK",
+    }),
   };
 
   // Only the scenes above: the name from the address is compared with each, never used to look one up.
-  const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected : scenes.protected;
+  const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected
+    : scene === "first_sign_in" ? scenes.first_sign_in : scene === "signing_in" ? scenes.signing_in : scenes.protected;
   let model = scene === "not_answering" ? null : make();
   // blocks=n: the list of n blocks over the week, every outcome (0, 3, 40 and 200 are the reviewed sizes); outcomes=1: one of each.
   if (model && (params.get("blocks") !== null || params.get("outcomes") || params.get("groups"))) {
@@ -232,7 +247,13 @@
     panel_state: () => state(),
     panel_close: () => { say("(The panel would close here.)"); return null; },
     panel_ready: () => null,
-    panel_action: ({ id }) => { say(id === "send_now" ? "Sent 312 records; nothing is waiting" : id === "open_workspace" ? "Opened this computer's page in your workspace" : "Checked just now: all good"); if (id === "send_now") model = scenes.protected(); return true; },
+    panel_action: ({ id }) => {
+      say(id === "send_now" ? "Sent 312 records; nothing is waiting" : id === "open_workspace" ? "Opened this computer's page in your workspace"
+        : id === "reconnect" ? "Approve this computer in your workspace: code BCDF-GHJK" : "Checked just now: all good");
+      if (id === "send_now") model = scenes.protected();
+      if (id === "reconnect" && model && model.first_sign_in) model = scenes.signing_in();
+      return true;
+    },
     panel_command: ({ id }) => {
       if (id.startsWith("notifications:")) notifications = id.slice(14);
       else say({ get_help: "Support report copied (no keys, records or commands) · the Help page is opening", about: "(About Scopebond would open.)", hide_icon: "(The icon would hide.)", autostart: "(Start with Windows would change.)", start_agent: "Starting the Scopebond Agent…" }[id] || "Done");
