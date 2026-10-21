@@ -79,6 +79,8 @@ test("the quiet list is signed with the grants, and a document without one keeps
   assert.equal(digestGrants(withList), createHash("sha256").update(canonical({ allowances: [], revoked_allowances: [], session_budgets: [], request_answers: [], quiet_patterns: [hex("a1")] })).digest("hex"));
   assert.notEqual(digestGrants({ quiet_patterns: [] }), before, "an emptied list is a change the computer takes");
   assert.equal(carriesGrants(withList), true);
+  // The workspace signs the same digest (shared vectors).
+  for (const g of vectors.grants) assert.equal(digestGrants(g.doc), g.digest, g.name);
 });
 
 test("a block note says the workspace keeps it quiet, and only for a rule's block", () => {

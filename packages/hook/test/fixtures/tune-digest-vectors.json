@@ -1,5 +1,5 @@
 {
-  "about": "Shared vectors for the tuning digest of a blocked record: sha256 of the JSON array [action type, workspace rule, program, target class, environment, host]. `digest` lists records and the digest both sides compute; `none` records neither side digests; `computer_none` records the computer never digests. `workspace` is a synthetic workspace (developers, days, the block of each kind, the blocks per developer per day) with the quiet list its tuning arrives at and the questions and notifications per developer per day before and after.",
+  "about": "Shared vectors for the tuning digest of a blocked record: sha256 of the JSON array [action type, workspace rule, program, target class, environment, host]. `digest` lists records and the digest both sides compute; `none` records neither side digests; `computer_none` records the computer never digests. `grants` pins the grants digest of a rules document with and without a quiet list (`quiet_patterns`). `workspace` is a synthetic workspace (developers, days, the block of each kind, the blocks per developer per day) with the quiet list its tuning arrives at and the questions and notifications per developer per day before and after.",
   "digest": [
     {
       "name": "shell delete of build output",
@@ -401,6 +401,91 @@
       "digest": "6d9407b4108450437bbde0cb51e0c8d3adc5c215cee6afa585959f409347faeb"
     },
     {
+      "name": "a cloud delete",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "cloud.resource.delete",
+            "params": {
+              "program": "cloudctl",
+              "environment": "staging"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "cloud-destructive"
+        }
+      },
+      "digest": "65116f78ddd569715117d54299e79d975fd30142ff2e61a7589dd9d441152e1f"
+    },
+    {
+      "name": "a secret write",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "secret.write",
+            "params": {
+              "program": "vaultctl",
+              "target": "kv/app"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "secret-write"
+        }
+      },
+      "digest": "c533d4380e1f2fd20649f33fea31350bef4102e534be03913e385f6560b9da9d"
+    },
+    {
+      "name": "an access change",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "iam.change",
+            "params": {
+              "program": "iamctl"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "iam-change"
+        }
+      },
+      "digest": "23fc0bb1a1371a4c628f08614ff69628e7841c895c32810f73149c77bd4eccaa"
+    },
+    {
+      "name": "a database migration against a host",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "db.migrate",
+            "params": {
+              "program": "migrate",
+              "host": "db.internal.example:5432",
+              "environment": "prod"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "database-migrate"
+        }
+      },
+      "digest": "cc1e5829a62e814f8c96cbe1c34a1c48bcd6aeb4c69380fc013e6b6480842425"
+    },
+    {
+      "name": "Scopebond's own keys read",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": ".scopebond/agent.key",
+              "root_scope": "inside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-scopebond-read"
+        }
+      },
+      "digest": "6dddc16a6064ebdd85594cbf363d7539dc641eb080a1752ff461b5d15b194f72"
+    },
+    {
       "name": "a long action type is cut at 64 characters",
       "receipt": {
         "payload": {
@@ -490,6 +575,37 @@
           "realtime_result": "deny"
         }
       }
+    }
+  ],
+  "grants": [
+    {
+      "name": "no quiet list: the digest documents had before",
+      "doc": {
+        "revoked_allowances": [
+          "alw-1"
+        ]
+      },
+      "digest": "6659b541d330e2cc0ef8902190cfda461cd39e478413660fa3fcc2d2af0abae7"
+    },
+    {
+      "name": "a quiet list joins the grants digest",
+      "doc": {
+        "revoked_allowances": [
+          "alw-1"
+        ],
+        "quiet_patterns": [
+          "86114d2f07d4f8d60fde2bc148d415fdaa3c35d718e3c1a528ce7d437b6c0356",
+          "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4"
+        ]
+      },
+      "digest": "9ba4c1726c999dceec6361e875884fee0696ea33d4b2035c9a46fcfd4a3f00d9"
+    },
+    {
+      "name": "an emptied quiet list is a change",
+      "doc": {
+        "quiet_patterns": []
+      },
+      "digest": "a67c5b2bee6a66816a0f362d356b549f2dce7b0f0f984a2d1ddc8584242e3dbd"
     }
   ],
   "workspace": {
