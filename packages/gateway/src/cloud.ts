@@ -70,6 +70,9 @@ export interface CloudOutbox {
    *  flush is sending it now (its records wait); `sent`: it was summarised (a record for it that turns up now goes in full).
    *  An outbox without claims is never sent summaries. */
   claimWindow?(windowStart: number, summaryId: string, now: number): { state: "claimed" | "busy" | "sent"; summaryId: string };
+  /** What `claimWindow` would answer now, without claiming or changing anything: `claimed` means the window is free to claim
+   *  (under `summaryId` when one was chosen for it before, else null). A preview of the next delivery reads it. */
+  peekWindow?(windowStart: number, now: number): { state: "claimed" | "busy" | "sent"; summaryId: string | null };
   /** Let a claim go without sending (another flush may take it at once, under the same summary id). */
   releaseWindow?(windowStart: number): void;
   /** The workspace has the window's summary. */
@@ -323,6 +326,12 @@ export function createMemoryCloudOutbox(options: MemoryCloudOutboxOptions = {}):
       w.summaryId ??= summaryId;
       w.claimedAt = at;
       return { state: "claimed" as const, summaryId: w.summaryId };
+    },
+    peekWindow(windowStart: number, at: number) {
+      const w = windows.get(windowStart);
+      if (w?.sent) return { state: "sent" as const, summaryId: w.summaryId };
+      if (w?.summaryId && at - w.claimedAt < WINDOW_LEASE_MS) return { state: "busy" as const, summaryId: w.summaryId };
+      return { state: "claimed" as const, summaryId: w?.summaryId ?? null };
     },
     releaseWindow(windowStart: number): void { const w = windows.get(windowStart); if (w) w.claimedAt = 0; },
     markWindowSent(windowStart: number): void { const w = windows.get(windowStart); if (w) w.sent = true; },

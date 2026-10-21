@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import {
   CloudEnrollmentError, completeCloudEnrollment, createCloudExporter, withCloudExporter,
   type Attester, type CloudBackoff, type CloudDeliveryGap, type CloudEnrollmentBundle, type CloudEnrollmentResult, type CloudExporter,
-  type CloudSequenceProofOptions, type ReceiptStore,
+  type CloudExporterOptions, type CloudOutbox, type CloudSequenceProofOptions, type ReceiptStore,
 } from "@scopebond/gateway";
 import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, ensurePrivateDir, loadOrCreateAttester } from "@scopebond/gateway/node";
 import { LOSSLESS_OUTBOX } from "./delivery-report.js";
@@ -160,17 +160,14 @@ export function sequenceProofFor(
   return { attester, credentialId: connection.credential_id };
 }
 
-export function attachExporter(
-  outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
-  options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void; backoff?: CloudBackoff | null } = {},
-): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
-  // Lossless: no cap and no expiry. A record leaves the queue only when the workspace
-  // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
-  // gateway's defaults (10,000 records, 64 MiB, 7 days) dropped the newest records once a long
-  // outage filled the queue.
-  let outbox: SqliteCloudOutbox;
-  try { outbox = new SqliteCloudOutbox(outboxDbPath, { ...LOSSLESS_OUTBOX, ...(options.busyTimeoutMs === undefined ? {} : { busyTimeoutMs: options.busyTimeoutMs }) }); }
-  catch (error) { throw new DeliveryQueueError(outboxDbPath, error); }
+/** The settings this computer's record uploader runs with for a queue (`outboxDbPath`'s): the workspace's ingest address and
+ *  credential, the summaries and sequence proof, the machine id, and a fetch that notes what the workspace's answers say. Shared
+ *  by `attachExporter` and by `intel show` (intel-show.ts), which runs the same uploader against a copy of the queue, so what
+ *  it shows is what is sent. */
+export function exporterOptions(
+  outboxDbPath: string, connection: HookConnection, outbox: CloudOutbox, fetchImpl?: typeof fetch,
+  options: { onGap?: (gap: CloudDeliveryGap) => void; backoff?: CloudBackoff | null } = {},
+): CloudExporterOptions {
   // `onGap`: a record the queue could not take (its write failed after the local write) is kept as a gap by the caller.
   const summaries = summaryOptions(dirname(outboxDbPath));
   const sequenceProof = sequenceProofFor(connection, summaries?.attester);
@@ -184,11 +181,30 @@ export function attachExporter(
     if (res?.ok && receiptContextFrom(res.headers)) noteReceiptContext(dir);
     return res;
   }) as typeof fetch;
-  const exporter = createCloudExporter({ url: ingestUrl(connection), credential: connection.credential, outbox, fetch: deliver,
+  return { url: ingestUrl(connection), credential: connection.credential, outbox, fetch: deliver,
     machineId: () => machineIdFor(dir, connection.organization_id),
     summaries, ...(sequenceProof ? { sequenceProof } : {}), ...(options.onGap ? { onGap: options.onGap } : {}),
     ...(options.backoff ? { backoff: options.backoff } : {}),
-    onChainHead: chainHeadRecorder(join(dirname(outboxDbPath), CHAIN_HEADS_FILE)) });
+    onChainHead: chainHeadRecorder(join(dirname(outboxDbPath), CHAIN_HEADS_FILE)) };
+}
+
+/** Open this computer's delivery queue with the settings the uploader keeps it with (lossless: nothing is dropped for space
+ *  or age). Throws a DeliveryQueueError when it cannot be opened. */
+export function openDeliveryQueue(outboxDbPath: string, busyTimeoutMs?: number): SqliteCloudOutbox {
+  try { return new SqliteCloudOutbox(outboxDbPath, { ...LOSSLESS_OUTBOX, ...(busyTimeoutMs === undefined ? {} : { busyTimeoutMs }) }); }
+  catch (error) { throw new DeliveryQueueError(outboxDbPath, error); }
+}
+
+export function attachExporter(
+  outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
+  options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void; backoff?: CloudBackoff | null } = {},
+): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
+  // Lossless: no cap and no expiry. A record leaves the queue only when the workspace
+  // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
+  // gateway's defaults (10,000 records, 64 MiB, 7 days) dropped the newest records once a long
+  // outage filled the queue.
+  const outbox = openDeliveryQueue(outboxDbPath, options.busyTimeoutMs);
+  const exporter = createCloudExporter(exporterOptions(outboxDbPath, connection, outbox, fetchImpl, options));
   return { store: withCloudExporter(store, exporter), exporter, outbox };
 }
 

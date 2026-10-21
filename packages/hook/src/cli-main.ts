@@ -78,6 +78,7 @@ import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
 import { describeLocalPacks, loadLocalPacks } from "./pack-local.js";
 import { packTestLines, testPackFiles } from "./pack-test.js";
+import { exampleRecord, intelShowJson, intelShowLines, previewNextUpload } from "./intel-show.js";
 import { switchablePackRules } from "./pack-rules.js";
 import { runPackVectors } from "./packs.js";
 import { loadIntelPlugin } from "./intel-plugin.js";
@@ -2430,6 +2431,18 @@ async function runPacksTest(args: string[], dir: string, json: boolean): Promise
   if (failures.length) process.exit(1);
 }
 
+/** `intel show [--json] [--raw]`: what the next upload of records to the workspace will contain (intel-show.ts). Sends
+ *  nothing and changes nothing. */
+async function runIntel(args: string[]): Promise<void> {
+  const [sub] = args.filter((a) => !a.startsWith("--"));
+  if (sub !== "show") { console.error("usage: scopebond intel show [--json] [--raw]"); process.exit(1); }
+  const raw = args.includes("--raw");
+  const preview = await previewNextUpload(resolveConfigDir(process.cwd()));
+  const example = preview.requests.length ? null : await exampleRecord();
+  if (args.includes("--json")) console.log(JSON.stringify(intelShowJson(preview, example, raw), null, 2));
+  else for (const line of intelShowLines(preview, example, raw)) console.log(line);
+}
+
 /** Check a pack file as `packs add` would, without changing anything. */
 function checkPackFile(text: string): { ok: true; ref: string; vectors: number } | { ok: false; message: string } {
   const checked = checkPackText(text);
@@ -2533,6 +2546,14 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "add <file> checks it the same way, then puts it in force here; remove <id> takes one out. Both need a terminal or --yes.",
       "Packs live in the packs folder of .scopebond/ (index.json and one <id>@<version>.json per pack). Local packs you write",
       "are named in rules.json (\"packs\": { \"local\": [\"team-packs/my-team.json\"] }) and only add rules; list shows them too.",
+    ] },
+  { name: "intel", args: "show [--json] [--raw]",
+    summary: "what the next upload of records to your workspace will contain",
+    detail: [
+      "show runs this computer's own record uploader against a copy of its delivery queue and prints what it would send,",
+      "without sending or changing anything: a summary (action kinds, parameters, rule results, coding tools, counts), then",
+      "the first request's body. A plugin's opaque slot is shown as its size; --raw adds its base64. --json gives every request.",
+      "When nothing is waiting it says so and shows the fields one record carries.",
     ] },
   { name: "budget", args: "init|ack <id>|status|load <export.json>",
     summary: "per-agent action budgets: how many actions this agent may dispatch in a window",
@@ -2689,6 +2710,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   else if (cmd === "prune") { await runPrune(rest); }
   else if (cmd === "rules") { await runRules(rest); }
   else if (cmd === "packs") { await runPacks(rest); }
+  else if (cmd === "intel") { await runIntel(rest); }
   else if (cmd === "help" || cmd === "--help" || cmd === "-h" || cmd === undefined) { printHelp(rest[0]); }
   else {
     console.error(`unknown command: ${cmd}`);

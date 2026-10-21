@@ -1119,6 +1119,14 @@ export class SqliteCloudOutbox implements CloudOutbox {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
+  /** What `claimWindow` would answer now, read without a transaction and without claiming or changing anything. */
+  peekWindow(windowStart: number, now: number): { state: "claimed" | "busy" | "sent"; summaryId: string | null } {
+    const row = this.db.prepare("SELECT summary_id, claimed_at, sent FROM cloud_summary_windows WHERE window_start = ?").all(windowStart)[0] as { summary_id: string | null; claimed_at: number; sent: number } | undefined;
+    if (row?.sent) return { state: "sent", summaryId: row.summary_id };
+    if (row?.summary_id && now - row.claimed_at < WINDOW_LEASE_MS) return { state: "busy", summaryId: row.summary_id };
+    return { state: "claimed", summaryId: row?.summary_id ?? null };
+  }
+
   releaseWindow(windowStart: number): void {
     this.db.prepare("UPDATE cloud_summary_windows SET claimed_at = 0 WHERE window_start = ? AND sent = 0").run(windowStart);
   }

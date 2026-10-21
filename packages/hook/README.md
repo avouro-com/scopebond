@@ -731,6 +731,44 @@ uses the form your installation runs: `scopebond-agent hook …` from the instal
 only and is not part of the signed Windows installer. To use it on Windows, install a current Node.js LTS release
 first; the hook itself does not need it.
 
+### What leaves this computer
+
+Records of the actions the hook decides go only to the workspace this computer is connected to; a computer that is
+not connected keeps them in its local log. What a delivery carries, by category:
+
+- **Records** (`POST /v1/ingest`): one signed record per action. With the default evidence detail, a routine action
+  (allowed or not evaluated, and not a push, a fetch, an MCP call or a write outside the project or to its CI and agent
+  settings) goes instead in a signed summary for its five-minute window (`POST /v1/summaries`: counts by action kind,
+  result and program, a keyed digest of the working folder, and how often an identical action repeated); the others
+  go one by one at once.
+- **In each record**: the kind of action (a command, a file read or write, a push, a fetch, an MCP call, or an action a
+  rule pack derived), its parameters as recorded (a command line after the secret masking, cut to its first 64
+  characters, with a keyed digest of the masked whole; paths with your home folder written as `~`; branch, remote,
+  host, MCP server and tool, and package names), the decision and the rule that matched, the rule set's digest and
+  version, the time, key ids and signatures. Once the workspace says it reads it, also the context: the coding tool,
+  its version, the model id it reports, an opaque session id, the repository as `host/owner/name`, and the branch.
+- **Beside each batch**: the delivery queue's id and the numbers this computer gave the records, signed with this
+  computer's key when the connection names its credential.
+- **A plugin slot**, only when a signed plugin component is installed: an opaque value of at most 4 KiB and a pattern
+  id the plugin produced for a record. The hook signs them into the record and does not read them.
+
+Not in a record: the contents of files (a record names a path; a rule pack may record a single value it reads from a
+configuration file, such as an environment name, or a keyed digest of a file), a command's text past its first 64
+characters, values the masking finds (passwords, tokens, keys: written `***`), and this computer's keys. The
+workspace credential only authenticates the request. Observations, the rules check, the computer name and the
+machine id are described in their own sections.
+
+To see exactly what the next delivery holds, run:
+
+```
+scopebond intel show            # a summary by category, then the first request's body
+scopebond intel show --json     # every request; add --raw to see a plugin slot's base64
+```
+
+`intel show` runs this computer's own uploader against a copy of its delivery queue and prints the request bodies
+it builds, without sending or changing anything. A plugin slot is shown as `<opaque, N bytes>`. When nothing is
+waiting, it says so and shows the fields one record carries.
+
 ### Checking the workspace's evidence chain
 
 Each delivery answer from the workspace carries its evidence chain's head (how many records
