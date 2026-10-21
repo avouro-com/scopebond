@@ -56,3 +56,8 @@ export type { CommandContext } from "./commands.js";
 export { applyToolSettings, toolSettingsReport, readToolSettingsState, TOOL_SETTINGS_STATE_FILE, TOOL_SETTINGS_SUPPORTED } from "./tool-settings.js";
 export type { ToolSettingsReport, HarnessReport, ToolSettingsRefusal } from "./tool-settings.js";
 export { packTgz, unpackTgz, FLAT_NAME, type TgzFile } from "./tgz.js";
+export {
+  maintainEngine, runEngineCandidate, readHookBundleTarget, badEngines, engineInUse, ENGINE_ARCHIVE_MAX_BYTES, BAD_ENGINES_FILE,
+  type HookBundleTarget, type EngineOutcome, type EngineUpdateOptions,
+} from "./engine-update.js";
+export { maintainIntel, readIntelTarget, COMPONENT_SIGNATURE_HEADER, COMPONENT_KEY_ID_HEADER, type IntelTarget, type IntelOutcome, type IntelInstallOptions } from "./intel-install.js";

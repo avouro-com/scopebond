@@ -90,6 +90,9 @@ Without the plugin (any build from this repository), the slot is empty and the e
 behaves exactly the same. What a computer sends to Scopebond Cloud stays open: the
 client code that sends it is here, and the hook prints the next upload on request.
 
+Signed components from Scopebond Cloud (the engine bundle and the closed intel plugin) are
+verified against the pinned key before they load; packs remain data, never code.
+
 Checked automatically: the OSS gate refuses a package for the closed component,
 training code, notebooks, data sets and model files, machine-learning or
 model-provider dependencies, imports of the closed module by name, and the closed

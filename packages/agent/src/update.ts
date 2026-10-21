@@ -18,6 +18,8 @@ import { findProgram, windowsSystemProgram } from "@scopebond/gateway/node";
 import { agentCliPath } from "./self.js";
 import { useNativeHookEntries } from "./hook-entries.js";
 import type { InstallKind } from "./native-update.js";
+import { readHookBundleTarget, type HookBundleTarget } from "./engine-update.js";
+import { readIntelTarget, type IntelTarget } from "./intel-install.js";
 
 /** x.y.z with no leading zeros, no tags, and each part of a sane size. */
 const VERSION = /^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,5})$/;
@@ -46,8 +48,14 @@ export const isVersion = (v: unknown): v is string => typeof v === "string" && V
  *  published signed Windows build (the version of its release manifest and installer), or null when there is none or the
  *  workspace holds it back. An install from the signed installer updates only to `native_agent`, never to `agent`: an
  *  npm release can be out before its signed build, or never get one. A workspace that does not send the field (an older
- *  one) offers the signed install no update. */
-export interface ClientVersion { policy: "recommended" | "hold"; hook: string | null; agent: string | null; native_agent: string | null }
+ *  one) offers the signed install no update.
+ *
+ *  `hook_bundle` names a newer engine for the signed install (engine-update.ts) and `intel` the plugin component
+ *  (intel-install.ts); each is left out when absent or not usable, which never refuses the rest of the answer. */
+export interface ClientVersion {
+  policy: "recommended" | "hold"; hook: string | null; agent: string | null; native_agent: string | null;
+  hook_bundle?: HookBundleTarget | null; intel?: IntelTarget | null;
+}
 
 /** A response body as text, or null when it is larger than `max` bytes. */
 async function boundedText(res: Response, max: number): Promise<string | null> {
@@ -90,7 +98,7 @@ export async function fetchClientVersion(
     if (text === null) return null;
     const body = JSON.parse(text) as unknown;
     if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-    const { policy, hook, agent, native_agent: nativeAgent } = body as Record<string, unknown>;
+    const { policy, hook, agent, native_agent: nativeAgent, hook_bundle: hookBundle, intel } = body as Record<string, unknown>;
     if (policy !== "recommended" && policy !== "hold") return null;
     const version = (v: unknown, current: string): string | null | undefined => {
       if (v === null || v === undefined) return null;
@@ -98,7 +106,8 @@ export async function fetchClientVersion(
     };
     const h = version(hook, running.hook), a = version(agent, running.agent), n = version(nativeAgent, running.agent);
     if (h === undefined || a === undefined || n === undefined) return null;
-    return { policy, hook: h, agent: a, native_agent: n };
+    const bundleTarget = readHookBundleTarget(hookBundle), intelTarget = readIntelTarget(intel);
+    return { policy, hook: h, agent: a, native_agent: n, ...(bundleTarget ? { hook_bundle: bundleTarget } : {}), ...(intelTarget ? { intel: intelTarget } : {}) };
   } catch { return null; }
 }
 

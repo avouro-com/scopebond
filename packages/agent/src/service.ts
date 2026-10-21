@@ -19,6 +19,8 @@ import {
   clearUpdatePending, fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind, nativeTrayPath, readUpdatePending, removeOldHelpers, takeInstallResult, UPDATE_PENDING_MS,
   writeUpdatePending, type InstallKind,
 } from "./native-update.js";
+import { maintainEngine } from "./engine-update.js";
+import { maintainIntel } from "./intel-install.js";
 import { AGENT_LOG_ENV, autostartHealth, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
@@ -653,6 +655,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         }
         log(result.error);
       }
+      // Components that need no installer: a newer engine for the signed install (engine-update.ts: verified, its pack
+      // vectors run, rolled back when it does not start) and the plugin component (intel-install.ts). Neither throws.
+      await maintainEngine({ dir: options.dir, kind, target, fetchImpl: options.fetchImpl, log });
+      await maintainIntel({ dir: options.dir, connection, target, fetchImpl: options.fetchImpl, log });
       // The local store: older rows rewritten, acknowledged receipts past the retention window removed, space returned.
       // The agent may rewrite the whole file once (the hook never does that during a tool call).
       try {
