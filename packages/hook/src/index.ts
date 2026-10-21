@@ -83,6 +83,7 @@ export { createOverrideHandler, overrideHint, overrideRemedy, askAgent, actionSu
 export { ruleTitle, ruleName, blockTitle, packRuleTitle, checkOfCode, GENERIC_RULE_TITLE } from "./rule-titles.js";
 export { installVerdictWords, noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
 export type { BlockNote } from "./block-notes.js";
+export { tuneDigest, tuneDigestParts, tuneDigestOfReceipt, targetClassOf, canonicalProgram, canonicalHost, quietPatternsOf, quietByWorkspace, quietBlock, QUIET_PATTERNS_CAPABILITY, MAX_QUIET_PATTERNS, TARGET_CLASSES, type TuneDigestParts, type TargetClass } from "./tune-digest.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion, Offers, UnblockLength } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES, hookCapabilities } from "./policy-sync.js";
 export {

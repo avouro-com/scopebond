@@ -948,6 +948,17 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   rules document (the rules in force stay); a hook older than this ignores the member. The hook
   says it understands budgets (`x-scopebond-hook-capabilities: allowances,session_budgets,service_rules,unblock_terms,unlimited_terms`;
   `service_rules` is the blocked services below).
+- **Blocks kept quiet.** A workspace may keep some kinds of block quiet: the action is still
+  blocked, but no one is asked about it and the tray lists it without a notification. It sends
+  them in its rules document as `quiet_patterns`, a list of tuning digests, only to a hook that
+  reports `quiet_patterns`, and signs the list with the allowances (`grants_digest`). A block's
+  tuning digest is the sha256 of the JSON array `[action type, workspace rule, program, target
+  class, environment, host]`, which the hook works out from the blocked record's own intent and
+  the clause that denied it (`tune-digest.ts`): the program by its file name, the path only as its
+  class (inside the repository, build output, temp, home, system, remote or unknown). It never
+  leaves this computer. A quiet list never lets an action through (an allowance in force still
+  does, as before), and it never applies to Scopebond's own protection, a session budget, Safe
+  Install or a blocked service.
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left

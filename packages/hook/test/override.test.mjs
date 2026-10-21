@@ -357,3 +357,37 @@ test("the coding agent trying a blocked action again within 10 minutes is not as
   const later = await run(dir, bash("rm -rf /data/old"), { now: () => t0 + 30 * 60_000 });
   assert.equal(later.asked.length, 1, "after 10 minutes without a try it is asked about again");
 });
+
+test("a block the workspace keeps quiet stays blocked and asks no one; an allowance in force still lets it through", async () => {
+  const { tuneDigestOfReceipt } = await import("../dist/index.js");
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ always: "at_once" }) } });
+  const quietList = (list) => {
+    const d = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8"));
+    writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ ...d, quiet_patterns: list }));
+  };
+  try {
+    // Without a quiet list the person is asked.
+    const asked = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "deny" }] });
+    assert.equal(asked.decision, "deny");
+    assert.equal(asked.asked.length, 1);
+    const digest = tuneDigestOfReceipt(asked.receipts.at(-1));
+    assert.match(digest, /^[0-9a-f]{64}$/);
+    // With the action's digest listed: blocked, no one asked, and the coding agent is told it stays blocked.
+    quietList([digest]);
+    const quiet = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "allow", reason: "Cleaning the build output before release" }], now: () => Date.now() + 11 * 60_000 });
+    assert.equal(quiet.decision, "deny");
+    assert.equal(quiet.asked.length, 0, "no question");
+    assert.equal(quiet.override, null);
+    assert.match(quiet.reason, /keeps this blocked without asking/);
+    assert.match(quiet.reason, /Don't retry or work around it/);
+    // An allowance in force for the action still lets it through: the quiet list only changes how a block is shown.
+    quietList([]);
+    const allowed = await run(dir, bash("rm -rf ../out"), { answers: [{ decision: "allow", reason: "Cleaning the build output before release", lasts: "always" }], now: () => Date.now() + 22 * 60_000 });
+    assert.equal(allowed.decision, "allow");
+    quietList([digest]);
+    const again = await run(dir, bash("rm -rf ../out"), { now: () => Date.now() + 23 * 60_000 });
+    assert.equal(again.decision, "allow");
+    assert.equal(again.override.method, "allowance");
+    assert.equal(again.asked.length, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

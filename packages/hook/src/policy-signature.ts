@@ -196,20 +196,23 @@ export function checkToolSettingsSignature(section: Record<string, unknown>, con
 // --- signed grants ---------------------------------------------------------------------------------------------------------
 //
 // A rules document also carries what lets a blocked action through, or stops doing so: the allowances the workspace holds for
-// this computer, the ones it revoked, the session budgets and the answers to requests. The workspace signs them with the rules,
-// by the same key and at the same `issued_at`: `grants_digest` is the sha256 of the canonical JSON of
-// `{ allowances, revoked_allowances, session_budgets, request_answers }` (each absent member as []), and `grants_signature` is
-// over the rules payload with that digest as `rules_digest`, `local_changes` false, `managed` true and `kind: "grants"`, which no
-// rules payload carries: a rules signature never verifies as grants, nor the reverse.
+// this computer, the ones it revoked, the session budgets, the answers to requests and the blocks it keeps quiet. The workspace
+// signs them with the rules, by the same key and at the same `issued_at`: `grants_digest` is the sha256 of the canonical JSON of
+// `{ allowances, revoked_allowances, session_budgets, request_answers }` (each absent member as []; with `quiet_patterns` too
+// when the document carries it), and `grants_signature` is over the rules payload with that digest as `rules_digest`,
+// `local_changes` false, `managed` true and `kind: "grants"`, which no rules payload carries: a rules signature never verifies
+// as grants, nor the reverse.
 
 /** The members of a rules document the grants signature covers. */
-export const GRANT_FIELDS = ["allowances", "revoked_allowances", "session_budgets", "request_answers"] as const;
+export const GRANT_FIELDS = ["allowances", "revoked_allowances", "session_budgets", "request_answers", "quiet_patterns"] as const;
 
-/** A document's grants digest (lowercase hex), computed from its own members. */
+/** A document's grants digest (lowercase hex), computed from its own members. The quiet list (`quiet_patterns`, tune-digest.ts)
+ *  joins the digested object only when the document carries it, so every document without one keeps the digest it had. */
 export function digestGrants(doc: Record<string, unknown>): string {
   return createHash("sha256").update(canonical({
     allowances: doc.allowances ?? [], revoked_allowances: doc.revoked_allowances ?? [],
     session_budgets: doc.session_budgets ?? [], request_answers: doc.request_answers ?? [],
+    ...(doc.quiet_patterns !== undefined ? { quiet_patterns: doc.quiet_patterns } : {}),
   })).digest("hex");
 }
 

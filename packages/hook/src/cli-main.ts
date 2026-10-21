@@ -65,6 +65,7 @@ import { markRulesDroppedTold, rulesDroppedNotice, syncIfDue, syncPolicy, type S
 import { loadBudgetExport } from "./budget-load.js";
 import { receiptContextFor, repositoryFacts } from "./receipt-context.js";
 import { noteBlock, projectOf } from "./block-notes.js";
+import { quietBlock } from "./tune-digest.js";
 import { RepositoryEnrollmentError, isRepositoryConnection, repositoryConnectionDir, REPO_TOKEN_ENV } from "./repo-enrol.js";
 import { REPO_HOOK_MARKER } from "./init.js";
 import { keyedSessionId, sessionBudgetGuardFor } from "./session-budgets.js";
@@ -334,7 +335,10 @@ async function withInstallVerdicts(dir: string, mapped: Mapped[], ask: "ask" | "
 /** For the tray: the rule, project and tool of a blocked call, noted on this computer (block-notes.ts). Never throws. */
 function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision, input?: Record<string, unknown>): void {
   if (decision.decision !== "deny") return;
-  try { noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd), session: input ? sessionKeyOf(decisionStateDir(dir), input) : null }); } catch { /* the receipt is the record */ }
+  try {
+    noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd), session: input ? sessionKeyOf(decisionStateDir(dir), input) : null,
+      quiet: quietBlock(decisionStateDir(dir), decision.receipt ?? decision.receipts?.at(-1)) });
+  } catch { /* the receipt is the record */ }
 }
 
 /** `deadlineAt`: a time after which the call is denied rather than evaluated (GitHub Copilot, whose hook timeouts fail

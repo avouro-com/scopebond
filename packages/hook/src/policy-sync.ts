@@ -107,6 +107,7 @@ import {
 } from "./managed.js";
 import { SERVICE_RULES_CAPABILITY } from "./service-rules.js";
 import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
+import { QUIET_PATTERNS_CAPABILITY } from "./tune-digest.js";
 
 /** What this hook reads in a workspace's rules document beyond what its version implies, as `x-scopebond-hook-capabilities`
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
@@ -115,8 +116,9 @@ import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
  *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts), who may allow "Similar commands in this project"
  *  (`pattern_allowances`: an override's `patterns`, pattern-recipes.ts), and the modes of the rule packs'
  *  rules (`pack_rules`, managed.ts; an unknown rule id is skipped and reported, never a refusal), and pack engine level 2
- *  (`pack_engine_2`: a pack list's `requires_engine`, `shadow` and `killed`, and the taxonomy extension, pack-sync.ts). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules", "pack_engine_2"] as const;
+ *  (`pack_engine_2`: a pack list's `requires_engine`, `shadow` and `killed`, and the taxonomy extension, pack-sync.ts), and the
+ *  blocks the workspace keeps quiet (`quiet_patterns`: blocked without asking or a notification, tune-digest.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules", "pack_engine_2", QUIET_PATTERNS_CAPABILITY] as const;
 
 /** The capabilities this hook reports now: `HOOK_CAPABILITIES`, without `pack_engine_2` while the pack engine level is lowered
  *  below 2 (`SCOPEBOND_PACK_ENGINE_LEVEL`, pack-store.ts). */
