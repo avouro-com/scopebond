@@ -156,24 +156,26 @@ const retryKey = (b: RecentBlockRecord & { session: string | null }): string =>
 /** Fold retries (newest-first input) into one block each: each try within RETRY_WINDOW_MS of the one before it in the same
  *  group. Returns the groups newest first, each named by its newest try. */
 export function foldRetries(newestFirst: Array<RecentBlockRecord & { session: string | null }>): RecentBlockRecord[] {
-  const open = new Map<string, RecentBlockRecord & { earliest: number }>();
-  const groups: Array<RecentBlockRecord & { earliest: number }> = [];
+  // The earliest try of each open group, beside the group (it is not part of what the tray is sent).
+  const open = new Map<string, { block: RecentBlockRecord; earliest: number }>();
+  const groups: RecentBlockRecord[] = [];
   for (const b of newestFirst) {
     const key = retryKey(b);
     const at = Date.parse(b.at);
     const group = open.get(key);
     if (group && Number.isFinite(at) && group.earliest - at <= RETRY_WINDOW_MS) {
-      group.tries = (group.tries ?? 1) + 1;
-      group.first_at = b.at;
-      group.group_id = b.action_id;
+      group.block.tries = (group.block.tries ?? 1) + 1;
+      group.block.first_at = b.at;
+      group.block.group_id = b.action_id;
       group.earliest = at;
       continue;
     }
-    const { session: _session, ...shown } = b;
-    const made = { ...shown, tries: 1, first_at: b.at, group_id: b.action_id, earliest: Number.isFinite(at) ? at : 0 };
-    open.set(key, made);
-    groups.push(made);
+    // The session key stays on this computer's notes: it is left out of what the tray is sent.
+    const shown: RecentBlockRecord & { session?: string | null } = { ...b, tries: 1, first_at: b.at, group_id: b.action_id };
+    delete shown.session;
+    open.set(key, { block: shown, earliest: Number.isFinite(at) ? at : 0 });
+    groups.push(shown);
   }
-  return groups.map(({ earliest: _earliest, ...b }) => b);
+  return groups;
 }
 
