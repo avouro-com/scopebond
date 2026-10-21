@@ -1,5 +1,35 @@
 # @scopebond/gateway
 
+## 0.20.6
+
+### Patch Changes
+
+- fcad353: The replay check on each decision is now one indexed lookup, so deciding an action takes the same few milliseconds however many receipts the local log holds.
+  
+  - gateway: the SQLite receipt store keeps an index of the request and approval ids its receipts name, written with each receipt in the same transaction (also by an older version sharing the file). A store made before the index still reads its recent receipts for the replay check until the index covers the replay window, and upkeep removes index rows after the seven days finished authority records are kept. An id the index holds is always refused.
+  - hook: a new test decides 200 tool calls against a log of 20,000 receipts (50,000 with `SCOPEBOND_BENCH=1`) and requires a 95th-percentile decision time under 10 ms.
+- 0a0332d: Receipts may now carry two optional members a signed plugin gave the action: `pattern_id` (64 lowercase hex) and `intel`, an opaque slot of padded base64 holding at most 4 KiB. The receipt schema, `isReceiptIntel`/`isReceiptPatternId` and the `receipt_intel` vectors describe their shape only; the gateway signs them through the new `intel` option of `handleAction` and `observeAction`, `validateReceiptIntel` checks them, and a receipt made without them is unchanged byte for byte.
+  
+  The hook can now load one optional signed plugin from `<home>/intel/current/intel.mjs`: only when the manifest beside it (`{ version, sha256, signature, key_id }`) verifies against a pinned policy key over `scopebond:component/intel/v1` and the module's SHA-256. It is asked about each action within 2 ms (a throw, a promise, a late or malformed answer gives nothing) and its answer is signed into the receipt as `pattern_id` and `intel`; it never changes a decision, and without it the hook writes exactly the receipts it wrote before.
+  
+  New `scopebond-hook packs test --all` runs the vectors of every rule pack in force with this engine (and `packs test <file>` those of one pack file), exiting non-zero when one fails; it is the check an engine update runs before the new engine is used.
+  
+  The signed install's hook now runs a newer engine bundle the agent staged and checked: `<home>/engine/current.json` names it, and it is loaded only when its manifest is signed by an updater key the executable carries, its bytes are the ones the manifest names, and it is newer than the engine inside the executable. Otherwise, or when it fails to start (recorded; after two failures it is not tried again), the engine inside the executable decides the call, and hook entries keep the `"<exe>" hook <harness>` form they have today.
+  
+  The signed Scopebond Agent (per user and for every user) now takes a newer engine without a new installer: when the workspace names `hook_bundle` in its client-version answer, the agent downloads the bundle, checks the manifest's updater-key signature, the archive's and every file's SHA-256 and that it is newer (never an older bundle), stages it under `<home>/engine/<version>/`, runs the new engine's `packs test --all` against the packs in force, and only then names it in `<home>/engine/current.json`. A bundle that fails its vectors, or fails to start twice, is rolled back (to the one before it, else to the engine the installer carries) and never taken again.
+  
+  The agent installs the plugin component its workspace names (`intel: { version, sha256, url }`): fetched from the workspace only, with the computer's credential and hook version, checked against the named SHA-256 and the pinned policy key, staged under `<home>/intel/<version>/` and switched to as `<home>/intel/current`; it is removed when the workspace is not licensed (402) or stops naming it.
+- 22dd251: `scopebond intel show [--json] [--raw]` prints what the next upload of records to the workspace will contain: it runs the hook's own uploader against a copy of the delivery queue, without sending or changing anything, and shows a summary by category (action kinds, parameters, rule results and rules, coding tools, counts) and the request bodies, with a plugin's opaque slot shown as its size (its base64 with `--raw`) and parameters masked again; when nothing is waiting it says so and shows the fields one record carries. The hook README has a new "What leaves this computer" section.
+  
+  A delivery queue can now say what claiming a summary window would answer without claiming it (`peekWindow`), so a preview of the next delivery changes nothing.
+- Updated dependencies [9a55ade]
+- Updated dependencies [1b8a705]
+- Updated dependencies [0a0332d]
+- Updated dependencies [f760776]
+- Updated dependencies [07f7189]
+  - @scopebond/verify@0.6.12
+  - @scopebond/policy-schema@0.11.3
+
 ## 0.20.5
 
 ### Patch Changes

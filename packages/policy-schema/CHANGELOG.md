@@ -1,5 +1,71 @@
 # @scopebond/policy-schema
 
+## 0.11.3
+
+### Patch Changes
+
+- 9a55ade: A workspace can now switch a rule Off (the hook reports the `rule_off` capability): the rule's actions run as routine and match nothing, while Scopebond's own protection and the refusal of commands whose program is only known when they run stay on, and an Off on a rule that can never be off is enforced as Block and noted in `status`.
+  
+  A workspace can now name exceptions for every rule that takes them, in Monitor as in Block (the hook reports the `exceptions_any_rule` capability): programs and the folders outside the working folder they may delete in for destructive-shell, environment names for production deploys, Kubernetes contexts and Terraform workspaces for cloud deletes, local database addresses for migrations, and sites for network requests; an excepted action matches no rule, and an exception never reaches further than what it names.
+  
+  An `action_allowlist` clause may carry `exceptions`, sets of bounds that excuse an action from the clause's `param_bounds` when it meets every bound of one set; a delete that reaches outside the working folder records those targets as `delete_targets`.
+  
+  A bare `git push` or `git push --force-with-lease` whose current branch cannot be read is now judged by the branch git names as its upstream, and is still denied when git cannot tell.
+  
+  safe-shell now also denies a file-system maker by its family name (`mkfs.<type>`), the PowerShell disk cmdlets `Format-Volume` and `Clear-Disk`, removing every scheduled job (`crontab -r`), and a recursive `chmod`, `chown` or `chgrp` of the whole disk, the home folder or a system folder, while their everyday forms stay allowed.
+  
+  The always-on protection now refuses reading a `cloud.json` only in a Scopebond folder (any project's own `config/cloud.json` reads as usual), and the coding agents' sub-agent definitions (`.claude/agents`) and `.mcp.json` move from it to the configuration rule a workspace can relax, while `.git/hooks`, `.git/config` and `.husky` stay always protected.
+  
+  A program run after a `cd` into a protected folder (Scopebond's own, or a credentials folder such as `~/.ssh`) now counts as a read of that folder, whatever its arguments, so `cd ~/.ssh && ls` is judged like reading `~/.ssh`.
+- 1b8a705: The agent now counts, per day, the questions it asks a person and the notifications the tray reports showing (`POST /fatigue`), and each rules check sends the counts as `x-scopebond-fatigue: toasts=n;prompts=n;day=YYYY-MM-DD` (counts only, never what was shown).
+  
+  The pack format now has engine levels: `PACK_ENGINE_LEVEL` is 2, a pack may say `requires: { engine, action_types? }`, and a pack rule may carry `title`, `blockable`, `default_mode`, `safer_way` and `allow_patterns`; a pack that uses any of them must say `requires.engine: 2`, every existing pack validates and reads exactly as before, `validatePack(doc, { engine: 1 })` reads a pack as an older engine does, and `packEngineProblem` says why an engine cannot run a pack (`engine_too_old` or `unknown_action_type`).
+  
+  A signed taxonomy extension (`scopebond:taxonomy-ext/v1`, at the `./taxonomy-ext` subpath) adds action types as data, and `getActionType` reads the extension in force after the built-in registry, never replacing a built-in type.
+  
+  A rule pack's rule can now say its own title, whether it may block and whether it blocks by default: the hook reads `blockable` (falling back to the target rules for older packs), applies `default_mode` until a person or the workspace sets the rule, names the block by the rule's `title`, adds the rule's `safer_way` to the deny message's "What to do" line, and keeps these fields out of the policy clause.
+  
+  A workspace can now set the mode of any rule pack's rule in `pack_rules` (the hook reports the `pack_rules` capability; `pack_rules` is digested with the rules), a person may allow or ask about such a rule when its terms say so, and `rules enforce|monitor` accepts a pack's own rules.
+  
+  The hook now reads packs at engine level 2 and says so (`x-scopebond-pack-engine: 2` on the rules check and on each pack fetch, and the `pack_engine_2` capability): a pack that needs a newer engine or an action type the hook does not know is skipped and reported (`engine_too_old` or `unknown_action_type`, with what it needs) while every other pack is kept, `SCOPEBOND_PACK_ENGINE_LEVEL` can lower the level to see what an older engine does, and the signed pack list may mark a pack `shadow` (its rules record what they would block) or kill versions (`killed`, covered by the list's digest), which are dropped at once in favour of the version held before.
+  
+  The hook now fetches and verifies the signed taxonomy extension a workspace names in its pack list (`taxonomy-ext`), so a pack can emit a new kind of action, and a policy that names one of its opt-in types decides those actions, without a new hook.
+  
+  A rule pack's grammar can now read local facts (an environment variable, a file's digest, a top-level configuration value) in the folder the command runs in, and an MCP profile can read the environment; a pack's own vectors still run without them, so they derive the same on every computer.
+  
+  Each rules check now reports the packs on the computer in `x-scopebond-packs` (`id@version,…;rejected=id@version:reason,…;engine=2`): the packs in force, the ones not taken and why, and the engine level.
+  
+  The hook now reads and pins a next policy-signing key from a document the current key signs (`scopebond:policy-next-key/v1`, sent as `policy_next_key` on a rules answer), so the key can be rotated without a release, and a computer its workspace manages enforces signed rules when that document says `managed_signature_mode: "enforce"`.
+  
+  A rule id the hook does not know in a workspace document, or a malformed `pack_rules` entry, is now skipped and reported (`skipped_rules` on the rules confirmation and in `managed-meta.json`) instead of refusing the whole document.
+- 0a0332d: Receipts may now carry two optional members a signed plugin gave the action: `pattern_id` (64 lowercase hex) and `intel`, an opaque slot of padded base64 holding at most 4 KiB. The receipt schema, `isReceiptIntel`/`isReceiptPatternId` and the `receipt_intel` vectors describe their shape only; the gateway signs them through the new `intel` option of `handleAction` and `observeAction`, `validateReceiptIntel` checks them, and a receipt made without them is unchanged byte for byte.
+  
+  The hook can now load one optional signed plugin from `<home>/intel/current/intel.mjs`: only when the manifest beside it (`{ version, sha256, signature, key_id }`) verifies against a pinned policy key over `scopebond:component/intel/v1` and the module's SHA-256. It is asked about each action within 2 ms (a throw, a promise, a late or malformed answer gives nothing) and its answer is signed into the receipt as `pattern_id` and `intel`; it never changes a decision, and without it the hook writes exactly the receipts it wrote before.
+  
+  New `scopebond-hook packs test --all` runs the vectors of every rule pack in force with this engine (and `packs test <file>` those of one pack file), exiting non-zero when one fails; it is the check an engine update runs before the new engine is used.
+  
+  The signed install's hook now runs a newer engine bundle the agent staged and checked: `<home>/engine/current.json` names it, and it is loaded only when its manifest is signed by an updater key the executable carries, its bytes are the ones the manifest names, and it is newer than the engine inside the executable. Otherwise, or when it fails to start (recorded; after two failures it is not tried again), the engine inside the executable decides the call, and hook entries keep the `"<exe>" hook <harness>` form they have today.
+  
+  The signed Scopebond Agent (per user and for every user) now takes a newer engine without a new installer: when the workspace names `hook_bundle` in its client-version answer, the agent downloads the bundle, checks the manifest's updater-key signature, the archive's and every file's SHA-256 and that it is newer (never an older bundle), stages it under `<home>/engine/<version>/`, runs the new engine's `packs test --all` against the packs in force, and only then names it in `<home>/engine/current.json`. A bundle that fails its vectors, or fails to start twice, is rolled back (to the one before it, else to the engine the installer carries) and never taken again.
+  
+  The agent installs the plugin component its workspace names (`intel: { version, sha256, url }`): fetched from the workspace only, with the computer's credential and hook version, checked against the named SHA-256 and the pinned policy key, staged under `<home>/intel/<version>/` and switched to as `<home>/intel/current`; it is removed when the workspace is not licensed (402) or stops naming it.
+- f760776: A delete outside the working folder whose every target is tracked and committed in a git repository (nothing modified, staged, untracked or ignored under it) is now recorded instead of blocked, as `program_scope` `<program>/git_restorable`, because git can restore it; an untracked or changed target, a target outside any repository, the repository's own top folder, and any git error or slow answer keep the block.
+  
+  A person who may unblock an action can now allow "Similar commands in this project" instead, where the workspace lets them (`override.patterns`: `person`, `needs_admin` or `off`; the hook reports the `pattern_allowances` capability): the allowance carries `match` (the rule, the action type, the recipe and its bounds) and never matches outside one folder of one project or repository, another rule, or an always-on protection.
+  
+  The policy schema now defines a rule's pattern recipes (`allow_patterns`: `path_prefix`, `path_glob`, `package_name`, `host`, `mcp_tool`) and the bounds of a pattern allowance (`allowance.match`), with checks that refuse any bound wider than one project folder or repository, a `..` or `.` segment, or a wildcard where a folder is named.
+  
+  The agent's block offers now carry `similar` (the words, an example it covers and one it does not, and whether it needs an admin), and `POST /blocked/answer` accepts `scope: "similar"` with a length.
+  
+  The tray's Unblock form shows "Similar commands in this project" beside "Just this command" where it is offered, with its words and examples, and names the result on its button ("Allow similar commands for 30 days").
+- 07f7189: The hook now reads local rule packs that `rules.json` names (`"packs": { "local": [...] }`, paths relative to that file): they use the same format and engine as delivered packs, are checked the same way on every call (format, engine level, action types, every vector) without needing a signature (or with one by a key listed in `packs.trusted_keys`), only add rules (a delivered pack with the same id, grammar or MCP server comes first, and a local rule can neither reuse a rule id nor cover a type of call the policy does not), and are named by `packs list`, `status` and `doctor` when they are not used.
+  
+  `scopebond packs test <file|folder>...` now checks pack files as local packs and runs each vector through the engine, printing a pass/fail line per vector with what the hook would decide (allow, deny, ask) and the rule that matched; `--json` reports every result, and the command exits non-zero when a vector fails or a file is not a usable pack.
+  
+  The hook package now ships four general rule packs (`git-safety`, `secrets-hygiene`, `build-hygiene`, `ci-guard`) and an authoring guide in its `packs` folder.
+  
+  `validatePack(doc, { unsigned: true })` reads a local pack, whose `signature` may be left out.
+
 ## 0.11.2
 
 ### Patch Changes
