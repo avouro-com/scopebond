@@ -50,7 +50,7 @@ test("allow once from the tray: checked as the window would be, applied once, th
     const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.equal(allowances.length, 1);
     assert.equal(allowances[0].choice, "once");
-    assert.equal(allowances[0].what, "rm -rf build");
+    assert.equal(allowances[0].what, "rm -rf build (in /repo)");
     assert.equal(allowances[0].rule_title, "Run a command that deletes data or shuts down the computer");
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
     assert.equal(tray.allowed.length, 1);
@@ -69,7 +69,7 @@ test("only a choice the workspace offers is applied; always waits for an admin a
     assert.equal(done.text, "Allowed for 15 minutes; always once an admin approves · Recorded on this computer");
     const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.deepEqual(allowances.map((a) => [a.choice, a.state, a.needs_admin]).sort(), [["always", "proposed", true], ["fifteen", "active", false]]);
-    assert.ok(allowances.every((a) => a.what === "rm -rf build"));
+    assert.ok(allowances.every((a) => a.what === "rm -rf build (in /repo)"));
   } finally { await service.stop(); }
 });
 
@@ -88,7 +88,7 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
     let { requests } = await callAgent(dir, "GET", "/requests", undefined, 10_000);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].state, "waiting");
-    assert.equal(requests[0].what, "rm -rf build");
+    assert.equal(requests[0].what, "rm -rf build (in /repo)");
     assert.equal(requests[0].reason, REASON);
     // The workspace approves: its allowance for the same rule and action arrives in the rules document.
     const request = readRequests(dir)[0];
@@ -101,7 +101,7 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
     assert.equal(requests[0].answered_by, "morgan@acme.test");
     const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.equal(allowances[0].by, "admin");
-    assert.equal(allowances[0].what, "rm -rf build");
+    assert.equal(allowances[0].what, "rm -rf build (in /repo)");
     // A workspace that says it declined, with a note.
     writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ ...doc, request_answers: [{ request_id: request.id, state: "declined", by: "morgan@acme.test", note: "Use the clean script\u0007" }] }));
     ({ requests } = await callAgent(dir, "GET", "/requests", undefined, 10_000));
@@ -209,7 +209,7 @@ test("stop allowing from the tray: the person's allowance ends at once and leave
     const [mine] = (await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances;
     assert.equal(mine.by, "person");
     const stopped = await callAgent(dir, "POST", "/allowances/stop", { id: mine.id }, 10_000);
-    assert.deepEqual(stopped, { outcome: "stopped", text: "Stopped allowing rm -rf build on this computer" });
+    assert.deepEqual(stopped, { outcome: "stopped", text: "Stopped allowing rm -rf build (in /repo) on this computer" });
     assert.deepEqual((await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances, []);
     assert.ok(readAllowances(dir).find((a) => a.id === mine.id).ended_at);
     assert.equal((await callAgent(dir, "POST", "/allowances/stop", { id: mine.id }, 10_000)).outcome, "gone");
