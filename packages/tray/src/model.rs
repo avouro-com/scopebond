@@ -90,6 +90,8 @@ pub struct RecentBlock {
     pub tries: u32,
     /// The first try's action id, the same for every retry, so a retry is not announced again (none from an older agent).
     pub group_id: Option<String>,
+    /// The person marked this block "This shouldn't be blocked".
+    pub feedback_sent: bool,
     /// The one outcome the row shows, and the sentence that stands in for a button (none from an older agent).
     pub outcome: Option<String>,
     pub outcome_text: Option<String>,
@@ -157,6 +159,8 @@ pub struct TrayModel {
     pub today: Option<Today>,
     /// Whether the workspace lets a person ask an admin under any rule (none from an older agent).
     pub can_ask: Option<bool>,
+    /// The workspace takes "This shouldn't be blocked" marks; false from an older agent.
+    pub feedback_offered: bool,
     /// What the person let through (in force, or waiting for an admin), newest first.
     pub allowed: Vec<AllowedItem>,
     /// What the person asked an admin, newest first, with the answer when there is one.

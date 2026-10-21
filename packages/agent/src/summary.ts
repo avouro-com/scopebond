@@ -14,6 +14,8 @@ export interface ComputerSummary {
   review_url: string | null;
   open_reviews: number;
   stage: string | null;
+  /** What the workspace takes from this computer beyond records (`block_feedback`); empty from an older workspace. */
+  capabilities: string[];
 }
 
 const text = (v: unknown, max = 200): string | null => (typeof v === "string" && v.length <= max ? v : null);
@@ -31,6 +33,7 @@ export async function fetchComputerSummary(connection: HookConnection, fetchImpl
       computer_url: link(body.computer_url), review_url: link(body.review_url),
       open_reviews: Number.isSafeInteger(body.open_reviews) && (body.open_reviews as number) >= 0 ? body.open_reviews as number : 0,
       stage: text(body.stage, 40),
+      capabilities: Array.isArray(body.capabilities) ? body.capabilities.filter((c): c is string => typeof c === "string" && c.length <= 40).slice(0, 20) : [],
     };
   } catch { return null; }
 }

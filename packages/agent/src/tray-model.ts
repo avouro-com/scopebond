@@ -48,6 +48,8 @@ export interface TrayModel {
   /** Whether the workspace lets a person ask an admin under any rule (so the tray shows its Requests list even before the
    *  person has asked anything); absent from an older agent. */
   can_ask?: boolean;
+  /** The workspace takes "This shouldn't be blocked" marks (its `block_feedback` capability); absent from an older agent. */
+  feedback_offered?: boolean;
   /** What the person let through (in force or waiting for an admin), and what they asked an admin (allowed-asked.ts). */
   allowed?: AllowedItem[];
   asked?: AskedItem[];
@@ -112,6 +114,8 @@ export interface RecentBlock {
    *  block) and when it first did; the one outcome the row shows (block-outcome.ts), the sentence that stands in for a
    *  button, the text "Copy details" copies, and the person's request for it, when they asked. */
   tries?: number; first_at?: string; group_id?: string | null;
+  /** The person marked this block "This shouldn't be blocked". */
+  feedback_sent?: boolean;
   outcome?: BlockOutcome; outcome_text?: string | null; copy_details?: string | null; request?: BlockRequest | null;
   /** Newer again: why the rule exists, in one line (the first sentence of the rule's description on this computer), for the
    *  block's details; absent when the rule says nothing about itself. */

@@ -344,6 +344,11 @@
       ]),
       cloud ? el("div", {}, [el("button", { class: "btn text", type: "button", "data-key": "cloud-" + id, text: "View in Scopebond Cloud ↗",
         onclick: () => run("action", "open_workspace") })]) : null,
+      // "This shouldn't be blocked": a mark the workspace's admins see beside the rule; once per block.
+      model && model.feedback_offered && id ? el("div", {}, [b.feedback_sent
+        ? el("span", { class: "meta", text: "You marked this as not a concern" })
+        : el("button", { class: "btn text", type: "button", "data-key": "feedback-" + id, text: "This shouldn't be blocked",
+          onclick: async () => { try { await invoke("panel_feedback", { actionId: id }); } catch (_) { /* the note says why */ } setTimeout(refresh, 150); } })]) : null,
     ]);
   }
   /** The title of a block's row: a button that opens and closes its details. */

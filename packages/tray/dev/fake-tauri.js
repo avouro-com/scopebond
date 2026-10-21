@@ -138,7 +138,7 @@
   ];
   const base = () => ({
     state: "protected", headline: "Protected", tooltip: "Scopebond — Protected · Acme", rows, fix: null, actions, hint: null,
-    recent_blocks: blocks(), detail: "3 blocked today · rules updated 3 min ago", workspace: "Acme", today: { actions: 1160, blocked: 3 },
+    recent_blocks: blocks(), detail: "3 blocked today · rules updated 3 min ago", workspace: "Acme", today: { actions: 1160, blocked: 3 }, feedback_offered: true,
     allowed: allowed(), asked: asked(),
     computer_rows: computerRows, version_label: "Scopebond 0.11.5",
   });
@@ -270,6 +270,13 @@
       pending = null;
       say(resultText(choice, offered, what));
       if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", kind: choice === "quiet" ? "quiet" : "allow", rule: "force-push-protected", rule_title: "Rewrite history on a protected branch", what, choice: choice === "quiet" ? "always" : choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + LENGTH_MIN[choice] * MIN).toISOString(), answered_by: null, unblocked: "person" });
+      return true;
+    },
+    panel_feedback: ({ actionId }) => {
+      const b = model && model.recent_blocks.find((x) => x.action_id === actionId);
+      if (!b) return false;
+      b.feedback_sent = true;
+      say("Noted: your workspace's admins see that this shouldn't have been blocked");
       return true;
     },
     panel_stop: ({ id }) => {

@@ -1013,6 +1013,25 @@ fn panel_stop(id: String, shared: State<'_, Arc<Shared>>) -> bool {
     true
 }
 
+/// "This shouldn't be blocked" on a block in the panel: the agent keeps the mark and sends it to the workspace.
+#[tauri::command]
+fn panel_feedback(action_id: String, shared: State<'_, Arc<Shared>>) -> bool {
+    let known = lock(&shared.answer).as_ref().is_some_and(|a| a.tray.feedback_offered && a.tray.recent_blocks.iter().any(|b| b.action_id.as_deref() == Some(action_id.as_str())));
+    if !known {
+        return false;
+    }
+    let s = shared.inner().clone();
+    thread::spawn(move || {
+        let text = match s.client.call("POST", "/blocked/feedback", Some(&json!({ "action_id": action_id })), Duration::from_secs(10)) {
+            Ok(answer) => panel::block_text(&answer),
+            Err(e) => format!("It could not be noted: {e}"),
+        };
+        s.set_note(text);
+        s.wake();
+    });
+    true
+}
+
 /// The panel's Unblock form has input (keep the panel open when it loses focus), or no longer has.
 #[tauri::command]
 fn panel_hold(hold: bool, shared: State<'_, Arc<Shared>>) {
@@ -1074,7 +1093,7 @@ fn main() {
             }
         }))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_live, panel_stop, panel_hold, panel_command, panel_ready, panel_close])
+        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_live, panel_stop, panel_feedback, panel_hold, panel_command, panel_ready, panel_close])
         .setup(move |app| {
             let handle = app.handle().clone();
             if let Err(e) = create_tray(&handle, &shared) {

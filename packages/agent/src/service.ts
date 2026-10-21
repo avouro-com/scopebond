@@ -4,6 +4,7 @@
 // versions to run, and once a day it runs the end-to-end self-check.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
@@ -28,6 +29,7 @@ import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { allowedList, askedList, blockStates } from "./allowed-asked.js";
+import { BLOCK_FEEDBACK_CAPABILITY, blockFeedbackFor, queueBlockFeedback, sendBlockFeedback } from "./block-feedback.js";
 import { blockOutcome } from "./block-outcome.js";
 import { checkResult, projectName, RECENT_BLOCKS_MAX, RULES_STALE_MS, supportBundle, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
@@ -523,6 +525,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const sent = await sendAllowancesAndRequests(options.dir, connection, options.fetchImpl);
       if (sent.allowances || sent.requests || sent.ended) log(`sent ${sent.allowances} allowance(s), ${sent.ended} stopped allowance(s) and ${sent.requests} request(s) to the workspace`);
     } catch { /* they wait for the next cycle */ }
+    // "This shouldn't be blocked" marks, to a workspace that takes them.
+    if (summary?.capabilities.includes(BLOCK_FEEDBACK_CAPABILITY)) {
+      try { const n = await sendBlockFeedback(options.dir, connection, options.fetchImpl); if (n) log(`sent ${n} "shouldn't be blocked" mark(s) to the workspace`); }
+      catch { /* they wait for the next cycle */ }
+    }
   };
   const cycle = async (): Promise<CycleResult> => {
     if (running) return running;
@@ -731,6 +738,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const actionable = (blocks: RecentBlockRecord[], now: number): RecentBlock[] => {
     const known = new Map(readBlocked(options.dir).map((b) => [b.id, b]));
     const states = blockStates(options.dir, now);
+    const marked = blockFeedbackFor(options.dir);
     const workspace = summary?.workspace_name ?? null;
     // Why each rule exists, for a block's details: the clause's own description in this computer's policy, read once.
     let policy: ExplainPolicy | undefined;
@@ -762,6 +770,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         offers,
         reason_min: q ? q.reason_min : null,
         tries: b.tries ?? 1, first_at: b.first_at ?? b.at, group_id: b.group_id ?? b.action_id,
+        feedback_sent: b.action_id ? marked.has(b.action_id) : false,
         ...outcome,
         request,
         rule_why: whyOf(findClause(policy, b.clause ?? null)?.description ?? findClause(policy, rule)?.description),
@@ -821,7 +830,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         ? { expires_at: renewal.expires_at && Number.isFinite(Date.parse(renewal.expires_at)) ? Date.parse(renewal.expires_at) : null } : null,
     });
     // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
-    return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
+    return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir), feedback_offered: summary?.capabilities.includes(BLOCK_FEEDBACK_CAPABILITY) ?? false };
   };
   /** What this install can update to, for the tray: from npm, the workspace's agent and hook (as its rules check said);
    *  the signed install, only the signed build the workspace names (the hook is inside it); for every user, nothing. */
@@ -1032,6 +1041,21 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     "GET /requests": () => ({ requests: askedList(options.dir) }),
     // "Stop allowing": the person ends an allowance they made here. It stops applying at once, and the ended record goes to
     // the workspace, signed by this computer's key.
+    // "This shouldn't be blocked": the person's mark on a block, kept here and sent to a workspace that takes it. Only a block
+    // this computer recorded can be marked, once.
+    "POST /blocked/feedback": (body) => {
+      const id = typeof (body as { action_id?: unknown } | null)?.action_id === "string" ? String((body as { action_id: string }).action_id) : "";
+      // A block a person could act on has its action's key; any other block of the week is named by its record, and its key is
+      // a digest of the record's id (the workspace finds the block by the record).
+      const item = id ? readBlocked(options.dir).find((b) => b.id === id) : undefined;
+      const listed = item ? undefined : localActivity(options.dir, { limit: RECENT_BLOCKS_MAX })?.recent_blocks.find((b) => b.action_id === id);
+      const rule = item?.rule ?? listed?.rule ?? listed?.clause ?? null;
+      if (!id || !rule) return { outcome: "gone", text: "This block is no longer on this computer." };
+      const actionKey = item?.action_key ?? createHash("sha256").update(`record:${id}`).digest("hex");
+      const added = queueBlockFeedback(options.dir, { action_id: id, rule, action_key: actionKey, harness: item?.harness ?? listed?.harness ?? null });
+      if (added) setTimeout(() => { void sendReasons(); }, 1_000);
+      return { outcome: added ? "noted" : "already", text: "Noted: your workspace's admins see that this shouldn't have been blocked" };
+    },
     "POST /allowances/stop": (body) => {
       const id = typeof (body as { id?: unknown } | null)?.id === "string" ? String((body as { id: string }).id) : "";
       const item = allowedList(options.dir).find((a) => a.id === id && a.by === "person");
