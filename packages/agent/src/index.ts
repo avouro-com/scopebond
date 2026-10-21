@@ -10,6 +10,8 @@ export { runUninstall, spawnHook, HOOK_UNINSTALL_TIMEOUT_MS } from "./uninstall.
 export type { UninstallOptions, HookRun, HookRunner } from "./uninstall.js";
 export { awakeSinceAtStart, readAwake, writeAwake, AWAKE_FILE } from "./awake.js";
 export type { AwakeState } from "./awake.js";
+export { noteRunningVersion, recentUpdate, VERSION_SEEN_FILE, UPDATED_SHOWN_MS } from "./version-seen.js";
+export type { Updated } from "./version-seen.js";
 export { runUpkeepApart, upkeepCommand, UPKEEP_BUDGET_MS, UPKEEP_TIMEOUT_MS } from "./upkeep.js";
 export type { UpkeepReport, UpkeepApartOptions } from "./upkeep.js";
 export { startControl, callAgent, readEndpoint, localSocketPath, AGENT_FILE, TOKEN_HEADER } from "./ipc.js";

@@ -60,6 +60,15 @@ export interface TrayModel {
   /** What this computer enforces, for Settings' "This computer" row; null before the rules can be read. Absent from an older
    *  agent. */
   rules?: TrayRules | null;
+  /** The code of a sign-in waiting for approval (the tray's tooltip shows it whole); null otherwise. Absent from an older
+   *  agent. */
+  sign_in_code?: string | null;
+  /** This computer has not finished its first sign-in yet (never connected; the tray tells no problem meanwhile, and says
+   *  "Connected to …" once it is). Absent from an older agent. */
+  first_sign_in?: boolean;
+  /** The update this computer took, for a day after it (the tray says "Updated to …" once); null otherwise. Absent from an
+   *  older agent. */
+  updated?: { from: string; to: string; at: string } | null;
 }
 
 /** The rules in force: how many block and how many only record (every starter, workspace and pack rule, and each service the
@@ -224,6 +233,8 @@ export interface TrayInput {
   packs?: Array<{ id: string; title: string; version: string }> | null;
   /** When the rules were last checked successfully (a failed check never moves it); absent: `rules.checked_at`. */
   rulesUpdatedAt?: number | null;
+  /** The update this computer took, while the tray should still name it (version-seen.ts `recentUpdate`). */
+  updated?: { from: string; to: string; at: string } | null;
 }
 
 const MIN = 60_000;
@@ -412,7 +423,8 @@ export function trayModel(input: TrayInput): TrayModel {
 
   const where = [input.workspace?.name, input.workspace?.environment].filter(Boolean).join(" · ");
   const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : headline;
-  const tooltip = `Scopebond — ${label}`;
+  // A sign-in waiting: the code, whole (the headline would be cut at 63 characters before it).
+  const tooltip = input.signingIn ? `Scopebond: approve code ${input.signingIn.user_code}` : `Scopebond — ${label}`;
   // One line under "Protected": what was blocked today and when the rules were last updated (Settings says the rest).
   const updatedAt = input.rulesUpdatedAt !== undefined ? input.rulesUpdatedAt : input.rules?.checked_at ?? null;
   let detail: string | null = null;
@@ -438,6 +450,9 @@ export function trayModel(input: TrayInput): TrayModel {
     } : null,
     computer_rows: computerRows(input, state, updatedAt, updateAvailable),
     version_label: `Scopebond ${input.version.agent}`,
+    sign_in_code: input.signingIn?.user_code ?? null,
+    first_sign_in: !d.connected && (input.canSignIn === true || !!input.signingIn),
+    updated: input.updated ?? null,
   };
 }
 

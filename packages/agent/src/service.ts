@@ -41,6 +41,7 @@ import {
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
 import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
+import { noteRunningVersion, recentUpdate } from "./version-seen.js";
 import { withoutNodeInjection } from "./child-env.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
@@ -351,6 +352,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   rmSync(join(options.dir, STOPPED_FILE), { force: true });
   // What the install helper of a signed update recorded before this start (installAfterExit).
   noteUpdateOutcome(options.dir, log);
+  // The update this start finishes, if any: the tray says "Updated to …" once.
+  const updatedHere = noteRunningVersion(options.dir, agentVersion());
   // No agent has run in this folder before (it writes its wake time from its first cycle): a new install.
   settleTraySettings(options.dir);
   const interval = options.intervalMs ?? INTERVAL_MS;
@@ -658,6 +661,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       canAsk: workspaceLetsAsk(options.dir),
       packs: packsInForce(),
       rulesUpdatedAt: lastGoodCheck(meta),
+      updated: recentUpdate(updatedHere, now),
     });
     // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
     return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
