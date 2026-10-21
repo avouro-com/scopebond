@@ -260,7 +260,7 @@ test("no tray and no window: the denial's line for the person says where to allo
     assert.match(askLine, /ask an admin to unblock it from the Scopebond icon in the notification area \(its recent blocks: choose the record below\)/);
     assert.doesNotMatch(askLine, /https:/, "no link the agent did not give");
     // An agent that is not running: as before, the denial says to start it, and the line for the person is the workspace's.
-    const down = await run(allow.dir, bash("rm -rf build"), { answers: [{ decision: "unavailable" }] });
+    const down = await run(allow.dir, bash("rm -rf dist"), { answers: [{ decision: "unavailable" }] });
     assert.match(down.reason, /Scopebond Agent is not running/);
     assert.doesNotMatch(down.reason, /recent blocks/);
   } finally { for (const s of [allow, ask]) rmSync(s.dir, { recursive: true, force: true }); }
@@ -340,4 +340,20 @@ test("the agent's answer with no reason reads as an empty reason; a reason that 
   assert.deepEqual(await askAgent(home, {}, 1000, answering({ decision: "allow", lasts: "always" })), { decision: "allow", reason: "", lasts: "always" });
   assert.deepEqual(await askAgent(home, {}, 1000, answering({ decision: "ask" })), { decision: "ask", reason: "" });
   assert.deepEqual(await askAgent(home, {}, 1000, answering({ decision: "allow", reason: 42 })), { decision: "unavailable" });
+});
+
+test("the coding agent trying a blocked action again within 10 minutes is not asked about again; later it is", async () => {
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms() } });
+  const t0 = Date.parse("2026-10-20T16:17:00Z");
+  const first = await run(dir, bash("rm -rf /data/old"), { now: () => t0 });
+  assert.equal(first.decision, "deny");
+  assert.equal(first.asked.length, 1, "asked once");
+  const retry = await run(dir, bash("rm -rf /data/old"), { now: () => t0 + 4 * 60_000 });
+  assert.equal(retry.decision, "deny");
+  assert.equal(retry.asked.length, 0, "a retry is not a new question");
+  assert.match(retry.reason, /Don't try it again/);
+  const other = await run(dir, bash("rm -rf /data/other"), { now: () => t0 + 5 * 60_000 });
+  assert.equal(other.asked.length, 1, "another action is asked about");
+  const later = await run(dir, bash("rm -rf /data/old"), { now: () => t0 + 30 * 60_000 });
+  assert.equal(later.asked.length, 1, "after 10 minutes without a try it is asked about again");
 });

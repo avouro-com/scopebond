@@ -13,3 +13,5 @@ Every block carries one outcome: Unblock, Ask an admin, or a plain sentence sayi
 "Check now" checks the rules and packs again and runs the self-check; it never installs an update. A failed self-check is kept until a check passes.
 
 The npm tray icon's menu shows `&` in commands as it is.
+
+The coding agent trying a blocked action again within 10 minutes, before the person answered, is not asked about again: the denial tells the agent not to retry and to tell the person, who acts on it from the tray.

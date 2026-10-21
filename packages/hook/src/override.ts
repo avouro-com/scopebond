@@ -281,10 +281,13 @@ function projectOfCall(ctx: OverrideContext): { project?: string } {
 /** What happened when the last override was considered, so a denial can say how an override would be possible. */
 export interface OverrideNote {
   rule: AnyManagedRuleId; title: string;
-  outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" | "later" | "ask_later";
+  outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" | "later" | "ask_later" | "retry";
   /** This computer's page in the workspace (`later`, `ask_later`), when the agent gave it. */
   link?: string;
 }
+
+/** A block of the same action within this long of an earlier one, not answered since, is a retry: no new question. */
+const RETRY_MS = 10 * 60 * 1000;
 
 export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOverrideHandler; note(): OverrideNote | null } | null {
   let doc: ManagedDocument;
@@ -343,6 +346,11 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
       }
     }
     if (allowing && !underDailyLimit(terms, state.entries.filter((e) => e.rule === rule && e.at >= dayStart).length)) { last = { rule, title, outcome: "limit" }; blocked(); return null; }
+    // The coding agent trying again what was blocked a few minutes ago, not answered since: one question per block, so no new
+    // prompt. The tray's row for the block (retries folded into it) is where the person acts.
+    const retryOf = readBlocked(ctx.dir).find((b) => b.rule === rule && keys.includes(b.action_key) && !b.acted && b.harness === ctx.harness
+      && t - Date.parse(b.at) >= 0 && t - Date.parse(b.at) < RETRY_MS);
+    if (retryOf) { last = { rule, title, outcome: "retry" }; blocked(); return null; }
 
     const waitMs = typeof ctx.waitMs === "function" ? ctx.waitMs() : ctx.waitMs ?? 45_000;
     let answer = await (ctx.ask ?? askAgent)(ctx.home, {
@@ -487,6 +495,7 @@ export function overrideHint(note: OverrideNote | null): string | null {
   switch (note.outcome) {
     case "unavailable": return `Your workspace lets you allow this once with a reason in the Scopebond window, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
     case "limit": return `You have used today's overrides for "${note.title}". It blocks until tomorrow.`;
+    case "retry": return `This was blocked a few minutes ago and the person has not answered yet. Don't try it again: tell the person what you were trying to do; they can act on it from the Scopebond icon.`;
     case "declined": return `The override was not given.`;
     case "not_overridable": return null;
     case "asked": return `A request to allow "${note.title}" was sent to your workspace's admins. The Scopebond icon shows their answer; then run it again.`;
