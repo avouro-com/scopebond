@@ -43,6 +43,9 @@ SDK signatures; cross-package vectors pin the resulting bytes.
   approval and monitor violations regardless of clause order.
 - **Action allowlists are closed** — when present, an unlisted action violates
   the allowlist; bounded numeric and patterned values must have the required type.
+- **Exceptions are bounded** — an `action_allowlist` clause's `exceptions` excuse an
+  action from its `param_bounds` only when it meets every bound of one exception; a
+  field the action does not carry never meets one.
 - **`global` scope** returns `undetermined` (not `violated`) when the caller signals
   the cross-gateway receipt set is incomplete.
 
@@ -99,7 +102,7 @@ claim-time verification over the full receipt set is unaffected.
 `spend_limit` (per-action + windowed, principal/global), `rate_limit`,
 `require_approval`, `sequence`, `time_window`, `endpoint_allowlist` /
 `endpoint_denylist`, `address_allowlist` / `address_denylist`,
-`contract_allowlist`, `action_allowlist` (param bounds), `key_policy`.
+`contract_allowlist`, `action_allowlist` (param bounds and exceptions), `key_policy`.
 
 Endpoint clauses compare `endpointDestination(host)`: the host as the WHATWG URL
 parser (and so `fetch`) reads it, with every spelling of an address in one form and an

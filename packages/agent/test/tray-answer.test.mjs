@@ -29,10 +29,10 @@ test("an answer from the form is read strictly", () => {
   }
   // No reason is an empty one; the workspace's minimum decides whether that is enough.
   assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "once" }), { action_id: "act-1", choice: "once", reason: "" });
-  assert.equal(answerText("allowed", "once", 30, "Acme", true), "Allowed once · Recorded and sent to Acme");
-  assert.equal(answerText("allowed", "always", 14, null, true), "Always allowed on this computer for 14 days · Recorded and sent to your workspace");
-  assert.equal(answerText("asked", "ask", 30, "Acme", true), "Request sent · you'll see the answer under Requests");
-  assert.equal(answerText("asked", "ask", 30, "Acme", false), "Request saved, sent once this computer is connected · you'll see the answer under Requests");
+  assert.equal(answerText("allowed", "once", 30, "Acme", true), "Allowed once · recorded in Acme");
+  assert.equal(answerText("allowed", "always", 14, null, true), "Allowed for 14 days · recorded in your workspace");
+  assert.equal(answerText("asked", "ask", 30, "Acme", true), "Request sent · the answer shows on the block");
+  assert.equal(answerText("asked", "ask", 30, "Acme", false), "Request saved, sent once this computer is connected · the answer shows on the block");
 });
 
 test("allow once from the tray: checked as the window would be, applied once, then no longer offered", async () => {
@@ -43,7 +43,7 @@ test("allow once from the tray: checked as the window would be, applied once, th
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: "too short" })).outcome, "reason_short", "the workspace's minimum (12)");
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: 42 })).outcome, "invalid");
     const done = await answer(dir, { action_id: id, choice: "once", reason: REASON });
-    assert.deepEqual(done, { outcome: "allowed", choice: "once", text: "Allowed once · Recorded on this computer" });
+    assert.deepEqual(done, { outcome: "allowed", choice: "once", text: "Allowed once: rm -rf ../build (in /repo) · recorded on this computer" });
     const made = readAllowances(dir).at(-1);
     assert.equal(made.once, true);
     assert.equal(made.reason, REASON);
@@ -68,7 +68,7 @@ test("only a choice the workspace offers is applied; always waits for an admin a
     assert.equal(readRequests(dir).length, 0);
     const done = await answer(dir, { action_id: id, choice: "always", reason: REASON });
     assert.equal(done.outcome, "proposed");
-    assert.equal(done.text, "Allowed for 15 minutes; always once an admin approves · Recorded on this computer");
+    assert.equal(done.text, "Allowed for 15 minutes while an admin decides on 14 days: rm -rf ../build (in /repo) · recorded on this computer");
     const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.deepEqual(allowances.map((a) => [a.choice, a.state, a.needs_admin]).sort(), [["always", "proposed", true], ["fifteen", "active", false]]);
     assert.ok(allowances.every((a) => a.what === "rm -rf ../build (in /repo)"));
@@ -82,11 +82,11 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "'Block, person may ask' never allows on the spot");
     // Only an admin unblocks: the tray is told that asking is all there is, and shows Ask to unblock and its Requests list.
     const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
-    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false });
+    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false });
     assert.equal(before.can_ask, true);
     const done = await answer(dir, { action_id: id, choice: "ask", reason: REASON });
     assert.equal(done.outcome, "asked");
-    assert.equal(done.text, "Request saved, sent once this computer is connected · you'll see the answer under Requests");
+    assert.equal(done.text, "Request saved: rm -rf ../build (in /repo), sent once this computer is connected · the answer shows on the block");
     let { requests } = await callAgent(dir, "GET", "/requests", undefined, 10_000);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].state, "waiting");
@@ -135,7 +135,7 @@ test("an answer from the tray reaches the workspace signed by this computer, as 
     writeFileSync(join(dir, MANAGED_DOC_FILE), doc); // as the workspace sent it, whatever the first rules check did
     const done = await answer(dir, { action_id: id, choice: "fifteen", reason: REASON });
     assert.equal(done.outcome, "allowed");
-    assert.match(done.text, /^Allowed for 15 minutes · Recorded and sent to /);
+    assert.match(done.text, /^Allowed for 15 minutes: .* · recorded in /);
     await service.cycleNow();
     const sent = posted.find((p) => p.path === "/v1/allowances");
     assert.ok(sent, "the allowance was sent");
@@ -145,15 +145,18 @@ test("an answer from the tray reaches the workspace signed by this computer, as 
   } finally { await service.stop(); server.close(); }
 });
 
-test("notifications: blocks and problems for a new install; the older 'all' reads the same; a person's choice stays", () => {
+test("notifications: one switch, on for every install; the older 'all' and 'problems' read as on; a person's off stays", () => {
   const fresh = mkdtempSync(join(tmpdir(), "sb-settings-"));
-  settleTraySettings(fresh, true);
+  settleTraySettings(fresh);
   assert.equal(readTraySettings(fresh).notifications, "blocks");
   const existing = mkdtempSync(join(tmpdir(), "sb-settings-"));
-  settleTraySettings(existing, false);
-  assert.equal(readTraySettings(existing).notifications, "problems", "an install whose person never chose keeps problems only");
+  settleTraySettings(existing);
+  assert.equal(readTraySettings(existing).notifications, "blocks", "an install whose person never chose: on");
+  writeFileSync(join(existing, "agent-settings.json"), JSON.stringify({ notifications: "problems" }));
+  assert.equal(readTraySettings(existing).notifications, "blocks", "problems only, the old default nobody chose, reads as on");
+  assert.equal(readTraySettings(mkdtempSync(join(tmpdir(), "sb-settings-"))).notifications, "blocks", "no file: on");
   writeTraySettings(existing, { notifications: "off" });
-  settleTraySettings(existing, true);
+  settleTraySettings(existing);
   assert.equal(readTraySettings(existing).notifications, "off", "never changed once written");
   writeFileSync(join(existing, "agent-settings.json"), JSON.stringify({ notifications: "all" }));
   assert.equal(readTraySettings(existing).notifications, "blocks");
@@ -178,11 +181,11 @@ test("unblocking automatically, reviewed later: one length, applied at once, and
   const service = await serviceFor(dir);
   try {
     const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
-    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: true, always: false, always_days: null, always_needs_admin: false, ask: false, reviewed: true });
+    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: true, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: false, reviewed: true });
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "only the length the workspace set");
     const done = await answer(dir, { action_id: id, choice: "fifteen", reason: REASON });
     assert.equal(done.outcome, "allowed");
-    assert.match(done.text, /^Unblocked until \d{1,2}:\d{2} [AP]M · an admin will review it$/);
+    assert.match(done.text, /^Unblocked until \d{1,2}:\d{2} [AP]M: .* · an admin will review it$/);
     let { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.equal(allowances.length, 1);
     assert.equal(allowances[0].choice, "fifteen");
@@ -200,7 +203,7 @@ test("the words after an unblock that an admin reviews later", () => {
   assert.equal(answerText("allowed", "fifteen", 30, "Acme", true, true, now), "Unblocked until 4:07 PM · an admin will review it");
   assert.equal(answerText("allowed", "once", 30, "Acme", true, true, now), "Unblocked for the next try · an admin will review it");
   assert.equal(answerText("allowed", "always", 30, "Acme", true, true, now), "Unblocked until Nov 13 · an admin will review it");
-  assert.equal(answerText("allowed", "fifteen", 30, "Acme", true, false, now), "Allowed for 15 minutes · Recorded and sent to Acme", "not reviewed: as before");
+  assert.equal(answerText("allowed", "fifteen", 30, "Acme", true, false, now), "Allowed for 15 minutes · recorded in Acme", "not reviewed: as before");
 });
 
 test("stop allowing from the tray: the person's allowance ends at once and leaves Allowed; an admin's is not theirs to stop", async () => {

@@ -8,15 +8,19 @@ import { join } from "node:path";
 import { toolName } from "./tray-model.js";
 import { MANAGED_DOC_FILE, mergeWorkspaceAllowances, readActionText, readAllowances, readBlocked, readRequests, ruleName, type Allowance } from "@scopebond/hook";
 
-/** An allowance in force or waiting for an admin. `choice`: once (the next try), fifteen (15 minutes) or always (until
- *  `ends_at`). `by`: the person on this computer, or an admin in the workspace (an approved request, or one an admin made). */
+/** An allowance in force or waiting for an admin, or a block the person chose to keep without being asked again. `choice`:
+ *  once (the next try), fifteen (15 minutes), hour, tomorrow (24 hours) or always (until `ends_at`, 30 days or the
+ *  workspace's length). `by`: the person on this computer, or an admin in the workspace (an approved request, or one an
+ *  admin made). `kind`: "allow" lets the action through; "quiet" keeps it blocked and asks nobody (listed as Kept blocked,
+ *  with Undo). */
 export interface AllowedItem {
   id: string;
+  kind: "allow" | "quiet";
   rule: string;
   rule_title: string | null;
   /** The action as the Scopebond window showed it, when this computer knows it. */
   what: string | null;
-  choice: "once" | "fifteen" | "always";
+  choice: "once" | "fifteen" | "hour" | "tomorrow" | "always";
   state: "active" | "proposed";
   /** Waiting for an admin to approve before it applies. */
   needs_admin: boolean;
@@ -48,8 +52,24 @@ export interface AskedItem {
 }
 
 const MAX_ITEMS = 50;
-/** An allowance made for 15 minutes ends this long after it was made. */
-const FIFTEEN_MS = 15 * 60_000;
+const MIN = 60_000;
+/** An allowance made for 15 minutes ends this long after it was made; for an hour, and until tomorrow (24 hours), as well. */
+const FIFTEEN_MS = 15 * MIN;
+const HOUR_MS = 60 * MIN;
+const DAY_MS = 24 * HOUR_MS;
+
+/** A personal quiet block: kept blocked, nobody asked again (never lets anything through). */
+const isQuiet = (a: Allowance): boolean => (a as unknown as Record<string, unknown>).kind === "quiet";
+
+/** The length an allowance was made for, in the words a person chose it by (a minute's slack for the clock). */
+function choiceOf(a: Allowance): AllowedItem["choice"] {
+  if (a.once) return "once";
+  const length = Date.parse(a.expires_at) - Date.parse(a.created_at);
+  if (a.created_by === "person" && length <= FIFTEEN_MS + MIN) return "fifteen";
+  if (length <= HOUR_MS + MIN) return "hour";
+  if (length <= DAY_MS + MIN) return "tomorrow";
+  return "always";
+}
 
 // eslint-disable-next-line no-control-regex -- deliberate: control characters are taken out of text the workspace sent
 const text = (v: unknown, max: number): string | null => (typeof v === "string" && v.trim() ? v.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : null);
@@ -85,8 +105,8 @@ export function allowedList(dir: string, now = Date.now()): AllowedItem[] {
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
     .slice(0, MAX_ITEMS)
     .map((a) => ({
-      id: a.id, rule: a.rule, rule_title: ruleName(a.rule), what: texts.get(a.action_key) ?? null,
-      choice: a.once ? "once" : a.created_by === "person" && Date.parse(a.expires_at) - Date.parse(a.created_at) <= FIFTEEN_MS + 60_000 ? "fifteen" : "always",
+      id: a.id, kind: isQuiet(a) ? "quiet" as const : "allow" as const, rule: a.rule, rule_title: ruleName(a.rule), what: texts.get(a.action_key) ?? null,
+      choice: choiceOf(a),
       state: a.state === "proposed" ? "proposed" : "active", needs_admin: a.state === "proposed", by: a.created_by === "workspace" ? "admin" : "person",
       created_at: a.created_at, ends_at: a.expires_at, answered_by: a.created_by === "workspace" ? extra(a, "approved_by", 120) : null,
       unblocked: a.unblocked ?? null,
@@ -110,18 +130,21 @@ function requestAnswers(dir: string): Map<string, RequestAnswer> {
 }
 
 /** For the tray's Blocked list: the state of the person's newest request about a block (by the block's record, else by the
- *  same rule and action), and whether an allowance in force already covers it. A block either covers needs no Unblock or
- *  Ask any more. */
+ *  same rule and action), whether an allowance in force already covers it, and whether the person chose to keep it blocked
+ *  without being asked (a quiet block in force). A block any of them covers needs no Unblock or Ask any more. */
 export function blockStates(dir: string, now = Date.now()): {
   requestFor(actionId: string | null, rule: string | null, actionKey: string | null): { state: AskedItem["state"]; answered_by: string | null; answered_at: string | null } | null;
   allowedFor(rule: string | null, actionKey: string | null): boolean;
+  quietFor(rule: string | null, actionKey: string | null): boolean;
 } {
   const asked = new Map(askedList(dir).map((a) => [a.id, a]));
   const requests = readRequests(dir).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   const byAction = new Map<string, string>();
   const byKey = new Map<string, string>();
   for (const r of requests) { if (r.action_id) byAction.set(r.action_id, r.id); byKey.set(`${r.rule}\n${r.action_key}`, r.id); }
-  const live = allAllowances(dir).filter((a) => a.state === "active" && !a.ended_at && Date.parse(a.expires_at) > now && !(a.once && a.uses > 0));
+  const inForce = allAllowances(dir).filter((a) => a.state === "active" && !a.ended_at && Date.parse(a.expires_at) > now && !(a.once && a.uses > 0));
+  const live = inForce.filter((a) => !isQuiet(a));
+  const quiet = inForce.filter(isQuiet);
   return {
     requestFor(actionId, rule, actionKey) {
       const id = (actionId ? byAction.get(actionId) : undefined) ?? (rule && actionKey ? byKey.get(`${rule}\n${actionKey}`) : undefined);
@@ -131,6 +154,9 @@ export function blockStates(dir: string, now = Date.now()): {
     allowedFor(rule, actionKey) {
       return !!rule && !!actionKey && live.some((a) => a.rule === rule && a.action_key === actionKey);
     },
+    quietFor(rule, actionKey) {
+      return !!rule && !!actionKey && quiet.some((a) => a.rule === rule && a.action_key === actionKey);
+    },
   };
 }
 
@@ -138,7 +164,7 @@ export function blockStates(dir: string, now = Date.now()): {
  *  workspace said so) or declined (the workspace said so), with who answered and their note when the workspace sent them. */
 export function askedList(dir: string): AskedItem[] {
   const answers = requestAnswers(dir);
-  const fromWorkspace = allAllowances(dir).filter((a) => a.created_by === "workspace" && a.state !== "proposed");
+  const fromWorkspace = allAllowances(dir).filter((a) => a.created_by === "workspace" && a.state !== "proposed" && !isQuiet(a));
   return readRequests(dir)
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
     .slice(0, MAX_ITEMS)

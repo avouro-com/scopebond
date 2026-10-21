@@ -50,12 +50,17 @@ pub struct BlockOffers {
     pub ask: bool,
     /// The workspace reviews every unblock later and may undo it (false from an older agent).
     pub reviewed: bool,
+    /// Allow it for 1 hour, or until tomorrow (24 hours); false from an older agent.
+    pub hour: bool,
+    pub tomorrow: bool,
+    /// Keep it blocked without being asked again ("Keep blocking without asking me"); false from an older agent.
+    pub quiet: bool,
 }
 
 impl BlockOffers {
-    /// Whether the person may let it through here (once, for 15 minutes or always), not only ask an admin.
+    /// Whether the person may let it through here (once, for a length, or for `always_days`), not only ask an admin.
     pub fn allows(&self) -> bool {
-        self.once || self.fifteen || self.always
+        self.once || self.fifteen || self.hour || self.tomorrow || self.always
     }
 }
 
@@ -88,6 +93,26 @@ pub struct RecentBlock {
     /// The one outcome the row shows, and the sentence that stands in for a button (none from an older agent).
     pub outcome: Option<String>,
     pub outcome_text: Option<String>,
+    /// When the coding agent first tried it, the text "Copy details" copies, and the person's request for it (none from an
+    /// older agent). Kept so the panel gets them: it draws what the tray passes on, and a field not named here is dropped.
+    pub first_at: Option<String>,
+    pub copy_details: Option<String>,
+    pub request: Option<serde_json::Value>,
+    /// Why the rule exists, in one line, for the block's details (none when the rule says nothing about itself).
+    pub rule_why: Option<String>,
+}
+
+/// Blocks the panel shows as one row: today's repeats of one action under one rule. `members` index `recent_blocks`,
+/// newest first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlockGroup {
+    pub key: String,
+    pub members: Vec<usize>,
+    pub times: u64,
+    pub first_at: String,
+    pub last_at: String,
+    pub today: bool,
 }
 
 /// The rule's name when the agent sends none (an older agent): never an empty line, never a rule id.
@@ -123,7 +148,9 @@ pub struct TrayModel {
     pub actions: Vec<TrayAction>,
     pub hint: Option<String>,
     pub recent_blocks: Vec<RecentBlock>,
-    /// The line under "Protected" (when the rules were checked, what was blocked today); none otherwise.
+    /// The rows the panel's Blocked list shows (none from an older agent: each block is its own row).
+    pub blocked_groups: Vec<BlockGroup>,
+    /// The line under "Protected" (what was blocked today, when the rules were last updated); none otherwise.
     pub detail: Option<String>,
     /// The workspace's name, when the agent knows it.
     pub workspace: Option<String>,
@@ -136,6 +163,19 @@ pub struct TrayModel {
     pub asked: Vec<AskedItem>,
     /// The hook's question waiting for the person now (the live prompt), when the tray is listening.
     pub pending: Option<LiveQuestion>,
+    /// Settings' "This computer": Protection, Workspace, Rules updated, Version (none from an older agent: the rows above).
+    pub computer_rows: Vec<ComputerRow>,
+    /// The one client version as a person reads it ("Scopebond 0.11.5"); none from an older agent.
+    pub version_label: Option<String>,
+}
+
+/// A fact about this computer for Settings; `items` are what the row lists when opened (the rule packs in force).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ComputerRow {
+    pub label: String,
+    pub value: String,
+    pub items: Vec<String>,
 }
 
 /// A question the hook is waiting on during a coding session: what the coding tool tried, under which rule, what the person
@@ -158,15 +198,17 @@ pub struct LiveQuestion {
     pub opened: bool,
 }
 
-/// An allowance in force or waiting for an admin.
+/// An allowance in force or waiting for an admin, or a block the person chose to keep without being asked.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AllowedItem {
     pub id: String,
+    /// "allow" (let through) or "quiet" (kept blocked, nobody asked; Undo ends it); none from an older agent (an allowance).
+    pub kind: Option<String>,
     pub rule: String,
     pub rule_title: Option<String>,
     pub what: Option<String>,
-    /// "once", "fifteen" or "always".
+    /// "once", "fifteen", "hour", "tomorrow" or "always".
     pub choice: String,
     /// "active" or "proposed".
     pub state: String,
@@ -238,14 +280,14 @@ impl TrayModel {
     }
 }
 
-/// Which notifications the person wants: blocks and problems (the agent's default for a new install), problems only (the
-/// default when the agent says nothing), or none. An older agent's "all" meant blocks and problems too.
+/// One switch: tell the person when something is blocked (and when an admin answers their request), or not. On unless they
+/// turned it off: an older agent's "problems" (problems only, which nobody chose: it was the default) and "all" read as on.
+/// Alerts the person must act on (protection is off, sign in again) are shown either way; they are not a setting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", from = "String")]
 pub enum Notifications {
-    Blocks,
     #[default]
-    Problems,
+    Blocks,
     Off,
 }
 
@@ -256,30 +298,34 @@ impl From<String> for Notifications {
 }
 
 impl Notifications {
-    pub const ALL: [Notifications; 3] = [Notifications::Blocks, Notifications::Problems, Notifications::Off];
-
+    /// What the agent stored: only "off" is off.
     pub fn parse(value: &str) -> Notifications {
+        if value == "off" { Notifications::Off } else { Notifications::Blocks }
+    }
+
+    /// A value the panel or the menu sends, strictly: "blocks" (on) or "off"; anything else is none.
+    pub fn from_choice(value: &str) -> Option<Notifications> {
         match value {
-            "blocks" | "all" => Notifications::Blocks,
-            "off" => Notifications::Off,
-            _ => Notifications::Problems,
+            "blocks" => Some(Notifications::Blocks),
+            "off" => Some(Notifications::Off),
+            _ => None,
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
             Notifications::Blocks => "blocks",
-            Notifications::Problems => "problems",
             Notifications::Off => "off",
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Notifications::Blocks => "Blocks and problems",
-            Notifications::Problems => "Problems only",
-            Notifications::Off => "Off",
-        }
+    pub fn is_on(self) -> bool {
+        self == Notifications::Blocks
+    }
+
+    /// The other setting (the switch, flipped).
+    pub fn toggled(self) -> Notifications {
+        if self.is_on() { Notifications::Off } else { Notifications::Blocks }
     }
 }
 
@@ -394,7 +440,7 @@ mod tests {
         assert_eq!(a.tray.rows.len(), 3);
         assert_eq!(a.tray.recent_blocks[0].action_id.as_deref(), Some("a1"));
         assert!(a.tray.recent_blocks[0].can_act);
-        assert_eq!(a.settings.notifications, Notifications::Problems);
+        assert_eq!(a.settings.notifications, Notifications::Blocks, "an older agent's problems only reads as on");
     }
 
     #[test]
@@ -432,20 +478,56 @@ mod tests {
     }
 
     #[test]
+    fn the_fields_the_panel_draws_pass_through_the_tray() {
+        // The panel gets the model as the tray serializes it again: a field the tray does not name never reaches it.
+        let json = r#"{"tray":{"state":"protected","headline":"Protected",
+          "recent_blocks":[{"action_id":"a1","summary":"rm","at":"2026-10-21T15:00:00.000Z","what":"rm -rf ../build",
+            "first_at":"2026-10-21T14:58:00.000Z","copy_details":"rm -rf ../build\nRule: Delete","rule_why":"Deny destructive programs.",
+            "request":{"state":"waiting","answered_by":null,"answered_at":null},"outcome":"requested"}],
+          "computer_rows":[{"label":"Protection","value":"On · 9 rules blocking · 1 pack","items":["Cloud CLIs 1.2.0"]},{"label":"Version","value":"Scopebond 0.11.5 · up to date"}],
+          "version_label":"Scopebond 0.11.5",
+          "allowed":[{"id":"alw_quiet","kind":"quiet","rule":"secret-read","choice":"always","state":"active","by":"person"}],
+          "blocked_groups":[{"key":"Delete\nrm -rf ../build","members":[0],"times":3,"first_at":"2026-10-21T14:58:00.000Z","last_at":"2026-10-21T15:00:00.000Z","today":true}]}}"#;
+        let a = TrayAnswer::parse(json.as_bytes()).unwrap();
+        let again = serde_json::to_value(&a).unwrap();
+        let b = &again["tray"]["recent_blocks"][0];
+        assert_eq!(b["rule_why"], "Deny destructive programs.");
+        assert_eq!(b["copy_details"], "rm -rf ../build\nRule: Delete");
+        assert_eq!(b["first_at"], "2026-10-21T14:58:00.000Z");
+        assert_eq!(b["request"]["state"], "waiting");
+        assert_eq!(again["tray"]["blocked_groups"][0]["times"], 3);
+        assert_eq!(a.tray.blocked_groups[0].members, vec![0]);
+        assert_eq!(a.tray.allowed[0].kind.as_deref(), Some("quiet"));
+        assert_eq!(a.tray.computer_rows[0].items, vec!["Cloud CLIs 1.2.0".to_string()]);
+        assert!(a.tray.computer_rows[1].items.is_empty());
+        assert_eq!(again["tray"]["version_label"], "Scopebond 0.11.5");
+        assert_eq!(again["tray"]["allowed"][0]["kind"], "quiet");
+        assert!(crate::live::stoppable(&a.tray.allowed[0]), "Undo for a block the person kept");
+        assert!(TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap().tray.blocked_groups.is_empty(), "an older agent sends none");
+    }
+
+    #[test]
     fn fields_it_does_not_know_and_fields_that_are_missing_are_fine() {
         let a = TrayAnswer::parse(br#"{"tray":{"state":"working","headline":"Updating","new_field":1},"settings":{"notifications":"loud"}}"#).unwrap();
         assert_eq!(a.tray.icon_state(), IconState::Working);
         assert!(a.tray.actions.is_empty());
-        assert_eq!(a.settings.notifications, Notifications::Problems, "an unknown setting reads as the default");
+        assert_eq!(a.settings.notifications, Notifications::Blocks, "an unknown setting reads as the default: on");
     }
 
     #[test]
     fn notification_settings_old_and_new() {
         assert_eq!(Notifications::parse("blocks"), Notifications::Blocks);
         assert_eq!(Notifications::parse("all"), Notifications::Blocks, "an older agent's all meant blocks and problems");
+        assert_eq!(Notifications::parse("problems"), Notifications::Blocks, "problems only was nobody's choice: on");
+        assert_eq!(Notifications::parse("off"), Notifications::Off);
         assert_eq!(Notifications::Blocks.as_str(), "blocks");
-        assert_eq!(Notifications::Blocks.label(), "Blocks and problems");
+        assert_eq!(Notifications::Blocks.toggled(), Notifications::Off);
+        assert_eq!(Notifications::Off.toggled(), Notifications::Blocks);
+        assert!(Notifications::default().is_on());
+        assert_eq!(Notifications::from_choice("off"), Some(Notifications::Off));
+        assert_eq!(Notifications::from_choice("problems"), None, "the panel and the menu send only on or off");
         assert_eq!(serde_json::to_string(&Notifications::Blocks).unwrap(), "\"blocks\"");
+        assert_eq!(serde_json::to_string(&Notifications::Off).unwrap(), "\"off\"");
     }
 
     #[test]

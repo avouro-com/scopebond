@@ -5,8 +5,8 @@
 /** `unblock`: the person may let it through; `ask`: an admin decides; `always_on`: Scopebond's own protection, never
  *  unblocked; `workspace_rule`: a rule the workspace set with no unblocking; `safe_install`: Safe Install refused the
  *  install; `requested`: the person asked an admin (waiting, approved or declined); `allowed`: an allowance in force already
- *  covers it. */
-export type BlockOutcome = "unblock" | "ask" | "always_on" | "workspace_rule" | "safe_install" | "requested" | "allowed";
+ *  covers it; `quiet`: the person chose to keep it blocked without being asked again (Undo is under Allowed). */
+export type BlockOutcome = "unblock" | "ask" | "always_on" | "workspace_rule" | "safe_install" | "requested" | "allowed" | "quiet";
 
 /** The state of the person's request for a block, as the workspace last said. */
 export interface BlockRequest {
@@ -17,7 +17,7 @@ export interface BlockRequest {
 
 export interface OutcomeInput {
   /** What the workspace offers for it now (null: nothing). */
-  offers: { once: boolean; fifteen: boolean; always: boolean; ask: boolean } | null;
+  offers: { once: boolean; fifteen: boolean; always: boolean; ask: boolean; hour?: boolean; tomorrow?: boolean } | null;
   /** The clause that denied it, the workspace rule and what blocked it when no rule did (block-notes.ts). */
   clause: string | null;
   rule: string | null;
@@ -28,6 +28,8 @@ export interface OutcomeInput {
   /** The person's newest request for this action, and whether an allowance in force covers it. */
   request: BlockRequest | null;
   allowed: boolean;
+  /** The person chose to keep it blocked without being asked (a quiet block in force, or this block's own answer). */
+  quiet?: boolean;
   /** The workspace's name, the coding tool's name, the action in words, the rule's name and the record's id (for Copy
    *  details). */
   workspace: string | null;
@@ -59,7 +61,8 @@ export function blockOutcome(b: OutcomeInput): OutcomeOutput {
     return { outcome: "requested", outcome_text: text, copy_details: null };
   }
   if (b.allowed) return { outcome: "allowed", outcome_text: `Allowed: ask ${tool} to try again`, copy_details: null };
-  if (b.offers && (b.offers.once || b.offers.fifteen || b.offers.always)) return { outcome: "unblock", outcome_text: null, copy_details: null };
+  if (b.quiet) return { outcome: "quiet", outcome_text: "Kept blocked: you won't be asked about it again. Undo it under Allowed.", copy_details: null };
+  if (b.offers && (b.offers.once || b.offers.fifteen || b.offers.always || b.offers.hour || b.offers.tomorrow)) return { outcome: "unblock", outcome_text: null, copy_details: null };
   if (b.offers?.ask) return { outcome: "ask", outcome_text: null, copy_details: null };
   if (b.clause && ALWAYS_ON_CLAUSES.has(b.clause)) {
     return { outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", copy_details: null };

@@ -1,7 +1,9 @@
 // For reviewing the panel in a browser only: a stand-in for the tray's `window.__TAURI__.core.invoke`, answering
 // `panel_state` with made-up scenes. Never built into the program (build.rs copies only ui/panel.css and ui/panel.js).
 // Run `node packages/tray/dev/preview.mjs` and open the page it prints; one scene alone is dist/panel-frame.html#scene=protected
-// (add &view=settings, &tab=allowed or &open=<action id>).
+// (add &view=settings, &tab=allowed or &open=<action id>; the lists: blocks=n, outcomes=1, groups=1 with expand=1 or
+// details=<action id>, older=1; the form: choice=, why=, reason=, ask=1, quiet=1, submit=1, required=1, mode=approval|automatic|
+// admin30|legacy|final; Settings: packs=1, notify=off).
 "use strict";
 
 (function () {
@@ -9,15 +11,17 @@
   const scene = params.get("scene") || "protected";
   const MIN = 60_000;
   const ago = (min) => new Date(Date.now() - min * MIN).toISOString();
-  const offers = (o) => ({ once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: false, ...o });
+  const offers = (o) => ({ once: false, fifteen: false, hour: false, tomorrow: false, always: false, always_days: null, always_needs_admin: false, ask: false, quiet: false, ...o });
+  /** What a workspace with the newer terms offers a person: Once · 1 hour · Until tomorrow · 30 days, ask, keep it blocked. */
+  const self = () => offers({ once: true, hour: true, tomorrow: true, always: true, always_days: 30, ask: true, quiet: true });
 
   const blocks = () => [
     { action_id: "act-read-env-0000000001", summary: "file.read .env.production", at: ago(6), rule: "secret-read", can_act: true, acted: null,
       what: "Read .env.production", action_text: ".env.production", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
-      offers: offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true }), reason_min: 10 },
+      offers: self(), reason_min: 0 },
     { action_id: "act-push-main-00000001", summary: "git.push origin main", at: ago(28), rule: "force-push-protected", can_act: true, acted: null,
       what: "git push --force origin main", action_text: "git push origin main", rule_title: "Rewrite history on a protected branch", project: "checkout",
-      tool: "Claude Code", offers: offers({ ask: true }), reason_min: 20 },
+      tool: "Claude Code", offers: offers({ ask: true, quiet: true }), reason_min: 0 },
     { action_id: "act-rm-dist-0000000001", summary: "shell.exec rm", at: ago(95), rule: null, can_act: false, acted: null,
       what: "rm -rf ./dist --token=***", action_text: "rm -rf ./dist --token=***", rule_title: null, project: "billing-api", tool: "Cursor", offers: null, reason_min: null },
     { action_id: "act-policy-0000000001", summary: "file.write .scopebond/policy.json", at: ago(140), rule: "guardrail-config-write", can_act: false, acted: null,
@@ -31,13 +35,15 @@
   const outcomeBlocks = () => [
     { action_id: "act-out-unblock-000001", summary: "file.read .env.production", at: ago(3), rule: "secret-read", can_act: true, acted: null,
       what: "Read .env.production", action_text: ".env.production", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
-      offers: offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true }), reason_min: 0, outcome: "unblock", outcome_text: null, tries: 1 },
+      offers: self(), reason_min: 0, outcome: "unblock", outcome_text: null, tries: 1,
+      rule_why: "Allow workspace reads, but never signing keys, environment secret files, SSH keys or cloud credentials." },
     { action_id: "act-out-ask-0000000001", summary: "git.push origin main", at: ago(9), rule: "push-protected", can_act: true, acted: null,
       what: "git push origin main", action_text: "git push origin main", rule_title: "Push straight to a protected branch", project: "checkout", tool: "Claude Code",
-      offers: offers({ ask: true }), reason_min: 0, outcome: "ask", outcome_text: null, tries: 3 },
+      offers: offers({ ask: true, quiet: true }), reason_min: 0, outcome: "ask", outcome_text: null, tries: 3 },
     { action_id: "act-out-always-000001", summary: "file.read receipts.db", at: ago(15), rule: "secret-read", can_act: false, acted: null,
       what: "Read ~/.scopebond/receipts.db", action_text: "~/.scopebond/receipts.db", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
-      offers: null, reason_min: null, outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", tries: 12 },
+      offers: null, reason_min: null, outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", tries: 12,
+      rule_why: "Never read Scopebond's own folder, which holds this computer's key and connection (always on; it cannot be relaxed)." },
     { action_id: "act-out-rule-00000001", summary: "file.write .github/workflows/release.yml", at: ago(31), rule: "ci-config-write", can_act: false, acted: null,
       what: "Edit .github/workflows/release.yml", action_text: ".github/workflows/release.yml", rule_title: "Change build and release settings", project: "billing-api",
       tool: "Cursor", offers: null, reason_min: null, outcome: "workspace_rule", outcome_text: "Set by Acme. Ask an admin to change the rule.",
@@ -61,6 +67,28 @@
       what: "Read .env.staging", action_text: ".env.staging", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
       offers: null, reason_min: null, outcome: "allowed", outcome_text: "Allowed: ask Claude Code to try again", tries: 1 },
   ];
+  /** The same action under the same rule, tried in three sessions and two tools today, beside other blocks (groups=1). */
+  const repeatedBlocks = () => {
+    const read = outcomeBlocks()[2];
+    const tries = [[2, "Claude Code", 4], [24, "Cursor", 1], [61, "Claude Code", 7]].map(([min, tool, n], i) => ({ ...read,
+      action_id: "act-rep-read-0000000" + i, at: ago(min), tool, tries: n }));
+    return [tries[0], outcomeBlocks()[0], tries[1], outcomeBlocks()[1], tries[2], ...outcomeBlocks().slice(3)];
+  };
+  /** The agent's grouping (tray-model.ts groupBlocks): today's repeats of one action under one rule as one row. */
+  const groupBlocks = (list) => {
+    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    const groups = []; const byKey = new Map();
+    list.forEach((b, i) => {
+      const today = Date.parse(b.at) >= midnight.getTime();
+      const key = today ? (b.rule_title || b.rule || "") + "\n" + (b.what || b.summary) : "one\n" + (b.action_id || "") + "\n" + i;
+      const known = today ? byKey.get(key) : undefined;
+      const tries = b.tries > 0 ? b.tries : 1;
+      if (known) { known.members.push(i); known.times += tries; return; }
+      const g = { key, members: [i], times: tries, first_at: b.first_at || b.at, last_at: b.at, today };
+      groups.push(g); if (today) byKey.set(key, g);
+    });
+    return groups;
+  };
   /** n blocks over the last week, cycling through every outcome (blocks=n in the address). */
   const manyBlocks = (n) => {
     const kinds = outcomeBlocks();
@@ -80,8 +108,19 @@
     { label: "Today", value: "1,160 actions · 3 blocked" },
     { label: "Version", value: "Up to date (agent 0.9.0)" },
   ];
+  // Settings' This computer, as the agent words it (tray-model.ts computerRows).
+  const computerRows = [
+    { label: "Protection", value: "On · 9 rules blocking · 4 packs", items: ["Cloud CLIs 1.2.0", "Infrastructure 1.1.0", "Databases 1.0.3", "MCP servers 0.9.2"] },
+    { label: "Workspace", value: "Acme · Production" },
+    { label: "Rules updated", value: "2 min ago" },
+    { label: "Version", value: "Scopebond 0.11.5 · up to date" },
+  ];
   const ahead = (min) => new Date(Date.now() + min * MIN).toISOString();
   const allowed = () => [
+    { id: "alw_quiet000000000000001", kind: "quiet", rule: "secret-read", rule_title: "Read passwords, keys or secrets", what: "Read ~/.aws/credentials", choice: "always",
+      state: "active", needs_admin: false, by: "person", created_at: ago(3 * 60), ends_at: ahead(30 * 24 * 60 - 180), answered_by: null },
+    { id: "alw_hour00000000000000001", kind: "allow", rule: "destructive-shell", rule_title: "Run a command that deletes data or shuts down the computer", what: "rm -rf ./dist",
+      choice: "hour", state: "active", needs_admin: false, by: "person", created_at: ago(10), ends_at: ahead(50), answered_by: null },
     { id: "alw_staging00000000000001", rule: "secret-read", rule_title: "Read passwords, keys or secrets", what: ".env.staging", choice: "fifteen", state: "active",
       needs_admin: false, by: "person", created_at: ago(4), ends_at: ahead(11), answered_by: null },
     { id: "alw_release00000000000001", rule: "push-protected", rule_title: "Push straight to a protected branch", what: "git push origin release/2.4", choice: "always",
@@ -99,13 +138,14 @@
   ];
   const base = () => ({
     state: "protected", headline: "Protected", tooltip: "Scopebond — Protected · Acme", rows, fix: null, actions, hint: null,
-    recent_blocks: blocks(), detail: "Rules checked 3 min ago · 3 blocked today", workspace: "Acme", today: { actions: 1160, blocked: 3 },
+    recent_blocks: blocks(), detail: "3 blocked today · rules updated 3 min ago", workspace: "Acme", today: { actions: 1160, blocked: 3 },
     allowed: allowed(), asked: asked(),
+    computer_rows: computerRows, version_label: "Scopebond 0.11.5",
   });
 
   const scenes = {
     protected: () => base(),
-    quiet: () => ({ ...base(), recent_blocks: [], allowed: [], asked: [], detail: "Rules checked 3 min ago · nothing blocked today", today: { actions: 212, blocked: 0 } }),
+    quiet: () => ({ ...base(), recent_blocks: [], allowed: [], asked: [], detail: "Nothing blocked today · rules updated 3 min ago", today: { actions: 212, blocked: 0 } }),
     attention: () => ({
       ...base(), state: "attention", headline: "312 records waiting to send", detail: null,
       hint: "Your workspace refused the last try. The records wait on this computer and are sent again.",
@@ -123,23 +163,27 @@
   const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected : scenes.protected;
   let model = scene === "not_answering" ? null : make();
   // blocks=n: the list of n blocks over the week, every outcome (0, 3, 40 and 200 are the reviewed sizes); outcomes=1: one of each.
-  if (model && (params.get("blocks") !== null || params.get("outcomes"))) {
-    const list = params.get("outcomes") ? outcomeBlocks() : manyBlocks(Math.max(0, Math.min(500, Number(params.get("blocks")) || 0)));
+  if (model && (params.get("blocks") !== null || params.get("outcomes") || params.get("groups"))) {
+    const list = params.get("groups") ? repeatedBlocks() : params.get("outcomes") ? outcomeBlocks() : manyBlocks(Math.max(0, Math.min(500, Number(params.get("blocks")) || 0)));
     const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
     const today = list.filter((b) => Date.parse(b.at) >= midnight.getTime()).length;
     model.recent_blocks = list;
     model.today = { actions: 16867, blocked: today };
-    model.detail = "Rules checked 3 min ago · " + (today ? today.toLocaleString("en-US") + " blocked today" : "nothing blocked today");
+    model.detail = (today ? today.toLocaleString("en-US") + " blocked today" : "Nothing blocked today") + " · rules updated 3 min ago";
   }
   // What the workspace lets a person do (mode=self, the default; approval: only ask to unblock, an admin decides;
-  // automatic: one length the workspace set, applied at once and reviewed by an admin later; final: nothing): the agent
-  // says it per block in `offers`, and `can_ask` says whether asking is on under any rule.
+  // automatic: one length the workspace set, applied at once and reviewed by an admin later; admin30: 30 days needs an
+  // admin; legacy: an older hook's once · 15 minutes · always, nothing quiet; final: nothing): the agent says it per block in
+  // `offers`, and `can_ask` says whether asking is on under any rule. reason=required: the workspace asks for a reason.
   const mode = params.get("mode") || "self";
   if (model) {
     model.can_ask = mode !== "final" && mode !== "automatic";
     for (const b of model.recent_blocks) {
-      if (mode === "approval" && b.can_act) b.offers = offers({ ask: true });
+      if (mode === "approval" && b.can_act) b.offers = offers({ ask: true, quiet: true });
       if (mode === "automatic" && b.can_act) b.offers = offers({ fifteen: true, reviewed: true });
+      if (mode === "admin30" && b.can_act && b.offers && b.offers.once) b.offers.always_needs_admin = true;
+      if (mode === "legacy" && b.can_act && b.offers && b.offers.once) b.offers = offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true });
+      if (params.get("required") && b.can_act) b.reason_min = 10;
     }
     if (mode === "automatic" && model.allowed) model.allowed[0].unblocked = "automatic";
     for (const b of model.recent_blocks) {
@@ -147,19 +191,33 @@
     }
     if (mode === "final" && model.asked) model.asked = [];
   }
-  let notifications = "blocks";
+  // The agent's groups, unless the scene is an older agent's (older=1: each block is its own row).
+  if (model && !params.get("older")) model.blocked_groups = groupBlocks(model.recent_blocks);
+  // An older agent sends neither Settings' facts nor the client's version: the panel shows its rows.
+  if (model && params.get("older")) { delete model.computer_rows; delete model.version_label; }
+  // notify=off: the person turned notifications off.
+  let notifications = params.get("notify") === "off" ? "off" : "blocks";
   let note = null;
   let busy = null;
   let answered = null;
   // live=1: a question the hook is waiting on now (the live prompt), as the agent hands it to the tray.
   let pending = params.get("live") ? {
     action_id: "act-live-000000000001", what: "git push --force origin release/2.4", action_text: "git push origin release/2.4", rule: "force-push-protected",
-    rule_title: "Rewrite history on a protected branch", tool: "Claude Code", project: "checkout", reason_min: 10,
-    offers: offers(mode === "approval" ? { ask: true } : { once: true, fifteen: true, ask: true }),
+    rule_title: "Rewrite history on a protected branch", tool: "Claude Code", project: "checkout", reason_min: params.get("required") ? 10 : 0,
+    offers: mode === "approval" ? offers({ ask: true, quiet: true }) : self(),
     deadline: new Date(Date.now() + 41_000).toISOString(), opened: false,
   } : null;
   let openBlock = params.get("toast") || null;
   const say = (text) => { note = text; };
+  // How long each answer lasts (once: until the next try, kept a day), and the line the agent says for it (service.ts answerText).
+  const LENGTH_MIN = { once: 1440, fifteen: 15, hour: 60, tomorrow: 1440, always: 30 * 1440, quiet: 30 * 1440, ask: 0 };
+  const resultText = (choice, o, what) => {
+    if (choice === "ask") return "Request sent: " + what + " · the answer shows on the block";
+    if (choice === "quiet") return "Kept blocked without asking you: " + what + " · undo it under Allowed";
+    if (choice === "always" && o.always_needs_admin) return "Allowed for 15 minutes while an admin decides on " + (o.always_days || 30) + " days: " + what + " · recorded in Acme";
+    const words = { once: "Allowed once", fifteen: "Allowed for 15 minutes", hour: "Allowed for 1 hour", tomorrow: "Allowed until tomorrow", always: "Allowed for " + (o.always_days || 30) + " days" }[choice];
+    return words + ": " + what + " · recorded in Acme";
+  };
 
   const state = () => ({
     link: model ? "answering" : "not_answering",
@@ -167,7 +225,7 @@
     stateLabel: model ? { protected: "Protected", working: "Working", offline: "Offline", problem: "Problem", disconnected: "Not connected" }[model.state] || "Needs attention" : "Problem",
     headline: model ? model.headline : "The Scopebond Agent is not answering",
     answer: model ? { tray: model, settings: { notifications } } : null,
-    note, busy, version: "0.1.0", autostart: "on", answered, pending, openBlock: (() => { const o = openBlock; openBlock = null; return o; })(),
+    note, busy, version: "0.11.5", autostart: "on", answered, pending, openBlock: (() => { const o = openBlock; openBlock = null; return o; })(),
   });
 
   const handlers = new Map(Object.entries({
@@ -177,7 +235,7 @@
     panel_action: ({ id }) => { say(id === "send_now" ? "Sent 312 records; nothing is waiting" : id === "open_workspace" ? "Opened this computer's page in your workspace" : "Checked just now: all good"); if (id === "send_now") model = scenes.protected(); return true; },
     panel_command: ({ id }) => {
       if (id.startsWith("notifications:")) notifications = id.slice(14);
-      else say({ copy_diagnostics: "Diagnostics copied (no keys or credentials)", open_logs: "(The logs folder would open.)", about: "(About Scopebond would open.)", hide_icon: "(The icon would hide.)", autostart: "(Start with Windows would change.)", start_agent: "Starting the Scopebond Agent…" }[id] || "Done");
+      else say({ get_help: "Support report copied (no keys, records or commands) · the Help page is opening", about: "(About Scopebond would open.)", hide_icon: "(The icon would hide.)", autostart: "(Start with Windows would change.)", start_agent: "Starting the Scopebond Agent…" }[id] || "Done");
       if (id === "start_agent") model = scenes.protected();
       return true;
     },
@@ -185,37 +243,39 @@
     panel_live: ({ actionId, choice, reason }) => {
       if (!pending || pending.action_id !== actionId) return false;
       if (!choice) { pending.opened = true; return true; }
-      if (!pending.offers[choice] || String(reason || "").trim().length < pending.reason_min) { say("Say why in at least " + pending.reason_min + " characters."); return false; }
+      if (!pending.offers[choice] || (choice !== "quiet" && String(reason || "").trim().length < pending.reason_min)) { say("Say why in at least " + pending.reason_min + " characters."); return false; }
       const what = pending.action_text;
+      const offered = pending.offers;
       pending = null;
-      say(choice === "ask" ? "Request sent · you'll see the answer under Requests" : (choice === "fifteen" ? "Allowed for 15 minutes" : "Allowed once") + " · Recorded and sent to Acme");
-      if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", rule: "force-push-protected", rule_title: "Rewrite history on a protected branch", what, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + 15 * MIN).toISOString(), answered_by: null, unblocked: "person" });
+      say(resultText(choice, offered, what));
+      if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", kind: choice === "quiet" ? "quiet" : "allow", rule: "force-push-protected", rule_title: "Rewrite history on a protected branch", what, choice: choice === "quiet" ? "always" : choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + LENGTH_MIN[choice] * MIN).toISOString(), answered_by: null, unblocked: "person" });
       return true;
     },
     panel_stop: ({ id }) => {
       const a = model && model.allowed.find((x) => x.id === id);
       if (!a) return false;
       model.allowed = model.allowed.filter((x) => x.id !== id);
-      say("Stopped allowing " + (a.what || "it") + " · Recorded and sent to Acme");
+      say((a.kind === "quiet" ? "You'll be asked about " + (a.what || "it") + " again" : "Stopped allowing " + (a.what || "it")) + " · Recorded and sent to Acme");
       return true;
     },
     panel_block: ({ actionId, choice, reason }) => {
       const b = model && model.recent_blocks.find((x) => x.action_id === actionId);
       if (choice) {
-        if (!b || !b.offers || !b.offers[choice] || String(reason || "").trim().length < (b.reason_min || 10)) { say("Say why in at least " + ((b && b.reason_min) || 10) + " characters."); return false; }
+        const min = b && typeof b.reason_min === "number" ? b.reason_min : 10;
+        if (!b || !b.offers || !b.offers[choice] || (choice !== "quiet" && String(reason || "").trim().length < min)) { say("Say why in at least " + min + " characters."); return false; }
         busy = "answer:" + actionId;
         setTimeout(() => {
           busy = null;
           b.can_act = false;
-          b.acted = choice === "ask" ? "asked" : "allowed";
-          const words = { once: "Allowed once", fifteen: "Allowed for 15 minutes", always: "Always allowed on this computer for " + (b.offers.always_days || 30) + " days", ask: "Request sent" }[choice];
+          const outcome = choice === "ask" ? "asked" : choice === "quiet" ? "quiet" : choice === "always" && b.offers.always_needs_admin ? "proposed" : "allowed";
+          b.acted = outcome === "proposed" ? "allowed" : outcome;
           const until = new Date(Date.now() + 15 * MIN).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-          const text = choice === "ask" ? "Request sent · you'll see the answer under Requests"
-            : b.offers.reviewed ? "Unblocked until " + until + " · an admin will review it" : words + " · Recorded and sent to Acme";
-          answered = { actionId, outcome: choice === "ask" ? "asked" : "allowed", text };
+          const text = b.offers.reviewed ? "Unblocked until " + until + ": " + b.action_text + " · an admin will review it" : resultText(choice, b.offers, b.action_text);
+          answered = { actionId, outcome, text };
           say(text);
+          if (choice === "quiet") { b.outcome = "quiet"; b.outcome_text = "Kept blocked: you won't be asked about it again. Undo it under Allowed."; }
           if (choice === "ask") model.asked.unshift({ id: "req_new", rule: b.rule, rule_title: b.rule_title, what: b.action_text, reason: String(reason).trim(), asked_at: new Date().toISOString(), sent: true, state: "waiting", answered_by: null, note: null, answered_at: null });
-          else model.allowed.unshift({ id: "alw_new", rule: b.rule, rule_title: b.rule_title, what: b.action_text, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + (choice === "fifteen" ? 15 : choice === "once" ? 1440 : 30 * 1440) * MIN).toISOString(), answered_by: null });
+          else model.allowed.unshift({ id: "alw_new", kind: choice === "quiet" ? "quiet" : "allow", rule: b.rule, rule_title: b.rule_title, what: b.action_text, choice: choice === "quiet" ? "always" : choice, state: outcome === "proposed" ? "proposed" : "active", needs_admin: outcome === "proposed", by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + LENGTH_MIN[choice] * MIN).toISOString(), answered_by: null });
         }, 600);
         return true;
       }
@@ -224,7 +284,7 @@
         busy = null;
         const b = model && model.recent_blocks.find((x) => x.action_id === actionId);
         if (b) { b.can_act = false; b.acted = b.offers && b.offers.once ? "allowed" : "asked"; }
-        say(b && b.acted === "allowed" ? "Allowed. Run it again, or let the coding agent retry." : "Request sent · you'll see the answer under Requests");
+        say(b && b.acted === "allowed" ? "Allowed. Run it again, or let the coding agent retry." : "Request sent · the answer shows on the block");
       }, 1200);
       return true;
     },
@@ -241,10 +301,18 @@
     const click = (sel) => { const n = document.querySelector(sel); if (n) n.click(); };
     setTimeout(() => {
       if (params.get("view") === "settings") click('[data-key="settings"]');
+      // The Protection row's packs, opened (packs=1).
+      if (params.get("packs")) setTimeout(() => { const d = document.querySelector("details.packs"); if (d) d.open = true; }, 30);
       if (params.get("tab")) click('[data-key="tab-' + params.get("tab") + '"]');
       if (params.get("open")) click('[data-key="block-' + params.get("open") + '"]');
+      // A block's details (details=<action id>), and the first group's tries (expand=1).
+      if (params.get("expand")) click('[data-key^="tries-"]');
+      if (params.get("details")) setTimeout(() => click('[data-key="what-' + params.get("details") + '"], [data-key="try-' + params.get("details") + '"]'), 30);
       // Fill the form as a person would: a choice, a reason, and (with submit) the button.
       if (params.get("choice")) click('[data-key="choice-' + params.get("choice") + '"]');
+      if (params.get("ask")) click('[data-key^="mode-"]');
+      if (params.get("why")) click('[data-key="why-' + params.get("why") + '"]');
+      if (params.get("quiet")) setTimeout(() => click('[data-key^="quiet-"]'), 50);
       const area = document.getElementById("reason");
       if (area && params.get("reason")) { area.value = params.get("reason"); area.dispatchEvent(new Event("input", { bubbles: true })); }
       if (params.get("submit")) setTimeout(() => click('[data-key^="confirm-"]'), 50);

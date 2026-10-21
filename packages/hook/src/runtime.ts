@@ -11,9 +11,9 @@ import { createSigner } from "@scopebond/sdk";
 import type { Mapped, ShownCommand } from "./map.js";
 import type { ShownOverrideHandler } from "./override.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
-import { explainDeny } from "./explain.js";
+import { explainDeny, FINAL_INSTRUCTION } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
-import { allowsLocalChanges, enforcedRuleIds, isManaged } from "./managed.js";
+import { allowsLocalChanges, enforcedRuleIds, isManaged, packRuleAdjustmentsAt } from "./managed.js";
 import { withPackRules } from "./pack-rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
@@ -28,6 +28,7 @@ import type { SessionBudgetGuard } from "./session-budgets.js";
 import { policyOptsIntoTargets } from "./target-rules.js";
 import { blockedPackagePattern, blockedServiceKindOf, readBlockedServices, unreadablePackageKey, BLOCKED_SERVICE_REASON, type BlockedService } from "./service-rules.js";
 import { containedDeletesSentence, withProgramScope } from "./delete-scope.js";
+import { DESTRUCTIVE_FORMS, DESTRUCTIVE_FORMS_SENTENCE } from "./destructive-forms.js";
 export { policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
@@ -54,8 +55,9 @@ export interface RuntimeConfig {
    *  (`HOT_PATH_STORE_BUSY_MS`, hook-deadline.ts), so a lock wait cannot by itself carry the call past its deadline. */
   storeBusyTimeoutMs?: number;
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
-   *  (see override.ts). `hint` explains, in a denial, how an override would have been possible; `remedy`, when it says
-   *  something, replaces the denial's line for the person (where to act on the block afterwards). */
+   *  (see override.ts). `hint`, when it says something, is the denial's final instruction to the coding agent ("What to
+   *  do", by what the person can do about the block); `remedy`, when it says something, replaces the denial's line for the
+   *  person (where to act on the block). */
   override?: (agentKid: string) => { handler: ShownOverrideHandler; hint(): string | null; remedy?(): string | null } | null;
   /** The current account's home folder, in every spelling to mask (see home-mask.ts). Defaults to `os.homedir()`,
    *  `HOME` and `USERPROFILE`; tests pass their own. */
@@ -148,16 +150,28 @@ export const INSTALL_FOLDER = `(?!(?:.*/)?${INSTALL_PARENT}/(?:${ci("scopebond")
 const GUARDRAIL_WRITE_PATTERN_PREV = "^" + GUARDRAIL_WRITE_PREV2.join("") + ".+";
 /** What it compiled to before it covered GitHub Copilot's hook settings: upgraded on load too. */
 const GUARDRAIL_WRITE_PATTERN_PREV2 = "^" + GUARDRAIL_WRITE_PREV2.join("") + INSTALL_FOLDER + ".+";
+/** The agent settings the floor held until sub-agent definitions and MCP settings moved to the configuration rule. */
+const GUARDRAIL_WRITE_WITH_CONFIG = "^" + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER + ".+";
 /** The current agent settings without the install folder: weaker than the floor, so upgraded to it as well. */
 const GUARDRAIL_WRITE_PATTERN_NO_INSTALL = "^" + GUARDRAIL_WRITE.join("") + ".+";
-/** The write protection that is always on, whoever manages the rules: the hook's own settings and those of the agents it
- *  guards, and the installed program. A workspace can relax CI-configuration writes; it can never relax these. */
-export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER + ".+";
+// What the floor holds: everything above except the coding agents' sub-agent definitions (`.claude/agents`) and MCP settings
+// (`.mcp.json`). Those configure what the agent may do, which a workspace may manage; they stay protected by the configuration
+// rule (protect-write, `PROTECTED_WRITE`), which a workspace can relax. Git hooks, git config and Husky run code: they stay.
+const MOVED_TO_CONFIG = new Set([under("\\.claude/agents"), named("\\.mcp\\.json")]);
+const GUARDRAIL_FLOOR = GUARDRAIL_WRITE.filter((p) => !MOVED_TO_CONFIG.has(p));
+/** The write protection that is always on, whoever manages the rules: the hook's own settings and the coding agents' hook
+ *  settings, the hooks git runs, and the installed program. A workspace can relax configuration writes; never these. */
+export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_FLOOR.join("") + INSTALL_FOLDER + ".+";
+/** The current floor without the install folder: weaker than the floor, so upgraded to it. */
+const GUARDRAIL_FLOOR_NO_INSTALL = "^" + GUARDRAIL_FLOOR.join("") + ".+";
 /** The always-on floor as bare lookaheads, for a pattern that must also refuse these paths (the hook's own folder included). */
-export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_WRITE.join("") + INSTALL_FOLDER;
+export const GUARDRAIL_LOOKAHEADS = under("\\.scopebond") + GUARDRAIL_FLOOR.join("") + INSTALL_FOLDER;
 /** The read protection that is always on, whoever manages the rules: the hook's own folder, which holds this computer's
- *  signing key and connection. A workspace can record other protected reads instead of blocking them; never this one. */
-const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
+ *  signing key and connection, and the connection file in a Scopebond folder of another name (`…/Scopebond/cloud.json`). A
+ *  workspace can record other protected reads instead of blocking them; never this one. Any other `cloud.json` is a project's. */
+const GUARDRAIL_READ_PATTERN = "^" + under("\\.scopebond") + named("scopebond/cloud\\.json") + ".+";
+/** What it compiled to while it refused every file named cloud.json: narrowed on load. */
+const GUARDRAIL_READ_PATTERN_PREV = "^" + under("\\.scopebond") + named("cloud\\.json") + ".+";
 
 /** Scopebond's own protection, always enforced and never relaxed by a rule set or a workspace: the hook's folder (its keys,
  *  connection and policy) and the coding agents' hook settings can be neither changed nor read by the coding agent, and an
@@ -168,12 +182,12 @@ export function selfProtectionClauses(): Array<Record<string, unknown>> {
     {
       id: "protect-scopebond-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
       param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
-      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files), or the coding agents' hook settings, and never switch Scopebond off (always on; it cannot be relaxed).",
+      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files), the coding agents' hook settings, or the hooks git runs (.git/hooks, .git/config, .husky), and never switch Scopebond off (always on; it cannot be relaxed).",
     },
     {
       id: "protect-scopebond-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
       param_bounds: { path: { pattern: GUARDRAIL_READ_PATTERN } },
-      description: "Never read Scopebond's own folder, which holds this computer's key and connection, or a copy of the connection file (cloud.json) anywhere (always on; it cannot be relaxed).",
+      description: "Never read Scopebond's own folder, which holds this computer's key and connection, or the connection file (cloud.json) in a Scopebond folder (always on; it cannot be relaxed).",
     },
   ];
 }
@@ -199,10 +213,19 @@ const PROTECTED_READ = "^" + [
 export const DESTRUCTIVE = [
   "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "shred", "truncate", "unlink", "wipe", "srm",
   "del", "rd", "rmdir", "erase", "deltree", "format", "diskpart", "remove-item", "ri", "clear-content", "clc", "stop-computer", "restart-computer",
+  "format-volume", "clear-disk",
 ];
+/** The list before it held the PowerShell disk cmdlets: a policy that carries its pattern is upgraded on load. */
+const DESTRUCTIVE_PREV = DESTRUCTIVE.slice(0, -2);
+/** The safe-shell pattern for a list of programs: deny a listed program alone (any case, with or without an executable suffix)
+ *  and the destructive forms (destructive-forms.ts), which are always on it; an empty program fails `.+`. */
+export const safeShellPattern = (programs: readonly string[], forms: readonly string[] = DESTRUCTIVE_FORMS): string =>
+  `^(?!(?:${programs.map(ci).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?$)${forms.length ? `(?!(?:${forms.map(ci).join("|")})$)` : ""}.+`;
 // Bound on `program_scope` (delete-scope.ts): the program, with `/contained` after it for a delete whose every target is
 // inside the working folder. The pattern denies a listed program alone, so a contained delete is the one form that passes.
-const SAFE_SHELL = `^(?!(?:${DESTRUCTIVE.map(ci).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?$).+`;
+const SAFE_SHELL = safeShellPattern(DESTRUCTIVE);
+/** What the starter's safe-shell pattern was before the destructive forms and the disk cmdlets joined it. */
+const SAFE_SHELL_PREV = safeShellPattern(DESTRUCTIVE_PREV, []);
 /** The parameter safe-shell bounds. Earlier policies bound `program` with the same pattern. */
 export const SAFE_SHELL_PARAM = "program_scope";
 const CONTAINED_DELETES = containedDeletesSentence(DESTRUCTIVE);
@@ -222,6 +245,10 @@ const LEGACY_STARTER_PATTERNS: Record<string, string> = {
   [GUARDRAIL_WRITE_PATTERN_PREV]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_WRITE_PATTERN_PREV2]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_WRITE_PATTERN_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_WITH_CONFIG]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_FLOOR_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_READ_PATTERN_PREV]: GUARDRAIL_READ_PATTERN,
+  [SAFE_SHELL_PREV]: SAFE_SHELL,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd|del|rd|rmdir|erase|deltree|format|Remove-Item|ri)$).+": SAFE_SHELL,
   "^(?!(?:rm|sudo|shutdown|reboot|mkfs|dd)$).+": SAFE_SHELL,
@@ -268,7 +295,7 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
       {
         id: "safe-shell", type: "action_allowlist", mode: mode("safe-shell"), action_types: ["shell.exec"],
         param_bounds: { [SAFE_SHELL_PARAM]: { pattern: SAFE_SHELL } },
-        description: `Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. ${CONTAINED_DELETES} An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.`,
+        description: `Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content, Format-Volume, Clear-Disk) — in any case and with or without .exe. ${CONTAINED_DELETES} ${DESTRUCTIVE_FORMS_SENTENCE} An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.`,
       },
       {
         id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],
@@ -335,7 +362,7 @@ export function createHookRuntime(config: RuntimeConfig) {
   const homes = config.homeFolders ?? homeFolders();
   // The rules of the packs in force (verified on this call) join the policy here, on the modes this computer's rules or its
   // workspace's set (pack-rules.ts).
-  const policy = maskHomeInPolicy(withPackRules(upgradeStarterPolicy(readPolicyFile(config.policyPath)), enforcedRuleIds(dirname(config.policyPath))), homes);
+  const policy = maskHomeInPolicy(withPackRules(upgradeStarterPolicy(readPolicyFile(config.policyPath)), enforcedRuleIds(dirname(config.policyPath)), undefined, packRuleAdjustmentsAt(dirname(config.policyPath))), homes);
   /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */
@@ -504,7 +531,9 @@ export function createHookRuntime(config: RuntimeConfig) {
           let refused;
           try { refused = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(contextOption).length ? contextOption : undefined); }
           finally { boundaryVerdict = null; }
-          return { decision: "deny", reason: check.message, clauseId: null, code: "install_verdict", receipt: refused.receipt };
+          // A block is final: the coding agent is told so. An install held for a person this host cannot ask says what to do.
+          const reason = check.verdict === "block" ? `${check.message}\nWhat to do: ${FINAL_INSTRUCTION.stays}` : check.message;
+          return { decision: "deny", reason, clauseId: null, code: "install_verdict", receipt: refused.receipt };
         }
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);
         return { decision: "ask", reason: check.message, receipt };
@@ -552,8 +581,10 @@ export function createHookRuntime(config: RuntimeConfig) {
           // from `rules.json`, so telling someone to hand-edit it invites a change the
           // next `rules` run would overwrite.
           remedy: override?.remedy() ?? rulesRemedy,
+          // The final instruction by what the person can do about it (override.ts); else it stays blocked.
+          instruction: override?.hint() ?? null,
           actionId: (result.receipt as { payload?: { action_ref?: { action_id?: string } } } | undefined)?.payload?.action_ref?.action_id ?? null,
-        }) + (override?.hint() ? `\n${override.hint()}` : ""),
+        }),
         clauseId,
         ...(blockedServiceKindOf(clauseId) ? { code: BLOCKED_SERVICE_REASON } : {}),
         receipt: result.receipt,

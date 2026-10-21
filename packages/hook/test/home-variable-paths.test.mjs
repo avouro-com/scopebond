@@ -37,7 +37,9 @@ test("every spelling of the home folder is the home folder, after a cd or not", 
     const sep = tool === "PowerShell" ? ";" : " &&";
     for (const command of [`cat ${word}`, `cd src${sep} cat ${word}`, `cd ~/.scopebond${sep} cat ${word}`]) {
       const program = tool === "PowerShell" ? command.replace("cat ", "Get-Content ") : command;
-      assert.deepEqual(reads(tool, program), ["~/.scopebond/receipts.db"], `${tool}: ${program}`);
+      // A program run after a cd into Scopebond's folder also reads the folder itself (cd-protected-read.test.mjs).
+      const inFolder = command.startsWith("cd ~/.scopebond") ? ["~/.scopebond"] : [];
+      assert.deepEqual(reads(tool, program), ["~/.scopebond/receipts.db", ...inFolder], `${tool}: ${program}`);
     }
   }
 });

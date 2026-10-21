@@ -3,12 +3,16 @@
 //! - one when the state gets worse: at once for a problem or a lost connection to the workspace, and for "needs
 //!   attention" only once it has lasted five minutes, so sleep and wake or a short hiccup do not flap;
 //! - one when it is protected again after one of those;
-//! - with *Blocks and problems*, one for a new block (with *Unblock…* when the person may act on it); further blocks within
-//!   a minute of that one wait and are told together ("3 actions blocked in the last minute");
+//! - with notifications on, one for each new block (with *Unblock…* when the person may act on it), at most three an hour;
+//!   blocks past that wait and are told in one summary ("5 more blocked · Open Scopebond") ten minutes after the first of
+//!   them, or as soon as the hour's three allow, and at most one summary an hour;
+//! - never one for a block of Scopebond's always-on protection or one the person chose to keep blocked without being asked:
+//!   there is nothing to do about it, and it is in the list;
 //! - one when an admin answers one of the person's requests ("Approved: ask Claude Code to try again"), unless
 //!   notifications are off: the person asked and is waiting for it;
 //! - one per block, never again for the coding agent's retries of it (the agent folds them into the block);
-//! - nothing about blocks with *Problems only*, and nothing at all with *Off*.
+//! - with notifications off, only what the person must act on: a problem (protection is off, the workspace refused this
+//!   computer) and the word that it is fixed. Never a block, an admin's answer or "needs attention".
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -21,8 +25,11 @@ use crate::panel::block_button;
 
 /// "Needs attention" must last this long before it is worth a notification.
 pub const ATTENTION_AFTER: Duration = Duration::from_secs(5 * 60);
-/// Blocks within this long of the last block notification are told together, once it has passed.
-pub const BLOCK_GROUP: Duration = Duration::from_secs(60);
+/// At most this many block notifications in an hour (BUDGET_WINDOW); the rest are told in one summary.
+pub const BLOCK_BUDGET: usize = 3;
+pub const BUDGET_WINDOW: Duration = Duration::from_secs(60 * 60);
+/// Blocks past the budget are summed up this long after the first of them (at most one summary an hour).
+pub const SUMMARY_AFTER: Duration = Duration::from_secs(10 * 60);
 /// How many block ids are remembered, so a block is announced once.
 const REMEMBERED_BLOCKS: usize = 100;
 
@@ -57,8 +64,25 @@ pub fn rank(state: IconState) -> u8 {
     }
 }
 
-/// The notification for blocks seen together: one in plain words (with *Unblock…* when the person may act on it), or a
-/// count.
+/// Whether a block is never worth a notification: Scopebond's always-on protection (nothing to do), or one the person chose
+/// to keep blocked without being asked.
+pub fn silent(block: &RecentBlock) -> bool {
+    matches!(block.outcome.as_deref(), Some("always_on") | Some("quiet")) || block.acted.as_deref() == Some("quiet")
+}
+
+/// The one notification for blocks past the hour's budget: how many, and where to see them.
+pub fn summary_toast(more: usize) -> Toast {
+    Toast {
+        kind: Kind::Block,
+        title: format!("{more} more blocked · Open Scopebond"),
+        text: "Scopebond kept them blocked. Open it to see what was blocked and why.".into(),
+        unblock: None,
+        button: None,
+    }
+}
+
+/// The notification for one block in plain words (with *Unblock…* when the person may act on it); more than one is a
+/// summary.
 pub fn block_toast(blocks: &[RecentBlock]) -> Option<Toast> {
     match blocks {
         [] => None,
@@ -79,13 +103,7 @@ pub fn block_toast(blocks: &[RecentBlock]) -> Option<Toast> {
                 button,
             })
         }
-        many => Some(Toast {
-            kind: Kind::Block,
-            title: format!("{} actions blocked in the last minute", many.len()),
-            text: "Open Scopebond to see what was blocked".into(),
-            unblock: None,
-            button: None,
-        }),
+        many => Some(summary_toast(many.len())),
     }
 }
 
@@ -101,10 +119,13 @@ pub struct Notifier {
     worse_since: Option<Instant>,
     /// Blocks already seen (None until the first look, so blocks from before the tray started are not announced).
     seen: Option<VecDeque<String>>,
-    /// When the last block notification was shown.
-    last_block_toast: Option<Instant>,
-    /// New blocks waiting to be told together.
-    held: Vec<RecentBlock>,
+    /// When each block notification of the last hour was shown (the budget).
+    told_blocks: VecDeque<Instant>,
+    /// Blocks past the budget, waiting for the summary, and since when.
+    over: Vec<RecentBlock>,
+    over_since: Option<Instant>,
+    /// When the last summary was shown.
+    last_summary: Option<Instant>,
 }
 
 impl Notifier {
@@ -135,14 +156,15 @@ impl Notifier {
 
         // A retry keeps its block's group id, so it is not a new block.
         let ids = blocks.iter().filter_map(|b| b.group_id.clone().or_else(|| b.action_id.clone()).map(|id| (id, b)));
+        let mut fresh_blocks: Vec<RecentBlock> = Vec::new();
         match &mut self.seen {
             None => self.seen = Some(ids.map(|(id, _)| id).collect()),
             Some(seen) => {
-                // Oldest first, so a group is told in the order it happened.
+                // Oldest first, so blocks are told in the order they happened.
                 let fresh: Vec<(String, &RecentBlock)> = ids.filter(|(id, _)| !seen.contains(id)).collect();
                 for (id, block) in fresh.into_iter().rev() {
-                    if setting == Notifications::Blocks {
-                        self.held.push(block.clone());
+                    if setting == Notifications::Blocks && !silent(block) {
+                        fresh_blocks.push(block.clone());
                     }
                     seen.push_back(id);
                     if seen.len() > REMEMBERED_BLOCKS {
@@ -151,18 +173,55 @@ impl Notifier {
                 }
             }
         }
-        if setting != Notifications::Blocks {
-            self.held.clear();
-        }
-        let quiet = self.last_block_toast.is_some_and(|at| now.duration_since(at) < BLOCK_GROUP);
-        if !self.held.is_empty() && !quiet {
-            out.extend(block_toast(&self.held));
-            self.held.clear();
-            self.last_block_toast = Some(now);
+        if setting == Notifications::Blocks {
+            out.extend(self.budget(fresh_blocks, now));
+        } else {
+            self.over.clear();
+            self.over_since = None;
         }
         if setting == Notifications::Off {
-            out.clear();
+            out.retain(|t| matches!(t.kind, Kind::Problem | Kind::Recovered));
         }
+        out
+    }
+}
+
+impl Notifier {
+    /// One notification per new block while the hour's budget allows; past it, the blocks wait and are told in one summary
+    /// (SUMMARY_AFTER after the first of them, or as soon as the budget allows; at most one summary an hour). A single
+    /// block waiting when the budget allows again is told on its own.
+    fn budget(&mut self, fresh: Vec<RecentBlock>, now: Instant) -> Vec<Toast> {
+        let mut out = Vec::new();
+        while self.told_blocks.front().is_some_and(|at| now.duration_since(*at) >= BUDGET_WINDOW) {
+            self.told_blocks.pop_front();
+        }
+        for block in fresh {
+            if self.over.is_empty() && self.told_blocks.len() < BLOCK_BUDGET {
+                out.extend(block_toast(std::slice::from_ref(&block)));
+                self.told_blocks.push_back(now);
+            } else {
+                self.over_since.get_or_insert(now);
+                self.over.push(block);
+            }
+        }
+        if self.over.is_empty() {
+            return out;
+        }
+        let room = self.told_blocks.len() < BLOCK_BUDGET;
+        if room && self.over.len() == 1 {
+            out.extend(block_toast(&self.over));
+            self.told_blocks.push_back(now);
+        } else {
+            let due = room || self.over_since.is_some_and(|since| now.duration_since(since) >= SUMMARY_AFTER);
+            let allowed = self.last_summary.is_none_or(|at| now.duration_since(at) >= BUDGET_WINDOW);
+            if !(due && allowed) {
+                return out;
+            }
+            out.push(summary_toast(self.over.len()));
+            self.last_summary = Some(now);
+        }
+        self.over.clear();
+        self.over_since = None;
         out
     }
 }
@@ -232,63 +291,65 @@ mod tests {
 
     const NONE: [Kind; 0] = [];
     use IconState::*;
-    use Notifications::{Blocks, Off, Problems};
+    use Notifications::{Blocks, Off};
 
     #[test]
     fn a_problem_is_told_once_and_the_recovery_once() {
         let mut r = Run::new();
-        assert_eq!(r.at(0, Protected, Problems), NONE);
-        assert_eq!(r.at(30, Problem, Problems), [Kind::Problem]);
+        assert_eq!(r.at(0, Protected, Blocks), NONE);
+        assert_eq!(r.at(30, Problem, Blocks), [Kind::Problem]);
         for t in 31..100 {
-            assert_eq!(r.at(t, Problem, Problems), NONE, "once");
+            assert_eq!(r.at(t, Problem, Blocks), NONE, "once");
         }
-        assert_eq!(r.at(100, Protected, Problems), [Kind::Recovered]);
-        assert_eq!(r.at(130, Protected, Problems), NONE);
+        assert_eq!(r.at(100, Protected, Blocks), [Kind::Recovered]);
+        assert_eq!(r.at(130, Protected, Blocks), NONE);
     }
 
     #[test]
     fn attention_waits_five_minutes() {
         let mut r = Run::new();
-        assert_eq!(r.at(0, Attention, Problems), NONE);
-        assert_eq!(r.at(299, Attention, Problems), NONE);
-        assert_eq!(r.at(300, Attention, Problems), [Kind::Attention]);
+        assert_eq!(r.at(0, Attention, Blocks), NONE);
+        assert_eq!(r.at(299, Attention, Blocks), NONE);
+        assert_eq!(r.at(300, Attention, Blocks), [Kind::Attention]);
         // A short spell that clears before five minutes says nothing, and no recovery either.
         let mut r = Run::new();
-        r.at(0, Attention, Problems);
-        assert_eq!(r.at(120, Protected, Problems), NONE);
-        assert_eq!(r.at(200, Attention, Problems), NONE);
-        assert_eq!(r.at(499, Attention, Problems), NONE, "the five minutes start again");
-        assert_eq!(r.at(500, Attention, Problems), [Kind::Attention]);
+        r.at(0, Attention, Blocks);
+        assert_eq!(r.at(120, Protected, Blocks), NONE);
+        assert_eq!(r.at(200, Attention, Blocks), NONE);
+        assert_eq!(r.at(499, Attention, Blocks), NONE, "the five minutes start again");
+        assert_eq!(r.at(500, Attention, Blocks), [Kind::Attention]);
     }
 
     #[test]
     fn offline_and_working_are_not_worth_a_notification() {
         let mut r = Run::new();
         for t in 0..1000 {
-            assert_eq!(r.at(t, if t % 2 == 0 { Offline } else { Working }, Problems), NONE);
+            assert_eq!(r.at(t, if t % 2 == 0 { Offline } else { Working }, Blocks), NONE);
         }
     }
 
     #[test]
     fn worse_again_is_told_and_better_is_not() {
         let mut r = Run::new();
-        assert_eq!(r.at(0, Problem, Problems), [Kind::Problem]);
-        assert_eq!(r.at(400, Attention, Problems), NONE, "eased, still not protected");
-        assert_eq!(r.at(410, Disconnected, Problems), [Kind::Problem]);
-        assert_eq!(r.at(420, Protected, Problems), [Kind::Recovered]);
+        assert_eq!(r.at(0, Problem, Blocks), [Kind::Problem]);
+        assert_eq!(r.at(400, Attention, Blocks), NONE, "eased, still not protected");
+        assert_eq!(r.at(410, Disconnected, Blocks), [Kind::Problem]);
+        assert_eq!(r.at(420, Protected, Blocks), [Kind::Recovered]);
     }
 
     #[test]
-    fn off_means_nothing() {
+    fn off_keeps_only_what_the_person_must_act_on() {
         let mut r = Run::new();
-        assert_eq!(r.at(0, Problem, Off), NONE);
-        assert_eq!(r.at(10, Protected, Off), NONE);
-        r.blocks(20, &[block("a")], Off);
-        assert!(r.blocks(30, &[block("b"), block("a")], Off).is_empty());
+        assert_eq!(r.at(0, Problem, Off), [Kind::Problem], "protection is off: always told");
+        assert_eq!(r.at(10, Protected, Off), [Kind::Recovered]);
+        assert_eq!(r.at(20, Attention, Off), NONE);
+        assert_eq!(r.at(400, Attention, Off), NONE, "needs attention is not a must-act alert");
+        r.blocks(500, &[block("a")], Off);
+        assert!(r.blocks(510, &[block("b"), block("a")], Off).is_empty(), "no blocks");
     }
 
     #[test]
-    fn a_new_block_is_told_once_with_problems_only_none() {
+    fn a_new_block_is_told_once_and_none_with_notifications_off() {
         let mut r = Run::new();
         // Blocks from before the tray started are not announced.
         assert!(r.blocks(0, &[block("a")], Blocks).is_empty());
@@ -297,28 +358,79 @@ mod tests {
         assert_eq!(toasts[0].title, "Blocked: rm -rf b");
         assert_eq!(toasts[0].text, "A Scopebond rule", "no rule name from the agent: a plain name, never the rule id");
         assert!(r.blocks(100, &[block("b"), block("a")], Blocks).is_empty(), "once");
-        assert!(r.blocks(200, &[block("c"), block("b")], Problems).is_empty(), "problems only: no blocks");
+        assert!(r.blocks(200, &[block("c"), block("b")], Off).is_empty(), "off: no blocks");
         assert_eq!(r.blocks(300, &[block("d"), block("c")], Blocks).len(), 1, "c was seen meanwhile");
     }
 
-    #[test]
-    fn blocks_within_a_minute_are_told_together() {
-        let mut r = Run::new();
-        r.blocks(0, &[], Blocks);
-        assert_eq!(r.blocks(10, &[block("a")], Blocks).len(), 1, "the first at once");
-        assert!(r.blocks(20, &[block("b"), block("a")], Blocks).is_empty(), "held");
-        assert!(r.blocks(40, &[block("d"), block("c"), block("b"), block("a")], Blocks).is_empty(), "held");
-        let group = r.blocks(70, &[block("d"), block("c"), block("b"), block("a")], Blocks);
-        assert_eq!(group.len(), 1);
-        assert_eq!(group[0].title, "3 actions blocked in the last minute");
-        assert_eq!(group[0].unblock, None);
-        assert!(r.blocks(80, &[block("d")], Blocks).is_empty(), "nothing new");
-        // A minute after the group, a single new block is told at once again.
-        assert_eq!(r.blocks(131, &[block("e"), block("d")], Blocks)[0].title, "Blocked: rm -rf e");
+    /// The list as the agent sends it: newest first.
+    fn newest_first(ids: &[&str]) -> Vec<RecentBlock> {
+        ids.iter().rev().map(|id| block(id)).collect()
     }
 
     #[test]
-    fn an_admins_answer_to_a_request_is_told_once_with_blocks_and_problems() {
+    fn three_blocks_an_hour_then_one_summary() {
+        let mut r = Run::new();
+        r.blocks(0, &[], Blocks);
+        assert_eq!(r.blocks(10, &newest_first(&["a"]), Blocks).len(), 1, "the first at once");
+        assert_eq!(r.blocks(20, &newest_first(&["a", "b"]), Blocks)[0].title, "Blocked: rm -rf b", "one per block");
+        assert_eq!(r.blocks(30, &newest_first(&["a", "b", "c"]), Blocks).len(), 1, "the third");
+        assert!(r.blocks(40, &newest_first(&["a", "b", "c", "d"]), Blocks).is_empty(), "past three an hour: held");
+        assert!(r.blocks(100, &newest_first(&["a", "b", "c", "d", "e", "f", "g", "h"]), Blocks).is_empty());
+        assert!(r.blocks(600, &newest_first(&["a", "b", "c", "d", "e", "f", "g", "h"]), Blocks).is_empty(), "not ten minutes yet");
+        let summary = r.blocks(640, &newest_first(&["a", "b", "c", "d", "e", "f", "g", "h"]), Blocks);
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].title, "5 more blocked · Open Scopebond");
+        assert_eq!((summary[0].unblock.as_ref(), summary[0].button), (None, None), "it opens the panel");
+        // More blocks in the same hour: no second summary, nothing on its own.
+        assert!(r.blocks(700, &newest_first(&["h", "i"]), Blocks).is_empty());
+        assert!(r.blocks(1400, &newest_first(&["h", "i", "j"]), Blocks).is_empty(), "one summary an hour");
+        // An hour after the summary (the budget has renewed too), what waited is summed up, then each block is told again.
+        assert!(r.blocks(3_700, &newest_first(&["i", "j"]), Blocks).is_empty(), "the budget renewed, but one summary an hour");
+        let renewed = r.blocks(4_300, &newest_first(&["i", "j"]), Blocks);
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(renewed[0].title, "2 more blocked · Open Scopebond");
+        assert_eq!(r.blocks(4_400, &newest_first(&["j", "k"]), Blocks)[0].title, "Blocked: rm -rf k");
+    }
+
+    #[test]
+    fn a_single_block_that_waited_is_told_on_its_own_when_the_budget_allows() {
+        let mut r = Run::new();
+        r.blocks(0, &[], Blocks);
+        for (t, ids) in [(10, vec!["a"]), (20, vec!["a", "b"]), (30, vec!["a", "b", "c"])] {
+            assert_eq!(r.blocks(t, &newest_first(&ids), Blocks).len(), 1);
+        }
+        assert!(r.blocks(40, &newest_first(&["a", "b", "c", "d"]), Blocks).is_empty());
+        // Before ten minutes nothing; the summary of one is the block itself once the hour allows.
+        assert!(r.blocks(500, &newest_first(&["d"]), Blocks).is_empty());
+        let one = r.blocks(640, &newest_first(&["d"]), Blocks);
+        assert_eq!(one[0].title, "1 more blocked · Open Scopebond", "ten minutes: the summary, even of one");
+        let mut s = Run::new();
+        s.blocks(0, &[], Blocks);
+        for (t, ids) in [(10, vec!["a"]), (20, vec!["a", "b"]), (30, vec!["a", "b", "c"]), (3_000, vec!["d"])] {
+            s.blocks(t, &newest_first(&ids), Blocks);
+        }
+        let alone = s.blocks(3_611, &newest_first(&["d"]), Blocks);
+        assert_eq!(alone[0].title, "Blocked: rm -rf d", "the budget allows again before the summary was due");
+    }
+
+    #[test]
+    fn always_on_protection_and_kept_blocks_are_never_told() {
+        let mut r = Run::new();
+        r.blocks(0, &[], Blocks);
+        let always_on = RecentBlock { outcome: Some("always_on".into()), ..block("a") };
+        let kept = RecentBlock { outcome: Some("quiet".into()), ..block("b") };
+        let kept_acted = RecentBlock { acted: Some("quiet".into()), ..block("c") };
+        assert!(r.blocks(10, &[kept_acted.clone(), kept.clone(), always_on.clone()], Blocks).is_empty());
+        // They took nothing from the hour's budget: three more are each told.
+        for (t, id) in [(20, "d"), (30, "e"), (40, "f")] {
+            let list = [block(id), kept_acted.clone(), kept.clone(), always_on.clone()];
+            assert_eq!(r.blocks(t, &list, Blocks).len(), 1, "{id}");
+        }
+        assert!(silent(&always_on) && silent(&kept) && silent(&kept_acted) && !silent(&block("x")));
+    }
+
+    #[test]
+    fn an_admins_answer_to_a_request_is_told_once_unless_notifications_are_off() {
         let req = |state: &str| AskedItem { id: "req_1".into(), what: "rm -rf ./dist".into(), state: state.into(), answered_by: Some("morgan@acme.test".into()), ..Default::default() };
         let mut w = RequestWatch::new();
         assert!(w.observe(&[req("approved")], Blocks).is_empty(), "already answered when the tray started");
@@ -336,10 +448,7 @@ mod tests {
         let t = w.observe(&[req("approved"), declined.clone()], Blocks);
         assert_eq!(t[0].title, "Your request was declined");
         assert_eq!(t[0].text, "rm -rf ./dist · by morgan@acme.test · \u{201c}Use the clean script\u{201d}");
-        // An admin's answer is told whatever the setting, unless notifications are off: the person asked and is waiting.
-        let mut problems = RequestWatch::new();
-        problems.observe(&[AskedItem { state: "waiting".into(), ..declined.clone() }], Problems);
-        assert_eq!(problems.observe(&[declined.clone()], Problems).len(), 1, "problems only: still told");
+        // An admin's answer is told while notifications are on: the person asked and is waiting.
         let mut off = RequestWatch::new();
         off.observe(&[AskedItem { state: "waiting".into(), ..declined.clone() }], Off);
         assert!(off.observe(&[declined], Off).is_empty(), "off: not told");

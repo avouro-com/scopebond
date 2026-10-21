@@ -3,6 +3,7 @@
 // binary is the thin harness adapter over them.
 
 export { mapClaudeToolUse, mapCodexToolUse, mapCopilotToolUse, mapCopilotCall, copilotAsClaude, normalizeCopilotInput, mapCursorEvent, fillPushBranch, DERIVED_CAP } from "./map.js";
+export { upstreamBranch } from "./git-upstream.js";
 export {
   copilotAnswer, copilotCloudAgent, copilotSurface, surfaceSignals, readCopilotProbe, openCopilotProbe, recordCopilotProbe, renderCopilotProbe,
   COPILOT_CLOUD_ASK_IS_DENY, DOCUMENTED_COPILOT_TOOL_NAMES, COPILOT_PROBE_FILE, COPILOT_PROBE_WINDOW_MS,
@@ -43,6 +44,8 @@ export {
 } from "./rules.js";
 export type { RuleSet, PathRule } from "./rules.js";
 export { pathRuleMatches, isDestructiveProgram, isProtectedBranch } from "./rules.js";
+export { DESTRUCTIVE_FORMS, destructiveForm } from "./destructive-forms.js";
+export { EXCEPTION_FIELDS, EXCEPTIONS_CAPABILITY, MAX_EXCEPTIONS, validRuleExceptions, localDatabaseUrl, type RuleException, type ExceptionField } from "./rule-exceptions.js";
 export { classifyIntent, classificationBlocks, BLOCKING, MONITORED_HIGH } from "./classify.js";
 export type { CatalogId, Classification } from "./classify.js";
 export { classifyRoot, applyRootScope } from "./paths.js";
@@ -55,19 +58,22 @@ export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYP
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
   inspectManaged, compileManaged, managedEnforce, enforcedRuleIds, installManaged, restoreLocal, isManaged, readMeta, digestRules, digestManaged, ruleReport,
-  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
+  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, NEVER_OFF_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
+  offRuleIds, packRuleAdjustments, packRuleAdjustmentsAt,
   inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
-  MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY,
+  MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY, ANSWER_LENGTHS,
 } from "./managed.js";
+export { ruleSummary } from "./rule-summary.js";
+export type { RuleSummary } from "./rule-summary.js";
 export type {
-  ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnyManagedRuleId, OptionalRuleId,
+  ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnswerLength, AnyManagedRuleId, OptionalRuleId,
   ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,
 } from "./managed.js";
 export { createOverrideHandler, overrideHint, overrideRemedy, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked, plainAction, offersFor, allowsAny, offeredLength } from "./override.js";
 export { ruleTitle, ruleName, blockTitle, packRuleTitle, checkOfCode, GENERIC_RULE_TITLE } from "./rule-titles.js";
 export { installVerdictWords, noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
 export type { BlockNote } from "./block-notes.js";
-export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
+export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion, Offers, UnblockLength } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES } from "./policy-sync.js";
 export {
   validBlockedService, validBlockedServices, blockedServiceClauses, servicePattern, serviceMatches, blockedServiceKindOf, blockedServiceOf,
@@ -102,7 +108,7 @@ export {
   localHarnessFile, isMachineSpecificCommand, gitShareState, excludeFromGit, pruneHarnessEntries,
 } from "./install.js";
 export type { Harness, HarnessScopes, GitShare } from "./install.js";
-export { explainDeny, describeAction, findClause } from "./explain.js";
+export { explainDeny, describeAction, findClause, FINAL_INSTRUCTION } from "./explain.js";
 export type { ExplainDenyInput, ExplainIntent, ExplainPolicy, ExplainClause } from "./explain.js";
 export {
   ensureDurableRuntime, isEphemeralPath, nodeModulesRootOf, runtimeRoot, runtimeDirFor, pinnedCliPath,
@@ -147,7 +153,7 @@ export { hookVersion, hookCommand, cliCommand } from "./version.js";
 export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
 export type { HookEntry, HookScope } from "./duplicates.js";
 export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";
-export { readAllowances, writeAllowances, makeAllowance, matchAllowance, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance } from "./allowances.js";
+export { readAllowances, writeAllowances, makeAllowance, matchAllowance, matchQuietBlock, makeQuietBlock, QUIET_BLOCK_DAYS, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance } from "./allowances.js";
 export type { Allowance, BlockedItem } from "./allowances.js";
 export { sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, readSessionBudgets, validSessionBudget, validSessionBudgets, isPackageInstall, isAgentLaunch, SESSION_BUDGETS_FILE } from "./session-budgets.js";
 export type { SessionBudget, SessionBudgetLimit, SessionBudgetGuard, BudgetReservation, BudgetIntent } from "./session-budgets.js";

@@ -4,12 +4,12 @@
 // versions to run, and once a day it runs the end-to-end self-check.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { hostname, uptime, userInfo } from "node:os";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
-  writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness, type RecentBlockRecord,
+  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
+  writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -29,7 +29,7 @@ import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { allowedList, askedList, blockStates } from "./allowed-asked.js";
 import { blockOutcome } from "./block-outcome.js";
-import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
+import { checkResult, projectName, RECENT_BLOCKS_MAX, supportBundle, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
@@ -40,7 +40,7 @@ import {
   updateTarget, type ClientVersion,
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
-import { AWAKE_FILE, awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
+import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
 import { withoutNodeInjection } from "./child-env.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
@@ -64,21 +64,21 @@ export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
 /** Left in the Scopebond folder when this computer's user stops the agent (`scopebond-agent stop`), and removed when it
  *  starts: the native tray then leaves it stopped instead of starting it again. */
 export const STOPPED_FILE = "agent-stopped.json";
-/** The person's tray settings: which notifications they want. "blocks": blocks and problems (the default for a new install);
- *  "problems": problems only (the default before, and for an install whose person never chose); "off". The older "all"
- *  meant blocks and problems too, and is read as "blocks". */
+/** The person's tray settings: one switch, "Tell me when something is blocked". "blocks": on (the default); "off". The
+ *  older "problems" (problems only, the default before, which nobody chose) and "all" are read as on. Alerts the person must
+ *  act on (protection off, sign in again) are not a setting: the tray shows them either way. */
 const TRAY_SETTINGS_FILE = "agent-settings.json";
-type NotificationSetting = "blocks" | "problems" | "off";
+type NotificationSetting = "blocks" | "off";
 export interface TraySettings { notifications: NotificationSetting }
 
 const notificationSetting = (value: unknown): NotificationSetting | null =>
-  value === "blocks" || value === "all" ? "blocks" : value === "problems" || value === "off" ? value : null;
+  value === "blocks" || value === "all" || value === "problems" ? "blocks" : value === "off" ? "off" : null;
 
 export function readTraySettings(dir: string): TraySettings {
   try {
     const parsed = JSON.parse(readFileSync(join(dir, TRAY_SETTINGS_FILE), "utf8")) as Partial<Record<keyof TraySettings, unknown>>;
-    return { notifications: notificationSetting(parsed.notifications) ?? "problems" };
-  } catch { return { notifications: "problems" }; }
+    return { notifications: notificationSetting(parsed.notifications) ?? "blocks" };
+  } catch { return { notifications: "blocks" }; }
 }
 
 export function writeTraySettings(dir: string, patch: unknown): TraySettings {
@@ -89,11 +89,11 @@ export function writeTraySettings(dir: string, patch: unknown): TraySettings {
   return next;
 }
 
-/** On an agent's first start in a Scopebond folder (no agent has run there before), notifications default to blocks and
- *  problems; an install whose person never chose keeps problems only. Written once; the person's choice is never changed. */
-export function settleTraySettings(dir: string, firstStart: boolean): void {
+/** On an agent's first start in a Scopebond folder, notifications are written on (a new install, or an older one whose
+ *  person never chose). Written once; the person's choice is never changed. */
+export function settleTraySettings(dir: string): void {
   if (existsSync(join(dir, TRAY_SETTINGS_FILE))) return;
-  try { writeTraySettings(dir, { notifications: firstStart ? "blocks" : "problems" }); } catch { /* read as problems only */ }
+  try { writeTraySettings(dir, { notifications: "blocks" }); } catch { /* read as on */ }
 }
 
 /** Set for a replacement started directly because the launcher is an older one: it rewrites the launcher once the old agent is gone. */
@@ -352,7 +352,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // What the install helper of a signed update recorded before this start (installAfterExit).
   noteUpdateOutcome(options.dir, log);
   // No agent has run in this folder before (it writes its wake time from its first cycle): a new install.
-  settleTraySettings(options.dir, !existsSync(join(options.dir, AWAKE_FILE)));
+  settleTraySettings(options.dir);
   const interval = options.intervalMs ?? INTERVAL_MS;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
@@ -578,27 +578,31 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const known = new Map(readBlocked(options.dir).map((b) => [b.id, b]));
     const states = blockStates(options.dir, now);
     const workspace = summary?.workspace_name ?? null;
+    // Why each rule exists, for a block's details: the clause's own description in this computer's policy, read once.
+    let policy: ExplainPolicy | undefined;
+    try { policy = JSON.parse(readFileSync(join(options.dir, "policy.json"), "utf8")) as ExplainPolicy; } catch { /* no why lines */ }
     let asked = 0;
     return blocks.map((b) => {
       const item = b.action_id ? known.get(b.action_id) : undefined;
       const rule = b.rule ?? item?.rule ?? null;
       const request = states.requestFor(b.action_id, rule, item?.action_key ?? null);
       const allowed = !request && states.allowedFor(rule, item?.action_key ?? null);
+      const quiet = !request && !allowed && ((item?.acted as string | null | undefined) === "quiet" || states.quietFor(rule, item?.action_key ?? null));
       // What the workspace offers, for the newest QUESTIONS_MAX blocks not acted on (each question reads the hook's files).
-      const q = item && !item.acted && b.action_id && !request && !allowed && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
+      const q = item && !item.acted && b.action_id && !request && !allowed && !quiet && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
       const offers = q ? {
-        once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
+        once: q.offers.allow, fifteen: q.offers.fifteen, hour: q.offers.hour, tomorrow: q.offers.tomorrow, quiet: true, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
         always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
       } : null;
       const what = b.what ?? b.summary;
       const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
       const tool = toolName(b.harness ?? item?.harness ?? null);
       const outcome = blockOutcome({
-        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, held: b.held === true, request, allowed,
+        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, held: b.held === true, request, allowed, quiet,
         workspace, tool, what, rule_title: ruleTitleText, action_id: b.action_id,
       });
       return {
-        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: item?.acted ?? (request ? "asked" : allowed ? "allowed" : null),
+        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: (quiet ? "quiet" : null) ?? item?.acted ?? (request ? "asked" : allowed ? "allowed" : null),
         what, action_text: item?.summary ?? b.action_text ?? b.summary, rule_title: ruleTitleText,
         project: projectName(b.repository) ?? b.project ?? null, tool,
         offers,
@@ -606,20 +610,40 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         tries: b.tries ?? 1, first_at: b.first_at ?? b.at, group_id: b.group_id ?? b.action_id,
         ...outcome,
         request,
+        rule_why: whyOf(findClause(policy, b.clause ?? null)?.description ?? findClause(policy, rule)?.description),
       };
     });
+  };
+
+  // The rule packs in force, for Settings: read again only when the pack index changes (each pack's signature is checked).
+  let packCache: { key: string; packs: Array<{ id: string; title: string; version: string }> } | null = null;
+  const packsInForce = (): Array<{ id: string; title: string; version: string }> => {
+    const index = readPackIndex(options.dir);
+    const key = index ? `${index.checked_at}|${index.packs.map((p) => `${p.id}@${p.version}`).join(",")}` : "";
+    if (packCache?.key !== key) {
+      let packs: Array<{ id: string; title: string; version: string }> = [];
+      try {
+        packs = index ? loadPacks(options.dir).packs.map((p) => ({ id: p.id, version: p.version, title: (typeof p.title === "string" && p.title.trim() ? p.title.trim() : p.id).slice(0, 60) })) : [];
+      } catch { /* none listed */ }
+      packCache = { key, packs };
+    }
+    return packCache.packs;
   };
 
   const trayState = (): TrayModel => {
     const now = Date.now();
     const status = computerStatus(options.dir);
     const meta = readMeta(options.dir);
-    const report = ruleReport(options.dir);
-    const modes = report ? Object.values(report).map(([mode]) => mode) : [];
+    // Every rule in force, counted (the hook's rule summary): the older `block`/`monitor` carry the same counts.
+    const counted = ruleSummary(options.dir);
+    const at = (iso: string | null | undefined): number | null => (iso && Number.isFinite(Date.parse(iso)) ? Date.parse(iso) : null);
     const activity = localActivity(options.dir, { limit: RECENT_BLOCKS_MAX });
     const model = trayModel({
       status, health: health(), now, awakeSince, working,
-      rules: report ? { checked_at: meta.checked_at ? Date.parse(meta.checked_at) : null, managed: isManaged(options.dir), block: modes.filter((m) => m === "enforce").length, monitor: modes.filter((m) => m === "monitor").length } : null,
+      rules: counted ? {
+        checked_at: at(meta.checked_ok_at ?? meta.checked_at), managed: isManaged(options.dir), block: counted.blocking, monitor: counted.monitoring,
+        blocking: counted.blocking, monitoring: counted.monitoring, packs: counted.packs, last_attempt_at: at(meta.last_attempt_at), last_error: meta.last_error ?? null,
+      } : null,
       today: activity?.today ?? null,
       recentBlocks: actionable(activity?.recent_blocks ?? [], now),
       version: { agent: agentVersion(), hook: hookVersion(), policy: lastMaintenance?.policy ?? "unknown", ...offeredVersions(), failedUpdate: failedUpdate(options.dir) },
@@ -632,6 +656,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       signingIn: reconnecting,
       notice: migrationNotice(),
       canAsk: workspaceLetsAsk(options.dir),
+      packs: packsInForce(),
+      rulesUpdatedAt: lastGoodCheck(meta),
     });
     // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
     return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
@@ -735,10 +761,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
       const done = live.answer(body, os_user);
       if (!done.ok) return { outcome: done.outcome, text: done.text };
-      const outcome = done.choice === "ask" ? "asked" as const : done.choice === "always" && waiting?.offers.always_needs_admin ? "proposed" as const : "allowed" as const;
+      const outcome = done.choice === "ask" ? "asked" as const : done.choice === "quiet" ? "quiet" as const
+        : done.choice === "always" && waiting?.offers.always_needs_admin ? "proposed" as const : "allowed" as const;
       log(`question under "${waiting?.rule_title ?? "a rule"}", answered in the tray: ${outcome} (${done.choice})`);
       if (outcome === "asked") pollAnswers();
-      return { outcome, choice: done.choice, text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), done.reviewed) };
+      return { outcome, choice: done.choice, text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), done.reviewed, Date.now(), waiting?.action_text || waiting?.what || null) };
     },
     "POST /settings": (body) => ({ settings: writeTraySettings(options.dir, body) }),
     // "Check now" always says what it found.
@@ -791,6 +818,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const answer = await windowPrompt({ action_id: id, rule: q.item.rule, title: q.title, summary: q.item.summary, reason_min: q.reason_min,
         lasts: "the next time it runs", timeout_ms: 55_000, mode: q.mode, offers: q.offers });
       if (answer.decision === "unavailable") return { outcome: "unavailable", text: "The Scopebond window could not be shown." };
+      // The window offers "keep blocking" (quiet) and the newer lengths only where the hook's question does, so the hook
+      // takes every answer it can return.
       const done = actOnBlocked(options.dir, id, answer);
       if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
       if (done.outcome === "asked") pollAnswers();
@@ -807,19 +836,35 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (!parsed) return { outcome: "invalid", text: "That answer could not be read." };
       const q = blockedQuestion(options.dir, parsed.action_id);
       if (!q) return { outcome: "gone", text: blockedText("gone") };
-      const offered = parsed.choice === "once" ? q.offers.allow : parsed.choice === "fifteen" ? q.offers.fifteen : parsed.choice === "always" ? q.offers.always : q.offers.ask;
+      // Keeping it blocked is always offered for a block a person may act on, and needs no reason.
+      const offered = parsed.choice === "once" ? q.offers.allow : parsed.choice === "fifteen" ? q.offers.fifteen : parsed.choice === "always" ? q.offers.always
+        : parsed.choice === "hour" ? q.offers.hour : parsed.choice === "tomorrow" ? q.offers.tomorrow : parsed.choice === "quiet" ? true : q.offers.ask;
       if (!offered) return { outcome: "not_offered", text: "Your workspace does not offer that choice for this block now." };
-      if (parsed.reason.length < q.reason_min) return { outcome: "reason_short", text: `Say why in at least ${q.reason_min} characters.` };
+      if (parsed.choice !== "quiet" && parsed.reason.length < q.reason_min) return { outcome: "reason_short", text: `Say why in at least ${q.reason_min} characters.` };
       let os_user: string | undefined;
       try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
-      const lasts = parsed.choice === "fifteen" ? "15m" as const : parsed.choice === "always" ? "always" as const : "once" as const;
+      const lasts = LASTS_OF_CHOICE[parsed.choice] ?? "once";
       const answer = parsed.choice === "ask" ? { decision: "ask" as const, reason: parsed.reason, ...(os_user ? { os_user } : {}) }
+        : parsed.choice === "quiet" ? { decision: "quiet" as const, ...(os_user ? { os_user } : {}) }
         : { decision: "allow" as const, reason: parsed.reason, lasts, ...(os_user ? { os_user } : {}) };
       const done = actOnBlocked(options.dir, parsed.action_id, answer);
-      if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
+      if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked" || done.outcome === "quiet") setTimeout(() => { void sendReasons(); }, 1_000);
       if (done.outcome === "asked") pollAnswers();
       log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
-      return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed) };
+      return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed, Date.now(), q.item.summary || null) };
+    },
+    // "Get help…": a support report the tray copies for the person (tray-model.ts supportBundle: no keys, records, commands
+    // or reasons; failures in the log with the folders and anything token-shaped masked).
+    "GET /support": () => {
+      let os = process.platform as string;
+      try { os = `${process.platform} ${release()}`; } catch { /* the platform alone */ }
+      return { bundle: supportBundle({
+        now: Date.now(), model: trayState(), status: computerStatus(options.dir),
+        versions: { scopebond: agentVersion(), agent: agentVersion(), hook: hookVersion(), install_kind: kind, platform: process.platform, os, node: process.version },
+        settings: readTraySettings(options.dir), selfCheck: lastSelfCheck ? { ok: lastSelfCheck.ok, failed: lastSelfCheck.failed } : null,
+        maintenanceError: lastMaintenance?.error ?? null, failedUpdate: failedUpdate(options.dir),
+        logLines: logTail(join(options.dir, "agent.log")), home: options.dir, userHome: homedir(),
+      }, scrubSecrets) };
     },
     // What the person let through (in force, or waiting for an admin) and what they asked an admin, with the answers.
     "GET /allowances": () => ({ allowances: allowedList(options.dir) }),
@@ -834,8 +879,13 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       setTimeout(() => { void sendReasons(); }, 1_000);
       const what = item.what ?? item.rule_title ?? "it";
       const connected = !!loadConnection(options.dir);
+      const where = connected ? ` · Recorded and sent to ${summary?.workspace_name ?? "your workspace"}` : " on this computer";
+      if (item.kind === "quiet") {
+        log(`no longer keeping an action under "${item.rule_title ?? item.rule}" blocked without asking, from the tray`);
+        return { outcome: "stopped", text: `You'll be asked about ${what} again${where}` };
+      }
       log(`stopped allowing an action under "${item.rule_title ?? item.rule}", from the tray`);
-      return { outcome: "stopped", text: connected ? `Stopped allowing ${what} · Recorded and sent to ${summary?.workspace_name ?? "your workspace"}` : `Stopped allowing ${what} on this computer` };
+      return { outcome: "stopped", text: `Stopped allowing ${what}${where}` };
     },
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
@@ -866,7 +916,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       log(`override ${answer.decision === "allow" ? "given" : answer.decision === "deny" ? "not given" : answer.later ? "not asked (no tray listening, no window): the person acts on it later" : "not available"} for "${question.title}"`);
       if (answer.decision === "allow" && answer.reason) { queueReason(options.dir, question.action_id, answer.reason); setTimeout(() => { void sendReasons(); }, 1_000); }
       // The hook writes the request or allowance after this answer; send it shortly after.
-      if (answer.decision === "ask" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);
+      if (answer.decision === "ask" || answer.decision === "quiet" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);
       return answer;
     },
   }, nativeTray ? { loopback: false } : {}); // beside the native tray nothing uses loopback: its tray and its hook use the pipe
@@ -939,50 +989,107 @@ export function workspaceLetsAsk(dir: string): boolean {
   } catch { return false; }
 }
 
+/** The last lines of a log file (its last 128 KB), oldest first; none when it cannot be read. */
+export function logTail(file: string, bytes = 128 * 1024): string[] {
+  let fd: number | null = null;
+  try {
+    fd = openSync(file, "r");
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, bytes);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.toString("utf8").split(/\r?\n/).filter((l) => l.trim());
+    // The first line may start mid-way when the file was cut.
+    return size > length ? lines.slice(1) : lines;
+  } catch { return []; } finally { if (fd !== null) try { closeSync(fd); } catch { /* closed */ } }
+}
+
+/** When the workspace's rules were last checked successfully, for the tray: the time the rules check records for its last
+ *  success when it records one, else its last check when that one did not fail, else unknown (never a failed check's time). */
+export function lastGoodCheck(meta: object): number | null {
+  const m = meta as Record<string, unknown>;
+  const at = (v: unknown): number | null => { const t = typeof v === "string" ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null; };
+  for (const field of ["checked_ok_at", "last_success_at", "succeeded_at", "rules_ok_at"]) {
+    const t = at(m[field]);
+    if (t !== null) return t;
+  }
+  return m.last_error ? null : at(m.checked_at);
+}
+
+/** What a newer hook offers besides once, 15 minutes, always and ask: 1 hour and until tomorrow, and keeping the block
+ *  without being asked again. A hook that knows the new lengths keeps a block quietly as well (one release), so "Keep
+ *  blocking without asking me" is offered only by such a hook; an older one hears nothing it cannot answer. */
+export function newerOffers(offers: object): { hour: boolean; tomorrow: boolean; quiet: boolean } {
+  const o = offers as Record<string, unknown>;
+  const lengths = typeof o.hour === "boolean" || typeof o.tomorrow === "boolean";
+  return { hour: o.hour === true, tomorrow: o.tomorrow === true, quiet: o.quiet === true || (lengths && o.quiet !== false) };
+}
+
 /** What the tray says after a person acted on an earlier block. */
-function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone"): string {
+function blockedText(outcome: "allowed" | "proposed" | "asked" | "quiet" | "declined" | "gone"): string {
   switch (outcome) {
     case "allowed": return "Allowed. Run it again, or let the coding agent retry.";
     case "proposed": return "Allowed for 15 minutes. Your workspace's admins decide whether it stands; run it again meanwhile.";
     case "asked": return "Request sent to your workspace's admins. Scopebond shows the answer; then run it again.";
+    case "quiet": return `Kept blocked for ${QUIET_BLOCK_DAYS} days. You won't be asked about it again.`;
     case "declined": return "Nothing was allowed.";
     case "gone": return "This block can no longer be allowed or sent to an admin from here.";
   }
 }
 
-export type BlockedChoice = "once" | "fifteen" | "always" | "ask";
+/** hour: for an hour; tomorrow: until tomorrow (24 hours); quiet: keep it blocked without asking again (a quiet block). */
+export type BlockedChoice = "once" | "fifteen" | "hour" | "tomorrow" | "always" | "ask" | "quiet";
+/** The length the hook is told for each choice that allows. */
+export const LASTS_OF_CHOICE: Readonly<Partial<Record<BlockedChoice, "once" | "15m" | "1h" | "tomorrow" | "always">>> = {
+  once: "once", fifteen: "15m", hour: "1h", tomorrow: "tomorrow", always: "always",
+};
+const CHOICES: readonly string[] = ["once", "fifteen", "hour", "tomorrow", "always", "ask", "quiet"];
 
-/** Check an answer from the tray's form: an action id, one of the four choices, and a reason of at most 500 characters
+/** Check an answer from the tray's form: an action id, one of the choices, and a reason of at most 500 characters
  *  (control characters other than line breaks are refused; none is an empty one, enough where the workspace asks for none).
  *  The rest (offered, long enough) is checked against the block. */
 export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: BlockedChoice; reason: string } | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.action_id !== "string" || !/^[A-Za-z0-9._:-]{1,200}$/.test(r.action_id)) return null;
-  if (r.choice !== "once" && r.choice !== "fifteen" && r.choice !== "always" && r.choice !== "ask") return null;
+  if (typeof r.choice !== "string" || !CHOICES.includes(r.choice)) return null;
   if (r.reason !== undefined && typeof r.reason !== "string") return null;
   const reason = (r.reason ?? "").trim();
   if (reason.length > 500 || [...reason].some((c) => { const n = c.charCodeAt(0); return (n < 32 && n !== 10 && n !== 13) || n === 127; })) return null;
-  return { action_id: r.action_id, choice: r.choice, reason };
+  return { action_id: r.action_id, choice: r.choice as BlockedChoice, reason };
 }
 
-/** What the tray says after a person answered a block in its form: what happened, and where it was recorded. */
-export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone", choice: BlockedChoice, alwaysDays: number, workspace: string | null, connected: boolean, reviewed = false, now = Date.now()): string {
+/** A choice in the tray's form: the lengths (once, 15 minutes for older terms, 1 hour, until tomorrow, 30 days or the
+ *  workspace's "always" length), asking an admin, or keeping it blocked without being asked. */
+export type AnswerChoice = BlockedChoice | "hour" | "tomorrow" | "quiet";
+
+/** What the tray says after a person answered a block in its form, in one line: the result, the command as the form showed
+ *  it (when known), and where it was recorded ("Allowed for 1 hour: rm -rf ./dist · recorded in Acme"). Never "always". */
+export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone" | "quiet", choice: AnswerChoice, alwaysDays: number, workspace: string | null,
+  connected: boolean, reviewed = false, now = Date.now(), command: string | null = null): string {
   if (outcome === "gone") return blockedText("gone");
   if (outcome === "declined") return blockedText("declined");
+  const on = command ? `: ${command.length > 120 ? `${command.slice(0, 119)}…` : command}` : "";
+  const days = `${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`;
+  if (outcome === "quiet" || choice === "quiet") return `Kept blocked without asking you${on} · undo it under Allowed`;
   // A request: where the answer will show (it is recorded and sent like everything else).
-  if (outcome === "asked") return connected ? "Request sent · you'll see the answer under Requests" : "Request saved, sent once this computer is connected · you'll see the answer under Requests";
+  if (outcome === "asked") return connected ? `Request sent${on} · the answer shows on the block` : `Request saved${on}, sent once this computer is connected · the answer shows on the block`;
+  const time = (ms: number) => new Date(now + ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   // Applied at once, reviewed by an admin later: when it ends, and that it will be reviewed.
   if (reviewed && outcome === "allowed") {
     const until = choice === "once" ? "for the next try"
-      : choice === "fifteen" ? `until ${new Date(now + 15 * 60_000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+      : choice === "fifteen" ? `until ${time(15 * 60_000)}`
+      : choice === "hour" ? `until ${time(60 * 60_000)}`
+      : choice === "tomorrow" ? `until tomorrow ${time(24 * 60 * 60_000)}`
       : `until ${new Date(now + alwaysDays * 86_400_000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
-    return `Unblocked ${until} · an admin will review it`;
+    return `Unblocked ${until}${on} · an admin will review it`;
   }
-  const what = outcome === "proposed" ? "Allowed for 15 minutes; always once an admin approves"
+  const what = outcome === "proposed" ? `Allowed for 15 minutes while an admin decides on ${days}`
     : choice === "fifteen" ? "Allowed for 15 minutes"
-    : choice === "always" ? `Always allowed on this computer for ${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`
+    : choice === "hour" ? "Allowed for 1 hour"
+    : choice === "tomorrow" ? "Allowed until tomorrow"
+    : choice === "always" ? `Allowed for ${days}`
     : "Allowed once";
-  const where = connected ? `Recorded and sent to ${workspace ?? "your workspace"}` : "Recorded on this computer";
-  return `${what} · ${where}`;
+  const where = connected ? `recorded in ${workspace ?? "your workspace"}` : "recorded on this computer";
+  return `${what}${on} · ${where}`;
 }

@@ -39,7 +39,7 @@ test("the tray model lists today's blocks in plain words, with the rule's name, 
     assert.equal(rm.project, "checkout");
     assert.equal(rm.tool, "Claude Code");
     assert.equal(rm.can_act, true);
-    assert.deepEqual(rm.offers, { once: true, fifteen: true, always: true, always_days: 14, always_needs_admin: true, ask: true, reviewed: false });
+    assert.deepEqual(rm.offers, { once: true, fifteen: true, hour: false, tomorrow: false, quiet: true, always: true, always_days: 14, always_needs_admin: true, ask: true, reviewed: false });
     assert.equal(rm.reason_min, 12);
     assert.equal(rm.summary, "shell.exec rm", "the older fields stay for older trays");
     assert.equal(read.what, "Read .env.production");

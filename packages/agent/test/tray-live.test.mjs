@@ -36,7 +36,7 @@ test("a listening tray gets the question, and the person's answer from its form 
   assert.equal(q.what, ".env.production");
   assert.equal(q.rule_title, "Read passwords, keys or secrets");
   assert.equal(q.tool, "Claude Code");
-  assert.deepEqual(q.offers, { once: true, fifteen: true, always: true, always_days: 30, always_needs_admin: false, ask: true, reviewed: false });
+  assert.deepEqual(q.offers, { once: true, fifteen: true, hour: false, tomorrow: false, quiet: true, always: true, always_days: 30, always_needs_admin: false, ask: true, reviewed: false });
   assert.ok(Date.parse(q.deadline) > Date.now() + 40_000, "the hook's own wait");
   assert.equal(live.open(q.action_id), true);
   assert.deepEqual(live.answer({ action_id: q.action_id, choice: "once", reason: "too short" }), { ok: false, outcome: "reason_short", text: "Say why in at least 12 characters." });
@@ -130,7 +130,7 @@ test("through the agent: the hook's POST /override waits for the tray's answer; 
     const hook = callAgent(dir, "POST", "/override", body, 25_000);
     const { question: q } = await waited;
     assert.equal(q.tool, "Codex");
-    assert.deepEqual(q.offers, { once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false });
+    assert.deepEqual(q.offers, { once: false, fifteen: false, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false });
     assert.equal((await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray.pending.action_id, q.action_id);
     assert.equal((await callAgent(dir, "POST", "/override/open", { action_id: q.action_id }, 10_000)).opened, true);
     assert.equal((await callAgent(dir, "POST", "/override/answer", { action_id: q.action_id, choice: "once", reason: REASON }, 10_000)).outcome, "not_offered");
@@ -159,13 +159,13 @@ test("through the agent, the window retired: with no tray listening the hook hea
 
 test("the window's words: ask to unblock; macOS and Linux offer the workspace's one length", () => {
   const ask = question({ mode: "ask", offers: { allow: false, always: false, ask: true } });
-  assert.ok(windowsScript(ask).includes(b64("Ask to unblock")));
+  assert.ok(windowsScript(ask).includes(b64("Send request")));
   assert.ok(!windowsScript(ask).includes(b64("Ask an admin")));
   assert.match(questionText(ask), /You may ask to unblock it; an admin decides\./);
   assert.deepEqual(singleChoice(ask), { label: "Ask to unblock", decision: "ask" });
   assert.deepEqual(singleChoice(question()), { label: "Allow once", decision: "allow", lasts: "once" });
-  assert.deepEqual(singleChoice(question({ offers: { allow: false, always: false, ask: false, fifteen: true } })), { label: "Allow for 15 min", decision: "allow", lasts: "15m" });
-  assert.deepEqual(singleChoice(question({ offers: { allow: false, always: true, ask: false, fifteen: false } })), { label: "Always allow", decision: "allow", lasts: "always" });
+  assert.deepEqual(singleChoice(question({ offers: { allow: false, always: false, ask: false, fifteen: true } })), { label: "Allow for 15 minutes", decision: "allow", lasts: "15m" });
+  assert.deepEqual(singleChoice(question({ offers: { allow: false, always: true, ask: false, fifteen: false } })), { label: "Allow for 30 days", decision: "allow", lasts: "always" });
   assert.equal(singleChoice(question({ offers: { allow: false, always: false, ask: false, fifteen: false } })), null);
   const extra = question({ harness: "Not A Tool", reviewed: true, always_days: 999, project: "checkout" });
   assert.equal(extra.harness, undefined, "only a tool id");

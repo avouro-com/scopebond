@@ -110,7 +110,8 @@ const installHeld = (message: string | null | undefined): boolean => !!message &
  *  characters; null when the message has no such sentence. */
 export function installVerdictWords(message: string | null | undefined): string | null {
   if (!message) return null;
-  const why = message.split(/\.\s+/)[1]?.replace(/\.$/, "").trim();
+  // The first line only: the coding agent's instruction after it is not the verdict.
+  const why = message.split("\n")[0].split(/\.\s+/)[1]?.replace(/\.$/, "").trim();
   return why ? why.slice(0, 160) : null;
 }
 

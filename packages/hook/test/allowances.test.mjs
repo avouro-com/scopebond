@@ -119,9 +119,10 @@ test("'Block, person may ask': the window offers only Ask an admin; the request 
   const reason = "Need to clear the build cache before the release";
   const d = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "ask", reason, os_user: "dev" }] });
   assert.equal(d.decision, "deny");
-  assert.deepEqual(d.asked[0].offers, { allow: false, always: false, ask: true, fifteen: false });
+  assert.deepEqual(d.asked[0].offers, { allow: false, always: false, ask: true, fifteen: false, hour: false, tomorrow: false });
   assert.equal(d.asked[0].mode, "ask");
-  assert.match(d.hint, /request to allow .* was sent to your workspace's admins/);
+  assert.match(d.reason, /\nWhat to do: The person can ask an admin from the Scopebond icon/);
+  assert.equal(d.hint, "The person can ask an admin from the Scopebond icon; tell them, and wait for the answer before trying again.");
   const [request] = readRequests(dir);
   assert.equal(request.rule, "destructive-shell");
   assert.equal(request.reason, reason);
@@ -142,7 +143,7 @@ test("'Allow for 15 min' and 'Always allow this here…' also stand for the same
   const first = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason, os_user: ME, lasts: "15m" }] });
   assert.equal(first.decision, "allow");
   assert.equal(first.override.method, "agent_dialog");
-  assert.deepEqual(first.asked[0].offers, { allow: true, always: true, ask: false, fifteen: true });
+  assert.deepEqual(first.asked[0].offers, { allow: true, always: true, ask: false, fifteen: true, hour: false, tomorrow: false });
   const next = await run(dir, bash("rm -rf ../build"));
   assert.equal(next.override.method, "allowance", "the next one needs no window");
   const always = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "allow", reason, os_user: ME, lasts: "always" }] });
@@ -169,7 +170,7 @@ test("from the tray, a person allows an earlier block for the next try, or asks 
   assert.equal(blocked.decision, "deny");
   const item = readBlocked(dir).at(-1);
   const q = blockedQuestion(dir, item.id);
-  assert.deepEqual(q.offers, { allow: true, always: true, ask: true, fifteen: true });
+  assert.deepEqual(q.offers, { allow: true, always: true, ask: true, fifteen: true, hour: false, tomorrow: false });
   assert.equal(q.title, "Run a command that deletes data or shuts down the computer");
   assert.equal(q.always_days, 30);
   assert.equal(q.always_needs_admin, false);
@@ -312,7 +313,7 @@ test("unblocking automatically, reviewed later: the workspace sets one length; o
   const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ lasts: "15m", review: true }) } });
   // The window is asked with only 15 minutes on offer; an answer for another length allows nothing.
   const once = await run(dir, bash("rm -rf ../build"), { answers: [{ decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "once" }] });
-  assert.deepEqual(once.asked[0].offers, { allow: false, always: false, ask: false, fifteen: true });
+  assert.deepEqual(once.asked[0].offers, { allow: false, always: false, ask: false, fifteen: true, hour: false, tomorrow: false });
   assert.equal(once.decision, "deny", "a length the workspace did not set is not given");
   const fifteen = await run(dir, bash("rm -rf ../dist"), { answers: [{ decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "15m" }] });
   assert.equal(fifteen.decision, "allow");
@@ -320,7 +321,7 @@ test("unblocking automatically, reviewed later: the workspace sets one length; o
   // From the tray: the earlier block offers the one length, says it is reviewed later, and nothing else applies.
   const item = readBlocked(dir).at(-1);
   const q = blockedQuestion(dir, item.id);
-  assert.deepEqual(q.offers, { allow: false, always: false, ask: false, fifteen: true });
+  assert.deepEqual(q.offers, { allow: false, always: false, ask: false, fifteen: true, hour: false, tomorrow: false });
   assert.equal(q.reviewed, true);
   assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "always" }), { outcome: "declined" });
   assert.deepEqual(actOnBlocked(dir, item.id, { decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "15m" }), { outcome: "allowed" });
@@ -328,7 +329,7 @@ test("unblocking automatically, reviewed later: the workspace sets one length; o
   const { dir: plain } = setup({ "destructive-shell": { mode: "override", override: terms({ always: "at_once", requests: true }) } });
   await run(plain, bash("rm -rf ../build"), { answers: [] });
   const p = blockedQuestion(plain, readBlocked(plain).at(-1).id);
-  assert.deepEqual(p.offers, { allow: true, always: true, ask: true, fifteen: true });
+  assert.deepEqual(p.offers, { allow: true, always: true, ask: true, fifteen: true, hour: false, tomorrow: false });
   assert.equal(p.reviewed, false);
 });
 

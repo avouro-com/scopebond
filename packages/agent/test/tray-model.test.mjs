@@ -107,7 +107,8 @@ test("the tray script takes the home and agent id as data and draws all six stat
   assert.doesNotMatch(script, /Remove-Item C:/);
   for (const s of ["protected", "working", "offline", "attention", "problem", "disconnected"]) assert.ok(script.includes(`'${s}'`), `draws '${s}'`);
   assert.match(script, /GET' '\/tray'/);
-  assert.match(script, /'Problems only'/);
+  assert.match(script, /'Tell me when something is blocked'/);
+  assert.doesNotMatch(script, /Problems only/, "one switch: no 'Problems only' choice");
 });
 
 test("a workspace at its monthly limit is said plainly, not 'sending'; another refusal names its status", () => {
@@ -199,13 +200,13 @@ test("today: an edit recorded after it ran is shown apart from blocks, never add
 
 test("one line under Protected, the workspace's name and today's counts; up to 200 blocks", () => {
   const m = trayModel(input(status(), { recentBlocks: Array.from({ length: 230 }, (_, i) => ({ action_id: `a${i}`, summary: "shell.exec rm", at: "", rule: null })) }));
-  assert.equal(m.detail, "Rules checked 3 min ago · 3 blocked today");
+  assert.equal(m.detail, "3 blocked today · rules updated 3 min ago");
   assert.equal(m.workspace, "Avouro");
   assert.deepEqual(m.today, { actions: 312, blocked: 3 });
   assert.equal(m.recent_blocks.length, 200);
   assert.equal(m.can_ask, false, "not said: no Requests list");
   assert.equal(trayModel(input(status(), { canAsk: true })).can_ask, true);
-  assert.equal(trayModel(input(status(), { today: { actions: 4, blocked: 0, allowed_by_person: 0 } })).detail, "Rules checked 3 min ago · nothing blocked today");
+  assert.equal(trayModel(input(status(), { today: { actions: 4, blocked: 0, allowed_by_person: 0 } })).detail, "Nothing blocked today · rules updated 3 min ago");
   assert.equal(trayModel(input(status(), { rules: null, today: null })).detail, null);
   assert.equal(trayModel(input(status({ pending: 42, oldest_pending_age_s: 40 * 60 }))).detail, null, "the headline says what is wrong");
 });

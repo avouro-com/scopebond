@@ -256,3 +256,11 @@ test("receipt match vectors: valid matches validate, invalid ones do not", () =>
     assert.ok(vectors.invalid.some((vector) => vector.name === name), name);
   }
 });
+
+test("an action allowlist may carry bounded exceptions, each a closed set of bounds", () => {
+  const exceptions = policySchema.$defs.action_allowlist.properties.exceptions;
+  assert.equal(exceptions.minItems, 1);
+  assert.equal(exceptions.maxItems, 50);
+  assert.equal(exceptions.items.minProperties, 1, "an empty exception would excuse every action");
+  assert.deepEqual(exceptions.items.additionalProperties, { $ref: "#/$defs/paramBound" });
+});

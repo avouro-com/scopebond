@@ -34,6 +34,9 @@ export interface TrayModel {
   /** Up to 200 blocks of the last seven days, newest first (today's, then earlier ones); an agent's retries of one block
    *  are one entry with its number of tries. */
   recent_blocks: RecentBlock[];
+  /** `recent_blocks` as the tray lists them: today's repeats of one action under one rule as one row (groupBlocks). Absent
+   *  from an older agent: each block is its own row. */
+  blocked_groups?: BlockGroup[];
   /** The line under the state when it is protected ("Rules checked 3 min ago · 2 blocked today"); null otherwise (the
    *  headline says it). */
   detail?: string | null;
@@ -50,23 +53,50 @@ export interface TrayModel {
   asked?: AskedItem[];
   /** The hook's question waiting for the person now, when the tray is listening (live-prompt.ts). */
   pending?: LiveQuestion | null;
+  /** Settings' "This computer" rows (computerRows), and the one client version ("Scopebond 0.11.5"); absent from an older
+   *  agent. */
+  computer_rows?: ComputerRow[];
+  version_label?: string;
+  /** What this computer enforces, for Settings' "This computer" row; null before the rules can be read. Absent from an older
+   *  agent. */
+  rules?: TrayRules | null;
 }
 
-/** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes, or
- *  always (for `always_days`, after an admin approves when `always_needs_admin`), or ask an admin. */
+/** The rules in force: how many block and how many only record (every starter, workspace and pack rule, and each service the
+ *  workspace blocks by name), the packs in force, and the rules check: `checked_at` is the last successful one ("Rules
+ *  updated"), `last_attempt_at` the last try and `last_error` why it failed (null after one that worked). Times in ms. */
+export interface TrayRules {
+  managed: boolean;
+  blocking: number;
+  monitoring: number;
+  packs: Array<{ id: string; version: string; title: string }>;
+  checked_at: number | null;
+  last_attempt_at: number | null;
+  last_error: string | null;
+}
+
+/** A fact about this computer for Settings; `items` are what the row lists when opened (the rule packs in force). */
+export interface ComputerRow { label: string; value: string; items?: string[] }
+
+/** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes (older
+ *  terms), or for `always_days` (30 days; after an admin approves when `always_needs_admin`), or ask an admin. */
 export interface BlockOffers {
   once: boolean; fifteen: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean;
   /** The workspace reviews every unblock later and may undo it; absent from an older agent. */
   reviewed?: boolean;
+  /** Newer: allow it for 1 hour or until tomorrow, and keep it blocked without being asked again ("Keep blocking without
+   *  asking me"); absent or false from an older hook. */
+  hour?: boolean; tomorrow?: boolean; quiet?: boolean;
 }
 
-/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did. The
+/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did ("quiet":
+ *  they kept it blocked without being asked again, or a quiet block they made denied it). The
  *  fields after `acted` are newer (an older tray reads `summary` and `rule`): `what` is the action in plain words and
  *  `action_text` the text the Scopebond window shows (both with secrets masked), `rule_title` the rule's name, `project`
  *  the repository's name and `tool` the coding tool's, each when the record has it; `offers` and `reason_min` what the
  *  person may do now and the shortest reason the workspace accepts (null when nothing can be done). */
 export interface RecentBlock {
-  action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | null;
+  action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | "quiet" | null;
   what?: string; action_text?: string; rule_title?: string | null; project?: string | null; tool?: string | null;
   offers?: BlockOffers | null; reason_min?: number | null;
   /** Newer still (an older tray leaves them out): how many times the coding agent tried it (retries folded, 1 for a single
@@ -74,10 +104,68 @@ export interface RecentBlock {
    *  button, the text "Copy details" copies, and the person's request for it, when they asked. */
   tries?: number; first_at?: string; group_id?: string | null;
   outcome?: BlockOutcome; outcome_text?: string | null; copy_details?: string | null; request?: BlockRequest | null;
+  /** Newer again: why the rule exists, in one line (the first sentence of the rule's description on this computer), for the
+   *  block's details; absent when the rule says nothing about itself. */
+  rule_why?: string | null;
+}
+
+/** Blocks shown as one row in the tray: today, the same action under the same rule, however many sessions tried it; else one
+ *  block (with its retries) alone. `members` are indexes into `recent_blocks`, newest first; the first is the one the row
+ *  shows and acts on. `times` counts every try (retries included). */
+export interface BlockGroup {
+  key: string;
+  members: number[];
+  times: number;
+  first_at: string;
+  last_at: string;
+  today: boolean;
 }
 
 /** The most blocks the tray lists (the last seven days; the panel shows them 50 at a time). */
 export const RECENT_BLOCKS_MAX = 200;
+/** The longest "why" line a block's details show. */
+const WHY_MAX = 200;
+
+/** A rule's description as one line for a person: its first sentence, at most 200 characters (cut at a word). Null when
+ *  there is nothing to say. */
+export function whyOf(description: unknown): string | null {
+  if (typeof description !== "string") return null;
+  const clean = description.replace(/\s+/g, " ").trim();
+  if (!clean) return null;
+  const end = clean.search(/[.!?](?:\s|$)/);
+  const first = end >= 0 ? clean.slice(0, end + 1) : clean;
+  if (first.length <= WHY_MAX) return first;
+  const cut = first.slice(0, WHY_MAX - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > WHY_MAX * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:]+$/, "")}…`;
+}
+
+/** Group the list the way the tray shows it: today's blocks of the same action under the same rule (across sessions and
+ *  coding tools) are one row, newest first; earlier blocks are each their own row. Order follows the newest member. */
+export function groupBlocks(blocks: readonly RecentBlock[], now: number): BlockGroup[] {
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const groups: BlockGroup[] = [];
+  const byKey = new Map<string, BlockGroup>();
+  blocks.forEach((b, i) => {
+    const at = Date.parse(b.at);
+    const today = Number.isFinite(at) && at >= midnight.getTime();
+    const tries = typeof b.tries === "number" && b.tries > 0 ? b.tries : 1;
+    const first = b.first_at ?? b.at;
+    const key = today ? `${b.rule_title ?? b.rule ?? ""}\n${b.what ?? b.summary}` : `one\n${b.group_id ?? b.action_id ?? ""}\n${i}`;
+    const known = today ? byKey.get(key) : undefined;
+    if (known) {
+      known.members.push(i);
+      known.times += tries;
+      if (Date.parse(first) < Date.parse(known.first_at)) known.first_at = first;
+      return;
+    }
+    const group: BlockGroup = { key, members: [i], times: tries, first_at: first, last_at: b.at, today };
+    groups.push(group);
+    if (today) byKey.set(key, group);
+  });
+  return groups;
+}
 
 const TOOL_NAMES: Readonly<Record<string, string>> = {
   claude: "Claude Code", cursor: "Cursor", codex: "Codex", copilot: "GitHub Copilot", windsurf: "Windsurf", gemini: "Gemini CLI",
@@ -103,7 +191,13 @@ export interface TrayInput {
   awakeSince: number;
   /** A long step the agent is running (an update, a sign-in, a repair), or null. */
   working: string | null;
-  rules: { checked_at: number | null; managed: boolean; block: number; monitor: number } | null;
+  /** `checked_at`: the last successful rules check. `block`/`monitor`: the rules that block and that record. Newer (an older
+   *  agent leaves them out): the same counts as `blocking`/`monitoring` (every starter, workspace and pack rule, each service
+   *  the workspace blocks by name counted as one), the packs in force, and the last attempt and its error when it failed. */
+  rules: {
+    checked_at: number | null; managed: boolean; block: number; monitor: number;
+    blocking?: number; monitoring?: number; packs?: TrayRules["packs"]; last_attempt_at?: number | null; last_error?: string | null;
+  } | null;
   /** `recorded_after`: out of policy but reported only after it ran (a Cursor edit); never counted as blocked. */
   today: { actions: number; blocked: number; recorded_after?: number; allowed_by_person: number } | null;
   recentBlocks?: RecentBlock[];
@@ -126,6 +220,10 @@ export interface TrayInput {
   notice?: string | null;
   /** The workspace lets a person ask an admin under at least one rule. */
   canAsk?: boolean;
+  /** The rule packs in force on this computer, for Settings' Protection row. */
+  packs?: Array<{ id: string; title: string; version: string }> | null;
+  /** When the rules were last checked successfully (a failed check never moves it); absent: `rules.checked_at`. */
+  rulesUpdatedAt?: number | null;
 }
 
 const MIN = 60_000;
@@ -315,22 +413,125 @@ export function trayModel(input: TrayInput): TrayModel {
   const where = [input.workspace?.name, input.workspace?.environment].filter(Boolean).join(" · ");
   const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : headline;
   const tooltip = `Scopebond — ${label}`;
-  // One line under "Protected": when the rules were last checked and what was blocked today (the rows say the rest).
+  // One line under "Protected": what was blocked today and when the rules were last updated (Settings says the rest).
+  const updatedAt = input.rulesUpdatedAt !== undefined ? input.rulesUpdatedAt : input.rules?.checked_at ?? null;
   let detail: string | null = null;
   if (state === "protected") {
-    const checked = input.rules?.checked_at ? `Rules checked ${ago(input.rules.checked_at, now)}` : input.rules && !input.rules.managed ? "Using this computer's own rules" : null;
     const blocked = input.today ? (input.today.blocked ? `${count(input.today.blocked)} blocked today` : "nothing blocked today") : null;
-    detail = [checked, blocked].filter(Boolean).join(" · ") || null;
+    const checked = updatedAt ? `rules updated ${ago(updatedAt, now)}` : input.rules && !input.rules.managed ? "using this computer's own rules" : null;
+    detail = [blocked, checked].filter(Boolean).join(" · ") || null;
     if (detail) detail = detail[0].toUpperCase() + detail.slice(1);
   }
+  const recent = (input.recentBlocks ?? []).slice(0, RECENT_BLOCKS_MAX);
   return {
     state, headline, fix, actions, hint, rows,
     tooltip: tooltip.length > 63 ? `${tooltip.slice(0, 62)}…` : tooltip,
-    recent_blocks: (input.recentBlocks ?? []).slice(0, RECENT_BLOCKS_MAX),
+    recent_blocks: recent,
+    blocked_groups: groupBlocks(recent, now),
     detail,
     workspace: input.workspace?.name ?? null,
     today: input.today ? { actions: input.today.actions, blocked: input.today.blocked } : null,
     can_ask: input.canAsk ?? false,
+    rules: input.rules ? {
+      managed: input.rules.managed, blocking: input.rules.blocking ?? input.rules.block, monitoring: input.rules.monitoring ?? input.rules.monitor,
+      packs: input.rules.packs ?? [], checked_at: input.rules.checked_at, last_attempt_at: input.rules.last_attempt_at ?? null, last_error: input.rules.last_error ?? null,
+    } : null,
+    computer_rows: computerRows(input, state, updatedAt, updateAvailable),
+    version_label: `Scopebond ${input.version.agent}`,
+  };
+}
+
+/** Settings' "This computer", as facts a person reads (no queues, no internals), each only when known:
+ *  Protection ("On · 9 rules blocking · 4 packs", the packs listed when opened), Workspace ("Avouro · Production"), Rules
+ *  updated (the last successful check) and Version ("Scopebond 0.11.4 · up to date": one version for the whole client). */
+function computerRows(input: TrayInput, state: TrayState, updatedAt: number | null, updateAvailable: boolean): ComputerRow[] {
+  const rows: ComputerRow[] = [];
+  const plural = (n: number, one: string, many: string) => `${count(n)} ${n === 1 ? one : many}`;
+  const packs = input.packs ?? [];
+  const counts = [
+    input.rules ? plural(input.rules.block, "rule blocking", "rules blocking") : null,
+    packs.length ? plural(packs.length, "pack", "packs") : null,
+  ].filter(Boolean);
+  const on = state === "problem" ? "Needs attention" : "On";
+  rows.push({ label: "Protection", value: [on, ...counts].join(" · "), ...(packs.length ? { items: packs.map((p) => `${p.title} ${p.version}`) } : {}) });
+  if (input.workspace?.name) rows.push({ label: "Workspace", value: [input.workspace.name, input.workspace.environment].filter(Boolean).join(" · ") });
+  else if (!input.status.delivery.connected) rows.push({ label: "Workspace", value: "Not connected: using this computer's own rules" });
+  if (updatedAt) rows.push({ label: "Rules updated", value: ago(updatedAt, input.now) });
+  else if (input.rules && !input.rules.managed) rows.push({ label: "Rules updated", value: "Using this computer's own rules" });
+  const failed = input.version.failedUpdate ?? null;
+  const version = `Scopebond ${input.version.agent}`;
+  rows.push({
+    label: "Version",
+    value: updateAvailable ? `${version} · ${input.version.recommendedAgent ?? "a newer version"} ready to install`
+      : failed ? `${version} · the update to ${failed.version} didn't install; trying again later`
+      : input.version.policy === "hold" ? `${version} · updates set by your workspace`
+      : `${version} · up to date`,
+  });
+  return rows;
+}
+
+export interface SupportInput {
+  now: number;
+  model: TrayModel;
+  status: StatusJson;
+  versions: { scopebond: string; agent: string; hook: string; install_kind: string; platform: string; os: string; node: string };
+  settings: { notifications: string };
+  selfCheck: { ok: boolean; failed: string[] } | null;
+  /** The last maintenance pass's error, and a version that did not install here. */
+  maintenanceError: string | null;
+  failedUpdate: { version: string; reason: string | null } | null;
+  /** The agent's log, newest last (the caller reads its tail); only lines about a failure are kept. */
+  logLines: string[];
+  /** This computer's Scopebond folder and the person's home folder, never written into the report. */
+  home: string;
+  userHome: string;
+}
+
+/** The most log lines a support report carries, and the longest line. */
+const SUPPORT_LOG_LINES = 30;
+const SUPPORT_LINE_MAX = 300;
+const FAILURE_LINE = /\b(?:fail|failed|error|could not|cannot|did not|refused|unavailable|problem|timed out|not answering)\b/i;
+// A sign-in code ("ABCD-EFGH"): it lets someone approve this computer while it waits, so it never goes in a report.
+const SIGN_IN_CODE = /\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/g;
+
+/** One line made safe for a report: the folders named as <scopebond> and ~ (not the person's user name), anything shaped
+ *  like a token or a sign-in code masked, cut to 300 characters. */
+export function redactLine(line: string, home: string, userHome: string, scrub: (text: string) => string = (t) => t): string {
+  let out = line;
+  for (const [folder, name] of [[home, "<scopebond>"], [userHome, "~"]] as const) {
+    if (!folder) continue;
+    for (const spelling of new Set([folder, folder.replace(/\\/g, "/"), folder.replace(/\//g, "\\")])) out = out.split(spelling).join(name);
+  }
+  out = scrub(out).replace(SIGN_IN_CODE, "****-****");
+  // eslint-disable-next-line no-control-regex -- control characters are taken out of the log text
+  out = out.replace(/[\u0000-\u001f\u007f]/g, " ");
+  return out.length > SUPPORT_LINE_MAX ? `${out.slice(0, SUPPORT_LINE_MAX - 1)}…` : out;
+}
+
+/** What "Get help…" copies for a support conversation: the state, versions, settings, the facts Settings shows, delivery
+ *  counts and the last failures in the agent's log. Never a key, a credential, a record, a command, a reason, a file from
+ *  the Scopebond folder or the person's user name: only counts, versions, states and redacted failure lines. */
+export function supportBundle(i: SupportInput, scrub: (text: string) => string = (t) => t): Record<string, unknown> {
+  const d = i.status.delivery;
+  const clean = (text: string | null | undefined): string | null => (text ? redactLine(text, i.home, i.userHome, scrub) : null);
+  return {
+    schema: "scopebond.support.v1",
+    created_at: new Date(i.now).toISOString(),
+    versions: i.versions,
+    state: { state: i.model.state, headline: clean(i.model.headline), hint: clean(i.model.hint), fix: i.model.fix?.id ?? null },
+    computer: (i.model.computer_rows ?? []).map((r) => ({ label: r.label, value: clean(r.value), ...(r.items ? { items: r.items } : {}) })),
+    delivery: {
+      connected: d.connected, pending: d.pending, oldest_pending_age_s: d.oldest_pending_age_s,
+      last_success_at: d.last_success_at ? new Date(d.last_success_at).toISOString() : null,
+      last_error: clean(d.last_error), connection_refused_since: d.connection_refused_since ? new Date(d.connection_refused_since).toISOString() : null,
+    },
+    installation_id: i.status.identity?.installation_id ?? null,
+    today: i.model.today ?? null,
+    settings: i.settings,
+    self_check: i.selfCheck ? { ok: i.selfCheck.ok, failed: i.selfCheck.failed.map((f) => clean(f)) } : null,
+    maintenance_error: clean(i.maintenanceError),
+    failed_update: i.failedUpdate ? { version: i.failedUpdate.version, why: clean(i.failedUpdate.reason) } : null,
+    last_errors: i.logLines.filter((l) => FAILURE_LINE.test(l)).slice(-SUPPORT_LOG_LINES).map((l) => clean(l)),
   };
 }
 

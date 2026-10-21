@@ -33,8 +33,10 @@ export interface Classification {
   coverage?: "program_only";
 }
 
-/** The CI locations: a write to one is H03; any other protected write is C02. */
-const CI_LOCATION = /github\/(?:workflows|actions)|gitlab-ci|circleci|azure-pipelines|jenkinsfile|bitbucket-pipelines|travis|drone|cloudbuild|buildkite/i;
+/** The CI locations, and the agent configuration a workspace may relax with them (Claude Code's sub-agent definitions and a
+ *  project's `.mcp.json`, which are not in the always-on floor): a write to one is H03; any other protected write is C02.
+ *  Tested against the protected-write rule's own (escaped) value. */
+const CI_LOCATION = /github\/(?:workflows|actions)|gitlab-ci|circleci|azure-pipelines|jenkinsfile|bitbucket-pipelines|travis|drone|cloudbuild|buildkite|claude\/agents|^\\\.mcp\\\.json$/i;
 
 /** Ids whose match the default policy blocks. I-classes are inventory only. */
 export const BLOCKING: readonly CatalogId[] = ["H01", "H02", "H03", "H04", "H05", "C01", "C02"];
@@ -94,8 +96,10 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
     if (program === "") unknown.push("program not resolved");
     else {
       ids.push("I05");
-      // A delete whose every target is inside the working folder (delete-scope.ts) is not destructive here.
-      if (isDestructiveProgram(rules, program) && !isContainedDelete(params)) { ids.push("H04"); coverage = "program_only"; }
+      // A delete whose every target is inside the working folder (delete-scope.ts) is not destructive here; a destructive form
+      // of a program (destructive-forms.ts) is judged as safe-shell judges it, by `program_scope`.
+      const scope = typeof params.program_scope === "string" && params.program_scope !== "" ? params.program_scope : program;
+      if ((isDestructiveProgram(rules, program) || isDestructiveProgram(rules, scope)) && !isContainedDelete(params)) { ids.push("H04"); coverage = "program_only"; }
     }
   }
   return { ids, unknown, ...(coverage ? { coverage } : {}) };

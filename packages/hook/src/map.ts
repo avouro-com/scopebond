@@ -19,6 +19,7 @@ import { derivePackMcp, derivePackTargets, type PackAction } from "./packs.js";
 import { packagesToCheck } from "./typed-ops.js";
 import { deriveInstalls, deriveSettingsInstalls, MCP_SETTINGS_FILE } from "./typed-install.js";
 import { deleteVerdicts, programScope, type DeleteVerdict } from "./delete-scope.js";
+import { destructiveForm } from "./destructive-forms.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -1573,12 +1574,35 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
 
 const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 
+// Folders whose contents a read rule protects as a whole: Scopebond's own and the credential folders.
+const PROTECTED_READ_FOLDERS = [".scopebond", ".ssh", ".aws", ".kube", ".docker", ".azure", ".gnupg", ".config/gcloud", ".config/gh"];
+/** The protected folder a `cd` folder is in or is (`~/.ssh/keys` is in `~/.ssh`), up to and including it; null when none. A
+ *  folder that still holds a variable is not judged here (where it leads is only known at run time). */
+function protectedFolderOf(dir: string): string | null {
+  if (dir === "" || HOLDS_VARIABLE.test(dir)) return null;
+  // `.` and `..` resolved first: `~/.ssh/..` is the home folder.
+  const segs: string[] = [];
+  for (const s of dir.replace(/\\/g, "/").split("/")) {
+    if (s === "." || (s === "" && segs.length > 0)) continue;
+    if (s === ".." && segs.length > 0 && segs[segs.length - 1] !== "..") segs.pop(); else segs.push(s);
+  }
+  for (let i = 0; i < segs.length; i++) {
+    const one = segs[i].toLowerCase();
+    const two = i + 1 < segs.length ? `${one}/${segs[i + 1].toLowerCase()}` : "";
+    if (PROTECTED_READ_FOLDERS.includes(two)) return segs.slice(0, i + 2).join("/");
+    if (PROTECTED_READ_FOLDERS.includes(one)) return segs.slice(0, i + 1).join("/");
+  }
+  return null;
+}
+
 /** A simple command's intents with `program_scope` on its shell.exec (what safe-shell judges: delete-scope.ts). A delete whose
  *  every target is contained also records each target as a write, so the file rules (protected places, workspace roots) judge
- *  what it removes. */
-function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, cwd?: string): Mapped[] {
+ *  what it removes. A destructive form of a program (destructive-forms.ts: `mkfs.ext4`, `crontab -r`, a recursive `chmod`
+ *  of a system folder) is judged as that form. */
+function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, cwd?: string, form?: string | null): Mapped[] {
+  // A delete that reaches outside the working folder also carries those targets, for a workspace's exception to compare.
   const out = mapped.map((m) => (m.intent.action_type === "shell.exec"
-    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict) } } }
+    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: form ?? programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict), ...(verdict?.targets ? { delete_targets: verdict.targets } : {}) } } }
     : m));
   if (verdict?.scope !== "contained") return out;
   const seen = new Set(out.filter((m) => m.intent.action_type === "file.write").map((m) => String(m.intent.params.path)));
@@ -1668,9 +1692,15 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
     const vars: Variables = new Map();
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir), deletes.get(sc), cwd);
+      const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir), deletes.get(sc), cwd, destructiveForm(sc, dir, cwd));
       const kept = filesOnly ? mapped.filter(isFile) : mapped;
       out.push(...kept);
+      // A program run in a protected folder (after a `cd` there) reads there, whatever it names: a read of the folder.
+      const held = sc.opaque || !CD.has(canonProgram(sc.program)) ? protectedFolderOf(dir) : null;
+      if (held !== null) {
+        const have = new Set(out.filter(isFile).map(key));
+        for (const m of fileIntent("file.read", held, "", cwd)) if (!have.has(key(m))) out.push(m);
+      }
       // The command read with the values its variables may hold, and in each other folder it may run in: the file effects and
       // the switch-off those readings add. A credential's value adds only a place the always-on protection guards.
       const lookup = scopeOf(vars, sc);
@@ -1814,13 +1844,15 @@ function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | u
 /** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,
  *  so the runtime resolves it and fills it in here, before evaluation — otherwise the
  *  starter policy's ref bound would fail-closed on every plain push. Only git.push
- *  intents with no ref are touched. */
-export function fillPushBranch(mapped: Mapped[], branch: string | null | undefined): Mapped[] {
-  if (!branch) return mapped;
-  return mapped.map((m) =>
-    m.intent.action_type === "git.push" && m.intent.params.ref === undefined
-      ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, ref: scrubParam(branch) } } }
-      : m);
+ *  intents with no ref are touched. `upstream`, when the branch is unknown, names the
+ *  branch the upstream points at (or null: the ref stays unknown and fails closed). */
+export function fillPushBranch(mapped: Mapped[], branch: string | null | undefined, upstream?: () => string | null): Mapped[] {
+  const bare = (m: Mapped): boolean => m.intent.action_type === "git.push" && m.intent.params.ref === undefined;
+  // The current branch could not be read: before a bare push is judged as one whose destination is unknown, the branch its
+  // upstream names is asked for (git-upstream.ts), only then; when that cannot be read either, the ref stays unknown.
+  const fill = branch || (upstream && mapped.some(bare) ? upstream() : null);
+  if (!fill) return mapped;
+  return mapped.map((m) => (bare(m) ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, ref: scrubParam(fill) } } } : m));
 }
 
 // VS Code's own settings can switch hooks off: `chat.useHooks` (Local hooks at all), `chat.hookFilesLocations` (which hook

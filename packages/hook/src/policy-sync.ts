@@ -91,12 +91,14 @@ import {
   allowsLocalChanges, ruleReport, toolSettingsMark, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
 import { SERVICE_RULES_CAPABILITY } from "./service-rules.js";
+import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
 
 /** What this hook reads in a workspace's rules document beyond what its version implies, as `x-scopebond-hook-capabilities`
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
  *  unblock lasts and its review (`unblock_terms`), "unlimited" for an override's `minutes` and `daily_limit`
- *  (`unlimited_terms`; an older hook gets numbers), and the signed list of rule packs to hold (`packs`, pack-sync.ts). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason"] as const;
+ *  (`unlimited_terms`; an older hook gets numbers), and the signed list of rule packs to hold (`packs`, pack-sync.ts), and the
+ *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths"] as const;
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";
@@ -175,7 +177,11 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let receiptContext = meta.receipt_context ?? null;
   // And the rule packs the workspace names (pack-sync.ts).
   let packState = meta.packs ?? null;
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch, checked_at: now.toISOString() });
+  // Every check records when it was tried; only a successful one (it clears the error: rules applied, unchanged, or the
+  // workspace's own-rules answer) moves `checked_at`, so "Rules updated" is the last check that worked. A failed one keeps
+  // `checked_at` and says why in `last_error`.
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch,
+    last_attempt_at: now.toISOString(), ...(patch.last_error === null ? { checked_at: now.toISOString(), checked_ok_at: now.toISOString() } : {}) });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {
@@ -365,7 +371,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   options.afterPolicyWrite?.(dir);
   await syncPackList(r);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
-  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null,
+  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, rule_notes: inspected.notes.length ? inspected.notes : null,
     policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
   return { state: "applied", revision: doc.revision };
 }
@@ -378,8 +384,11 @@ export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, bud
   try {
     if (process.env.SCOPEBOND_POLICY_SYNC === "off") return null;
     if (!existsSync(connectionPath(dir))) return null;
-    const checked = readMeta(dir).checked_at;
-    if (checked && now - Date.parse(checked) < SYNC_INTERVAL_MS) return null;
+    // Due five minutes after the last attempt, whether it worked or not: a workspace that cannot be reached is not tried again
+    // on every tool call.
+    const meta = readMeta(dir);
+    const last = Math.max(meta.checked_at ? Date.parse(meta.checked_at) : 0, meta.last_attempt_at ? Date.parse(meta.last_attempt_at) : 0);
+    if (last && now - last < SYNC_INTERVAL_MS) return null;
     if (!claimSyncLock(join(dir, LOCK_FILE), now)) return null;
     const budget = Number.isFinite(budgetMs) && budgetMs > 0 ? budgetMs : INLINE_BUDGET_MS;
     const work = Promise.resolve()

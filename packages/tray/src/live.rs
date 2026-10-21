@@ -135,7 +135,7 @@ mod tests {
     fn the_person_is_told_once_per_question_with_the_panels_button() {
         let mut w = LiveWatch::new();
         let unblock = question(BlockOffers { once: true, fifteen: true, ask: true, ..Default::default() });
-        let t = w.observe(Some(&unblock), Notifications::Problems).expect("told, whatever the block setting");
+        let t = w.observe(Some(&unblock), Notifications::Blocks).expect("told");
         assert_eq!(t.title, "Blocked: Read .env.production");
         assert_eq!(t.text, "Claude Code is waiting for your answer · Read passwords, keys or secrets");
         assert_eq!((t.button, t.unblock.as_deref()), (Some("Unblock…"), Some("act-live-000000000001")));

@@ -37,7 +37,7 @@ export function noteReceiptContext(dir: string): void {
 export function forgetWorkspaceAnnouncements(dir: string): void {
   try {
     const meta = readMeta(dir);
-    writeMeta(dir, { ...meta, receipt_context: null, checked_at: null });
+    writeMeta(dir, { ...meta, receipt_context: null, checked_at: null, last_attempt_at: null });
   } catch { /* nothing recorded yet */ }
 }
 

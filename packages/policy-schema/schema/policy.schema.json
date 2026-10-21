@@ -176,6 +176,14 @@
         "param_bounds": {
           "type": "object", "minProperties": 1,
           "additionalProperties": { "$ref": "#/$defs/paramBound" }
+        },
+        "exceptions": {
+          "description": "Sets of bounds that excuse an action from param_bounds: an action that meets every bound of one set is not checked against them. A field the action does not carry, or an empty list for an items bound, never meets a bound.",
+          "type": "array", "minItems": 1, "maxItems": 50,
+          "items": {
+            "type": "object", "minProperties": 1, "maxProperties": 16,
+            "additionalProperties": { "$ref": "#/$defs/paramBound" }
+          }
         }
       }
     },

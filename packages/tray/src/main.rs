@@ -33,6 +33,8 @@ const REFRESH_EVERY: Duration = Duration::from_secs(30);
 const NOTE_FOR: Duration = Duration::from_secs(120);
 /// The panel shows when its page says it has drawn, or after this long whatever happens.
 const PANEL_SHOW_WAIT_MS: u64 = 1_500;
+/// The client's one version (the agent package's, from build.rs): what About, the panel and the support report say.
+const SCOPEBOND_VERSION: &str = env!("SCOPEBOND_VERSION");
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -196,7 +198,7 @@ fn build_menu(app: &AppHandle, spec: &[Entry]) -> tauri::Result<Menu<tauri::Wry>
 
 fn create_tray(app: &AppHandle, shared: &Arc<Shared>) -> tauri::Result<tauri::tray::TrayIcon> {
     let (s_menu, s_tray) = (shared.clone(), shared.clone());
-    let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Problems });
+    let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Blocks });
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon_image(IconState::Working))
         .tooltip("Scopebond — starting")
@@ -639,28 +641,38 @@ fn act_on_block(shared: &Arc<Shared>, action_id: String) {
     shared.wake();
 }
 
-fn copy_diagnostics(shared: &Arc<Shared>) {
-    let text = match shared.client.call("GET", "/status", None, Duration::from_secs(10)) {
-        Ok(status) => {
-            let report = json!({ "tray": env!("CARGO_PKG_VERSION"), "status": status });
-            if win::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default()) {
-                "Diagnostics copied (no keys or credentials)".to_string()
-            } else {
-                "The clipboard could not be used; try again".to_string()
-            }
+/// "Get help…": copy a support report (the agent's, with no keys, records, commands or reasons; the tray's version and how
+/// it stands with the agent) and open the Help page. Nothing in the Scopebond folder is opened or attached.
+fn get_help(shared: &Arc<Shared>) {
+    {
+        let mut busy = lock(&shared.busy);
+        if busy.is_some() {
+            return;
         }
-        Err(e) => format!("Diagnostics could not be read: {e}"),
-    };
-    shared.set_note(text);
+        *busy = Some("help".into());
+    }
+    let link = link_name(*lock(&shared.link));
+    let agent = shared.client.call("GET", "/support", None, Duration::from_secs(15)).map_err(|e| e.to_string());
+    let report = panel::help_report(SCOPEBOND_VERSION, link, agent);
+    let copied = win::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default());
+    let opened = std::process::Command::new("explorer.exe").arg(panel::HELP_URL).spawn().is_ok();
+    *lock(&shared.busy) = None;
+    shared.set_note(match (copied, opened) {
+        (true, true) => "Support report copied (no keys, records or commands): paste it in your message. The Help page is opening.".into(),
+        (true, false) => format!("Support report copied (no keys, records or commands). Help: {}", panel::HELP_URL),
+        (false, _) => format!("The support report could not be copied; try again. Help: {}", panel::HELP_URL),
+    });
+    shared.wake();
 }
 
 fn about(shared: &Arc<Shared>) {
     let status = shared.client.call("GET", "/status", None, Duration::from_secs(10)).unwrap_or(Value::Null);
     let field = |v: &Value| v.as_str().map(str::to_string).unwrap_or_else(|| "not running".into());
+    let agent = field(&status["agent"]["version"]).trim_start_matches("agent/").to_string();
+    // One version for the whole client; the agent's only when it is not the same (an update not finished yet).
+    let agent_line = if agent == SCOPEBOND_VERSION { String::new() } else { format!("Agent: {agent}\n") };
     let text = format!(
-        "Scopebond\nPublisher: Avouro LLC\n\nTray: {}\nAgent: {}\nHook: {}\nComputer: {}\n\nScopebond folder: {}",
-        env!("CARGO_PKG_VERSION"),
-        field(&status["agent"]["version"]).trim_start_matches("agent/"),
+        "Scopebond {SCOPEBOND_VERSION}\nPublisher: Avouro LLC\n\n{agent_line}Rule engine: {}\nComputer: {}\n\nScopebond folder: {}",
         field(&status["version"]),
         field(&status["identity"]["installation_id"]),
         shared.client.home().display(),
@@ -700,11 +712,8 @@ fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
                 s.wake();
             });
         }
-        Command::CopyDiagnostics => {
-            thread::spawn(move || copy_diagnostics(&s));
-        }
-        Command::OpenLogs => {
-            let _ = std::process::Command::new("explorer.exe").arg(shared.client.home()).spawn();
+        Command::GetHelp => {
+            thread::spawn(move || get_help(&s));
         }
         Command::About => {
             thread::spawn(move || about(&s));
@@ -714,6 +723,8 @@ fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
             if let Some(tray) = app.tray_by_id(TRAY_ID) {
                 let _ = tray.set_visible(false);
             }
+            // Asked for just now, so said whatever the notification setting: how to bring the icon back.
+            show_toast(Toast { kind: Kind::Recovered, title: "Scopebond icon hidden".into(), text: menu::HIDDEN_ICON_TEXT.into(), unblock: None, button: None }, None);
         }
     }
 }
@@ -844,7 +855,7 @@ fn panel_state(shared: State<'_, Arc<Shared>>) -> Value {
         "answer": answer,
         "note": note,
         "busy": *lock(&shared.busy),
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": SCOPEBOND_VERSION,
         // For the panel's Settings: Start with Windows as the menu shows it.
         "autostart": autostart_state().as_str(),
         // A notification's Unblock…: the block whose form to open (once).
@@ -961,14 +972,13 @@ fn panel_hold(hold: bool, shared: State<'_, Arc<Shared>>) {
 fn panel_command(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> bool {
     // The same commands the menu has (Settings in the panel offers them too); anything else does nothing.
     let command = match id.as_str() {
-        "copy_diagnostics" => Command::CopyDiagnostics,
-        "open_logs" => Command::OpenLogs,
+        "get_help" => Command::GetHelp,
         "start_agent" => Command::StartAgent,
         "autostart" => Command::ToggleAutostart,
         "about" => Command::About,
         "hide_icon" => Command::HideIcon,
-        other => match other.strip_prefix("notifications:").and_then(|v| Notifications::ALL.iter().find(|n| n.as_str() == v)) {
-            Some(n) => Command::Notifications(*n),
+        other => match other.strip_prefix("notifications:").and_then(Notifications::from_choice) {
+            Some(n) => Command::Notifications(n),
             None => return false,
         },
     };
@@ -994,7 +1004,7 @@ fn panel_close(window: WebviewWindow, shared: State<'_, Arc<Shared>>) {
 fn main() {
     let home = scopebond_home().unwrap_or_else(std::env::temp_dir);
     log::init(&home);
-    log::line(&format!("Scopebond tray {} starting for {}", env!("CARGO_PKG_VERSION"), home.display()));
+    log::line(&format!("Scopebond {} tray starting for {} (tray crate {})", SCOPEBOND_VERSION, home.display(), env!("CARGO_PKG_VERSION")));
     if start_with_windows_choice(&home) == Some(false) && win::read_string(false, win::RUN_KEY, "Scopebond").is_some() {
         win::delete_user_value(win::RUN_KEY, "Scopebond");
         log::line("start with Windows stays off, as chosen");
