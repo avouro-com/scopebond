@@ -81,7 +81,9 @@ stays on 5). The installer:
   as the person installing) and then closes any agent or hook call still running, so nothing needs a reboot;
 - on removal, first runs `scopebond-agent.exe uninstall` as the person removing it: autostart off, the agent stopped,
   the hook taken out of the coding agents' settings and the workspace told (the Scopebond folder stays; with `PURGE=1`,
-  `msiexec /x … PURGE=1`, it runs `uninstall --purge` and the folder goes too).
+  `msiexec /x … PURGE=1`, it runs `uninstall --purge` and the folder goes too). What it says lands in the installer's log
+  (`/l*v <log>`), ending with a sentence naming the Scopebond folder; a workspace that could not be told within a few
+  seconds is said there with exit code 75, and the removal goes on (`Return="ignore"`).
 
 Signing in, the hook entries and autostart come from `scopebond-agent.exe setup <workspace-url>` after installing, as with
 npm. CI installs and removes it, per user and for every user (`test/msi.test.mjs`, only with `SCOPEBOND_MSI=1`). The
