@@ -26,7 +26,8 @@ export function computer(rules = {}) {
 }
 
 /** Run tool calls through the hook as Claude Code in a checkout of acme/checkout; the window is not there, so each block is
- *  kept for the tray. `context: null`: receipts without a context (a workspace that has not said it reads it); `note`: the
+ *  kept for the tray. `context: null`: receipts without a context (a workspace that has not said it reads it); `handler`: more
+ *  for the override handler (the repository a path is in, for "Similar commands in this project"); `note`: the
  *  hook also notes each block for the tray, as its command line does. */
 export async function blockActions(dir, toolUses, options = {}) {
   const context = options.context === undefined ? { harness: "claude", repository: "github.com/acme/checkout" } : options.context;
@@ -34,7 +35,7 @@ export async function blockActions(dir, toolUses, options = {}) {
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo",
     ...(context ? { context } : {}),
     override: (agentKid) => {
-      const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", waitMs: 50, ask: async () => ({ decision: "unavailable" }) });
+      const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", waitMs: 50, ask: async () => ({ decision: "unavailable" }), ...options.handler });
       return made ? { handler: made.handler, hint: () => null } : null;
     },
   });

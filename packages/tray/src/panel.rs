@@ -211,6 +211,25 @@ pub fn check_answer(block: &RecentBlock, choice: &str, reason: &str) -> Result<V
     Ok(json!({ "action_id": id, "choice": choice, "reason": reason }))
 }
 
+/// `check_answer`, with what the answer covers: the action itself (`None` or "exact"), or "Similar commands in this project"
+/// ("similar"), only where the block offers it and for a length longer than once (asking an admin and keeping it blocked
+/// are about the action itself). The body then carries `"scope": "similar"`.
+pub fn check_scoped_answer(block: &RecentBlock, choice: &str, reason: &str, scope: Option<&str>) -> Result<Value, String> {
+    let mut body = check_answer(block, choice, reason)?;
+    match scope {
+        None | Some("exact") => Ok(body),
+        Some("similar") => {
+            let offered = block.offers.as_ref().is_some_and(|o| o.similar.is_some());
+            if !offered || matches!(choice, "once" | "ask" | "quiet") {
+                return Err("Your workspace does not offer similar commands for this block.".into());
+            }
+            body["scope"] = Value::from("similar");
+            Ok(body)
+        }
+        Some(_) => Err("That answer could not be read.".into()),
+    }
+}
+
 fn plural(n: u64) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
@@ -386,6 +405,25 @@ mod tests {
         assert_eq!(block_button(&b), Some("Ask to unblock…"));
         b.offers = Some(BlockOffers { tomorrow: true, ..Default::default() });
         assert_eq!(block_button(&b), Some("Unblock…"), "a length alone is an unblock");
+    }
+
+    #[test]
+    fn similar_commands_are_answered_only_where_offered_and_for_a_length() {
+        use crate::model::{BlockOffers, SimilarOffer};
+        let mut b = answerable();
+        b.reason_min = Some(0);
+        let similar = SimilarOffer { recipe_id: "delete-in-folder".into(), words: "Deleting folders inside d:/src/app with rm".into(), ..Default::default() };
+        b.offers = Some(BlockOffers { once: true, always: true, always_days: Some(30), ask: true, quiet: true, similar: Some(similar), ..Default::default() });
+        assert_eq!(check_scoped_answer(&b, "always", "", Some("similar")).unwrap(),
+            json!({ "action_id": "act-read-env-0000000001", "choice": "always", "reason": "", "scope": "similar" }));
+        assert_eq!(check_scoped_answer(&b, "always", "", None).unwrap(), check_answer(&b, "always", "").unwrap(), "just this command");
+        assert_eq!(check_scoped_answer(&b, "always", "", Some("exact")).unwrap(), check_answer(&b, "always", "").unwrap());
+        for choice in ["once", "ask", "quiet"] {
+            assert!(check_scoped_answer(&b, choice, "", Some("similar")).is_err(), "{choice}: about this action alone");
+        }
+        assert!(check_scoped_answer(&b, "always", "", Some("everything")).is_err());
+        b.offers = Some(BlockOffers { always: true, always_days: Some(30), ..Default::default() });
+        assert!(check_scoped_answer(&b, "always", "", Some("similar")).is_err(), "not offered");
     }
 
     #[test]

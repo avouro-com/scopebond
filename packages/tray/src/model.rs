@@ -55,6 +55,21 @@ pub struct BlockOffers {
     pub tomorrow: bool,
     /// Keep it blocked without being asked again ("Keep blocking without asking me"); false from an older agent.
     pub quiet: bool,
+    /// "Similar commands in this project": what it allows, in words with examples; none where it is not offered (or from an
+    /// older agent).
+    pub similar: Option<SimilarOffer>,
+}
+
+/// "Similar commands in this project", as the Unblock form shows it: the words, an example it covers and one it does not, and
+/// whether it waits for an admin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SimilarOffer {
+    pub recipe_id: String,
+    pub words: String,
+    pub covers: Vec<String>,
+    pub not_covers: Vec<String>,
+    pub needs_admin: bool,
 }
 
 impl BlockOffers {
