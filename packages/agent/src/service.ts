@@ -591,8 +591,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // What the workspace offers, for the newest QUESTIONS_MAX blocks not acted on (each question reads the hook's files).
       const q = item && !item.acted && b.action_id && !request && !allowed && !quiet && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
       const offers = q ? {
-        once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
-        always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed, ...newerOffers(q.offers),
+        once: q.offers.allow, fifteen: q.offers.fifteen, hour: q.offers.hour, tomorrow: q.offers.tomorrow, quiet: true, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
+        always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
       } : null;
       const what = b.what ?? b.summary;
       const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
@@ -641,7 +641,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const model = trayModel({
       status, health: health(), now, awakeSince, working,
       rules: counted ? {
-        checked_at: at(meta.checked_at), managed: isManaged(options.dir), block: counted.blocking, monitor: counted.monitoring,
+        checked_at: at(meta.checked_ok_at ?? meta.checked_at), managed: isManaged(options.dir), block: counted.blocking, monitor: counted.monitoring,
         blocking: counted.blocking, monitoring: counted.monitoring, packs: counted.packs, last_attempt_at: at(meta.last_attempt_at), last_error: meta.last_error ?? null,
       } : null,
       today: activity?.today ?? null,

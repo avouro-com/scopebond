@@ -82,7 +82,7 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "'Block, person may ask' never allows on the spot");
     // Only an admin unblocks: the tray is told that asking is all there is, and shows Ask to unblock and its Requests list.
     const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
-    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false, hour: false, tomorrow: false, quiet: false });
+    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false });
     assert.equal(before.can_ask, true);
     const done = await answer(dir, { action_id: id, choice: "ask", reason: REASON });
     assert.equal(done.outcome, "asked");
@@ -181,7 +181,7 @@ test("unblocking automatically, reviewed later: one length, applied at once, and
   const service = await serviceFor(dir);
   try {
     const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
-    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: true, always: false, always_days: null, always_needs_admin: false, ask: false, reviewed: true, hour: false, tomorrow: false, quiet: false });
+    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: true, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: false, reviewed: true });
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "only the length the workspace set");
     const done = await answer(dir, { action_id: id, choice: "fifteen", reason: REASON });
     assert.equal(done.outcome, "allowed");

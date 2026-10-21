@@ -21,7 +21,7 @@ export interface LiveQuestion {
   tool: string | null;
   project: string | null;
   reason_min: number;
-  offers: { once: boolean; fifteen: boolean; hour: boolean; tomorrow: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean; reviewed: boolean };
+  offers: { once: boolean; fifteen: boolean; hour: boolean; tomorrow: boolean; quiet: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean; reviewed: boolean };
   /** When the hook stops waiting (RFC 3339). */
   deadline: string;
   /** The person opened it in the tray. */
@@ -98,7 +98,7 @@ export function livePrompt(options: { fallback: Prompter; now?: () => number; wi
       action_id: q.action_id, what: q.summary, action_text: q.summary, rule: q.rule, rule_title: q.title,
       tool: toolName(q.harness ?? null), project: q.project ?? null, reason_min: q.reason_min,
       offers: {
-        once: q.offers.allow, fifteen: !!q.offers.fifteen, hour: !!q.offers.hour, tomorrow: !!q.offers.tomorrow, always: q.offers.always,
+        once: q.offers.allow, fifteen: !!q.offers.fifteen, hour: !!q.offers.hour, tomorrow: !!q.offers.tomorrow, quiet: true, always: q.offers.always,
         always_days: q.offers.always ? q.always_days ?? 30 : null, always_needs_admin: q.offers.always && !!q.always_needs_admin,
         ask: q.offers.ask, reviewed: allowing && !!q.reviewed,
       },

@@ -181,7 +181,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   // workspace's own-rules answer) moves `checked_at`, so "Rules updated" is the last check that worked. A failed one keeps
   // `checked_at` and says why in `last_error`.
   const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch,
-    last_attempt_at: now.toISOString(), ...(patch.last_error === null ? { checked_at: now.toISOString() } : {}) });
+    last_attempt_at: now.toISOString(), ...(patch.last_error === null ? { checked_at: now.toISOString(), checked_ok_at: now.toISOString() } : {}) });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
     try {

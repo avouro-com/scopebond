@@ -489,6 +489,8 @@ export interface ManagedMeta {
   rule_notes?: string[] | null;
   /** When the last rules check was tried, whether it worked or not. */
   last_attempt_at?: string | null;
+  /** The same time as `checked_at` (the last successful rules check), under a name that cannot be read as "last tried". */
+  checked_ok_at?: string | null;
   /** The Scopebond versions the workspace recommends for its computers, as its last rules check said. */
   recommended?: Recommended | null;
   /** How many days this computer keeps receipts the workspace acknowledged, as its last rules check said. */

@@ -94,6 +94,7 @@ test("rules updated means the last successful check: a failed check keeps checke
   let meta = readMeta(dir);
   assert.equal(meta.checked_at, "2026-10-21T10:00:00.000Z");
   assert.equal(meta.last_attempt_at, "2026-10-21T10:00:00.000Z");
+  assert.equal(meta.checked_ok_at, "2026-10-21T10:00:00.000Z", "the same time, under a name that reads as success");
   assert.equal(meta.last_error, null);
 
   // Unreachable: checked_at stays; the attempt and the error are recorded.
@@ -108,12 +109,14 @@ test("rules updated means the last successful check: a failed check keeps checke
   meta = readMeta(dir);
   assert.equal(meta.checked_at, "2026-10-21T10:00:00.000Z");
   assert.equal(meta.last_attempt_at, "2026-10-21T10:30:00.000Z");
+  assert.equal(meta.checked_ok_at, "2026-10-21T10:00:00.000Z");
   assert.ok(meta.last_error);
 
   // Unchanged (304) is a successful check.
   assert.equal((await syncPolicy(dir, opts(answering([{ status: 304 }]), at("2026-10-21T10:40:00Z")))).state, "unchanged");
   meta = readMeta(dir);
   assert.equal(meta.checked_at, "2026-10-21T10:40:00.000Z");
+  assert.equal(meta.checked_ok_at, "2026-10-21T10:40:00.000Z");
   assert.equal(meta.last_error, null);
 });
 
