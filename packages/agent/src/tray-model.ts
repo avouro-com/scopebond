@@ -238,6 +238,8 @@ export interface TrayInput {
   /** The coding tools whose Scopebond hook the agent could not put back ("Claude Code"): the one setup problem the person
    *  sees (the agent repairs the rest by itself, at once). */
   repairFailed?: string[] | null;
+  /** The workspace refused to renew this computer's credential, which ends at `expires_at`: the person must sign in again. */
+  signInAgain?: { expires_at: number | null } | null;
   /** The last self-check's result, kept until a check passes: a quiet Settings line while it did not pass. */
   selfCheck?: { ok: boolean; failed: string[] } | null;
 }
@@ -317,7 +319,7 @@ const newer = (want: string | null, have: string): boolean => {
   return false;
 };
 
-const ACTIONS: Record<TrayAction["id"] | "sign_in", TrayAction> = {
+const ACTIONS: Record<TrayAction["id"] | "sign_in" | "sign_in_again", TrayAction> = {
   send_now: { id: "send_now", label: "Send records now", route: "/flush" },
   update_now: { id: "update_now", label: "Update now", route: "/update" },
   check_now: { id: "check_now", label: "Check now", route: "/check" },
@@ -325,6 +327,7 @@ const ACTIONS: Record<TrayAction["id"] | "sign_in", TrayAction> = {
   reconnect: { id: "reconnect", label: "Reconnect…", route: "/reconnect" },
   // The same route and id (the tray shows the code the answer carries for "reconnect"), for a computer never connected.
   sign_in: { id: "reconnect", label: "Sign in…", route: "/reconnect" },
+  sign_in_again: { id: "reconnect", label: "Sign in again…", route: "/reconnect" },
   open_workspace: { id: "open_workspace", label: "Open workspace", route: "/open-workspace" },
 };
 
@@ -363,6 +366,11 @@ export function trayModel(input: TrayInput): TrayModel {
   } else if (health.level === "red" && d.connection_refused_since !== null) {
     state = "disconnected"; headline = "Not connected to your workspace: using this computer's own rules";
     if (input.canReconnect) fix = ACTIONS.reconnect; else hint = health.hint;
+  } else if (input.signInAgain) {
+    // Renewal is Scopebond's job; a refused one is the person's. Until the credential ends everything works as usual.
+    state = "attention"; headline = "Sign in again to keep this computer connected"; fix = ACTIONS.sign_in_again;
+    const ends = input.signInAgain.expires_at;
+    hint = `Your workspace didn't renew this computer's connection${ends ? `, which ends ${new Date(ends).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}. Sign in again to keep it.`;
   } else if (input.repairFailed?.length) {
     // The agent repaired at once and checked again; this one did not take. Repair tries again, as the person asks.
     state = "problem"; headline = `Scopebond couldn't reconnect to ${input.repairFailed.join(" and ")}`; fix = ACTIONS.repair;

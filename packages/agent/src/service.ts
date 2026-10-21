@@ -9,7 +9,7 @@ import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
-  dedupeHooks, duplicateHooks, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
+  dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -48,6 +48,10 @@ export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
 const MIN_MS = 60_000;
+/** A credential that ends within a week (the self-check's line) and that the rules check has not renewed: the agent asks the
+ *  workspace itself, at most once an hour, to learn whether it renews or refuses. */
+const CREDENTIAL_LAPSING_MS = 7 * 24 * 60 * 60 * 1000;
+const CREDENTIAL_RETRY_MS = 60 * 60 * 1000;
 const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const SUMMARY_EVERY_MS = 5 * 60 * 1000;
@@ -423,6 +427,21 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const selfRepair = options.selfRepair ?? options.maintenance !== false;
   const autostart: AutostartRepair = options.autostart ?? { health: () => autostartHealth(options.dir), enable: () => enableAutostart(options.dir, agentCliPath()) };
   let lastRepair: SetupRepair | null = null;
+  // The agent's own renewal of a credential about to end: what the workspace answered, for which credential, and when.
+  let renewal: { at: number; outcome: Awaited<ReturnType<typeof refreshIfDue>>; credential_id: string; expires_at: string | null } | null = null;
+  /** Renew the credential silently when it ends within a week (the rules check renews it in its last 30 days; this learns why
+   *  it did not). Only a refusal is the person's to act on: "Sign in again". */
+  const renewCredential = async (): Promise<void> => {
+    const connection = loadConnection(options.dir);
+    const expires = Date.parse(connection?.expires_at ?? "");
+    if (!connection || !Number.isFinite(expires) || expires - Date.now() > CREDENTIAL_LAPSING_MS) { renewal = null; return; }
+    if (renewal && renewal.credential_id === connection.credential_id && Date.now() - renewal.at < CREDENTIAL_RETRY_MS) return;
+    const outcome = await refreshIfDue(options.dir, connection, { fetchImpl: options.fetchImpl });
+    renewal = { at: Date.now(), outcome, credential_id: connection.credential_id, expires_at: connection.expires_at ?? null };
+    if (outcome === "renewed") { renewal = null; log("renewed this computer's connection to the workspace"); }
+    else log(outcome === "refused" ? "the workspace refused to renew this computer's connection: the person must sign in again"
+      : `this computer's connection ends ${connection.expires_at}; renewing it did not work now (${outcome}), tried again in an hour`);
+  };
   /** `thorough`: autostart too (a registry read on Windows), as before a self-check; `asked`: the person's Repair. A look
    *  reads a few small settings files and writes only what is broken. */
   const heal = (thorough = false, asked = false): SetupRepair | null => {
@@ -443,6 +462,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
    *  is repaired and the check runs once more. */
   const selfCheck = async (connection: NonNullable<ReturnType<typeof loadConnection>>): Promise<MaintenanceResult["selfCheck"]> => {
     heal(true);
+    try { await renewCredential(); } catch { /* the check says so */ }
+    connection = loadConnection(options.dir) ?? connection;
     const run = () => runSelfCheck(options.dir, connection, expectedHarnesses(), agentVersion(), { fetchImpl: options.fetchImpl });
     const first = await run();
     if (!selfRepair || !first || first.ok || !first.checks.some((c) => !c.ok && SETUP_CHECKS.has(c.id))) return first;
@@ -526,6 +547,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       await sendReasons();
       // A hook entry a coding agent's settings lost (an update or a reset can remove it), or a second copy: put right now.
       heal();
+      if (result.connected) { try { await renewCredential(); } catch { /* tried again next cycle */ } }
       try { noticeHealth(); } catch { /* status is best effort */ }
       last = result;
       failures = result.deliveryError ? failures + 1 : 0;
@@ -779,6 +801,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       updated: recentUpdate(updatedHere, now),
       repairFailed: (lastRepair?.failed ?? []).map((h) => toolName(h) ?? h),
       selfCheck: lastSelfCheck ? { ok: lastSelfCheck.ok, failed: lastSelfCheck.failed } : null,
+      signInAgain: renewal?.outcome === "refused" && renewal.credential_id === loadConnection(options.dir)?.credential_id
+        ? { expires_at: renewal.expires_at && Number.isFinite(Date.parse(renewal.expires_at)) ? Date.parse(renewal.expires_at) : null } : null,
     });
     // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
     return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
@@ -1011,7 +1035,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
-      failed_update: failedUpdate(options.dir), signing_in: reconnecting, last_repair: lastRepair,
+      failed_update: failedUpdate(options.dir), signing_in: reconnecting, last_repair: lastRepair, credential_renewal: renewal,
     } }),
     "POST /flush": async () => ({ cycle: await cycle() }),
     // The person's Repair: the same repair the agent makes by itself, whatever its setting, with what it did and what failed.

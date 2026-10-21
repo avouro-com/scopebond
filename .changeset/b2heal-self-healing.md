@@ -9,3 +9,5 @@ The agent now repairs this computer's setup as soon as it sees it broken (each c
 Rules not checked for over an hour no longer turn the tray to "Rules not checked for…": the last-known rules stay in force, the agent checks again at once after a failed check and then after 1, 2, 4, 8 and at most 15 minutes, and Settings' "Rules updated" says when the last check worked.
 
 A self-check that did not pass no longer turns the tray to attention: Settings shows "Last check didn't pass: …" in words (never check ids), the line stays until a check passes, and "Check now" names what it found in the same words.
+
+A credential that ends within a week is renewed by the agent itself (at most once an hour, besides the rules check's own renewal), silently when the workspace renews it or does not answer; only when the workspace refuses does the tray ask "Sign in again to keep this computer connected" with "Sign in again…", and `status` reports the last renewal as `credential_renewal`.
