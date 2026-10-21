@@ -15,3 +15,5 @@ A credential that ends within a week is renewed by the agent itself (at most onc
 An update that does not install (a failed download or check, an install or start that failed) is now tried again after 1 hour, then 6 hours, then every 24 hours while the running version keeps protecting; `failedUpdate` reports how many tries failed, a version that installs forgets them, and Settings says "Update didn't install; Scopebond keeps protecting on <version>" only from the third failed try (nothing before).
 
 A workspace that refuses records for billing reasons (its monthly limit, no license, or the plan paused this agent) no longer turns the tray to attention for the developer: the tray stays "Protected" with no button, and Settings shows one line such as "Not licensed · 4 records wait on this computer" with the plain note under it.
+
+A workspace that cannot be reached now keeps the tray "Offline" however long it lasts (no attention state after four hours, so no toast), with the one line "Using this computer's rules; records send when back online".

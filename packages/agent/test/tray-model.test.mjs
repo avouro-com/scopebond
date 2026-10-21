@@ -55,13 +55,13 @@ test("records waiting are the agent's job: never attention and no Send records n
   assert.ok(RECORDS_STUCK_MS === 24 * 60 * MIN);
 });
 
-test("workspace unreachable is offline (grey) for four hours, then needs attention; records wait", () => {
+test("workspace unreachable is offline (grey) however long it lasts, never attention; records wait", () => {
   const down = (sinceMin) => trayModel(input(status({ pending: 7, oldest_pending_age_s: sinceMin * 60, last_error: "fetch failed (ENOTFOUND)", last_success_at: NOW - sinceMin * MIN })));
   const short = down(30);
   assert.equal(short.state, "offline");
-  assert.match(short.headline, /Workspace unreachable: 7 records waiting/);
+  assert.equal(short.headline, "Using this computer's rules; records send when back online");
   assert.match(short.rows.find((r) => r.label === "Delivery").value, /^7 waiting since \d\d:\d\d · offline$/);
-  assert.equal(down(5 * 60).state, "attention");
+  assert.equal(down(5 * 60).state, "offline", "nothing to do after four hours either");
   assert.equal(unreachable("ingest failed: HTTP 503"), false, "an answer is not unreachable");
 });
 

@@ -249,8 +249,6 @@ const HOUR = 60 * MIN;
 /** Sending records is the agent's job, never the person's: only after this long awake and online without a delivery does
  *  Settings say so, in one quiet row (no attention state, no toast). */
 export const RECORDS_STUCK_MS = 24 * HOUR;
-/** Offline (the workspace unreachable) this long needs attention. */
-const OFFLINE_ATTENTION_MS = 4 * HOUR;
 /** Rules not checked for this long: the agent checks again at once and keeps trying; the last-known rules stay in force, so
  *  the person sees nothing (Settings' "Rules updated" says when). */
 export const RULES_STALE_MS = HOUR;
@@ -369,7 +367,6 @@ export function trayModel(input: TrayInput): TrayModel {
   const billing = pending > 0 ? billingLine(d.last_error, pending) : null;
   const stuck = !billing && d.connected && stuckFor > RECORDS_STUCK_MS && reachedAt !== null
     ? `Records can't reach ${input.workspace?.name ?? "your workspace"} since ${dayAndClock(reachedAt)}` : null;
-  const offlineFor = offline ? now - Math.max(d.last_success_at ?? input.awakeSince, input.awakeSince) : 0;
   const failed = input.version.failedUpdate ?? null;
   const offered = (want: string | null) => want !== null && want !== failed?.version ? want : null;
   const updateAvailable = input.version.policy === "recommended" && (newer(offered(input.version.recommendedAgent), input.version.agent) || newer(offered(input.version.recommendedHook), input.version.hook));
@@ -404,8 +401,9 @@ export function trayModel(input: TrayInput): TrayModel {
     state = "problem"; headline = health.headline; hint = health.hint;
     if (health.fix?.route === "/repair") fix = ACTIONS.repair;
   } else if (offline) {
-    state = offlineFor > OFFLINE_ATTENTION_MS ? "attention" : "offline";
-    headline = pending ? `Workspace unreachable: ${pending} record${pending === 1 ? "" : "s"} waiting` : "Workspace unreachable: still checking actions";
+    // However long it lasts, there is nothing to do: the hook checks every action with this computer's rules and the agent
+    // keeps trying. Never attention, so never a toast.
+    state = "offline"; headline = "Using this computer's rules; records send when back online";
   } else {
     state = "protected"; headline = "Protected";
   }
