@@ -40,7 +40,7 @@ import {
   updateTarget, type ClientVersion,
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
-import { AWAKE_FILE, awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
+import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
 import { withoutNodeInjection } from "./child-env.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
@@ -91,7 +91,7 @@ export function writeTraySettings(dir: string, patch: unknown): TraySettings {
 
 /** On an agent's first start in a Scopebond folder, notifications are written on (a new install, or an older one whose
  *  person never chose). Written once; the person's choice is never changed. */
-export function settleTraySettings(dir: string, _firstStart: boolean): void {
+export function settleTraySettings(dir: string): void {
   if (existsSync(join(dir, TRAY_SETTINGS_FILE))) return;
   try { writeTraySettings(dir, { notifications: "blocks" }); } catch { /* read as on */ }
 }
@@ -352,7 +352,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // What the install helper of a signed update recorded before this start (installAfterExit).
   noteUpdateOutcome(options.dir, log);
   // No agent has run in this folder before (it writes its wake time from its first cycle): a new install.
-  settleTraySettings(options.dir, !existsSync(join(options.dir, AWAKE_FILE)));
+  settleTraySettings(options.dir);
   const interval = options.intervalMs ?? INTERVAL_MS;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
