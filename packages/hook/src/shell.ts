@@ -50,10 +50,33 @@ const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "fish"]);
 const POWERSHELLS = new Set(["powershell", "pwsh"]);
 const MAX_DEPTH = 6;
 
+/** The two command languages a command line is read in: a POSIX shell, or PowerShell (script blocks, statements, the call
+ *  operator, the backtick escape). */
+export type ShellDialect = "posix" | "powershell";
+
+/** The end of the PowerShell script block or braced variable that opens at `start` (a `{`): the index of its closing `}`, or
+ *  -1 when it never closes. Quotes and nested blocks are honored; the backtick escapes the next character. */
+function braceEnd(src: string, start: number): number {
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  for (let i = start; i < src.length; i++) {
+    const c = src[i];
+    if (c === "`") { i++; continue; }
+    if (quote) { if (c === quote) quote = null; continue; }
+    if (c === "'" || c === '"') { quote = c; continue; }
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+
 /** Split a command line into top-level simple-command strings at unquoted
  *  separators (`;`, newline, `&&`, `||`, `|`, `&`), leaving quotes, `$( )`,
- *  backticks and `( )` groups intact inside each piece. */
-function splitTopLevel(src: string): { segments: string[]; seps: string[]; unbalanced: boolean } {
+ *  backticks and `( )` groups intact inside each piece. Read as PowerShell, a script
+ *  block or hashtable (`{ … }`, `@{ … }`) and a braced variable (`${env:X}`) stay
+ *  whole too, the backtick escapes the next character, and an `&` that starts a
+ *  statement is the call operator (`& $tool`), not a separator. */
+function splitTopLevel(src: string, ps = false): { segments: string[]; seps: string[]; unbalanced: boolean } {
   const segments: string[] = [];
   // The separator after each segment (`;`, a line end, `&&`, `||`, `|`, `&`, or "" after the last).
   const seps: string[] = [];
@@ -61,26 +84,38 @@ function splitTopLevel(src: string): { segments: string[]; seps: string[]; unbal
   let quote: '"' | "'" | null = null;
   let paren = 0; // depth of $( ) and ( )
   let backtick = false;
+  let unclosedBrace = false;
   const flush = (sep = "") => { const t = cur.trim(); if (t) { segments.push(t); seps.push(sep); } cur = ""; };
 
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     const n = src[i + 1];
+    if (ps && c === "`") { cur += c + (n ?? ""); i++; continue; }
     if (quote) {
       cur += c;
       if (quote === "'") { if (c === "'") quote = null; }
-      else if (c === "\\" && n !== undefined) cur += src[++i];
+      else if (!ps && c === "\\" && n !== undefined) cur += src[++i];
       else if (c === '"') quote = null;
       continue;
     }
     if (c === "'" || c === '"') { quote = c; cur += c; continue; }
-    if (c === "`") { backtick = !backtick; cur += c; continue; }
+    if (ps && c === "{") {
+      const end = braceEnd(src, i);
+      if (end < 0) { unclosedBrace = true; cur += src.slice(i); break; }
+      cur += src.slice(i, end + 1);
+      i = end;
+      continue;
+    }
+    if (ps && c === "<" && n === "#") { const end = src.indexOf("#>", i + 2); i = end < 0 ? src.length : end + 1; continue; }
+    if (!ps && c === "`") { backtick = !backtick; cur += c; continue; }
     if (backtick) { cur += c; continue; }
-    if (c === "\\" && n !== undefined) { cur += c + src[++i]; continue; }
+    if (!ps && c === "\\" && n !== undefined) { cur += c + src[++i]; continue; }
     if (c === "$" && n === "(") { paren++; cur += "$("; i++; continue; }
     if (c === "(") { paren++; cur += c; continue; }
     if (c === ")") { if (paren > 0) paren--; cur += c; continue; }
     if (paren > 0) { cur += c; continue; }
+    // PowerShell's call operator starts a statement (`& $tool`, `$x = & $tool`); elsewhere `&` still ends one.
+    if (ps && c === "&" && n !== "&" && (cur.trim() === "" || /=\s*$/.test(cur))) { cur += c; continue; }
     const prev = src[i - 1];
     // An unquoted `#` at the start of a word begins a comment that runs to the end of
     // the line (`rm -rf x # don't` must not read as an unbalanced quote).
@@ -98,7 +133,7 @@ function splitTopLevel(src: string): { segments: string[]; seps: string[]; unbal
     cur += c;
   }
   flush();
-  return { segments, seps, unbalanced: quote !== null || paren !== 0 || backtick };
+  return { segments, seps, unbalanced: quote !== null || paren !== 0 || backtick || unclosedBrace };
 }
 
 /** A command line split at its top-level separators, with the separator after each part (`|` for a pipe), here-documents
@@ -118,8 +153,11 @@ const SUBST = "${__sb_subst}";
  *  segment — `$( … )` and `` ` … ` `` (also inside double quotes, where the shell
  *  still runs them) and `( … )` groups — for recursion. A substitution is replaced
  *  by a placeholder expansion; a group is blanked, except an empty `()` (a function
- *  definition), which is kept. */
-function extractSubstitutions(seg: string): { outer: string; inner: string[] } {
+ *  definition), which is kept. Read as PowerShell, a script block (`{ … }`) is
+ *  pulled out too and blanked, a `( … )` group that opens a word is a value only
+ *  known at run time (the placeholder), a braced variable (`${env:X}`) stays as written and the backtick
+ *  escapes rather than substitutes. */
+function extractSubstitutions(seg: string, ps = false): { outer: string; inner: string[] } {
   const inner: string[] = [];
   let outer = "";
   let quote: '"' | "'" | null = null;
@@ -136,8 +174,21 @@ function extractSubstitutions(seg: string): { outer: string; inner: string[] } {
   for (let i = 0; i < seg.length; i++) {
     const c = seg[i];
     const n = seg[i + 1];
+    if (ps && c === "`") { outer += c + (n ?? ""); i++; continue; }
     if (quote === "'") { outer += c; if (c === "'") quote = null; continue; }
-    if (c === "`") {
+    if (ps && quote === null && c === "{") {
+      const end = braceEnd(seg, i);
+      const close = end < 0 ? seg.length : end;
+      // `${env:X}` is a variable, kept as written; any other `{ … }` is a script block (or a hashtable's body), read on its own.
+      if (seg[i - 1] === "$") outer += seg.slice(i, close + 1);
+      else { inner.push(seg.slice(i + 1, close)); outer += " "; }
+      i = close;
+      continue;
+    }
+    // A group that opens a word is a value (`& (Get-Command x)`, `if ($ok)`); one right after a name holds a method's
+    // arguments (`[IO.File]::ReadAllText(…)`, `$s.Trim(…)`) and is blanked, as in a POSIX reading.
+    if (ps && quote === null && c === "(" && n !== ")" && !/[\w\].:)}'"]/.test(seg[i - 1] ?? "")) { i = group(i + 1); outer += SUBST; continue; }
+    if (!ps && c === "`") {
       const end = seg.indexOf("`", i + 1);
       if (end === -1) { outer += c; continue; }
       inner.push(seg.slice(i + 1, end));
@@ -148,12 +199,12 @@ function extractSubstitutions(seg: string): { outer: string; inner: string[] } {
     if (c === "$" && n === "(") { i = group(i + 2); outer += SUBST; continue; }
     if (quote === '"') {
       outer += c;
-      if (c === "\\" && n !== undefined) outer += seg[++i];
+      if (!ps && c === "\\" && n !== undefined) outer += seg[++i];
       else if (c === '"') quote = null;
       continue;
     }
     if (c === "'" || c === '"') { quote = c; outer += c; continue; }
-    if (c === "\\" && n !== undefined) { outer += c + seg[++i]; continue; }
+    if (!ps && c === "\\" && n !== undefined) { outer += c + seg[++i]; continue; }
     if (c === "(" && n === ")") { outer += "()"; i++; continue; }
     if (c === "(") { i = group(i + 1); continue; }
     outer += c;
@@ -589,29 +640,107 @@ function stripHeredocs(src: string): { text: string; scripts: string[]; code: Ar
   return { text: out.join("\n"), scripts, code };
 }
 
+// PowerShell statements that open with a keyword and run nothing of their own: their conditions, collections and bodies (a
+// `( … )` group, a `{ … }` block) were already read on their own. `return`, `throw` and `exit` are followed by a value,
+// which may be a pipeline that runs a command.
+const PS_STATEMENTS = new Set([
+  "if", "elseif", "else", "foreach", "for", "while", "do", "until", "switch", "try", "catch", "finally", "trap", "begin",
+  "process", "end", "clean", "dynamicparam", "param", "data",
+]);
+const PS_NAMED = new Set(["function", "filter", "workflow", "configuration", "class", "enum"]);
+const PS_VALUE = new Set(["return", "throw", "exit", "break", "continue"]);
+/** A PowerShell assignment's target and operator (`$x =`, `$env:X +=`, `${env:X} =`, `$a.b[0] =`, `[int]$n =`). Linear: it
+ *  is anchored and every run stops at a character it cannot take. */
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and each run is bounded by a character it excludes
+const PS_ASSIGNMENT = /^(?:\[[^\]\s]*\]\s*)*\$(?:\{[^}]*\}|[\w:?]+)(?:\.\w+|\[[^\]]*\])*\s*(?:[-+*/%]|\?\?)?=(?!=)/;
+/** Running a script block or a string as code through a method (`$block.Invoke()`, `$ExecutionContext.InvokeCommand
+ *  .InvokeScript(…)`). */
+const PS_INVOKE = /\.Invoke\w*(?![\w-])/i;
+/** The parameters through which a cmdlet takes a script block to run. */
+const PS_BLOCK_PARAMETER = /^-(?:ScriptBlock|sb|FilterScript|Process|Begin|End)$/i;
+
+/** What one PowerShell statement runs, read from its text after `extractSubstitutions` (its groups are the placeholder and
+ *  its blocks are blank): `none` for a statement that runs no program (an assignment of a value, a keyword statement, a bare
+ *  variable or member expression, a string), `opaque` for a program only known at run time (`& $x`, `& (…)`, `. $x`), or the
+ *  command text it runs (the right-hand side of `$x = cmd`, the program after `&`). */
+function psStatement(text: string): { kind: "none" } | { kind: "opaque" } | { kind: "command"; text: string } {
+  let t = text.trim();
+  if (PS_INVOKE.test(t)) return { kind: "opaque" };
+  for (let guard = 0; guard < 64; guard++) {
+    if (t === "") return { kind: "none" };
+    const word = /^\S+/.exec(t)?.[0] ?? "";
+    const lower = word.toLowerCase();
+    const after = t.slice(word.length).trim();
+    if (PS_STATEMENTS.has(lower)) {
+      // Its own options (`switch -regex`) and type filters (`catch [IOException]`) come before what it reads.
+      t = after.replace(/^(?:(?:-\w+|\[[^\]]*\])\s*)*/, "");
+      continue;
+    }
+    if (PS_NAMED.has(lower)) return { kind: "none" };
+    if (PS_VALUE.has(lower)) { t = lower === "break" || lower === "continue" ? "" : after; continue; }
+    if (t[0] === "&" || (t[0] === "." && /^\.\s/.test(t))) {
+      const rest = t.slice(1).trim();
+      // `& { … }` runs a block already read; `& $x`, `& "$x"`, `& (…)` and `. $x` run a program only known at run time.
+      if (rest === "") return { kind: "none" };
+      const target = /^\S+/.exec(rest)?.[0] ?? "";
+      if (/^["']?\$/.test(target) || (target[0] === '"' && target.includes("$"))) return { kind: "opaque" };
+      return { kind: "command", text: t[0] === "&" ? rest : t };
+    }
+    if (t[0] === "$" || t[0] === "[") {
+      const assignment = PS_ASSIGNMENT.exec(t);
+      if (assignment) { t = t.slice(assignment[0].length).trim(); continue; }
+      // `foreach ($f in <pipeline>)`: the collection is a pipeline that may run a command.
+      const each = /^\$\w+\s+in\s+/i.exec(t);
+      if (each) { t = t.slice(each[0].length); continue; }
+      // A type literal opens a .NET call (`[IO.File]::Delete(…)`): read as a command, as before.
+      if (t[0] === "[") return { kind: "command", text: t };
+      return { kind: "none" };
+    }
+    // A string, a number or a collection is a value, not a command.
+    if (/^["'@]/.test(t) || /^-?\d[\d.]*$/.test(word)) return { kind: "none" };
+    return { kind: "command", text: t };
+  }
+  return { kind: "opaque" };
+}
+
 /** Decompose a command line into the simple commands it will run. Recurses into
  *  `-c` scripts and command substitutions up to a bounded depth. `inherited` is the
- *  assignments an enclosing command puts in force for this script (`X=1 sh -c '…'`). */
-export function decomposeShell(command: string, depth = 0, inherited: readonly string[] = []): SimpleCommand[] {
+ *  assignments an enclosing command puts in force for this script (`X=1 sh -c '…'`).
+ *  `dialect` is the language the text is read in: under `powershell`, script blocks are
+ *  read for the commands inside them, and statements (assignments, `foreach`/`if`/
+ *  `while`/`switch`, bare variable expressions) are not commands of their own. */
+export function decomposeShell(command: string, depth = 0, inherited: readonly string[] = [], dialect: ShellDialect = "posix"): SimpleCommand[] {
   const src = command.trim();
   if (!src) return [];
   const opaque = (raw = src): SimpleCommand[] => [{ program: "", programRaw: "", argv: [], redirects: [], raw, opaque: true }];
   if (depth > MAX_DEPTH) return opaque();
+  const ps = dialect === "powershell";
 
-  const { text, scripts, code } = stripHeredocs(src);
+  const { text, scripts, code } = ps ? { text: src, scripts: [], code: [] } : stripHeredocs(src);
   const fromHeredocs = scripts.flatMap((s) => decomposeShell(s, depth + 1, inherited));
   // An interpreter's here-document is its code: recorded as that interpreter run with the code inline.
   for (const c of code) fromHeredocs.push({ program: c.program, programRaw: c.program, argv: ["-e", c.body], redirects: [], raw: `${c.program} <<heredoc`, opaque: false });
 
-  const { segments, unbalanced } = splitTopLevel(text);
+  const { segments, unbalanced } = splitTopLevel(text, ps);
   // Unreadable: kept as the text without its here-document bodies, which are data (a commit message that says "scopebond"
   // never counts as naming it); a body fed to a shell is decomposed on its own above.
   if (unbalanced) return [...opaque(text), ...fromHeredocs];
 
   const out: SimpleCommand[] = [];
   for (const seg of segments) {
-    const { outer, inner } = extractSubstitutions(seg);
-    for (const sub of inner) out.push(...decomposeShell(sub, depth + 1, inherited));
+    const extracted = extractSubstitutions(seg, ps);
+    let outer = extracted.outer;
+    for (const sub of extracted.inner) out.push(...decomposeShell(sub, depth + 1, inherited, dialect));
+    if (ps) {
+      const statement = psStatement(outer);
+      if (statement.kind === "opaque") { out.push(...opaque(seg)); continue; }
+      if (statement.kind === "none") {
+        // It runs no program; a redirection it carries (`"x" > f`) still writes, and its text is kept for the variables it sets.
+        out.push({ program: "", programRaw: "", argv: [], redirects: splitRedirects(tokenize(outer)).redirects, raw: seg, opaque: false, assigns: [...inherited] });
+        continue;
+      }
+      outer = statement.text;
+    }
 
     const split = splitRedirects(tokenize(outer));
     const { tokens, wrappers, assigns: own } = stripPrefixes(split.words);
@@ -633,6 +762,8 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
     const program = basename(tokens[0]);
     const argv = tokens.slice(1);
     out.push({ program, programRaw: tokens[0], argv, redirects, raw: seg, opaque: false, assigns });
+    // A script block handed over in a variable (`Invoke-Command -ScriptBlock $sb`) runs code only known at run time.
+    if (ps && argv.some((a, k) => PS_BLOCK_PARAMETER.test(a) && /^\$/.test(argv[k + 1] ?? ""))) out.push(...opaque(seg));
 
     const canon = canonProgram(program);
     const nested = (script: string | null | undefined) => { if (script) out.push(...decomposeShell(script, depth + 1, assigns)); };
@@ -647,8 +778,13 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
       // Code on standard input (`echo "…" | python3`, `python -`) is not in the command, but what feeds it is: the whole
       // command line is scanned as that interpreter's code, so a path named anywhere in it counts.
       out.push({ program, programRaw: tokens[0], argv: ["-e", src], redirects: [], raw: seg, opaque: false });
-    } else if (canon === "eval" || canon === "iex" || canon === "invoke-expression") {
+    } else if (canon === "eval") {
       nested(argv.join(" "));
+    } else if (canon === "iex" || canon === "invoke-expression") {
+      // Given no code (`$cmd | iex`), it runs what the pipeline hands it: only known at run time.
+      const script = argv.filter((a) => !/^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(a)).join(" ");
+      if (script.trim() === "") out.push(...opaque(seg));
+      else nested(script);
     } else if (canon === "trap") {
       if (argv.length >= 2 && !argv[0].startsWith("-")) nested(argv[0]);
     } else if (canon === "su" || canon === "runuser" || canon === "script" || canon === "flock" || canon === "sg") {

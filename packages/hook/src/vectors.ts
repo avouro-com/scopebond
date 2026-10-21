@@ -250,7 +250,7 @@ shell("C02", "rm -rf ~/.claude", "deny", ["H04", "C02"]);
 shell("C02", "mv .claude .claude.off", "deny", ["C02"]);
 shell("C02", "Rename-Item -Path .codex -NewName codex-off", "deny", ["C02"], {}, "powershell");
 shell("C02", "export CLAUDE_CONFIG_DIR=/tmp/clean && claude -p x", "deny", ["C02"]);
-shell("C02", "$env:CODEX_HOME = 'C:\\tmp\\clean'; codex exec x", "deny", ["C02"], { unknown: true }, "powershell");
+shell("C02", "$env:CODEX_HOME = 'C:\\tmp\\clean'; codex exec x", "deny", ["C02"], {}, "powershell");
 push("GIT_CONFIG_PARAMETERS=\"'alias.sync=push --force origin main'\" git sync", "deny", [], { unknown: true });
 
 // GitHub Copilot ------------------------------------------------------------------------

@@ -1530,7 +1530,7 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
   const src = dialect === "powershell" ? command.replace(/`(.)/g, "$1").replace(/\\/g, "/") : command;
   // PowerShell text with no backtick keeps its own quoting through the normalization above.
   const plainPowerShell = dialect === "powershell" && !command.includes("`");
-  const commands = decomposeShell(src);
+  const commands = decomposeShell(src, 0, [], dialect);
   if (commands.length === 0) {
     return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
   }
@@ -1632,6 +1632,8 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
       if (!seen.has(key)) { seen.add(key); out.push(m); }
     }
   }
+  // Statements alone (`$x = 5`, `$_.Name`) run no program: recorded like an empty command, with nothing to grant.
+  if (out.length === 0) return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
   return out;
 }
 
