@@ -9,12 +9,14 @@
 // ambiguous Windows short path.
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { posix } from "node:path";
 import { digest, keyedDigest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf, trimChars } from "./text.js";
-import { derivePackMcp, derivePackTargets, type PackAction } from "./packs.js";
+import { derivePackMcp, derivePackTargets, type PackAction, type PackProbe } from "./packs.js";
+import { systemFiles } from "./infra-probe.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
 import { packagesToCheck } from "./typed-ops.js";
 import { deriveInstalls, deriveSettingsInstalls, MCP_SETTINGS_FILE } from "./typed-install.js";
@@ -1479,6 +1481,14 @@ function runFolder(runDir: string, cwd?: string): string {
   return folder.length > 1 && folder.endsWith("/") && !/^[A-Za-z]:\/$/.test(folder) ? folder.slice(0, -1) : folder;
 }
 
+/** What a rule pack may consult beyond the command line (packs.ts `PackProbe`): this computer's environment and its files,
+ *  relative to the folder the command runs in (`folder`; this process's folder when none is known). Read only when a pack in
+ *  force asks for a local fact (`env_var`, `file_sha256`, `config_value`, …). */
+function packProbe(folder: string): PackProbe {
+  const at = folder === "~" || folder.startsWith("~/") ? homedir() + folder.slice(1) : folder;
+  return { env: (name) => process.env[name], files: systemFiles, cwd: at || process.cwd() };
+}
+
 /** What a person is shown for one simple command, and keyed on (see `ShownCommand`). `scrub` removes secrets from the text
  *  as the recorded command's are. */
 function shownCommand(sc: SimpleCommand, runDir: string, cwd: string | undefined, scrub: (text: string) => string): ShownCommand {
@@ -1563,7 +1573,8 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
   if (installs) exec.packages = installs;
   // What the command reaches through a command-line tool the rule packs in force describe (packs.ts), as taxonomy actions
   // beside the command itself. Nothing when no pack is in force or none reads this command.
-  const targets: Mapped[] = derivePackTargets(sc).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
+  // A pack may read local facts (the environment, a file's digest, a configuration value) in the folder the command runs in.
+  const targets: Mapped[] = derivePackTargets(sc, packProbe(runFolder(runDir ?? dir, cwd))).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
   // A command that writes files its text does not name (`patch`, `git apply`, `tar x`)
   // cannot be judged here: its writes are recorded as a file.write with no path, not
   // evaluated — observed in normal mode, denied by strict mode (like an apply_patch
@@ -1838,7 +1849,8 @@ function mapMcpCall(server: string, tool: string, args: unknown, cwd: string | u
     }
     return [{ intent: op, evaluated: true, derived: true, source }];
   };
-  return capDerived([...call, ...derivePackMcp(server, tool, args, hint).flatMap(derived)]);
+  // An MCP profile may read the environment (a profile reads no files).
+  return capDerived([...call, ...derivePackMcp(server, tool, args, hint, undefined, { env: (name) => process.env[name] }).flatMap(derived)]);
 }
 
 /** A bare `git push` (no ref) pushes the current branch. The mapper cannot know it,

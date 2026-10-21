@@ -4,9 +4,10 @@
 //
 // The rules this interpreter keeps:
 //   - Packs are data, never code. Every operator is one of the closed set the format defines; nothing in a pack is run.
-//   - Deterministic and pure: the same command and the same packs give the same actions, with no model, no network and no
-//     clock. A pack reads local files or the environment only through an optional probe; the mapper passes none, so those
-//     facts are unknown there (left out), never guessed.
+//   - Deterministic: the same command, the same packs and the same local facts give the same actions, with no model, no
+//     network and no clock. A pack reads local files or the environment only through a probe: the mapper passes this
+//     computer's (the files relative to the folder the command runs in); a pack's own vectors run with none, so there those
+//     facts are unknown (left out), never guessed, and a vector derives the same on every computer.
 //   - Bounded: only the subcommand paths a grammar lists are read. A help, version or dry run (`--help`, `-h` alone, a `help`
 //     first word, `--version` with no operand, `--dry-run`, and whatever the grammar's `skip` adds) derives nothing.
 //     A command a grammar does not match derives nothing, unless an option the grammar does not know stopped it reading
@@ -581,13 +582,13 @@ export function deriveFromGrammar(sc: SimpleCommand, grammar: PackGrammar, probe
 const serverWords = (name: string): Set<string> => new Set(name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
 
 /** The actions one profile derives from one MCP call, or null when the profile does not cover this server and tool. */
-export function deriveFromProfile(profile: PackProfile, server: string, tool: string, args: unknown, hint?: string): PackAction[] | null {
+export function deriveFromProfile(profile: PackProfile, server: string, tool: string, args: unknown, hint?: string, probe: PackProbe = {}): PackAction[] | null {
   const named = (text: string): boolean => { const words = serverWords(text); return profile.servers.some((w) => words.has(w)); };
   if (!named(server) && !(hint !== undefined && named(hint))) return null;
   const entry = profile.tools.find((t) => t.names.includes(tool));
   if (!entry) return null;
   const input: Node = args && typeof args === "object" && !Array.isArray(args) ? (args as Node) : {};
-  const scope: Scope = { kind: "mcp", mcp: { server, tool, args: input }, probe: {} };
+  const scope: Scope = { kind: "mcp", mcp: { server, tool, args: input }, probe: { ...(probe.env ? { env: probe.env } : {}) } };
   if (entry.when && !holds(entry.when, scope)) return [];
   const out: PackAction[] = [];
   emitAll(entry.emit, scope, profile.via ?? profile.id, "mcp.tool.call", out);
@@ -634,13 +635,13 @@ export function derivePackTargets(sc: SimpleCommand, probe: PackProbe = {}, pack
  *  name the server's configured name owns the call; only when none does, the first whose words name the hint (the server's
  *  URL or launch command). The owning profile derives what it lists for the tool, and nothing for a tool it does not list:
  *  another profile is never asked, so a call is read the same way whichever tools a profile lists. */
-export function derivePackMcp(server: string, tool: string, args: unknown, hint?: string, packs: readonly Pack[] = active): PackAction[] {
+export function derivePackMcp(server: string, tool: string, args: unknown, hint?: string, packs: readonly Pack[] = active, probe: PackProbe = {}): PackAction[] {
   for (const by of hint === undefined ? [server] : [server, hint]) {
     const words = serverWords(by);
     for (const pack of packs) {
       for (const profile of pack.profiles) {
         if (!profile.servers.some((w) => words.has(w))) continue;
-        try { return deriveFromProfile(profile, server, tool, args, hint) ?? []; } catch { return []; }
+        try { return deriveFromProfile(profile, server, tool, args, hint, probe) ?? []; } catch { return []; }
       }
     }
   }
