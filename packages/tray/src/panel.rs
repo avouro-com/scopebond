@@ -73,10 +73,18 @@ pub fn outcome_text(action_id: &str, answer: &Value) -> String {
             Some(v) => format!("Updating to {v}; Scopebond restarts by itself"),
             None => "Already on the version your workspace recommends".into(),
         },
-        "repair" => match answer.get("repaired").and_then(Value::as_array).map(Vec::len) {
-            Some(0) | None => "Nothing needed repairing".into(),
-            Some(n) => format!("Put the Scopebond hook back in {n} place{}", plural(n as u64)),
-        },
+        // A newer agent names the coding tools it could not repair: say so before anything else.
+        "repair" => {
+            let failed: Vec<&str> = answer.get("failed").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            if !failed.is_empty() {
+                format!("Couldn't put the Scopebond hook back for {}. Get help… in Settings copies what support needs.", failed.join(", "))
+            } else {
+                match answer.get("repaired").and_then(Value::as_array).map(Vec::len) {
+                    Some(0) | None => "Nothing needed repairing".into(),
+                    Some(n) => format!("Put the Scopebond hook back in {n} place{}", plural(n as u64)),
+                }
+            }
+        }
         "reconnect" if answer.get("connected").and_then(Value::as_bool) == Some(true) =>
             "Connected to your workspace. Open it from here to make this computer yours.".into(),
         "reconnect" => match (text(answer, "user_code"), text(answer, "verification_url")) {
@@ -268,6 +276,11 @@ mod tests {
         assert_eq!(outcome_text("update_now", &json!({ "updated_to": "0.6.0", "error": null })), "Updating to 0.6.0; Scopebond restarts by itself");
         assert_eq!(outcome_text("update_now", &json!({ "updated_to": null, "error": null })), "Already on the version your workspace recommends");
         assert_eq!(outcome_text("repair", &json!({ "repaired": [{ "harness": "claude" }] })), "Put the Scopebond hook back in 1 place");
+        assert_eq!(outcome_text("repair", &json!({ "repaired": ["claude"], "failed": [] })), "Put the Scopebond hook back in 1 place");
+        assert_eq!(
+            outcome_text("repair", &json!({ "repaired": [], "failed": ["Claude Code"] })),
+            "Couldn't put the Scopebond hook back for Claude Code. Get help… in Settings copies what support needs."
+        );
         assert_eq!(outcome_text("open_workspace", &json!({ "opened": false })), "The workspace page could not be opened from here");
         assert_eq!(outcome_text("something_new", &json!({})), "Done");
         assert_eq!(block_text(&json!({ "outcome": "asked", "text": "Request sent." })), "Request sent.");
