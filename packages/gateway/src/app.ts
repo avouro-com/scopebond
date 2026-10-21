@@ -12,7 +12,7 @@ import type { DispatchGuard } from "./dispatch.js";
 import {
   buildReceipt, createAttester, MemoryReceiptStore, canonical, sha256, intentHash,
   minimizeIntentForEvidence, REDACTION_PROFILE,
-  CANONICALIZATION, validateReceiptContext, validateReceiptBudget,
+  CANONICALIZATION, validateReceiptContext, validateReceiptBudget, receiptMatch,
 } from "./receipts.js";
 import type {
   Attester, ReceiptStore, SignedReceipt, Anchor, ExecutionState, RealtimeResult,
@@ -424,6 +424,7 @@ export function createGateway(config: GatewayConfig): Gateway {
         if (!store.prepareDispatch) throw new AuthorityUnavailableError();
         const pendingReceipt = await buildReceipt({
           ...receiptFields(d.realtime_result, "allowed_pending", "none", null),
+          ...receiptMatch(d.verdict, d.realtime_result),
         }, attester);
         await store.prepareDispatch(actionId, pendingReceipt, executor.id ?? "scopebond:unidentified-dispatch-adapter");
         try {
@@ -449,6 +450,8 @@ export function createGateway(config: GatewayConfig): Gateway {
     const finalResult = stoppedBeforeDispatch ? "deny" : d.realtime_result;
     const receipt = await buildReceipt({
       ...receiptFields(finalResult, executionState, assertion, ref),
+      // The clause that matched and the bound that failed, for a denial, a monitored match, a hold or an override.
+      ...receiptMatch(d.verdict, finalResult),
       ...(override && finalResult === "approved" ? { override } : {}),
     }, attester);
     const finalState = executionState;

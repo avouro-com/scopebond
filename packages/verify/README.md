@@ -15,8 +15,16 @@ import { violates, validateIntent, validatePolicy } from "@scopebond/verify";
 validatePolicy(policy); // full, closed vocabulary-v1 document
 validateIntent(intent); // closed action shape with finite numeric values
 const v = violates(policy, receipts, claimed, { at, gatewaysComplete });
-// → { violated, clause_id, explanation, inputs_hash, undetermined? }
+// → { violated, clause_id, explanation, inputs_hash, undetermined?, failed_bound? }
 ```
+
+A verdict that names a clause also names the bound that failed, as `failed_bound`
+(`<param>:<bound>`: `program:pattern`, `amount:max_per_action`, `host:hosts`,
+`action_type:action_types`). It names the param and the clause field, never the param's
+value. When several clauses match, the verdict names an enforced clause first, then
+one that needs approval, then a monitored one, and among clauses of one mode the first
+by policy order. Gateways sign
+both into receipts as `clause_id` and `failed_bound`.
 
 `inputs_hash` uses the shared strict canonical serializer also used by gateway and
 SDK signatures; cross-package vectors pin the resulting bytes.

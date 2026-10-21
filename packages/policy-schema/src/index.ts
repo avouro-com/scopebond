@@ -105,6 +105,14 @@ export const RECEIPT_CONTEXT_KEYS = ["harness", "harness_version", "model", "ses
 export type ReceiptContextKey = (typeof RECEIPT_CONTEXT_KEYS)[number];
 export type ReceiptContext = Partial<Record<ReceiptContextKey, string | null>>;
 
+// Optional receipt match (payload.clause_id, payload.failed_bound): the policy clause that matched a denied, monitored,
+// held or overridden action, and the bound of it that failed, as `<param>:<bound>` (`program:pattern`, `path:pattern`,
+// `amount:max_per_action`). It names the param and the bound, never the param's value. A receipt for an allowed action
+// carries neither.
+export const RECEIPT_FAILED_BOUND_PATTERN = "^[A-Za-z0-9_.-]{1,64}:[a-z_]{1,32}$";
+/** The realtime results a receipt naming a matched clause may carry. */
+export const RECEIPT_MATCH_RESULTS = ["deny", "approved", "timeout"] as const;
+
 // Session budgets (session-budgets.schema.json): limits on what one coding-agent session may do, sent by a workspace in its
 // rules document as `session_budgets` (at most so many actions of the listed types, 0 = none, until the budget expires). The
 // words follow the gateway's action budgets. A receipt an action budget counted or refused carries `payload.budget`.

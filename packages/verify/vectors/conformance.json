@@ -9,7 +9,7 @@
     "name": "spend_limit per-action: covered (monitored, executed over limit)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "tx", "type": "spend_limit", "mode": "monitor", "asset": "USDC", "max_per_action": 1000000 }] },
     "claimed": { "intent": { "action_type": "payout.create", "asset": "USDC", "amount": 2000000 }, "executed": true, "realtime_result": "deny", "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "tx" }
+    "expect": { "violated": true, "clause_id": "tx", "failed_bound": "amount:max_per_action" }
   },
   {
     "name": "spend_limit per-action: ambiguity resolves for operator (exactly at limit)",
@@ -22,7 +22,7 @@
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "daily", "type": "spend_limit", "mode": "monitor", "asset": "USDC", "max_per_window": 5000000, "window": "P1D", "scope": "principal" }] },
     "receipts": [{ "intent": { "action_type": "payout.create", "asset": "USDC", "amount": 3000000 }, "executed": true, "timestamp": "2026-09-12T10:00:00Z", "intent_hash": "a" }],
     "claimed": { "intent": { "action_type": "payout.create", "asset": "USDC", "amount": 3000000 }, "executed": true, "timestamp": "2026-09-12T12:00:00Z", "intent_hash": "b" },
-    "expect": { "violated": true, "clause_id": "daily" }
+    "expect": { "violated": true, "clause_id": "daily", "failed_bound": "amount:max_per_window" }
   },
   {
     "name": "spend_limit global: undetermined when gateway set incomplete",
@@ -40,7 +40,7 @@
       { "intent": { "action_type": "payout.create" }, "executed": true, "timestamp": "2026-09-12T10:00:00Z", "intent_hash": "b" }
     ],
     "claimed": { "intent": { "action_type": "payout.create" }, "executed": true, "timestamp": "2026-09-12T11:00:00Z", "intent_hash": "c" },
-    "expect": { "violated": true, "clause_id": "rl" }
+    "expect": { "violated": true, "clause_id": "rl", "failed_bound": "action_type:max_count" }
   },
   {
     "name": "rate_limit: ambiguity resolves for operator (exactly at count)",
@@ -53,7 +53,7 @@
     "name": "require_approval: covered (executed without approval)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ap", "type": "require_approval", "mode": "require_approval", "action_types": ["payout.create"], "approvers": ["key:ops"] }] },
     "claimed": { "intent": { "action_type": "payout.create" }, "executed": true, "intent_hash": "x", "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "ap" }
+    "expect": { "violated": true, "clause_id": "ap", "failed_bound": "approval:approvers" }
   },
   {
     "name": "require_approval: not violated (valid approval)",
@@ -66,7 +66,7 @@
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "seq", "type": "sequence", "mode": "monitor", "first_action_types": ["beneficiary.update"], "then_action_types": ["payout.create"], "forbidden_within": "PT30M" }] },
     "receipts": [{ "intent": { "action_type": "beneficiary.update" }, "executed": true, "timestamp": "2026-09-12T12:00:00Z", "intent_hash": "a" }],
     "claimed": { "intent": { "action_type": "payout.create" }, "executed": true, "timestamp": "2026-09-12T12:10:00Z", "intent_hash": "b" },
-    "expect": { "violated": true, "clause_id": "seq" }
+    "expect": { "violated": true, "clause_id": "seq", "failed_bound": "timestamp:forbidden_within" }
   },
   {
     "name": "sequence: not violated (outside forbidden window)",
@@ -79,7 +79,7 @@
     "name": "time_window: covered (executed outside window)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "tw", "type": "time_window", "mode": "monitor", "start": "09:00", "end": "17:00", "timezone": "UTC" }] },
     "claimed": { "intent": { "action_type": "payout.create" }, "executed": true, "timestamp": "2026-09-12T20:00:00Z" },
-    "expect": { "violated": true, "clause_id": "tw" }
+    "expect": { "violated": true, "clause_id": "tw", "failed_bound": "timestamp:hours" }
   },
   {
     "name": "time_window: not violated (executed inside window)",
@@ -91,13 +91,13 @@
     "name": "endpoint_allowlist: covered (host not allowlisted)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ep", "type": "endpoint_allowlist", "mode": "monitor", "hosts": ["api.payments.example"], "paths": ["/v1/payouts"], "methods": ["POST"] }] },
     "claimed": { "intent": { "action_type": "http.call", "params": { "host": "evil.example", "path": "/v1/payouts", "method": "POST" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "ep" }
+    "expect": { "violated": true, "clause_id": "ep", "failed_bound": "host:hosts" }
   },
   {
     "name": "endpoint_allowlist: covered (path not allowlisted)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ep", "type": "endpoint_allowlist", "mode": "monitor", "hosts": ["api.payments.example"], "paths": ["/v1/payouts"], "methods": ["POST"] }] },
     "claimed": { "intent": { "action_type": "http.call", "params": { "host": "api.payments.example", "path": "/v1/admin", "method": "POST" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "ep" }
+    "expect": { "violated": true, "clause_id": "ep", "failed_bound": "path:paths" }
   },
   {
     "name": "endpoint_allowlist: not violated (host/path/method allowed)",
@@ -109,7 +109,7 @@
     "name": "endpoint_denylist: covered (denied host)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["blocked.example"] }] },
     "claimed": { "intent": { "action_type": "http.call", "params": { "host": "blocked.example", "path": "/x", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "epd" }
+    "expect": { "violated": true, "clause_id": "epd", "failed_bound": "host:hosts" }
   },
   {
     "name": "endpoint_denylist: not violated (other host)",
@@ -121,7 +121,7 @@
     "name": "endpoint_denylist: covered (a port on a host listed without one)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["blocked.example"] }] },
     "claimed": { "intent": { "action_type": "http.call", "params": { "host": "Blocked.Example:8443", "path": "/x", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "epd" }
+    "expect": { "violated": true, "clause_id": "epd", "failed_bound": "host:hosts" }
   },
   {
     "name": "endpoint_denylist: not violated (another port than the listed one)",
@@ -133,19 +133,19 @@
     "name": "endpoint_denylist: covered (IPv4-mapped IPv6 spelling of a listed address)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["169.254.169.254"] }] },
     "claimed": { "intent": { "action_type": "http.call", "params": { "host": "[::ffff:a9fe:a9fe]", "path": "/latest/meta-data", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "epd" }
+    "expect": { "violated": true, "clause_id": "epd", "failed_bound": "host:hosts" }
   },
   {
     "name": "endpoint_denylist: covered (decimal spelling of a listed address)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["169.254.169.254"] }] },
     "claimed": { "intent": { "action_type": "http.call", "params": { "host": "2852039166", "path": "/latest/meta-data", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "epd" }
+    "expect": { "violated": true, "clause_id": "epd", "failed_bound": "host:hosts" }
   },
   {
     "name": "endpoint_denylist: covered (another loopback address for a listed loopback host)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "epd", "type": "endpoint_denylist", "mode": "monitor", "hosts": ["localhost"] }] },
     "claimed": { "intent": { "action_type": "http.call", "params": { "host": "[::1]:3000", "path": "/admin", "method": "POST" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "epd" }
+    "expect": { "violated": true, "clause_id": "epd", "failed_bound": "host:hosts" }
   },
   {
     "name": "endpoint_allowlist: not violated (hex spelling of an allowlisted address)",
@@ -157,13 +157,13 @@
     "name": "endpoint_allowlist: covered (another loopback address than the allowlisted one)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ep", "type": "endpoint_allowlist", "mode": "monitor", "hosts": ["127.0.0.1:8080"] }] },
     "claimed": { "intent": { "action_type": "http.call", "params": { "host": "[::1]:8080", "path": "/v1/x", "method": "GET" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "ep" }
+    "expect": { "violated": true, "clause_id": "ep", "failed_bound": "host:hosts" }
   },
   {
     "name": "address_allowlist: covered (destination not allowlisted)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "aa", "type": "address_allowlist", "mode": "monitor", "addresses": ["0xAAA"], "chain_ids": [8453] }] },
     "claimed": { "intent": { "action_type": "chain.transfer", "params": { "to": "0xBBB", "chain_id": 8453 } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "aa" }
+    "expect": { "violated": true, "clause_id": "aa", "failed_bound": "to:addresses" }
   },
   {
     "name": "address_allowlist: not violated (allowlisted destination)",
@@ -175,19 +175,19 @@
     "name": "address_denylist: covered (denied destination)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ad", "type": "address_denylist", "mode": "monitor", "addresses": ["0xBAD"], "best_effort": true }] },
     "claimed": { "intent": { "action_type": "chain.transfer", "params": { "to": "0xBAD" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "ad" }
+    "expect": { "violated": true, "clause_id": "ad", "failed_bound": "to:addresses" }
   },
   {
     "name": "contract_allowlist: covered (contract not allowlisted)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ca", "type": "contract_allowlist", "mode": "monitor", "contracts": ["0xCON"], "selectors": ["0x1234abcd"] }] },
     "claimed": { "intent": { "action_type": "chain.call", "params": { "contract": "0xOTHER", "selector": "0x1234abcd" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "ca" }
+    "expect": { "violated": true, "clause_id": "ca", "failed_bound": "contract:contracts" }
   },
   {
     "name": "contract_allowlist: covered (selector not allowlisted)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "ca", "type": "contract_allowlist", "mode": "monitor", "contracts": ["0xCON"], "selectors": ["0x1234abcd"] }] },
     "claimed": { "intent": { "action_type": "chain.call", "params": { "contract": "0xCON", "selector": "0xdeadbeef" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "ca" }
+    "expect": { "violated": true, "clause_id": "ca", "failed_bound": "selector:selectors" }
   },
   {
     "name": "contract_allowlist: not violated (contract + selector allowed)",
@@ -199,13 +199,13 @@
     "name": "action_allowlist: covered (param above max)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "act", "type": "action_allowlist", "mode": "monitor", "action_types": ["transfer"], "param_bounds": { "amount": { "max": 100 } } }] },
     "claimed": { "intent": { "action_type": "transfer", "params": { "amount": 500 } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "act" }
+    "expect": { "violated": true, "clause_id": "act", "failed_bound": "amount:max" }
   },
   {
     "name": "action_allowlist: covered (param not in enum)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "act", "type": "action_allowlist", "mode": "monitor", "action_types": ["transfer"], "param_bounds": { "currency": { "enum": ["USD", "EUR"] } } }] },
     "claimed": { "intent": { "action_type": "transfer", "params": { "currency": "XYZ" } }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "act" }
+    "expect": { "violated": true, "clause_id": "act", "failed_bound": "currency:enum" }
   },
   {
     "name": "action_allowlist: not violated (param in bounds)",
@@ -217,7 +217,7 @@
     "name": "key_policy: covered (signer outside active set)",
     "policy": { "vocabulary_version": "1.0", "policy_id": "conformance", "version": 1, "clauses": [{ "id": "kp", "type": "key_policy", "active_keys": ["key:agent-prod"] }] },
     "claimed": { "intent": { "action_type": "payout.create", "signer": "key:retired" }, "executed": true, "timestamp": "2026-09-12T12:00:00Z" },
-    "expect": { "violated": true, "clause_id": "kp" }
+    "expect": { "violated": true, "clause_id": "kp", "failed_bound": "signer:active_keys" }
   },
   {
     "name": "key_policy: not violated (active signer)",
@@ -235,7 +235,7 @@
     "name": "force_push_guard: covered (monitored, executed force-push to a protected branch)",
     "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"monitor"}]},
     "claimed": {"intent":{"action_type":"git.push","params":{"force":true,"ref":"main"}},"executed":true,"realtime_result":"deny","timestamp":"2026-09-21T14:14:07Z"},
-    "expect": {"violated":true,"clause_id":"fpg"}
+    "expect": {"violated":true,"clause_id":"fpg","failed_bound":"ref:protected_refs"}
   },
   {
     "name": "force_push_guard: prevented (enforce, force-push to main denied, not executed)",
@@ -259,12 +259,12 @@
     "name": "force_push_guard: custom protected_refs glob matches release/*",
     "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"monitor","protected_refs":["release/*"]}]},
     "claimed": {"intent":{"action_type":"git.push","params":{"force":true,"ref":"release/2026.09"}},"executed":true,"realtime_result":"deny","timestamp":"2026-09-21T14:14:07Z"},
-    "expect": {"violated":true,"clause_id":"fpg"}
+    "expect": {"violated":true,"clause_id":"fpg","failed_bound":"ref:protected_refs"}
   },
   {
     "name": "force_push_guard: force-push with an unresolved ref fails closed",
     "policy": {"vocabulary_version":"1.0","policy_id":"conformance","version":1,"clauses":[{"id":"fpg","type":"force_push_guard","mode":"monitor"}]},
     "claimed": {"intent":{"action_type":"git.push","params":{"force":true}},"executed":true,"realtime_result":"deny","timestamp":"2026-09-21T14:14:07Z"},
-    "expect": {"violated":true,"clause_id":"fpg"}
+    "expect": {"violated":true,"clause_id":"fpg","failed_bound":"ref:protected_refs"}
   }
 ]
