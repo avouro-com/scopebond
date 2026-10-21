@@ -18,7 +18,8 @@ export { decomposeShell } from "./shell.js";
 export { launched, toolNames } from "./launchers.js";
 export type { SimpleCommand } from "./shell.js";
 // What a delete reaches: the safe-shell rule lets a delete through when every target is inside the working folder.
-export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, isContainedDelete } from "./delete-scope.js";
+export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, RESTORABLE_SUFFIX, isContainedDelete, isRestorableDelete, withRestorableScope } from "./delete-scope.js";
+export { gitRestorable, GIT_RESTORE_TIMEOUT_MS, GIT_RESTORE_MAX_TARGETS, type GitRun } from "./git-restore.js";
 export type { DeleteScope, DeleteVerdict } from "./delete-scope.js";
 // Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
 // this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.

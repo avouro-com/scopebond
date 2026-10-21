@@ -27,7 +27,8 @@ import type { ReceiptBudget, ReceiptPayloadContext } from "@scopebond/gateway";
 import type { SessionBudgetGuard } from "./session-budgets.js";
 import { policyOptsIntoTargets } from "./target-rules.js";
 import { blockedPackagePattern, blockedServiceKindOf, readBlockedServices, unreadablePackageKey, BLOCKED_SERVICE_REASON, type BlockedService } from "./service-rules.js";
-import { containedDeletesSentence, withProgramScope } from "./delete-scope.js";
+import { containedDeletesSentence, withProgramScope, withRestorableScope } from "./delete-scope.js";
+import { gitRestorable } from "./git-restore.js";
 import { DESTRUCTIVE_FORMS, DESTRUCTIVE_FORMS_SENTENCE } from "./destructive-forms.js";
 export { policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
@@ -71,6 +72,9 @@ export interface RuntimeConfig {
   /** How this host handles a Safe Install "ask" (install-verdicts.ts): "ask", its own prompt asks the person; "deny" (the
    *  default), it cannot ask, so the install is refused with the reason and how to go ahead. A "block" is always refused. */
   installAsk?: "ask" | "deny";
+  /** Whether git can restore every target a delete outside the working folder names (git-restore.ts `gitRestorable`, the
+   *  default): such a delete is recorded instead of blocked. Tests pass their own. */
+  restorable?: (targets: string[]) => boolean;
 }
 
 export interface Decision {
@@ -367,8 +371,10 @@ export function createHookRuntime(config: RuntimeConfig) {
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */
   const masked = (input: Mapped): Mapped => {
-    // A shell command built without `program_scope` (by hand, or by an older mapper) is judged by its program alone.
-    const m = withProgramScope(input);
+    // A shell command built without `program_scope` (by hand, or by an older mapper) is judged by its program alone. A delete
+    // outside the working folder that git can restore is recorded instead of blocked (asked before the home folder is masked:
+    // git reads the real paths).
+    const m = withRestorableScope(withProgramScope(input), config.restorable ?? ((targets) => gitRestorable(targets)));
     const params = maskHomeInValue(m.intent.params, homes);
     return params === m.intent.params ? m : { ...m, intent: { ...m.intent, params } };
   };
