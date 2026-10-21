@@ -26,6 +26,7 @@ import { requestOverSocket } from "./local-socket.js";
 import { maskHomeInPolicy, unmaskHomeFolder, unmaskHomeInValue } from "./home-mask.js";
 import { ruleName } from "./rule-titles.js";
 import { withPackRules } from "./pack-rules.js";
+import type { ShownCommand } from "./map.js";
 
 export const OVERRIDE_STATE_FILE = "overrides.json";
 const AGENT_FILE = "agent.json";
@@ -170,18 +171,39 @@ export function actionKey(intent: { action_type?: string; params?: Record<string
   return digestOf(JSON.stringify({ action_type: intent.action_type ?? "", params: sorted(params) }));
 }
 
-/** The keys an older version gave this action, before records masked the home folder as `~`: the working folder as the
- *  coding agent reported it, and also every path with the home folder written out. Lookups only; new allowances use
- *  `actionKey`. */
+/** What the window shows for an action: the blocked shell command as the mapper read it (`shownSummary`), else the action
+ *  from its parameters (`actionSummary`). */
+export function shownSummary(intent: { action_type?: string; params?: Record<string, unknown> }, shown?: ShownCommand): string {
+  if (intent.action_type !== "shell.exec" || !shown) return actionSummary(intent);
+  // At most 200 characters in all, as `actionSummary`: the folder keeps up to 100 of them.
+  const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 3)}...` : text);
+  const folder = shown.folder ? ` (in ${clip(revealHidden(shown.folder.slice(0, 2000)), 94)})` : "";
+  return `${clip(revealHidden(shown.command.slice(0, 2000)), 200 - folder.length)}${folder}`;
+}
+
+/** The key an allowance for this action is made under: for a shell command, exactly what the window shows (the command, the
+ *  folder it runs in when an argument is relative to it, the project and the rule), so the same command allowed in one line
+ *  passes in another, with any `cd`, redirection, quoting or joined command around it; else `actionKey`. */
+export function allowanceKey(intent: { action_type?: string; params?: Record<string, unknown> }, shown: ShownCommand | undefined, rule: string, project: string | null | undefined): string {
+  if (intent.action_type !== "shell.exec" || !shown) return actionKey(intent);
+  return digestOf(JSON.stringify({ key: 2, rule, project: project ?? "", command: shown.digest, ...(shown.folder !== undefined ? { folder: shown.folder } : {}) }));
+}
+
+/** The keys an older version gave this action: its type and parameters (`actionKey`, before allowances were keyed on what the
+ *  window shows), and before records masked the home folder as `~`, the working folder as the coding agent reported it, and
+ *  also every path with the home folder written out. Lookups only; new allowances use `allowanceKey`. */
 function legacyActionKeys(intent: { action_type?: string; params?: Record<string, unknown> }, home: string = homedir()): string[] {
   const params = intent.params ?? {};
-  if (!home || !JSON.stringify(params).includes("~")) return [];
+  const own = actionKey(intent);
+  if (!home || !JSON.stringify(params).includes("~")) return [own];
   const cwd = typeof params.cwd === "string" ? { cwd: unmaskHomeFolder(params.cwd, home) } : {};
   const workingFolder = { ...params, ...cwd };
   const everywhere = { ...unmaskHomeInValue(params, home.replace(/\\/g, "/")), ...cwd };
-  const own = actionKey(intent);
-  return [...new Set([workingFolder, everywhere].map((p) => actionKey({ ...intent, params: p })))].filter((k) => k !== own);
+  return [...new Set([own, ...[workingFolder, everywhere].map((p) => actionKey({ ...intent, params: p }))])];
 }
+
+/** The override handler, also told what the action shows a person (map.ts `shown`) when the runtime knows it. */
+export type ShownOverrideHandler = (ctx: Parameters<OverrideHandler>[0] & { shown?: ShownCommand }) => ReturnType<OverrideHandler>;
 
 /** The window's answer. allow: allow this action (`lasts`: once, or also for 15 minutes, or always via an allowance). ask: send
  *  "Ask an admin" with the reason; the action stays blocked. unavailable with `later`: the agent runs but had no one to ask
@@ -262,17 +284,22 @@ export interface OverrideNote {
   link?: string;
 }
 
-export function createOverrideHandler(ctx: OverrideContext): { handler: OverrideHandler; note(): OverrideNote | null } | null {
+export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOverrideHandler; note(): OverrideNote | null } | null {
   let doc: ManagedDocument;
   try { doc = JSON.parse(readFileSync(join(ctx.dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
   if (!Object.values(doc.rules ?? {}).some((r) => personMayAct(r))) return null;
   const now = ctx.now ?? Date.now;
   let last: OverrideNote | null = null;
-  const handler: OverrideHandler = async ({ verdict, action_id, intent, intent_hash }) => {
-    const key = actionKey(intent);
+  const handler: ShownOverrideHandler = async ({ verdict, action_id, intent, intent_hash, shown }) => {
     const rule = RULE_OF_CLAUSE[verdict.clause_id ?? ""];
     const setting = rule ? doc.rules[rule] : undefined;
     if (!rule || !personMayAct(setting) || !setting?.override) return null;
+    // Keyed on what the window shows, the project among it; an allowance or unblock made under an older key still counts.
+    // The project is read only for a key that has it, or when a person is asked.
+    let read: { project?: string } | null = null;
+    const projectShown = (): { project?: string } => (read ??= projectOfCall(ctx));
+    const key = allowanceKey(intent, shown, rule, shown && intent.action_type === "shell.exec" ? projectShown().project : null);
+    const keys = [...new Set([key, ...legacyActionKeys(intent)])];
     const terms = setting.override;
     const title = ruleName(rule);
     // Would the action still be denied with every overridable rule only recorded? Then a Block rule or Scopebond's own
@@ -290,8 +317,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     // A standing allowance for this rule and this exact action lets it through, and the receipt names it.
     let allowances = readAllowances(ctx.dir);
     if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, doc.allowances, doc.revoked_allowances);
-    // An allowance made before records masked the home folder is keyed on the action as it was then: try those keys too.
-    const standing = [key, ...legacyActionKeys(intent)].reduce<ReturnType<typeof matchAllowance>>(
+    const standing = keys.reduce<ReturnType<typeof matchAllowance>>(
       (found, k) => found ?? matchAllowance(allowances, { rule, actionKey: k, osUserDigest: osDigest, now: t, sessionId: ctx.sessionId ?? null }), null);
     if (standing) {
       standing.uses += 1;
@@ -299,7 +325,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
       return { version: 1, rule, method: "allowance", state: "allowed", repeat_of: standing.id, reason_digest: standing.reason_digest,
         reason_length: standing.reason_length, os_user_digest: osDigest, decided_at: new Date(t).toISOString() };
     }
-    const summary = actionSummary(intent);
+    const summary = shownSummary(intent, shown);
     const blocked = () => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness }, t);
     const offers = offersFor(setting.mode, terms);
     const allowing = allowsAny(offers);
@@ -308,7 +334,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     // Inside the time an earlier override allowed (at any time, where the workspace set no time limit), the same action is
     // allowed again without asking, and says so.
     if (terms.minutes !== 0) {
-      const earlier = [...state.entries].reverse().find((e) => e.rule === rule && e.action_key === key && stillCovers(terms, e.at, t));
+      const earlier = [...state.entries].reverse().find((e) => e.rule === rule && keys.includes(e.action_key) && stillCovers(terms, e.at, t));
       if (earlier) {
         return { version: 1, rule, method: "agent_dialog", state: "allowed", repeat_of: earlier.action_id, reason_digest: earlier.reason_digest,
           reason_length: earlier.reason_length, os_user_digest: osUserDigest(), decided_at: new Date(t).toISOString() };
@@ -320,7 +346,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
     let answer = await (ctx.ask ?? askAgent)(ctx.home, {
       action_id, rule, title, summary, reason_min: terms.reason_min, mode: setting.mode, offers,
       // For the tray, which shows the question too: the coding tool, and what the workspace set about the length.
-      harness: ctx.harness, ...projectOfCall(ctx), reviewed: terms.review === true, always_days: terms.always_days ?? ALLOWANCE_DEFAULT_DAYS, always_needs_admin: terms.always === "needs_admin",
+      harness: ctx.harness, ...projectShown(), reviewed: terms.review === true, always_days: terms.always_days ?? ALLOWANCE_DEFAULT_DAYS, always_needs_admin: terms.always === "needs_admin",
       lasts: coverText(terms), timeout_ms: waitMs,
     }, waitMs + 2_000);
     // Ask an admin: the action stays blocked; the request waits for the agent to send it.

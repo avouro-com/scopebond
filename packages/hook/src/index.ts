@@ -8,7 +8,7 @@ export {
   COPILOT_CLOUD_ASK_IS_DENY, DOCUMENTED_COPILOT_TOOL_NAMES, COPILOT_PROBE_FILE, COPILOT_PROBE_WINDOW_MS,
   type CopilotSurface, type CopilotAnswer, type CopilotProbe, type ProbeEntry,
 } from "./copilot-surface.js";
-export type { Mapped, NormalizedIntent } from "./map.js";
+export type { Mapped, NormalizedIntent, ShownCommand } from "./map.js";
 export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./runtime.js";
 export type { TargetRule } from "./runtime.js";
 // The shell reader every derivation starts from: a command line as the simple commands it runs.

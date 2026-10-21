@@ -9,7 +9,8 @@
 // ambiguous Windows short path.
 
 import { existsSync } from "node:fs";
-import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
+import { posix } from "node:path";
+import { digest, keyedDigest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
 import { textOf } from "./text.js";
@@ -58,7 +59,16 @@ export interface Mapped {
   /** On a `software.install` intent Safe Install checked (install-verdicts.ts): its verdict and the message for it. Not part of
    *  the signed intent (the intent carries the verdict and its reason codes); the runtime reads it to block, ask or go on. */
   install?: { verdict: "block" | "ask" | "allow"; reasons: Array<{ code: string; text: string }>; source: string; message: string };
+  /** On a shell command's own `shell.exec`: what a person is shown when a rule they may act on blocks it, and all an
+   *  allowance for it is keyed on (override.ts), worked out only when asked for. Not part of the signed intent. */
+  shown?: () => ShownCommand;
 }
+
+/** One simple command as a person judges it: the program and its arguments as the shell reads them (quotes gone, a trailing
+ *  slash dropped), after any wrapper written before the program (`sudo`, `X=1`); never its redirections or the commands
+ *  joined to it, which are judged on their own. `folder`, present when an argument names a place relative to it: the folder
+ *  the command runs in, after any `cd` earlier in the call. `digest`: a keyed digest of `command` (minimize.ts). */
+export interface ShownCommand { command: string; digest: string; folder?: string }
 
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
 
@@ -1454,10 +1464,45 @@ function mentionsOnlyInSearch(text: string, names: RegExp): boolean {
 
 const NOTHING_HIDDEN: readonly PipedSecret[] = [];
 
+/** A word that may name a place relative to the folder a command runs in: not an option, a number or an address, and not
+ *  absolute (`/x`, `~/x`, `C:/x`). A bare word counts (`rm -rf build`): which words are places is up to the program. */
+const relativeWord = (w: string): boolean => !w.startsWith("-") && isPathWord(w) && !/^(?:[\\/]|~(?:[\\/]|$)|[A-Za-z]:)/.test(w);
+
+/** The folder a command runs in: `runDir` (after the call's `cd`s; "~" after a `cd` home) inside `cwd` unless absolute, with
+ *  `.` and `..` resolved and no trailing slash. Empty when neither is known. */
+function runFolder(runDir: string, cwd?: string): string {
+  const at = /^(?:[\\/]|~|[A-Za-z]:)/.test(runDir) ? runDir : [cwd ?? "", runDir].filter(Boolean).join("/");
+  if (!at) return "";
+  const folder = posix.normalize(at.replace(/\\/g, "/"));
+  return folder.length > 1 && folder.endsWith("/") && !/^[A-Za-z]:\/$/.test(folder) ? folder.slice(0, -1) : folder;
+}
+
+/** What a person is shown for one simple command, and keyed on (see `ShownCommand`). `scrub` removes secrets from the text
+ *  as the recorded command's are. */
+function shownCommand(sc: SimpleCommand, runDir: string, cwd: string | undefined, scrub: (text: string) => string): ShownCommand {
+  // A wrapper written before the program (`sudo`, `env X=1`, `X=1`) changes how it runs, so it stays.
+  const raw = sc.raw.trim().split(/\s+/);
+  const at = raw.findIndex((w) => w.replace(/^["']+|["']+$/g, "") === sc.programRaw);
+  const prefix = at > 0 ? raw.slice(0, at).map((w) => w.replace(/^["']+|["']+$/g, "")) : [];
+  // `build/` and `build` name the same place; `/` and `C:/` keep theirs. (A loop: a pattern anchored at the end takes
+  // quadratic time on a long run of slashes.)
+  const unslashed = (w: string): string => {
+    let end = w.length;
+    while (end > 0 && (w[end - 1] === "/" || w[end - 1] === "\\")) end--;
+    const t = w.slice(0, end);
+    return t === "" || /^[A-Za-z]:$/.test(t) ? w : t;
+  };
+  // One way of quoting, so `rm "my dir"` (one target) never reads as `rm my dir` (two).
+  const quoted = (w: string): string => (w === "" || /[\s'"`]/.test(w) ? `'${w.replace(/'/g, "'\\''")}'` : w);
+  const command = scrub([...prefix, sc.programRaw || sc.program, ...sc.argv.map(unslashed)].map(quoted).join(" "));
+  return { command, digest: keyedDigest(command), ...(sc.argv.some(relativeWord) ? { folder: runFolder(runDir, cwd) } : {}) };
+}
+
 /** `searchReading`: the command text is the one cmd or PowerShell itself reads (a Windows reading, or a PowerShell command
  *  with no backtick, whose quoting the normalization left as it was), so a mention of Scopebond only in a search's
- *  pattern may be told apart from one that switches it off. */
-function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: readonly PipedSecret[] = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = [], searchReading = false): Mapped[] {
+ *  pattern may be told apart from one that switches it off. `runDir`: the folder the command runs in, for what a person is
+ *  shown (`shownCommand`); `dir` when not given. */
+function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: readonly PipedSecret[] = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = [], searchReading = false, runDir?: string): Mapped[] {
   // Words the whole command shows to be secret (a literal piped into a secret reader) are masked in this part's recorded
   // text too. Only the text: the program and paths a policy judges are never changed by what another part says.
   const redact = (raw: string): string => redactCommand(hidden.length ? maskWords(raw, hidden) : raw);
@@ -1510,6 +1555,7 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
     },
     evaluated: true, source: "shell",
     ...(sc.describes ? { describesOnly: true as const } : {}),
+    shown: () => shownCommand(sc, runDir ?? dir, cwd, (text) => scrubSecrets(hidden.length ? maskWords(text, hidden) : text)),
   };
   const installs = packagesToCheck(sc);
   if (installs) exec.packages = installs;
@@ -1596,12 +1642,13 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
   };
   const walk = (list: SimpleCommand[], filesOnly: boolean): Mapped[] => {
     let dir = "";
+    let shownDir = "";
     // Other folders a `cd` to a variable may have led to (`x=.claude; cd $x`), and whether a credential's value led there.
     let elsewhere: Array<{ dir: string; secret: boolean }> = [];
     const vars: Variables = new Map();
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell);
+      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir);
       const kept = filesOnly ? mapped.filter(isFile) : mapped;
       out.push(...kept);
       // The command read with the values its variables may hold, and in each other folder it may run in: the file effects and
@@ -1640,6 +1687,8 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
           }
         }
         dir = next;
+        // What a person is shown: a `cd` home (or with no folder) leads home, not back to the working folder.
+        shownDir = target === undefined || target === "~" ? "~" : into(shownDir, target);
         elsewhere = [...others].map(([d, secret]) => ({ dir: d, secret }));
       }
       for (const { name, value } of shellVariablesSet(sc)) remember(vars, lookup, name, value);

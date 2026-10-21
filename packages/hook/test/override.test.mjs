@@ -84,7 +84,7 @@ test("a person allows one action in the Scopebond window: approved, with the rea
     assert.equal(allowed.decision, "allow");
     assert.equal(allowed.asked.length, 1);
     assert.equal(allowed.asked[0].rule, "destructive-shell");
-    assert.equal(allowed.asked[0].summary, "rm -rf build");
+    assert.equal(allowed.asked[0].summary, "rm -rf build (in /repo)", "the command, and the folder its relative target is in");
     assert.equal(allowed.asked[0].title, "Run a command that deletes data or shuts down the computer", "the workspace's name for the rule");
     assert.equal(allowed.asked[0].harness, "claude");
     assert.equal(allowed.asked[0].project, undefined, "no project when the hook cannot read one");

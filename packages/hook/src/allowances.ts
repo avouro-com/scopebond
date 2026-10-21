@@ -1,8 +1,10 @@
 // Allowances: an action a rule blocks that stands allowed for a while. A person at the computer makes one from
 // the Scopebond window or the tray ("Allow for 15 min", "Always allow this here…"); an admin makes one by approving a request
-// ("Ask an admin") or confirming a person's. Each is bound to one rule and one exact action (the same type and parameters,
-// whatever tool call it came from), expires (30 days by default, 90 at most unless the workspace allows more), and is
-// recorded: the receipt of an action an allowance lets through says `method: "allowance"` and names it.
+// ("Ask an admin") or confirming a person's. Each is bound to one rule and one exact action: for a shell command, what the
+// window showed (the command, the folder a relative target is in, the project), whatever line it came in; for any other
+// action, the same type and parameters, whatever tool call it came from. It expires (30 days by default, 90 at most unless
+// the workspace allows more), and is recorded: the receipt of an action an allowance lets through says `method: "allowance"`
+// and names it.
 //
 // Nothing here can allow Scopebond's own protection: the override handler checks the floor before any allowance.
 //
@@ -26,7 +28,8 @@ export const ALLOWANCE_MAX_DAYS = 365;
 export interface Allowance {
   id: string;
   rule: string;
-  /** The exact action (see `actionKey`): the same action type and parameters. */
+  /** The exact action (see `allowanceKey` in override.ts): what the window showed for a shell command, else the same action
+   *  type and parameters. */
   action_key: string;
   /** computer: anyone on this computer. person: only the operating-system account it was made by. session: only the coding-agent
    *  session it names (`session_id`, the keyed id receipts carry), approved by an admin with a session budget. A hook that

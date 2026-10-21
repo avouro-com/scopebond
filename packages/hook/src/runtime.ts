@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { createGateway, StaticPrincipalKeyRegistry, withCloudExporter, type CloudExporter } from "@scopebond/gateway";
 import { ensurePrivateDir, loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
-import type { Mapped } from "./map.js";
+import type { Mapped, ShownCommand } from "./map.js";
+import type { ShownOverrideHandler } from "./override.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
 import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
@@ -54,7 +55,7 @@ export interface RuntimeConfig {
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
    *  (see override.ts). `hint` explains, in a denial, how an override would have been possible; `remedy`, when it says
    *  something, replaces the denial's line for the person (where to act on the block afterwards). */
-  override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null; remedy?(): string | null } | null;
+  override?: (agentKid: string) => { handler: ShownOverrideHandler; hint(): string | null; remedy?(): string | null } | null;
   /** The current account's home folder, in every spelling to mask (see home-mask.ts). Defaults to `os.homedir()`,
    *  `HOME` and `USERPROFILE`; tests pass their own. */
   homeFolders?: readonly string[];
@@ -393,13 +394,15 @@ export function createHookRuntime(config: RuntimeConfig) {
   const gatewayGuard: DispatchGuard = { authorize: () => Promise.resolve(boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] }) };
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only", dispatchGuard: gatewayGuard });
   const made = config.override?.(agent.kid) ?? null;
+  /** What the action being decided shows a person (map.ts), handed to the override handler with it, masked as the action is. */
+  let deciding: (() => ShownCommand) | undefined;
   // Once a person has been asked, most of the hook's time limit is gone: the receipt that follows waits less for the local
   // log's lock (a write that still fails denies the call, and the open action is closed later as an interrupted one).
   const override = made ? {
     hint: () => made.hint(),
     remedy: () => made.remedy?.() ?? null,
     handler: (async (ctx) => {
-      try { return await made.handler(ctx); }
+      try { return await made.handler(deciding ? { ...ctx, shown: maskHomeInValue(deciding(), homes) } : ctx); }
       finally { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(Math.min(AFTER_OVERRIDE_STORE_BUSY_MS, storeBusyMs)); } catch { /* keeps its wait */ } }
     }) as OverrideHandler,
   } : null;
@@ -511,7 +514,10 @@ export function createHookRuntime(config: RuntimeConfig) {
       // An action the coding agent reported only after it ran (Cursor's afterFileEdit) is signed as recorded after the
       // fact when a rule denies it: the receipt must not claim it was prevented.
       const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}), ...contextOption, ...(budget ? { budget } : {}) };
-      const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(options).length ? options : undefined);
+      deciding = mapped.shown;
+      let result;
+      try { result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(options).length ? options : undefined); }
+      finally { deciding = undefined; }
       const granted = (result.receipt as { payload?: { override?: { state?: string } } } | undefined)?.payload?.override;
       if (result.allowed && granted?.state === "offered") {
         return { decision: "ask", reason: "Scopebond: a workspace rule blocks this, and your workspace lets you allow it once. Allow only if you meant it; your answer is recorded.", receipt: result.receipt };

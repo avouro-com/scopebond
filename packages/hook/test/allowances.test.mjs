@@ -13,7 +13,7 @@ import {
   scaffold, createHookRuntime, mapClaudeToolUse, inspectManaged, compileManaged, digestRules, defaultRules,
   createOverrideHandler, overrideHint, MANAGED_DOC_FILE, makeAllowance, readAllowances, writeAllowances, readRequests, readBlocked, blockedQuestion, actOnBlocked, readActionText,
 } from "../dist/index.js";
-import { actionKey } from "../dist/override.js";
+import { actionKey, allowanceKey } from "../dist/override.js";
 
 const INSTALLATION = "gw-allow-1";
 const terms = (extra = {}) => ({ reason_min: 10, minutes: 0, daily_limit: 5, harness_prompt: false, ...extra });
@@ -38,24 +38,29 @@ function setup(rules, extra = {}) {
   return { dir, agentKid };
 }
 
-async function run(dir, toolUse, { answers = [], permissionMode = "default", now } = {}) {
+async function run(dir, toolUse, { answers = [], permissionMode = "default", now, cwd = "/repo", project } = {}) {
   const asked = [];
   let hint = null;
   const runtime = createHookRuntime({
-    policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo",
+    policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd,
     override: (agentKid) => {
-      const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", permissionMode, now, waitMs: 50,
+      const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", permissionMode, now, waitMs: 50, ...(project ? { project: () => project } : {}),
         ask: async (_home, request) => { asked.push(request); return answers.shift() ?? { decision: "unavailable" }; } });
       return made ? { handler: made.handler, hint: () => { hint = overrideHint(made.note()); return hint; } } : null;
     },
   });
   try {
-    const d = await runtime.evaluate(mapClaudeToolUse({ cwd: "/repo", ...toolUse }));
+    const d = await runtime.evaluate(mapClaudeToolUse({ cwd, ...toolUse }));
     return { ...d, asked, hint, override: d.receipts?.map((r) => r.payload.override).find(Boolean) ?? d.receipt?.payload?.override ?? null };
   } finally { runtime.close(); }
 }
 
+// The key an older version made an allowance under (still honoured), and the one it is made under now: what the window shows.
 const keyOf = (command) => actionKey(mapClaudeToolUse({ cwd: "/repo", ...bash(command) }).find((m) => m.intent.action_type === "shell.exec").intent);
+const shownKeyOf = (command, rule = "destructive-shell", project = null) => {
+  const exec = mapClaudeToolUse({ cwd: "/repo", ...bash(command) }).find((m) => m.intent.action_type === "shell.exec");
+  return allowanceKey(exec.intent, exec.shown(), rule, project);
+};
 
 test("the workspace may send 'Block, person may ask' and the new terms; unknown terms are refused", () => {
   const at = (rules) => inspectManaged(doc(3, rules), { installationId: INSTALLATION, currentRevision: 2 });
@@ -120,7 +125,7 @@ test("'Block, person may ask': the window offers only Ask an admin; the request 
   const [request] = readRequests(dir);
   assert.equal(request.rule, "destructive-shell");
   assert.equal(request.reason, reason);
-  assert.equal(request.summary, "rm -rf build");
+  assert.equal(request.summary, "rm -rf build (in /repo)");
   assert.equal(request.sent_at, null);
   assert.equal(readBlocked(dir).at(-1).mode, "ask");
   // An "allow" answer is not honoured where allowing is not offered, and Claude Code's own prompt is never offered here.
@@ -142,7 +147,7 @@ test("'Allow for 15 min' and 'Always allow this here…' also stand for the same
   assert.equal(next.override.method, "allowance", "the next one needs no window");
   const always = await run(dir, bash("rm -rf dist"), { answers: [{ decision: "allow", reason, os_user: ME, lasts: "always" }] });
   assert.equal(always.decision, "allow");
-  const made = readAllowances(dir).find((a) => a.lasts === undefined && a.action_key === keyOf("rm -rf dist"));
+  const made = readAllowances(dir).find((a) => a.lasts === undefined && a.action_key === shownKeyOf("rm -rf dist"));
   assert.equal(made.state, "active");
   assert.ok(Date.parse(made.expires_at) - Date.now() > 29 * 24 * 60 * 60 * 1000, "30 days by default");
   assert.equal(made.reason, reason, "kept until the agent sends it");
@@ -153,7 +158,7 @@ test("an 'always' choice that needs an admin is proposed, and the person is cove
   await run(dir, bash("rm -rf build"), { answers: [{ decision: "allow", reason: "Cleaning the build output before release", os_user: ME, lasts: "always" }] });
   const states = readAllowances(dir).map((a) => a.state).sort();
   assert.deepEqual(states, ["active", "proposed"]);
-  assert.equal(readActionText(dir).get(keyOf("rm -rf build")), "rm -rf build", "what the window showed, kept for the tray");
+  assert.equal(readActionText(dir).get(shownKeyOf("rm -rf build")), "rm -rf build (in /repo)", "what the window showed, kept for the tray");
   assert.equal((await run(dir, bash("rm -rf build"))).override.method, "allowance");
 });
 
@@ -187,7 +192,7 @@ test("from the tray, a person allows an earlier block for the next try, or asks 
   assert.deepEqual(actOnBlocked(dir, second.id, { decision: "ask", reason: "Need dist cleared for the release", os_user: ME }), { outcome: "asked" });
   const request = readRequests(dir).at(-1);
   assert.equal(request.action_id, second.id);
-  assert.equal(request.summary, "rm -rf dist");
+  assert.equal(request.summary, "rm -rf dist (in /repo)");
   assert.equal(request.sent_at, null);
 });
 
@@ -224,7 +229,7 @@ test("from the tray, an earlier block offers 15 minutes where the workspace know
   const made = readAllowances(dir).at(-1);
   assert.equal(made.once, false);
   assert.ok(Date.parse(made.expires_at) - Date.now() <= 15 * 60_000 + 1_000, "for 15 minutes");
-  assert.equal(readActionText(dir).get(item.action_key), "rm -rf build", "the tray can say what the allowance lets through");
+  assert.equal(readActionText(dir).get(item.action_key), "rm -rf build (in /repo)", "the tray can say what the allowance lets through");
   // An older workspace (no allowance terms): no 15 minutes, and a 15-minute answer allows the next try only.
   const { dir: old } = setup({ "destructive-shell": { mode: "override", override: terms() } });
   await run(old, bash("rm -rf build"), { answers: [] });
@@ -344,4 +349,46 @@ test("an allowance the person stopped no longer applies, stays stopped when the 
   assert.equal(unblockedBy(terms()), undefined, "an older workspace's records stay as they were");
   assert.equal(unblockedBy(terms({ lasts: "once" })), "person");
   assert.equal(unblockedBy(terms({ review: true })), "automatic");
+});
+
+test("an allowance is keyed on the blocked command the window showed, not on the line it came in", async () => {
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ always: "at_once" }) } });
+  const reason = "Removing a worktree I no longer need";
+  const opts = { cwd: "D:/src/app-a", project: "app" };
+  const first = await run(dir, bash("cd D:/src && rm -rf D:/src/old-review 2>&1 | tail -2; git worktree prune"),
+    { ...opts, answers: [{ decision: "allow", reason, os_user: ME, lasts: "always" }] });
+  assert.equal(first.decision, "allow");
+  assert.equal(first.asked.length, 1);
+  assert.equal(first.asked[0].summary, "rm -rf D:/src/old-review", "the window shows the blocked command, wrappers left out");
+  const second = await run(dir, bash("cd D:/src && rm -rf D:/src/old-review 2>&1; ls -d D:/src/old* | head -1"), opts);
+  assert.equal(second.decision, "allow", "the same rm in another line passes");
+  assert.deepEqual(second.asked, [], "with no window");
+  assert.equal(second.override.method, "allowance");
+  // Quoting, a trailing slash and a redirection change nothing; another working folder of the same project neither, as the
+  // target is absolute.
+  for (const line of [`rm -rf "D:/src/old-review/" >/dev/null`, "rm -rf D:/src/old-review 2>nul"]) {
+    const d = await run(dir, bash(line), { cwd: "D:/src/app-b", project: "app" });
+    assert.equal(d.decision, "allow", line);
+    assert.deepEqual(d.asked, [], line);
+  }
+  const other = await run(dir, bash("rm -rf D:/src/other"), opts);
+  assert.equal(other.decision, "deny", "another target is still blocked");
+  assert.equal(other.asked.length, 1);
+  const elsewhere = await run(dir, bash("rm -rf D:/src/old-review"), { cwd: "D:/src/web", project: "web" });
+  assert.equal(elsewhere.decision, "deny", "the project is part of what was allowed");
+});
+
+test("the folder a cd leads to is part of a relative target", async () => {
+  const { dir } = setup({ "destructive-shell": { mode: "override", override: terms({ always: "at_once" }) } });
+  const reason = "Cleaning the build output before release";
+  const root = await run(dir, bash("rm -rf build"), { project: "repo", answers: [{ decision: "allow", reason, os_user: ME, lasts: "always" }] });
+  assert.equal(root.decision, "allow");
+  assert.equal(root.asked[0].summary, "rm -rf build (in /repo)", "a relative target names the folder it is in");
+  assert.equal((await run(dir, bash("rm -rf build/"), { project: "repo" })).asked.length, 0, "the same target");
+  const nested = await run(dir, bash("cd packages/web && rm -rf build"), { project: "repo" });
+  assert.equal(nested.decision, "deny", "packages/web/build is another target");
+  assert.equal(nested.asked.length, 1);
+  assert.equal(nested.asked[0].summary, "rm -rf build (in /repo/packages/web)");
+  const home = await run(dir, bash("cd ~ && rm -rf build"), { project: "repo" });
+  assert.equal(home.decision, "deny", "a cd home leads elsewhere too");
 });
