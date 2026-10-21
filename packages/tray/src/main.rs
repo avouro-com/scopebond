@@ -33,6 +33,8 @@ const REFRESH_EVERY: Duration = Duration::from_secs(30);
 const NOTE_FOR: Duration = Duration::from_secs(120);
 /// The panel shows when its page says it has drawn, or after this long whatever happens.
 const PANEL_SHOW_WAIT_MS: u64 = 1_500;
+/// The client's one version (the agent package's, from build.rs): what About, the panel and the support report say.
+const SCOPEBOND_VERSION: &str = env!("SCOPEBOND_VERSION");
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -651,7 +653,7 @@ fn get_help(shared: &Arc<Shared>) {
     }
     let link = link_name(*lock(&shared.link));
     let agent = shared.client.call("GET", "/support", None, Duration::from_secs(15)).map_err(|e| e.to_string());
-    let report = panel::help_report(env!("CARGO_PKG_VERSION"), link, agent);
+    let report = panel::help_report(SCOPEBOND_VERSION, link, agent);
     let copied = win::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default());
     let opened = std::process::Command::new("explorer.exe").arg(panel::HELP_URL).spawn().is_ok();
     *lock(&shared.busy) = None;
@@ -666,10 +668,11 @@ fn get_help(shared: &Arc<Shared>) {
 fn about(shared: &Arc<Shared>) {
     let status = shared.client.call("GET", "/status", None, Duration::from_secs(10)).unwrap_or(Value::Null);
     let field = |v: &Value| v.as_str().map(str::to_string).unwrap_or_else(|| "not running".into());
+    let agent = field(&status["agent"]["version"]).trim_start_matches("agent/").to_string();
+    // One version for the whole client; the agent's only when it is not the same (an update not finished yet).
+    let agent_line = if agent == SCOPEBOND_VERSION { String::new() } else { format!("Agent: {agent}\n") };
     let text = format!(
-        "Scopebond\nPublisher: Avouro LLC\n\nTray: {}\nAgent: {}\nHook: {}\nComputer: {}\n\nScopebond folder: {}",
-        env!("CARGO_PKG_VERSION"),
-        field(&status["agent"]["version"]).trim_start_matches("agent/"),
+        "Scopebond {SCOPEBOND_VERSION}\nPublisher: Avouro LLC\n\n{agent_line}Rule engine: {}\nComputer: {}\n\nScopebond folder: {}",
         field(&status["version"]),
         field(&status["identity"]["installation_id"]),
         shared.client.home().display(),
@@ -850,7 +853,7 @@ fn panel_state(shared: State<'_, Arc<Shared>>) -> Value {
         "answer": answer,
         "note": note,
         "busy": *lock(&shared.busy),
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": SCOPEBOND_VERSION,
         // For the panel's Settings: Start with Windows as the menu shows it.
         "autostart": autostart_state().as_str(),
         // A notification's Unblock…: the block whose form to open (once).
@@ -999,7 +1002,7 @@ fn panel_close(window: WebviewWindow, shared: State<'_, Arc<Shared>>) {
 fn main() {
     let home = scopebond_home().unwrap_or_else(std::env::temp_dir);
     log::init(&home);
-    log::line(&format!("Scopebond tray {} starting for {}", env!("CARGO_PKG_VERSION"), home.display()));
+    log::line(&format!("Scopebond {} tray starting for {} (tray crate {})", SCOPEBOND_VERSION, home.display(), env!("CARGO_PKG_VERSION")));
     if start_with_windows_choice(&home) == Some(false) && win::read_string(false, win::RUN_KEY, "Scopebond").is_some() {
         win::delete_user_value(win::RUN_KEY, "Scopebond");
         log::line("start with Windows stays off, as chosen");

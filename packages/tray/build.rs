@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 #[path = "src/icon.rs"]
 mod icon;
 
+#[path = "src/version.rs"]
+mod version;
+
 /// Write only when the content changed, so an unchanged build does not rebuild the program.
 fn write_if_changed(path: &Path, bytes: &[u8]) {
     if fs::read(path).map(|old| old == bytes).unwrap_or(false) {
@@ -28,6 +31,14 @@ fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=src/icon.rs");
     println!("cargo:rerun-if-changed=ui");
+
+    // The client's one version (the agent package's), for About and the panel: never this crate's own.
+    let package = manifest.join("..").join("agent").join("package.json");
+    println!("cargo:rerun-if-changed={}", package.display());
+    println!("cargo:rerun-if-changed=src/version.rs");
+    let text = fs::read_to_string(&package).unwrap_or_else(|e| panic!("read {}: {e}", package.display()));
+    let scopebond = version::package_version(&text).unwrap_or_else(|| panic!("{} names no plain version", package.display()));
+    println!("cargo:rustc-env=SCOPEBOND_VERSION={scopebond}");
 
     let ico = out.join("scopebond.ico");
     write_if_changed(&ico, &icon::ico(icon::IconState::Protected, &[16, 20, 24, 32, 40, 48, 64, 256]));
