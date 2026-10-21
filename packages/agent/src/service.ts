@@ -8,8 +8,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { hostname, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
-  writeDeliveryState, userHarnessFile, writeHarnessConfig, type Harness, type RecentBlockRecord,
+  actOnBlocked, blockedQuestion, findClause, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
+  writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -29,7 +29,7 @@ import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { allowedList, askedList, blockStates } from "./allowed-asked.js";
 import { blockOutcome } from "./block-outcome.js";
-import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
+import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
@@ -578,6 +578,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const known = new Map(readBlocked(options.dir).map((b) => [b.id, b]));
     const states = blockStates(options.dir, now);
     const workspace = summary?.workspace_name ?? null;
+    // Why each rule exists, for a block's details: the clause's own description in this computer's policy, read once.
+    let policy: ExplainPolicy | undefined;
+    try { policy = JSON.parse(readFileSync(join(options.dir, "policy.json"), "utf8")) as ExplainPolicy; } catch { /* no why lines */ }
     let asked = 0;
     return blocks.map((b) => {
       const item = b.action_id ? known.get(b.action_id) : undefined;
@@ -606,6 +609,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         tries: b.tries ?? 1, first_at: b.first_at ?? b.at, group_id: b.group_id ?? b.action_id,
         ...outcome,
         request,
+        rule_why: whyOf(findClause(policy, b.clause ?? null)?.description ?? findClause(policy, rule)?.description),
       };
     });
   };

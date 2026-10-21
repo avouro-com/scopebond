@@ -13,8 +13,9 @@
   // What the person is looking at; kept across redraws.
   // `open`: the block whose Unblock form is open, with the choice and the reason typed so far.
   // `stopping`: the allowance whose "Stop allowing" waits for the person to confirm.
-  // `shown`: how many blocks the list shows (50 at a time).
-  const ui = { view: "list", tab: "blocked", open: null, choice: null, reason: "", stopping: null, shown: PAGE };
+  // `shown`: how many rows the list shows (50 at a time).
+  // `details`: the block whose details are open; `expanded`: the group whose tries are listed.
+  const ui = { view: "list", tab: "blocked", open: null, choice: null, reason: "", stopping: null, shown: PAGE, details: null, expanded: null };
   let last = null;
   let lastJson = "";
   // Whether the tray was told the page has drawn (it made the window hidden, and shows it then).
@@ -289,13 +290,38 @@
     ]);
   }
 
-  function blockItem(s, model, b, i) {
+  /** A block's details: the exact command (masked), why the rule exists, the record's id, and its place in Scopebond Cloud. */
+  function details(model, b) {
+    const id = b.action_id || "";
+    const cloud = offered(model, "open_workspace");
+    return el("div", { class: "details", id: "details-" + id, role: "region", "aria-label": "Details: " + (b.what || b.summary) }, [
+      el("dl", { class: "rows" }, [
+        el("dt", { text: "Command" }), el("dd", {}, [el("div", { class: "cmd", text: b.action_text || b.what || b.summary })]),
+        b.rule_why ? el("dt", { text: "Why" }) : null, b.rule_why ? el("dd", { text: b.rule_why }) : null,
+        el("dt", { text: "Rule" }), el("dd", { text: ruleOf(b) }),
+        id ? el("dt", { text: "Record" }) : null, id ? el("dd", { class: "mono", text: id }) : null,
+      ]),
+      cloud ? el("div", {}, [el("button", { class: "btn text", type: "button", "data-key": "cloud-" + id, text: "View in Scopebond Cloud ↗",
+        onclick: () => run("action", "open_workspace") })]) : null,
+    ]);
+  }
+  /** The title of a block's row: a button that opens and closes its details. */
+  function whatButton(b, words) {
+    const id = b.action_id || "";
+    const open = !!id && ui.details === id;
+    if (!id) return el("span", { class: "what", text: words });
+    return el("button", { class: "what link", type: "button", "data-key": "what-" + id, "aria-expanded": open ? "true" : "false", "aria-controls": "details-" + id,
+      onclick: () => { ui.details = open ? null : id; draw("what-" + id); } }, [words]);
+  }
+
+  function blockItem(s, model, b, i, group) {
     const busy = s.busy;
     const words = b.what || b.summary;
-    const meta = [ruleOf(b), b.project, b.tool].filter(Boolean).join(" · ");
+    const times = group ? group.times : (b.tries && b.tries > 1 ? b.tries : 1);
+    const repeated = times > 1 && b.at ? times + " times · last " + when(b.at) : null;
+    const meta = [ruleOf(b), repeated, b.project, b.tool].filter(Boolean).join(" · ");
     const offers = b.offers;
     const allows = offers ? offers.once || offers.fifteen || offers.always : b.can_act;
-    const tries = b.tries && b.tries > 1 ? b.tries : 0;
     let act = null;
     if (b.outcome_text && !(ui.open === b.action_id && offers)) act = outcomeLine(b);
     else if (b.acted === "allowed") act = el("span", { class: "chip ok", text: "Allowed" });
@@ -313,34 +339,66 @@
       })]);
     }
     const answered = s.answered && s.answered.actionId === b.action_id && ["allowed", "proposed", "asked"].includes(s.answered.outcome) ? s.answered.text : null;
+    const members = group && group.blocks.length > 1 ? group.blocks : null;
+    const expanded = !!members && ui.expanded === group.key;
     return el("li", { class: "item", "data-index": String(i) }, [
       el("div", { class: "row" }, [
         el("span", { class: "mark", "aria-hidden": "true" }),
-        el("span", { class: "what", text: words }),
-        tries ? el("span", { class: "tries", "aria-label": "tried " + tries + " times", text: "×" + tries }) : null,
+        b.live ? el("span", { class: "what", text: words }) : whatButton(b, words),
         b.live ? el("span", { class: "when", id: "countdown", "data-deadline": b.deadline, text: secondsLeft(b.deadline) + " s left" })
           : el("span", { class: "when", text: when(b.at) }),
       ]),
       meta ? el("span", { class: "meta", text: meta }) : null,
+      !b.live && b.action_id && ui.details === b.action_id ? details(model, b) : null,
       answered ? el("span", { class: "done", text: answered }) : act,
+      members ? el("div", {}, [el("button", { class: "btn text", type: "button", "data-key": "tries-" + group.key, "aria-expanded": expanded ? "true" : "false",
+        text: (expanded ? "Hide each try" : "Show each try") + " (" + members.length + ")", onclick: () => { ui.expanded = expanded ? null : group.key; draw("tries-" + group.key); } })]) : null,
+      expanded ? el("ul", { class: "tries-list", "aria-label": "Each try: " + words }, members.map((m) => tryItem(model, m, b))) : null,
+    ]);
+  }
+  /** One try inside a group: when, where, and its own details. */
+  function tryItem(model, b, head) {
+    const id = b.action_id || "";
+    const open = !!id && ui.details === id;
+    const where = [b.tool, b.project, b.tries > 1 ? "×" + b.tries : null].filter(Boolean).join(" · ");
+    return el("li", { class: "try" }, [
+      el("div", { class: "row" }, [
+        id ? el("button", { class: "link", type: "button", "data-key": "try-" + id, "aria-expanded": open ? "true" : "false", "aria-controls": "details-" + id,
+          onclick: () => { ui.details = open ? null : id; draw("try-" + id); } }, [when(b.at)]) : el("span", { text: when(b.at) }),
+        el("span", { class: "meta", text: [where, b.outcome_text !== head.outcome_text ? b.outcome_text : null].filter(Boolean).join(" · ") }),
+      ]),
+      open ? details(model, b) : null,
     ]);
   }
 
+  /** The list's rows: the agent's groups (today's repeats of one action under one rule as one row), or each block alone from an
+   *  older agent. Each with its blocks, newest first; the question waiting now is left out (it has its own row). */
+  function groupsOf(s, model) {
+    const blocks = model && model.recent_blocks || [];
+    const skip = (b) => !b || (s.pending && b.action_id === s.pending.action_id);
+    const given = model && Array.isArray(model.blocked_groups) ? model.blocked_groups : null;
+    const groups = given
+      ? given.map((g) => ({ key: String(g.key), times: Number(g.times) || 1, today: g.today === true, blocks: (g.members || []).map((i) => blocks[i]).filter((b) => !skip(b)) }))
+      : blocks.filter((b) => !skip(b)).map((b, i) => ({ key: "one-" + i, times: b.tries > 1 ? b.tries : 1, today: isToday(b.at), blocks: [b] }));
+    return groups.filter((g) => g.blocks.length);
+  }
+
   function blockedList(s, model) {
-    const blocks = (model && model.recent_blocks || []).filter((b) => !(s.pending && b.action_id === s.pending.action_id));
+    const groups = groupsOf(s, model);
     const live = pendingBlock(s);
     const out = [];
     if (live) out.push(el("h2", { id: "live-h", text: "Waiting for your answer" }), el("ul", { "aria-labelledby": "live-h" }, [blockItem(s, model, live, 0)]));
-    if (!blocks.length) return out.concat(live ? [] : [empty("Nothing blocked today", "Scopebond checks every action your coding agents take.")]);
-    const today = blocks.filter((b) => isToday(b.at));
-    const earlier = blocks.filter((b) => !isToday(b.at));
-    // All of today, newest first, then earlier this week; PAGE at a time, with Show more.
+    if (!groups.length) return out.concat(live ? [] : [empty("Nothing blocked today", "Scopebond checks every action your coding agents take.")]);
+    const today = groups.filter((g) => g.today);
+    const earlier = groups.filter((g) => !g.today);
+    // All of today, newest first, then earlier this week; PAGE rows at a time, with Show more.
     const todayShown = today.slice(0, ui.shown);
     const earlierShown = earlier.slice(0, Math.max(0, ui.shown - todayShown.length));
+    const item = (g, i) => blockItem(s, model, g.blocks[0], i, g);
     if (!today.length) out.push(empty("Nothing blocked today", "Earlier blocks are below."));
-    else out.push(el("h2", { id: "today-h", text: "Today" }), el("ul", { "aria-labelledby": "today-h" }, todayShown.map((b, i) => blockItem(s, model, b, i))));
-    if (earlierShown.length) out.push(el("h2", { id: "earlier-h", text: "Earlier this week" }), el("ul", { "aria-labelledby": "earlier-h" }, earlierShown.map((b, i) => blockItem(s, model, b, todayShown.length + i))));
-    const left = blocks.length - todayShown.length - earlierShown.length;
+    else out.push(el("h2", { id: "today-h", text: "Today" }), el("ul", { "aria-labelledby": "today-h" }, todayShown.map(item)));
+    if (earlierShown.length) out.push(el("h2", { id: "earlier-h", text: "Earlier this week" }), el("ul", { "aria-labelledby": "earlier-h" }, earlierShown.map((g, i) => item(g, todayShown.length + i))));
+    const left = groups.length - todayShown.length - earlierShown.length;
     if (left > 0) out.push(el("div", { class: "more" }, [el("button", { class: "btn", type: "button", "data-key": "more",
       text: "Show " + Math.min(PAGE, left) + " more", onclick: () => { ui.shown += PAGE; draw("more"); } })]));
     return out;

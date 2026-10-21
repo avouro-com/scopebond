@@ -34,6 +34,9 @@ export interface TrayModel {
   /** Up to 200 blocks of the last seven days, newest first (today's, then earlier ones); an agent's retries of one block
    *  are one entry with its number of tries. */
   recent_blocks: RecentBlock[];
+  /** `recent_blocks` as the tray lists them: today's repeats of one action under one rule as one row (groupBlocks). Absent
+   *  from an older agent: each block is its own row. */
+  blocked_groups?: BlockGroup[];
   /** The line under the state when it is protected ("Rules checked 3 min ago · 2 blocked today"); null otherwise (the
    *  headline says it). */
   detail?: string | null;
@@ -74,10 +77,68 @@ export interface RecentBlock {
    *  button, the text "Copy details" copies, and the person's request for it, when they asked. */
   tries?: number; first_at?: string; group_id?: string | null;
   outcome?: BlockOutcome; outcome_text?: string | null; copy_details?: string | null; request?: BlockRequest | null;
+  /** Newer again: why the rule exists, in one line (the first sentence of the rule's description on this computer), for the
+   *  block's details; absent when the rule says nothing about itself. */
+  rule_why?: string | null;
+}
+
+/** Blocks shown as one row in the tray: today, the same action under the same rule, however many sessions tried it; else one
+ *  block (with its retries) alone. `members` are indexes into `recent_blocks`, newest first; the first is the one the row
+ *  shows and acts on. `times` counts every try (retries included). */
+export interface BlockGroup {
+  key: string;
+  members: number[];
+  times: number;
+  first_at: string;
+  last_at: string;
+  today: boolean;
 }
 
 /** The most blocks the tray lists (the last seven days; the panel shows them 50 at a time). */
 export const RECENT_BLOCKS_MAX = 200;
+/** The longest "why" line a block's details show. */
+const WHY_MAX = 200;
+
+/** A rule's description as one line for a person: its first sentence, at most 200 characters (cut at a word). Null when
+ *  there is nothing to say. */
+export function whyOf(description: unknown): string | null {
+  if (typeof description !== "string") return null;
+  const clean = description.replace(/\s+/g, " ").trim();
+  if (!clean) return null;
+  const end = clean.search(/[.!?](?:\s|$)/);
+  const first = end >= 0 ? clean.slice(0, end + 1) : clean;
+  if (first.length <= WHY_MAX) return first;
+  const cut = first.slice(0, WHY_MAX - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > WHY_MAX * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:]+$/, "")}…`;
+}
+
+/** Group the list the way the tray shows it: today's blocks of the same action under the same rule (across sessions and
+ *  coding tools) are one row, newest first; earlier blocks are each their own row. Order follows the newest member. */
+export function groupBlocks(blocks: readonly RecentBlock[], now: number): BlockGroup[] {
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const groups: BlockGroup[] = [];
+  const byKey = new Map<string, BlockGroup>();
+  blocks.forEach((b, i) => {
+    const at = Date.parse(b.at);
+    const today = Number.isFinite(at) && at >= midnight.getTime();
+    const tries = typeof b.tries === "number" && b.tries > 0 ? b.tries : 1;
+    const first = b.first_at ?? b.at;
+    const key = today ? `${b.rule_title ?? b.rule ?? ""}\n${b.what ?? b.summary}` : `one\n${b.group_id ?? b.action_id ?? ""}\n${i}`;
+    const known = today ? byKey.get(key) : undefined;
+    if (known) {
+      known.members.push(i);
+      known.times += tries;
+      if (Date.parse(first) < Date.parse(known.first_at)) known.first_at = first;
+      return;
+    }
+    const group: BlockGroup = { key, members: [i], times: tries, first_at: first, last_at: b.at, today };
+    groups.push(group);
+    if (today) byKey.set(key, group);
+  });
+  return groups;
+}
 
 const TOOL_NAMES: Readonly<Record<string, string>> = {
   claude: "Claude Code", cursor: "Cursor", codex: "Codex", copilot: "GitHub Copilot", windsurf: "Windsurf", gemini: "Gemini CLI",
@@ -323,10 +384,12 @@ export function trayModel(input: TrayInput): TrayModel {
     detail = [checked, blocked].filter(Boolean).join(" · ") || null;
     if (detail) detail = detail[0].toUpperCase() + detail.slice(1);
   }
+  const recent = (input.recentBlocks ?? []).slice(0, RECENT_BLOCKS_MAX);
   return {
     state, headline, fix, actions, hint, rows,
     tooltip: tooltip.length > 63 ? `${tooltip.slice(0, 62)}…` : tooltip,
-    recent_blocks: (input.recentBlocks ?? []).slice(0, RECENT_BLOCKS_MAX),
+    recent_blocks: recent,
+    blocked_groups: groupBlocks(recent, now),
     detail,
     workspace: input.workspace?.name ?? null,
     today: input.today ? { actions: input.today.actions, blocked: input.today.blocked } : null,

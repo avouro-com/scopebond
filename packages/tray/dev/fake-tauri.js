@@ -31,13 +31,15 @@
   const outcomeBlocks = () => [
     { action_id: "act-out-unblock-000001", summary: "file.read .env.production", at: ago(3), rule: "secret-read", can_act: true, acted: null,
       what: "Read .env.production", action_text: ".env.production", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
-      offers: offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true }), reason_min: 0, outcome: "unblock", outcome_text: null, tries: 1 },
+      offers: offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true }), reason_min: 0, outcome: "unblock", outcome_text: null, tries: 1,
+      rule_why: "Allow workspace reads, but never signing keys, environment secret files, SSH keys or cloud credentials." },
     { action_id: "act-out-ask-0000000001", summary: "git.push origin main", at: ago(9), rule: "push-protected", can_act: true, acted: null,
       what: "git push origin main", action_text: "git push origin main", rule_title: "Push straight to a protected branch", project: "checkout", tool: "Claude Code",
       offers: offers({ ask: true }), reason_min: 0, outcome: "ask", outcome_text: null, tries: 3 },
     { action_id: "act-out-always-000001", summary: "file.read receipts.db", at: ago(15), rule: "secret-read", can_act: false, acted: null,
       what: "Read ~/.scopebond/receipts.db", action_text: "~/.scopebond/receipts.db", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
-      offers: null, reason_min: null, outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", tries: 12 },
+      offers: null, reason_min: null, outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", tries: 12,
+      rule_why: "Never read Scopebond's own folder, which holds this computer's key and connection (always on; it cannot be relaxed)." },
     { action_id: "act-out-rule-00000001", summary: "file.write .github/workflows/release.yml", at: ago(31), rule: "ci-config-write", can_act: false, acted: null,
       what: "Edit .github/workflows/release.yml", action_text: ".github/workflows/release.yml", rule_title: "Change build and release settings", project: "billing-api",
       tool: "Cursor", offers: null, reason_min: null, outcome: "workspace_rule", outcome_text: "Set by Acme. Ask an admin to change the rule.",
@@ -61,6 +63,28 @@
       what: "Read .env.staging", action_text: ".env.staging", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
       offers: null, reason_min: null, outcome: "allowed", outcome_text: "Allowed: ask Claude Code to try again", tries: 1 },
   ];
+  /** The same action under the same rule, tried in three sessions and two tools today, beside other blocks (groups=1). */
+  const repeatedBlocks = () => {
+    const read = outcomeBlocks()[2];
+    const tries = [[2, "Claude Code", 4], [24, "Cursor", 1], [61, "Claude Code", 7]].map(([min, tool, n], i) => ({ ...read,
+      action_id: "act-rep-read-0000000" + i, at: ago(min), tool, tries: n }));
+    return [tries[0], outcomeBlocks()[0], tries[1], outcomeBlocks()[1], tries[2], ...outcomeBlocks().slice(3)];
+  };
+  /** The agent's grouping (tray-model.ts groupBlocks): today's repeats of one action under one rule as one row. */
+  const groupBlocks = (list) => {
+    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    const groups = []; const byKey = new Map();
+    list.forEach((b, i) => {
+      const today = Date.parse(b.at) >= midnight.getTime();
+      const key = today ? (b.rule_title || b.rule || "") + "\n" + (b.what || b.summary) : "one\n" + (b.action_id || "") + "\n" + i;
+      const known = today ? byKey.get(key) : undefined;
+      const tries = b.tries > 0 ? b.tries : 1;
+      if (known) { known.members.push(i); known.times += tries; return; }
+      const g = { key, members: [i], times: tries, first_at: b.first_at || b.at, last_at: b.at, today };
+      groups.push(g); if (today) byKey.set(key, g);
+    });
+    return groups;
+  };
   /** n blocks over the last week, cycling through every outcome (blocks=n in the address). */
   const manyBlocks = (n) => {
     const kinds = outcomeBlocks();
@@ -123,8 +147,8 @@
   const make = scene === "quiet" ? scenes.quiet : scene === "attention" ? scenes.attention : scene === "disconnected" ? scenes.disconnected : scenes.protected;
   let model = scene === "not_answering" ? null : make();
   // blocks=n: the list of n blocks over the week, every outcome (0, 3, 40 and 200 are the reviewed sizes); outcomes=1: one of each.
-  if (model && (params.get("blocks") !== null || params.get("outcomes"))) {
-    const list = params.get("outcomes") ? outcomeBlocks() : manyBlocks(Math.max(0, Math.min(500, Number(params.get("blocks")) || 0)));
+  if (model && (params.get("blocks") !== null || params.get("outcomes") || params.get("groups"))) {
+    const list = params.get("groups") ? repeatedBlocks() : params.get("outcomes") ? outcomeBlocks() : manyBlocks(Math.max(0, Math.min(500, Number(params.get("blocks")) || 0)));
     const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
     const today = list.filter((b) => Date.parse(b.at) >= midnight.getTime()).length;
     model.recent_blocks = list;
@@ -147,6 +171,8 @@
     }
     if (mode === "final" && model.asked) model.asked = [];
   }
+  // The agent's groups, unless the scene is an older agent's (older=1: each block is its own row).
+  if (model && !params.get("older")) model.blocked_groups = groupBlocks(model.recent_blocks);
   let notifications = "blocks";
   let note = null;
   let busy = null;
@@ -243,6 +269,9 @@
       if (params.get("view") === "settings") click('[data-key="settings"]');
       if (params.get("tab")) click('[data-key="tab-' + params.get("tab") + '"]');
       if (params.get("open")) click('[data-key="block-' + params.get("open") + '"]');
+      // A block's details (details=<action id>), and the first group's tries (expand=1).
+      if (params.get("expand")) click('[data-key^="tries-"]');
+      if (params.get("details")) setTimeout(() => click('[data-key="what-' + params.get("details") + '"], [data-key="try-' + params.get("details") + '"]'), 30);
       // Fill the form as a person would: a choice, a reason, and (with submit) the button.
       if (params.get("choice")) click('[data-key="choice-' + params.get("choice") + '"]');
       const area = document.getElementById("reason");

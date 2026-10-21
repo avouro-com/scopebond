@@ -88,6 +88,26 @@ pub struct RecentBlock {
     /// The one outcome the row shows, and the sentence that stands in for a button (none from an older agent).
     pub outcome: Option<String>,
     pub outcome_text: Option<String>,
+    /// When the coding agent first tried it, the text "Copy details" copies, and the person's request for it (none from an
+    /// older agent). Kept so the panel gets them: it draws what the tray passes on, and a field not named here is dropped.
+    pub first_at: Option<String>,
+    pub copy_details: Option<String>,
+    pub request: Option<serde_json::Value>,
+    /// Why the rule exists, in one line, for the block's details (none when the rule says nothing about itself).
+    pub rule_why: Option<String>,
+}
+
+/// Blocks the panel shows as one row: today's repeats of one action under one rule. `members` index `recent_blocks`,
+/// newest first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlockGroup {
+    pub key: String,
+    pub members: Vec<usize>,
+    pub times: u64,
+    pub first_at: String,
+    pub last_at: String,
+    pub today: bool,
 }
 
 /// The rule's name when the agent sends none (an older agent): never an empty line, never a rule id.
@@ -123,6 +143,8 @@ pub struct TrayModel {
     pub actions: Vec<TrayAction>,
     pub hint: Option<String>,
     pub recent_blocks: Vec<RecentBlock>,
+    /// The rows the panel's Blocked list shows (none from an older agent: each block is its own row).
+    pub blocked_groups: Vec<BlockGroup>,
     /// The line under "Protected" (when the rules were checked, what was blocked today); none otherwise.
     pub detail: Option<String>,
     /// The workspace's name, when the agent knows it.
@@ -429,6 +451,26 @@ mod tests {
         assert_eq!(old.tray.recent_blocks[0].words(), "rm -rf build");
         assert_eq!(old.tray.recent_blocks[0].offers, None);
         assert_eq!(old.tray.blocked_today(), 1, "an older agent: the blocks it listed");
+    }
+
+    #[test]
+    fn the_fields_the_panel_draws_pass_through_the_tray() {
+        // The panel gets the model as the tray serializes it again: a field the tray does not name never reaches it.
+        let json = r#"{"tray":{"state":"protected","headline":"Protected",
+          "recent_blocks":[{"action_id":"a1","summary":"rm","at":"2026-10-21T15:00:00.000Z","what":"rm -rf ../build",
+            "first_at":"2026-10-21T14:58:00.000Z","copy_details":"rm -rf ../build\nRule: Delete","rule_why":"Deny destructive programs.",
+            "request":{"state":"waiting","answered_by":null,"answered_at":null},"outcome":"requested"}],
+          "blocked_groups":[{"key":"Delete\nrm -rf ../build","members":[0],"times":3,"first_at":"2026-10-21T14:58:00.000Z","last_at":"2026-10-21T15:00:00.000Z","today":true}]}}"#;
+        let a = TrayAnswer::parse(json.as_bytes()).unwrap();
+        let again = serde_json::to_value(&a).unwrap();
+        let b = &again["tray"]["recent_blocks"][0];
+        assert_eq!(b["rule_why"], "Deny destructive programs.");
+        assert_eq!(b["copy_details"], "rm -rf ../build\nRule: Delete");
+        assert_eq!(b["first_at"], "2026-10-21T14:58:00.000Z");
+        assert_eq!(b["request"]["state"], "waiting");
+        assert_eq!(again["tray"]["blocked_groups"][0]["times"], 3);
+        assert_eq!(a.tray.blocked_groups[0].members, vec![0]);
+        assert!(TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap().tray.blocked_groups.is_empty(), "an older agent sends none");
     }
 
     #[test]
