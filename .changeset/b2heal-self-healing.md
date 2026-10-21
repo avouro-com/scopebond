@@ -7,3 +7,5 @@ Records waiting to send are now the agent's job alone: the tray stays "Protected
 The agent now repairs this computer's setup as soon as it sees it broken (each cycle, whenever the tray asks, and before every self-check): a Scopebond hook entry a coding agent's settings lost is put back, a second copy is taken out, and autostart that is on but broken is started again (autostart the person turned off stays off); each repair is checked again and recorded as `last_repair` in `status`, the self-check runs once more after a repair, and the tray shows only a repair that failed, as "Scopebond couldn't reconnect to Claude Code" with Repair.
 
 Rules not checked for over an hour no longer turn the tray to "Rules not checked for…": the last-known rules stay in force, the agent checks again at once after a failed check and then after 1, 2, 4, 8 and at most 15 minutes, and Settings' "Rules updated" says when the last check worked.
+
+A self-check that did not pass no longer turns the tray to attention: Settings shows "Last check didn't pass: …" in words (never check ids), the line stays until a check passes, and "Check now" names what it found in the same words.

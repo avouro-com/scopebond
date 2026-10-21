@@ -238,6 +238,8 @@ export interface TrayInput {
   /** The coding tools whose Scopebond hook the agent could not put back ("Claude Code"): the one setup problem the person
    *  sees (the agent repairs the rest by itself, at once). */
   repairFailed?: string[] | null;
+  /** The last self-check's result, kept until a check passes: a quiet Settings line while it did not pass. */
+  selfCheck?: { ok: boolean; failed: string[] } | null;
 }
 
 const MIN = 60_000;
@@ -389,8 +391,6 @@ export function trayModel(input: TrayInput): TrayModel {
   } else if (offline) {
     state = offlineFor > OFFLINE_ATTENTION_MS ? "attention" : "offline";
     headline = pending ? `Workspace unreachable: ${pending} record${pending === 1 ? "" : "s"} waiting` : "Workspace unreachable: still checking actions";
-  } else if (health.level === "amber" && health.fix?.route === "/maintain") {
-    state = "attention"; headline = health.headline; fix = ACTIONS.check_now;
   } else {
     state = "protected"; headline = "Protected";
   }
@@ -489,6 +489,9 @@ function computerRows(input: TrayInput, state: TrayState, updatedAt: number | nu
   if (updatedAt) rows.push({ label: "Rules updated", value: ago(updatedAt, input.now) });
   else if (input.rules && !input.rules.managed) rows.push({ label: "Rules updated", value: "Using this computer's own rules" });
   if (delivery) rows.push({ label: "Delivery", value: delivery });
+  // A self-check that did not pass, until one does: nothing in it is the person's to do (setup problems are repaired at once).
+  const failedChecks = input.selfCheck && !input.selfCheck.ok ? selfCheckWords(input.selfCheck.failed.filter((id) => !OWN_LINE_CHECKS.has(id))) : [];
+  if (failedChecks.length) rows.push({ label: "Self-check", value: `Last check didn't pass: ${failedChecks.join("; ")}` });
   const failed = input.version.failedUpdate ?? null;
   const version = `Scopebond ${input.version.agent}`;
   rows.push({
@@ -570,5 +573,25 @@ export function supportBundle(i: SupportInput, scrub: (text: string) => string =
 export function checkResult(selfCheck: { ok: boolean; failed: string[] } | null, error: string | null): string {
   if (error) return `Check could not finish: ${error}`.slice(0, 200);
   if (!selfCheck) return "Checked just now: this computer is not connected to a workspace, so only local checks ran";
-  return selfCheck.ok ? "Checked just now: all good" : `Check found a problem: ${selfCheck.failed[0] ?? "see status"}`;
+  return selfCheck.ok ? "Checked just now: all good" : `Check found a problem: ${selfCheckWords(selfCheck.failed)[0] ?? "see status"}`;
+}
+
+/** Self-check items with a line of their own elsewhere (records waiting, the connection's renewal): not repeated. */
+const OWN_LINE_CHECKS = new Set(["queue", "credential"]);
+const CHECK_WORDS: Readonly<Record<string, string>> = {
+  hook_entry: "a coding tool's settings lost the Scopebond hook",
+  hook_starts: "the Scopebond hook can't start",
+  hook_duplicates: "the Scopebond hook runs more than once",
+  autostart: "Scopebond doesn't start with sign-in",
+  queue: "records are waiting to send",
+  credential: "the connection to the workspace needs renewing",
+  signing_key: "this computer's signing key is missing",
+  signature: "the workspace couldn't verify this computer's check",
+};
+
+/** A self-check's failed items in words a person reads (never ids), each once. */
+export function selfCheckWords(failed: readonly string[]): string[] {
+  const words = failed.map((id) => Object.prototype.hasOwnProperty.call(CHECK_WORDS, id) ? CHECK_WORDS[id]
+    : id.startsWith("workspace_") ? "the workspace didn't answer" : "one of its checks didn't pass");
+  return [...new Set(words)];
 }

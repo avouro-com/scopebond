@@ -97,7 +97,7 @@ test("rows without data are left out, never shown as unknown", () => {
 
 test("Check now always says what it found", () => {
   assert.equal(checkResult({ ok: true, failed: [] }, null), "Checked just now: all good");
-  assert.equal(checkResult({ ok: false, failed: ["autostart"] }, null), "Check found a problem: autostart");
+  assert.equal(checkResult({ ok: false, failed: ["autostart"] }, null), "Check found a problem: Scopebond doesn't start with sign-in", "in words, never an id");
   assert.match(checkResult(null, null), /not connected/);
   assert.match(checkResult(null, "timeout"), /could not finish: timeout/);
 });

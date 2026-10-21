@@ -778,6 +778,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       rulesUpdatedAt: lastGoodCheck(meta),
       updated: recentUpdate(updatedHere, now),
       repairFailed: (lastRepair?.failed ?? []).map((h) => toolName(h) ?? h),
+      selfCheck: lastSelfCheck ? { ok: lastSelfCheck.ok, failed: lastSelfCheck.failed } : null,
     });
     // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
     return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
