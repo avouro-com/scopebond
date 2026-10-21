@@ -28,7 +28,7 @@
 import { canonProgram, decomposeShell, gitArgs, shellScriptArg, splitCommandLine, type SimpleCommand } from "./shell.js";
 import { scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { scan, flagValue } from "./scan.js";
-import { launched, skipOptions } from "./launchers.js";
+import { skipOptions } from "./launchers.js";
 
 export interface InstallAction { action_type: "software.install"; params: Record<string, unknown> }
 
@@ -268,27 +268,85 @@ function jsInstalls(sc: SimpleCommand, manager: "npm" | "pnpm" | "yarn" | "bun")
   return out;
 }
 
+/** The runner options that never take a value, so a word after one is not its value. */
+const JS_RUNNER_SWITCHES = new Set(["-y", "--yes", "--no", "--no-yes", "--no-install", "--ignore-existing", "-q", "--quiet", "-s", "--silent", "--offline", "--prefer-offline",
+  "--prefer-online", "--ws", "--workspaces", "--include-workspace-root", "--if-present", "-g", "--global", "--verbose", "--json", "--parseable", "--no-color",
+  "--foreground-scripts", "--legacy-peer-deps", "--force", "-f", "--bun", "--no-bun"]);
+const PY_RUNNER_SWITCHES = new Set(["-q", "--quiet", "-v", "--verbose", "--isolated", "--offline", "--no-cache", "-n", "--refresh", "-U", "--upgrade", "--native-tls",
+  "--no-progress", "--no-config", "--preview", "--no-python-downloads", "--managed-python", "--no-managed-python", "--no-build", "--no-sources", "--compile-bytecode",
+  "--reinstall", "--system-site-packages", "--include-deps", "--force", "--no-color"]);
+/** The subcommand of a manager that runs a package (`npm exec`, `pnpm dlx`, `yarn dlx`, `bun x`, `pipx run`); none for a
+ *  runner of its own (`npx`, `bunx`, `uvx`). */
+const RUNNER_SUBS: Readonly<Record<string, readonly string[]>> = { npm: ["exec", "x"], pnpm: ["dlx"], yarn: ["dlx"], bun: ["x"], pipx: ["run"] };
+
+interface RunnerCall { packages: string[]; command?: string; flags: Map<string, string | true> }
+
+/**
+ * What a package runner is asked to run, read from its own options only. The rules:
+ *   - The runner's options end at its command: the first word that is not an option or an option's value, or the word after
+ *     `--`. Every word after the command is the command's own argument, never a package and never a runner option
+ *     (`npx vite --port 4333`, `npx tsc -p tsconfig.json`, `npx example-tool --yes`).
+ *   - Before the command, only the runner's package option names packages: `-p`/`--package` for npx, `npm exec`, `pnpm dlx`,
+ *     `yarn dlx` and bunx; `--from`/`--spec` for uvx and `pipx run`. Each one names one (`npx -p typescript -p ts-node …`).
+ *     With any, the command is a program those packages provide and is not itself a package (`npx -p typescript tsc`).
+ *   - A runner option known to take a value has it skipped (`--registry <url>`); a known switch takes none (`-y`, `--yes`).
+ *   - An option this reader does not know, followed by a word: when the runner's words go on to a `--`, the word is read as
+ *     that option's value and the command is what follows the `--` (`npx --flag value -- tool`); otherwise the word is read as
+ *     the command (`npx --flag tool`), which records a package rather than missing one.
+ */
+function runnerCall(argv: readonly string[], subs: readonly string[], packageFlags: readonly string[], valued: ReadonlySet<string>, switches: ReadonlySet<string>): RunnerCall {
+  const packages: string[] = [];
+  const flags = new Map<string, string | true>();
+  let expectSub = subs.length > 0;
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "--") return { packages, command: argv[i + 1], flags };
+    if (!t.startsWith("-") || t === "-") {
+      if (expectSub && subs.includes(t)) { expectSub = false; continue; }
+      return { packages, command: t, flags };
+    }
+    const eq = t.startsWith("--") ? t.indexOf("=") : -1;
+    const name = eq > 0 ? t.slice(0, eq) : t;
+    const inline = eq > 0 ? t.slice(eq + 1) : undefined;
+    if (packageFlags.includes(name)) { const v = inline ?? argv[++i]; if (v !== undefined) packages.push(v); continue; }
+    if (valued.has(name)) { flags.set(name, inline ?? argv[++i] ?? ""); continue; }
+    flags.set(name, inline ?? true);
+    const next = argv[i + 1];
+    if (inline === undefined && !switches.has(name) && next !== undefined && !next.startsWith("-") && !(expectSub && subs.includes(next)) && argv.indexOf("--", i + 2) >= 0) {
+      flags.set(name, next);
+      i++;
+    }
+  }
+  return { packages, flags };
+}
+
 /** A package run through a runner that installs it first when it is missing: `npx`, `pnpm dlx`, `yarn dlx`, `bunx`, `npm exec`,
- *  `uvx`, `uv tool run`, `pipx run`. */
+ *  `uvx`, `uv tool run`, `pipx run`. One action per package the runner's options name, or one for its command. */
 function runner(sc: SimpleCommand, kind: "npx" | "pnpm" | "yarn" | "bun" | "npm" | "uvx" | "pipx"): Facts[] {
   const py = kind === "uvx" || kind === "pipx";
-  const s = scan(sc.argv, py ? PY_VALUED : JS_VALUED);
+  const program = canonProgram(sc.program);
+  const subs = Object.hasOwn(RUNNER_SUBS, program) ? RUNNER_SUBS[program] : [];
+  const call = py
+    ? runnerCall(sc.argv, subs, ["--from", "--spec"], new Set(PY_VALUED.filter((f) => f !== "--from" && f !== "--spec")), PY_RUNNER_SWITCHES)
+    : runnerCall(sc.argv, subs, ["-p", "--package"], new Set(JS_VALUED.filter((f) => f !== "-p" && f !== "--package")), JS_RUNNER_SWITCHES);
+  const s = { positionals: [], flags: call.flags };
   if (s.flags.has("--no") || s.flags.has("--no-install") || s.flags.has("--offline")) return [];
-  const yes = s.flags.has("-y") || s.flags.has("--yes");
   // `npm exec` installs without asking only with --yes (or when nothing can ask: then npm assumes yes).
-  const packageFlag = py ? flagValue(s, "--from", "--spec") : flagValue(s, "-p", "--package");
-  const l = launched(sc);
-  const spec = packageFlag ?? l?.spec;
-  if (spec === undefined) return [];
+  const yes = s.flags.has("-y") || s.flags.has("--yes");
+  const specs = call.packages.length > 0 ? call.packages : call.command !== undefined ? [call.command] : [];
   const route: Route = py ? (kind === "uvx" ? "uv" : "pipx") : kind === "npm" || kind === "npx" ? "npx" : kind;
   const via = kind === "uvx" ? "uvx" : kind === "npm" ? "npm" : kind;
-  const parsed = py ? pySpec(spec.replace(/@([^@]+)$/, "==$1")) : jsSpec(spec);
-  if (!parsed) return [];
   const registry = py ? hostOf(flagValue(s, "-i", "--index-url", "--default-index", "--index") ?? assigned(sc, "UV_INDEX_URL", "UV_DEFAULT_INDEX", "PIP_INDEX_URL")) : jsRegistry(sc, s);
-  return [{
-    route, ecosystem: py ? "pypi" : "npm", verb: "run", via, ...parsed,
-    ...(parsed.source_domain === undefined && registry ? { source_domain: registry } : {}), ...(yes ? { auto_confirm: true as const } : {}),
-  }];
+  const out: Facts[] = [];
+  for (const spec of specs.slice(0, MAX_ACTIONS)) {
+    const parsed = py ? pySpec(spec.replace(/@([^@]+)$/, "==$1")) : jsSpec(spec);
+    if (!parsed) continue;
+    out.push({
+      route, ecosystem: py ? "pypi" : "npm", verb: "run", via, ...parsed,
+      ...(parsed.source_domain === undefined && registry ? { source_domain: registry } : {}), ...(yes ? { auto_confirm: true as const } : {}),
+    });
+  }
+  return out;
 }
 
 function pyInstalls(sc: SimpleCommand, route: "pip" | "uv" | "poetry" | "pipx", argv: readonly string[], via: string, verb: Verb, global = false): Facts[] {

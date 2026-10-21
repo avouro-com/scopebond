@@ -546,6 +546,479 @@
       ]
     },
     {
+      "id": "npx-yes-versioned-initializer",
+      "input": {
+        "shell": {
+          "command": "npx --yes create-vite@latest app"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "create-vite",
+          "version": "latest",
+          "auto_confirm": true,
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-y-scoped-version-then-command-flag",
+      "input": {
+        "shell": {
+          "command": "npx -y @example/pkg@1.2.3 --flag"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "@example/pkg",
+          "version": "1.2.3",
+          "auto_confirm": true,
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-command-option-value-not-a-package",
+      "input": {
+        "shell": {
+          "command": "npx vite --port 4333"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "vite",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-command-c-option-not-a-package",
+      "input": {
+        "shell": {
+          "command": "npx tsc -c tsconfig.unit.json"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "tsc",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-command-p-option-not-a-package",
+      "input": {
+        "shell": {
+          "command": "npx tsc -p tsconfig.unit.json --noEmit"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "tsc",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-command-short-port-not-a-package",
+      "input": {
+        "shell": {
+          "command": "npx example-serve -p 4333 dist"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "example-serve",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-command-yes-is-the-command-own",
+      "input": {
+        "shell": {
+          "command": "npx example-tool --yes"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "example-tool",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-command-registry-is-the-command-own",
+      "input": {
+        "shell": {
+          "command": "npx example-tool --registry https://registry.example.test"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "example-tool",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-command-no-is-the-command-own",
+      "input": {
+        "shell": {
+          "command": "npx example-tool --no"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "example-tool",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "pnpm-dlx-command-arguments",
+      "input": {
+        "shell": {
+          "command": "pnpm dlx shadcn@latest add button"
+        }
+      },
+      "expect": [
+        {
+          "route": "pnpm",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "pnpm",
+          "name": "shadcn",
+          "version": "latest",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-package-flag-names-the-package",
+      "input": {
+        "shell": {
+          "command": "npx -p typescript tsc --version"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "typescript",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-two-package-flags",
+      "input": {
+        "shell": {
+          "command": "npx -p typescript -p ts-node ts-node --esm x.ts"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "typescript",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        },
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "ts-node",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-package-flag-with-call",
+      "input": {
+        "shell": {
+          "command": "npx -p @example/say -c 'example-say hi'"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "@example/say",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npm-exec-package-flag-then-dashdash",
+      "input": {
+        "shell": {
+          "command": "npm exec -p typescript -- tsc -p tsconfig.json"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npm",
+          "name": "typescript",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npm-exec-yes-dashdash-command-options",
+      "input": {
+        "shell": {
+          "command": "npm exec --yes -- vite --port 4333"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npm",
+          "name": "vite",
+          "auto_confirm": true,
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "yarn-dlx-package-flag",
+      "input": {
+        "shell": {
+          "command": "yarn dlx -p typescript tsc --project tsconfig.json"
+        }
+      },
+      "expect": [
+        {
+          "route": "yarn",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "yarn",
+          "name": "typescript",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "bunx-command-options-not-packages",
+      "input": {
+        "shell": {
+          "command": "bunx vite --port 4333 -p 1"
+        }
+      },
+      "expect": [
+        {
+          "route": "bun",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "bun",
+          "name": "vite",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "bun-x-command-options-not-packages",
+      "input": {
+        "shell": {
+          "command": "bun x example-tool --package other"
+        }
+      },
+      "expect": [
+        {
+          "route": "bun",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "bun",
+          "name": "example-tool",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-registry-before-command",
+      "input": {
+        "shell": {
+          "command": "npx --registry https://registry.example.test example-tool --port 1"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "example-tool",
+          "source_domain": "registry.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-unknown-option-then-command",
+      "input": {
+        "shell": {
+          "command": "npx --example-flag example-tool run"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "example-tool",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "npx-unknown-option-value-then-dashdash",
+      "input": {
+        "shell": {
+          "command": "npx --example-flag on -- example-tool --port 1"
+        }
+      },
+      "expect": [
+        {
+          "route": "npx",
+          "ecosystem": "npm",
+          "verb": "run",
+          "via": "npx",
+          "name": "example-tool",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "uvx-from-names-the-package",
+      "input": {
+        "shell": {
+          "command": "uvx --from example-cli==1.0 example run --spec other"
+        }
+      },
+      "expect": [
+        {
+          "route": "uv",
+          "ecosystem": "pypi",
+          "verb": "run",
+          "via": "uvx",
+          "name": "example-cli",
+          "version": "1.0",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "uvx-command-options-not-packages",
+      "input": {
+        "shell": {
+          "command": "uvx example-lint check --from other --python 3.12"
+        }
+      },
+      "expect": [
+        {
+          "route": "uv",
+          "ecosystem": "pypi",
+          "verb": "run",
+          "via": "uvx",
+          "name": "example-lint",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "pipx-run-command-options-not-packages",
+      "input": {
+        "shell": {
+          "command": "pipx run example-say --spec other hi"
+        }
+      },
+      "expect": [
+        {
+          "route": "pipx",
+          "ecosystem": "pypi",
+          "verb": "run",
+          "via": "pipx",
+          "name": "example-say",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
       "id": "pip-exact",
       "input": {
         "shell": {
