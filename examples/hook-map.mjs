@@ -39,7 +39,7 @@ await hook("Bash `git push origin main` (push to a protected branch → deny)",
   { tool_name: "Bash", tool_input: { command: "git push origin main" } });
 await hook("Read a workspace file (allowed)",
   { tool_name: "Read", tool_input: { file_path: "/repo/src/app.ts" }, cwd: "/repo" });
-await hook("Bash `rm -rf build` (destructive program → deny)",
-  { tool_name: "Bash", tool_input: { command: "rm -rf build" } });
+await hook("Bash `rm -rf ~/projects` (a delete outside the working folder → deny)",
+  { tool_name: "Bash", tool_input: { command: "rm -rf ~/projects" } });
 await hook("WebSearch (no taxonomy mapping → observed, not evaluated)",
   { tool_name: "WebSearch", tool_input: { query: "scopebond" } });

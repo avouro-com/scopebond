@@ -9,6 +9,7 @@
 //
 // Pure and deterministic, like the mapper: it reads the command text and the working folder it is given, never the disk.
 
+import { trimChars } from "./text.js";
 import type { Mapped } from "./map.js";
 import { canonProgram, decomposeShell, type SimpleCommand } from "./shell.js";
 
@@ -251,7 +252,7 @@ function targetWords(prog: string, argv: string[]): string[] {
  *  it more arguments (`xargs`) makes its targets unknown. */
 function wrappedElsewhere(sc: SimpleCommand): boolean {
   const words = sc.raw.trim().split(/\s+/);
-  const at = words.findIndex((w) => canonProgram(w.replace(/^['"]+|['"]+$/g, "")) === canonProgram(sc.program));
+  const at = words.findIndex((w) => canonProgram(trimChars(w, "'\"")) === canonProgram(sc.program));
   return words.slice(0, Math.max(at, 0)).some((w) => {
     const name = canonProgram(w);
     return name === "chroot" || name === "xargs" || /^--chdir/.test(w) || /^-[A-Za-z]*[CD]/.test(w);

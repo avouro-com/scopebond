@@ -13,7 +13,7 @@ import { posix } from "node:path";
 import { digest, keyedDigest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
-import { textOf } from "./text.js";
+import { textOf, trimChars } from "./text.js";
 import { derivePackMcp, derivePackTargets, type PackAction } from "./packs.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
 import { packagesToCheck } from "./typed-ops.js";
@@ -1431,7 +1431,7 @@ function windowsParts(text: string, quoting: "cmd" | "powershell"): Array<{ text
 
 /** Whether a part starts with a search program (`grep`, `rg`, `findstr`, `Select-String`, `git grep`, …). */
 function isSearchPart(part: string): boolean {
-  const words = part.trim().split(/\s+/).map((w) => w.replace(/^["']+|["']+$/g, ""));
+  const words = part.trim().split(/\s+/).map((w) => trimChars(w, "\"'"));
   const prog = (words[0] ?? "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.exe$/, "");
   if (SEARCH_PROGRAMS.has(prog)) return true;
   if (prog !== "git") return false;
@@ -1483,8 +1483,8 @@ function runFolder(runDir: string, cwd?: string): string {
 function shownCommand(sc: SimpleCommand, runDir: string, cwd: string | undefined, scrub: (text: string) => string): ShownCommand {
   // A wrapper written before the program (`sudo`, `env X=1`, `X=1`) changes how it runs, so it stays.
   const raw = sc.raw.trim().split(/\s+/);
-  const at = raw.findIndex((w) => w.replace(/^["']+|["']+$/g, "") === sc.programRaw);
-  const prefix = at > 0 ? raw.slice(0, at).map((w) => w.replace(/^["']+|["']+$/g, "")) : [];
+  const at = raw.findIndex((w) => trimChars(w, "\"'") === sc.programRaw);
+  const prefix = at > 0 ? raw.slice(0, at).map((w) => trimChars(w, "\"'")) : [];
   // `build/` and `build` name the same place; `/` and `C:/` keep theirs. (A loop: a pattern anchored at the end takes
   // quadratic time on a long run of slashes.)
   const unslashed = (w: string): string => {

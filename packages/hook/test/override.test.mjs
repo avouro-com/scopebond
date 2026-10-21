@@ -252,7 +252,7 @@ test("no tray and no window: the denial's line for the person says where to allo
     assert.equal(later.asked.length, 1, "the agent was asked once");
     const person = later.reason.split("\n").find((l) => l.startsWith("For the person: "));
     assert.match(person, /allow it with a reason from the Scopebond icon in the notification area \(its recent blocks: choose the record below\)/);
-    assert.ok(person.includes(link), "the computer's page in the workspace, when the agent knows it");
+    assert.match(person, /\(https:\/\/app\.scopebond\.example\/computers\/c-1\)/, "the computer's page in the workspace, when the agent knows it");
     assert.match(later.reason, /\nRecord: \S+/, "the record the person picks");
     assert.doesNotMatch(later.reason, /not running/);
     const asking = await run(ask.dir, bash("rm -rf ../build"), { answers: [{ decision: "unavailable", later: true }] });

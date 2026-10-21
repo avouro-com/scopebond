@@ -3,6 +3,7 @@
 // hook ships has its own name: a workspace rule's, else the clause's own (Scopebond's checks, the starter rules a workspace
 // does not name, blocked services), else a rule pack's (its rule's title or description, else what its action types do).
 // Only a block nothing names reads "A Scopebond rule", never an empty line or a rule id.
+import { trimChars } from "./text.js";
 import type { Pack } from "@scopebond/policy-schema/pack";
 import { RULE_OF_CLAUSE, type AnyManagedRuleId } from "./managed.js";
 import { activePacks } from "./packs.js";
@@ -115,7 +116,8 @@ export const checkOfCode = (code: string | null | undefined): string | null => (
 /** A title from a rule's description: its first sentence, without a leading "Record", "Deny" or "Block", in sentence case and
  *  at most 60 characters (cut at a word). Null when nothing is left. */
 function titleOfDescription(text: string): string | null {
-  let s = text.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s/)[0].replace(/[.!?]+$/, "").trim();
+  let s = text.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s/)[0];
+  s = trimChars(s, ".!? ");
   s = s.replace(/^(?:record|deny|block|refuse|stop|never)\s+/i, "");
   if (!s) return null;
   s = s[0].toUpperCase() + s.slice(1);
