@@ -196,7 +196,7 @@ fn build_menu(app: &AppHandle, spec: &[Entry]) -> tauri::Result<Menu<tauri::Wry>
 
 fn create_tray(app: &AppHandle, shared: &Arc<Shared>) -> tauri::Result<tauri::tray::TrayIcon> {
     let (s_menu, s_tray) = (shared.clone(), shared.clone());
-    let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Problems });
+    let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Blocks });
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon_image(IconState::Working))
         .tooltip("Scopebond — starting")
@@ -967,8 +967,8 @@ fn panel_command(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> 
         "autostart" => Command::ToggleAutostart,
         "about" => Command::About,
         "hide_icon" => Command::HideIcon,
-        other => match other.strip_prefix("notifications:").and_then(|v| Notifications::ALL.iter().find(|n| n.as_str() == v)) {
-            Some(n) => Command::Notifications(*n),
+        other => match other.strip_prefix("notifications:").and_then(Notifications::from_choice) {
+            Some(n) => Command::Notifications(n),
             None => return false,
         },
     };

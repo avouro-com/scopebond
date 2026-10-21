@@ -53,7 +53,14 @@ export interface TrayModel {
   asked?: AskedItem[];
   /** The hook's question waiting for the person now, when the tray is listening (live-prompt.ts). */
   pending?: LiveQuestion | null;
+  /** Settings' "This computer" rows (computerRows), and the one client version ("Scopebond 0.11.5"); absent from an older
+   *  agent. */
+  computer_rows?: ComputerRow[];
+  version_label?: string;
 }
+
+/** A fact about this computer for Settings; `items` are what the row lists when opened (the rule packs in force). */
+export interface ComputerRow { label: string; value: string; items?: string[] }
 
 /** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes, or
  *  always (for `always_days`, after an admin approves when `always_needs_admin`), or ask an admin. */
@@ -187,6 +194,10 @@ export interface TrayInput {
   notice?: string | null;
   /** The workspace lets a person ask an admin under at least one rule. */
   canAsk?: boolean;
+  /** The rule packs in force on this computer, for Settings' Protection row. */
+  packs?: Array<{ id: string; title: string; version: string }> | null;
+  /** When the rules were last checked successfully (a failed check never moves it); absent: `rules.checked_at`. */
+  rulesUpdatedAt?: number | null;
 }
 
 const MIN = 60_000;
@@ -376,12 +387,13 @@ export function trayModel(input: TrayInput): TrayModel {
   const where = [input.workspace?.name, input.workspace?.environment].filter(Boolean).join(" · ");
   const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : headline;
   const tooltip = `Scopebond — ${label}`;
-  // One line under "Protected": when the rules were last checked and what was blocked today (the rows say the rest).
+  // One line under "Protected": what was blocked today and when the rules were last updated (Settings says the rest).
+  const updatedAt = input.rulesUpdatedAt !== undefined ? input.rulesUpdatedAt : input.rules?.checked_at ?? null;
   let detail: string | null = null;
   if (state === "protected") {
-    const checked = input.rules?.checked_at ? `Rules checked ${ago(input.rules.checked_at, now)}` : input.rules && !input.rules.managed ? "Using this computer's own rules" : null;
     const blocked = input.today ? (input.today.blocked ? `${count(input.today.blocked)} blocked today` : "nothing blocked today") : null;
-    detail = [checked, blocked].filter(Boolean).join(" · ") || null;
+    const checked = updatedAt ? `rules updated ${ago(updatedAt, now)}` : input.rules && !input.rules.managed ? "using this computer's own rules" : null;
+    detail = [blocked, checked].filter(Boolean).join(" · ") || null;
     if (detail) detail = detail[0].toUpperCase() + detail.slice(1);
   }
   const recent = (input.recentBlocks ?? []).slice(0, RECENT_BLOCKS_MAX);
@@ -394,7 +406,38 @@ export function trayModel(input: TrayInput): TrayModel {
     workspace: input.workspace?.name ?? null,
     today: input.today ? { actions: input.today.actions, blocked: input.today.blocked } : null,
     can_ask: input.canAsk ?? false,
+    computer_rows: computerRows(input, state, updatedAt, updateAvailable),
+    version_label: `Scopebond ${input.version.agent}`,
   };
+}
+
+/** Settings' "This computer", as facts a person reads (no queues, no internals), each only when known:
+ *  Protection ("On · 9 rules blocking · 4 packs", the packs listed when opened), Workspace ("Avouro · Production"), Rules
+ *  updated (the last successful check) and Version ("Scopebond 0.11.4 · up to date": one version for the whole client). */
+function computerRows(input: TrayInput, state: TrayState, updatedAt: number | null, updateAvailable: boolean): ComputerRow[] {
+  const rows: ComputerRow[] = [];
+  const plural = (n: number, one: string, many: string) => `${count(n)} ${n === 1 ? one : many}`;
+  const packs = input.packs ?? [];
+  const counts = [
+    input.rules ? plural(input.rules.block, "rule blocking", "rules blocking") : null,
+    packs.length ? plural(packs.length, "pack", "packs") : null,
+  ].filter(Boolean);
+  const on = state === "problem" ? "Needs attention" : "On";
+  rows.push({ label: "Protection", value: [on, ...counts].join(" · "), ...(packs.length ? { items: packs.map((p) => `${p.title} ${p.version}`) } : {}) });
+  if (input.workspace?.name) rows.push({ label: "Workspace", value: [input.workspace.name, input.workspace.environment].filter(Boolean).join(" · ") });
+  else if (!input.status.delivery.connected) rows.push({ label: "Workspace", value: "Not connected: using this computer's own rules" });
+  if (updatedAt) rows.push({ label: "Rules updated", value: ago(updatedAt, input.now) });
+  else if (input.rules && !input.rules.managed) rows.push({ label: "Rules updated", value: "Using this computer's own rules" });
+  const failed = input.version.failedUpdate ?? null;
+  const version = `Scopebond ${input.version.agent}`;
+  rows.push({
+    label: "Version",
+    value: updateAvailable ? `${version} · ${input.version.recommendedAgent ?? "a newer version"} ready to install`
+      : failed ? `${version} · the update to ${failed.version} didn't install; trying again later`
+      : input.version.policy === "hold" ? `${version} · updates set by your workspace`
+      : `${version} · up to date`,
+  });
+  return rows;
 }
 
 /** What "Check now" says afterwards, for five seconds: never silence. */

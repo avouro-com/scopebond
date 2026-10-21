@@ -3,12 +3,13 @@
 //! - one when the state gets worse: at once for a problem or a lost connection to the workspace, and for "needs
 //!   attention" only once it has lasted five minutes, so sleep and wake or a short hiccup do not flap;
 //! - one when it is protected again after one of those;
-//! - with *Blocks and problems*, one for a new block (with *Unblock…* when the person may act on it); further blocks within
+//! - with notifications on, one for a new block (with *Unblock…* when the person may act on it); further blocks within
 //!   a minute of that one wait and are told together ("3 actions blocked in the last minute");
 //! - one when an admin answers one of the person's requests ("Approved: ask Claude Code to try again"), unless
 //!   notifications are off: the person asked and is waiting for it;
 //! - one per block, never again for the coding agent's retries of it (the agent folds them into the block);
-//! - nothing about blocks with *Problems only*, and nothing at all with *Off*.
+//! - with notifications off, only what the person must act on: a problem (protection is off, the workspace refused this
+//!   computer) and the word that it is fixed. Never a block, an admin's answer or "needs attention".
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -161,7 +162,7 @@ impl Notifier {
             self.last_block_toast = Some(now);
         }
         if setting == Notifications::Off {
-            out.clear();
+            out.retain(|t| matches!(t.kind, Kind::Problem | Kind::Recovered));
         }
         out
     }
@@ -232,63 +233,65 @@ mod tests {
 
     const NONE: [Kind; 0] = [];
     use IconState::*;
-    use Notifications::{Blocks, Off, Problems};
+    use Notifications::{Blocks, Off};
 
     #[test]
     fn a_problem_is_told_once_and_the_recovery_once() {
         let mut r = Run::new();
-        assert_eq!(r.at(0, Protected, Problems), NONE);
-        assert_eq!(r.at(30, Problem, Problems), [Kind::Problem]);
+        assert_eq!(r.at(0, Protected, Blocks), NONE);
+        assert_eq!(r.at(30, Problem, Blocks), [Kind::Problem]);
         for t in 31..100 {
-            assert_eq!(r.at(t, Problem, Problems), NONE, "once");
+            assert_eq!(r.at(t, Problem, Blocks), NONE, "once");
         }
-        assert_eq!(r.at(100, Protected, Problems), [Kind::Recovered]);
-        assert_eq!(r.at(130, Protected, Problems), NONE);
+        assert_eq!(r.at(100, Protected, Blocks), [Kind::Recovered]);
+        assert_eq!(r.at(130, Protected, Blocks), NONE);
     }
 
     #[test]
     fn attention_waits_five_minutes() {
         let mut r = Run::new();
-        assert_eq!(r.at(0, Attention, Problems), NONE);
-        assert_eq!(r.at(299, Attention, Problems), NONE);
-        assert_eq!(r.at(300, Attention, Problems), [Kind::Attention]);
+        assert_eq!(r.at(0, Attention, Blocks), NONE);
+        assert_eq!(r.at(299, Attention, Blocks), NONE);
+        assert_eq!(r.at(300, Attention, Blocks), [Kind::Attention]);
         // A short spell that clears before five minutes says nothing, and no recovery either.
         let mut r = Run::new();
-        r.at(0, Attention, Problems);
-        assert_eq!(r.at(120, Protected, Problems), NONE);
-        assert_eq!(r.at(200, Attention, Problems), NONE);
-        assert_eq!(r.at(499, Attention, Problems), NONE, "the five minutes start again");
-        assert_eq!(r.at(500, Attention, Problems), [Kind::Attention]);
+        r.at(0, Attention, Blocks);
+        assert_eq!(r.at(120, Protected, Blocks), NONE);
+        assert_eq!(r.at(200, Attention, Blocks), NONE);
+        assert_eq!(r.at(499, Attention, Blocks), NONE, "the five minutes start again");
+        assert_eq!(r.at(500, Attention, Blocks), [Kind::Attention]);
     }
 
     #[test]
     fn offline_and_working_are_not_worth_a_notification() {
         let mut r = Run::new();
         for t in 0..1000 {
-            assert_eq!(r.at(t, if t % 2 == 0 { Offline } else { Working }, Problems), NONE);
+            assert_eq!(r.at(t, if t % 2 == 0 { Offline } else { Working }, Blocks), NONE);
         }
     }
 
     #[test]
     fn worse_again_is_told_and_better_is_not() {
         let mut r = Run::new();
-        assert_eq!(r.at(0, Problem, Problems), [Kind::Problem]);
-        assert_eq!(r.at(400, Attention, Problems), NONE, "eased, still not protected");
-        assert_eq!(r.at(410, Disconnected, Problems), [Kind::Problem]);
-        assert_eq!(r.at(420, Protected, Problems), [Kind::Recovered]);
+        assert_eq!(r.at(0, Problem, Blocks), [Kind::Problem]);
+        assert_eq!(r.at(400, Attention, Blocks), NONE, "eased, still not protected");
+        assert_eq!(r.at(410, Disconnected, Blocks), [Kind::Problem]);
+        assert_eq!(r.at(420, Protected, Blocks), [Kind::Recovered]);
     }
 
     #[test]
-    fn off_means_nothing() {
+    fn off_keeps_only_what_the_person_must_act_on() {
         let mut r = Run::new();
-        assert_eq!(r.at(0, Problem, Off), NONE);
-        assert_eq!(r.at(10, Protected, Off), NONE);
-        r.blocks(20, &[block("a")], Off);
-        assert!(r.blocks(30, &[block("b"), block("a")], Off).is_empty());
+        assert_eq!(r.at(0, Problem, Off), [Kind::Problem], "protection is off: always told");
+        assert_eq!(r.at(10, Protected, Off), [Kind::Recovered]);
+        assert_eq!(r.at(20, Attention, Off), NONE);
+        assert_eq!(r.at(400, Attention, Off), NONE, "needs attention is not a must-act alert");
+        r.blocks(500, &[block("a")], Off);
+        assert!(r.blocks(510, &[block("b"), block("a")], Off).is_empty(), "no blocks");
     }
 
     #[test]
-    fn a_new_block_is_told_once_with_problems_only_none() {
+    fn a_new_block_is_told_once_and_none_with_notifications_off() {
         let mut r = Run::new();
         // Blocks from before the tray started are not announced.
         assert!(r.blocks(0, &[block("a")], Blocks).is_empty());
@@ -297,7 +300,7 @@ mod tests {
         assert_eq!(toasts[0].title, "Blocked: rm -rf b");
         assert_eq!(toasts[0].text, "A Scopebond rule", "no rule name from the agent: a plain name, never the rule id");
         assert!(r.blocks(100, &[block("b"), block("a")], Blocks).is_empty(), "once");
-        assert!(r.blocks(200, &[block("c"), block("b")], Problems).is_empty(), "problems only: no blocks");
+        assert!(r.blocks(200, &[block("c"), block("b")], Off).is_empty(), "off: no blocks");
         assert_eq!(r.blocks(300, &[block("d"), block("c")], Blocks).len(), 1, "c was seen meanwhile");
     }
 
@@ -318,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn an_admins_answer_to_a_request_is_told_once_with_blocks_and_problems() {
+    fn an_admins_answer_to_a_request_is_told_once_unless_notifications_are_off() {
         let req = |state: &str| AskedItem { id: "req_1".into(), what: "rm -rf ./dist".into(), state: state.into(), answered_by: Some("morgan@acme.test".into()), ..Default::default() };
         let mut w = RequestWatch::new();
         assert!(w.observe(&[req("approved")], Blocks).is_empty(), "already answered when the tray started");
@@ -336,10 +339,7 @@ mod tests {
         let t = w.observe(&[req("approved"), declined.clone()], Blocks);
         assert_eq!(t[0].title, "Your request was declined");
         assert_eq!(t[0].text, "rm -rf ./dist · by morgan@acme.test · \u{201c}Use the clean script\u{201d}");
-        // An admin's answer is told whatever the setting, unless notifications are off: the person asked and is waiting.
-        let mut problems = RequestWatch::new();
-        problems.observe(&[AskedItem { state: "waiting".into(), ..declined.clone() }], Problems);
-        assert_eq!(problems.observe(&[declined.clone()], Problems).len(), 1, "problems only: still told");
+        // An admin's answer is told while notifications are on: the person asked and is waiting.
         let mut off = RequestWatch::new();
         off.observe(&[AskedItem { state: "waiting".into(), ..declined.clone() }], Off);
         assert!(off.observe(&[declined], Off).is_empty(), "off: not told");

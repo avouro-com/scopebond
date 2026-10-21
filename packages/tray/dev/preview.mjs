@@ -59,6 +59,9 @@ const SCENES = [
   ["not_answering", "The agent is not answering"],
   ["protected&tab=allowed", "Allowed"],
   ["protected&view=settings", "Settings"],
+  ["protected&view=settings&packs=1", "Settings: the packs in force"],
+  ["protected&view=settings&notify=off", "Settings: notifications off"],
+  ["protected&view=settings&older=1", "Settings from an older agent"],
 ];
 
 const escape = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);

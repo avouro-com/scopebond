@@ -145,13 +145,16 @@ test("an answer from the tray reaches the workspace signed by this computer, as 
   } finally { await service.stop(); server.close(); }
 });
 
-test("notifications: blocks and problems for a new install; the older 'all' reads the same; a person's choice stays", () => {
+test("notifications: one switch, on for every install; the older 'all' and 'problems' read as on; a person's off stays", () => {
   const fresh = mkdtempSync(join(tmpdir(), "sb-settings-"));
   settleTraySettings(fresh, true);
   assert.equal(readTraySettings(fresh).notifications, "blocks");
   const existing = mkdtempSync(join(tmpdir(), "sb-settings-"));
   settleTraySettings(existing, false);
-  assert.equal(readTraySettings(existing).notifications, "problems", "an install whose person never chose keeps problems only");
+  assert.equal(readTraySettings(existing).notifications, "blocks", "an install whose person never chose: on");
+  writeFileSync(join(existing, "agent-settings.json"), JSON.stringify({ notifications: "problems" }));
+  assert.equal(readTraySettings(existing).notifications, "blocks", "problems only, the old default nobody chose, reads as on");
+  assert.equal(readTraySettings(mkdtempSync(join(tmpdir(), "sb-settings-"))).notifications, "blocks", "no file: on");
   writeTraySettings(existing, { notifications: "off" });
   settleTraySettings(existing, true);
   assert.equal(readTraySettings(existing).notifications, "off", "never changed once written");

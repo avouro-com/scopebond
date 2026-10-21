@@ -73,7 +73,8 @@ pub enum Command {
 }
 
 const ACTION_PREFIX: &str = "action:";
-const NOTIFICATIONS_PREFIX: &str = "notifications:";
+/// The Notifications switch.
+const NOTIFICATIONS: &str = "notifications";
 /// The model's action that opens this computer's page in the workspace.
 pub const OPEN_WORKSPACE: &str = "open_workspace";
 
@@ -136,17 +137,12 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
     if let Some(open) = offered.iter().find(|a| a.id == OPEN_WORKSPACE && fix.is_none_or(|f| f.id != a.id)) {
         out.push(item(&format!("{ACTION_PREFIX}{}", open.id), &open_cloud_label(model.and_then(|m| m.workspace.as_deref()))));
     }
-    out.push(Entry::Submenu {
+    // One switch: tell me when something is blocked. The setting lives in the agent, so it waits for it.
+    out.push(Entry::Check {
+        id: NOTIFICATIONS.into(),
         label: "Notifications".into(),
-        entries: Notifications::ALL
-            .iter()
-            .map(|n| Entry::Check {
-                id: format!("{NOTIFICATIONS_PREFIX}{}", n.as_str()),
-                label: n.label().into(),
-                checked: *n == ctx.notifications,
-                enabled: ctx.link == AgentLink::Answering,
-            })
-            .collect(),
+        checked: ctx.notifications.is_on(),
+        enabled: ctx.link == AgentLink::Answering,
     });
     out.push(Entry::Check {
         id: "autostart".into(),
@@ -172,8 +168,9 @@ pub fn command_for(id: &str, answer: Option<&TrayAnswer>) -> Option<Command> {
     if let Some(action_id) = id.strip_prefix(ACTION_PREFIX) {
         return answer?.tray.offered_action(action_id).cloned().map(Command::Run);
     }
-    if let Some(value) = id.strip_prefix(NOTIFICATIONS_PREFIX) {
-        return Notifications::ALL.iter().find(|n| n.as_str() == value).map(|n| Command::Notifications(*n));
+    if id == NOTIFICATIONS {
+        // Flip what the agent last said (the item is off while it does not answer).
+        return answer.map(|a| Command::Notifications(a.settings.notifications.toggled()));
     }
     Some(match id {
         // Blocked today opens the panel, which shows the blocked list first.
@@ -198,7 +195,7 @@ mod tests {
     }
 
     fn ctx(link: AgentLink) -> MenuContext {
-        MenuContext { link, autostart: Autostart::On, notifications: Notifications::Problems }
+        MenuContext { link, autostart: Autostart::On, notifications: Notifications::Blocks }
     }
 
     /// Every label, submenus indented, separators as "-".
@@ -240,10 +237,7 @@ mod tests {
                 "Blocked today (2)",
                 "-",
                 "Open Acme in Scopebond Cloud",
-                "Notifications >",
-                "  [ ] Blocks and problems",
-                "  [x] Problems only",
-                "  [ ] Off",
+                "[x] Notifications",
                 "[x] Start with Windows",
                 "-",
                 "Help >",
@@ -352,7 +346,7 @@ mod tests {
             assert!(!l.iter().any(|x| x.starts_with("Blocked today")));
         }
         assert!(matches!(
-            &spec.iter().find_map(|e| match e { Entry::Submenu { label, entries } if label == "Notifications" => Some(entries[0].clone()), _ => None }),
+            spec.iter().find(|e| matches!(e, Entry::Check { id, .. } if id == "notifications")),
             Some(Entry::Check { enabled: false, .. })
         ), "the setting lives in the agent, so it waits for it");
         assert_eq!(header(None, AgentLink::NotAnswering), "Scopebond — The Scopebond Agent is not answering");
@@ -366,8 +360,10 @@ mod tests {
         c.autostart = Autostart::Managed;
         let l = labels(&menu_spec(Some(&a), &c));
         assert!(l.contains(&"[x] Start with Windows (set for every user)".to_string()));
-        assert!(l.contains(&"  [x] Off".to_string()));
-        assert_eq!(command_for("notifications:blocks", Some(&a)), Some(Command::Notifications(Notifications::Blocks)));
+        assert!(l.contains(&"[ ] Notifications".to_string()), "off: the switch shows unticked");
+        // The agent said "problems" in this fixture, which reads as on: the switch turns it off.
+        assert_eq!(command_for("notifications", Some(&a)), Some(Command::Notifications(Notifications::Off)));
+        assert_eq!(command_for("notifications", None), None, "nothing to flip without the agent");
         assert_eq!(command_for("notifications:loud", Some(&a)), None);
         c.autostart = Autostart::Off;
         assert!(labels(&menu_spec(Some(&a), &c)).contains(&"[ ] Start with Windows".to_string()));

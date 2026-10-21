@@ -5,7 +5,9 @@ import assert from "node:assert/strict";
 import { callAgent } from "../dist/index.js";
 import { makeAllowance, readBlocked, writeAllowances } from "@scopebond/hook";
 import { computer, blockActions, serviceFor } from "./tray-helpers.mjs";
-import { groupBlocks, whyOf } from "../dist/tray-model.js";
+import { groupBlocks, trayModel, whyOf } from "../dist/tray-model.js";
+import { healthOf } from "../dist/health.js";
+import { lastGoodCheck } from "../dist/service.js";
 
 const NOW = new Date(2026, 9, 21, 16, 30).getTime();
 const at = (hoursAgo) => new Date(NOW - hoursAgo * 3_600_000).toISOString();
@@ -86,4 +88,53 @@ test("a block the person chose to keep blocked is listed under Kept blocked, off
     assert.ok(!after.allowed.some((a) => a.id === quiet.id));
     assert.notEqual(after.recent_blocks[0].outcome, "quiet");
   } finally { await service.stop(); }
+});
+
+const status = (delivery = {}) => ({
+  schema: "scopebond.status.v1", version: "0.31.0", state: "delivering",
+  delivery: { connected: true, last_success_at: NOW - 60_000, last_attempt_at: NOW - 60_000, last_error: null, last_error_code: null, connection_refused_since: null, pending: 0, oldest_pending_age_s: null, gaps_by_reason: {}, queue_error: null, ...delivery },
+  identity: { installation_id: "gw-1", generation: 1, key_kid: "key:1", credential_expires_at: null },
+  config: { active: "C:/x", others: [], user_connection_shadowed: false }, agents: { claude: true, cursor: false, codex: false },
+});
+const modelInput = (over = {}) => {
+  const s = over.status ?? status();
+  return {
+    status: s, health: healthOf(s, null), now: NOW, awakeSince: NOW - 3_600_000, working: null,
+    rules: { checked_at: NOW - 60_000, managed: true, block: 9, monitor: 2 },
+    today: { actions: 16867, blocked: 19, allowed_by_person: 0 },
+    version: { agent: "0.11.5", hook: "0.31.1", policy: "recommended", recommendedAgent: "0.11.5", recommendedHook: null },
+    workspace: { name: "Avouro", environment: "Production", computer_url: null }, computerName: "LAPTOP",
+    packs: [{ id: "cloud-clis", title: "Cloud CLIs", version: "1.2.0" }, { id: "databases", title: "Databases", version: "1.0.3" }],
+    rulesUpdatedAt: NOW - 2 * 60_000,
+    ...over,
+  };
+};
+
+test("Settings' This computer: protection with rules and packs, the workspace, the last good rules check and one version", () => {
+  const m = trayModel(modelInput());
+  assert.deepEqual(m.computer_rows, [
+    { label: "Protection", value: "On · 9 rules blocking · 2 packs", items: ["Cloud CLIs 1.2.0", "Databases 1.0.3"] },
+    { label: "Workspace", value: "Avouro · Production" },
+    { label: "Rules updated", value: "2 min ago" },
+    { label: "Version", value: "Scopebond 0.11.5 · up to date" },
+  ]);
+  assert.equal(m.version_label, "Scopebond 0.11.5");
+  assert.equal(m.detail, "19 blocked today · rules updated 2 min ago", "the header: what was blocked, then when the rules were updated");
+  const one = trayModel(modelInput({ packs: [], rules: { checked_at: NOW, managed: true, block: 1, monitor: 0 } }));
+  assert.equal(one.computer_rows[0].value, "On · 1 rule blocking");
+  assert.equal(one.computer_rows[0].items, undefined);
+  const update = trayModel(modelInput({ version: { agent: "0.11.4", hook: "0.31.1", policy: "recommended", recommendedAgent: "0.11.5", recommendedHook: null } }));
+  assert.equal(update.computer_rows.at(-1).value, "Scopebond 0.11.4 · 0.11.5 ready to install");
+  const never = trayModel(modelInput({ rulesUpdatedAt: null }));
+  assert.ok(!never.computer_rows.some((r) => r.label === "Rules updated"), "no successful check known: nothing claimed");
+  const local = trayModel(modelInput({ workspace: null, status: status({ connected: false }), rules: { checked_at: null, managed: false, block: 4, monitor: 0 }, rulesUpdatedAt: null }));
+  assert.deepEqual(local.computer_rows.slice(1, 3).map((r) => r.value), ["Not connected: using this computer's own rules", "Using this computer's own rules"]);
+  for (const row of m.computer_rows) assert.doesNotMatch(row.value, /waiting|queue|sending|self-check/i, "no internals");
+});
+
+test("the last good rules check: the field the rules check keeps for a success, else a check that did not fail", () => {
+  assert.equal(lastGoodCheck({ checked_at: "2026-10-21T10:00:00Z", last_error: null }), Date.parse("2026-10-21T10:00:00Z"));
+  assert.equal(lastGoodCheck({ checked_at: "2026-10-21T10:00:00Z", last_error: "could not reach the workspace" }), null, "a failed check is never 'updated'");
+  assert.equal(lastGoodCheck({ checked_at: "2026-10-21T10:00:00Z", last_error: "x", checked_ok_at: "2026-10-21T09:00:00Z" }), Date.parse("2026-10-21T09:00:00Z"));
+  assert.equal(lastGoodCheck({}), null);
 });

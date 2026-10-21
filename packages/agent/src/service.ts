@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { hostname, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, findClause, hookVersion, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
+  actOnBlocked, blockedQuestion, findClause, hookVersion, loadPacks, readPackIndex, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
   writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -64,21 +64,21 @@ export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
 /** Left in the Scopebond folder when this computer's user stops the agent (`scopebond-agent stop`), and removed when it
  *  starts: the native tray then leaves it stopped instead of starting it again. */
 export const STOPPED_FILE = "agent-stopped.json";
-/** The person's tray settings: which notifications they want. "blocks": blocks and problems (the default for a new install);
- *  "problems": problems only (the default before, and for an install whose person never chose); "off". The older "all"
- *  meant blocks and problems too, and is read as "blocks". */
+/** The person's tray settings: one switch, "Tell me when something is blocked". "blocks": on (the default); "off". The
+ *  older "problems" (problems only, the default before, which nobody chose) and "all" are read as on. Alerts the person must
+ *  act on (protection off, sign in again) are not a setting: the tray shows them either way. */
 const TRAY_SETTINGS_FILE = "agent-settings.json";
-type NotificationSetting = "blocks" | "problems" | "off";
+type NotificationSetting = "blocks" | "off";
 export interface TraySettings { notifications: NotificationSetting }
 
 const notificationSetting = (value: unknown): NotificationSetting | null =>
-  value === "blocks" || value === "all" ? "blocks" : value === "problems" || value === "off" ? value : null;
+  value === "blocks" || value === "all" || value === "problems" ? "blocks" : value === "off" ? "off" : null;
 
 export function readTraySettings(dir: string): TraySettings {
   try {
     const parsed = JSON.parse(readFileSync(join(dir, TRAY_SETTINGS_FILE), "utf8")) as Partial<Record<keyof TraySettings, unknown>>;
-    return { notifications: notificationSetting(parsed.notifications) ?? "problems" };
-  } catch { return { notifications: "problems" }; }
+    return { notifications: notificationSetting(parsed.notifications) ?? "blocks" };
+  } catch { return { notifications: "blocks" }; }
 }
 
 export function writeTraySettings(dir: string, patch: unknown): TraySettings {
@@ -89,11 +89,11 @@ export function writeTraySettings(dir: string, patch: unknown): TraySettings {
   return next;
 }
 
-/** On an agent's first start in a Scopebond folder (no agent has run there before), notifications default to blocks and
- *  problems; an install whose person never chose keeps problems only. Written once; the person's choice is never changed. */
-export function settleTraySettings(dir: string, firstStart: boolean): void {
+/** On an agent's first start in a Scopebond folder, notifications are written on (a new install, or an older one whose
+ *  person never chose). Written once; the person's choice is never changed. */
+export function settleTraySettings(dir: string, _firstStart: boolean): void {
   if (existsSync(join(dir, TRAY_SETTINGS_FILE))) return;
-  try { writeTraySettings(dir, { notifications: firstStart ? "blocks" : "problems" }); } catch { /* read as problems only */ }
+  try { writeTraySettings(dir, { notifications: "blocks" }); } catch { /* read as on */ }
 }
 
 /** Set for a replacement started directly because the launcher is an older one: it rewrites the launcher once the old agent is gone. */
@@ -615,6 +615,21 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     });
   };
 
+  // The rule packs in force, for Settings: read again only when the pack index changes (each pack's signature is checked).
+  let packCache: { key: string; packs: Array<{ id: string; title: string; version: string }> } | null = null;
+  const packsInForce = (): Array<{ id: string; title: string; version: string }> => {
+    const index = readPackIndex(options.dir);
+    const key = index ? `${index.checked_at}|${index.packs.map((p) => `${p.id}@${p.version}`).join(",")}` : "";
+    if (packCache?.key !== key) {
+      let packs: Array<{ id: string; title: string; version: string }> = [];
+      try {
+        packs = index ? loadPacks(options.dir).packs.map((p) => ({ id: p.id, version: p.version, title: (typeof p.title === "string" && p.title.trim() ? p.title.trim() : p.id).slice(0, 60) })) : [];
+      } catch { /* none listed */ }
+      packCache = { key, packs };
+    }
+    return packCache.packs;
+  };
+
   const trayState = (): TrayModel => {
     const now = Date.now();
     const status = computerStatus(options.dir);
@@ -637,6 +652,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       signingIn: reconnecting,
       notice: migrationNotice(),
       canAsk: workspaceLetsAsk(options.dir),
+      packs: packsInForce(),
+      rulesUpdatedAt: lastGoodCheck(meta),
     });
     // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
     return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
@@ -947,6 +964,18 @@ export function workspaceLetsAsk(dir: string): boolean {
     const doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as { rules?: Record<string, { mode?: unknown; override?: { requests?: unknown } } | undefined> };
     return Object.values(doc.rules ?? {}).some((r) => !!r?.override && (r.mode === "ask" || (r.mode === "override" && r.override.requests === true)));
   } catch { return false; }
+}
+
+/** When the workspace's rules were last checked successfully, for the tray: the time the rules check records for its last
+ *  success when it records one, else its last check when that one did not fail, else unknown (never a failed check's time). */
+export function lastGoodCheck(meta: object): number | null {
+  const m = meta as Record<string, unknown>;
+  const at = (v: unknown): number | null => { const t = typeof v === "string" ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null; };
+  for (const field of ["checked_ok_at", "last_success_at", "succeeded_at", "rules_ok_at"]) {
+    const t = at(m[field]);
+    if (t !== null) return t;
+  }
+  return m.last_error ? null : at(m.checked_at);
 }
 
 /** What the tray says after a person acted on an earlier block. */

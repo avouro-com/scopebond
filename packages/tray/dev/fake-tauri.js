@@ -104,6 +104,13 @@
     { label: "Today", value: "1,160 actions · 3 blocked" },
     { label: "Version", value: "Up to date (agent 0.9.0)" },
   ];
+  // Settings' This computer, as the agent words it (tray-model.ts computerRows).
+  const computerRows = [
+    { label: "Protection", value: "On · 9 rules blocking · 4 packs", items: ["Cloud CLIs 1.2.0", "Infrastructure 1.1.0", "Databases 1.0.3", "MCP servers 0.9.2"] },
+    { label: "Workspace", value: "Acme · Production" },
+    { label: "Rules updated", value: "2 min ago" },
+    { label: "Version", value: "Scopebond 0.11.5 · up to date" },
+  ];
   const ahead = (min) => new Date(Date.now() + min * MIN).toISOString();
   const allowed = () => [
     { id: "alw_quiet000000000000001", kind: "quiet", rule: "secret-read", rule_title: "Read passwords, keys or secrets", what: "Read ~/.aws/credentials", choice: "always",
@@ -127,13 +134,14 @@
   ];
   const base = () => ({
     state: "protected", headline: "Protected", tooltip: "Scopebond — Protected · Acme", rows, fix: null, actions, hint: null,
-    recent_blocks: blocks(), detail: "Rules checked 3 min ago · 3 blocked today", workspace: "Acme", today: { actions: 1160, blocked: 3 },
+    recent_blocks: blocks(), detail: "3 blocked today · rules updated 3 min ago", workspace: "Acme", today: { actions: 1160, blocked: 3 },
     allowed: allowed(), asked: asked(),
+    computer_rows: computerRows, version_label: "Scopebond 0.11.5",
   });
 
   const scenes = {
     protected: () => base(),
-    quiet: () => ({ ...base(), recent_blocks: [], allowed: [], asked: [], detail: "Rules checked 3 min ago · nothing blocked today", today: { actions: 212, blocked: 0 } }),
+    quiet: () => ({ ...base(), recent_blocks: [], allowed: [], asked: [], detail: "Nothing blocked today · rules updated 3 min ago", today: { actions: 212, blocked: 0 } }),
     attention: () => ({
       ...base(), state: "attention", headline: "312 records waiting to send", detail: null,
       hint: "Your workspace refused the last try. The records wait on this computer and are sent again.",
@@ -157,7 +165,7 @@
     const today = list.filter((b) => Date.parse(b.at) >= midnight.getTime()).length;
     model.recent_blocks = list;
     model.today = { actions: 16867, blocked: today };
-    model.detail = "Rules checked 3 min ago · " + (today ? today.toLocaleString("en-US") + " blocked today" : "nothing blocked today");
+    model.detail = (today ? today.toLocaleString("en-US") + " blocked today" : "Nothing blocked today") + " · rules updated 3 min ago";
   }
   // What the workspace lets a person do (mode=self, the default; approval: only ask to unblock, an admin decides;
   // automatic: one length the workspace set, applied at once and reviewed by an admin later; final: nothing): the agent
@@ -177,7 +185,10 @@
   }
   // The agent's groups, unless the scene is an older agent's (older=1: each block is its own row).
   if (model && !params.get("older")) model.blocked_groups = groupBlocks(model.recent_blocks);
-  let notifications = "blocks";
+  // An older agent sends neither Settings' facts nor the client's version: the panel shows its rows.
+  if (model && params.get("older")) { delete model.computer_rows; delete model.version_label; }
+  // notify=off: the person turned notifications off.
+  let notifications = params.get("notify") === "off" ? "off" : "blocks";
   let note = null;
   let busy = null;
   let answered = null;
@@ -197,7 +208,7 @@
     stateLabel: model ? { protected: "Protected", working: "Working", offline: "Offline", problem: "Problem", disconnected: "Not connected" }[model.state] || "Needs attention" : "Problem",
     headline: model ? model.headline : "The Scopebond Agent is not answering",
     answer: model ? { tray: model, settings: { notifications } } : null,
-    note, busy, version: "0.1.0", autostart: "on", answered, pending, openBlock: (() => { const o = openBlock; openBlock = null; return o; })(),
+    note, busy, version: "0.11.5", autostart: "on", answered, pending, openBlock: (() => { const o = openBlock; openBlock = null; return o; })(),
   });
 
   const handlers = new Map(Object.entries({
@@ -207,7 +218,7 @@
     panel_action: ({ id }) => { say(id === "send_now" ? "Sent 312 records; nothing is waiting" : id === "open_workspace" ? "Opened this computer's page in your workspace" : "Checked just now: all good"); if (id === "send_now") model = scenes.protected(); return true; },
     panel_command: ({ id }) => {
       if (id.startsWith("notifications:")) notifications = id.slice(14);
-      else say({ copy_diagnostics: "Diagnostics copied (no keys or credentials)", open_logs: "(The logs folder would open.)", about: "(About Scopebond would open.)", hide_icon: "(The icon would hide.)", autostart: "(Start with Windows would change.)", start_agent: "Starting the Scopebond Agent…" }[id] || "Done");
+      else say({ get_help: "Support report copied (no keys, records or commands) · the Help page is opening", copy_diagnostics: "Diagnostics copied (no keys or credentials)", open_logs: "(The logs folder would open.)", about: "(About Scopebond would open.)", hide_icon: "(The icon would hide.)", autostart: "(Start with Windows would change.)", start_agent: "Starting the Scopebond Agent…" }[id] || "Done");
       if (id === "start_agent") model = scenes.protected();
       return true;
     },
@@ -271,6 +282,8 @@
     const click = (sel) => { const n = document.querySelector(sel); if (n) n.click(); };
     setTimeout(() => {
       if (params.get("view") === "settings") click('[data-key="settings"]');
+      // The Protection row's packs, opened (packs=1).
+      if (params.get("packs")) setTimeout(() => { const d = document.querySelector("details.packs"); if (d) d.open = true; }, 30);
       if (params.get("tab")) click('[data-key="tab-' + params.get("tab") + '"]');
       if (params.get("open")) click('[data-key="block-' + params.get("open") + '"]');
       // A block's details (details=<action id>), and the first group's tries (expand=1).

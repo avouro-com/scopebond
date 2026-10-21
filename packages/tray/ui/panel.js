@@ -471,44 +471,51 @@
     return el("div", { class: "list", id: "list", role: "tabpanel", "aria-labelledby": "tab-" + ui.tab, tabindex: "-1" }, body);
   }
 
-  // ---- Settings: notifications, start with Windows, this computer, the other actions, help.
+  // ---- Settings, one screen: the notification switch, Start with Windows, facts about this computer, and Get help.
+  /** A setting that is on or off: the whole row is the switch's label, with a line under it saying what it does. */
+  function switchRow(key, title, small, on, disabled, onchange) {
+    return el("label", { class: "switch-row" + (disabled ? " off" : "") }, [
+      el("span", { class: "grow" }, [el("span", { class: "title", text: title }), small ? el("small", { id: key + "-small", text: small }) : null]),
+      el("input", { type: "checkbox", role: "switch", "data-key": key, checked: on, disabled, "aria-describedby": small ? key + "-small" : null, onchange }),
+    ]);
+  }
+  /** One fact about this computer; a row with items (the packs in force) lists them when opened. */
+  function computerRow(r) {
+    const items = Array.isArray(r.items) ? r.items : [];
+    return [
+      el("dt", { text: r.label }),
+      el("dd", {}, [r.value, items.length ? el("details", { class: "packs" }, [
+        el("summary", { "data-key": "row-" + r.label, text: items.length === 1 ? "Show the pack" : "Show the " + items.length + " packs" }),
+        el("ul", {}, items.map((i) => el("li", { text: i }))),
+      ]) : null]),
+    ];
+  }
   function settings(s, model) {
     const answer = s.answer;
-    const current = answer && answer.settings ? answer.settings.notifications : "problems";
-    const agentUp = !!model;
-    const radios = [["blocks", "Blocks and problems"], ["problems", "Problems only"], ["off", "Off"]];
+    // On unless the person turned it off; an older agent's "problems" (problems only, nobody's choice) reads as on.
+    const on = !(answer && answer.settings && answer.settings.notifications === "off");
     const managed = s.autostart === "managed";
-    const busy = s.busy;
-    const actions = model ? [model.fix].concat(model.actions || []).filter((a, i, all) => a && a.id !== "open_workspace" && all.findIndex((x) => x && x.id === a.id) === i) : [];
-    const rows = model && model.rows || [];
+    const rows = model ? (Array.isArray(model.computer_rows) && model.computer_rows.length ? model.computer_rows : model.rows || []) : [];
+    const version = model && model.version_label ? model.version_label : "Scopebond " + s.version;
     return el("div", { class: "settings", role: "region", "aria-label": "Settings" }, [
       el("div", {}, [el("button", { class: "btn text", type: "button", "data-key": "back", text: "← Back", onclick: () => { ui.view = "list"; draw("settings"); } })]),
-      el("fieldset", {}, [el("legend", { text: "Notifications" })].concat(radios.map(([v, label]) => el("label", { class: "radio" }, [
-        el("input", { type: "radio", name: "notifications", value: v, "data-key": "notify-" + v, checked: current === v, disabled: !agentUp,
-          onchange: () => run("command", "notifications:" + v) }),
-        label,
-      ])))),
-      el("label", { class: "toggle" }, [
-        el("span", { text: managed ? "Start with Windows (set for every user)" : "Start with Windows" }),
-        el("input", { type: "checkbox", "data-key": "autostart", checked: s.autostart !== "off", disabled: managed, onchange: () => run("command", "autostart") }),
+      el("div", { class: "group" }, [
+        switchRow("notify", "Tell me when something is blocked", "And when an admin answers your request. Alerts you must act on always show.", on, !model,
+          () => run("command", "notifications:" + (on ? "off" : "blocks"))),
+        switchRow("autostart", "Start with Windows", managed ? "Set for every user on this computer" : null, s.autostart !== "off", managed,
+          () => run("command", "autostart")),
       ]),
       el("section", { "aria-labelledby": "computer-h" }, [
         el("h2", { id: "computer-h", text: "This computer" }),
-        rows.length ? el("dl", { class: "rows" }, rows.flatMap((r) => [el("dt", { text: r.label }), el("dd", { text: r.value })])) : el("p", { class: "note", text: s.headline }),
+        rows.length ? el("dl", { class: "rows" }, rows.flatMap((r) => computerRow(r))) : el("p", { class: "note", text: s.headline }),
         model && model.state === "protected" && model.hint ? el("p", { class: "note", text: model.hint }) : null,
+        rows.some((r) => r.label === "Version") ? null : el("p", { class: "note", text: version }),
       ]),
-      el("div", { class: "linkrow", role: "group", "aria-label": "Actions" }, actions.map((a) => el("button", {
-        class: "btn text", type: "button", "data-key": "action-" + a.id, disabled: !!busy, "aria-busy": busy === a.id ? "true" : null,
-        text: busy === a.id ? "Working…" : a.label, onclick: () => run("action", a.id),
-      })).concat([
-        el("button", { class: "btn text", type: "button", "data-key": "diagnostics", text: "Copy diagnostics", onclick: () => run("command", "copy_diagnostics") }),
-        el("button", { class: "btn text", type: "button", "data-key": "logs", text: "Open logs folder", onclick: () => run("command", "open_logs") }),
-      ])),
-      el("div", { class: "linkrow" }, [
-        el("button", { class: "btn text", type: "button", "data-key": "about", text: "Help", onclick: () => run("command", "about") }),
-        el("button", { class: "btn text", type: "button", "data-key": "hide", text: "Hide icon", onclick: () => run("command", "hide_icon") }),
+      el("div", { class: "help" }, [
+        el("button", { class: "btn", type: "button", "data-key": "help", "aria-describedby": "help-small", disabled: s.busy === "help", "aria-busy": s.busy === "help" ? "true" : null,
+          text: "Get help…", onclick: () => run("command", "get_help") }),
+        el("small", { id: "help-small", text: "Copies a support report (no keys, records or commands) and opens the Help page." }),
       ]),
-      el("p", { class: "note", text: "Scopebond tray " + s.version }),
     ]);
   }
 
