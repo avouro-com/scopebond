@@ -13,7 +13,11 @@
 //!   answering, and after another half minute it is ended (only the process that is the agent beside this tray) and
 //!   started again, with the same waits.
 //! - Another agent is starting (its lock file is fresh and its process is alive): wait for it. Never two.
+//! - All of this is silent. Only when two restarts in a row fail within ten minutes (the agent is lost again before it has
+//!   answered for five minutes, or cannot be started) is protection off on this computer: the tray says so once, with
+//!   *Restart it*, which starts it at once and gives it a fresh count. It keeps trying meanwhile, with the same waits.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::menu::AgentLink;
@@ -53,6 +57,10 @@ pub const RESTART_HUNG_AFTER: Duration = Duration::from_secs(30);
 /// What the agent leaves in the Scopebond folder when this computer's user stops it (`scopebond-agent stop`); it removes
 /// the file when it starts.
 pub const STOPPED_FILE: &str = "agent-stopped.json";
+/// Failed restarts count within this long of each other.
+pub const RESTART_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// This many failed restarts within RESTART_WINDOW: protection is off on this computer, and the person is told.
+pub const FAILED_RESTARTS_OFF: usize = 2;
 
 /// Something supervision did that the person should be told about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +121,14 @@ pub struct Supervisor {
     hung_since: Option<Instant>,
     notice: Option<Notice>,
     link: AgentLink,
+    /// The agent was lost since it last answered for STABLE_AFTER: a further loss means the restart in between failed.
+    lost_since_stable: bool,
+    /// When each failed restart of the last RESTART_WINDOW happened.
+    failed_restarts: VecDeque<Instant>,
+    /// The person asked for a restart (*Restart it*): a hung agent is ended at the next look, without the usual wait.
+    restart_now: bool,
+    /// Two restarts failed within RESTART_WINDOW and it does not answer yet: protection is off on this computer.
+    off: bool,
 }
 
 impl Default for Supervisor {
@@ -133,6 +149,10 @@ impl Supervisor {
             hung_since: None,
             notice: None,
             link: AgentLink::Starting,
+            lost_since_stable: false,
+            failed_restarts: VecDeque::new(),
+            restart_now: false,
+            off: false,
         }
     }
 
@@ -140,40 +160,81 @@ impl Supervisor {
         self.link
     }
 
+    /// Two restarts failed within RESTART_WINDOW and the agent does not answer yet: protection is off on this computer (the
+    /// one time the person is told about restarts). False again once it answers, or when the person asks for a restart.
+    pub fn protection_off(&self) -> bool {
+        self.off
+    }
+
     /// What to tell the person since the last look, once.
     pub fn take_notice(&mut self) -> Option<Notice> {
         self.notice.take()
     }
 
-    /// The person asked for the agent (the menu's "Start the Scopebond Agent"): start it at the next look.
+    /// The person asked for the agent (the menu's "Start the Scopebond Agent", or *Restart it*): start it at the next look
+    /// (a hung one is ended first), with a fresh count of failed restarts.
     pub fn start_requested(&mut self) {
         self.stopped = false;
         self.clean_exit_at = None;
         self.not_before = None;
         self.backoff.reset();
+        self.lost_since_stable = false;
+        self.failed_restarts.clear();
+        self.restart_now = true;
+        self.off = false;
     }
 
     /// Starting failed (the program could not be run): try again after the next wait.
     pub fn start_failed(&mut self, now: Instant) {
         self.not_before = Some(now + self.backoff.next());
         self.link = AgentLink::NotAnswering;
+        self.lost(now);
+        self.off = self.restarts_failed(now);
     }
 
     fn unexpected_exit(&mut self, now: Instant) {
         self.not_before = Some(now + self.backoff.next());
+        self.lost(now);
+    }
+
+    /// The agent was lost (it exited on its own, hung, or could not be started). Lost again before it answered for
+    /// STABLE_AFTER: the restart in between failed.
+    fn lost(&mut self, now: Instant) {
+        if self.lost_since_stable {
+            self.failed_restarts.push_back(now);
+        }
+        self.lost_since_stable = true;
+    }
+
+    /// Whether FAILED_RESTARTS_OFF restarts failed within RESTART_WINDOW (older ones are forgotten).
+    fn restarts_failed(&mut self, now: Instant) -> bool {
+        while self.failed_restarts.front().is_some_and(|at| now.duration_since(*at) >= RESTART_WINDOW) {
+            self.failed_restarts.pop_front();
+        }
+        self.failed_restarts.len() >= FAILED_RESTARTS_OFF
     }
 
     pub fn tick(&mut self, o: &Observation, now: Instant) -> Decision {
+        let decision = self.decide(o, now);
+        // Off only while the agent is being brought back (not when it answers, was stopped on purpose, waits for an update's
+        // replacement or is not installed).
+        self.off = matches!(self.link, AgentLink::NotAnswering | AgentLink::Starting) && self.restarts_failed(now);
+        decision
+    }
+
+    fn decide(&mut self, o: &Observation, now: Instant) -> Decision {
         if o.answering && o.unresponsive {
-            // Hung: its pipe accepts connections, but no model comes. Shown as not answering; after a further wait it is
-            // ended and started again, with the waits that grow after each failure.
+            // Hung: its pipe accepts connections, but no model comes. Shown as not answering; after a further wait (none when
+            // the person asked for a restart) it is ended and started again, with the waits that grow after each failure.
             self.answering_since = None;
             self.link = AgentLink::NotAnswering;
             let since = *self.hung_since.get_or_insert(now);
-            if now.duration_since(since) >= RESTART_HUNG_AFTER && self.not_before.is_none_or(|t| now >= t) {
+            if (self.restart_now || now.duration_since(since) >= RESTART_HUNG_AFTER) && self.not_before.is_none_or(|t| now >= t) {
                 self.hung_since = None;
+                self.restart_now = false;
                 self.not_before = Some(now + self.backoff.next());
                 self.notice = Some(Notice::Restarting);
+                self.lost(now);
                 return Decision::Restart;
             }
             return Decision::Wait;
@@ -183,9 +244,12 @@ impl Supervisor {
             self.stopped = false;
             self.clean_exit_at = None;
             self.was_answering = true;
+            self.restart_now = false;
             let since = *self.answering_since.get_or_insert(now);
             if now.duration_since(since) >= STABLE_AFTER {
                 self.backoff.reset();
+                self.lost_since_stable = false;
+                self.failed_restarts.clear();
             }
             self.link = AgentLink::Answering;
             return Decision::Wait;
@@ -229,6 +293,7 @@ impl Supervisor {
                 self.clean_exit_at = None;
                 self.not_before = Some(now + self.backoff.next());
                 self.notice = Some(Notice::StartingAgain);
+                self.lost(now);
             }
         }
         if self.stopped {
@@ -237,6 +302,7 @@ impl Supervisor {
         }
         if self.not_before.is_none_or(|t| now >= t) {
             self.not_before = None;
+            self.restart_now = false;
             self.link = AgentLink::Starting;
             return Decision::Start;
         }
@@ -546,6 +612,167 @@ mod tests {
         s.start_failed(c.at(0));
         assert_eq!(s.tick(&obs(false, Child::None), c.at(1)), Decision::Wait);
         assert_eq!(s.tick(&obs(false, Child::None), c.at(2)), Decision::Start);
+    }
+
+    /// Crash the agent at `t` (its child exits with 1), then tick until it is started again; the time of that start.
+    fn crash_and_restart(s: &mut Supervisor, c: &Clock, t: u64) -> u64 {
+        assert_eq!(s.tick(&obs(false, Child::Exited(Some(1))), c.at(t)), Decision::Wait);
+        let mut t = t;
+        loop {
+            t += 1;
+            if s.tick(&obs(false, Child::None), c.at(t)) == Decision::Start {
+                return t;
+            }
+            assert!(t < 100_000, "never started again");
+        }
+    }
+
+    #[test]
+    fn a_crash_is_restarted_silently_and_two_failed_restarts_in_ten_minutes_turn_protection_off() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        s.tick(&obs(true, Child::Running), c.at(5));
+        // The first crash: started again, nothing to tell.
+        let t = crash_and_restart(&mut s, &c, 100);
+        assert!(!s.protection_off());
+        assert_eq!(s.take_notice(), None, "a restart is silent");
+        // The restart fails (it crashes again before answering): one failed restart, still silent.
+        let t = crash_and_restart(&mut s, &c, t + 1);
+        assert!(!s.protection_off(), "one failed restart is not enough");
+        // The second restart fails too, within ten minutes: protection is off, and stays so while it is brought back.
+        assert_eq!(s.tick(&obs(false, Child::Exited(Some(1))), c.at(t + 1)), Decision::Wait);
+        assert!(s.protection_off());
+        assert_eq!(s.link(), AgentLink::NotAnswering);
+        assert_eq!(s.take_notice(), None, "told by the tray's notification, not a restart notice");
+        let mut t = t + 1;
+        while s.tick(&obs(false, Child::None), c.at(t)) != Decision::Start {
+            assert!(s.protection_off());
+            t += 1;
+        }
+        assert!(s.protection_off(), "starting again: still off until it answers");
+        // It answers: protection is back.
+        assert_eq!(s.tick(&obs(true, Child::Running), c.at(t + 1)), Decision::Wait);
+        assert!(!s.protection_off());
+    }
+
+    #[test]
+    fn failed_restarts_further_apart_than_ten_minutes_never_turn_it_off() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        s.tick(&obs(true, Child::Running), c.at(5));
+        // Each time it starts slowly (its child runs, no answer for almost seven minutes), answers four minutes (not long
+        // enough to count as stable) and crashes: every restart fails, but they are more than ten minutes apart.
+        let mut t = 100;
+        for _ in 0..4 {
+            let started = crash_and_restart(&mut s, &c, t);
+            s.tick(&obs(false, Child::Running), c.at(started + 1));
+            s.tick(&obs(false, Child::Running), c.at(started + 400));
+            s.tick(&obs(true, Child::Running), c.at(started + 401));
+            s.tick(&obs(true, Child::Running), c.at(started + 401 + 240));
+            assert!(!s.protection_off());
+            t = started + 401 + 241;
+        }
+        // Two within ten minutes do.
+        let started = crash_and_restart(&mut s, &c, t);
+        assert!(!s.protection_off());
+        crash_and_restart(&mut s, &c, started + 1);
+        assert!(s.protection_off());
+    }
+
+    #[test]
+    fn five_minutes_of_answering_forgets_failed_restarts() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        s.tick(&obs(true, Child::Running), c.at(5));
+        let t = crash_and_restart(&mut s, &c, 100);
+        let t = crash_and_restart(&mut s, &c, t + 1);
+        // One failed restart, then it answers for five minutes: the count starts over.
+        s.tick(&obs(true, Child::Running), c.at(t + 1));
+        s.tick(&obs(true, Child::Running), c.at(t + 1 + STABLE_AFTER.as_secs()));
+        let t = crash_and_restart(&mut s, &c, t + 400);
+        crash_and_restart(&mut s, &c, t + 1);
+        assert!(!s.protection_off(), "one failed restart since it was stable");
+    }
+
+    #[test]
+    fn restart_it_starts_the_agent_at_once_with_a_fresh_count() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        let mut t = 0;
+        assert_eq!(s.tick(&obs(false, Child::None), c.at(t)), Decision::Start);
+        // It cannot be started at all: the first start fails, then two restarts fail.
+        for failed in 0..3 {
+            assert!(!s.protection_off(), "{failed} failed so far");
+            s.start_failed(c.at(t));
+            while s.tick(&obs(false, Child::None), c.at(t)) != Decision::Start {
+                t += 1;
+            }
+        }
+        assert!(s.protection_off(), "the first start and two restarts failed");
+        s.start_failed(c.at(t));
+        assert_eq!(s.tick(&obs(false, Child::None), c.at(t + 1)), Decision::Wait, "waiting before the next try");
+        // Restart it: at once, and not off until two more restarts fail.
+        s.start_requested();
+        assert!(!s.protection_off());
+        assert_eq!(s.tick(&obs(false, Child::None), c.at(t + 1)), Decision::Start);
+        s.start_failed(c.at(t + 1));
+        assert!(!s.protection_off());
+    }
+
+    #[test]
+    fn a_hung_agent_counts_as_a_failed_restart_and_restart_it_ends_it_at_once() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        let hung = Observation { unresponsive: true, ..obs(true, Child::Running) };
+        let mut restarts = Vec::new();
+        let mut off_at = None;
+        for t in 1..600 {
+            if s.tick(&hung, c.at(t)) == Decision::Restart {
+                restarts.push(t);
+            }
+            if s.protection_off() && off_at.is_none() {
+                off_at = Some(t);
+            }
+        }
+        assert_eq!(off_at, Some(restarts[2]), "the third restart: the two before it failed");
+        assert!(restarts[2] - restarts[0] < RESTART_WINDOW.as_secs());
+        // Restart it, while it hangs: ended at the next look, not after half a minute.
+        let mut s = Supervisor::new();
+        s.tick(&obs(true, Child::Running), c.at(0));
+        assert_eq!(s.tick(&hung, c.at(1)), Decision::Wait);
+        s.start_requested();
+        assert_eq!(s.tick(&hung, c.at(2)), Decision::Restart);
+        assert_eq!(s.tick(&hung, c.at(3)), Decision::Wait, "once");
+    }
+
+    #[test]
+    fn stopped_on_purpose_and_an_updates_handover_never_turn_it_off() {
+        let c = Clock(Instant::now());
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        s.tick(&obs(true, Child::Running), c.at(5));
+        let t = crash_and_restart(&mut s, &c, 100);
+        let t = crash_and_restart(&mut s, &c, t + 1);
+        let t = crash_and_restart(&mut s, &c, t + 1);
+        assert!(s.protection_off());
+        // Then the person stops it: not "protection off".
+        let stopped = Observation { stopped_on_purpose: true, ..obs(false, Child::Exited(Some(0))) };
+        s.tick(&stopped, c.at(t + 1));
+        assert_eq!(s.link(), AgentLink::Stopped);
+        assert!(!s.protection_off());
+        // An update's handover (a clean exit, a replacement starting): not off either.
+        let mut s = Supervisor::new();
+        s.tick(&obs(false, Child::None), c.at(0));
+        s.tick(&obs(true, Child::Running), c.at(5));
+        s.tick(&obs(false, Child::Exited(Some(0))), c.at(100));
+        for t in 101..160 {
+            s.tick(&Observation { other_starting: true, ..obs(false, Child::None) }, c.at(t));
+            assert!(!s.protection_off());
+        }
     }
 
     #[test]

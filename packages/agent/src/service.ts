@@ -4,12 +4,13 @@
 // versions to run, and once a day it runs the end-to-end self-check.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
-  writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
+  dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -18,7 +19,7 @@ import {
   clearUpdatePending, fetchVerifiedInstaller, installAfterExit, installerUnchanged, installKind, nativeTrayPath, readUpdatePending, removeOldHelpers, takeInstallResult, UPDATE_PENDING_MS,
   writeUpdatePending, type InstallKind,
 } from "./native-update.js";
-import { AGENT_LOG_ENV, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
+import { AGENT_LOG_ENV, autostartHealth, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
@@ -28,24 +29,31 @@ import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { allowedList, askedList, blockStates } from "./allowed-asked.js";
+import { BLOCK_FEEDBACK_CAPABILITY, blockFeedbackFor, queueBlockFeedback, sendBlockFeedback } from "./block-feedback.js";
 import { blockOutcome } from "./block-outcome.js";
-import { checkResult, projectName, RECENT_BLOCKS_MAX, supportBundle, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
+import { checkResult, projectName, RECENT_BLOCKS_MAX, RULES_STALE_MS, supportBundle, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
 import { migrateFromNpm, readMigration, npmRemovalCommand } from "./migrate.js";
 import { enableAutostart } from "./autostart.js";
 import {
-  agentVersion, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
+  agentVersion, clearFailedUpdate, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
   updateTarget, type ClientVersion,
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
 import { awakeSinceAtStart, readAwake, writeAwake } from "./awake.js";
+import { noteRunningVersion, recentUpdate } from "./version-seen.js";
 import { withoutNodeInjection } from "./child-env.js";
 
 export const AGENT_VERSION = `agent/${agentVersion()}`;
 const INTERVAL_MS = 60_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
+const MIN_MS = 60_000;
+/** A credential that ends within a week (the self-check's line) and that the rules check has not renewed: the agent asks the
+ *  workspace itself, at most once an hour, to learn whether it renews or refuses. */
+const CREDENTIAL_LAPSING_MS = 7 * 24 * 60 * 60 * 1000;
+const CREDENTIAL_RETRY_MS = 60 * 60 * 1000;
 const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const SUMMARY_EVERY_MS = 5 * 60 * 1000;
@@ -133,7 +141,51 @@ export interface ServiceOptions {
   signIn?: { registry?: RegistryReader; open?: (url: string) => void; autostart?: () => string };
   /** A signed install takes over from an npm install of the agent before it starts (default on; tests turn it off). */
   migrate?: boolean;
+  /** The agent puts a lost hook entry back, takes a second copy out and starts broken autostart again as soon as it sees them
+   *  (default: on with maintenance; a test turns it on with a temp home). The person's Repair works either way. */
+  selfRepair?: boolean;
+  /** This computer's autostart, for that repair (tests replace it). */
+  autostart?: AutostartRepair;
 }
+
+/** Whether autostart is on and works, and how to turn it on again. */
+export interface AutostartRepair { health: () => { on: boolean; ok: boolean; detail: string }; enable: () => string }
+
+/** What one repair of this computer's setup did, checked again afterwards. `failed`: the coding agents still without a
+ *  Scopebond hook (shown to the person); `duplicates`: those still running it more than once (an enabled plugin, which only
+ *  the person can turn off; reported by the self-check). `autostart`: repaired, failed, or null when it needed nothing (or
+ *  the person turned it off). */
+export interface SetupRepair { at: number; repaired: Harness[]; deduped: Harness[]; failed: Harness[]; duplicates: Harness[]; autostart: "repaired" | "failed" | null }
+
+/** Repair this computer's setup at once: the hook entry put back where a coding agent's settings lost it, a second copy of it
+ *  taken out (the user settings keep theirs), and autostart that is on but broken started again (autostart the person turned
+ *  off stays off). Each step is checked again afterwards. */
+export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostart: AutostartRepair | null = null, now = Date.now()): SetupRepair {
+  const home = homedir();
+  const repaired = repairHookEntries(missingHookEntries(harnesses)).map((r) => r.harness);
+  const deduped: Harness[] = [];
+  for (const harness of harnesses) {
+    try {
+      if (!duplicateHooks(harness, home, home)) continue;
+      if (dedupeHooks(harness, "user", home, home).removed.length) deduped.push(harness);
+    } catch (error) {
+      process.stderr.write(`Scopebond Agent: could not take the second Scopebond hook out for ${harness}: ${(error as Error).message}\n`);
+    }
+  }
+  let fixedAutostart: SetupRepair["autostart"] = null;
+  if (autostart) {
+    try {
+      const before = autostart.health();
+      if (before.on && !before.ok) { autostart.enable(); fixedAutostart = autostart.health().ok ? "repaired" : "failed"; }
+    } catch { fixedAutostart = "failed"; }
+  }
+  const failed = missingHookEntries(harnesses);
+  const duplicates = harnesses.filter((h) => { try { return duplicateHooks(h, home, home) !== null; } catch { return false; } });
+  return { at: now, repaired: repaired.filter((h) => !failed.includes(h)), deduped, failed, duplicates, autostart: fixedAutostart };
+}
+
+/** The self-check items a setup repair can fix. */
+const SETUP_CHECKS = new Set(["hook_entry", "hook_duplicates", "autostart"]);
 
 /** The agent's own delivery problem, kept apart from a hook call's cut-off. */
 function recordAgentError(dir: string, message: string): void {
@@ -320,12 +372,12 @@ export function noteUpdateOutcome(dir: string, log: (line: string) => void, runn
       const why = `the installer reported ${installed.version} installed, but the agent that started is ${running}${installed.log ? ` (log: ${installed.log})` : ""}`;
       recordFailedUpdate(dir, installed.version, now, why);
       log(`the update to ${installed.version} did not take: ${why}`);
-    } else log(`the Scopebond Agent ${installed.version} was installed`);
+    } else { clearFailedUpdate(dir); log(`the Scopebond Agent ${installed.version} was installed`); }
     return;
   }
   if (!pending) return;
   // Installed, and its result already read by an earlier start of this version.
-  if (pending.version === running) { clearUpdatePending(dir); return; }
+  if (pending.version === running) { clearUpdatePending(dir); clearFailedUpdate(dir); return; }
   // Still under way (the helper waits for the old agent and runs msiexec), unless it has been far too long.
   if (now >= pending.at && now - pending.at < UPDATE_PENDING_MS) return;
   clearUpdatePending(dir);
@@ -351,6 +403,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   rmSync(join(options.dir, STOPPED_FILE), { force: true });
   // What the install helper of a signed update recorded before this start (installAfterExit).
   noteUpdateOutcome(options.dir, log);
+  // The update this start finishes, if any: the tray says "Updated to …" once.
+  const updatedHere = noteRunningVersion(options.dir, agentVersion());
   // No agent has run in this folder before (it writes its wake time from its first cycle): a new install.
   settleTraySettings(options.dir);
   const interval = options.intervalMs ?? INTERVAL_MS;
@@ -360,6 +414,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // runs no self-check does not clear it).
   let lastSelfCheck: MaintenanceResult["selfCheck"] = null;
   let failures = 0;
+  // When the last cycle that could not deliver ended; and rules checks that failed in a row.
+  let failedAt = 0;
+  let rulesFailures = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   let running: Promise<CycleResult> | null = null;
@@ -367,6 +424,56 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const cycleLimit = options.cycleLimitMs ?? CYCLE_LIMIT_MS;
   let stopped = false;
   let lastSelfCheckAt = 0;
+  // Repairs of this computer's setup: done as soon as they are seen (each cycle, when the tray asks, before each self-check),
+  // recorded, and shown only while one fails.
+  const selfRepair = options.selfRepair ?? options.maintenance !== false;
+  const autostart: AutostartRepair = options.autostart ?? { health: () => autostartHealth(options.dir), enable: () => enableAutostart(options.dir, agentCliPath()) };
+  let lastRepair: SetupRepair | null = null;
+  // The agent's own renewal of a credential about to end: what the workspace answered, for which credential, and when.
+  let renewal: { at: number; outcome: Awaited<ReturnType<typeof refreshIfDue>>; credential_id: string; expires_at: string | null } | null = null;
+  /** Renew the credential silently when it ends within a week (the rules check renews it in its last 30 days; this learns why
+   *  it did not). Only a refusal is the person's to act on: "Sign in again". */
+  const renewCredential = async (): Promise<void> => {
+    const connection = loadConnection(options.dir);
+    const expires = Date.parse(connection?.expires_at ?? "");
+    if (!connection || !Number.isFinite(expires) || expires - Date.now() > CREDENTIAL_LAPSING_MS) { renewal = null; return; }
+    if (renewal && renewal.credential_id === connection.credential_id && Date.now() - renewal.at < CREDENTIAL_RETRY_MS) return;
+    const outcome = await refreshIfDue(options.dir, connection, { fetchImpl: options.fetchImpl });
+    renewal = { at: Date.now(), outcome, credential_id: connection.credential_id, expires_at: connection.expires_at ?? null };
+    if (outcome === "renewed") { renewal = null; log("renewed this computer's connection to the workspace"); }
+    else log(outcome === "refused" ? "the workspace refused to renew this computer's connection: the person must sign in again"
+      : `this computer's connection ends ${connection.expires_at}; renewing it did not work now (${outcome}), tried again in an hour`);
+  };
+  /** `thorough`: autostart too (a registry read on Windows), as before a self-check; `asked`: the person's Repair. A look
+   *  reads a few small settings files and writes only what is broken. */
+  const heal = (thorough = false, asked = false): SetupRepair | null => {
+    const at = Date.now();
+    if (!asked && !selfRepair) return lastRepair;
+    let done: SetupRepair;
+    try { done = repairSetup(expectedHarnesses(), thorough || asked ? autostart : null, at); } catch (error) { log(`setup repair failed: ${(error as Error).message}`); return lastRepair; }
+    const acted = done.repaired.length || done.deduped.length || done.failed.length || done.autostart;
+    for (const h of done.repaired) log(`repaired: the Scopebond hook entry was missing for ${h}; put back and checked again`);
+    for (const h of done.deduped) log(`repaired: the Scopebond hook ran more than once for ${h}; the second copy was taken out`);
+    if (done.autostart) log(`autostart was on but broken: ${done.autostart === "repaired" ? "started again and checked" : "could not be repaired"}`);
+    if (done.failed.length && !(lastRepair?.failed.length)) log(`could not put the Scopebond hook back for ${done.failed.join(", ")}`);
+    // Kept while it says something: the last repair made, or one that failed until it no longer does.
+    if (acted || asked || lastRepair?.failed.length) lastRepair = done;
+    return done;
+  };
+  /** The end-to-end self-check, after a repair of anything it would find broken; when it still finds a setup problem, that
+   *  is repaired and the check runs once more. */
+  const selfCheck = async (connection: NonNullable<ReturnType<typeof loadConnection>>): Promise<MaintenanceResult["selfCheck"]> => {
+    heal(true);
+    try { await renewCredential(); } catch { /* the check says so */ }
+    connection = loadConnection(options.dir) ?? connection;
+    const run = () => runSelfCheck(options.dir, connection, expectedHarnesses(), agentVersion(), { fetchImpl: options.fetchImpl });
+    const first = await run();
+    if (!selfRepair || !first || first.ok || !first.checks.some((c) => !c.ok && SETUP_CHECKS.has(c.id))) return first;
+    const fixed = heal(true);
+    if (!fixed || !(fixed.repaired.length || fixed.deduped.length || fixed.autostart === "repaired")) return first;
+    log("self-check: repaired what it found and checked again");
+    return run();
+  };
   // Time asleep never counts as records waiting. A gap between cycles longer than the schedule allows means the
   // computer slept (or the agent was stopped); waiting is counted again from the next cycle. The wake time is kept across
   // restarts of the agent alone (awake.ts), so a restart never hides a backlog; after a long gap the waiting records decide.
@@ -418,6 +525,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const sent = await sendAllowancesAndRequests(options.dir, connection, options.fetchImpl);
       if (sent.allowances || sent.requests || sent.ended) log(`sent ${sent.allowances} allowance(s), ${sent.ended} stopped allowance(s) and ${sent.requests} request(s) to the workspace`);
     } catch { /* they wait for the next cycle */ }
+    // "This shouldn't be blocked" marks, to a workspace that takes them.
+    if (summary?.capabilities.includes(BLOCK_FEEDBACK_CAPABILITY)) {
+      try { const n = await sendBlockFeedback(options.dir, connection, options.fetchImpl); if (n) log(`sent ${n} "shouldn't be blocked" mark(s) to the workspace`); }
+      catch { /* they wait for the next cycle */ }
+    }
   };
   const cycle = async (): Promise<CycleResult> => {
     if (running) return running;
@@ -440,9 +552,14 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (limitTimer) clearTimeout(limitTimer);
       if (result.deliveryError?.startsWith("a delivery cycle did not finish")) recordAgentError(options.dir, result.deliveryError);
       await sendReasons();
+      // A hook entry a coding agent's settings lost (an update or a reset can remove it), or a second copy: put right now.
+      heal();
+      if (result.connected) { try { await renewCredential(); } catch { /* tried again next cycle */ } }
       try { noticeHealth(); } catch { /* status is best effort */ }
       last = result;
       failures = result.deliveryError ? failures + 1 : 0;
+      rulesFailures = result.rules === "unavailable" || result.rules === "refused" ? rulesFailures + 1 : result.rules === "skipped" ? rulesFailures : 0;
+      if (result.deliveryError) failedAt = Date.now();
       if (result.delivered) log(`delivered ${result.delivered} record(s); ${result.pending} waiting`);
       if (result.deliveryError) log(`delivery problem: ${result.deliveryError}`);
       // Asked from the workspace's computer page. Send again now (the cycle sent before its rules check), or run the
@@ -508,7 +625,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
             result.error = `update to ${newer} could not start its installer: ${(error as Error).message}; nothing was installed`;
           }
         } else {
-          // Tried again at the next check: a download or a release not yet complete can pass then.
+          // Tried again after 1 hour, 6 hours, then daily: a download or a release not yet complete can pass then.
+          recordFailedUpdate(options.dir, newer, Date.now(), verified.ok ? "the installer changed after it was checked" : verified.reason);
           result.error = `update to ${newer} could not be verified: ${verified.ok ? "the installer changed after it was checked" : verified.reason}; nothing was installed`;
         }
         log(result.error);
@@ -517,6 +635,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         const installed = await installAgent(newer, { fetchImpl: options.fetchImpl });
         const started = installed.ok ? await (options.startCheck ?? startCheck)(newer) : null;
         if (installed.ok && started?.ok) {
+          clearFailedUpdate(options.dir);
           result.updatedTo = newer;
           lastMaintenance = result;
           if (options.onUpdated) options.onUpdated(newer);
@@ -528,7 +647,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
           recordFailedUpdate(options.dir, newer);
           const back = await installAgent(current, { provenance: false });
           result.error = `the Scopebond Agent ${newer} did not start (${(started?.output ?? "").slice(-200)}); ${back.ok ? `went back to ${current}` : `going back to ${current} failed: ${back.output.slice(-200)}`}`;
-        } else result.error = `update to ${newer} failed: ${installed.output.slice(-300)}`;
+        } else {
+          result.error = `update to ${newer} failed: ${installed.output.slice(-300)}`;
+          recordFailedUpdate(options.dir, newer, Date.now(), installed.output.slice(-300));
+        }
         log(result.error);
       }
       // The local store: older rows rewritten, acknowledged receipts past the retention window removed, space returned.
@@ -542,14 +664,25 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         }
       } catch (error) { log(`local store upkeep failed: ${(error as Error).message}`); }
       if (connection && (forceSelfCheck || Date.now() - lastSelfCheckAt >= SELF_CHECK_EVERY_MS)) {
-        result.selfCheck = await runSelfCheck(options.dir, connection, harnesses, current, { fetchImpl: options.fetchImpl });
+        result.selfCheck = await selfCheck(connection);
         lastSelfCheck = result.selfCheck;
         lastSelfCheckAt = Date.now();
         log(`self-check ${result.selfCheck?.ok ? "passed" : `failed: ${result.selfCheck?.failed.join(", ") ?? "no result"}`}`);
       }
     } catch (error) { result.error = (error as Error).message; }
     lastMaintenance = result;
+    retryUpdateWhenDue();
     return result;
+  };
+  // A failed update is tried again when its wait is over (1 hour, 6 hours, then daily), not only at the six-hourly check.
+  let updateRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  const retryUpdateWhenDue = () => {
+    if (updateRetryTimer) { clearTimeout(updateRetryTimer); updateRetryTimer = null; }
+    const failed = failedUpdate(options.dir);
+    if (stopped || options.maintenance === false || !failed || kind === "per-machine") return;
+    const wait = failed.retry_at - Date.now() + 1_000;
+    updateRetryTimer = setTimeout(() => { updateRetryTimer = null; if (!stopped) void maintain(); }, Math.max(wait, 1_000));
+    updateRetryTimer.unref?.();
   };
 
   // A request was just sent: check for the answer every 10 seconds from now (schedule picks the shorter wait).
@@ -564,10 +697,38 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     if (stopped) return;
     // While a request to an admin waits (asked in the last 10 minutes), the rules are checked every 10 seconds, so an answer
     // shows in the tray at once; then at the usual interval.
-    const delay = failures ? Math.min(MAX_BACKOFF_MS, interval * 2 ** Math.min(failures, 6))
+    // Rules not checked for over an hour (the last-known ones stay in force): checked again at once, then after 1, 2, 4, 8
+    // and at most 15 minutes, never later than the usual interval.
+    const rulesRetry = rulesFailures > 0 && rulesStale() ? Math.min(interval, rulesFailures <= 1 ? 0 : Math.min(MAX_BACKOFF_MS, MIN_MS * 2 ** (rulesFailures - 2))) : null;
+    const usual = failures ? Math.min(MAX_BACKOFF_MS, interval * 2 ** Math.min(failures, 6))
       : requestWaiting(options.dir, Date.now()) ? Math.min(interval, ANSWER_POLL_MS) : interval;
+    const delay = rulesRetry === null ? usual : Math.min(usual, rulesRetry);
     timerWaiting = true;
-    timer = setTimeout(() => { timerWaiting = false; void cycle().finally(schedule); }, delay);
+    const due = Date.now() + delay;
+    let lastTick = Date.now();
+    // While backing off, the agent looks again every interval and starts the next cycle at once (the backoff starts over)
+    // when a delivery worked elsewhere since its last failed one (a hook call reached the workspace) or the computer has just
+    // woken. Sending is the agent's job: nobody has to press "Send now".
+    const tick = () => {
+      const at = Date.now();
+      const woke = at - lastTick > allowedGapMs + interval;
+      lastTick = at;
+      if (failures && at < due && !woke && !deliveredSince(failedAt)) { timer = setTimeout(tick, Math.min(interval, due - at)); return; }
+      timerWaiting = false;
+      void cycle().finally(schedule);
+    };
+    timer = setTimeout(tick, failures ? Math.min(delay, interval) : delay);
+  };
+  /** Connected, and the last rules check that worked was over an hour ago (or none is known). Only a check that failed
+   *  makes the agent try again sooner, so a computer whose check is skipped is never asked in a loop. */
+  const rulesStale = (): boolean => {
+    if (!loadConnection(options.dir)) return false;
+    const good = lastGoodCheck(readMeta(options.dir));
+    return good === null || Date.now() - good > RULES_STALE_MS;
+  };
+  /** A delivery that worked after `at` (any process: the hook delivers on its own too). */
+  const deliveredSince = (at: number): boolean => {
+    try { const success = readDeliveryState(options.dir).last_success_at; return success !== null && success > at; } catch { return false; }
   };
 
   // A block under a rule a person may allow or ask about can be acted on afterwards, from the tray: what the workspace offers
@@ -577,6 +738,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const actionable = (blocks: RecentBlockRecord[], now: number): RecentBlock[] => {
     const known = new Map(readBlocked(options.dir).map((b) => [b.id, b]));
     const states = blockStates(options.dir, now);
+    const marked = blockFeedbackFor(options.dir);
     const workspace = summary?.workspace_name ?? null;
     // Why each rule exists, for a block's details: the clause's own description in this computer's policy, read once.
     let policy: ExplainPolicy | undefined;
@@ -608,6 +770,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         offers,
         reason_min: q ? q.reason_min : null,
         tries: b.tries ?? 1, first_at: b.first_at ?? b.at, group_id: b.group_id ?? b.action_id,
+        feedback_sent: b.action_id ? marked.has(b.action_id) : false,
         ...outcome,
         request,
         rule_why: whyOf(findClause(policy, b.clause ?? null)?.description ?? findClause(policy, rule)?.description),
@@ -632,6 +795,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
 
   const trayState = (): TrayModel => {
     const now = Date.now();
+    // Seen now, repaired now: the tray shows a setup problem only while its repair fails.
+    heal();
     const status = computerStatus(options.dir);
     const meta = readMeta(options.dir);
     // Every rule in force, counted (the hook's rule summary): the older `block`/`monitor` carry the same counts.
@@ -658,9 +823,14 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       canAsk: workspaceLetsAsk(options.dir),
       packs: packsInForce(),
       rulesUpdatedAt: lastGoodCheck(meta),
+      updated: recentUpdate(updatedHere, now),
+      repairFailed: (lastRepair?.failed ?? []).map((h) => toolName(h) ?? h),
+      selfCheck: lastSelfCheck ? { ok: lastSelfCheck.ok, failed: lastSelfCheck.failed } : null,
+      signInAgain: renewal?.outcome === "refused" && renewal.credential_id === loadConnection(options.dir)?.credential_id
+        ? { expires_at: renewal.expires_at && Number.isFinite(Date.parse(renewal.expires_at)) ? Date.parse(renewal.expires_at) : null } : null,
     });
     // What the person let through and asked an admin, for the tray's Allowed and Requests lists.
-    return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir) };
+    return { ...model, allowed: allowedList(options.dir, now), asked: askedList(options.dir), feedback_offered: summary?.capabilities.includes(BLOCK_FEEDBACK_CAPABILITY) ?? false };
   };
   /** What this install can update to, for the tray: from npm, the workspace's agent and hook (as its rules check said);
    *  the signed install, only the signed build the workspace names (the hook is inside it); for every user, nothing. */
@@ -778,15 +948,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         if (cycled.rules === "refused" || cycled.rules === "unavailable") error = "the rules could not be checked; this computer keeps its last rules";
       } catch (e) { error = (e as Error).message; }
       const connection = loadConnection(options.dir);
-      let selfCheck: MaintenanceResult["selfCheck"] = null;
+      let checked: MaintenanceResult["selfCheck"] = null;
       if (connection) {
         try {
-          selfCheck = await runSelfCheck(options.dir, connection, expectedHarnesses(), agentVersion(), { fetchImpl: options.fetchImpl });
-          lastSelfCheck = selfCheck;
+          checked = await selfCheck(connection);
+          lastSelfCheck = checked;
           lastSelfCheckAt = Date.now();
         } catch (e) { error = error ?? (e as Error).message; }
       }
-      return { text: checkResult(selfCheck, error), tray: trayState() };
+      return { text: checkResult(checked, error), tray: trayState() };
     },
     // Install the version the workspace recommends now, instead of at the next six-hourly check.
     "POST /update": async () => {
@@ -871,6 +1041,21 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     "GET /requests": () => ({ requests: askedList(options.dir) }),
     // "Stop allowing": the person ends an allowance they made here. It stops applying at once, and the ended record goes to
     // the workspace, signed by this computer's key.
+    // "This shouldn't be blocked": the person's mark on a block, kept here and sent to a workspace that takes it. Only a block
+    // this computer recorded can be marked, once.
+    "POST /blocked/feedback": (body) => {
+      const id = typeof (body as { action_id?: unknown } | null)?.action_id === "string" ? String((body as { action_id: string }).action_id) : "";
+      // A block a person could act on has its action's key; any other block of the week is named by its record, and its key is
+      // a digest of the record's id (the workspace finds the block by the record).
+      const item = id ? readBlocked(options.dir).find((b) => b.id === id) : undefined;
+      const listed = item ? undefined : localActivity(options.dir, { limit: RECENT_BLOCKS_MAX })?.recent_blocks.find((b) => b.action_id === id);
+      const rule = item?.rule ?? listed?.rule ?? listed?.clause ?? null;
+      if (!id || !rule) return { outcome: "gone", text: "This block is no longer on this computer." };
+      const actionKey = item?.action_key ?? createHash("sha256").update(`record:${id}`).digest("hex");
+      const added = queueBlockFeedback(options.dir, { action_id: id, rule, action_key: actionKey, harness: item?.harness ?? listed?.harness ?? null });
+      if (added) setTimeout(() => { void sendReasons(); }, 1_000);
+      return { outcome: added ? "noted" : "already", text: "Noted: your workspace's admins see that this shouldn't have been blocked" };
+    },
     "POST /allowances/stop": (body) => {
       const id = typeof (body as { id?: unknown } | null)?.id === "string" ? String((body as { id: string }).id) : "";
       const item = allowedList(options.dir).find((a) => a.id === id && a.by === "person");
@@ -890,14 +1075,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
-      failed_update: failedUpdate(options.dir), signing_in: reconnecting,
+      failed_update: failedUpdate(options.dir), signing_in: reconnecting, last_repair: lastRepair, credential_renewal: renewal,
     } }),
     "POST /flush": async () => ({ cycle: await cycle() }),
-    "POST /repair": () => {
-      const repaired = repairHookEntries();
-      for (const r of repaired) log(`repaired the Scopebond hook entry in ${r.file}`);
-      return { repaired };
-    },
+    // The person's Repair: the same repair the agent makes by itself, whatever its setting, with what it did and what failed.
+    "POST /repair": () => heal(true, true) ?? { repaired: [], deduped: [], failed: [], duplicates: [], autostart: null },
     "POST /maintain": async () => ({ maintenance: await maintain(true) }),
     // `scopebond-agent stop` and `autostart off`: answer first, then stop, so the caller hears back.
     "POST /stop": () => {
@@ -932,6 +1114,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     try { endSignIn?.(); } catch { /* already over */ }
     if (timer) clearTimeout(timer);
     if (maintenanceTimer) clearInterval(maintenanceTimer);
+    if (updateRetryTimer) clearTimeout(updateRetryTimer);
     // A cycle under way gets a moment to finish; stop never waits on one that does not.
     if (running) await Promise.race([running.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2_000).unref?.())]);
     await control.close();

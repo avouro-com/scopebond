@@ -48,6 +48,8 @@ export interface TrayModel {
   /** Whether the workspace lets a person ask an admin under any rule (so the tray shows its Requests list even before the
    *  person has asked anything); absent from an older agent. */
   can_ask?: boolean;
+  /** The workspace takes "This shouldn't be blocked" marks (its `block_feedback` capability); absent from an older agent. */
+  feedback_offered?: boolean;
   /** What the person let through (in force or waiting for an admin), and what they asked an admin (allowed-asked.ts). */
   allowed?: AllowedItem[];
   asked?: AskedItem[];
@@ -60,6 +62,15 @@ export interface TrayModel {
   /** What this computer enforces, for Settings' "This computer" row; null before the rules can be read. Absent from an older
    *  agent. */
   rules?: TrayRules | null;
+  /** The code of a sign-in waiting for approval (the tray's tooltip shows it whole); null otherwise. Absent from an older
+   *  agent. */
+  sign_in_code?: string | null;
+  /** This computer has not finished its first sign-in yet (never connected; the tray tells no problem meanwhile, and says
+   *  "Connected to …" once it is). Absent from an older agent. */
+  first_sign_in?: boolean;
+  /** The update this computer took, for a day after it (the tray says "Updated to …" once); null otherwise. Absent from an
+   *  older agent. */
+  updated?: { from: string; to: string; at: string } | null;
 }
 
 /** The rules in force: how many block and how many only record (every starter, workspace and pack rule, and each service the
@@ -103,6 +114,8 @@ export interface RecentBlock {
    *  block) and when it first did; the one outcome the row shows (block-outcome.ts), the sentence that stands in for a
    *  button, the text "Copy details" copies, and the person's request for it, when they asked. */
   tries?: number; first_at?: string; group_id?: string | null;
+  /** The person marked this block "This shouldn't be blocked". */
+  feedback_sent?: boolean;
   outcome?: BlockOutcome; outcome_text?: string | null; copy_details?: string | null; request?: BlockRequest | null;
   /** Newer again: why the rule exists, in one line (the first sentence of the rule's description on this computer), for the
    *  block's details; absent when the rule says nothing about itself. */
@@ -204,7 +217,7 @@ export interface TrayInput {
   /** `recommendedAgent`/`recommendedHook`: what this install can update to (the signed install: the workspace's signed
    *  build, and never a separate hook; an install for every user: nothing). `failedUpdate`: a version that did not install
    *  or start here within the last day (not offered again until then). */
-  version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null; failedUpdate?: { version: string; reason: string | null } | null };
+  version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null; failedUpdate?: { version: string; reason: string | null; failures?: number } | null };
   workspace: { name: string | null; environment: string | null; computer_url: string | null } | null;
   computerName: string;
   /** Items about this computer waiting in the workspace's Review (from the workspace's summary). */
@@ -224,16 +237,27 @@ export interface TrayInput {
   packs?: Array<{ id: string; title: string; version: string }> | null;
   /** When the rules were last checked successfully (a failed check never moves it); absent: `rules.checked_at`. */
   rulesUpdatedAt?: number | null;
+  /** The update this computer took, while the tray should still name it (version-seen.ts `recentUpdate`). */
+  updated?: { from: string; to: string; at: string } | null;
+  /** The coding tools whose Scopebond hook the agent could not put back ("Claude Code"): the one setup problem the person
+   *  sees (the agent repairs the rest by itself, at once). */
+  repairFailed?: string[] | null;
+  /** The workspace refused to renew this computer's credential, which ends at `expires_at`: the person must sign in again. */
+  signInAgain?: { expires_at: number | null } | null;
+  /** The last self-check's result, kept until a check passes: a quiet Settings line while it did not pass. */
+  selfCheck?: { ok: boolean; failed: string[] } | null;
 }
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
-/** Records waiting this long while the computer is awake and online need attention. */
-export const WAITING_ATTENTION_MS = 15 * MIN;
-/** Offline (the workspace unreachable) this long needs attention. */
-const OFFLINE_ATTENTION_MS = 4 * HOUR;
-/** Rules not checked for this long while online need attention. */
-const RULES_STALE_MS = HOUR;
+/** Sending records is the agent's job, never the person's: only after this long awake and online without a delivery does
+ *  Settings say so, in one quiet row (no attention state, no toast). */
+export const RECORDS_STUCK_MS = 24 * HOUR;
+/** Rules not checked for this long: the agent checks again at once and keeps trying; the last-known rules stay in force, so
+ *  the person sees nothing (Settings' "Rules updated" says when). */
+export const RULES_STALE_MS = HOUR;
+/** Failed tries of an update before Settings says it did not install (an older agent's record counts as said). */
+const UPDATE_TRIES_BEFORE_SAYING = 3;
 
 /** A delivery error that means the workspace could not be reached (no answer at all), not a refusal. */
 export function unreachable(error: string | null | undefined): boolean {
@@ -263,6 +287,27 @@ function notLicensed(error: string | null | undefined): boolean {
   return !!error && /HTTP 402 \(not_licensed\)/.test(error);
 }
 
+/** A billing refusal as Settings says it: the line ("Not licensed · 4 records wait on this computer") and the note. Null for
+ *  any other error. A plan change is named only when the workspace said one lifts the limit, with the limit it gives. */
+function billingLine(error: string | null | undefined, pending: number): { line: string; note: string } | null {
+  const waiting = `${count(pending)} record${pending === 1 ? " waits" : "s wait"} on this computer`;
+  if (overQuota(error)) {
+    const liftsTo = planLiftsTo(error);
+    return { line: `Workspace limit reached · ${waiting}`, note: liftsTo !== null
+      ? `Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows, or sooner if a workspace owner moves to a plan that allows ${liftsTo.toLocaleString("en-US")} records a month.`
+      : "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows." };
+  }
+  if (notLicensed(error)) {
+    return { line: `Not licensed · ${waiting}`,
+      note: "This agent is not covered by your workspace's licenses. The starter protections stay on, and this computer keeps its records; they send once an owner adds licenses in Settings, Billing." };
+  }
+  if (planPaused(error)) {
+    return { line: `Paused by your workspace's plan · ${waiting}`,
+      note: "Your workspace's plan keeps fewer agents active than it has, and this one is paused. This computer keeps checking actions and keeps its records; they send once an owner keeps this agent active or changes the plan." };
+  }
+  return null;
+}
+
 /** The HTTP status of a refusal the workspace answered (not "unreachable"), or null. */
 function refusedStatus(error: string | null | undefined): number | null {
   const m = error ? /HTTP (\d{3})/.exec(error) : null;
@@ -287,6 +332,11 @@ function clock(at: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/** "Tue 09:14": a time at least a day ago, with its weekday. */
+function dayAndClock(at: number): string {
+  return `${new Date(at).toLocaleDateString("en-US", { weekday: "short" })} ${clock(at)}`;
+}
+
 const newer = (want: string | null, have: string): boolean => {
   if (!want) return false;
   const a = want.split(".").map(Number), b = have.split(".").map(Number);
@@ -294,7 +344,7 @@ const newer = (want: string | null, have: string): boolean => {
   return false;
 };
 
-const ACTIONS: Record<TrayAction["id"] | "sign_in", TrayAction> = {
+const ACTIONS: Record<TrayAction["id"] | "sign_in" | "sign_in_again", TrayAction> = {
   send_now: { id: "send_now", label: "Send records now", route: "/flush" },
   update_now: { id: "update_now", label: "Update now", route: "/update" },
   check_now: { id: "check_now", label: "Check now", route: "/check" },
@@ -302,6 +352,7 @@ const ACTIONS: Record<TrayAction["id"] | "sign_in", TrayAction> = {
   reconnect: { id: "reconnect", label: "Reconnect…", route: "/reconnect" },
   // The same route and id (the tray shows the code the answer carries for "reconnect"), for a computer never connected.
   sign_in: { id: "reconnect", label: "Sign in…", route: "/reconnect" },
+  sign_in_again: { id: "reconnect", label: "Sign in again…", route: "/reconnect" },
   open_workspace: { id: "open_workspace", label: "Open workspace", route: "/open-workspace" },
 };
 
@@ -310,10 +361,16 @@ export function trayModel(input: TrayInput): TrayModel {
   const d = status.delivery;
   const pending = d.pending;
   const oldestAt = d.oldest_pending_age_s === null ? null : now - d.oldest_pending_age_s * 1000;
-  // Sleep-aware: time the computer was asleep or off never counts as waiting.
-  const waitingMs = oldestAt === null ? 0 : now - Math.max(oldestAt, input.awakeSince);
   const offline = d.connected && unreachable(d.last_error);
-  const offlineFor = offline ? now - Math.max(d.last_success_at ?? input.awakeSince, input.awakeSince) : 0;
+  // How long records have waited without a delivery while the computer was awake and online: time asleep or off never counts,
+  // nor time before the last delivery that worked.
+  const reachedAt = oldestAt === null ? null : Math.max(oldestAt, d.last_success_at ?? 0);
+  const stuckFor = reachedAt === null || pending === 0 || offline ? 0 : now - Math.max(reachedAt, input.awakeSince);
+  // Billing refusals (the workspace's monthly limit, no license, paused by the plan): nothing a developer can do, Scopebond
+  // Cloud tells the workspace's owner, and the hook keeps checking every action. One quiet Settings line and the note.
+  const billing = pending > 0 ? billingLine(d.last_error, pending) : null;
+  const stuck = !billing && d.connected && stuckFor > RECORDS_STUCK_MS && reachedAt !== null
+    ? `Records can't reach ${input.workspace?.name ?? "your workspace"} since ${dayAndClock(reachedAt)}` : null;
   const failed = input.version.failedUpdate ?? null;
   const offered = (want: string | null) => want !== null && want !== failed?.version ? want : null;
   const updateAvailable = input.version.policy === "recommended" && (newer(offered(input.version.recommendedAgent), input.version.agent) || newer(offered(input.version.recommendedHook), input.version.hook));
@@ -336,37 +393,21 @@ export function trayModel(input: TrayInput): TrayModel {
   } else if (health.level === "red" && d.connection_refused_since !== null) {
     state = "disconnected"; headline = "Not connected to your workspace: using this computer's own rules";
     if (input.canReconnect) fix = ACTIONS.reconnect; else hint = health.hint;
-  } else if (pending > 0 && overQuota(d.last_error) && health.fix?.route !== "/repair") {
-    // Not "sending": the workspace refuses them until its limit allows. Nothing is lost; say so. A plan change is named only
-    // when the workspace said one lifts the limit, with the limit it gives: on some plans none does.
-    state = "attention"; headline = `Workspace limit reached: ${pending} record${pending === 1 ? "" : "s"} waiting`;
-    const liftsTo = planLiftsTo(d.last_error);
-    hint = liftsTo !== null
-      ? `Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows, or sooner if a workspace owner moves to a plan that allows ${liftsTo.toLocaleString("en-US")} records a month.`
-      : "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows.";
-    fix = ACTIONS.open_workspace;
-  } else if (pending > 0 && notLicensed(d.last_error) && health.fix?.route !== "/repair") {
-    // Not a delivery problem to retry: this agent holds no license. Sending again changes nothing; an owner decides.
-    state = "attention"; headline = `Not licensed: ${pending} record${pending === 1 ? "" : "s"} waiting`;
-    hint = "This agent is not covered by your workspace's licenses. The starter protections stay on, and this computer keeps its records; they send once an owner adds licenses in Settings, Billing.";
-    fix = ACTIONS.open_workspace;
-  } else if (pending > 0 && planPaused(d.last_error) && health.fix?.route !== "/repair") {
-    // Not a delivery problem to retry: the plan paused this agent. Sending again changes nothing; an owner decides.
-    state = "attention"; headline = `Paused by your workspace's plan: ${pending} record${pending === 1 ? "" : "s"} waiting`;
-    hint = "Your workspace's plan keeps fewer agents active than it has, and this one is paused. This computer keeps checking actions and keeps its records; they send once an owner keeps this agent active or changes the plan.";
-    fix = ACTIONS.open_workspace;
+  } else if (input.signInAgain) {
+    // Renewal is Scopebond's job; a refused one is the person's. Until the credential ends everything works as usual.
+    state = "attention"; headline = "Sign in again to keep this computer connected"; fix = ACTIONS.sign_in_again;
+    const ends = input.signInAgain.expires_at;
+    hint = `Your workspace didn't renew this computer's connection${ends ? `, which ends ${new Date(ends).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}. Sign in again to keep it.`;
+  } else if (input.repairFailed?.length) {
+    // The agent repaired at once and checked again; this one did not take. Repair tries again, as the person asks.
+    state = "problem"; headline = `Scopebond couldn't reconnect to ${input.repairFailed.join(" and ")}`; fix = ACTIONS.repair;
   } else if (health.level === "red") {
     state = "problem"; headline = health.headline; hint = health.hint;
     if (health.fix?.route === "/repair") fix = ACTIONS.repair;
   } else if (offline) {
-    state = offlineFor > OFFLINE_ATTENTION_MS ? "attention" : "offline";
-    headline = pending ? `Workspace unreachable: ${pending} record${pending === 1 ? "" : "s"} waiting` : "Workspace unreachable: still checking actions";
-  } else if (pending > 0 && waitingMs > WAITING_ATTENTION_MS) {
-    state = "attention"; headline = `${pending} record${pending === 1 ? "" : "s"} waiting to send`; fix = ACTIONS.send_now;
-  } else if (health.level === "amber" && health.fix?.route === "/maintain") {
-    state = "attention"; headline = health.headline; fix = ACTIONS.check_now;
-  } else if (input.rules?.checked_at && d.connected && now - input.rules.checked_at > RULES_STALE_MS) {
-    state = "attention"; headline = `Rules not checked for ${ago(input.rules.checked_at, now).replace(" ago", "")}`; fix = ACTIONS.check_now;
+    // However long it lasts, there is nothing to do: the hook checks every action with this computer's rules and the agent
+    // keeps trying. Never attention, so never a toast.
+    state = "offline"; headline = "Using this computer's rules; records send when back online";
   } else {
     state = "protected"; headline = "Protected";
   }
@@ -376,7 +417,7 @@ export function trayModel(input: TrayInput): TrayModel {
     const when = input.rules.checked_at ? ` · checked ${ago(input.rules.checked_at, now)}` : "";
     const source = input.rules.managed ? "Up to date" : "Using this computer's own rules";
     const counts = input.rules.block + input.rules.monitor > 0 ? ` · ${input.rules.block} block · ${input.rules.monitor} monitor` : "";
-    rows.push({ label: "Rules", value: `${input.rules.managed && input.rules.checked_at && now - input.rules.checked_at > RULES_STALE_MS ? `Not checked for ${ago(input.rules.checked_at, now).replace(" ago", "")}` : source}${when}${counts}` });
+    rows.push({ label: "Rules", value: `${input.rules.managed && input.rules.checked_at && now - input.rules.checked_at > RULES_STALE_MS ? "Using the last rules" : source}${when}${counts}` });
   }
   if (d.connected) {
     const value = pending === 0
@@ -402,17 +443,21 @@ export function trayModel(input: TrayInput): TrayModel {
       : `Up to date (agent ${input.version.agent})`,
   });
 
+  // No "Send records now": the agent retries by itself (and starts again at once when a delivery works elsewhere).
   const actions: TrayAction[] = [];
-  if (pending > 0 && fix?.id !== "send_now" && state !== "disconnected") actions.push(ACTIONS.send_now);
   if (updateAvailable && !input.working) actions.push(ACTIONS.update_now);
   if (fix?.id !== "check_now") actions.push(ACTIONS.check_now);
   if (input.workspace?.computer_url) actions.push(ACTIONS.open_workspace);
 
+  // A billing refusal: Settings' note under "This computer" (the panel shows a hint there while protected).
+  if (hint === null && state === "protected" && billing) hint = billing.note;
   if (hint === null && input.notice) hint = input.notice;
 
   const where = [input.workspace?.name, input.workspace?.environment].filter(Boolean).join(" · ");
-  const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : headline;
-  const tooltip = `Scopebond — ${label}`;
+  // Offline: the short form (the line itself does not fit the 63 characters of a tooltip).
+  const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : state === "offline" ? "Offline: using this computer's rules" : headline;
+  // A sign-in waiting: the code, whole (the headline would be cut at 63 characters before it).
+  const tooltip = input.signingIn ? `Scopebond: approve code ${input.signingIn.user_code}` : `Scopebond — ${label}`;
   // One line under "Protected": what was blocked today and when the rules were last updated (Settings says the rest).
   const updatedAt = input.rulesUpdatedAt !== undefined ? input.rulesUpdatedAt : input.rules?.checked_at ?? null;
   let detail: string | null = null;
@@ -436,15 +481,20 @@ export function trayModel(input: TrayInput): TrayModel {
       managed: input.rules.managed, blocking: input.rules.blocking ?? input.rules.block, monitoring: input.rules.monitoring ?? input.rules.monitor,
       packs: input.rules.packs ?? [], checked_at: input.rules.checked_at, last_attempt_at: input.rules.last_attempt_at ?? null, last_error: input.rules.last_error ?? null,
     } : null,
-    computer_rows: computerRows(input, state, updatedAt, updateAvailable),
+    computer_rows: computerRows(input, state, updatedAt, updateAvailable, stuck, billing?.line ?? null),
     version_label: `Scopebond ${input.version.agent}`,
+    sign_in_code: input.signingIn?.user_code ?? null,
+    first_sign_in: !d.connected && (input.canSignIn === true || !!input.signingIn),
+    updated: input.updated ?? null,
   };
 }
 
 /** Settings' "This computer", as facts a person reads (no queues, no internals), each only when known:
  *  Protection ("On · 9 rules blocking · 4 packs", the packs listed when opened), Workspace ("Avouro · Production"), Rules
- *  updated (the last successful check) and Version ("Scopebond 0.11.4 · up to date": one version for the whole client). */
-function computerRows(input: TrayInput, state: TrayState, updatedAt: number | null, updateAvailable: boolean): ComputerRow[] {
+ *  updated (the last successful check) and Version ("Scopebond 0.11.4 · up to date": one version for the whole client).
+ *  Quiet lines about chores Scopebond keeps doing by itself go here too, never in the header: Records, while the workspace
+ *  refuses them for billing reasons; Delivery, after a day of records not reaching the workspace. */
+function computerRows(input: TrayInput, state: TrayState, updatedAt: number | null, updateAvailable: boolean, delivery: string | null, records: string | null): ComputerRow[] {
   const rows: ComputerRow[] = [];
   const plural = (n: number, one: string, many: string) => `${count(n)} ${n === 1 ? one : many}`;
   const packs = input.packs ?? [];
@@ -458,12 +508,20 @@ function computerRows(input: TrayInput, state: TrayState, updatedAt: number | nu
   else if (!input.status.delivery.connected) rows.push({ label: "Workspace", value: "Not connected: using this computer's own rules" });
   if (updatedAt) rows.push({ label: "Rules updated", value: ago(updatedAt, input.now) });
   else if (input.rules && !input.rules.managed) rows.push({ label: "Rules updated", value: "Using this computer's own rules" });
+  if (records) rows.push({ label: "Records", value: records });
+  if (delivery) rows.push({ label: "Delivery", value: delivery });
+  // A self-check that did not pass, until one does: nothing in it is the person's to do (setup problems are repaired at once).
+  const failedChecks = input.selfCheck && !input.selfCheck.ok ? selfCheckWords(input.selfCheck.failed.filter((id) => !OWN_LINE_CHECKS.has(id))) : [];
+  if (failedChecks.length) rows.push({ label: "Self-check", value: `Last check didn't pass: ${failedChecks.join("; ")}` });
   const failed = input.version.failedUpdate ?? null;
   const version = `Scopebond ${input.version.agent}`;
   rows.push({
     label: "Version",
+    // An update that did not install is tried again by itself (1 hour, 6 hours, then daily) while this version keeps
+    // protecting: nothing is said until three tries failed.
     value: updateAvailable ? `${version} · ${input.version.recommendedAgent ?? "a newer version"} ready to install`
-      : failed ? `${version} · the update to ${failed.version} didn't install; trying again later`
+      : failed && (failed.failures ?? UPDATE_TRIES_BEFORE_SAYING) >= UPDATE_TRIES_BEFORE_SAYING ? `Update didn't install; Scopebond keeps protecting on ${input.version.agent}`
+      : failed ? version
       : input.version.policy === "hold" ? `${version} · updates set by your workspace`
       : `${version} · up to date`,
   });
@@ -539,5 +597,25 @@ export function supportBundle(i: SupportInput, scrub: (text: string) => string =
 export function checkResult(selfCheck: { ok: boolean; failed: string[] } | null, error: string | null): string {
   if (error) return `Check could not finish: ${error}`.slice(0, 200);
   if (!selfCheck) return "Checked just now: this computer is not connected to a workspace, so only local checks ran";
-  return selfCheck.ok ? "Checked just now: all good" : `Check found a problem: ${selfCheck.failed[0] ?? "see status"}`;
+  return selfCheck.ok ? "Checked just now: all good" : `Check found a problem: ${selfCheckWords(selfCheck.failed)[0] ?? "see status"}`;
+}
+
+/** Self-check items with a line of their own elsewhere (records waiting, the connection's renewal): not repeated. */
+const OWN_LINE_CHECKS = new Set(["queue", "credential"]);
+const CHECK_WORDS: Readonly<Record<string, string>> = {
+  hook_entry: "a coding tool's settings lost the Scopebond hook",
+  hook_starts: "the Scopebond hook can't start",
+  hook_duplicates: "the Scopebond hook runs more than once",
+  autostart: "Scopebond doesn't start with sign-in",
+  queue: "records are waiting to send",
+  credential: "the connection to the workspace needs renewing",
+  signing_key: "this computer's signing key is missing",
+  signature: "the workspace couldn't verify this computer's check",
+};
+
+/** A self-check's failed items in words a person reads (never ids), each once. */
+export function selfCheckWords(failed: readonly string[]): string[] {
+  const words = failed.map((id) => Object.prototype.hasOwnProperty.call(CHECK_WORDS, id) ? CHECK_WORDS[id]
+    : id.startsWith("workspace_") ? "the workspace didn't answer" : "one of its checks didn't pass");
+  return [...new Set(words)];
 }

@@ -15,7 +15,7 @@ use scopebond_tray::icon::{self, IconState};
 use scopebond_tray::menu::{self, AgentLink, Autostart, Command, Entry, MenuContext};
 use scopebond_tray::live::{self, LiveWatch};
 use scopebond_tray::model::{LiveQuestion, Notifications, TrayAction, TrayAnswer};
-use scopebond_tray::notify::{Kind, Notifier, RequestWatch, Toast};
+use scopebond_tray::notify::{update_toast, Kind, Notifier, RequestWatch, Situation, Toast};
 use scopebond_tray::panel::{self, Area, PANEL_HEIGHT, PANEL_WIDTH};
 use scopebond_tray::supervise::{self, Decision, Observation, Supervisor};
 use scopebond_tray::{log, win};
@@ -71,6 +71,8 @@ struct Shared {
     supervised: Mutex<AgentLink>,
     /// The person asked for the agent to be started.
     start_requested: AtomicBool,
+    /// Supervision could not bring the agent back (two failed restarts within ten minutes): protection is off.
+    protection_off: AtomicBool,
     notifier: Mutex<Notifier>,
     /// Since when the agent has not answered (for a notification when that lasts).
     silent_since: Mutex<Option<Instant>>,
@@ -101,6 +103,7 @@ impl Shared {
             anchor: Mutex::new(None),
             supervised: Mutex::new(AgentLink::Starting),
             start_requested: AtomicBool::new(false),
+            protection_off: AtomicBool::new(false),
             notifier: Mutex::new(Notifier::new()),
             silent_since: Mutex::new(None),
             open_block: Mutex::new(None),
@@ -153,10 +156,26 @@ fn autostart_state() -> Autostart {
 /// The person's own choice about starting with Windows, kept in the Scopebond folder: an upgrade of the installer puts
 /// the Run value back, and the tray takes it out again when the person had turned it off.
 const TRAY_SETTINGS: &str = "tray-settings.json";
+/// In the tray's settings file: the version whose "Updated to …" was told (once per version).
+const TOLD_UPDATE: &str = "told_update";
+
+/// The tray's settings file as a JSON object (empty when there is none, or it cannot be read).
+fn tray_settings(home: &Path) -> serde_json::Map<String, Value> {
+    match std::fs::read(home.join(TRAY_SETTINGS)).ok().and_then(|text| serde_json::from_slice::<Value>(&text).ok()) {
+        Some(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// Set one value in the tray's settings file, keeping the others.
+fn save_tray_setting(home: &Path, key: &str, value: Value) {
+    let mut settings = tray_settings(home);
+    settings.insert(key.to_string(), value);
+    let _ = std::fs::write(home.join(TRAY_SETTINGS), format!("{}\n", Value::Object(settings)));
+}
 
 fn start_with_windows_choice(home: &Path) -> Option<bool> {
-    let text = std::fs::read(home.join(TRAY_SETTINGS)).ok()?;
-    serde_json::from_slice::<Value>(&text).ok()?.get("start_with_windows")?.as_bool()
+    tray_settings(home).get("start_with_windows")?.as_bool()
 }
 
 fn set_start_with_windows(home: &Path, on: bool) -> bool {
@@ -167,7 +186,7 @@ fn set_start_with_windows(home: &Path, on: bool) -> bool {
     } else {
         win::delete_user_value(win::RUN_KEY, "Scopebond")
     };
-    let _ = std::fs::write(home.join(TRAY_SETTINGS), format!("{}\n", json!({ "start_with_windows": on })));
+    save_tray_setting(home, "start_with_windows", json!(on));
     done
 }
 
@@ -330,23 +349,18 @@ fn supervise_agent(shared: &Arc<Shared>) {
                     }
                 }
             }
+            // Restarts are silent: only the log says so. The person is told once two restarts failed (below).
             if let Some(notice) = sup.take_notice() {
                 log::line(match notice {
                     supervise::Notice::StartingAgain => "the agent stopped and nothing replaced it: starting it again",
                     supervise::Notice::Restarting => "the agent has not answered: restarting it",
                 });
-                // An agent that stopped without anyone asking is told about (as the person's setting allows). A hung agent
-                // was already told about once, as a problem, when it was shown as not answering.
-                let setting = lock(&shared.answer).as_ref().map(|a| a.settings.notifications).unwrap_or_default();
-                if notice == supervise::Notice::StartingAgain && setting != Notifications::Off {
-                    show_toast(Toast {
-                        kind: Kind::Problem,
-                        title: "Scopebond".into(),
-                        text: "The Scopebond Agent stopped and nothing started in its place; starting it again".into(),
-                        unblock: None,
-                        button: None,
-                    }, None);
-                }
+            }
+            // Two restarts failed within ten minutes: protection is off. The refresh tells the person once, with Restart it.
+            let off = sup.protection_off();
+            if shared.protection_off.swap(off, Ordering::SeqCst) != off {
+                log::line(if off { "two restarts of the agent failed within ten minutes: protection is off" } else { "protection is no longer off" });
+                shared.wake();
             }
             if sup.link() != before || *lock(&shared.supervised) != sup.link() {
                 log::line(&format!("agent: {}", link_name(sup.link())));
@@ -391,38 +405,61 @@ fn refresh(app: &AppHandle, shared: &Arc<Shared>) {
     notify(app, shared, answer.as_ref(), link, setting);
 }
 
-/// How long the agent may not answer (while the tray tries to start it) before that is worth a notification.
+/// How long the agent program may be missing beside the tray before that is worth a notification.
 const SILENT_FOR: Duration = Duration::from_secs(2 * 60);
 
 fn notify(app: &AppHandle, shared: &Arc<Shared>, answer: Option<&TrayAnswer>, link: AgentLink, setting: Notifications) {
     let now = Instant::now();
+    let off = answer.is_none() && shared.protection_off.load(Ordering::SeqCst);
     let (state, headline, blocks) = match (answer, link) {
         (Some(a), _) => {
             *lock(&shared.silent_since) = None;
             (a.tray.icon_state(), a.tray.headline.clone(), a.tray.recent_blocks.clone())
         }
-        // Not answering although the tray keeps trying: a problem once it has lasted. Stopped on purpose, waiting for an
-        // update's replacement or starting: nothing to tell.
-        (None, AgentLink::NotAnswering | AgentLink::Missing) => {
+        // Supervision could not bring the agent back (two restarts failed within ten minutes): protection is off, told once
+        // with Restart it.
+        (None, _) if off => {
+            *lock(&shared.silent_since) = None;
+            (IconState::Problem, menu::header(None, link).trim_start_matches("Scopebond — ").to_string(), Vec::new())
+        }
+        // No agent program beside the tray: a problem once it has lasted.
+        (None, AgentLink::Missing) => {
             let since = *lock(&shared.silent_since).get_or_insert(now);
-            // An agent whose pipe accepts but that has given no model for half a minute already waited its time: a
-            // problem at once (one notification; the notifier says it once).
-            let hung = link == AgentLink::NotAnswering && unresponsive(shared, now);
-            let state = if hung || now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
+            let state = if now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
             (state, menu::header(None, link).trim_start_matches("Scopebond — ").to_string(), Vec::new())
         }
+        // Starting, restarted after a crash or a hang (silently), stopped on purpose, waiting for an update's replacement:
+        // nothing to tell.
         (None, _) => {
             *lock(&shared.silent_since) = None;
             (IconState::Working, String::new(), Vec::new())
         }
     };
-    for toast in lock(&shared.notifier).observe(state, &headline, &blocks, setting, now) {
+    // The first sign-in: nothing about the state while it waits, "Connected to …" once it is done.
+    let situation = Situation {
+        protection_off: off,
+        first_sign_in: answer.is_some_and(|a| a.tray.first_sign_in),
+        workspace: answer.and_then(|a| a.tray.workspace.as_deref()),
+    };
+    for toast in lock(&shared.notifier).observe(state, &headline, &blocks, setting, situation, now) {
         show_toast(toast, Some((app.clone(), shared.clone())));
     }
     // An admin's answer to one of the person's requests.
     if let Some(a) = answer {
         for toast in lock(&shared.request_watch).observe(&a.tray.asked, setting) {
             show_toast(toast, Some((app.clone(), shared.clone())));
+        }
+    }
+    // "Updated to Scopebond 0.11.5", once per version (remembered in the tray's settings file, so a restart of the tray does
+    // not tell it again).
+    if let Some(updated) = answer.and_then(|a| a.tray.updated.as_ref()) {
+        let home = shared.client.home();
+        let told = tray_settings(home).get(TOLD_UPDATE).and_then(Value::as_str).map(str::to_string);
+        if let Some((version, toast)) = update_toast(Some(updated), told.as_deref(), setting) {
+            save_tray_setting(home, TOLD_UPDATE, json!(version));
+            if let Some(toast) = toast {
+                show_toast(toast, None);
+            }
         }
     }
 }
@@ -475,7 +512,7 @@ fn open_question(shared: &Arc<Shared>, action_id: &str) {
 fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
     thread::spawn(move || {
         let mut t = tauri_winrt_notification::Toast::new("Avouro.Scopebond").title(&toast.title).text1(&toast.text);
-        if matches!(toast.kind, Kind::Recovered | Kind::Block | Kind::Request) {
+        if matches!(toast.kind, Kind::Recovered | Kind::Block | Kind::Request | Kind::Connected | Kind::Updated) {
             t = t.sound(None);
         }
         match (toast.kind, panel) {
@@ -500,6 +537,23 @@ fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
             (Kind::Request, Some((app, shared))) => {
                 t = t.on_activated(move |_| {
                     open_panel(&app, &shared, None);
+                    Ok(())
+                });
+            }
+            // Protection is off: *Restart it* starts the agent at once (with a fresh count of failed restarts); a click on the
+            // notification itself opens the panel.
+            (Kind::Problem, Some((app, shared))) => {
+                if let Some(words) = toast.button {
+                    t = t.add_button(words, "restart");
+                }
+                t = t.on_activated(move |action| {
+                    if action.as_deref() == Some("restart") {
+                        log::line("asked to restart the agent (from the notification)");
+                        shared.start_requested.store(true, Ordering::SeqCst);
+                        shared.wake();
+                    } else {
+                        open_panel(&app, &shared, None);
+                    }
                     Ok(())
                 });
             }
@@ -536,11 +590,8 @@ fn draw(app: &AppHandle, shared: &Arc<Shared>) {
         (AgentLink::Starting | AgentLink::Waiting, _) | (AgentLink::Answering, None) => IconState::Working,
         _ => IconState::Problem,
     };
-    let tooltip = match (link, &answer) {
-        (AgentLink::Answering, Some(a)) if !a.tray.tooltip.is_empty() => a.tray.tooltip.clone(),
-        _ => menu::header(answer.as_ref(), link),
-    };
-    let tooltip: String = tooltip.chars().take(120).collect();
+    // A sign-in waiting shows its code whole; at most 63 characters.
+    let tooltip = menu::tooltip(answer.as_ref(), link);
     let mut drawn = lock(&shared.drawn);
     if drawn.icon != Some(state) {
         let _ = tray.set_icon(Some(icon_image(state)));
@@ -962,6 +1013,25 @@ fn panel_stop(id: String, shared: State<'_, Arc<Shared>>) -> bool {
     true
 }
 
+/// "This shouldn't be blocked" on a block in the panel: the agent keeps the mark and sends it to the workspace.
+#[tauri::command]
+fn panel_feedback(action_id: String, shared: State<'_, Arc<Shared>>) -> bool {
+    let known = lock(&shared.answer).as_ref().is_some_and(|a| a.tray.feedback_offered && a.tray.recent_blocks.iter().any(|b| b.action_id.as_deref() == Some(action_id.as_str())));
+    if !known {
+        return false;
+    }
+    let s = shared.inner().clone();
+    thread::spawn(move || {
+        let text = match s.client.call("POST", "/blocked/feedback", Some(&json!({ "action_id": action_id })), Duration::from_secs(10)) {
+            Ok(answer) => panel::block_text(&answer),
+            Err(e) => format!("It could not be noted: {e}"),
+        };
+        s.set_note(text);
+        s.wake();
+    });
+    true
+}
+
 /// The panel's Unblock form has input (keep the panel open when it loses focus), or no longer has.
 #[tauri::command]
 fn panel_hold(hold: bool, shared: State<'_, Arc<Shared>>) {
@@ -1023,7 +1093,7 @@ fn main() {
             }
         }))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_live, panel_stop, panel_hold, panel_command, panel_ready, panel_close])
+        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_live, panel_stop, panel_feedback, panel_hold, panel_command, panel_ready, panel_close])
         .setup(move |app| {
             let handle = app.handle().clone();
             if let Err(e) = create_tray(&handle, &shared) {

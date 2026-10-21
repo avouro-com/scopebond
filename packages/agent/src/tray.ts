@@ -162,12 +162,12 @@ export function startTray(home: string, agentPid = process.pid): ChildProcess | 
   } catch { return null; }
 }
 
-const RANK: Record<HealthLevel, number> = { green: 0, amber: 1, red: 2 };
-
-/** macOS and Linux: notify when the state gets worse, and once when it is green again. Returns whether it notified. */
+/** macOS and Linux: notify when the person must act (red: not connected, sign in again, the delivery queue cannot be opened),
+ *  and once when that is over. Amber is a chore Scopebond does by itself (records waiting, a check it runs again): quiet.
+ *  Returns whether it notified. */
 export function notifyChange(previous: HealthLevel | null, health: Health, run: typeof spawn = spawn): boolean {
   if (process.platform === "win32" || previous === null || previous === health.level) return false;
-  if (RANK[health.level] < RANK[previous] && health.level !== "green") return false;
+  if (health.level === "amber" || (health.level === "green" && previous !== "red")) return false;
   const text = health.level === "green" ? "Working again: " + health.headline : health.headline + (health.hint ? `. ${health.hint}` : "");
   try {
     const child = process.platform === "darwin"

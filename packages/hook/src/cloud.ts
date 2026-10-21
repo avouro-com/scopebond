@@ -209,6 +209,21 @@ export async function flushBounded(exporter: CloudExporter, timeoutMs = 3000, op
 
 export interface UninstallReport { workspace: string; told: boolean; authorized: boolean | null }
 
+/** The exit code of an `uninstall` that removed Scopebond but could not tell a workspace (sysexits' "temporary failure"):
+ *  the removal is done, only the notice failed. A program that runs the uninstall reports it rather than a plain success. */
+export const UNINSTALL_NOT_TOLD_EXIT = 75;
+
+/** Set by a program that runs `uninstall` for the person (the agent, its Settings entry) and says itself, last, what happens
+ *  to the Scopebond folder; `uninstall` then leaves that sentence to it. */
+export const UNINSTALL_CALLER_ENV = "SCOPEBOND_UNINSTALL_CALLER";
+
+/** The line an uninstall prints for a workspace's answer to the notice. */
+export function uninstallReportLine(report: UninstallReport): string {
+  if (!report.told) return `! could not tell ${report.workspace} that Scopebond is being removed (it will see this computer go quiet)`;
+  if (report.authorized) return `✓ told ${report.workspace}; the removal was allowed there`;
+  return `! told ${report.workspace}; the removal was not allowed there, so its owners and admins get a critical alert`;
+}
+
 /** Tell the workspace this computer is removing Scopebond, before anything is removed. Unless an owner or admin disconnected
  *  the computer or allowed its removal first, the workspace raises a critical alert. Bounded: an unreachable workspace never
  *  stops the person's uninstall; the line printed says the workspace was not told. */

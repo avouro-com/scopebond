@@ -90,6 +90,8 @@ pub struct RecentBlock {
     pub tries: u32,
     /// The first try's action id, the same for every retry, so a retry is not announced again (none from an older agent).
     pub group_id: Option<String>,
+    /// The person marked this block "This shouldn't be blocked".
+    pub feedback_sent: bool,
     /// The one outcome the row shows, and the sentence that stands in for a button (none from an older agent).
     pub outcome: Option<String>,
     pub outcome_text: Option<String>,
@@ -157,6 +159,8 @@ pub struct TrayModel {
     pub today: Option<Today>,
     /// Whether the workspace lets a person ask an admin under any rule (none from an older agent).
     pub can_ask: Option<bool>,
+    /// The workspace takes "This shouldn't be blocked" marks; false from an older agent.
+    pub feedback_offered: bool,
     /// What the person let through (in force, or waiting for an admin), newest first.
     pub allowed: Vec<AllowedItem>,
     /// What the person asked an admin, newest first, with the answer when there is one.
@@ -167,6 +171,22 @@ pub struct TrayModel {
     pub computer_rows: Vec<ComputerRow>,
     /// The one client version as a person reads it ("Scopebond 0.11.5"); none from an older agent.
     pub version_label: Option<String>,
+    /// The code of a sign-in waiting for approval (the tooltip shows it whole); none otherwise, or from an older agent.
+    pub sign_in_code: Option<String>,
+    /// This computer's first sign-in is still to come: nothing about the state is told meanwhile (false from an older agent).
+    pub first_sign_in: bool,
+    /// The update this computer took, for a day after it (none otherwise, or from an older agent).
+    pub updated: Option<Updated>,
+}
+
+/// An update this computer took: the version before and the version now running.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Updated {
+    pub from: String,
+    pub to: String,
+    /// When the agent first started on it (RFC 3339).
+    pub at: String,
 }
 
 /// A fact about this computer for Settings; `items` are what the row lists when opened (the rule packs in force).
@@ -504,6 +524,20 @@ mod tests {
         assert_eq!(again["tray"]["allowed"][0]["kind"], "quiet");
         assert!(crate::live::stoppable(&a.tray.allowed[0]), "Undo for a block the person kept");
         assert!(TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap().tray.blocked_groups.is_empty(), "an older agent sends none");
+    }
+
+    #[test]
+    fn reads_the_first_run_fields_and_an_older_agent_without_them() {
+        let json = r#"{"tray":{"state":"working","headline":"Approve this computer in your workspace: code BCDF-GHJK",
+          "sign_in_code":"BCDF-GHJK","first_sign_in":true,"updated":{"from":"0.11.4","to":"0.11.5","at":"2026-10-21T12:00:00.000Z"}}}"#;
+        let a = TrayAnswer::parse(json.as_bytes()).unwrap();
+        assert_eq!(a.tray.sign_in_code.as_deref(), Some("BCDF-GHJK"));
+        assert!(a.tray.first_sign_in);
+        assert_eq!(a.tray.updated, Some(Updated { from: "0.11.4".into(), to: "0.11.5".into(), at: "2026-10-21T12:00:00.000Z".into() }));
+        let old = TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap();
+        assert_eq!((old.tray.sign_in_code, old.tray.first_sign_in, old.tray.updated), (None, false, None));
+        let null = TrayAnswer::parse(br#"{"tray":{"state":"protected","sign_in_code":null,"updated":null}}"#).unwrap();
+        assert_eq!((null.tray.sign_in_code, null.tray.updated), (None, None));
     }
 
     #[test]

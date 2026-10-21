@@ -69,7 +69,11 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
   `npm.cmd uninstall -g @scopebond/agent`. `status` says so while both are there.
 - **Removing it.** Settings -> Apps -> Scopebond Agent -> Uninstall first runs `scopebond-agent uninstall` as the person
   removing it (autostart off, the agent stopped, the hook taken out of that person's coding-agent settings, the workspace
-  told). An install for every user removed by a deployment tool (Intune, Group Policy, the system account) cleans only the
+  told). Its output and exit code go to the installer's log (`msiexec /x … /l*v <log>`): a workspace that could not be
+  told within a few seconds is said there and the exit code is 75, and the removal goes on either way. The last line names
+  the Scopebond folder, which stays (keys and records not yet sent) unless it was removed with `msiexec /x … PURGE=1`.
+  From npm, `scopebond-agent uninstall` (and the Settings -> Apps entry of an npm install) does the same and ends the same
+  way; `scopebond-agent uninstall --purge` removes the folder too. An install for every user removed by a deployment tool (Intune, Group Policy, the system account) cleans only the
   profile it runs as: the agent does not edit other people's profiles. Before removing it for everyone, have each person
   run `scopebond-agent uninstall` (or remove it for them as them); afterwards, any hook entries left in someone's
   settings point at a program that is gone, and `status` and the daily self-check name that file

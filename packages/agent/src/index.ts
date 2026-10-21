@@ -5,9 +5,13 @@ export type { Handover } from "./service.js";
 export { writeOutputTo, FALLBACK_LOG } from "./log-file.js";
 export { scrubNodeInjection, withoutNodeInjection, NODE_INJECTION_VARS } from "./child-env.js";
 export type { Service, ServiceOptions, MaintenanceResult } from "./service.js";
-export { appsEntryValues, uninstallScript, writeUninstallScript, writeAppsEntry, removeAppsEntry, npmBeside, psQuote, UNINSTALL_KEY, UNINSTALL_SCRIPT, UTF8_BOM } from "./apps-entry.js";
+export { appsEntryValues, uninstallScript, writeUninstallScript, writeAppsEntry, refreshAppsEntry, removeAppsEntry, npmBeside, psQuote, UNINSTALL_KEY, UNINSTALL_SCRIPT, UTF8_BOM } from "./apps-entry.js";
+export { runUninstall, spawnHook, HOOK_UNINSTALL_TIMEOUT_MS } from "./uninstall.js";
+export type { UninstallOptions, HookRun, HookRunner } from "./uninstall.js";
 export { awakeSinceAtStart, readAwake, writeAwake, AWAKE_FILE } from "./awake.js";
 export type { AwakeState } from "./awake.js";
+export { noteRunningVersion, recentUpdate, VERSION_SEEN_FILE, UPDATED_SHOWN_MS } from "./version-seen.js";
+export type { Updated } from "./version-seen.js";
 export { runUpkeepApart, upkeepCommand, UPKEEP_BUDGET_MS, UPKEEP_TIMEOUT_MS } from "./upkeep.js";
 export type { UpkeepReport, UpkeepApartOptions } from "./upkeep.js";
 export { startControl, callAgent, readEndpoint, localSocketPath, AGENT_FILE, TOKEN_HEADER } from "./ipc.js";
@@ -19,7 +23,7 @@ export {
 } from "./autostart.js";
 export {
   agentVersion, fetchClientVersion, compareVersions, commandHookVersion, maintainedHookCommand, maintainHookEntries, installAgent, ownNpm,
-  isVersion, npmInstallArgs, npmEnvironment, checkProvenance, startCheck, recordFailedUpdate, recentlyFailedUpdate, failedUpdate, updateTarget,
+  isVersion, npmInstallArgs, npmEnvironment, checkProvenance, startCheck, recordFailedUpdate, recentlyFailedUpdate, failedUpdate, clearFailedUpdate, updateRetryMs, updateTarget, UPDATE_RETRY_MS,
   NPM_REGISTRY, PROVENANCE_REPOSITORY, PROVENANCE_REF, CLIENT_VERSION_MAX_BYTES, FAILED_UPDATE_FILE, FAILED_UPDATE_RETRY_MS,
 } from "./update.js";
 export type { ClientVersion, ProvenanceResult } from "./update.js";
@@ -47,7 +51,7 @@ export type { RegistryReader, FirstSignIn, FirstSignInOptions } from "./signin.j
 export { findNpmInstall, hasNpmInstall, migrateFromNpm, isNpmLauncher, readMigration, MIGRATED_FILE } from "./migrate.js";
 export type { NpmInstall, MigrateDeps, Migration } from "./migrate.js";
 export { useNativeHookEntries, hasForeignHookEntries, missingPrograms } from "./hook-entries.js";
-export { agentCli, hookCli, setupCli } from "./commands.js";
+export { agentCli, hookCli, setupCli, folderSentence } from "./commands.js";
 export type { CommandContext } from "./commands.js";
 export { applyToolSettings, toolSettingsReport, readToolSettingsState, TOOL_SETTINGS_STATE_FILE, TOOL_SETTINGS_SUPPORTED } from "./tool-settings.js";
 export type { ToolSettingsReport, HarnessReport, ToolSettingsRefusal } from "./tool-settings.js";

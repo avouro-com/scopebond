@@ -53,7 +53,7 @@ import {
 import { OBSERVATION_DB, ObservationStore } from "./obs-store.js";
 import { loadOrCreateBindingKey } from "./observation.js";
 import { uploadPending } from "./obs-upload.js";
-import { connectCloud, ingestUrl, loadConnection, reportUninstall } from "./cloud.js";
+import { connectCloud, ingestUrl, loadConnection, reportUninstall, uninstallReportLine, UNINSTALL_CALLER_ENV, UNINSTALL_NOT_TOLD_EXIT } from "./cloud.js";
 import { recoverEarlierReceipts } from "./recover.js";
 import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { compileManaged, isManaged, readMeta, writeMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
@@ -2175,16 +2175,18 @@ async function runDoctor(): Promise<void> {
 async function runUninstall(args: string[]): Promise<void> {
   requireInteractive("uninstall", args);
   // Every workspace this computer is connected to hears about the removal first (the user home's connection and a project's).
+  // One that could not be told is said, and the exit code says so once the removal is done (UNINSTALL_NOT_TOLD_EXIT).
   const seen = new Set<string>();
+  let untold = 0;
   for (const dir of [userHome(), resolveConfigDir(process.cwd())]) {
     const connection = loadConnection(dir);
     if (!connection || seen.has(connection.credential)) continue;
     seen.add(connection.credential);
     const report = await reportUninstall(connection, { purge: args.includes("--purge"), hookVersion: hookVersion() });
-    if (!report.told) console.log(`! could not tell ${report.workspace} that Scopebond is being removed (it will see this computer go quiet)`);
-    else if (report.authorized) console.log(`✓ told ${report.workspace}; the removal was allowed there`);
-    else console.log(`! told ${report.workspace}; the removal was not allowed there, so its owners and admins get a critical alert`);
+    if (!report.told) untold++;
+    console.log(uninstallReportLine(report));
   }
+  if (seen.size === 0) console.log("this computer is not connected to a workspace, so there was none to tell");
   let removed = 0;
   // Both scopes. Checking only the user config meant that after a per-project `init` —
   // the install the site actually tells people to run — `uninstall` reported "no
@@ -2195,12 +2197,16 @@ async function runUninstall(args: string[]): Promise<void> {
     }
   }
   if (removed === 0) console.log("no Scopebond hook found in this project or your user config.");
-  if (args.includes("--purge")) { purgeHome(); console.log(`✓ purged ${userHome()} (keys, policy, receipts)`); }
-  else console.log(`Kept ${userHome()} (keys, policy, receipts). Use --purge to remove it too.`);
+  // A program that ran this for the person (UNINSTALL_CALLER_ENV) says last what happens to the Scopebond folder.
+  const caller = !!process.env[UNINSTALL_CALLER_ENV];
+  if (args.includes("--purge")) { purgeHome(); if (!caller) console.log(`✓ purged ${userHome()} (keys, policy, receipts)`); }
+  else if (!caller) console.log(`Kept ${userHome()} (keys, policy, receipts). Use --purge to remove it too.`);
+  // Run from the home folder, the user home is also the "project" folder found: it is named once, above.
   const projectDir = resolveConfigDir(process.cwd());
-  if (existsSync(join(projectDir, "policy.json"))) {
+  if (resolve(projectDir) !== resolve(userHome()) && existsSync(join(projectDir, "policy.json"))) {
     console.log(`Kept ${projectDir} (this project's keys, policy and receipts) — delete it by hand if you want it gone.`);
   }
+  if (untold) process.exitCode = UNINSTALL_NOT_TOLD_EXIT;
 }
 
 /** `trust` — let this project's .scopebond policy govern here instead of the user
