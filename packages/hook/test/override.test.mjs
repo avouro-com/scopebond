@@ -251,13 +251,13 @@ test("no tray and no window: the denial's line for the person says where to allo
     assert.equal(later.decision, "deny");
     assert.equal(later.asked.length, 1, "the agent was asked once");
     const person = later.reason.split("\n").find((l) => l.startsWith("For the person: "));
-    assert.match(person, /allow it with a reason from the Scopebond icon in the notification area \(its recent blocks: choose the record below\)/);
+    assert.match(person, /allow it from the Scopebond icon in the notification area \(its recent blocks; the record id is on the Ref line\)/);
     assert.match(person, /\(https:\/\/app\.scopebond\.example\/computers\/c-1\)/, "the computer's page in the workspace, when the agent knows it");
-    assert.match(later.reason, /\nRecord: \S+/, "the record the person picks");
+    assert.match(later.reason, /\nRef: safe-shell · enforce · [0-9a-f-]{36}( \(.*\))?$/, "the record the person picks");
     assert.doesNotMatch(later.reason, /not running/);
     const asking = await run(ask.dir, bash("rm -rf ../build"), { answers: [{ decision: "unavailable", later: true }] });
     const askLine = asking.reason.split("\n").find((l) => l.startsWith("For the person: "));
-    assert.match(askLine, /ask an admin to unblock it from the Scopebond icon in the notification area \(its recent blocks: choose the record below\)/);
+    assert.match(askLine, /ask an admin to unblock it from the Scopebond icon in the notification area \(its recent blocks; the record id is on the Ref line\)/);
     assert.doesNotMatch(askLine, /https:/, "no link the agent did not give");
     // An agent that is not running: as before, the denial says to start it, and the line for the person is the workspace's.
     const down = await run(allow.dir, bash("rm -rf ../dist"), { answers: [{ decision: "unavailable" }] });

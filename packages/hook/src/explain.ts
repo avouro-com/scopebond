@@ -12,7 +12,8 @@
 // `permissionDecisionReason`, Cursor's `agentMessage`), so a clear one lets the
 // agent pick a different approach instead of retrying the same blocked call.
 
-import { ruleOfClause, ruleTitle } from "./rule-titles.js";
+import { blockTitle, ruleOfClause } from "./rule-titles.js";
+import { plainAction } from "./action-words.js";
 import { BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, blockedServiceKindOf, blockedServiceOf, isUnreadablePackageKey, type BlockedService } from "./service-rules.js";
 
 /** A policy clause, as much of it as the message needs. */
@@ -104,53 +105,78 @@ export interface ExplainDenyInput {
   services?: readonly BlockedService[];
   /** The record of this action (its action id), so the person can hand it to an admin who finds it in the workspace. */
   actionId?: string | null;
+  /** The final instruction to the coding agent, by what the person can do about the block (`FINAL_INSTRUCTION`); absent: it
+   *  stays blocked. */
+  instruction?: string | null;
 }
 
-/** What the coding agent reads first: stop, do not retry or work around the block, say what it was trying to do. A remedy
- *  addressed to "you" read as an instruction to the agent to edit its own rules, which is itself blocked. */
-const AGENT_INSTRUCTION = "What to do: do not retry this or work around it; tell the person what you were trying to do.";
+/** The final instruction the coding agent reads, by outcome, so it stops retrying and says the right thing. `unblock`: the
+ *  person may let it through; `ask`: an admin decides; `stays`: a rule with no unblocking, Scopebond's own protection, a
+ *  service the workspace blocks, or Safe Install; `quiet`: the person chose to keep it blocked. A remedy addressed to "you"
+ *  read as an instruction to the agent to edit its own rules, which is itself blocked. */
+export const FINAL_INSTRUCTION = {
+  unblock: "The person can unblock it from the Scopebond icon; ask them, then try once more.",
+  ask: "The person can ask an admin from the Scopebond icon; tell them, and wait for the answer before trying again.",
+  stays: "It stays blocked. Don't retry or work around it; tell the person what you were trying to do.",
+  quiet: "The person chose to keep this blocked; do not ask again or retry.",
+} as const;
 
-/** Compose the block message. Degrades in order: with a clause and a description
- *  it explains the rule; with a clause but no description it still names it; with
- *  no clause at all (an undetermined verdict, a kill switch) it reports the
- *  engine's reason unchanged rather than inventing a rule that did not decide. */
+/** Scopebond's own protection: always on, never unblocked, whatever the workspace sets. */
+const ALWAYS_ON = new Set(["protect-scopebond-read", "protect-scopebond-write"]);
+const ALWAYS_ON_PERSON = "this is Scopebond's own protection, always on: no one can unblock it. The Scopebond icon lists it under Blocked.";
+
+/** Compose the block message. With a clause it has five lines:
+ *
+ *    Scopebond blocked: <the action in plain words> ("<the rule's name>").
+ *    Why: <the rule's one-line why>
+ *    What to do: <the final instruction, by outcome>
+ *    For the person: <where to act>
+ *    Ref: <clause id> · <mode> · <record id> (<the engine's own reason>)
+ *
+ *  Without a description there is no Why line, and after the fact (post-hoc) no What to do line. With no clause at all (an
+ *  undetermined verdict, a kill switch) it reports the engine's reason unchanged rather than inventing a rule that did not
+ *  decide. */
 export function explainDeny(input: ExplainDenyInput): string {
   const detail = input.detail.trim() || "denied";
-  const action = describeAction(input.intent);
   const clause = findClause(input.policy, input.clauseId);
   const clauseId = str(clause?.id) || str(input.clauseId);
   // "blocked" is a claim about prevention, so it is only used where the action really
   // was stopped in flight.
   const verb = input.postHoc ? "recorded an out-of-policy" : "blocked";
   if (!clauseId) {
+    const action = describeAction(input.intent);
     return action ? `Scopebond ${verb} ${action}: ${detail}` : `Scopebond ${verb} action: ${detail}`;
   }
+  const intent = input.intent as { action_type?: string; params?: Record<string, unknown> } | undefined;
+  const words = (intent?.action_type ? plainAction(intent) : "") || describeAction(input.intent);
+  const mode = str(clause?.mode) || "enforce";
   // A blocked service is the workspace's own choice, said plainly: which service, and that the workspace blocks it.
   const kind = blockedServiceKindOf(clauseId);
+  let why: string;
+  let person: string;
   if (kind) {
     const params = (input.intent?.params ?? {}) as Record<string, unknown>;
     const key = blockedServiceOf(kind, params, input.services ?? [])?.key ?? str(params[BLOCKED_SERVICE_CLAUSES[kind].param]);
-    const what = kind === "package" && isUnreadablePackageKey(params.package_key)
+    why = kind === "package" && isUnreadablePackageKey(params.package_key)
       ? `Your workspace blocks some ${str(params.manager)} packages, and the packages this install names could not be read.`
       : `Your workspace blocks the ${BLOCKED_SERVICE_LABEL[kind]} ${key}.`;
-    return [
-      `Scopebond ${verb} ${action || "action"}: ${what}`,
-      "Use another way, or ask an admin of your Scopebond workspace to change the block.",
-    ].join("\n");
+    person = "ask an admin of your Scopebond workspace to change the block.";
+  } else {
+    why = shorten(str(clause?.description));
+    person = ALWAYS_ON.has(clauseId) ? ALWAYS_ON_PERSON : input.remedy ?? `edit clause "${clauseId}" in ${input.policyPath || "your Scopebond policy"}`;
   }
-  const mode = str(clause?.mode) || "enforce";
-  const why = shorten(str(clause?.description));
-  // The rule by the name a person reads (the tray's), with its id only when it has no name.
-  const title = ruleTitle(ruleOfClause(clauseId) ?? clauseId);
-  const actionId = str(input.actionId);
-  const lines = [
-    // The id stays in brackets after the name, so an admin can find the rule and support can match it.
-    `Scopebond ${verb} ${action || "action"}: ${title ? `"${title}" (rule ${clauseId}, ${mode})` : `rule "${clauseId}" (${mode})`}.`,
+  // The rule by the name a person reads (the tray's).
+  const title = blockTitle(ruleOfClause(clauseId), clauseId);
+  // Scopebond's own protection and a blocked service stay blocked, whatever an override handler said.
+  const instruction = ALWAYS_ON.has(clauseId) || kind ? FINAL_INSTRUCTION.stays : input.instruction || FINAL_INSTRUCTION.stays;
+  // The ids, the mode and the engine's own reason, last, so an admin can find the rule and the record, and support can match it.
+  const ref = [clauseId, mode, str(input.actionId)].filter(Boolean).join(" · ") + (detail !== "denied" ? ` (${detail})` : "");
+  const verbLine = input.postHoc ? "Scopebond recorded an out-of-policy action" : "Scopebond blocked";
+  return [
+    `${verbLine}: ${words || "an action"} ("${title}").`,
     ...(why ? [`Why: ${why}`] : []),
-    ...(detail && detail !== "denied" ? [`Detail: ${detail}`] : []),
-    ...(input.postHoc ? [] : [AGENT_INSTRUCTION]),
-    `For the person: ${input.remedy ?? `edit clause "${clauseId}" in ${input.policyPath || "your Scopebond policy"}`}`,
-    ...(actionId ? [`Record: ${actionId}`] : []),
-  ];
-  return lines.join("\n");
+    ...(input.postHoc ? [] : [`What to do: ${instruction}`]),
+    `For the person: ${person}`,
+    `Ref: ${ref}`,
+  ].join("\n");
 }

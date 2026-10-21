@@ -11,7 +11,7 @@ import { createSigner } from "@scopebond/sdk";
 import type { Mapped, ShownCommand } from "./map.js";
 import type { ShownOverrideHandler } from "./override.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
-import { explainDeny } from "./explain.js";
+import { explainDeny, FINAL_INSTRUCTION } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
 import { allowsLocalChanges, enforcedRuleIds, isManaged, packRuleAdjustmentsAt } from "./managed.js";
 import { withPackRules } from "./pack-rules.js";
@@ -55,8 +55,9 @@ export interface RuntimeConfig {
    *  (`HOT_PATH_STORE_BUSY_MS`, hook-deadline.ts), so a lock wait cannot by itself carry the call past its deadline. */
   storeBusyTimeoutMs?: number;
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
-   *  (see override.ts). `hint` explains, in a denial, how an override would have been possible; `remedy`, when it says
-   *  something, replaces the denial's line for the person (where to act on the block afterwards). */
+   *  (see override.ts). `hint`, when it says something, is the denial's final instruction to the coding agent ("What to
+   *  do", by what the person can do about the block); `remedy`, when it says something, replaces the denial's line for the
+   *  person (where to act on the block). */
   override?: (agentKid: string) => { handler: ShownOverrideHandler; hint(): string | null; remedy?(): string | null } | null;
   /** The current account's home folder, in every spelling to mask (see home-mask.ts). Defaults to `os.homedir()`,
    *  `HOME` and `USERPROFILE`; tests pass their own. */
@@ -530,7 +531,9 @@ export function createHookRuntime(config: RuntimeConfig) {
           let refused;
           try { refused = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(contextOption).length ? contextOption : undefined); }
           finally { boundaryVerdict = null; }
-          return { decision: "deny", reason: check.message, clauseId: null, code: "install_verdict", receipt: refused.receipt };
+          // A block is final: the coding agent is told so. An install held for a person this host cannot ask says what to do.
+          const reason = check.verdict === "block" ? `${check.message}\nWhat to do: ${FINAL_INSTRUCTION.stays}` : check.message;
+          return { decision: "deny", reason, clauseId: null, code: "install_verdict", receipt: refused.receipt };
         }
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);
         return { decision: "ask", reason: check.message, receipt };
@@ -578,8 +581,10 @@ export function createHookRuntime(config: RuntimeConfig) {
           // from `rules.json`, so telling someone to hand-edit it invites a change the
           // next `rules` run would overwrite.
           remedy: override?.remedy() ?? rulesRemedy,
+          // The final instruction by what the person can do about it (override.ts); else it stays blocked.
+          instruction: override?.hint() ?? null,
           actionId: (result.receipt as { payload?: { action_ref?: { action_id?: string } } } | undefined)?.payload?.action_ref?.action_id ?? null,
-        }) + (override?.hint() ? `\n${override.hint()}` : ""),
+        }),
         clauseId,
         ...(blockedServiceKindOf(clauseId) ? { code: BLOCKED_SERVICE_REASON } : {}),
         receipt: result.receipt,

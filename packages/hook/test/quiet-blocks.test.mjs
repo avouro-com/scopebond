@@ -85,7 +85,7 @@ test("kept blocked from the tray: the same action is denied at once with no ques
   assert.equal(again.decision, "deny");
   assert.deepEqual(again.asked, [], "nobody is asked");
   assert.equal(again.override, null, "nothing let through");
-  assert.equal(again.hint, "The person chose to keep this blocked; do not ask again.");
+  assert.match(again.hint, /^The person chose to keep this blocked; do not ask again/);
   assert.equal(readBlocked(dir).at(-1).acted, "quiet", "the new block is noted as kept blocked");
   assert.equal(blockedQuestion(dir, readBlocked(dir).at(-1).id), null);
   // Another action under the same rule still asks.
@@ -101,14 +101,14 @@ test("Undo ends a quiet block: the next try asks again", async () => {
   const next = await run(dir, bash("rm -rf ../build"));
   assert.equal(next.decision, "deny");
   assert.equal(next.asked.length, 1, "asked again");
-  assert.notEqual(next.hint, "The person chose to keep this blocked; do not ask again.");
+  assert.doesNotMatch(next.hint ?? "", /chose to keep this blocked/);
 });
 
 test("kept blocked from the live question: the answer makes a quiet block for what the window showed", async () => {
   const dir = setup({ "destructive-shell": { mode: "ask", override: { reason_min: 10, minutes: 0, daily_limit: 5, harness_prompt: false, requests: true } } });
   const first = await run(dir, bash("cd /repo && rm -rf ../build 2>&1 | tail -2"), { answers: [{ decision: "quiet", os_user: userInfo().username }] });
   assert.equal(first.decision, "deny");
-  assert.equal(first.hint, "The person chose to keep this blocked; do not ask again.");
+  assert.match(first.hint, /^The person chose to keep this blocked; do not ask again/);
   assert.equal(readBlocked(dir).at(-1).acted, "quiet");
   const [quiet] = quietOnes(dir);
   assert.equal(quiet.action_key, shownKeyOf("rm -rf ../build"));

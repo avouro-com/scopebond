@@ -155,7 +155,7 @@ test("the runtime: block denies with a signed receipt carrying the verdict; ask 
     const blocked = await run(verdict("block", "typosquat"));
     assert.equal(blocked.decision, "deny");
     assert.equal(blocked.code, "install_verdict");
-    assert.match(blocked.reason, /^Scopebond Safe Install blocked installing example-pkg \(npm\)\. Reason typosquat\.$/);
+    assert.equal(blocked.reason, "Scopebond Safe Install blocked installing example-pkg (npm). Reason typosquat.\nWhat to do: It stays blocked. Don't retry or work around it; tell the person what you were trying to do.");
     const receipt = blocked.receipts.find((r) => r.payload.realtime_result === "deny");
     assert.equal(receipt.payload.intent.action_type, "software.install");
     assert.equal(receipt.payload.intent.params.verdict, "block");

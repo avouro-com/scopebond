@@ -27,6 +27,10 @@ import { maskHomeInPolicy, unmaskHomeFolder, unmaskHomeInValue } from "./home-ma
 import { ruleName } from "./rule-titles.js";
 import { withPackRules } from "./pack-rules.js";
 import type { ShownCommand } from "./map.js";
+import { actionSummary, revealHidden } from "./action-words.js";
+import { FINAL_INSTRUCTION } from "./explain.js";
+
+export { actionSummary, plainAction, revealHidden } from "./action-words.js";
 
 export const OVERRIDE_STATE_FILE = "overrides.json";
 const AGENT_FILE = "agent.json";
@@ -78,51 +82,6 @@ function underDailyLimit(terms: OverrideTerms, count: number): boolean {
 function coverText(terms: OverrideTerms): string {
   if (terms.minutes === "unlimited") return "the same action from now on";
   return terms.minutes > 0 ? `the same action for ${terms.minutes} minutes` : "this action only";
-}
-
-/** Control, bidi and zero-width characters: shown to a person, they can make a command read as a different one. */
-// eslint-disable-next-line no-control-regex -- deliberate: these are the characters being found and written out
-const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/g;
-
-/** The text with each such character written out as ⟨U+XXXX⟩, so the summary a person (and an admin) reads is what runs. */
-export function revealHidden(text: string): string {
-  return text.replace(HIDDEN, (ch) => `⟨U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}⟩`);
-}
-
-/** One line a person can judge at a glance, from the minimized intent: never file contents or command output. */
-export function actionSummary(intent: { action_type?: string; params?: Record<string, unknown> }): string {
-  const p = intent.params ?? {};
-  const pick = (k: string) => (typeof p[k] === "string" ? String(p[k]) : "");
-  const text = intent.action_type === "shell.exec" ? pick("command") || pick("program")
-    : intent.action_type === "git.push" ? `git push ${pick("remote")} ${pick("ref")}`.trim()
-    : intent.action_type === "net.fetch" ? pick("url") || pick("host")
-    : pick("path") || intent.action_type || "an action";
-  // Arguments the hook keeps only as a keyed digest stay out of the window.
-  const shown = revealHidden(text.slice(0, 2000).replace(/ ?\(hmac-sha256:[0-9a-f]{64}\)/g, "").trim());
-  return shown.length > 200 ? `${shown.slice(0, 197)}...` : shown;
-}
-
-/** The action in plain words for the tray: the same masked text the Scopebond window shows (`actionSummary`), with a verb
- *  where the text alone is a path or an address ("Read .env.production", "Edit .github/workflows/release.yml", "git push
- *  --force origin main"). A command stays the command. Never file contents, command output or arguments the hook keeps
- *  only as a digest. */
-export function plainAction(intent: { action_type?: string; params?: Record<string, unknown> }): string {
-  const p = intent.params ?? {};
-  const pick = (k: string) => (typeof p[k] === "string" ? String(p[k]).trim() : "");
-  const type = intent.action_type ?? "";
-  const verb = (word: string, text: string) => (text ? `${word} ${text}` : "");
-  const text = type === "file.read" ? verb("Read", pick("path"))
-    : type === "file.write" ? verb("Edit", pick("path"))
-    : type === "git.push" ? `git push${p.force === true ? " --force" : ""} ${pick("remote")} ${pick("ref")}`.replace(/\s+/g, " ").trim()
-    : type === "net.fetch" ? verb("Reach", pick("url") || pick("host"))
-    : type === "mcp.tool.call" ? verb("Use", [pick("server"), pick("tool")].filter(Boolean).join(": "))
-    : type === "package.install" ? verb("Install", pick("package_key") || `${pick("manager")} ${pick("name")}`.trim())
-    : type === "software.install" ? verb("Install", [pick("name") || pick("source_url") || pick("source_domain"), pick("source_domain") && pick("name") ? `from ${pick("source_domain")}` : ""].filter(Boolean).join(" "))
-    : "";
-  if (!text) return actionSummary(intent);
-  // As the window shows it: digests left out, hidden characters written out, at most 200 characters.
-  const shown = revealHidden(text.slice(0, 2000).replace(/ ?\(hmac-sha256:[0-9a-f]{64}\)/g, "").replace(/\s+/g, " ").trim());
-  return shown.length > 200 ? `${shown.slice(0, 197)}...` : shown;
 }
 
 /** What a person may do about a block: allow it once (`allow`), for 15 minutes (`fifteen`), for an hour (`hour`), until
@@ -551,30 +510,42 @@ function osUserDigest(): string | null {
   try { return digestOf(userInfo().username); } catch { return null; }
 }
 
-/** The sentence added to a denial when the rule allows an override, so the person knows what to do. */
+/** The final instruction to the coding agent (the denial's "What to do" line) for what the person can do about this block:
+ *  unblock it, ask an admin, nothing (it stays blocked), or nothing because they chose to keep it blocked; a retry within
+ *  minutes keeps its own words. Null when the rule's own outcome stands (no person may act, or Scopebond's own protection). */
 export function overrideHint(note: OverrideNote | null): string | null {
   if (!note) return null;
   switch (note.outcome) {
-    case "unavailable": return `Your workspace lets you allow this once with a reason in the Scopebond window, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
-    case "limit": return `You have used today's overrides for "${note.title}". It blocks until tomorrow.`;
+    case "unavailable": case "later": return FINAL_INSTRUCTION.unblock;
+    case "asked": case "ask_unavailable": case "ask_later": return FINAL_INSTRUCTION.ask;
+    case "limit": case "declined": return FINAL_INSTRUCTION.stays;
+    case "quiet": return FINAL_INSTRUCTION.quiet;
     case "retry": return `This was blocked a few minutes ago and the person has not answered yet. Don't try it again: tell the person what you were trying to do; they can act on it from the Scopebond icon.`;
-    case "quiet": return "The person chose to keep this blocked; do not ask again.";
-    case "declined": return `The override was not given.`;
     case "not_overridable": return null;
-    case "asked": return `A request to allow "${note.title}" was sent to your workspace's admins. The Scopebond icon shows their answer; then run it again.`;
-    case "ask_unavailable": return `Your workspace lets you ask an admin to allow this, from the Scopebond window, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
-    // The line for the person says it (overrideRemedy).
-    case "later": case "ask_later": return null;
   }
 }
 
-/** The denial's line for the person when no one could be asked now (no tray listening, no window) but the person may act:
- *  where to allow the block, or ask an admin, afterwards. Null otherwise, and the workspace's own line stands. There is no
- *  command that unblocks a record: the Scopebond icon's recent blocks, or this computer's page in the workspace, do. */
+/** The denial's line for the person ("For the person"), matching what the tray offers for this block: where to unblock it or
+ *  ask an admin, afterwards when no one could be asked now (no tray listening, no window); to start the Scopebond Agent when it
+ *  is not running; that a request was sent, the override was not given, today's are used up, or they kept it blocked. Null
+ *  when the workspace's own line stands. There is no command that unblocks a record: the Scopebond icon's recent blocks, or
+ *  this computer's page in the workspace, do. */
 export function overrideRemedy(note: OverrideNote | null): string | null {
-  if (!note || (note.outcome !== "later" && note.outcome !== "ask_later")) return null;
-  const what = note.outcome === "later" ? "allow it with a reason" : "ask an admin to unblock it";
-  const page = note.link ? `, or on this computer's page in your Scopebond workspace (${note.link})` : "";
-  const then = note.outcome === "later" ? "then run it again" : "the Scopebond icon shows the answer; then run it again";
-  return `your workspace lets you ${what} from the Scopebond icon in the notification area (its recent blocks: choose the record below)${page}; ${then}`;
+  if (!note) return null;
+  switch (note.outcome) {
+    case "later": case "ask_later": {
+      const what = note.outcome === "later" ? "allow it" : "ask an admin to unblock it";
+      const page = note.link ? `, or on this computer's page in your Scopebond workspace (${note.link})` : "";
+      const then = note.outcome === "later" ? "then run it again" : "the Scopebond icon shows the answer; then run it again";
+      return `your workspace lets you ${what} from the Scopebond icon in the notification area (its recent blocks; the record id is on the Ref line)${page}; ${then}`;
+    }
+    case "unavailable": return `your workspace lets you allow this from the Scopebond icon, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
+    case "ask_unavailable": return `your workspace lets you ask an admin to allow this from the Scopebond icon, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
+    case "asked": return `a request to allow "${note.title}" was sent to your workspace's admins. The Scopebond icon shows their answer; then run it again.`;
+    case "limit": return `you have used today's overrides for "${note.title}". It stays blocked until tomorrow.`;
+    case "declined": return "the override was not given, so it stays blocked.";
+    case "retry": return "the Scopebond icon lists it under Blocked, where you can act on it.";
+    case "quiet": return "you chose to keep this blocked without being asked. To undo it, open the Scopebond icon (Allowed, Kept blocked).";
+    case "not_overridable": return null;
+  }
 }

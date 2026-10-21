@@ -10,3 +10,5 @@ A workspace can now name the lengths a person's unblock may last (`lengths` on a
 The hook's new `ruleSummary` counts every rule in force (the starter rules, the workspace's own, the rule packs' rules on Block and each service the workspace blocks by name) and lists the packs in force, and the tray model passes these counts on; `ruleReport` keeps its shape.
 
 "Rules updated" now means the last successful rules check: a failed check keeps `checked_at`, records `last_attempt_at` and `last_error`, and is not tried again before five minutes have passed.
+
+The message a coding agent gets on a deny now has five lines (what was blocked in plain words and the rule's name, why, what to do, what the person can do, and a `Ref:` line with the clause, the mode and the record id), and its final instruction follows the outcome: the person can unblock it, an admin decides, it stays blocked, or the person chose to keep it blocked; a Safe Install block also says it stays blocked.

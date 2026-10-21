@@ -108,7 +108,7 @@ export {
   localHarnessFile, isMachineSpecificCommand, gitShareState, excludeFromGit, pruneHarnessEntries,
 } from "./install.js";
 export type { Harness, HarnessScopes, GitShare } from "./install.js";
-export { explainDeny, describeAction, findClause } from "./explain.js";
+export { explainDeny, describeAction, findClause, FINAL_INSTRUCTION } from "./explain.js";
 export type { ExplainDenyInput, ExplainIntent, ExplainPolicy, ExplainClause } from "./explain.js";
 export {
   ensureDurableRuntime, isEphemeralPath, nodeModulesRootOf, runtimeRoot, runtimeDirFor, pinnedCliPath,

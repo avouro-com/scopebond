@@ -121,7 +121,8 @@ test("'Block, person may ask': the window offers only Ask an admin; the request 
   assert.equal(d.decision, "deny");
   assert.deepEqual(d.asked[0].offers, { allow: false, always: false, ask: true, fifteen: false, hour: false, tomorrow: false });
   assert.equal(d.asked[0].mode, "ask");
-  assert.match(d.hint, /request to allow .* was sent to your workspace's admins/);
+  assert.match(d.reason, /\nWhat to do: The person can ask an admin from the Scopebond icon/);
+  assert.equal(d.hint, "The person can ask an admin from the Scopebond icon; tell them, and wait for the answer before trying again.");
   const [request] = readRequests(dir);
   assert.equal(request.rule, "destructive-shell");
   assert.equal(request.reason, reason);

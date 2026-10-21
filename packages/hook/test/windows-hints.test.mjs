@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, overrideHint,
+  agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, overrideRemedy,
 } from "../dist/index.js";
 
 test("agent and npm commands use the .cmd form on Windows only", () => {
@@ -43,7 +43,7 @@ test("a PowerShell refusal is explained in one line with the .cmd fix", () => {
 });
 
 test("an override the agent cannot show names the command that starts it", () => {
-  const hint = overrideHint({ outcome: "unavailable", title: "x" });
+  const hint = overrideRemedy({ outcome: "unavailable", title: "x" });
   assert.ok(hint.includes(agentCommand("autostart on")), hint);
 });
 

@@ -311,11 +311,11 @@ test("ordinary rules decide first, and a blocked service is a block no allowance
 
 test("the explanation names the service even without the list at hand, and says it was only recorded when it already ran", () => {
   const intent = { action_type: "shell.exec", params: { program: "ffmpeg" } };
-  assert.equal(explainDeny({ clauseId: "blocked-programs", detail: "param program fails pattern", intent }).split("\n")[0],
-    "Scopebond blocked shell.exec ffmpeg: Your workspace blocks the program ffmpeg.");
+  assert.deepEqual(explainDeny({ clauseId: "blocked-programs", detail: "param program fails pattern", intent }).split("\n").slice(0, 2),
+    ['Scopebond blocked: ffmpeg ("Run a blocked program").', "Why: Your workspace blocks the program ffmpeg."]);
   assert.match(explainDeny({ clauseId: "blocked-mcp-servers", detail: "x", intent: { action_type: "mcp.tool.call", params: { server: "plugin_github_github", tool: "t" } }, services: SERVICES }),
     /Your workspace blocks the MCP server github\./);
-  assert.match(explainDeny({ clauseId: "blocked-programs", detail: "x", intent, postHoc: true }), /^Scopebond recorded an out-of-policy shell\.exec ffmpeg/);
+  assert.match(explainDeny({ clauseId: "blocked-programs", detail: "x", intent, postHoc: true }), /^Scopebond recorded an out-of-policy action: ffmpeg/);
 });
 
 test("the hook says it reads service rules, and a synced list is enforced; a tampered one is refused and the rules in force stay", async () => {
