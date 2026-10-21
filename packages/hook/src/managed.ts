@@ -216,6 +216,10 @@ export interface ManagedDocument {
    *  `pack_rules` capability). Digested with the rules (`digestManaged`). Read through `packRulesOf`, which leaves out an
    *  entry that is not well formed. */
   pack_rules?: Record<string, ManagedRule>;
+  /** The blocks the workspace keeps quiet, by tuning digest (tune-digest.ts), sent only to a hook that reports the
+   *  `quiet_patterns` capability and signed with the grants. Such a block stays blocked; nobody is asked about it and the tray
+   *  shows no notification for it. Read through `quietPatternsOf`, which skips an entry that is not a digest. */
+  quiet_patterns?: string[];
   /** Signed rules (policy-signature.ts): `true` on a rules document when present; the workspace's id; when it was issued
    *  (RFC 3339); the signing key's id and the base64 Ed25519 signature. All optional while unsigned documents are accepted. */
   managed?: true;

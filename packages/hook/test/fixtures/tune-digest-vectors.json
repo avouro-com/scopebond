@@ -1,0 +1,1162 @@
+{
+  "about": "Shared vectors for the tuning digest of a blocked record: sha256 of the JSON array [action type, workspace rule, program, target class, environment, host]. `digest` lists records and the digest both sides compute; `none` records neither side digests; `computer_none` records the computer never digests. `grants` pins the grants digest of a rules document with and without a quiet list (`quiet_patterns`). `workspace` is a synthetic workspace (developers, days, the block of each kind, the blocks per developer per day) with the quiet list its tuning arrives at and the questions and notifications per developer per day before and after.",
+  "digest": [
+    {
+      "name": "shell delete of build output",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "rm",
+              "command": "rm -rf dist",
+              "program_scope": "inside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4"
+    },
+    {
+      "name": "a Windows program path reads as its canonical name",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "C:\\Tools\\RM.EXE",
+              "command": "rm -rf dist"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4"
+    },
+    {
+      "name": "a program that is not a plain name has none",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "$(echo rm)",
+              "command": "$(echo rm) -rf x"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "5cf5a97558b2d1d157c177ef6bf5635c6135e6765b0e57e85cedb44e8b96fab6"
+    },
+    {
+      "name": "workflow write inside the repository",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.write",
+            "params": {
+              "path": ".github/workflows/ci.yml",
+              "root_scope": "inside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-write"
+        }
+      },
+      "digest": "a601ae55cd0fb32ea9343182c572cb5abd3f86e06a28b314bcdc35d95ec0b897"
+    },
+    {
+      "name": "secret read in the home folder",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "~/.aws/credentials"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "32359d0860d34107ffe353693ba5624a85e80b8bddf9ab9a481ed2e112e3dd53"
+    },
+    {
+      "name": "secret read under a Windows profile variable",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "%USERPROFILE%\\.ssh\\id_ed25519"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "32359d0860d34107ffe353693ba5624a85e80b8bddf9ab9a481ed2e112e3dd53"
+    },
+    {
+      "name": "secret read under an upper-case /USERS",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "/USERS/dev/.netrc"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "32359d0860d34107ffe353693ba5624a85e80b8bddf9ab9a481ed2e112e3dd53"
+    },
+    {
+      "name": "secret read on a system folder",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "/etc/shadow"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "b5f630759adaa628574cccdcdc7fb238a64c5b94f7f2acd3e7aa329b44ce27dd"
+    },
+    {
+      "name": "secret read in build output",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "node_modules/pkg/.env"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "879f160ab7ed4ded762f7cc21b1ec387353ecbe0b4d4e526dcc3782cd2afab66"
+    },
+    {
+      "name": "secret read in a temporary folder",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "/tmp/build/.env"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "0af8bb087aec15ad0eb7bdebae1c6736ed8b17fc416ccd6e768519bfe4221ecd"
+    },
+    {
+      "name": "secret read under $env:TEMP",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "$env:TEMP\\x\\.env"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "0af8bb087aec15ad0eb7bdebae1c6736ed8b17fc416ccd6e768519bfe4221ecd"
+    },
+    {
+      "name": "secret read on a drive root",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "C:\\"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "b5f630759adaa628574cccdcdc7fb238a64c5b94f7f2acd3e7aa329b44ce27dd"
+    },
+    {
+      "name": "secret read outside the folder",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "../other/.env"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "ae030f26310e298b0aa968adf675b044a14cf3fa2a13866ce6e26d9b97ac60e1"
+    },
+    {
+      "name": "secret read the hook placed outside",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "secrets/.env",
+              "root_scope": "outside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "ae030f26310e298b0aa968adf675b044a14cf3fa2a13866ce6e26d9b97ac60e1"
+    },
+    {
+      "name": "secret read inside the repository",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": "config/.env.production"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "6dddc16a6064ebdd85594cbf363d7539dc641eb080a1752ff461b5d15b194f72"
+    },
+    {
+      "name": "a URL is a remote target",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "target": "https://example.com/.env"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "029d4e5117db46ad9810c4b617ab64dfbecbe604192ec6eec715d7b5a909cc30"
+    },
+    {
+      "name": "an scp-style address is a remote target",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "targets": [
+                "",
+                "git@example.com:org/repo.git"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-read"
+        }
+      },
+      "digest": "029d4e5117db46ad9810c4b617ab64dfbecbe604192ec6eec715d7b5a909cc30"
+    },
+    {
+      "name": "request to one host, port and case dropped",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "net.fetch",
+            "params": {
+              "host": "API.Example.COM:443",
+              "method": "GET"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "allowed-sites"
+        }
+      },
+      "digest": "54e6cfe06500886214243d4a6591ed2ed9fd4621b416360d659329d7f5d1b7c0"
+    },
+    {
+      "name": "a host with credentials is no host",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "net.fetch",
+            "params": {
+              "host": "user@example.com"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "allowed-sites"
+        }
+      },
+      "digest": "4ac30eb5770e22284f99ed9199785d77723c14bf62f5b04f7f355cc6cb7c158c"
+    },
+    {
+      "name": "push to a protected branch",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "git.push",
+            "params": {
+              "ref": "main",
+              "remote": "origin"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-branches"
+        }
+      },
+      "digest": "cacbb41549baa4730b13b58c6b618ed00831da213981425da140cf750ffa2468"
+    },
+    {
+      "name": "force push",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "git.push",
+            "params": {
+              "ref": "main",
+              "force": true
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-branch-history"
+        }
+      },
+      "digest": "1bca5a6dfab76f1a682291bd04f8ed6b86983727a06a957fbe97a4c1e84e41c4"
+    },
+    {
+      "name": "production deploy names its environment",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "deploy.release",
+            "params": {
+              "program": "deployctl",
+              "environment": " Production "
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "production-deploy"
+        }
+      },
+      "digest": "3af65ce8452072f26123093dfacbfa03271283aaf9e31df23247d92f28253136"
+    },
+    {
+      "name": "package install by its manager",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "package.install",
+            "params": {
+              "manager": "NPM.cmd",
+              "name": "left-pad"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "047712845ff9763dab655a4164b5f1e9c24972873434cb00644386b6655e14a8"
+    },
+    {
+      "name": "Scopebond's own settings (a digest, never quiet)",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.write",
+            "params": {
+              "path": ".scopebond/policy.json",
+              "root_scope": "inside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-scopebond-write"
+        }
+      },
+      "digest": "6d9407b4108450437bbde0cb51e0c8d3adc5c215cee6afa585959f409347faeb"
+    },
+    {
+      "name": "a cloud delete",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "cloud.resource.delete",
+            "params": {
+              "program": "cloudctl",
+              "environment": "staging"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "cloud-destructive"
+        }
+      },
+      "digest": "65116f78ddd569715117d54299e79d975fd30142ff2e61a7589dd9d441152e1f"
+    },
+    {
+      "name": "a secret write",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "secret.write",
+            "params": {
+              "program": "vaultctl",
+              "target": "kv/app"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "secret-write"
+        }
+      },
+      "digest": "c533d4380e1f2fd20649f33fea31350bef4102e534be03913e385f6560b9da9d"
+    },
+    {
+      "name": "an access change",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "iam.change",
+            "params": {
+              "program": "iamctl"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "iam-change"
+        }
+      },
+      "digest": "23fc0bb1a1371a4c628f08614ff69628e7841c895c32810f73149c77bd4eccaa"
+    },
+    {
+      "name": "a database migration against a host",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "db.migrate",
+            "params": {
+              "program": "migrate",
+              "host": "db.internal.example:5432",
+              "environment": "prod"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "database-migrate"
+        }
+      },
+      "digest": "cc1e5829a62e814f8c96cbe1c34a1c48bcd6aeb4c69380fc013e6b6480842425"
+    },
+    {
+      "name": "Scopebond's own keys read",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "file.read",
+            "params": {
+              "path": ".scopebond/agent.key",
+              "root_scope": "inside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-scopebond-read"
+        }
+      },
+      "digest": "6dddc16a6064ebdd85594cbf363d7539dc641eb080a1752ff461b5d15b194f72"
+    },
+    {
+      "name": "a long action type is cut at 64 characters",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "custom.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "params": {
+              "program": "rm"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "08df166fdd0840a28ed33bbd07006ba311be5ca3f7e1ee88195dc863eea99b68"
+    },
+    {
+      "name": "a session budget decided it",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "rm",
+              "command": "rm -rf dist"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell",
+          "budget": {
+            "version": 1,
+            "scope": "session",
+            "budget_id": "budget-0001",
+            "budget_version": 1,
+            "mode": "enforce",
+            "operation": "shell.exec",
+            "count": 21,
+            "max": 20,
+            "state": "over"
+          }
+        }
+      },
+      "digest": null
+    },
+    {
+      "name": "a service the workspace blocks",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "net.fetch",
+            "params": {
+              "host": "paste.example.com"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "blocked-hosts"
+        }
+      },
+      "digest": null
+    }
+  ],
+  "computer_none": [
+    {
+      "name": "recorded, not denied",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "rm"
+            }
+          },
+          "realtime_result": "allow"
+        }
+      }
+    },
+    {
+      "name": "denied with no clause",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "rm",
+              "command": "rm -rf dist"
+            }
+          },
+          "realtime_result": "deny"
+        }
+      }
+    }
+  ],
+  "grants": [
+    {
+      "name": "no quiet list: the digest documents had before",
+      "doc": {
+        "revoked_allowances": [
+          "alw-1"
+        ]
+      },
+      "digest": "6659b541d330e2cc0ef8902190cfda461cd39e478413660fa3fcc2d2af0abae7"
+    },
+    {
+      "name": "a quiet list joins the grants digest",
+      "doc": {
+        "revoked_allowances": [
+          "alw-1"
+        ],
+        "quiet_patterns": [
+          "86114d2f07d4f8d60fde2bc148d415fdaa3c35d718e3c1a528ce7d437b6c0356",
+          "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4"
+        ]
+      },
+      "digest": "9ba4c1726c999dceec6361e875884fee0696ea33d4b2035c9a46fcfd4a3f00d9"
+    },
+    {
+      "name": "an emptied quiet list is a change",
+      "doc": {
+        "quiet_patterns": []
+      },
+      "digest": "a67c5b2bee6a66816a0f362d356b549f2dce7b0f0f984a2d1ddc8584242e3dbd"
+    }
+  ],
+  "workspace": {
+    "developers": 4,
+    "days": 10,
+    "patterns": {
+      "A": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "rm",
+              "command": "rm -rf dist",
+              "program_scope": "inside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "B": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "shred",
+              "command": "shred ~/notes.txt"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "C": {
+        "payload": {
+          "intent": {
+            "action_type": "file.write",
+            "params": {
+              "path": ".github/workflows/release.yml",
+              "root_scope": "inside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-write"
+        }
+      },
+      "D": {
+        "payload": {
+          "intent": {
+            "action_type": "file.write",
+            "params": {
+              "path": ".scopebond/rules.json",
+              "root_scope": "inside"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "protect-scopebond-write"
+        }
+      },
+      "E": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "rimraf",
+              "command": "rimraf .turbo"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "F": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "program": "rmdir",
+              "command": "rmdir /tmp/x"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      }
+    },
+    "stream": [
+      [
+        0,
+        1,
+        "A",
+        2
+      ],
+      [
+        1,
+        1,
+        "A",
+        2
+      ],
+      [
+        2,
+        1,
+        "A",
+        2
+      ],
+      [
+        0,
+        1,
+        "E",
+        2
+      ],
+      [
+        3,
+        1,
+        "B",
+        1
+      ],
+      [
+        3,
+        1,
+        "C",
+        1
+      ],
+      [
+        1,
+        1,
+        "D",
+        1
+      ],
+      [
+        0,
+        2,
+        "A",
+        2
+      ],
+      [
+        1,
+        2,
+        "A",
+        2
+      ],
+      [
+        2,
+        2,
+        "A",
+        2
+      ],
+      [
+        0,
+        2,
+        "E",
+        2
+      ],
+      [
+        3,
+        2,
+        "B",
+        1
+      ],
+      [
+        3,
+        2,
+        "C",
+        1
+      ],
+      [
+        1,
+        2,
+        "D",
+        1
+      ],
+      [
+        2,
+        2,
+        "F",
+        1
+      ],
+      [
+        0,
+        3,
+        "A",
+        2
+      ],
+      [
+        1,
+        3,
+        "A",
+        2
+      ],
+      [
+        2,
+        3,
+        "A",
+        2
+      ],
+      [
+        0,
+        3,
+        "E",
+        2
+      ],
+      [
+        3,
+        3,
+        "B",
+        1
+      ],
+      [
+        3,
+        3,
+        "C",
+        1
+      ],
+      [
+        1,
+        3,
+        "D",
+        1
+      ],
+      [
+        0,
+        4,
+        "A",
+        2
+      ],
+      [
+        1,
+        4,
+        "A",
+        2
+      ],
+      [
+        2,
+        4,
+        "A",
+        2
+      ],
+      [
+        0,
+        4,
+        "E",
+        2
+      ],
+      [
+        3,
+        4,
+        "B",
+        1
+      ],
+      [
+        3,
+        4,
+        "C",
+        1
+      ],
+      [
+        1,
+        4,
+        "D",
+        1
+      ],
+      [
+        2,
+        4,
+        "F",
+        1
+      ],
+      [
+        0,
+        5,
+        "A",
+        2
+      ],
+      [
+        1,
+        5,
+        "A",
+        2
+      ],
+      [
+        2,
+        5,
+        "A",
+        2
+      ],
+      [
+        0,
+        5,
+        "E",
+        2
+      ],
+      [
+        3,
+        5,
+        "B",
+        1
+      ],
+      [
+        3,
+        5,
+        "C",
+        1
+      ],
+      [
+        1,
+        5,
+        "D",
+        1
+      ],
+      [
+        0,
+        6,
+        "A",
+        2
+      ],
+      [
+        1,
+        6,
+        "A",
+        2
+      ],
+      [
+        2,
+        6,
+        "A",
+        2
+      ],
+      [
+        0,
+        6,
+        "E",
+        2
+      ],
+      [
+        3,
+        6,
+        "B",
+        1
+      ],
+      [
+        3,
+        6,
+        "C",
+        1
+      ],
+      [
+        1,
+        6,
+        "D",
+        1
+      ],
+      [
+        2,
+        6,
+        "F",
+        1
+      ],
+      [
+        0,
+        7,
+        "A",
+        2
+      ],
+      [
+        1,
+        7,
+        "A",
+        2
+      ],
+      [
+        2,
+        7,
+        "A",
+        2
+      ],
+      [
+        0,
+        7,
+        "E",
+        2
+      ],
+      [
+        3,
+        7,
+        "B",
+        1
+      ],
+      [
+        3,
+        7,
+        "C",
+        1
+      ],
+      [
+        1,
+        7,
+        "D",
+        1
+      ],
+      [
+        0,
+        8,
+        "A",
+        2
+      ],
+      [
+        1,
+        8,
+        "A",
+        2
+      ],
+      [
+        2,
+        8,
+        "A",
+        2
+      ],
+      [
+        0,
+        8,
+        "E",
+        2
+      ],
+      [
+        3,
+        8,
+        "B",
+        1
+      ],
+      [
+        3,
+        8,
+        "C",
+        1
+      ],
+      [
+        1,
+        8,
+        "D",
+        1
+      ],
+      [
+        2,
+        8,
+        "F",
+        1
+      ],
+      [
+        0,
+        9,
+        "A",
+        2
+      ],
+      [
+        1,
+        9,
+        "A",
+        2
+      ],
+      [
+        2,
+        9,
+        "A",
+        2
+      ],
+      [
+        0,
+        9,
+        "E",
+        2
+      ],
+      [
+        3,
+        9,
+        "B",
+        1
+      ],
+      [
+        3,
+        9,
+        "C",
+        1
+      ],
+      [
+        1,
+        9,
+        "D",
+        1
+      ],
+      [
+        0,
+        10,
+        "A",
+        2
+      ],
+      [
+        1,
+        10,
+        "A",
+        2
+      ],
+      [
+        2,
+        10,
+        "A",
+        2
+      ],
+      [
+        0,
+        10,
+        "E",
+        2
+      ],
+      [
+        3,
+        10,
+        "B",
+        1
+      ],
+      [
+        3,
+        10,
+        "C",
+        1
+      ],
+      [
+        1,
+        10,
+        "D",
+        1
+      ],
+      [
+        2,
+        10,
+        "F",
+        1
+      ]
+    ],
+    "quiet_patterns": [
+      "86114d2f07d4f8d60fde2bc148d415fdaa3c35d718e3c1a528ce7d437b6c0356",
+      "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4"
+    ],
+    "expect": {
+      "before": {
+        "total": 115,
+        "median": 3
+      },
+      "after": {
+        "total": 35,
+        "median": 1
+      }
+    }
+  }
+}

@@ -42,6 +42,8 @@ export interface RecentBlockRecord {
   verdict?: string | null;
   /** Safe Install held it for the person to decide (not a final block). */
   held?: boolean;
+  /** The workspace keeps blocks like this one quiet (tune-digest.ts): blocked, nobody asked, no notification. */
+  quiet?: boolean;
 }
 
 export interface LocalActivity {
@@ -127,6 +129,7 @@ export function localActivity(dir: string, options: { now?: Date; limit?: number
           ...(note?.kind ? { kind: note.kind } : {}),
           ...(note?.verdict ? { verdict: note.verdict } : {}),
           ...(note?.held ? { held: true } : {}),
+          ...(note?.quiet ? { quiet: true } : {}),
           session: note?.session ?? (typeof context.session === "string" ? context.session : null),
         }];
       } catch { return []; }

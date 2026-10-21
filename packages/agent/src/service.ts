@@ -756,8 +756,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const request = states.requestFor(b.action_id, rule, item?.action_key ?? null);
       const allowed = !request && states.allowedFor(rule, item?.action_key ?? null);
       const quiet = !request && !allowed && ((item?.acted as string | null | undefined) === "quiet" || states.quietFor(rule, item?.action_key ?? null));
+      // The workspace keeps blocks like this one quiet (the hook noted it): no question, no notification, still blocked.
+      const workspaceQuiet = !request && !allowed && !quiet && b.quiet === true;
       // What the workspace offers, for the newest QUESTIONS_MAX blocks not acted on (each question reads the hook's files).
-      const q = item && !item.acted && b.action_id && !request && !allowed && !quiet && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
+      const q = item && !item.acted && b.action_id && !request && !allowed && !quiet && !workspaceQuiet && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
       const offers = q ? {
         once: q.offers.allow, fifteen: q.offers.fifteen, hour: q.offers.hour, tomorrow: q.offers.tomorrow, quiet: true, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
         always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
@@ -768,11 +770,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
       const tool = toolName(b.harness ?? item?.harness ?? null);
       const outcome = blockOutcome({
-        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, held: b.held === true, request, allowed, quiet,
+        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, held: b.held === true, request, allowed, quiet, workspace_quiet: workspaceQuiet,
         workspace, tool, what, rule_title: ruleTitleText, action_id: b.action_id,
       });
       return {
-        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: (quiet ? "quiet" : null) ?? item?.acted ?? (request ? "asked" : allowed ? "allowed" : null),
+        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: (quiet || workspaceQuiet ? "quiet" : null) ?? item?.acted ?? (request ? "asked" : allowed ? "allowed" : null),
         what, action_text: item?.summary ?? b.action_text ?? b.summary, rule_title: ruleTitleText,
         project: projectName(b.repository) ?? b.project ?? null, tool,
         offers,

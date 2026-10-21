@@ -33,6 +33,7 @@ import { withPackRules } from "./pack-rules.js";
 import type { ShownCommand } from "./map.js";
 import { actionSummary, revealHidden } from "./action-words.js";
 import { FINAL_INSTRUCTION } from "./explain.js";
+import { quietByWorkspace, quietPatternsOf } from "./tune-digest.js";
 
 export { actionSummary, plainAction, revealHidden } from "./action-words.js";
 
@@ -312,7 +313,7 @@ function similarAllowances(input: { rule: string; actionKey: string; proposal: S
 /** What happened when the last override was considered, so a denial can say how an override would be possible. */
 export interface OverrideNote {
   rule: AnyManagedRuleId; title: string;
-  outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" | "later" | "ask_later" | "retry" | "quiet";
+  outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" | "later" | "ask_later" | "retry" | "quiet" | "workspace_quiet";
   /** This computer's page in the workspace (`later`, `ask_later`), when the agent gave it. */
   link?: string;
 }
@@ -405,6 +406,8 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     const retryOf = readBlocked(ctx.dir).find((b) => b.rule === rule && keys.includes(b.action_key) && !b.acted && b.harness === ctx.harness
       && t - Date.parse(b.at) >= 0 && t - Date.parse(b.at) < RETRY_MS);
     if (retryOf) { last = { rule, title, outcome: "retry" }; blocked(); return null; }
+    // The workspace keeps blocks like this one quiet (tune-digest.ts): it stays blocked and no one is asked.
+    if (quietByWorkspace(quietPatternsOf(doc), intent, verdict.clause_id)) { last = { rule, title, outcome: "workspace_quiet" }; blocked(); return null; }
 
     const waitMs = typeof ctx.waitMs === "function" ? ctx.waitMs() : ctx.waitMs ?? 45_000;
     const similarOffer = allowing ? similarOfferOf(similar(), rule, terms, allowing) : null;
@@ -599,6 +602,7 @@ export function overrideHint(note: OverrideNote | null): string | null {
     case "asked": case "ask_unavailable": case "ask_later": return FINAL_INSTRUCTION.ask;
     case "limit": case "declined": return FINAL_INSTRUCTION.stays;
     case "quiet": return FINAL_INSTRUCTION.quiet;
+    case "workspace_quiet": return FINAL_INSTRUCTION.stays;
     case "retry": return `This was blocked a few minutes ago and the person has not answered yet. Don't try it again: tell the person what you were trying to do; they can act on it from the Scopebond icon.`;
     case "not_overridable": return null;
   }
@@ -625,6 +629,7 @@ export function overrideRemedy(note: OverrideNote | null): string | null {
     case "declined": return "the override was not given, so it stays blocked.";
     case "retry": return "the Scopebond icon lists it under Blocked, where you can act on it.";
     case "quiet": return "you chose to keep this blocked without being asked. To undo it, open the Scopebond icon (Allowed, Kept blocked).";
+    case "workspace_quiet": return "your workspace keeps this blocked without asking. The Scopebond icon lists it under Blocked.";
     case "not_overridable": return null;
   }
 }

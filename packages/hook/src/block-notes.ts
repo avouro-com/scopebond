@@ -2,7 +2,8 @@
 // names its rule only when a person was asked about it, and carries the tool and repository only when its workspace reads
 // them, so the hook notes them here, on this computer, for each call it blocks. The note never leaves this computer and holds
 // no arguments: the action's id, the clause that denied it and the rule that clause carries, the tool's id and the project's
-// name (the repository's, else the folder's). The tray reads it with the receipts (local-activity.ts).
+// name (the repository's, else the folder's), and whether the workspace keeps blocks like it quiet. The tray reads it with the
+// receipts (local-activity.ts).
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, parse, resolve } from "node:path";
@@ -41,6 +42,8 @@ export interface BlockNote {
   /** Safe Install held the install for the person to decide (its verdict was "ask") and this coding tool could not ask them:
    *  not a final block. */
   held?: boolean;
+  /** The workspace keeps blocks like this one quiet (tune-digest.ts): the tray lists it without a notification. */
+  quiet?: boolean;
 }
 
 /** The project's name for a person: the repository's last part, else the working folder's name. Never the home folder or a
@@ -73,7 +76,7 @@ function deniedActionId(decision: { receipt?: unknown; receipts?: unknown[] }): 
 /** Note a blocked call (the newest 100 of the last week). Nothing for any other decision. Never throws: the receipt is the
  *  record, the note only names it for the tray. */
 export function noteBlock(dir: string, decision: { decision: string; clauseId?: string | null; code?: string; reason?: string; receipt?: unknown; receipts?: unknown[] },
-  where: { harness: string; project: string | null; session?: string | null }, now = Date.now()): void {
+  where: { harness: string; project: string | null; session?: string | null; quiet?: boolean }, now = Date.now()): void {
   try {
     if (decision.decision !== "deny") return;
     const id = deniedActionId(decision);
@@ -88,6 +91,7 @@ export function noteBlock(dir: string, decision: { decision: string; clauseId?: 
       ...(where.session ? { session: where.session } : {}),
       ...(kind ? { kind } : {}),
       ...(kind === "install" ? { verdict: installVerdictWords(decision.reason), ...(installHeld(decision.reason) ? { held: true } : {}) } : {}),
+      ...(where.quiet && !kind ? { quiet: true } : {}),
     };
     const notes = [...readBlockNotes(dir).filter((n) => n.id !== id), note].filter((n) => now - Date.parse(n.at) < WEEK_MS).slice(-KEEP);
     writeAtomic(join(dir, BLOCK_NOTES_FILE), `${JSON.stringify({ notes })}\n`);
