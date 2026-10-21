@@ -1,8 +1,9 @@
 //! The right-click menu, worked out from the agent's tray model as plain data (no window system here, so it is tested on
-//! its own). It is short: *Open Scopebond*, *Blocked today (N)*, the one fix when the model offers one, *Open in Scopebond
-//! Cloud*, *Notifications*, *Start with Windows*, *Help* (the model's other actions, diagnostics, logs, about) and *Hide
-//! icon*. An action item calls only what the model offers at that moment, and there is no "Quit" and no "Pause
-//! protection": the hook decides every action whether or not the tray runs.
+//! its own). It is short: *Open Scopebond*, *Blocked today (N)* when something was, the fix the person must act on when
+//! there is one, *Update now* when an update is waiting, then *Open <workspace> in Scopebond Cloud*, *Notifications* and
+//! *Start with Windows*, then *Get help…* and *Hide icon*. Chores Scopebond does by itself (sending records, checking the
+//! rules) are never menu items. An action item calls only what the model offers at that moment, and there is no "Quit" and
+//! no "Pause protection": the hook decides every action whether or not the tray runs.
 
 use crate::model::{Notifications, TrayAction, TrayAnswer};
 
@@ -77,6 +78,10 @@ const ACTION_PREFIX: &str = "action:";
 const NOTIFICATIONS: &str = "notifications";
 /// The model's action that opens this computer's page in the workspace.
 pub const OPEN_WORKSPACE: &str = "open_workspace";
+/// The model's action that installs the update waiting.
+pub const UPDATE_NOW: &str = "update_now";
+/// Fixes that are Scopebond's own chores, never the person's: it sends records and checks the rules by itself.
+const CHORES: [&str; 2] = ["send_now", "check_now"];
 
 /// A menu label as Windows shows it: "&" would mark a keyboard shortcut, so it is doubled; long text is cut.
 pub fn menu_text(text: &str, max: usize) -> String {
@@ -121,17 +126,20 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
         _ => None,
     };
     let offered = model.map(|m| m.offered()).unwrap_or_default();
-    // The fix is the model's first offered action when it has one (offered() puts it first, with a valid route).
-    let fix = model.and_then(|m| m.fix.as_ref()).and_then(|f| offered.iter().copied().find(|a| a.id == f.id));
+    // The fix the person must act on (sign in again, repair, the workspace's page), when the model offers one; a chore is not.
+    let fix = model.and_then(|m| m.fix.as_ref()).and_then(|f| offered.iter().copied().find(|a| a.id == f.id)).filter(|f| !CHORES.contains(&f.id.as_str()));
 
     let mut out = vec![item("open_status", "Open Scopebond")];
-    if let Some(m) = model {
-        out.push(item("blocked", &format!("Blocked today ({})", m.blocked_today())));
+    if let Some(blocked) = model.map(|m| m.blocked_today()).filter(|n| *n > 0) {
+        out.push(item("blocked", &format!("Blocked today ({blocked})")));
     }
     match (fix, ctx.link) {
         (Some(fix), _) => out.push(action(fix)),
         (None, AgentLink::NotAnswering | AgentLink::Stopped) => out.push(item("start_agent", "Start the Scopebond Agent")),
         _ => {}
+    }
+    if let Some(update) = offered.iter().find(|a| a.id == UPDATE_NOW && fix.is_none_or(|f| f.id != a.id)) {
+        out.push(action(update));
     }
     out.push(Entry::Separator);
     if let Some(open) = offered.iter().find(|a| a.id == OPEN_WORKSPACE && fix.is_none_or(|f| f.id != a.id)) {
@@ -151,16 +159,13 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
         enabled: ctx.autostart != Autostart::Managed,
     });
     out.push(Entry::Separator);
-    // The model's other actions (Check now, Send records now, Update now…) stay one click away, under Help.
-    let mut help: Vec<Entry> = offered.iter().filter(|a| fix.is_none_or(|f| f.id != a.id) && a.id != OPEN_WORKSPACE).map(|a| action(*a)).collect();
-    if !help.is_empty() {
-        help.push(Entry::Separator);
-    }
-    help.extend([item("get_help", "Get help…"), item("about", "About Scopebond")]);
-    out.push(Entry::Submenu { label: "Help".into(), entries: help });
+    out.push(item("get_help", "Get help…"));
     out.push(item("hide_icon", "Hide icon"));
     out
 }
+
+/// What the tray says when its icon is hidden: Scopebond keeps protecting, and how to bring the icon back.
+pub const HIDDEN_ICON_TEXT: &str = "Scopebond keeps protecting this computer. To show the icon again, open Scopebond from the Start menu.";
 
 /// What the item with this id does now. An action the model no longer offers (it changed since the menu was drawn) does
 /// nothing, so a menu item can only ever call what the agent offers at that moment.
@@ -239,30 +244,38 @@ mod tests {
                 "[x] Notifications",
                 "[x] Start with Windows",
                 "-",
-                "Help >",
-                "  Check now",
-                "  -",
-                "  Get help…",
-                "  About Scopebond",
+                "Get help…",
                 "Hide icon",
             ]
         );
     }
 
     #[test]
-    fn the_one_fix_comes_right_after_blocked_today_only_when_offered() {
+    fn blocked_today_only_when_something_was_and_chores_are_never_items() {
+        let mut none = answer(fixtures::BLOCKED);
+        none.tray.today = Some(crate::model::Today { actions: 40, blocked: 0 });
+        let l = labels(&menu_spec(Some(&none), &ctx(AgentLink::Answering)));
+        assert_eq!(&l[..2], ["Open Scopebond", "-"], "nothing blocked today: no Blocked today item");
+        for chore in ["Check now", "Send records now", "Copy diagnostics", "Open logs folder"] {
+            assert!(!l.iter().any(|x| x.trim() == chore), "{chore} is Scopebond's job, not a menu item");
+        }
+    }
+
+    #[test]
+    fn the_must_act_fix_and_update_now_come_right_after_blocked_today() {
         let protected = labels(&menu_spec(Some(&answer(fixtures::PROTECTED)), &ctx(AgentLink::Answering)));
         assert_eq!(&protected[..3], ["Open Scopebond", "Blocked today (1)", "-"]);
         for absent in ["Send records now", "Update now", "Reconnect…"] {
             assert!(!protected.iter().any(|l| l.trim() == absent), "{absent} without the model offering it");
         }
+        // Records waiting is Scopebond's chore: no Send records now; the waiting update is offered.
         let waiting = labels(&menu_spec(Some(&answer(fixtures::WAITING)), &ctx(AgentLink::Answering)));
-        assert_eq!(&waiting[..4], ["Open Scopebond", "Blocked today (0)", "Send records now", "-"]);
-        assert!(waiting.contains(&"  Update now".to_string()) && waiting.contains(&"  Check now".to_string()), "the other actions under Help");
-        assert_eq!(waiting.iter().filter(|l| l.contains("Send records now")).count(), 1, "the fix once");
+        assert_eq!(&waiting[..3], ["Open Scopebond", "Update now", "-"]);
+        assert!(!waiting.iter().any(|l| l.contains("Send records now") || l.contains("Check now")));
         let disconnected = labels(&menu_spec(Some(&answer(fixtures::DISCONNECTED)), &ctx(AgentLink::Answering)));
-        assert_eq!(disconnected[2], "Reconnect…");
+        assert_eq!(&disconnected[..3], ["Open Scopebond", "Reconnect…", "-"], "the must-act fix");
         assert!(!disconnected.iter().any(|l| l.contains("Scopebond Cloud")), "no Cloud item when the model offers no page");
+        assert!(HIDDEN_ICON_TEXT.contains("Start menu"));
     }
 
     #[test]
@@ -299,7 +312,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(routes, ["/flush", "/update", "/check"]);
+        assert_eq!(routes, ["/update"], "only the update the person may want now");
+        assert_eq!(command_for("get_help", Some(&a)), Some(Command::GetHelp));
         let cloud = answer(fixtures::BLOCKED);
         assert!(ids(&menu_spec(Some(&cloud), &ctx(AgentLink::Answering))).iter().any(|id| matches!(command_for(id, Some(&cloud)), Some(Command::Run(x)) if x.route == "/open-workspace")));
     }
@@ -324,10 +338,10 @@ mod tests {
     }
 
     #[test]
-    fn an_action_from_a_newer_agent_is_offered_as_the_model_names_it() {
+    fn a_fix_from_a_newer_agent_is_offered_as_the_model_names_it() {
         let mut a = answer(fixtures::PROTECTED);
-        a.tray.actions.push(TrayAction { id: "tidy".into(), label: "Tidy up".into(), route: "/tidy".into() });
-        assert!(labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering))).contains(&"  Tidy up".to_string()));
+        a.tray.fix = Some(TrayAction { id: "tidy".into(), label: "Tidy up".into(), route: "/tidy".into() });
+        assert!(labels(&menu_spec(Some(&a), &ctx(AgentLink::Answering))).contains(&"Tidy up".to_string()));
         assert_eq!(command_for("action:tidy", Some(&a)).map(|c| matches!(c, Command::Run(x) if x.route == "/tidy")), Some(true));
     }
 

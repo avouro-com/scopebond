@@ -215,6 +215,7 @@
   }
 
   // ---- The one problem and its one fix, only when there is one.
+  const CHORES = ["send_now", "check_now"];
   function banner(s, model) {
     if (!model) {
       if (s.link !== "not_answering" && s.link !== "stopped") return null;
@@ -225,13 +226,16 @@
     }
     const quiet = model.state === "protected" || model.state === "working";
     const hint = quiet ? null : model.hint;
-    if (!model.fix && !hint) return null;
+    // Only a fix the person must act on (sign in, repair, the workspace's page); sending records and checking the rules are
+    // Scopebond's own chores, never a button.
+    const fix = model.fix && CHORES.indexOf(model.fix.id) < 0 ? model.fix : null;
+    if (!fix && !hint) return null;
     const busy = s.busy;
     return el("div", { class: "banner state-" + model.state }, [
       hint ? el("p", { text: hint }) : null,
-      model.fix ? el("div", {}, [el("button", {
-        class: "btn primary", type: "button", "data-key": "fix", disabled: !!busy, "aria-busy": busy === model.fix.id ? "true" : null,
-        text: busy === model.fix.id ? "Working…" : model.fix.label, onclick: () => run("action", model.fix.id),
+      fix ? el("div", {}, [el("button", {
+        class: "btn primary", type: "button", "data-key": "fix", disabled: !!busy, "aria-busy": busy === fix.id ? "true" : null,
+        text: busy === fix.id ? "Working…" : fix.label, onclick: () => run("action", fix.id),
       })]) : null,
     ]);
   }

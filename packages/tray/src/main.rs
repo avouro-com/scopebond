@@ -723,6 +723,8 @@ fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
             if let Some(tray) = app.tray_by_id(TRAY_ID) {
                 let _ = tray.set_visible(false);
             }
+            // Asked for just now, so said whatever the notification setting: how to bring the icon back.
+            show_toast(Toast { kind: Kind::Recovered, title: "Scopebond icon hidden".into(), text: menu::HIDDEN_ICON_TEXT.into(), unblock: None, button: None }, None);
         }
     }
 }
