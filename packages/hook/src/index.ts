@@ -37,7 +37,7 @@ export {
 } from "./pack-taxonomy.js";
 export { targetOptInTypes, setExtensionOptInTypes } from "./target-rules.js";
 // Pack delivery: the signed list a workspace answer names, and the cache brought in step with it on each rules check.
-export { syncPacks, restampPacks, describePackSync, packRefsOf, taxonomyRefOf, killedOf, MAX_PACK_REFS, PACK_ENGINE_HEADER } from "./pack-sync.js";
+export { syncPacks, restampPacks, describePackSync, packRefsOf, taxonomyRefOf, killedOf, packsHeaderValue, MAX_PACK_REFS, PACK_ENGINE_HEADER, PACKS_HEADER } from "./pack-sync.js";
 // Safe Install: verdicts on detected installs from the workspace, and the signed block list used offline.
 export {
   checkInstalls, checkable, checkBlocklistText, loadBlocklist, safeInstallOn, syncInstallBlocklist, removeBlocklist, comparableName,

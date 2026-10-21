@@ -33,7 +33,7 @@ import { evidenceDetailFrom } from "./evidence-detail.js";
 import { receiptContextFrom } from "./receipt-context.js";
 import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
-import { restampPacks, syncPacks, PACK_ENGINE_HEADER } from "./pack-sync.js";
+import { packsHeaderValue, restampPacks, syncPacks, PACK_ENGINE_HEADER, PACKS_HEADER } from "./pack-sync.js";
 import { packEngineLevel } from "./pack-store.js";
 import { removeBlocklist, syncInstallBlocklist, SAFE_INSTALL_HEADER } from "./install-verdicts.js";
 
@@ -61,6 +61,8 @@ function deliveryHeaders(dir: string): Record<string, string> {
       ...rulesHeader(dir),
       // How the last answer's signature was checked (verified, unsigned and accepted, or refused, and why).
       ...signatureHeader(dir),
+      // The packs in force, those not taken and why, and this engine's level (pack-sync.ts).
+      ...packsHeader(dir),
     };
   } catch { return {}; }
 }
@@ -80,6 +82,10 @@ function installedToolSettingsMark(dir: string): string | null {
 function rulesHeader(dir: string): Record<string, string> {
   const report = ruleReport(dir);
   return report ? { "x-scopebond-rules": JSON.stringify(report) } : {};
+}
+function packsHeader(dir: string): Record<string, string> {
+  const value = packsHeaderValue(dir);
+  return value !== null ? { [PACKS_HEADER]: value } : {};
 }
 function signatureHeader(dir: string): Record<string, string> {
   const state = readSignatureState(dir);

@@ -15,4 +15,8 @@ The hook now reads packs at engine level 2 and says so (`x-scopebond-pack-engine
 
 The hook now fetches and verifies the signed taxonomy extension a workspace names in its pack list (`taxonomy-ext`), so a pack can emit a new kind of action, and a policy that names one of its opt-in types decides those actions, without a new hook.
 
+A rule pack's grammar can now read local facts (an environment variable, a file's digest, a top-level configuration value) in the folder the command runs in, and an MCP profile can read the environment; a pack's own vectors still run without them, so they derive the same on every computer.
+
+Each rules check now reports the packs on the computer in `x-scopebond-packs` (`id@version,…;rejected=id@version:reason,…;engine=2`): the packs in force, the ones not taken and why, and the engine level.
+
 A rule id the hook does not know in a workspace document, or a malformed `pack_rules` entry, is now skipped and reported (`skipped_rules` on the rules confirmation and in `managed-meta.json`) instead of refusing the whole document.

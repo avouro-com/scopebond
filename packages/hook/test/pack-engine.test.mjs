@@ -270,3 +270,23 @@ test("a pack in shadow records what its rules would block, and never blocks", as
     assert.equal(decision.receipts.length, 2, "the derived action is recorded");
   } finally { runtime.close(); }
 });
+
+test("each rules check reports the packs in force, those not taken and why, and the engine level", async () => {
+  const h = connected();
+  const { served, refs } = published();
+  const w = workspace([signed(unmanaged(), { packs: refs, issuedAt: T(15) }), signed(unmanaged(), { packs: refs, issuedAt: T(16) })], served);
+  await sync(h, w);
+  const first = w.calls.find((c) => c.url.endsWith("/v1/policy"));
+  assert.equal(first.headers["x-scopebond-packs"], ";engine=2", "nothing in force yet");
+  await sync(h, w);
+  const second = w.calls.filter((c) => c.url.endsWith("/v1/policy"))[1];
+  assert.equal(second.headers["x-scopebond-packs"], "demo-purge@1.0.0,example@1.0.0;engine=2");
+
+  process.env[PACK_ENGINE_ENV] = "1";
+  const old = connected();
+  const w1 = workspace([signed(unmanaged(), { packs: refs, issuedAt: T(15) }), signed(unmanaged(), { packs: refs, issuedAt: T(16) })], served);
+  await sync(old, w1);
+  await sync(old, w1);
+  const report = w1.calls.filter((c) => c.url.endsWith("/v1/policy"))[1].headers["x-scopebond-packs"];
+  assert.equal(report, "example@1.0.0;rejected=demo-purge@1.0.0:engine_too_old;engine=1");
+});

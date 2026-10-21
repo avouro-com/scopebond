@@ -33,9 +33,9 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:f
 import { dirname, join } from "node:path";
 import { packRef } from "@scopebond/policy-schema/pack";
 import { TAXONOMY_EXT_ID } from "@scopebond/policy-schema/taxonomy-ext";
-import { writeAtomic, type ManagedMeta } from "./managed.js";
+import { readMeta, writeAtomic, type ManagedMeta } from "./managed.js";
 import {
-  checkPackText, packCheckedAt, packEngineLevel, packFallbackFile, packsDir, readPackFlags, readPackIndex, writePackFlags, writePackIndex,
+  checkPackText, loadPacks, packCheckedAt, packEngineLevel, packFallbackFile, packsDir, readPackFlags, readPackIndex, writePackFlags, writePackIndex,
   PACK_INDEX_FILE, PACK_TTL_MS, type PackIndexEntry,
 } from "./pack-store.js";
 import { checkTaxonomyExtText, heldTaxonomyDigest, installTaxonomyExtension, removeTaxonomyExtension } from "./pack-taxonomy.js";
@@ -307,6 +307,35 @@ export function restampPacks(dir: string, now: Date = new Date(), unconfirmed: r
     writePackIndex(dir, { v: 1, checked_at: now.toISOString(), packs });
     return true;
   } catch { return false; }
+}
+
+/** The header that reports the packs on this computer with each rules check. */
+export const PACKS_HEADER = "x-scopebond-packs";
+const MAX_PACKS_HEADER = 2_000;
+const CODE = /^[a-z_]{1,32}$/;
+
+/** What this computer reports about its packs on the rules check (`x-scopebond-packs`):
+ *  `<id@version>,…;rejected=<id@version>:<code>,…;engine=<level>`: the packs in force, those named or held that are not (with
+ *  why, as a code: from the last pack list, then from loading the cache), and this engine's level. The `rejected` part is left
+ *  out when there are none. ASCII, at most 2000 characters. Never throws: null when it cannot be read. */
+export function packsHeaderValue(dir: string, options: { now?: Date; engine?: number; keys?: PolicyKey[] } = {}): string | null {
+  try {
+    const loaded = loadPacks(dir, { now: options.now, engine: options.engine, keys: options.keys });
+    const active = loaded.packs.map(packRef);
+    const rejected = new Map<string, string>();
+    for (const f of readMeta(dir).packs?.failed ?? []) {
+      const ref = `${f.id}@${f.version}`;
+      if (KILLED.test(ref) && !active.includes(ref)) rejected.set(ref, f.code && CODE.test(f.code) ? f.code : "not_taken");
+    }
+    for (const p of loaded.problems) if (KILLED.test(p.ref) && !rejected.has(p.ref)) rejected.set(p.ref, p.reason);
+    const level = `;engine=${options.engine ?? packEngineLevel()}`;
+    let value = active.join(",");
+    const parts = [...rejected].map(([ref, code]) => `${ref}:${code}`);
+    if (parts.length) value += `;rejected=${parts.join(",")}`;
+    // Bounded: the in-force list first, then as many refusals as fit.
+    while (value.length + level.length > MAX_PACKS_HEADER && value.includes(",")) value = value.slice(0, value.lastIndexOf(","));
+    return value.length + level.length > MAX_PACKS_HEADER ? level : value + level;
+  } catch { return null; }
 }
 
 /** What `status` and `packs list` say about the last pack list the workspace named: one line for each pack that could not be
