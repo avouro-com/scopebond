@@ -17,7 +17,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
-import { compileManaged, floorDocument, managedEnforce, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms } from "./managed.js";
+import { compileManaged, floorDocument, managedEnforce, packRuleAdjustments, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms } from "./managed.js";
 import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem } from "./allowances.js";
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
@@ -313,7 +313,7 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     // The rule packs' rules join the floor as they join the policy in force, on the floor document's modes.
     const local = loadRules(ctx.dir) ?? defaultRules();
     const floorDoc = floorDocument(doc, rule);
-    const floor = maskHomeInPolicy(withPackRules(compileManaged(local, floorDoc, ctx.agentKid), new Set(managedEnforce(local, floorDoc))));
+    const floor = maskHomeInPolicy(withPackRules(compileManaged(local, floorDoc, ctx.agentKid), new Set(managedEnforce(local, floorDoc)), undefined, packRuleAdjustments(floorDoc, local)));
     const atFloor = evaluate(floor, [], { intent, intent_hash }, new Date(now()).toISOString(), { cooperative: true });
     if (!atFloor.allow) { last = { rule, title, outcome: "not_overridable" }; return null; }
 

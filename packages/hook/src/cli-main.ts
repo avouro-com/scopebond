@@ -1860,6 +1860,7 @@ function runStatus(args: string[] = []): void {
     console.log(`  rules            ${managed ? `set by your workspace (version ${meta.revision})${checked}` : `this computer's own (${rulesPath(activeDir)})${connected ? checked : ""}`}`);
     console.log(`                   always on: protection of Scopebond's own settings and the agents' hook settings`);
     if (meta.last_error) console.log(`                   last problem: ${meta.last_error}`);
+    for (const note of meta.rule_notes ?? []) console.log(`                   note: ${note}`);
     for (const line of describePackSync(meta.packs)) console.log(`  rule packs       ${line}`);
   }
   {

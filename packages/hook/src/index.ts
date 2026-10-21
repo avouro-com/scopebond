@@ -55,7 +55,8 @@ export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYP
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
   inspectManaged, compileManaged, managedEnforce, enforcedRuleIds, installManaged, restoreLocal, isManaged, readMeta, digestRules, digestManaged, ruleReport,
-  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
+  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, NEVER_OFF_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
+  offRuleIds, packRuleAdjustments, packRuleAdjustmentsAt,
   inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
   MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY,
 } from "./managed.js";

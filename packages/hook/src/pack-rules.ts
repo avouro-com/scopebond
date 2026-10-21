@@ -6,6 +6,7 @@
 // changes or expires changes what is enforced on the next call without the policy being compiled again.
 //
 // The rules this module keeps:
+//   - A target rule the workspace switched Off allows its action types with no bounds: they stay covered, nothing matches.
 //   - A pack's rule records (monitor) until a person or the workspace turns it on. Only a target rule (target-rules.ts) with
 //     bounds can be turned on: a rule without bounds would block every action of its types, so it always records.
 //   - A clause the policy already carries is kept as it is (a policy compiled by an earlier version, which had the rule built in).
@@ -23,8 +24,18 @@ const switchable = (rule: Record<string, unknown>): boolean =>
   (TARGET_RULES as readonly string[]).includes(String(rule.id))
   && typeof rule.param_bounds === "object" && rule.param_bounds !== null && Object.keys(rule.param_bounds).length > 0;
 
-/** The clauses the packs define, each on enforce when it can be switched and `enforced` names it, else on monitor. */
-export function packRuleClauses(enforced: ReadonlySet<string>, packs: readonly Pack[] = activePacks()): Clause[] {
+/** What a workspace changes in the packs' rules (managed.ts `packRuleAdjustments`): the target rules it switched Off. */
+export interface PackRuleSettings { off?: ReadonlySet<string> }
+
+/** A target rule switched Off: an allow clause with no bounds for its action types, so they stay covered and nothing matches. */
+const offClause = (rule: Record<string, unknown>, id: string): Clause => ({
+  id, type: "action_allowlist", mode: "monitor", action_types: rule.action_types,
+  description: "These actions are allowed and are not recorded as matches: your workspace switched this rule off.",
+});
+
+/** The clauses the packs define, each on enforce when it can be switched and `enforced` names it, else on monitor; a target
+ *  rule `settings.off` names is switched off. */
+export function packRuleClauses(enforced: ReadonlySet<string>, packs: readonly Pack[] = activePacks(), settings: PackRuleSettings = {}): Clause[] {
   const seen = new Set<string>();
   const out: Clause[] = [];
   for (const pack of packs) {
@@ -32,6 +43,7 @@ export function packRuleClauses(enforced: ReadonlySet<string>, packs: readonly P
       const id = String(rule.id);
       if (seen.has(id)) continue;
       seen.add(id);
+      if (settings.off?.has(id) && switchable(rule) && rule.type === "action_allowlist" && Array.isArray(rule.action_types)) { out.push(offClause(rule, id)); continue; }
       out.push({ ...rule, id, mode: switchable(rule) && enforced.has(id) ? "enforce" : "monitor" });
     }
   }
@@ -46,11 +58,11 @@ export function switchablePackRules(packs: readonly Pack[] = activePacks()): str
 }
 
 /** `policy` with the rules of the packs in force that it does not carry yet. The same object when there are none to add. */
-export function withPackRules<T>(policy: T, enforced: ReadonlySet<string>, packs: readonly Pack[] = activePacks()): T {
+export function withPackRules<T>(policy: T, enforced: ReadonlySet<string>, packs: readonly Pack[] = activePacks(), settings: PackRuleSettings = {}): T {
   const clauses = (policy as { clauses?: unknown } | null)?.clauses;
   if (!Array.isArray(clauses) || packs.length === 0) return policy;
   const have = new Set(clauses.map((c) => String((c as { id?: unknown })?.id)));
-  const add = packRuleClauses(enforced, packs).filter((c) => !have.has(c.id));
+  const add = packRuleClauses(enforced, packs, settings).filter((c) => !have.has(c.id));
   if (add.length === 0) return policy;
   const ids = clauses.map((c) => String((c as { id?: unknown })?.id));
   const after = ids.indexOf("observe-net-mcp");

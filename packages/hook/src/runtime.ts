@@ -13,7 +13,7 @@ import type { ShownOverrideHandler } from "./override.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
 import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
-import { allowsLocalChanges, enforcedRuleIds, isManaged } from "./managed.js";
+import { allowsLocalChanges, enforcedRuleIds, isManaged, packRuleAdjustmentsAt } from "./managed.js";
 import { withPackRules } from "./pack-rules.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
@@ -335,7 +335,7 @@ export function createHookRuntime(config: RuntimeConfig) {
   const homes = config.homeFolders ?? homeFolders();
   // The rules of the packs in force (verified on this call) join the policy here, on the modes this computer's rules or its
   // workspace's set (pack-rules.ts).
-  const policy = maskHomeInPolicy(withPackRules(upgradeStarterPolicy(readPolicyFile(config.policyPath)), enforcedRuleIds(dirname(config.policyPath))), homes);
+  const policy = maskHomeInPolicy(withPackRules(upgradeStarterPolicy(readPolicyFile(config.policyPath)), enforcedRuleIds(dirname(config.policyPath)), undefined, packRuleAdjustmentsAt(dirname(config.policyPath))), homes);
   /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */

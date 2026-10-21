@@ -19,6 +19,12 @@
 // `protect_remote_database`). A rule set to Monitor is still covered by an allow clause, so the action is recorded and passes;
 // leaving it out would block the whole action type, because the verifier denies an action no clause covers.
 //
+// A rule set to Off (sent only to a hook that reports `rule_off`) compiles to an allow clause with no bounds for the rule's
+// action types: the types stay covered and nothing matches, so its actions are routine (never a monitor match). What may never
+// be off stays on: the always-on floor, and destructive-shell's refusal of a command whose program is only known when it runs
+// (its Off clause denies that alone). A document that sets one of the always-on rules (`NEVER_OFF_RULE_IDS`) to anything but
+// Block is read as Block and the inspection says so in `notes`; the document itself is not refused for it.
+//
 // Loading is checked and atomic: the document must be well formed, name this computer, carry a matching digest and be newer
 // than the one in force; the merged policy must build; policy.json is written through a temp file and a rename, the previous
 // one kept. Disconnecting, or a workspace that stops managing this computer, restores the computer's own rules. A signed
@@ -28,7 +34,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
-import { GUARDRAIL_LOOKAHEADS, ci } from "./runtime.js";
+import { GUARDRAIL_LOOKAHEADS, SAFE_SHELL_PARAM, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES, SWITCHABLE_RULES } from "./rules.js";
 import { TARGET_RULES } from "./target-rules.js";
 import type { Recommended } from "./client-health.js";
@@ -46,6 +52,14 @@ type ManagedRuleId = (typeof MANAGED_RULE_IDS)[number];
  *  and no lists. */
 export const OPTIONAL_RULE_IDS = TARGET_RULES;
 export type OptionalRuleId = (typeof OPTIONAL_RULE_IDS)[number];
+/** What may never be switched off, in the hook or by the workspace: Scopebond's own protection (its read and write floor and
+ *  the coding agents' hook settings), the detection of an agent switching it off, Safe Install's malware list, services an
+ *  admin blocked by name, and session budgets. A document may name these rules only to say Block; any other mode is read as
+ *  Block and reported. None of them takes settings. */
+export const NEVER_OFF_RULE_IDS = [
+  "protect-scopebond-read", "protect-scopebond-write", "guardrail-config-write", "self-disable", "safe-install-malware", "blocked-services", "session-budgets",
+] as const;
+type NeverOffRuleId = (typeof NEVER_OFF_RULE_IDS)[number];
 /** Every rule id a workspace document may name. */
 export type AnyManagedRuleId = ManagedRuleId | OptionalRuleId;
 type ListKey = "protected_branches" | "destructive_programs" | "allowed_hosts";
@@ -99,9 +113,17 @@ export interface OverrideTerms {
    *  may undo it (the workspace then sends it among its revoked allowances). The window and the tray say so. */
   review?: boolean;
 }
-/**  rule modes, in the workspace's words: monitor = Monitor, block = Block, override = "Block, person may allow",
- *  ask = "Block, person may ask". */
-export type ManagedRule = { mode: "monitor" | "block" | "override" | "ask"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
+/**  rule modes, in the workspace's words: off = Off (sent only to a hook that reports `rule_off`), monitor = Monitor,
+ *  block = Block, override = "Block, person may allow", ask = "Block, person may ask". */
+export type ManagedRule = { mode: "off" | "monitor" | "block" | "override" | "ask"; override?: OverrideTerms } & Partial<Record<ListKey | ExclusionKey, string[]>>;
+const MODES = new Set(["off", "monitor", "block", "override", "ask"]);
+/** Whether a rule in this mode stops what it matches (Block, or Block with a person's answer). */
+const blocks = (rule: ManagedRule | undefined): boolean => rule !== undefined && rule.mode !== "monitor" && rule.mode !== "off";
+/** The computer's own rule id (rules.ts) that carries each workspace rule a person may switch on the computer. */
+const LOCAL_ID: Readonly<Record<string, string>> = {
+  "push-protected": "protect-branches", "destructive-shell": "safe-shell", "ci-config-write": "protect-write", "secret-read": "protect-read",
+  ...Object.fromEntries(TARGET_RULES.map((id) => [id, id])),
+};
 const intIn = (v: unknown, min: number, max: number): boolean => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 /** An integer in the range, or the string "unlimited" (`unlimited_terms`); anything else fails closed. */
 const intOrUnlimited = (v: unknown, min: number, max: number): boolean => v === "unlimited" || intIn(v, min, max);
@@ -148,7 +170,7 @@ export interface ManagedDocument {
   environment_id: string;
   agent_id: string;
   installation_id: string;
-  rules: Record<ManagedRuleId, ManagedRule> & Partial<Record<OptionalRuleId, ManagedRule>>;
+  rules: Record<ManagedRuleId, ManagedRule> & Partial<Record<OptionalRuleId | NeverOffRuleId, ManagedRule>>;
   rules_digest: string;
   /** Whether a person may change a rule on this computer (`rules enforce|monitor`); absent means no. */
   local_changes?: boolean;
@@ -197,7 +219,9 @@ export const isUnmanagedAnswer = (raw: unknown): raw is UnmanagedAnswer =>
   isObject(raw) && raw.type === "scopebond:managed-rules" && raw.managed === false;
 
 export type RefusalReason = "invalid_document" | "stale_revision" | "wrong_computer" | "unsupported" | "write_failed";
-export type Inspection = { ok: true; doc: ManagedDocument } | { ok: false; reason: RefusalReason; message: string };
+/** A checked document, with `notes` on what is read differently from what it says (an always-on rule set to anything but
+ *  Block is read as Block). */
+export type Inspection = { ok: true; doc: ManagedDocument; notes: string[] } | { ok: false; reason: RefusalReason; message: string };
 
 export const digestRules = (rules: unknown): string => createHash("sha256").update(canonical(rules)).digest("hex");
 /** A document's `rules_digest`: the digest of its rules, or, when it carries `blocked_services`, of `{ rules, blocked_services }`
@@ -223,13 +247,20 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
     return { ok: false, reason: "wrong_computer", message: "these rules were issued for a different computer" };
   }
   const keys = Object.keys(rules);
-  const known: readonly string[] = [...MANAGED_RULE_IDS, ...OPTIONAL_RULE_IDS];
+  const known: readonly string[] = [...MANAGED_RULE_IDS, ...OPTIONAL_RULE_IDS, ...NEVER_OFF_RULE_IDS];
   if (!MANAGED_RULE_IDS.every((id) => keys.includes(id)) || !keys.every((id) => known.includes(id))) {
     return { ok: false, reason: "unsupported", message: "the rules document names rules this version does not know; update Scopebond" };
   }
+  const notes: string[] = [];
   for (const id of keys as AnyManagedRuleId[]) {
     const rule = rules[id];
-    if (!isObject(rule) || (rule.mode !== "monitor" && rule.mode !== "block" && rule.mode !== "override" && rule.mode !== "ask")) return bad(`rule ${id} has no valid mode`);
+    if (!isObject(rule) || typeof rule.mode !== "string" || !MODES.has(rule.mode)) return bad(`rule ${id} has no valid mode`);
+    // An always-on rule takes no settings; whatever mode it names, it blocks.
+    if ((NEVER_OFF_RULE_IDS as readonly string[]).includes(id)) {
+      if (Object.keys(rule).some((k) => k !== "mode")) return bad(`rule ${id} has an unknown setting`);
+      if (rule.mode !== "block") notes.push(`rule ${id} cannot be switched off or relaxed; it was set to ${rule.mode} and is enforced as Block`);
+      continue;
+    }
     const acts = rule.mode === "override" || rule.mode === "ask";
     if (acts !== ("override" in rule) || (acts && !validTerms(rule.override))) return bad(`rule ${id} has invalid override terms`);
     for (const key of Object.keys(rule)) {
@@ -245,7 +276,7 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
     }
   }
   const network = rules["network-egress"] as ManagedRule;
-  if (network.mode !== "monitor" && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
+  if (blocks(network) && !(network.allowed_hosts?.length)) return bad("network blocking needs at least one allowed site");
   // Blocked services are checked whole, like session budgets, and are digested with the rules: a malformed or changed list
   // refuses the document (the rules in force stay), so a bad delivery never reads as "nothing blocked".
   if (raw.blocked_services !== undefined && !validBlockedServices(raw.blocked_services)) return bad("the blocked services are malformed");
@@ -259,7 +290,7 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   if (context.currentRevision !== null && (revision as number) <= context.currentRevision && !sameVersionChanged) {
     return { ok: false, reason: "stale_revision", message: `version ${String(revision)} is not newer than the version in force (${context.currentRevision})` };
   }
-  return { ok: true, doc: raw as unknown as ManagedDocument };
+  return { ok: true, doc: raw as unknown as ManagedDocument, notes };
 }
 
 const union = (a: readonly string[], b: readonly string[] | undefined): string[] => [...new Set([...a, ...(b ?? [])])];
@@ -284,26 +315,70 @@ const withBranchExclusions = (pattern: string, branches: readonly string[]): str
 const boundPattern = (clause: Clause, key: string): string => String(((clause.param_bounds as Record<string, { pattern: string }> | undefined)?.[key])?.pattern ?? "");
 const withBound = (clause: Clause, key: string, pattern: string): Clause => ({ ...clause, param_bounds: { ...(clause.param_bounds as Record<string, unknown>), [key]: { pattern } } });
 
+/** A rule switched Off: an allow clause with no bounds for the rule's action types, so the types stay covered and nothing
+ *  matches. destructive-shell keeps the part that may never be off: a command whose program is empty (it could not be read,
+ *  or is only known when it runs) is still denied. */
+function offClause(clause: Clause): Clause {
+  const what = clause.id === "safe-shell" ? "Destructive programs run" : "These actions are allowed";
+  const off: Clause = { id: clause.id, type: "action_allowlist", mode: "monitor", action_types: clause.action_types as string[],
+    description: `${what} and are not recorded as matches: your workspace switched this rule off.` };
+  if (clause.id !== "safe-shell") return off;
+  return { ...off, mode: "enforce", param_bounds: { [SAFE_SHELL_PARAM]: { pattern: "^.+" } },
+    description: `${off.description} A command that could not be read, or whose program is only known when it runs ($VAR, $(…), eval of a variable), is still denied.` };
+}
+
 /** The rules that block on this computer under workspace rules (the rest record), by the computer's own rule ids: the
  *  workspace decides (Block, Override or Ask), and where it allows changes on computers a person's own choice for a rule wins.
  *  Pure. */
 export function managedEnforce(local: RuleSet, doc: ManagedDocument): string[] {
   const r = doc.rules;
   const enforce = new Set<string>([
-    ...(r["push-protected"].mode !== "monitor" ? ["protect-branches"] : []),
-    ...(r["destructive-shell"].mode !== "monitor" ? ["safe-shell"] : []),
-    ...(r["ci-config-write"].mode !== "monitor" ? ["protect-write"] : []),
-    ...(r["secret-read"].mode !== "monitor" ? ["protect-read"] : []),
+    ...(blocks(r["push-protected"]) ? ["protect-branches"] : []),
+    ...(blocks(r["destructive-shell"]) ? ["safe-shell"] : []),
+    ...(blocks(r["ci-config-write"]) ? ["protect-write"] : []),
+    ...(blocks(r["secret-read"]) ? ["protect-read"] : []),
     // A target rule the document leaves out records.
-    ...OPTIONAL_RULE_IDS.filter((id) => r[id] !== undefined && r[id].mode !== "monitor"),
+    ...OPTIONAL_RULE_IDS.filter((id) => blocks(r[id])),
   ]);
-  if (doc.local_changes === true && local.local_overrides) {
-    for (const [id, mode] of Object.entries(local.local_overrides)) {
-      if (!SWITCHABLE_RULES.includes(id)) continue;
-      if (mode === "enforce") enforce.add(id); else if (mode === "monitor") enforce.delete(id);
-    }
+  for (const [id, mode] of personalChoices(local, doc)) {
+    if (mode === "enforce") enforce.add(id); else if (mode === "monitor") enforce.delete(id);
   }
   return SWITCHABLE_RULES.filter((id) => enforce.has(id));
+}
+
+/** A person's own choices on this computer, by the computer's rule ids, where the workspace allows changes on computers. */
+function personalChoices(local: RuleSet, doc: ManagedDocument): Array<[string, string]> {
+  if (doc.local_changes !== true || !local.local_overrides) return [];
+  const out: Array<[string, string]> = [];
+  for (const [id, mode] of Object.entries(local.local_overrides)) if (SWITCHABLE_RULES.includes(id) && typeof mode === "string") out.push([id, mode]);
+  return out;
+}
+
+/** The workspace rules switched Off on this computer, by workspace rule id. A person's own choice for the rule, where the
+ *  workspace allows changes on computers, wins over Off (it records or blocks again). Pure. */
+export function offRuleIds(local: RuleSet, doc: ManagedDocument): Set<string> {
+  const chosen = new Set(personalChoices(local, doc).map(([id]) => id));
+  const out = new Set<string>();
+  for (const [id, rule] of Object.entries(doc.rules) as Array<[string, ManagedRule | undefined]>) {
+    if (rule?.mode !== "off" || (NEVER_OFF_RULE_IDS as readonly string[]).includes(id)) continue;
+    if (LOCAL_ID[id] && chosen.has(LOCAL_ID[id])) continue;
+    out.add(id);
+  }
+  return out;
+}
+
+/** What the workspace document changes in the rule packs' clauses (pack-rules.ts), which join the policy when it is loaded:
+ *  the target rules it switched Off. Pure. */
+export interface PackRuleAdjustments { off: ReadonlySet<string> }
+export function packRuleAdjustments(doc: ManagedDocument | null, local: RuleSet = defaultRules()): PackRuleAdjustments {
+  if (!doc) return { off: new Set() };
+  return { off: new Set([...offRuleIds(local, doc)].filter((id) => (OPTIONAL_RULE_IDS as readonly string[]).includes(id))) };
+}
+
+/** The workspace document in force on this computer, or null (none, or unreadable). */
+function readManagedDoc(dir: string): ManagedDocument | null {
+  if (!isManaged(dir)) return null;
+  try { return JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
 }
 
 /** The rules that block on this computer now, from the files: its workspace's document when one is in force, else its own
@@ -311,11 +386,14 @@ export function managedEnforce(local: RuleSet, doc: ManagedDocument): string[] {
  *  switchable rule records). */
 export function enforcedRuleIds(dir: string, docOverride?: ManagedDocument): Set<string> {
   const local = loadRules(dir) ?? defaultRules();
-  let doc: ManagedDocument | null = docOverride ?? null;
-  if (!doc && isManaged(dir)) {
-    try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { doc = null; }
-  }
+  const doc = docOverride ?? readManagedDoc(dir);
   return new Set(doc ? managedEnforce(local, doc) : local.enforce ?? []);
+}
+
+/** `packRuleAdjustments` for the workspace document in force on this computer (none: nothing changes). */
+export function packRuleAdjustmentsAt(dir: string): PackRuleAdjustments {
+  const doc = readManagedDoc(dir);
+  return packRuleAdjustments(doc, doc ? loadRules(dir) ?? defaultRules() : defaultRules());
 }
 
 /** The policy this computer enforces under workspace rules: its own compiled rules, adjusted rule by rule. Pure. */
@@ -330,22 +408,27 @@ export function compileManaged(local: RuleSet, doc: ManagedDocument, agentKid: s
   };
   const policy = compile(rules, agentKid) as { clauses: Clause[] } & Record<string, unknown>;
   const clauses: Clause[] = [];
+  const off = offRuleIds(local, doc);
   const historyGuard = (): Clause => ({ id: "protect-branch-history", type: "force_push_guard", mode: "enforce", protected_refs: rules.protected_branches.map(branchGlob),
     description: "Deny force-pushes, deletions and mirror pushes that reach a protected branch; ordinary pushes are recorded. Set by your workspace." });
   for (const clause of policy.clauses) {
-    if (clause.id === "protect-branches") {
+    const ruleId = Object.keys(LOCAL_ID).find((id) => LOCAL_ID[id] === clause.id);
+    if (ruleId && off.has(ruleId)) {
+      clauses.push(offClause(clause));
+      if (clause.id === "protect-branches" && blocks(r["force-push-protected"]) && !off.has("force-push-protected")) clauses.push(historyGuard());
+    } else if (clause.id === "protect-branches") {
       const excluded = r["push-protected"].excluded_branches ?? [];
       clauses.push(excluded.length ? withBound(clause, "ref", withBranchExclusions(boundPattern(clause, "ref"), excluded)) : clause);
       // History protection is its own setting: it blocks when the workspace turned it on, whether ordinary pushes block or record,
       // and skipping ordinary pushes to a branch never skips it.
-      if (r["force-push-protected"].mode !== "monitor" && (r["push-protected"].mode === "monitor" || excluded.length)) clauses.push(historyGuard());
+      if (blocks(r["force-push-protected"]) && (!blocks(r["push-protected"]) || excluded.length)) clauses.push(historyGuard());
     } else if (clause.id === "protect-read" && r["secret-read"].excluded_paths?.length) {
       clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["secret-read"].excluded_paths))));
     } else if (clause.id === "protect-write" && r["ci-config-write"].excluded_paths?.length) {
       clauses.push(withBound(clause, "path", withPathExclusions(boundPattern(clause, "path"), safeExclusions(r["ci-config-write"].excluded_paths))));
     } else clauses.push(clause);
   }
-  if (r["network-egress"].mode !== "monitor") {
+  if (blocks(r["network-egress"])) {
     const keysAt = clauses.findIndex((c) => c.id === "keys");
     clauses.splice(keysAt < 0 ? clauses.length : keysAt, 0, {
       id: "allowed-sites", type: "action_allowlist", mode: "enforce", action_types: ["net.fetch"],
@@ -373,6 +456,8 @@ export interface ManagedMeta {
   checked_at: string | null;
   last_ack: { revision: number; result: "loaded" | "rejected"; at: string } | null;
   last_error: string | null;
+  /** What the document in force says that this computer reads differently (an always-on rule set to anything but Block). */
+  rule_notes?: string[] | null;
   /** The Scopebond versions the workspace recommends for its computers, as its last rules check said. */
   recommended?: Recommended | null;
   /** How many days this computer keeps receipts the workspace acknowledged, as its last rules check said. */
@@ -465,11 +550,14 @@ export function ruleReport(dir: string): Record<string, [ "enforce" | "monitor",
     const doc = managed ? JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument : null;
     const overrides = (loadRules(dir)?.local_overrides ?? {}) as Record<string, string>;
     const report: Record<string, [ "enforce" | "monitor", RuleSource ]> = {};
+    // A rule switched Off is reported as recording: it blocks nothing, and the report's readers know two modes.
+    const off = doc ? offRuleIds(loadRules(dir) ?? defaultRules(), doc) : new Set<string>();
+    const offLocal = new Set([...off].map((id) => LOCAL_ID[id]).filter(Boolean));
     // The report names the four rules it always named; the target rules come from the workspace document itself.
     for (const id of ENFORCEABLE_RULES) {
       const clause = policy.clauses?.find((c) => c.id === id);
       if (!clause) continue;
-      const mode = clause.mode === "monitor" ? "monitor" : "enforce";
+      const mode = clause.mode === "monitor" || offLocal.has(id) ? "monitor" : "enforce";
       const source: RuleSource = !managed ? "computer" : doc?.local_changes === true && overrides[id] ? "computer" : "workspace";
       report[id] = [mode, source];
     }

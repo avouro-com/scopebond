@@ -65,7 +65,7 @@ test("a document is checked before anything changes, and every refusal says why"
   refuse(doc(3, { "network-egress": { mode: "block" } }), null, "invalid_document");
   refuse(doc(3, { "destructive-shell": { mode: "block", destructive_programs: ["rm -rf"] } }), null, "invalid_document");
   refuse(doc(3, { "secret-read": { mode: "block", allowed_hosts: ["a.com"] } }), null, "invalid_document");
-  refuse(doc(3, { "secret-read": { mode: "off" } }), null, "invalid_document");
+  refuse(doc(3, { "secret-read": { mode: "silent" } }), null, "invalid_document");
   refuse("not json", null, "invalid_document");
   assert.deepEqual([...MANAGED_RULE_IDS].sort(), Object.keys(defaults()).sort());
 });
