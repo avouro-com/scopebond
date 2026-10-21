@@ -15,3 +15,5 @@ A bare `git push` or `git push --force-with-lease` whose current branch cannot b
 safe-shell now also denies a file-system maker by its family name (`mkfs.<type>`), the PowerShell disk cmdlets `Format-Volume` and `Clear-Disk`, removing every scheduled job (`crontab -r`), and a recursive `chmod`, `chown` or `chgrp` of the whole disk, the home folder or a system folder, while their everyday forms stay allowed.
 
 The always-on protection now refuses reading a `cloud.json` only in a Scopebond folder (any project's own `config/cloud.json` reads as usual), and the coding agents' sub-agent definitions (`.claude/agents`) and `.mcp.json` move from it to the configuration rule a workspace can relax, while `.git/hooks`, `.git/config` and `.husky` stay always protected.
+
+A program run after a `cd` into a protected folder (Scopebond's own, or a credentials folder such as `~/.ssh`) now counts as a read of that folder, whatever its arguments, so `cd ~/.ssh && ls` is judged like reading `~/.ssh`.

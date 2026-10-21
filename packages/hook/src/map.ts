@@ -1574,6 +1574,27 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
 
 const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 
+// Folders whose contents a read rule protects as a whole: Scopebond's own and the credential folders.
+const PROTECTED_READ_FOLDERS = [".scopebond", ".ssh", ".aws", ".kube", ".docker", ".azure", ".gnupg", ".config/gcloud", ".config/gh"];
+/** The protected folder a `cd` folder is in or is (`~/.ssh/keys` is in `~/.ssh`), up to and including it; null when none. A
+ *  folder that still holds a variable is not judged here (where it leads is only known at run time). */
+function protectedFolderOf(dir: string): string | null {
+  if (dir === "" || HOLDS_VARIABLE.test(dir)) return null;
+  // `.` and `..` resolved first: `~/.ssh/..` is the home folder.
+  const segs: string[] = [];
+  for (const s of dir.replace(/\\/g, "/").split("/")) {
+    if (s === "." || (s === "" && segs.length > 0)) continue;
+    if (s === ".." && segs.length > 0 && segs[segs.length - 1] !== "..") segs.pop(); else segs.push(s);
+  }
+  for (let i = 0; i < segs.length; i++) {
+    const one = segs[i].toLowerCase();
+    const two = i + 1 < segs.length ? `${one}/${segs[i + 1].toLowerCase()}` : "";
+    if (PROTECTED_READ_FOLDERS.includes(two)) return segs.slice(0, i + 2).join("/");
+    if (PROTECTED_READ_FOLDERS.includes(one)) return segs.slice(0, i + 1).join("/");
+  }
+  return null;
+}
+
 /** A simple command's intents with `program_scope` on its shell.exec (what safe-shell judges: delete-scope.ts). A delete whose
  *  every target is contained also records each target as a write, so the file rules (protected places, workspace roots) judge
  *  what it removes. A destructive form of a program (destructive-forms.ts: `mkfs.ext4`, `crontab -r`, a recursive `chmod`
@@ -1674,6 +1695,12 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
       const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir), deletes.get(sc), cwd, destructiveForm(sc, dir, cwd));
       const kept = filesOnly ? mapped.filter(isFile) : mapped;
       out.push(...kept);
+      // A program run in a protected folder (after a `cd` there) reads there, whatever it names: a read of the folder.
+      const held = sc.opaque || !CD.has(canonProgram(sc.program)) ? protectedFolderOf(dir) : null;
+      if (held !== null) {
+        const have = new Set(out.filter(isFile).map(key));
+        for (const m of fileIntent("file.read", held, "", cwd)) if (!have.has(key(m))) out.push(m);
+      }
       // The command read with the values its variables may hold, and in each other folder it may run in: the file effects and
       // the switch-off those readings add. A credential's value adds only a place the always-on protection guards.
       const lookup = scopeOf(vars, sc);
