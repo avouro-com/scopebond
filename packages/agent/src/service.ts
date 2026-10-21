@@ -8,7 +8,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleSummary, ruleName, ruleTitle,
+  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
   writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -820,7 +820,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (answer.decision === "unavailable") return { outcome: "unavailable", text: "The Scopebond window could not be shown." };
       // The window offers "keep blocking" (quiet) and the newer lengths only where the hook's question does, so the hook
       // takes every answer it can return.
-      const done = actOnBlocked(options.dir, id, answer as Parameters<typeof actOnBlocked>[2]);
+      const done = actOnBlocked(options.dir, id, answer);
       if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
       if (done.outcome === "asked") pollAnswers();
       log(`earlier block under "${q.title}": ${done.outcome}`);
