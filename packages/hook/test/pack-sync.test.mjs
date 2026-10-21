@@ -14,7 +14,7 @@ import { packSigningInput } from "@scopebond/policy-schema/pack";
 import { ENFORCE } from "./enforce-all.mjs";
 import {
   scaffold, policyBuilds, digestRules, syncPolicy, readMeta, signedPolicyBytes, digestPacks, readPackIndex, loadPacks, packsDir, syncPacks, restampPacks,
-  packRefsOf, HOOK_CAPABILITIES, activatePacks, mapClaudeToolUse, setActivePacks,
+  packRefsOf, HOOK_CAPABILITIES, activatePacks, mapClaudeToolUse, setActivePacks, describePackSync,
 } from "../dist/index.js";
 
 const require = createRequire(import.meta.url);
@@ -193,7 +193,7 @@ test("fail closed: a list that does not verify, or a pack that does not check ou
     assert.deepEqual(readPackIndex(h.dir).packs, []);
     assert.match(readMeta(h.dir).packs.error, /does not verify/);
   });
-  await t.test("a newer version that cannot be fetched keeps the one held, and the cache keeps its last complete check-in", async () => {
+  await t.test("a newer version that cannot be fetched keeps the one held, on its own clock", async () => {
     const h = connected();
     const v2 = packText({ version: "2.0.0" });
     const w = workspace([{ body: signed(doc(1), { packs: [ref] }) }, { body: signed(doc(2), { packs: [refOf(v2)], issuedAt: T(16) }) }], { "example@1.0.0": text });
@@ -230,4 +230,53 @@ test("syncPacks and packRefsOf refuse malformed lists", async () => {
   assert.deepEqual(packRefsOf({ packs: [{ id: "b", version: "1.0.0", sha256: "b".repeat(64) }, { id: "a", version: "1.0.0", sha256: "a".repeat(64) }] }).map((p) => p.id), ["a", "b"]);
   const dir = mkdtempSync(join(tmpdir(), "scopebond-packsync-"));
   assert.deepEqual(await syncPacks(dir, {}, { base: "https://x", headers: {}, fetchImpl: fetch, workspace: WORKSPACE, computer: INSTALLATION, lastIssuedAt: null }), { state: "not_named" });
+});
+
+test("one pack that cannot be read never expires the others: each pack keeps its own 30-day clock", async () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const start = new Date(T(1));
+  const at = (days) => new Date(start.getTime() + days * DAY);
+  const h = connected();
+  const good = packText();
+  // A second, unrelated pack: the example under another id.
+  const otherText = (() => {
+    const unsigned = { ...example, id: "other", title: "Other pack", version: "1.0.0", signature: { alg: "Ed25519", key_id: "ws-1", value: "A".repeat(86) + "==" } };
+    const value = cryptoSign(null, Buffer.from(packSigningInput(unsigned), "utf8"), trusted.privateKey).toString("base64");
+    return JSON.stringify({ ...unsigned, signature: { alg: "Ed25519", key_id: "ws-1", value } });
+  })();
+  // The workspace's next version of `example` is one this computer cannot use (signed by a key it does not trust).
+  const bad = packText({ version: "2.0.0", key: stranger.privateKey });
+  const served = { "example@1.0.0": good, "other@1.0.0": otherText, "example@2.0.0": bad };
+  const run = (answer, days) => {
+    const w = workspace([answer], served);
+    return syncPolicy(h.dir, { agentKid: h.agentKid, hookVersion: "0.29.0", policyBuilds, fetchImpl: w.fetchImpl, now: () => at(days) });
+  };
+  // Day 0: both packs arrive and are in force.
+  await run({ body: signed(doc(1), { packs: [refOf(good), refOf(otherText)], issuedAt: at(0).toISOString() }), etag: '"1"' }, 0);
+  assert.deepEqual(loadPacks(h.dir, { now: at(0) }).packs.map((p) => `${p.id}@${p.version}`), ["example@1.0.0", "other@1.0.0"]);
+  // Day 1: the list names example@2.0.0, which is refused; other@1.0.0 refreshes as usual.
+  await run({ body: signed(doc(2), { packs: [refOf(bad), refOf(otherText)], issuedAt: at(1).toISOString() }), etag: '"2"' }, 1);
+  const meta = readMeta(h.dir);
+  assert.equal(meta.packs.complete, false);
+  assert.deepEqual(meta.packs.failed.map((f) => [f.id, f.version, f.held]), [["example", "2.0.0", "example@1.0.0"]]);
+  assert.match(meta.packs.failed[0].reason, /does not verify/);
+  // The direct result names the pack, its version and why.
+  const direct = await syncPacks(h.dir, signed(doc(2), { packs: [refOf(bad), refOf(otherText)], issuedAt: at(1).toISOString() }), {
+    base: "https://cloud.example.test", headers: {}, fetchImpl: workspace([], served).fetchImpl, workspace: WORKSPACE, computer: INSTALLATION, lastIssuedAt: null, now: at(1),
+  });
+  assert.equal(direct.state, "partial");
+  assert.deepEqual(direct.failed.map((f) => [f.id, f.version, f.held]), [["example", "2.0.0", "example@1.0.0"]]);
+  // Days 2–32: a check-in every day, alternating a full answer and a 304; the bad pack never checks out.
+  for (let d = 2; d <= 32; d++) {
+    if (d % 2) await run({ status: 304 }, d);
+    else await run({ body: signed(doc(2), { packs: [refOf(bad), refOf(otherText)], issuedAt: at(d).toISOString() }), etag: '"2"' }, d);
+    const loaded = loadPacks(h.dir, { now: at(d) });
+    assert.ok(loaded.packs.some((p) => p.id === "other"), `day ${d}: the unrelated pack is still in force`);
+    // The last good version of the bad pack stays until 30 days after it was last confirmed (day 0), on its own clock.
+    assert.equal(loaded.packs.some((p) => p.id === "example"), d <= 30, `day ${d}: example@1.0.0 ${d <= 30 ? "stays" : "has expired"}`);
+    if (d > 30) assert.ok(loaded.problems.some((p) => p.ref === "example@1.0.0" && p.reason === "expired"));
+  }
+  // What `status` and `packs list` say about the pack that could not be updated.
+  const lines = describePackSync(readMeta(h.dir).packs);
+  assert.ok(lines.some((l) => /example 2\.0\.0/.test(l) && /does not verify/.test(l)), lines.join("\n"));
 });

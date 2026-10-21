@@ -372,13 +372,18 @@ read MCP calls; they derive taxonomy actions beside the command's own `shell.exe
 decide them like any other action.
 
 **Where they live.** In the `packs` folder of the hook's state directory (the folder that holds `policy.json`):
-`packs/index.json` is `{ "v": 1, "checked_at": "<RFC 3339>", "packs": [{ "id", "version", "sha256" }] }`, and each
-pack is `packs/<id>@<version>.json`, byte for byte as it was served. Whoever delivers packs writes the pack files
-first and the index last, with `checked_at` the time of the successful check-in and `sha256` the hex SHA-256 of
+`packs/index.json` is `{ "v": 1, "checked_at": "<RFC 3339>", "packs": [{ "id", "version", "sha256", "checked_at"? }] }`,
+and each pack is `packs/<id>@<version>.json`, byte for byte as it was served. Whoever delivers packs writes the pack
+files first and the index last, with `checked_at` the time of the successful check-in and `sha256` the hex SHA-256 of
 each file. Only listed packs are read, one version per id.
 
-**When a pack is used.** On every tool call, and only when all of these hold: the index is readable and was checked
-in no more than 30 days ago; the file matches its `sha256`; it is a valid pack with the listed id and version; and its
+Each pack keeps its own clock. A pack's own `checked_at` is there only when a check-in could not confirm it (the
+workspace named a newer version that could not be fetched or checked): that pack's last good version stays in force
+until 30 days after it was last confirmed, while every other pack renews as usual. `scopebond status` and
+`scopebond packs list` name such a pack, the version the workspace named, and why it was not used.
+
+**When a pack is used.** On every tool call, and only when all of these hold: the index is readable and the pack was
+confirmed by a check-in no more than 30 days ago; the file matches its `sha256`; it is a valid pack with the listed id and version; and its
 Ed25519 signature verifies with a policy-signing key this release trusts (the same keys as signed rules), inside that
 key's validity window. Otherwise the pack is not used, and only the open detection and the starter protections
 apply: a missing, damaged, unsigned or expired pack never allows anything, it only stops adding actions. No network

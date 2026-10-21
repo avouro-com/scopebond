@@ -76,6 +76,7 @@ import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
 import { runPackVectors } from "./packs.js";
+import { describePackSync } from "./pack-sync.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, waitWithinDeadline } from "./hook-deadline.js";
 import { policyKeyProblems } from "./policy-keys.js";
@@ -1857,6 +1858,7 @@ function runStatus(args: string[] = []): void {
     console.log(`  rules            ${managed ? `set by your workspace (version ${meta.revision})${checked}` : `this computer's own (${rulesPath(activeDir)})${connected ? checked : ""}`}`);
     console.log(`                   always on: protection of Scopebond's own settings and the agents' hook settings`);
     if (meta.last_error) console.log(`                   last problem: ${meta.last_error}`);
+    for (const line of describePackSync(meta.packs)) console.log(`  rule packs       ${line}`);
   }
   {
     const activeDir = resolveConfigDir(process.cwd());
@@ -2313,13 +2315,18 @@ function runPacks(args: string[]): void {
   if (sub === "list") {
     const loaded = loadPacks(dir);
     if (json) {
-      console.log(JSON.stringify({ dir: packsDir(dir), expires_at: loaded.expiresAt, packs: loaded.packs.map((p) => ({ id: p.id, version: p.version, issued_at: p.issued_at, title: p.title ?? null })), problems: loaded.problems }, null, 2));
+      console.log(JSON.stringify({ dir: packsDir(dir), expires_at: loaded.expiresAt, packs: loaded.packs.map((p) => ({ id: p.id, version: p.version, issued_at: p.issued_at, title: p.title ?? null, expires_at: loaded.expires[`${p.id}@${p.version}`] ?? null })), problems: loaded.problems, not_updated: readMeta(dir).packs?.failed ?? [] }, null, 2));
       return;
     }
-    if (loaded.packs.length === 0 && loaded.problems.length === 0) { console.log("No rule packs on this computer. The open detection and the starter protections apply."); return; }
-    for (const p of loaded.packs) console.log(`  ${p.id}@${p.version}  issued ${p.issued_at}${p.title ? `  ${p.title}` : ""}`);
-    if (loaded.expiresAt && loaded.packs.length) console.log(`In force until ${loaded.expiresAt} unless this computer checks in again.`);
+    const notUpdated = describePackSync(readMeta(dir).packs);
+    if (loaded.packs.length === 0 && loaded.problems.length === 0 && notUpdated.length === 0) { console.log("No rule packs on this computer. The open detection and the starter protections apply."); return; }
+    for (const p of loaded.packs) {
+      const until = loaded.expires[`${p.id}@${p.version}`];
+      console.log(`  ${p.id}@${p.version}  issued ${p.issued_at}${p.title ? `  ${p.title}` : ""}${until ? `  in force until ${until}` : ""}`);
+    }
+    if (loaded.packs.length) console.log("Each pack stays in force for 30 days after this computer last confirmed it with the workspace.");
     for (const problem of loaded.problems) console.log(`  not used: ${problem.ref}: ${problem.message}`);
+    for (const line of notUpdated) console.log(`  not updated: ${line}`);
     return;
   }
   if ((sub === "verify" || sub === "add") && target) {
@@ -2439,8 +2446,9 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
     summary: "the rule packs on this computer: what is in force, and checking or adding a pack file",
     detail: [
       "Rule packs are signed data from Scopebond Cloud that teach the hook what more command-line tools and MCP servers do.",
-      "list shows the packs in force and why any other is not used (bad signature, expired, damaged). A pack stays in force",
-      "for 30 days after this computer last checked in; without one, the open detection and the starter protections apply.",
+      "list shows the packs in force and why any other is not used (bad signature, expired, damaged). Each pack stays in force",
+      "for 30 days after this computer last confirmed it; a pack whose update could not be used keeps its last good version on",
+      "its own clock, and the others renew as usual. Without one, the open detection and the starter protections apply.",
       "verify <file> checks a pack file (format, signature, its own vectors) and changes nothing.",
       "add <file> checks it the same way, then puts it in force here; remove <id> takes one out. Both need a terminal or --yes.",
       "Packs live in the packs folder of .scopebond/ (index.json and one <id>@<version>.json per pack).",

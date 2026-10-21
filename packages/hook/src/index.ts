@@ -22,18 +22,18 @@ export { setActivePacks, activePackRefs, activePacks, derivePackTargets, deriveP
 export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
 export { packRuleClauses, switchablePackRules, withPackRules } from "./pack-rules.js";
 export {
-  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
+  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
 } from "./pack-store.js";
 export type { PackIndex, PackIndexEntry, LoadedPacks, PackRefusal } from "./pack-store.js";
 // Pack delivery: the signed list a workspace answer names, and the cache brought in step with it on each rules check.
-export { syncPacks, restampPacks, packRefsOf, MAX_PACK_REFS } from "./pack-sync.js";
+export { syncPacks, restampPacks, describePackSync, packRefsOf, MAX_PACK_REFS } from "./pack-sync.js";
 // Safe Install: verdicts on detected installs from the workspace, and the signed block list used offline.
 export {
   checkInstalls, checkable, checkBlocklistText, loadBlocklist, safeInstallOn, syncInstallBlocklist, removeBlocklist, comparableName,
   INSTALL_BLOCKLIST_FILE, INSTALL_STATE_FILE, INSTALL_VERDICTS_FILE, BLOCKLIST_FORMAT, SAFE_INSTALL_HEADER, BLOCKLIST_TTL_MS, BLOCKLIST_CHECK_MS, VERDICT_TIMEOUT_MS, AGE_GATE_MS,
 } from "./install-verdicts.js";
 export type { InstallVerdict, VerdictReason, VerdictSource, InstallCheck, CheckOptions, BlocklistSyncOptions, BlocklistSyncResult } from "./install-verdicts.js";
-export type { PackSyncOptions, PackSyncResult } from "./pack-sync.js";
+export type { PackSyncOptions, PackSyncResult, PackSyncFailure } from "./pack-sync.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export {
   compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES, SWITCHABLE_RULES,

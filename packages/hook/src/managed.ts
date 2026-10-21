@@ -399,8 +399,12 @@ export interface ManagedMeta {
   rules_dropped_at?: string | null;
   rules_dropped_told?: boolean | null;
   /** The last signed pack list the workspace named (pack-sync.ts): when, its digest, whether every pack in it is in the cache,
-   *  and what went wrong when one is not. A `304` rules check renews the cache only when the list was complete. */
-  packs?: { at: string; digest: string | null; complete: boolean; error: string | null } | null;
+   *  and what went wrong when one is not. `failed` names each pack that could not be fetched or checked (the version named,
+   *  why, and the version of it still in force until when). A `304` rules check renews every other pack. */
+  packs?: {
+    at: string; digest: string | null; complete: boolean; error: string | null;
+    failed?: Array<{ id: string; version: string; reason: string; held: string | null; held_until: string | null }>;
+  } | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };
 

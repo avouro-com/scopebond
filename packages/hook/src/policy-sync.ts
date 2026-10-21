@@ -242,7 +242,10 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     const result = await syncPacks(dir, raw, { base, headers: auth, fetchImpl, workspace: workspaceId, computer: installationId, lastIssuedAt: lastIssuedAt(), now, timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
     if (result.state === "not_named") return;
     const error = result.state === "synced" ? null : result.state === "refused" ? result.message : result.failed.map((f) => `${f.ref}: ${f.message}`).join("; ");
-    packState = { at, digest: typeof raw.packs_digest === "string" ? raw.packs_digest : null, complete: result.state === "synced", error: error === null ? null : error.slice(0, 300) };
+    packState = {
+      at, digest: typeof raw.packs_digest === "string" ? raw.packs_digest : null, complete: result.state === "synced", error: error === null ? null : error.slice(0, 300),
+      ...(result.state === "partial" ? { failed: result.failed.map((f) => ({ id: f.id, version: f.version, reason: f.message.slice(0, 300), held: f.held, held_until: f.held_until })) } : {}),
+    };
   };
   const signed = (raw: Record<string, unknown>, managed: boolean) => {
     const check = checkAnswerSignature(raw, { workspace: workspaceId, computer: installationId, managed, lastIssuedAt: lastIssuedAt(), now }, mode);
@@ -279,8 +282,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   };
   if (res.status === 204) return toOwnRules(admitSigned({ result: "unsigned" }, mode, at), null);
   if (res.status === 304 && isManaged(dir) && meta.revision !== null) {
-    // Not modified covers the pack list too: a complete cache is renewed by this check-in.
-    if (packState?.complete) restampPacks(dir, now);
+    // Not modified covers the pack list too: every pack it confirmed is renewed by this check-in; a pack it named at a version
+    // this computer could not fetch or check keeps its own clock. A list that was refused as a whole renews nothing.
+    if (packState?.complete || packState?.failed) restampPacks(dir, now, packState.failed?.map((f) => f.id) ?? []);
     const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision, rules_digest: meta.rules_digest!, result: "loaded" });
     save({ last_ack: confirmed, last_error: null });
