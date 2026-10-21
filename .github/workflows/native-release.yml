@@ -11,6 +11,9 @@ name: Native release (signed)
 #   sign-macos the Apple build (Developer ID + notarization), designed in and off until its secrets exist
 #   release    a draft GitHub release with the signed files, for a person to check and publish
 #
+# The build job also builds the engine bundle (hook-bundle.mjs: the hook as one file, for signed installs to update their
+# engine without a new installer); sign-installer signs its manifest with the updater key, and the release carries it.
+#
 # Started on main by the release workflow (release.yml) once it has published a new @scopebond/agent, with that version,
 # so the signed build follows each npm release; or by hand from main: Actions → Native release (signed) → Run workflow.
 # Either way both signing environments still wait for an owner's approval, and the release stays a draft pre-release for
@@ -44,6 +47,8 @@ on:
       - packages/native/sbom.mjs
       - packages/native/icon.mjs
       - packages/native/manifest.mjs
+      - packages/native/hook-bundle.mjs
+      - packages/native/src/hook-bundle-main.mjs
       - packages/native/winget.mjs
       - packages/native/updater-key.mjs
       - packages/native/updater-public-key.txt
@@ -99,6 +104,22 @@ jobs:
           $out = & $exe hook help
           if ($LASTEXITCODE -ne 0) { throw "the executable did not run (exit $LASTEXITCODE)" }
           $out | Select-Object -First 1
+      # The engine bundle (hook-bundle.mjs): the hook as one file in an archive, with a manifest naming this commit. The
+      # agent puts a newer one in place on signed installs without a new installer; its manifest is signed in
+      # sign-installer, with the updater key, like the release manifest.
+      - name: Build the engine bundle
+        shell: pwsh
+        env:
+          COMMIT: ${{ github.sha }}
+        run: node packages/native/hook-bundle.mjs build packages/native/dist/hook-bundle "$env:COMMIT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-hook-bundle
+          path: |
+            packages/native/dist/hook-bundle/scopebond-hook-bundle-*.tgz
+            packages/native/dist/hook-bundle/scopebond-hook-bundle-*.manifest.json
+          if-no-files-found: error
+          retention-days: 7
       # The native tray (Rust, Tauri 2), from its committed Cargo.lock, with no cache: a release build starts from the
       # lockfile alone.
       - name: Rust toolchain (packages/tray/rust-toolchain.toml)
@@ -258,6 +279,10 @@ jobs:
         with:
           name: unsigned-installer
           path: msi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-hook-bundle
+          path: out
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -298,6 +323,14 @@ jobs:
       - name: Verify every signature, its timestamp and the publisher
         shell: pwsh
         run: ./packages/native/verify-signed.ps1 -Folder out -SignTool
+      # The engine bundle's manifest signed with the updater key (Node's built-ins only; it checks the archive's digest and
+      # this commit first). Before the sums, so they list the signed manifest. Without the key the run fails.
+      - name: Signed engine bundle manifest
+        shell: pwsh
+        env:
+          UPDATER_SIGNING_KEY: ${{ secrets.UPDATER_SIGNING_KEY }}
+          COMMIT: ${{ github.sha }}
+        run: node packages/native/hook-bundle.mjs sign out "$env:COMMIT"
       - name: SHA-256 sums
         shell: pwsh
         run: |
@@ -340,6 +373,7 @@ jobs:
             out/scopebond-agent-*-x64.exe
             out/scopebond-tray-*-x64.exe
             out/scopebond-agent-*-x64.msi
+            out/scopebond-hook-bundle-*.tgz
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed-windows
@@ -435,5 +469,5 @@ jobs:
           tag="agent-native-v${VERSION}"
           gh release create "$tag" --repo "$REPO" --target "$SHA" --draft --prerelease \
             --title "Scopebond Agent ${VERSION} for Windows (signed)" \
-            --notes "The Scopebond Agent and hook as one signed file, the signed Scopebond tray, and the signed installer with both (per user by default; ALLUSERS=1 for every user; the tray starts at sign-in and keeps the agent running). Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})." \
+            --notes "The Scopebond Agent and hook as one signed file, the signed Scopebond tray, and the signed installer with both (per user by default; ALLUSERS=1 for every user; the tray starts at sign-in and keeps the agent running), plus the engine bundle with its signed manifest, from which signed installs update their hook without a new installer. Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})." \
             out/*

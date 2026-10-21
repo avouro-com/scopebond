@@ -21,6 +21,25 @@ void (async () => {
   const args = process.argv.slice(2);
   if (args[0] === "hook") {
     process.argv.splice(2, 1);
+    // A newer engine the agent staged and checked (engine-shim.ts): run it when it verifies against the updater keys this
+    // executable carries and starts; otherwise the engine inside this file (the baseline) runs, and a start failure is
+    // recorded. The bundle arms its own deadline and fail-closed answer.
+    let engine = null;
+    const { engineToRun, engineKeysFrom, recordEngineStartFailure, engineHome, ENGINE_CANDIDATE_ENV } = await import("../../hook/dist/engine-shim.js");
+    try {
+      engine = engineToRun({ keys: engineKeysFrom(typeof __SCOPEBOND_UPDATER_KEYS__ === "string" ? __SCOPEBOND_UPDATER_KEYS__ : undefined), baselineVersion: __SCOPEBOND_HOOK_VERSION__ });
+    } catch (error) {
+      // Only a candidate (an update being checked) throws: that check fails, it never passes on the baseline.
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(3);
+    }
+    if (engine) {
+      try { await engine.run(args.slice(1)); return; }
+      catch (error) {
+        if (process.env[ENGINE_CANDIDATE_ENV]) { console.error(error instanceof Error ? error.message : String(error)); process.exit(3); }
+        recordEngineStartFailure(engineHome(), engine.version, error);
+      }
+    }
     // As `cli.js` does: any failure the commands do not answer, and a call that has not decided shortly before the coding
     // agent's own time limit, answer with that agent's deny.
     const { armHookDeadline, failClosed } = await import("../../hook/dist/hook-deadline.js");

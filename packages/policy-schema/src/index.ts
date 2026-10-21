@@ -135,7 +135,6 @@ export const RECEIPT_INTEL_MAX_BYTES = 4096;
 /** The longest the slot may be as text: base64 of RECEIPT_INTEL_MAX_BYTES (4096 bytes end in one byte, so `==`; a slot this
  *  long without it would be 4097 or 4098 bytes). */
 export const RECEIPT_INTEL_MAX_LENGTH = 5464;
-// eslint-disable-next-line security/detect-non-literal-regexp -- a constant of this module
 const INTEL_SLOT = new RegExp(RECEIPT_INTEL_PATTERN);
 
 /** Whether `value` is a slot the receipt schema accepts: standard padded base64 of 1 to RECEIPT_INTEL_MAX_BYTES bytes. */

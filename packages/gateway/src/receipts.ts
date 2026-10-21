@@ -211,7 +211,8 @@ export function validateReceiptBudget(value: unknown): value is ReceiptBudget {
  *  Both optional. The gateway checks their shape only: what the slot holds is never read. */
 export interface ReceiptIntel { pattern_id?: string; intel?: string }
 const PATTERN_ID = /^[0-9a-f]{64}$/;
-// The receipt schema's slot (RECEIPT_INTEL_PATTERN): standard padded base64. Linear: fixed-width groups.
+// The receipt schema's slot (RECEIPT_INTEL_PATTERN): standard padded base64.
+// eslint-disable-next-line security/detect-unsafe-regex -- linear: fixed-width groups of a class with no overlap with the padding
 const INTEL_SLOT = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 /** Base64 of 4096 bytes (RECEIPT_INTEL_MAX_LENGTH); a slot this long ends in `==` (one byte in its last group). */
 const INTEL_MAX_LENGTH = 5464;

@@ -55,3 +55,4 @@ export { agentCli, hookCli, setupCli, folderSentence } from "./commands.js";
 export type { CommandContext } from "./commands.js";
 export { applyToolSettings, toolSettingsReport, readToolSettingsState, TOOL_SETTINGS_STATE_FILE, TOOL_SETTINGS_SUPPORTED } from "./tool-settings.js";
 export type { ToolSettingsReport, HarnessReport, ToolSettingsRefusal } from "./tool-settings.js";
+export { packTgz, unpackTgz, FLAT_NAME, type TgzFile } from "./tgz.js";

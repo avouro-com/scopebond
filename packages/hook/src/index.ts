@@ -96,6 +96,12 @@ export {
   INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_MODULE, INTEL_MANIFEST, INTEL_MAX_BYTES,
   type IntelPlugin, type IntelManifest, type IntelAction, type IntelMembers, type IntelCheck,
 } from "./intel-plugin.js";
+export {
+  engineToRun, readCurrentEngine, writeCurrentEngine, engineStartFailures, recordEngineStartFailure, checkStagedEngine, verifyEngineManifest, compileEngine,
+  engineHome, engineDir, engineVersionDir, engineKeysFrom, engineStaged, isEngineVersion, compareEngineVersions,
+  ENGINE_MANIFEST_DOMAIN, ENGINE_FILE, ENGINE_MANIFEST, ENGINE_SIGNATURE, ENGINE_CURRENT, ENGINE_START_FAILURES, ENGINE_CANDIDATE_ENV, MAX_ENGINE_START_FAILURES, ENGINE_MAX_BYTES,
+  type EngineKey, type EngineManifest, type CurrentEngine, type StagedEngine, type LoadedEngine,
+} from "./engine-shim.js";
 export { versionedFetch, withHookVersion, HOOK_VERSION_HEADER } from "./workspace-fetch.js";
 export {
   receiptContextFor, receiptContextAllowed, receiptContextFrom, noteReceiptContext, canonicalRepository, repositoryFacts,

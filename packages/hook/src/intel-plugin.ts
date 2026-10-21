@@ -128,7 +128,7 @@ export function pluginFrom(version: string, inspect: (action: IntelAction) => un
       if (!answer || typeof answer !== "object" || typeof (answer as { then?: unknown }).then === "function") return {};
       const { pattern_id: patternId, slot } = answer as { pattern_id?: unknown; slot?: unknown };
       if ((patternId !== undefined && !isReceiptPatternId(patternId)) || (slot !== undefined && !isReceiptIntel(slot))) return {};
-      return { ...(patternId !== undefined ? { pattern_id: patternId as string } : {}), ...(slot !== undefined ? { intel: slot as string } : {}) };
+      return { ...(patternId !== undefined ? { pattern_id: patternId } : {}), ...(slot !== undefined ? { intel: slot } : {}) };
     },
   };
 }
