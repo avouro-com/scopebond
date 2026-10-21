@@ -12,11 +12,9 @@
 //   scopebond-agent uninstall [--purge] autostart off, stop, the hook's uninstall (tells the workspace); what the installer runs
 //   scopebond-agent version             this program's version and the hook it carries (an update checks the new one starts)
 
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { win32 } from "node:path";
-import { homedir } from "node:os";
-import { configuredHookCommands, hookCommandResolves, hookSelfCommand, hookVersion, isEphemeralPath, userHarnessFile, userHome } from "@scopebond/hook";
+import { configuredHookCommands, hookCommandResolves, hookVersion, isEphemeralPath, userHarnessFile, userHome, UNINSTALL_CALLER_ENV } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses } from "./agent.js";
 import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
@@ -24,7 +22,8 @@ import { agentCliPath } from "./self.js";
 import { runSetup } from "./setup.js";
 import { agentVersion } from "./update.js";
 import { writeOutputTo } from "./log-file.js";
-import { removeAppsEntry, writeAppsEntry } from "./apps-entry.js";
+import { refreshAppsEntry, writeAppsEntry } from "./apps-entry.js";
+import { runUninstall } from "./uninstall.js";
 import { installKind, UPDATE_HELPER_COMMAND } from "./native-update.js";
 import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
@@ -74,6 +73,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (log) writeOutputTo(log);
       // Started by an agent that just updated itself: let it exit first.
       await takeOver(dir, agentCliPath());
+      // An npm install listed in Settings -> Apps: the entry runs this version's uninstall (an update replaced only the agent).
+      if (installKind() === "npm") refreshAppsEntry(dir, { version: agentVersion(), cli: agentCliPath() });
       const service = await startService({ dir, onStopped: () => process.exit(0) });
       const stop = () => { void service.stop().finally(() => process.exit(0)); };
       process.on("SIGINT", stop);
@@ -157,16 +158,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       return;
     }
     case "uninstall": {
-      // What the Windows installer runs when Scopebond is removed (and anyone may run): stop and unregister the agent,
-      // then the hook's own uninstall, which tells the workspace and takes the hook out of the coding agents' settings.
-      // The Scopebond folder (keys, receipts) stays unless --purge.
-      console.log(disableAutostart(dir));
-      if (await stopRunning()) console.log("Stopped the running Scopebond Agent.");
-      const listed = removeAppsEntry(dir);
-      if (listed) console.log(listed);
-      const [program, args] = hookSelfCommand(["uninstall", "--yes", ...(rest.includes("--purge") ? ["--purge"] : [])]);
-      const removal = spawnSync(program, args, { stdio: "inherit", cwd: homedir(), env: { ...process.env, SCOPEBOND_HOME: dir } });
-      process.exitCode = removal.status ?? 1;
+      // What the Windows installer runs when Scopebond is removed, the Settings entry's script runs, and anyone may run
+      // (uninstall.ts): stop and unregister the agent, then the hook's own uninstall, which tells the workspace and takes the
+      // hook out of the coding agents' settings. The Scopebond folder (keys, receipts) stays unless --purge.
+      process.exitCode = await runUninstall({ dir, purge: rest.includes("--purge"), kind: installKind(), me, caller: process.env[UNINSTALL_CALLER_ENV], stopRunning });
       return;
     }
     case "autostart": {

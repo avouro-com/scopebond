@@ -35,6 +35,15 @@ export function setupCli(sub: string, c: CommandContext = here(), version?: stri
   return `${c.platform === "win32" ? "npx.cmd" : "npx"} -y @scopebond/agent${version ? `@${version}` : ""} setup ${sub}`;
 }
 
+/** The last thing an uninstall says: what happens to the Scopebond folder, and how to remove it when it stays. `kind` is how
+ *  the agent was installed: npm names the agent's purge, the signed installer its PURGE=1 option, and null only "delete it"
+ *  (the Settings entry's script, once npm has removed the agent). */
+export function folderSentence(dir: string, o: { exists: boolean; purged: boolean; kind: InstallKind | null; me: string }): string {
+  if (!o.exists) return o.purged ? `Your Scopebond folder ${dir} was removed, with its keys and the records not yet sent.` : `No Scopebond folder is left at ${dir}.`;
+  const command = o.kind === "npm" ? `${o.me} uninstall --purge` : o.kind ? "msiexec /x … PURGE=1" : null;
+  return `Your Scopebond folder ${dir} stays (keys and records not yet sent). Delete it${command ? `, or run \`${command}\`,` : ""} to remove everything.`;
+}
+
 /** npm itself, as a person types it on this platform. */
 export function npmProgram(platform: NodeJS.Platform = process.platform): string {
   return platform === "win32" ? "npm.cmd" : "npm";

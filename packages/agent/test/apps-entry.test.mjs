@@ -5,7 +5,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appsEntryValues, psQuote, uninstallScript, writeUninstallScript, writeAppsEntry, removeAppsEntry, UNINSTALL_KEY } from "../dist/index.js";
+import { appsEntryValues, psQuote, uninstallScript, writeUninstallScript, writeAppsEntry, removeAppsEntry, refreshAppsEntry, npmBeside, folderSentence, UNINSTALL_KEY } from "../dist/index.js";
+import { UNINSTALL_CALLER_ENV, UNINSTALL_NOT_TOLD_EXIT } from "@scopebond/hook";
 
 test("the entry names Scopebond, Avouro LLC and the version, and its Uninstall runs the script with no administrator rights", () => {
   const values = Object.fromEntries(appsEntryValues({ version: "0.5.3", script: "C:\\Users\\Ann\\.scopebond\\uninstall-agent.ps1", home: "C:\\Users\\Ann\\.scopebond" }).map(([n, t, d]) => [n, { t, d }]));
@@ -119,4 +120,74 @@ test("Windows PowerShell runs the script from a non-ASCII folder: removed only w
 test("off Windows there is no entry to write or remove", () => {
   assert.equal(writeAppsEntry("/tmp/x", { version: "1.0.0", cli: "/x/cli.js" }, "linux"), null);
   assert.equal(removeAppsEntry("/tmp/x", "darwin"), null);
+});
+
+test("the script lets the agent leave the folder to it, carries on to npm when only the workspace notice failed, and ends with the folder sentence", () => {
+  const script = uninstallScript({ node: "C:\\n\\node.exe", cli: "D:\\Apps\\cli.js", npm: "C:\\n\\npm.cmd", home: "C:\\Users\\Ann\\.scopebond" });
+  // The agent is told a script runs it, so it does not name the folder itself.
+  assert.ok(script.indexOf(`$env:${UNINSTALL_CALLER_ENV} = 'apps-entry'`) > 0);
+  assert.ok(script.indexOf(`$env:${UNINSTALL_CALLER_ENV} = 'apps-entry'`) < script.indexOf("$cli uninstall\n"));
+  // A workspace that could not be told: said, npm's uninstall still runs, and the script does not say "removed".
+  assert.ok(script.includes(`if ($LASTEXITCODE -eq ${UNINSTALL_NOT_TOLD_EXIT}) {\n      $problems += "The workspace was not told`), script);
+  assert.ok(script.indexOf(`-eq ${UNINSTALL_NOT_TOLD_EXIT}`) < script.indexOf("if ($LASTEXITCODE -eq 0) { $agentRan = $true }"), "before the success check");
+  // The folder sentence, as the agent words it, last on both endings.
+  assert.ok(script.includes(psQuote(folderSentence("{0}", { exists: true, purged: false, kind: null, me: "" }))));
+  assert.ok(script.includes(psQuote(folderSentence("{0}", { exists: false, purged: false, kind: null, me: "" }))));
+  assert.ok(script.includes("$folder = 'C:\\Users\\Ann\\.scopebond'"));
+  assert.equal(script.split("Write-Host $folderNote").length - 1, 2, "said on both endings");
+});
+
+test("Windows PowerShell: the agent's notice failing still removes npm's copy, exits 1 and says why; the folder sentence is last", { skip: process.platform !== "win32" }, () => {
+  const root = mkdtempSync(join(tmpdir(), "sb-apps-notice-"));
+  // An ASCII folder: the console's code page decides how other letters print (the test above covers non-ASCII paths).
+  const home = join(root, "Ann B", ".scopebond");
+  const pkg = join(root, "npm", "node_modules", "@scopebond", "agent", "dist");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(pkg, { recursive: true });
+  const cli = join(pkg, "cli.js");
+  const npm = join(root, "npm", "npm.cmd");
+  const agentRan = join(root, "agent-ran.txt");
+  const npmRan = join(root, "npm", "npm-ran.txt");
+  writeFileSync(cli, `require("node:fs").writeFileSync(${JSON.stringify(agentRan)}, process.argv.slice(2).join(" ") + "|" + (process.env.${UNINSTALL_CALLER_ENV} || ""));\nprocess.exit(Number(process.env.FAKE_AGENT_EXIT || 0));\n`);
+  writeFileSync(npm, "@echo off\r\necho %*> \"%~dp0npm-ran.txt\"\r\nexit /b 0\r\n");
+  const run = (agentExit) => {
+    for (const f of [agentRan, npmRan]) rmSync(f, { force: true });
+    mkdirSync(home, { recursive: true });
+    const script = writeUninstallScript(home, { node: process.execPath, cli, npm, key: "HKCU\\Software\\ScopebondTest\\NoSuchEntry" });
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], {
+      encoding: "utf8", env: { ...process.env, SCOPEBOND_NO_PAUSE: "1", FAKE_AGENT_EXIT: String(agentExit) }, timeout: 120_000,
+    });
+    const read = (f) => existsSync(f) ? readFileSync(f, "utf8").trim() : "";
+    const out = `${r.stdout}${r.stderr}`;
+    return { code: r.status, out, last: out.trim().split(/\r?\n/).at(-1), agent: read(agentRan), npm: read(npmRan) };
+  };
+  const kept = folderSentence(home, { exists: true, purged: false, kind: null, me: "" });
+
+  const ok = run(0);
+  assert.equal(ok.code, 0, ok.out);
+  assert.equal(ok.agent, "uninstall|apps-entry", "the agent knows the script names the folder");
+  assert.match(ok.out, /The Scopebond Agent is removed\./);
+  assert.equal(ok.last, kept, ok.out);
+
+  const untold = run(UNINSTALL_NOT_TOLD_EXIT);
+  assert.equal(untold.code, 1, untold.out);
+  assert.equal(untold.npm, "uninstall -g @scopebond/agent", "npm's copy is still removed: only the notice failed");
+  assert.match(untold.out, /The workspace was not told/);
+  assert.doesNotMatch(untold.out, /is removed\./);
+  assert.equal(untold.last, kept, untold.out);
+});
+
+test("an npm install's Settings entry is rewritten when its script is not this version's, and left alone otherwise", () => {
+  const home = mkdtempSync(join(tmpdir(), "sb-apps-refresh-"));
+  const o = { version: "0.12.0", cli: "D:\\Apps\\cli.js", node: "C:\\n\\node.exe" };
+  const writes = [];
+  const write = (h, given) => { writes.push(given.version); writeUninstallScript(h, { node: given.node, cli: given.cli, npm: npmBeside(given.node), home: h, version: given.version }); return "listed"; };
+  assert.equal(refreshAppsEntry(home, o, "win32", write), false, "not listed: nothing to refresh");
+  writeFileSync(join(home, "uninstall-agent.ps1"), "# an older version's script");
+  assert.equal(refreshAppsEntry(home, o, "linux", write), false, "only on Windows");
+  assert.equal(refreshAppsEntry(home, o, "win32", write), true, "an older script is replaced");
+  assert.equal(refreshAppsEntry(home, o, "win32", write), false, "this version's script is left alone");
+  assert.equal(refreshAppsEntry(home, { ...o, version: "0.12.1" }, "win32", write), true, "a new version lists its own version");
+  assert.deepEqual(writes, ["0.12.0", "0.12.1"]);
+  assert.equal(refreshAppsEntry(home, o, "win32", () => { throw new Error("reg failed"); }), false, "never throws");
 });
