@@ -534,15 +534,17 @@ function denyCursor(reason: string): never {
   process.exit(0);
 }
 
-/** A clean evaluated allow: the call was allowed and every action in it was checked and permitted (or allowed by a person).
- *  An action a monitored rule found out of policy is signed `deny` and still allowed; an unchecked one is `not_evaluated`. */
-function cleanAllow(decision: { decision: string; receipt?: unknown; receipts?: unknown[] }): boolean {
-  if (decision.decision !== "allow") return false;
+/** An evaluated allow: the call was allowed and every action in it was checked, permitted (or allowed by a person) or found
+ *  out of policy by a monitored rule, which is signed `deny` and still allowed. An unchecked action is `not_evaluated`.
+ *  `monitored` says whether a monitored rule matched any of them. */
+function evaluatedAllow(decision: { decision: string; receipt?: unknown; receipts?: unknown[] }): { ok: boolean; monitored: boolean } {
+  if (decision.decision !== "allow") return { ok: false, monitored: false };
   const list = decision.receipts?.length ? decision.receipts : decision.receipt !== undefined ? [decision.receipt] : [];
-  return list.length > 0 && list.every((r) => {
-    const result = (r as { payload?: { realtime_result?: unknown } } | null)?.payload?.realtime_result;
-    return result === "allow" || result === "approved";
-  });
+  const results = list.map((r) => (r as { payload?: { realtime_result?: unknown } } | null)?.payload?.realtime_result);
+  return {
+    ok: results.length > 0 && results.every((result) => result === "allow" || result === "approved" || result === "deny"),
+    monitored: results.includes("deny"),
+  };
 }
 
 /** Keep the local store small when the Scopebond Agent does not (it keeps the user home while it runs). */
@@ -601,19 +603,19 @@ async function runCursor(): Promise<void> {
     postHoc = mapped.some((m) => m.postHoc);
     // The answers:
     //   deny  — out of policy, blocked outright.
-    //   allow — only a clean evaluated allow: every action of the call was checked and
-    //           permitted. Returning "ask" here put a confirmation prompt in front of
-    //           every ordinary command, which is not "your agent works as normal"; it
-    //           also trained people to click through prompts, which makes the real
-    //           denials easier to miss.
-    //   ask   — anything else: no rule covers the action, or a rule that records rather
-    //           than blocks found it out of policy. Cursor's own approval stays in
-    //           charge, exactly as Claude Code's and Codex's do when the hook stays
-    //           silent. Answering "allow" to a recorded violation would approve it on
-    //           the person's behalf and skip the prompt Cursor would otherwise show.
-    permission = decision.decision === "deny" ? "deny" : cleanAllow(decision) ? "allow" : "ask";
-    message = decision.decision === "allow" && permission === "ask"
-      ? "Scopebond recorded this as out of policy under a rule that records rather than blocks; Cursor's own approval decides."
+    //   allow — an evaluated allow: every action of the call was checked and permitted,
+    //           or found out of policy by a rule that records rather than blocks.
+    //           Monitor is silent for the developer: answering "ask" for a monitored
+    //           match put Cursor's approval prompt in front of every one of them, which
+    //           is not "your agent works as normal" and trained people to click through
+    //           prompts, so the real denials were easier to miss. The match is recorded.
+    //   ask   — anything else: Scopebond could not evaluate the action (no rule covers
+    //           it, or the event could not be read into one), or it holds the action for
+    //           a person. Cursor's own approval stays in charge.
+    const evaluated = evaluatedAllow(decision);
+    permission = decision.decision === "deny" ? "deny" : evaluated.ok ? "allow" : "ask";
+    message = permission === "allow" && evaluated.monitored
+      ? "Scopebond recorded this under a rule that records rather than blocks."
       : decision.reason;
   } catch (error) {
     permission = "deny";

@@ -80,7 +80,7 @@ function home(mode) {
   return { root, env, home, dir, cwd };
 }
 
-test("default (monitored) rules: Cursor gets no opinion for an out-of-policy action, like Claude Code and Codex", () => {
+test("default (monitored) rules: an out-of-policy action is silent for the developer in Cursor, Claude Code and Codex", () => {
   const { env, dir, cwd } = home("default");
   const violations = [
     cursorShell("rm -rf ../src", cwd, "g1"),
@@ -90,8 +90,8 @@ test("default (monitored) rules: Cursor gets no opinion for an out-of-policy act
   ];
   for (const payload of violations) {
     const r = exercise(env, dir, "cursor", payload, cwd);
-    assert.notEqual(r.decision, "allow", `Cursor must not be told to allow a monitored violation: ${payload.command ?? payload.file_path}`);
-    assert.equal(r.decision, "ask");
+    // Monitor never puts Cursor's approval prompt in front of the developer; "ask" is kept for what could not be evaluated.
+    assert.equal(r.decision, "allow", `a monitored violation is let through without a prompt: ${payload.command ?? payload.file_path}`);
     assert.ok(r.receipts.some((x) => x.result === "deny"), "the violation is still recorded");
   }
   for (const [harness, payload] of [["claude", claude("Bash", { command: "rm -rf ../src" }, cwd)], ["codex", codex("Bash", { command: "rm -rf ../src" }, cwd)], ["copilot", copilot("Bash", { command: "rm -rf ../src" }, cwd)]]) {

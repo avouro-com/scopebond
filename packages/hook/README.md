@@ -227,10 +227,11 @@ before-edit hook), so an out-of-policy edit there is signed as recorded after th
 than claiming otherwise. For edits that must be stopped before they land, make
 `@scopebond/github-action` a required check on pull requests.
 
-Cursor is told `allow` only when every action of the call was checked and permitted. An
-action a monitored rule finds out of policy (recorded, not blocked) gets no opinion
-(`ask`), so Cursor's own approval still decides, as Claude Code's and Codex's do when the
-hook stays silent.
+Cursor is told `allow` when every action of the call was checked and either permitted or
+found out of policy by a monitored rule: monitor records the match and stays silent for the
+developer, with no approval prompt. Cursor is told `ask`, so its own approval decides, only
+for an action Scopebond could not evaluate (no rule covers it, or the event could not be
+read) or one it holds for a person.
 
 A hook entry the coding agent cannot start at all (a moved Node, a removed install) lets
 actions run with no check: the agents treat that as a non-blocking error. Any failure the

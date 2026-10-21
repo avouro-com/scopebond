@@ -4,7 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,4 +91,49 @@ test("afterFileEdit is marked post-hoc, and the message never claims prevention"
   assert.equal(result.permission, "deny", "the violation is still reported");
   assert.match(result.agentMessage, /was not prevented/);
   assert.doesNotMatch(result.agentMessage, /Scopebond blocked/, "must not claim the edit was blocked");
+});
+
+// Monitor is silent for the developer: a rule that records rather than blocks lets the action through without Cursor's
+// approval prompt, and the match is still recorded. Only an action Scopebond could not evaluate defers to Cursor's prompt.
+function monitored() {
+  const dir = enrolled();
+  const active = JSON.parse(readFileSync(join(dir, "policy.json"), "utf8"));
+  for (const clause of active.clauses) if (clause.type === "action_allowlist") clause.mode = "monitor";
+  writeFileSync(join(dir, "policy.json"), JSON.stringify(active));
+  return dir;
+}
+
+function isolatedCursorEvent(dir, payload) {
+  const home = mkdtempSync(join(tmpdir(), "sb-cursor-home-"));
+  const out = execFileSync(process.execPath, [cli, "cursor"], {
+    encoding: "utf8", input: JSON.stringify(payload),
+    env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local") },
+  });
+  return JSON.parse(out);
+}
+
+function signedResults(dir) {
+  const db = new DatabaseSync(join(dir, "receipts.db"), { readOnly: true });
+  try { return db.prepare("SELECT receipt_json FROM receipts ORDER BY id").all().map((row) => JSON.parse(row.receipt_json).payload); } finally { db.close(); }
+}
+
+test("a monitored match answers allow, with no approval prompt, and is still recorded", () => {
+  const dir = monitored();
+  const result = isolatedCursorEvent(dir, { hook_event_name: "beforeShellExecution", cwd: dir, command: "rm -rf src" });
+  assert.equal(result.permission, "allow", "monitor never puts a prompt in front of the developer");
+  const shell = signedResults(dir).find((p) => p.intent?.action_type === "shell.exec");
+  assert.equal(shell.realtime_result, "deny", "the match is recorded as would-have-blocked");
+  assert.equal(shell.clause_id, "safe-shell");
+});
+
+test("a call with a monitored match beside an allowed command answers allow", () => {
+  const dir = monitored();
+  const result = isolatedCursorEvent(dir, { hook_event_name: "beforeShellExecution", cwd: dir, command: "rm -rf src && npm test" });
+  assert.equal(result.permission, "allow");
+});
+
+test("an action Scopebond could not evaluate still defers to Cursor's prompt under monitor", () => {
+  const dir = monitored();
+  const result = isolatedCursorEvent(dir, { hook_event_name: "someFutureEvent", cwd: dir });
+  assert.equal(result.permission, "ask");
 });
