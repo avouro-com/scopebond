@@ -278,17 +278,33 @@ function scrubPath(word: string): string {
   return word.split(PATH_PARTS).map((part) => (part === "/" || part === "\\" ? part : scrubParam(part))).join("");
 }
 
-/** The file intents for one path operand, resolving it against a `cd` prefix. */
+/** The home folder named through a variable at the start of a path, in any shell's spelling: `$HOME`, `${HOME}`, PowerShell's
+ *  `$env:USERPROFILE`, `$env:HOME` (also braced), cmd's `%USERPROFILE%` and `%HOME%`. */
+const HOME_VARIABLE = /^(?:\$HOME|\$\{HOME\}|\$\{env:(?:USERPROFILE|HOME)\}|\$env:(?:USERPROFILE|HOME)|%(?:USERPROFILE|HOME)%)(?=$|[\\/])/i;
+/** `word` with a home variable at its start written `~`, as the record writes the home folder (`$HOME/.x` is `~/.x`). */
+const expandHome = (word: string): string => word.replace(HOME_VARIABLE, "~");
+/** A word that still holds a variable (`$X`, `${X}`, `$env:X`, `%X%`) or a substitution: its value is only known at run time. */
+const HOLDS_VARIABLE = /\$|%[A-Za-z_]\w*%/;
+/** A path whose start does not depend on the working folder: rooted, a drive, or the home folder. */
+const STARTS_ELSEWHERE = /^(?:[\\/]|~|[A-Za-z]:)/;
+/** `word` read the way the path matcher reads variables: cmd's `%X%` and PowerShell's `$env:X` as `${X}`. */
+const asShellVariables = (word: string): string =>
+  word.replace(/%([A-Za-z_]\w*)%/g, "$${$1}").replace(/\$(?:env|script|global|local|private):(\w+)/gi, "$${$1}");
+
+/** The file intents for one path operand, resolving it against a `cd` prefix. A home variable at its start is the home
+ *  folder; a path that still holds a variable after that is never joined to the `cd` folder (where it leads is only known
+ *  at run time, so it is matched against the protected places as a pattern). */
 function fileIntent(action: "file.read" | "file.write", word: string, dir: string, cwd?: string): Mapped[] {
-  let w = word;
-  if (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
+  let w = expandHome(word);
+  if (dir && !STARTS_ELSEWHERE.test(w) && !HOLDS_VARIABLE.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
   const path = rel(scrubPath(w), cwd);
-  if (UNRESOLVED.test(w)) {
-    const hit = protectedCandidate(normPath(w));
+  const pattern = asShellVariables(w);
+  if (UNRESOLVED.test(pattern)) {
+    const hit = protectedCandidate(normPath(pattern));
     if (hit) return pathIntents(action, hit, "shell", { pattern: path });
     // `cat $f` or `cat *` names no file a rule could match: recording a read of a file literally called "$f" was a
     // wrong row. A word with any literal text (`$D/notes.txt`, `src/*`) is still recorded.
-    if (action === "file.read" && !/[^/\\]/.test(w.replace(EXPANSION, "").replace(/["']/g, ""))) return [];
+    if (action === "file.read" && !/[^/\\]/.test(pattern.replace(EXPANSION, "").replace(/["']/g, ""))) return [];
   }
   return pathIntents(action, path, "shell");
 }
@@ -547,6 +563,18 @@ const SENSITIVE = /(?:^|[/\\])(?:\.scopebond(?:[/\\]|$)|\.env(?:\.[^/\\]*)?$|\.e
 // a word character — so `process.env` is not `.env`) and has no overlapping repeats,
 // keeping the scan linear; input is capped per argument.
 // Scopebond's own folder, and what follows it, wherever it appears in an argument.
+/** A character a path written in code or an argument can hold (not a space, a quote, a bracket or an operator). */
+const PATH_CHAR = /[^\s'"`(),;=+<>|&[\]]/;
+/** The whole path a match found in `text` at `start` sits in: the text before it back to the start of its word, when that
+ *  ends in a separator and names a folder (`$HOME/`, `~/`, `D:/work/` before the match), so the path is read from where it
+ *  starts rather than as one relative to the working folder. Looks back at most 512 characters. */
+function pathAround(text: string, start: number, match: string): string {
+  let s = start;
+  while (s > 0 && start - s < 512 && PATH_CHAR.test(text[s - 1])) s--;
+  const prefix = text.slice(s, start);
+  return /[\\/]$/.test(prefix) && /[^\\/]/.test(prefix) ? prefix + match : match;
+}
+
 /** Code that builds a path from pieces (`'.scope' + 'bond'`, `".sco" "pebond"`, SQL `'.scope' || 'bond'`) is read with the
  *  pieces joined, so the scan sees the path the code will use. Linear: one pass of a bounded string. */
 function foldConcatenation(code: string): string {
@@ -945,18 +973,18 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       const code = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
       // Scopebond's own folder is read through any API (`DatabaseSync('…/.scopebond/receipts.db')`) or handed to a
       // script as an argument: naming it is enough. The read floor is a classifier, not a sandbox (see the README).
-      for (const m of code.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+      for (const m of code.matchAll(SCOPEBOND_IN_TEXT)) read(pathAround(code, m.index, m[0]));
       // A wildcard that starts like Scopebond's folder (`~/.scope*/receipts.db*`) can only mean it.
       if (SCOPEBOND_GLOB.test(code)) { read("~/.scopebond"); if (FILE_API.test(code)) write("~/.scopebond"); }
       if (!FILE_API.test(code)) continue;
-      for (const m of code.match(SENSITIVE_IN_CODE) ?? []) { read(m); write(m); }
+      for (const m of code.matchAll(SENSITIVE_IN_CODE)) { const path = pathAround(code, m.index, m[0]); read(path); write(path); }
     }
   } else if (prog === "sqlite3" || prog === "sqlite") {
     // Options (`-cmd`, `-init`, `-separator`) take values and SQL can ATTACH any file: the first operand is not enough.
     read(operands[0]);
     for (const w of args) {
       const sql = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
-      for (const m of sql.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+      for (const m of sql.matchAll(SCOPEBOND_IN_TEXT)) read(pathAround(sql, m.index, m[0]));
       // ATTACH or .open of a path the statement computes (a function call, a parameter, a subquery) cannot be judged.
       for (const m of sql.matchAll(SQLITE_TARGET)) {
         const target = m[1];
@@ -987,6 +1015,18 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     const sources = [...operands];
     args.forEach((w, k) => { if (/^(?:-C|--directory|-Path|-LiteralPath|-SourcePath)$/i.test(w)) sources.push(args[k + 1] ?? ""); else if (/^--directory=/.test(w)) sources.push(w.slice(12)); });
     if (sources.some((s) => HOME_OR_ABOVE.test(s))) read("~/.scopebond");
+  }
+
+  // After a `cd`, a relative file any program is handed resolves in that folder: one that lands in Scopebond's own folder is a
+  // read of it, whatever the program does with it (`cd ~/.scopebond && node probe.mjs <file>`). A word with no dot or
+  // separator (a subcommand, a name) is not taken for a file.
+  if (dir) {
+    const seen = new Set(ops.map((m) => `${m.intent.action_type} ${String(m.intent.params.path)}`));
+    for (const o of operands) {
+      if (!isPathWord(o) || !/[./\\]/.test(o) || STARTS_ELSEWHERE.test(o) || HOLDS_VARIABLE.test(o)) continue;
+      if (!resolvedSegments(normPath(`${trimEnd(dir)}/${o}`)).includes(".scopebond")) continue;
+      for (const m of fileIntent("file.read", o, dir, cwd)) if (!seen.has(`file.read ${String(m.intent.params.path)}`)) ops.push(m);
+    }
   }
 
   for (const r of sc.redirects) {
@@ -1547,9 +1587,12 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
   const isFile = (m: Mapped) => m.intent.action_type.startsWith("file.");
   const key = (m: Mapped) => `${m.intent.action_type} ${String(m.intent.params.path)}`;
   const into = (base: string, target: string | undefined): string => {
-    if (target === undefined || target === "~") return "";
-    if (/^(?:[\\/]|~[\\/]|[A-Za-z]:)/.test(target)) return normPath(target);
-    return normPath((base ? base + "/" : "") + target);
+    if (target === undefined) return "";
+    // `cd ~`, `cd $HOME/x`, `cd $env:USERPROFILE`: the home folder. A folder that still holds a variable is not joined to
+    // the one before it (where it leads is only known at run time).
+    const t = expandHome(target);
+    if (STARTS_ELSEWHERE.test(t) || HOLDS_VARIABLE.test(t)) return normPath(t);
+    return normPath((base ? base + "/" : "") + t);
   };
   const walk = (list: SimpleCommand[], filesOnly: boolean): Mapped[] => {
     let dir = "";

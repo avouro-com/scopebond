@@ -701,6 +701,7 @@ function psStatement(text: string): { kind: "none" } | { kind: "opaque" } | { ki
     const after = t.slice(word.length).trim();
     if (PS_STATEMENTS.has(lower)) {
       // Its own options (`switch -regex`) and type filters (`catch [IOException]`) come before what it reads.
+      // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and each repeat opens with a fixed `-` or `[`
       t = after.replace(/^(?:(?:-\w+|\[[^\]]*\])\s*)*/, "");
       continue;
     }
@@ -812,6 +813,7 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
       nested(argv.join(" "));
     } else if (canon === "iex" || canon === "invoke-expression") {
       // Given no code (`$cmd | iex`), it runs what the pipeline hands it: only known at run time.
+      // eslint-disable-next-line security/detect-unsafe-regex -- bounded: the nested optionals spell at most `-command`
       const script = argv.filter((a) => !/^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(a)).join(" ");
       if (script.trim() === "") out.push(...opaque(seg));
       else nested(script);
