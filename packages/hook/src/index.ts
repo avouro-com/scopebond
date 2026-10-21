@@ -61,7 +61,7 @@ export type {
   ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,
 } from "./managed.js";
 export { createOverrideHandler, overrideHint, overrideRemedy, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked, plainAction, offersFor, allowsAny, offeredLength } from "./override.js";
-export { ruleTitle, ruleName, blockTitle, GENERIC_RULE_TITLE } from "./rule-titles.js";
+export { ruleTitle, ruleName, blockTitle, packRuleTitle, checkOfCode, GENERIC_RULE_TITLE } from "./rule-titles.js";
 export { installVerdictWords, noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
 export type { BlockNote } from "./block-notes.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";

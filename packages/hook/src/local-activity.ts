@@ -8,7 +8,7 @@ import { nodeSqlite } from "./self.js";
 import { describeAction, type ExplainIntent } from "./explain.js";
 import { actionSummary, plainAction } from "./override.js";
 import { projectOf, readBlockNotes, type BlockNote } from "./block-notes.js";
-import { blockTitle } from "./rule-titles.js";
+import { blockTitle, GENERIC_RULE_TITLE } from "./rule-titles.js";
 
 /** A block as the tray lists it. `summary` is the one-line description `log` prints (`shell.exec rm`); `what` is the action
  *  in plain words ("Read .env.production", "git push --force origin main") and `action_text` the text the Scopebond window
@@ -52,6 +52,13 @@ export interface LocalActivity {
 }
 
 type Db = { prepare(sql: string): { all(...a: unknown[]): unknown[] }; close(): void };
+
+/** The rule's name for a block: from the rule or the clause that denied it, else the name the hook noted when it blocked the
+ *  call (a rule pack's rule, whose pack this process may not have in force). */
+function titleOf(rule: string | null, clause: string | null, note: { title?: string } | undefined): string {
+  const title = blockTitle(rule, clause);
+  return title === GENERIC_RULE_TITLE && typeof note?.title === "string" && note.title ? note.title : title;
+}
 
 /** The most blocks returned, and the most denied receipts read from the last seven days. */
 export const RECENT_BLOCKS_LIMIT = 200;
@@ -112,7 +119,7 @@ export function localActivity(dir: string, options: { now?: Date; limit?: number
           action_text: actionSummary(intent),
           harness: typeof context.harness === "string" ? context.harness : note?.harness ?? null,
           repository,
-          rule_title: blockTitle(rule, clause),
+          rule_title: titleOf(rule, clause, note),
           project: projectOf(repository, null) ?? note?.project ?? null,
           clause,
           ...(note?.kind ? { kind: note.kind } : {}),

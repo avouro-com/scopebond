@@ -77,7 +77,7 @@ export interface Decision {
   clauseId?: string | null;
   /** Why a deny was made, where a reason beyond the clause applies: `blocked_service` when the workspace blocks the MCP server,
    *  host, program or package the action names (service-rules.ts). */
-  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict" | "session_budget";
+  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict" | "session_budget" | "dispatch_refused";
   /** The deciding receipt (the denied one, or the first allow). */
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
@@ -604,7 +604,7 @@ export function createHookRuntime(config: RuntimeConfig) {
             if (result.receipt !== undefined) receipts.push(result.receipt);
           } finally { boundaryVerdict = null; }
           release();
-          return { decision: "deny", reason: `Scopebond blocked this before it ran: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`, receipts, dispatched, dispatch: verdict };
+          return { decision: "deny", reason: `Scopebond blocked this before it ran: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`, code: "dispatch_refused", receipts, dispatched, dispatch: verdict };
         }
         return { ...chosen, receipts, dispatched, dispatch: verdict };
       }

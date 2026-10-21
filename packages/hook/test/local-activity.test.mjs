@@ -106,9 +106,10 @@ test("the rule names are the workspace's, and a block always gets one: never emp
   assert.equal(blockTitle(null, "safe-shell"), "Run a command that deletes data or shuts down the computer");
   assert.equal(blockTitle(null, "protect-branch-history"), "Rewrite history on a protected branch");
   assert.equal(blockTitle(null, "allowed-sites"), "Contact websites and online services");
-  assert.equal(blockTitle(null, "blocked-hosts"), "Blocked service");
+  assert.equal(blockTitle(null, "blocked-hosts"), "Contact a blocked site");
+  assert.equal(blockTitle(null, "protect-root"), "Change files outside the allowed folders");
   assert.equal(blockTitle("secret-read", "protect-scopebond-write"), "Read passwords, keys or secrets", "the receipt's rule comes first");
-  for (const [rule, clause] of [[null, null], [null, "protect-root"], ["no-destroy", "no-destroy"], ["constructor", "__proto__"], [undefined, undefined]]) {
+  for (const [rule, clause] of [[null, null], ["no-destroy", "no-destroy"], ["constructor", "__proto__"], [undefined, undefined]]) {
     assert.equal(blockTitle(rule, clause), "A Scopebond rule");
   }
   assert.equal(ruleName("not-a-rule"), "A Scopebond rule");

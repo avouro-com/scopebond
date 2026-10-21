@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { basename, join, parse, resolve } from "node:path";
 import { writeAtomic } from "./managed.js";
 import { revealHidden } from "./override.js";
-import { ruleOfClause } from "./rule-titles.js";
+import { blockTitle, checkOfCode, ruleOfClause } from "./rule-titles.js";
 
 export const BLOCK_NOTES_FILE = "block-notes.json";
 const KEEP = 500;
@@ -18,10 +18,14 @@ export interface BlockNote {
   /** The denied receipt's action id. */
   id: string;
   at: string;
-  /** The clause that denied it, when the verdict named one. */
+  /** The clause that denied it, when the verdict named one; else the check that refused it (`safe-install`, `session-budget`,
+   *  `dispatch-check`), when one did. */
   clause: string | null;
   /** The workspace rule that clause carries (`guardrail-config-write` for Scopebond's own protection), when any. */
   rule: string | null;
+  /** The rule's name as the hook read it at the time (rule-titles.ts `blockTitle`): a rule pack's rule is named only while
+   *  the pack is in force, which the reader of the note may not have. */
+  title?: string;
   /** The coding tool's id (`claude`, `cursor`, …). */
   harness: string;
   /** The project's name: the repository's (`checkout` for `github.com/acme/checkout`), else the folder's. */
@@ -71,10 +75,13 @@ export function noteBlock(dir: string, decision: { decision: string; clauseId?: 
     if (decision.decision !== "deny") return;
     const id = deniedActionId(decision);
     if (!id) return;
-    const clause = decision.clauseId ?? null;
+    const clause = decision.clauseId ?? checkOfCode(decision.code);
+    const rule = ruleOfClause(clause);
     const kind = blockKind(decision.code);
+    // A rule pack's rule is named only while its pack is in force: its name is kept with the note.
+    const title = blockTitle(rule, clause);
     const note: BlockNote = {
-      id, at: new Date(now).toISOString(), clause, rule: ruleOfClause(clause), harness: where.harness, project: where.project,
+      id, at: new Date(now).toISOString(), clause, rule, ...(title !== blockTitle(rule, clause, []) ? { title } : {}), harness: where.harness, project: where.project,
       ...(where.session ? { session: where.session } : {}),
       ...(kind ? { kind } : {}),
       ...(kind === "install" ? { verdict: installVerdictWords(decision.reason) } : {}),
