@@ -28,18 +28,23 @@ export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
 export { packRuleClauses, switchablePackRules, withPackRules, packRuleOf, packRuleSaferWay } from "./pack-rules.js";
 export type { PackRuleSettings, PackRuleMode } from "./pack-rules.js";
 export {
-  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
+  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, verifySignedData, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
+  packEngineLevel, readPackFlags, writePackFlags, packSidecarDir, packFallbackFile, PACK_ENGINE_ENV, PACK_SIDECAR_DIR, PACK_FLAGS_FILE,
 } from "./pack-store.js";
-export type { PackIndex, PackIndexEntry, LoadedPacks, PackRefusal } from "./pack-store.js";
+export type { PackIndex, PackIndexEntry, LoadedPacks, PackRefusal, PackCheckOptions, PackFlags } from "./pack-store.js";
+export {
+  checkTaxonomyExtText, activateTaxonomyExtension, installTaxonomyExtension, removeTaxonomyExtension, heldTaxonomyDigest, setTaxonomyExtension, TAXONOMY_EXT_FILE,
+} from "./pack-taxonomy.js";
+export { targetOptInTypes, setExtensionOptInTypes } from "./target-rules.js";
 // Pack delivery: the signed list a workspace answer names, and the cache brought in step with it on each rules check.
-export { syncPacks, restampPacks, describePackSync, packRefsOf, MAX_PACK_REFS } from "./pack-sync.js";
+export { syncPacks, restampPacks, describePackSync, packRefsOf, taxonomyRefOf, killedOf, MAX_PACK_REFS, PACK_ENGINE_HEADER } from "./pack-sync.js";
 // Safe Install: verdicts on detected installs from the workspace, and the signed block list used offline.
 export {
   checkInstalls, checkable, checkBlocklistText, loadBlocklist, safeInstallOn, syncInstallBlocklist, removeBlocklist, comparableName,
   INSTALL_BLOCKLIST_FILE, INSTALL_STATE_FILE, INSTALL_VERDICTS_FILE, BLOCKLIST_FORMAT, SAFE_INSTALL_HEADER, BLOCKLIST_TTL_MS, BLOCKLIST_CHECK_MS, VERDICT_TIMEOUT_MS, AGE_GATE_MS,
 } from "./install-verdicts.js";
 export type { InstallVerdict, VerdictReason, VerdictSource, InstallCheck, CheckOptions, BlocklistSyncOptions, BlocklistSyncResult } from "./install-verdicts.js";
-export type { PackSyncOptions, PackSyncResult, PackSyncFailure } from "./pack-sync.js";
+export type { PackSyncOptions, PackSyncResult, PackSyncFailure, PackRef } from "./pack-sync.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export {
   compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES, SWITCHABLE_RULES,
@@ -76,7 +81,7 @@ export { ruleTitle, ruleName, blockTitle, packRuleTitle, checkOfCode, GENERIC_RU
 export { installVerdictWords, noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
 export type { BlockNote } from "./block-notes.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion, Offers, UnblockLength } from "./override.js";
-export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES } from "./policy-sync.js";
+export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES, hookCapabilities } from "./policy-sync.js";
 export {
   validBlockedService, validBlockedServices, blockedServiceClauses, servicePattern, serviceMatches, blockedServiceKindOf, blockedServiceOf,
   BLOCKED_SERVICE_KINDS, BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, BLOCKED_SERVICE_REASON, SERVICE_RULES_CAPABILITY, MAX_BLOCKED_SERVICES, MAX_BLOCKED_SERVICE_KEY,

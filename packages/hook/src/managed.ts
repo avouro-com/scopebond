@@ -601,7 +601,7 @@ export interface ManagedMeta {
    *  why, and the version of it still in force until when). A `304` rules check renews every other pack. */
   packs?: {
     at: string; digest: string | null; complete: boolean; error: string | null;
-    failed?: Array<{ id: string; version: string; reason: string; held: string | null; held_until: string | null }>;
+    failed?: Array<{ id: string; version: string; reason: string; code?: string; needs?: number | string; held: string | null; held_until: string | null }>;
   } | null;
 }
 const EMPTY_META: ManagedMeta = { revision: null, rules_digest: null, export_id: null, etag: null, checked_at: null, last_ack: null, last_error: null, recommended: null };

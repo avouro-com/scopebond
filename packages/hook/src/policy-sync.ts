@@ -33,7 +33,8 @@ import { evidenceDetailFrom } from "./evidence-detail.js";
 import { receiptContextFrom } from "./receipt-context.js";
 import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, signatureMode, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
-import { restampPacks, syncPacks } from "./pack-sync.js";
+import { restampPacks, syncPacks, PACK_ENGINE_HEADER } from "./pack-sync.js";
+import { packEngineLevel } from "./pack-store.js";
 import { removeBlocklist, syncInstallBlocklist, SAFE_INSTALL_HEADER } from "./install-verdicts.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
@@ -97,10 +98,17 @@ import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
  *  unblock lasts and its review (`unblock_terms`), "unlimited" for an override's `minutes` and `daily_limit`
  *  (`unlimited_terms`; an older hook gets numbers), and the signed list of rule packs to hold (`packs`, pack-sync.ts), and the
- *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts), who may allow "Similar
- *  commands in this project" (`pattern_allowances`: an override's `patterns`, pattern-recipes.ts), and the modes of the rule packs' rules (`pack_rules`, managed.ts;
- *  an unknown rule id is skipped and reported, never a refusal). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules"] as const;
+ *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts), who may allow "Similar commands in this project"
+ *  (`pattern_allowances`: an override's `patterns`, pattern-recipes.ts), and the modes of the rule packs'
+ *  rules (`pack_rules`, managed.ts; an unknown rule id is skipped and reported, never a refusal), and pack engine level 2
+ *  (`pack_engine_2`: a pack list's `requires_engine`, `shadow` and `killed`, and the taxonomy extension, pack-sync.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules", "pack_engine_2"] as const;
+
+/** The capabilities this hook reports now: `HOOK_CAPABILITIES`, without `pack_engine_2` while the pack engine level is lowered
+ *  below 2 (`SCOPEBOND_PACK_ENGINE_LEVEL`, pack-store.ts). */
+export function hookCapabilities(level: number = packEngineLevel()): string[] {
+  return HOOK_CAPABILITIES.filter((c) => c !== "pack_engine_2" || level >= 2);
+}
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";
@@ -190,7 +198,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       const res = await fetchImpl(`${base}/v1/policy/ack`, {
         // The same capabilities as the rules check: the workspace rebuilds the document it expects from them to compare the
         // digest this confirms (with blocked services, the digest covers the list).
-        method: "POST", headers: { ...auth, "content-type": "application/json", "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(",") }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        method: "POST", headers: { ...auth, "content-type": "application/json", "x-scopebond-hook-capabilities": hookCapabilities().join(",") }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
         // The rule ids the document named that this version skipped are sent only when there are some.
         body: JSON.stringify({ ...body, reason: body.reason ?? null, hook_version: options.hookVersion, skipped_rules: body.skipped_rules?.length ? body.skipped_rules : undefined }),
       });
@@ -214,7 +222,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       // and the always/requests terms, session budgets and blocked services only to a hook that says so).
       // Whether this caller acts on a request from the workspace's computer page: a workspace that reads this header leaves
       // the request in place for the Scopebond Agent instead of handing it to a hook call that would drop it.
-      headers: { ...auth, "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(","), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag && meta.grants_digest && intact ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
+      headers: { ...auth, "x-scopebond-hook-capabilities": hookCapabilities().join(","), [PACK_ENGINE_HEADER]: String(packEngineLevel()), "x-scopebond-accepts-requests": options.onRequest ? "flush,self_check" : "none", ...(options.hookVersion ? { [HOOK_VERSION_HEADER]: options.hookVersion } : {}), ...(isManaged(dir) && meta.etag && meta.grants_digest && intact ? { "if-none-match": meta.etag } : {}), ...deliveryHeaders(dir), ...toolSettingsHeaders(options) },
       redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -253,7 +261,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     const error = result.state === "synced" ? null : result.state === "refused" ? result.message : result.failed.map((f) => `${f.ref}: ${f.message}`).join("; ");
     packState = {
       at, digest: typeof raw.packs_digest === "string" ? raw.packs_digest : null, complete: result.state === "synced", error: error === null ? null : error.slice(0, 300),
-      ...(result.state === "partial" ? { failed: result.failed.map((f) => ({ id: f.id, version: f.version, reason: f.message.slice(0, 300), held: f.held, held_until: f.held_until })) } : {}),
+      ...(result.state === "partial" ? { failed: result.failed.map((f) => ({ id: f.id, version: f.version, reason: f.message.slice(0, 300), code: f.code, ...(f.needs !== undefined ? { needs: f.needs } : {}), held: f.held, held_until: f.held_until })) } : {}),
     };
   };
   const signed = (raw: Record<string, unknown>, managed: boolean) => {

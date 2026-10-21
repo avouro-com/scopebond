@@ -11,4 +11,8 @@ A rule pack's rule can now say its own title, whether it may block and whether i
 
 A workspace can now set the mode of any rule pack's rule in `pack_rules` (the hook reports the `pack_rules` capability; `pack_rules` is digested with the rules), a person may allow or ask about such a rule when its terms say so, and `rules enforce|monitor` accepts a pack's own rules.
 
+The hook now reads packs at engine level 2 and says so (`x-scopebond-pack-engine: 2` on the rules check and on each pack fetch, and the `pack_engine_2` capability): a pack that needs a newer engine or an action type the hook does not know is skipped and reported (`engine_too_old` or `unknown_action_type`, with what it needs) while every other pack is kept, `SCOPEBOND_PACK_ENGINE_LEVEL` can lower the level to see what an older engine does, and the signed pack list may mark a pack `shadow` (its rules record what they would block) or kill versions (`killed`, covered by the list's digest), which are dropped at once in favour of the version held before.
+
+The hook now fetches and verifies the signed taxonomy extension a workspace names in its pack list (`taxonomy-ext`), so a pack can emit a new kind of action, and a policy that names one of its opt-in types decides those actions, without a new hook.
+
 A rule id the hook does not know in a workspace document, or a malformed `pack_rules` entry, is now skipped and reported (`skipped_rules` on the rules confirmation and in `managed-meta.json`) instead of refusing the whole document.
