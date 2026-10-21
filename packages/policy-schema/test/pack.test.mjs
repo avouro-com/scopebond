@@ -130,7 +130,7 @@ for (const c of formatCases) {
   test(`pack format: ${c.name}`, () => {
     let doc = change(example, c);
     for (const step of c.also ?? []) doc = change(doc, step);
-    const result = validatePack(doc);
+    const result = validatePack(doc, c.engine ? { engine: c.engine } : {});
     assert.equal(result.valid, c.valid, `validatePack: ${JSON.stringify(result.errors)}`);
     if (!c.valid) assert.ok(result.errors.length > 0);
     assert.equal(validate(packSchema, doc), c.schema ?? c.valid, "pack.schema.json");

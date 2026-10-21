@@ -13,19 +13,26 @@ import packSchemaDocument from "../schema/pack.schema.json" with { type: "json" 
 import { canonical } from "./canonical.js";
 export { canonical } from "./canonical.js";
 export {
-  actionRegistry, TAXONOMY_VERSION, getActionType, validateActionParams,
+  actionRegistry, TAXONOMY_VERSION, getActionType, getBuiltinActionType, setActionTypeExtension, extensionActionTypes, validateActionParams,
 } from "./registry.js";
 export {
   PACK_FORMAT, PACK_SIGNATURE_DOMAIN, PACK_LIMITS, PACK_RESERVED_ACTION_TYPES, PACK_RESERVED_PARAMS, EXPRESSION_OPERATORS, CONDITION_OPERATORS,
-  packSigningInput, packRef, comparePackVersions, validatePack,
+  PACK_ENGINE_LEVEL, PACK_LEVEL2_FIELDS, PACK_ALLOW_PATTERN_KINDS, PACK_RULE_LIMITS,
+  packSigningInput, packRef, comparePackVersions, validatePack, packEngineProblem, packRequiredEngine,
 } from "./pack.js";
 export type {
   Pack, PackGrammar, PackCommand, PackEmit, PackProfile, PackProfileTool, PackVector, PackSignature, PackValidation, PathWord, Expr, Condition, ExpectedValue, Scalar,
+  PackRequires, PackRule, PackAllowPattern, PackValidationOptions,
 } from "./pack.js";
 export {
   ALLOW_PATTERN_KINDS, ALLOW_PATTERN_LIMITS, DELETE_RECIPE, validAllowPatterns, allowPatternErrors, validAllowanceMatch, validBounds,
 } from "./allow-patterns.js";
 export type { AllowPattern, AllowPatternKind, AllowanceMatch, AllowanceBounds } from "./allow-patterns.js";
+export {
+  TAXONOMY_EXT_FORMAT, TAXONOMY_EXT_SIGNATURE_DOMAIN, TAXONOMY_EXT_ID, TAXONOMY_EXT_LIMITS,
+  taxonomyExtSigningInput, validateTaxonomyExtension, actionTypesOfExtension,
+} from "./taxonomy-ext.js";
+export type { TaxonomyExtension, TaxonomyExtType, TaxonomyExtParamKind } from "./taxonomy-ext.js";
 export type {
   ActionRegistry, ActionType, ActionParameter, ParameterType, RiskClass, ParamValidation,
 } from "./registry.js";

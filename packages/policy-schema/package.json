@@ -55,6 +55,10 @@
       "types": "./dist/pack.d.ts",
       "default": "./dist/pack.js"
     },
+    "./taxonomy-ext": {
+      "types": "./dist/taxonomy-ext.d.ts",
+      "default": "./dist/taxonomy-ext.js"
+    },
     "./pack.schema.json": "./schema/pack.schema.json",
     "./allow-patterns": {
       "types": "./dist/allow-patterns.d.ts",

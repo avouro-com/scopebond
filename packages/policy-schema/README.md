@@ -205,6 +205,25 @@ cross-field rules (unique ids, no program read by two grammars, registered actio
 command-line operators only in grammars and MCP ones only in profiles); the signature is
 the engine's to verify.
 
+**Engine levels.** The format grows only by adding fields, and each addition raises the
+engine level (`PACK_ENGINE_LEVEL`, now 2). Level 2 adds `requires: { engine, action_types? }`
+on the pack and, on a rule, `title` (at most 80 characters), `blockable` (the rule may
+block; it needs `param_bounds`), `default_mode` (`monitor` or `block`, block only when
+blockable), `safer_way` (at most 160 characters, a hint for the coding agent) and
+`allow_patterns` (`{ id, title, param, kind }`, kind one of `path_prefix`, `path_glob`,
+`package_name`, `host`, `mcp_tool`). A pack that uses a level-2 field says
+`requires.engine: 2`; an engine that predates level 2 reads such a field as unknown and
+refuses that pack alone. `packEngineProblem` says why an engine cannot run a valid pack
+(`engine_too_old`, or `unknown_action_type` for a type `requires.action_types` names that
+it does not know); `validatePack(doc, { engine: 1 })` reads a pack as a level-1 engine does.
+
+**Taxonomy extensions.** `scopebond:taxonomy-ext/v1` (`src/taxonomy-ext.ts`, at the
+`./taxonomy-ext` subpath) adds action types as signed data:
+`{ format, issued_at, types: [{ action_type, params: { name: "string" | "number" | "boolean" }, mutating, target_opt_in }], signature }`,
+signed like a pack over `scopebond:taxonomy-ext/v1`, one LF, then the canonical document
+without `signature`. An extension never redefines a built-in type. `getActionType` reads
+the extension in force (`setActionTypeExtension`) after the built-in registry.
+
 `vectors/example-pack.json` is a small public pack built from made-up tools
 (`test/build-example-pack.mjs`), signed with a test-only key whose private half is derived
 from a published phrase (`vectors/example-pack-key.json`); nothing trusts it outside
