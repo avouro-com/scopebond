@@ -24,6 +24,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
@@ -80,7 +81,69 @@ const DENY = [
   ".env", ".env.*", ".dev.vars", ".dev.vars.*", "**/*.pem", "**/*.key",
   // The vendor readers that rule packs replaced (SCOPE.md: knowledge lives in Scopebond Cloud rule packs).
   "packages/hook/src/typed-targets.ts", "packages/hook/src/mcp-profiles.ts",
+  // The learning system is closed (SCOPE.md, "Closed components"): no package for it, no training code, notebooks,
+  // data sets or model files.
+  "packages/intel/**", "packages/*-intel/**",
+  "**/*.py", "**/*.ipynb", "**/requirements*.txt", "**/pyproject.toml", "**/Pipfile", "**/*.parquet", "**/*.onnx",
+  "**/*.joblib", "**/*.pkl", "**/*.pickle", "**/*.lgb", "**/*.safetensors", "**/*.npy", "**/*.npz",
 ];
+
+// The closed learning system (SCOPE.md, "Closed components"). The public engine reaches it only through the generic
+// plugin interface (`packages/hook/src/intel-plugin.ts`): it never imports the closed module by name, never depends on a
+// machine-learning or model-provider library, and never names the closed system's features, tables, artifacts or
+// methods. Those names are checked by salted digest, so this file does not publish them: a source token, and every run of
+// up to four of its words (split at `_`, `-` and camelCase), is normalised (lower case, separators removed) and hashed.
+// OSS_GATE_EXTRA_INTEL_TERMS (comma-separated plain terms) adds terms for one run, as a private check may.
+const CLOSED_MODULE = "@scopebond" + "/intel";
+const ML_DEPENDENCIES = [
+  CLOSED_MODULE, "onnxruntime-node", "onnxruntime-web", "onnxruntime-common", "lightgbm", "xgboost", "brain.js", "synaptic",
+  "natural", "@anthropic-ai/sdk", "openai", "@xenova/transformers", "@huggingface/transformers", "@huggingface/inference",
+  "@duckdb/node-api", "duckdb", "apache-arrow", "parquetjs", "parquetjs-lite", "hyparquet", "@dsnp/parquetjs",
+];
+const ML_DEPENDENCY_PREFIXES = ["@tensorflow/", "ml-", "@mlc-ai/", "@langchain/", "langchain"];
+const INTEL_TERM_SALT = "scopebond-intel-gate:v1";
+const INTEL_TERM_DIGESTS = new Set([
+  "0856f74747fa", "0af7234a6f2c", "0cce096751f4", "109be5f6b7f4", "10db2f10a652", "14e3c3126dc4",
+  "151280b57691", "1772b8c0a371", "1d5af1e2c3f9", "25633c6e34dc", "2734d0af9ea6", "2ae21cccc122",
+  "2b3dbdc69518", "2cffa6b1aa6b", "2eb443d5a40c", "2f65294c99d7", "3015f2c22a4a", "3e0cba37bc7c",
+  "3e52e5090b0a", "414e662912ed", "44325989af99", "4c397dc71ce7", "51214520d561", "5d522ac90d97",
+  "64fa90702350", "692f3faf3449", "6cd8d69aa9e9", "6d2c0101bbea", "7aee28febd42", "7cabbe67f963",
+  "802441045c66", "8361f5dff242", "83b1d7d8a0f9", "87bec969b31b", "88b3a33a359d", "8d2aa43a30a2",
+  "95da506afb7d", "9ef058c3cc48", "a2c569130693", "aeff40a50283", "b05dc0c79528", "baed9d766914",
+  "c486d6227a02", "ccd46faa7b6b", "dcaca1796839", "dcfa13ce6f3e", "e3d04aeb7d4d", "e932197d511f",
+  "edbe5dcc334d", "f57676d18418", "f65e2ab53cd7",
+]);
+const normaliseTerm = (t) => t.toLowerCase().replace(/[_-]/g, "");
+const termDigest = (t) => createHash("sha256").update(INTEL_TERM_SALT + normaliseTerm(t)).digest("hex").slice(0, 12);
+for (const t of (process.env.OSS_GATE_EXTRA_INTEL_TERMS ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+  INTEL_TERM_DIGESTS.add(termDigest(t));
+}
+/** Closed-system terms in a text file, as `term` (the source spelling); empty when there are none. */
+function intelTermsIn(content) {
+  const found = new Set();
+  const seen = new Set();
+  for (const token of content.match(/[A-Za-z][A-Za-z0-9_-]{3,}/g) ?? []) {
+    if (seen.has(token)) continue;
+    seen.add(token);
+    const words = token.split(/[_-]+|(?<=[a-z0-9])(?=[A-Z])/).filter(Boolean);
+    for (let i = 0; i < words.length; i++) {
+      for (let n = 1; n <= 4 && i + n <= words.length; n++) {
+        const run = words.slice(i, i + n).join("_");
+        if (run.length >= 6 && INTEL_TERM_DIGESTS.has(termDigest(run))) found.add(run);
+      }
+    }
+  }
+  return [...found];
+}
+/** Machine-learning or model-provider dependencies a package manifest declares. */
+function mlDependenciesIn(path, content) {
+  if (!/(?:^|\/)package\.json$/.test(path)) return [];
+  let manifest;
+  try { manifest = JSON.parse(content); } catch { return []; }
+  const names = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "bundleDependencies"]
+    .flatMap((k) => (manifest && typeof manifest[k] === "object" && !Array.isArray(manifest[k]) ? Object.keys(manifest[k]) : []));
+  return names.filter((n) => ML_DEPENDENCIES.includes(n) || ML_DEPENDENCY_PREFIXES.some((p) => n.startsWith(p)));
+}
 
 // Vendor knowledge (SCOPE.md, "engine or knowledge?"): what a vendor's command-line tool or MCP server does belongs in a rule
 // pack, not in package source. A source file under packages/*/src that names one of these programs or MCP tools as a string
@@ -186,8 +249,8 @@ const CONTENT_ATTRIBUTION_PATTERNS = [
 // say why for each entry; a path here skips only the checks named for it.
 const CONTENT_CHECK_EXCEPTIONS = new Map([
   // The gate and its tests spell out the patterns they enforce, and sample strings that must trip them.
-  ["scripts/oss-gate.mjs", ["internal", "attribution"]],
-  ["scripts/oss-gate.test.mjs", ["internal", "attribution"]],
+  ["scripts/oss-gate.mjs", ["internal", "attribution", "intel"]],
+  ["scripts/oss-gate.test.mjs", ["internal", "attribution", "intel"]],
   // Describes, with made-up examples, the id shapes it removes from comments.
   ["scripts/strip-ticket-ids.mjs", ["internal"]],
   // A hook test: an agent's commit trailer and PR body that mention the assistant must not read as switching Scopebond off.
@@ -390,6 +453,19 @@ for (const f of files) {
         violations.push({ path, kind: "TOOL ATTRIBUTION", detail: `${name}: "${m[0]}"` });
         break;
       }
+    }
+  }
+  if (!exempt(path, "intel")) {
+    const ml = mlDependenciesIn(path, content);
+    if (ml.length) {
+      violations.push({ path, kind: "CLOSED COMPONENT", detail: `depends on ${ml.join(", ")}: machine-learning and model-provider libraries are not part of the open engine (SCOPE.md, "Closed components")` });
+    }
+    if (content.includes(CLOSED_MODULE)) {
+      violations.push({ path, kind: "CLOSED COMPONENT", detail: `names the closed learning module; the engine reaches it only through the generic plugin interface (SCOPE.md, "Closed components")` });
+    }
+    const terms = intelTermsIn(content);
+    if (terms.length) {
+      violations.push({ path, kind: "CLOSED COMPONENT", detail: `names ${terms.slice(0, 5).join(", ")}${terms.length > 5 ? ` and ${terms.length - 5} more` : ""}: identifiers of the closed learning system stay out of the open engine (SCOPE.md, "Closed components")` });
     }
   }
   const vendor = vendorNamesIn(path, content);

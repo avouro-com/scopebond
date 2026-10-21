@@ -71,6 +71,29 @@ agent's verdict is only as good as this document.
   interface with a local implementation; framework glue is a leaf package.
 - **Remote code:** downloading and running code from a server. Rule packs are data,
   never code.
+- **Learning, tuning or model code,** and any data set or model file (see "Closed
+  components").
+
+## Closed components
+
+Some parts of Scopebond are proprietary and never enter this repository:
+
+- **Learning and tuning:** how Scopebond Cloud learns from activity and suggests rule
+  changes, including its data model, methods, thresholds, prompts, test sets and
+  everything it produces.
+- **Curated rule packs** and Safe Install intelligence (see "engine or knowledge?").
+
+The open engine reaches a closed component only through a **generic plugin
+interface** in the hook, and records carry its output in one **opaque `intel` slot**
+that the open code stores and verifies as bytes without describing what is inside.
+Without the plugin (any build from this repository), the slot is empty and the engine
+behaves exactly the same. What a computer sends to Scopebond Cloud stays open: the
+client code that sends it is here, and the hook prints the next upload on request.
+
+Checked automatically: the OSS gate refuses a package for the closed component,
+training code, notebooks, data sets and model files, machine-learning or
+model-provider dependencies, imports of the closed module by name, and the closed
+system's identifiers.
 
 ## Hard constraints (a change that breaks one is rejected regardless of merit)
 

@@ -111,3 +111,38 @@ test("vendor tool and MCP server knowledge in package source is refused; tests, 
   });
   assert.equal(passes.status, 0, passes.stderr);
 });
+
+// The closed learning system: no package, training code, model files, model libraries or closed identifiers in the tree.
+function gateOverWithTerms(files, terms) {
+  const before = process.env.OSS_GATE_EXTRA_INTEL_TERMS;
+  process.env.OSS_GATE_EXTRA_INTEL_TERMS = terms;
+  try { return gateOver(files); } finally {
+    if (before === undefined) delete process.env.OSS_GATE_EXTRA_INTEL_TERMS; else process.env.OSS_GATE_EXTRA_INTEL_TERMS = before;
+  }
+}
+
+test("closed learning components are refused: the package, training code, model files, ML libraries and closed identifiers", () => {
+  const closed = "@scopebond" + "/intel";
+  const refusedFiles = {
+    "packages/intel/src/index.ts": "export const x = 1;\n",
+    "scripts/train.py": "print(1)\n",
+    "packages/hook/models/prior.onnx": "binary-ish\n",
+    "packages/hook/src/loader.ts": `export const m = await import("${closed}");\n`,
+    "packages/agent/package.json": JSON.stringify({ name: "x", dependencies: { "onnxruntime-node": "1.0.0" } }),
+    "packages/sdk/package.json": JSON.stringify({ name: "y", devDependencies: { "@tensorflow/tfjs": "4.0.0" } }),
+    "packages/hook/src/camel.ts": "export const madeUpFeatureKind = 1;\n",
+    "packages/hook/src/kebab.ts": 'export const flag = "--made-up-feature-kind-v2";\n',
+    "packages/hook/test/snake.test.mjs": "const made_up_feature_kind = 2;\n",
+  };
+  const r = gateOverWithTerms(refusedFiles, "made_up_feature_kind");
+  assert.equal(r.status, 1, r.stdout);
+  for (const path of Object.keys(refusedFiles)) assert.ok(r.stderr.includes(`${path}\n`), `${path} was not refused`);
+  assert.match(r.stderr, /CLOSED COMPONENT/);
+
+  const passes = gateOverWithTerms({
+    "packages/hook/src/intel-plugin.ts": "export interface IntelPlugin { inspect(action: unknown): { pattern_id: string; slot: string } | undefined }\n",
+    "packages/hook/src/camel.ts": "export const madeUpFeature = 1;\nexport const featureKind = 2;\n",
+    "packages/agent/package.json": JSON.stringify({ name: "x", dependencies: { "zod": "3.0.0", "mlkem": "1.0.0" } }),
+  }, "made_up_feature_kind");
+  assert.equal(passes.status, 0, passes.stderr);
+});
