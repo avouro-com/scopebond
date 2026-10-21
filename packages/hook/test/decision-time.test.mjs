@@ -1,7 +1,8 @@
 // A decision takes the same few milliseconds however many receipts the local log holds. A busy computer records about
 // 18,000 actions a day; every one of them sits inside the replay window here (the worst case for the replay check),
 // and 200 tool calls are then decided through the hook runtime. Only the decision is timed: starting the process,
-// reading the keys and opening the log are not.
+// reading the keys and opening the log are not. The 95th percentile must stay under 10 ms, or, on a machine busy enough
+// that the same decisions on a log of a few receipts (timed in between) are slow too, under twice theirs.
 //
 // 20,000 receipts by default; SCOPEBOND_BENCH=1 builds 50,000 (SCOPEBOND_BENCH_RECEIPTS=<n> picks any size).
 import { test } from "node:test";
@@ -72,33 +73,49 @@ async function buildStore(dir, count) {
 
 const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)];
 
+/** Decide `ls` once on the log in `dir`: the decision's time, and the time with opening and closing the runtime. */
+async function decideOnce(dir) {
+  const opened = performance.now();
+  const runtime = runtimeFor(dir);
+  let started, ended;
+  try {
+    const mapped = bash(dir, "ls");
+    started = performance.now();
+    const decision = await runtime.evaluate(mapped);
+    ended = performance.now();
+    assert.equal(decision.decision, "allow", decision.reason);
+  } finally { runtime.close(); }
+  return { decide: ended - started, call: performance.now() - opened };
+}
+
 test(`a decision stays under 10 ms at p95 with ${RECEIPTS.toLocaleString("en-US")} receipts in the replay window`, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "sb-decision-time-"));
   scaffold(dir);
   const built = performance.now();
   const { averageBytes } = await buildStore(dir, RECEIPTS);
   const buildMs = performance.now() - built;
+  // The same decisions on a log of a few receipts, interleaved with the large one's: what this machine takes right now.
+  const small = mkdtempSync(join(tmpdir(), "sb-decision-time-small-"));
+  scaffold(small);
+  await buildStore(small, 10);
 
-  const decide = [];
-  const call = [];
+  const decide = [], call = [], base = [];
   for (let i = 0; i < WARM_UP + DECISIONS; i++) {
-    const opened = performance.now();
-    const runtime = runtimeFor(dir);
-    let started, ended;
-    try {
-      const mapped = bash(dir, "ls");
-      started = performance.now();
-      const decision = await runtime.evaluate(mapped);
-      ended = performance.now();
-      assert.equal(decision.decision, "allow", decision.reason);
-    } finally { runtime.close(); }
-    if (i >= WARM_UP) { decide.push(ended - started); call.push(performance.now() - opened); }
+    const first = i % 2 === 0;
+    const a = first ? await decideOnce(dir) : null;
+    const b = await decideOnce(small);
+    const large = a ?? await decideOnce(dir);
+    if (i >= WARM_UP) { decide.push(large.decide); call.push(large.call); base.push(b.decide); }
   }
-  decide.sort((a, b) => a - b);
-  call.sort((a, b) => a - b);
+  for (const list of [decide, call, base]) list.sort((x, y) => x - y);
   const ms = (n) => n.toFixed(2);
+  const p95 = quantile(decide, 0.95);
   t.diagnostic(`${RECEIPTS} receipts of ~${averageBytes} B (${Math.round(statSync(join(dir, "receipts.db")).size / 1048576)} MB) built in ${Math.round(buildMs)} ms`);
-  t.diagnostic(`decision p50 ${ms(quantile(decide, 0.5))} ms, p95 ${ms(quantile(decide, 0.95))} ms; with opening and closing the runtime p50 ${ms(quantile(call, 0.5))} ms, p95 ${ms(quantile(call, 0.95))} ms`);
+  t.diagnostic(`decision p50 ${ms(quantile(decide, 0.5))} ms, p95 ${ms(p95)} ms; with opening and closing the runtime p50 ${ms(quantile(call, 0.5))} ms, p95 ${ms(quantile(call, 0.95))} ms`);
+  t.diagnostic(`the same decision on a log of ${SEEDS.length + 10} receipts: p50 ${ms(quantile(base, 0.5))} ms, p95 ${ms(quantile(base, 0.95))} ms`);
   assert.ok(averageBytes > 1_000, `receipts are of a realistic size (${averageBytes} B)`);
-  assert.ok(quantile(decide, 0.95) < 10, `p95 ${ms(quantile(decide, 0.95))} ms (p50 ${ms(quantile(decide, 0.5))} ms)`);
+  // Under 10 ms; on a machine so busy (a parallel test run) that the small log's decisions are slow too, within twice
+  // theirs. Reading the window's receipts took 85 ms at 25,000 receipts against 6 ms with a few, so either bound fails it.
+  const bound = Math.max(10, 2 * quantile(base, 0.95));
+  assert.ok(p95 < bound, `p95 ${ms(p95)} ms (p50 ${ms(quantile(decide, 0.5))} ms), bound ${ms(bound)} ms`);
 });
