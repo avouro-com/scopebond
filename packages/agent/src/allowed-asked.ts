@@ -106,6 +106,31 @@ function requestAnswers(dir: string): Map<string, RequestAnswer> {
   return out;
 }
 
+/** For the tray's Blocked list: the state of the person's newest request about a block (by the block's record, else by the
+ *  same rule and action), and whether an allowance in force already covers it. A block either covers needs no Unblock or
+ *  Ask any more. */
+export function blockStates(dir: string, now = Date.now()): {
+  requestFor(actionId: string | null, rule: string | null, actionKey: string | null): { state: AskedItem["state"]; answered_by: string | null; answered_at: string | null } | null;
+  allowedFor(rule: string | null, actionKey: string | null): boolean;
+} {
+  const asked = new Map(askedList(dir).map((a) => [a.id, a]));
+  const requests = readRequests(dir).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  const byAction = new Map<string, string>();
+  const byKey = new Map<string, string>();
+  for (const r of requests) { if (r.action_id) byAction.set(r.action_id, r.id); byKey.set(`${r.rule}\n${r.action_key}`, r.id); }
+  const live = allAllowances(dir).filter((a) => a.state === "active" && !a.ended_at && Date.parse(a.expires_at) > now && !(a.once && a.uses > 0));
+  return {
+    requestFor(actionId, rule, actionKey) {
+      const id = (actionId ? byAction.get(actionId) : undefined) ?? (rule && actionKey ? byKey.get(`${rule}\n${actionKey}`) : undefined);
+      const item = id ? asked.get(id) : undefined;
+      return item ? { state: item.state, answered_by: item.answered_by, answered_at: item.answered_at } : null;
+    },
+    allowedFor(rule, actionKey) {
+      return !!rule && !!actionKey && live.some((a) => a.rule === rule && a.action_key === actionKey);
+    },
+  };
+}
+
 /** Requests to an admin, newest first: waiting, approved (an allowance came back for the same rule and action, or the
  *  workspace said so) or declined (the workspace said so), with who answered and their note when the workspace sent them. */
 export function askedList(dir: string): AskedItem[] {

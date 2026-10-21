@@ -197,12 +197,12 @@ test("today: an edit recorded after it ran is shown apart from blocks, never add
   assert.equal(m.rows.find((r) => r.label === "Today").value, "10 actions · 2 blocked · 1 recorded, not prevented");
 });
 
-test("one line under Protected, the workspace's name and today's counts; up to 20 blocks", () => {
-  const m = trayModel(input(status(), { recentBlocks: Array.from({ length: 25 }, (_, i) => ({ action_id: `a${i}`, summary: "shell.exec rm", at: "", rule: null })) }));
+test("one line under Protected, the workspace's name and today's counts; up to 200 blocks", () => {
+  const m = trayModel(input(status(), { recentBlocks: Array.from({ length: 230 }, (_, i) => ({ action_id: `a${i}`, summary: "shell.exec rm", at: "", rule: null })) }));
   assert.equal(m.detail, "Rules checked 3 min ago · 3 blocked today");
   assert.equal(m.workspace, "Avouro");
   assert.deepEqual(m.today, { actions: 312, blocked: 3 });
-  assert.equal(m.recent_blocks.length, 20);
+  assert.equal(m.recent_blocks.length, 200);
   assert.equal(m.can_ask, false, "not said: no Requests list");
   assert.equal(trayModel(input(status(), { canAsk: true })).can_ask, true);
   assert.equal(trayModel(input(status(), { today: { actions: 4, blocked: 0, allowed_by_person: 0 } })).detail, "Rules checked 3 min ago · nothing blocked today");

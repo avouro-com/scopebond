@@ -27,7 +27,8 @@ import { livePrompt } from "./live-prompt.js";
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
-import { allowedList, askedList } from "./allowed-asked.js";
+import { allowedList, askedList, blockStates } from "./allowed-asked.js";
+import { blockOutcome } from "./block-outcome.js";
 import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
@@ -48,6 +49,17 @@ const MAX_BACKOFF_MS = 15 * 60_000;
 const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 const SELF_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const SUMMARY_EVERY_MS = 5 * 60 * 1000;
+/** The blocks asked what the workspace offers, newest first (each question reads the hook's files). */
+const QUESTIONS_MAX = 50;
+/** While a request to an admin asked in the last ANSWER_POLL_FOR_MS waits, the rules are checked this often. */
+const ANSWER_POLL_MS = 10_000;
+const ANSWER_POLL_FOR_MS = 10 * 60_000;
+
+/** A request to an admin asked in the last 10 minutes and not answered yet. */
+function requestWaiting(dir: string, now: number): boolean {
+  try { return askedList(dir).some((r) => r.state === "waiting" && now - Date.parse(r.asked_at) < ANSWER_POLL_FOR_MS); }
+  catch { return false; }
+}
 export const AFTER_PID_ENV = "SCOPEBOND_AGENT_AFTER_PID";
 /** Left in the Scopebond folder when this computer's user stops the agent (`scopebond-agent stop`), and removed when it
  *  starts: the native tray then leaves it stopped instead of starting it again. */
@@ -341,6 +353,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const interval = options.intervalMs ?? INTERVAL_MS;
   let last: CycleResult | null = null;
   let lastMaintenance: MaintenanceResult | null = null;
+  // The last self-check's result: kept until another self-check runs, so a failure stays until a check passes (upkeep that
+  // runs no self-check does not clear it).
+  let lastSelfCheck: MaintenanceResult["selfCheck"] = null;
   let failures = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let maintenanceTimer: ReturnType<typeof setInterval> | null = null;
@@ -385,7 +400,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const live = livePrompt({ fallback: windowPrompt });
   const prompt = serialized(live.prompter);
   let shownLevel: HealthLevel | null = null;
-  const health = () => healthOf(computerStatus(options.dir), lastMaintenance?.selfCheck ?? null);
+  const health = () => healthOf(computerStatus(options.dir), lastSelfCheck);
   const noticeHealth = () => { const h = health(); notifyChange(shownLevel, h); shownLevel = h.level; };
   const sendReasons = async () => {
     const connection = loadConnection(options.dir);
@@ -522,6 +537,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       } catch (error) { log(`local store upkeep failed: ${(error as Error).message}`); }
       if (connection && (forceSelfCheck || Date.now() - lastSelfCheckAt >= SELF_CHECK_EVERY_MS)) {
         result.selfCheck = await runSelfCheck(options.dir, connection, harnesses, current, { fetchImpl: options.fetchImpl });
+        lastSelfCheck = result.selfCheck;
         lastSelfCheckAt = Date.now();
         log(`self-check ${result.selfCheck?.ok ? "passed" : `failed: ${result.selfCheck?.failed.join(", ") ?? "no result"}`}`);
       }
@@ -530,29 +546,60 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     return result;
   };
 
+  // A request was just sent: check for the answer every 10 seconds from now (schedule picks the shorter wait).
+  // Only a waiting timer is moved: a cycle under way schedules the next one itself when it ends.
+  let timerWaiting = false;
+  const pollAnswers = () => {
+    if (stopped || !timerWaiting) return;
+    if (timer) clearTimeout(timer);
+    schedule();
+  };
   const schedule = () => {
     if (stopped) return;
-    const delay = failures ? Math.min(MAX_BACKOFF_MS, interval * 2 ** Math.min(failures, 6)) : interval;
-    timer = setTimeout(() => { void cycle().finally(schedule); }, delay);
+    // While a request to an admin waits (asked in the last 10 minutes), the rules are checked every 10 seconds, so an answer
+    // shows in the tray at once; then at the usual interval.
+    const delay = failures ? Math.min(MAX_BACKOFF_MS, interval * 2 ** Math.min(failures, 6))
+      : requestWaiting(options.dir, Date.now()) ? Math.min(interval, ANSWER_POLL_MS) : interval;
+    timerWaiting = true;
+    timer = setTimeout(() => { timerWaiting = false; void cycle().finally(schedule); }, delay);
   };
 
   // A block under a rule a person may allow or ask about can be acted on afterwards, from the tray: what the workspace offers
   // for it now (the same checks the Scopebond window makes), in plain words with the rule's name, the project and the tool.
+  // Each block has one outcome (block-outcome.ts): Unblock…, Ask an admin…, or a sentence saying why it stays blocked or
+  // where the person's request stands. A block a request or an allowance in force already covers offers nothing more.
   const actionable = (blocks: RecentBlockRecord[], now: number): RecentBlock[] => {
     const known = new Map(readBlocked(options.dir).map((b) => [b.id, b]));
+    const states = blockStates(options.dir, now);
+    const workspace = summary?.workspace_name ?? null;
+    let asked = 0;
     return blocks.map((b) => {
       const item = b.action_id ? known.get(b.action_id) : undefined;
-      const q = item && b.action_id ? blockedQuestion(options.dir, b.action_id, now) : null;
       const rule = b.rule ?? item?.rule ?? null;
+      const request = states.requestFor(b.action_id, rule, item?.action_key ?? null);
+      const allowed = !request && states.allowedFor(rule, item?.action_key ?? null);
+      // What the workspace offers, for the newest QUESTIONS_MAX blocks not acted on (each question reads the hook's files).
+      const q = item && !item.acted && b.action_id && !request && !allowed && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
+      const offers = q ? {
+        once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
+        always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
+      } : null;
+      const what = b.what ?? b.summary;
+      const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
+      const tool = toolName(b.harness ?? item?.harness ?? null);
+      const outcome = blockOutcome({
+        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, request, allowed,
+        workspace, tool, what, rule_title: ruleTitleText, action_id: b.action_id,
+      });
       return {
-        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: item?.acted ?? null,
-        what: b.what ?? b.summary, action_text: item?.summary ?? b.action_text ?? b.summary, rule_title: ruleTitle(rule) ?? b.rule_title ?? ruleName(rule),
-        project: projectName(b.repository) ?? b.project ?? null, tool: toolName(b.harness ?? item?.harness ?? null),
-        offers: q ? {
-          once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
-          always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
-        } : null,
+        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: item?.acted ?? (request ? "asked" : allowed ? "allowed" : null),
+        what, action_text: item?.summary ?? b.action_text ?? b.summary, rule_title: ruleTitleText,
+        project: projectName(b.repository) ?? b.project ?? null, tool,
+        offers,
         reason_min: q ? q.reason_min : null,
+        tries: b.tries ?? 1, first_at: b.first_at ?? b.at,
+        ...outcome,
+        request,
       };
     });
   };
@@ -684,13 +731,29 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (!done.ok) return { outcome: done.outcome, text: done.text };
       const outcome = done.choice === "ask" ? "asked" as const : done.choice === "always" && waiting?.offers.always_needs_admin ? "proposed" as const : "allowed" as const;
       log(`question under "${waiting?.rule_title ?? "a rule"}", answered in the tray: ${outcome} (${done.choice})`);
+      if (outcome === "asked") pollAnswers();
       return { outcome, choice: done.choice, text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), done.reviewed) };
     },
     "POST /settings": (body) => ({ settings: writeTraySettings(options.dir, body) }),
     // "Check now" always says what it found.
+    // It checks the rules and packs again now (a whole cycle) and runs the self-check; it never installs an update (that is
+    // "Update now").
     "POST /check": async () => {
-      const result = await maintain(true);
-      return { text: checkResult(result.selfCheck, result.error), tray: trayState() };
+      let error: string | null = null;
+      try {
+        const cycled = await cycle();
+        if (cycled.rules === "refused" || cycled.rules === "unavailable") error = "the rules could not be checked; this computer keeps its last rules";
+      } catch (e) { error = (e as Error).message; }
+      const connection = loadConnection(options.dir);
+      let selfCheck: MaintenanceResult["selfCheck"] = null;
+      if (connection) {
+        try {
+          selfCheck = await runSelfCheck(options.dir, connection, expectedHarnesses(), agentVersion(), { fetchImpl: options.fetchImpl });
+          lastSelfCheck = selfCheck;
+          lastSelfCheckAt = Date.now();
+        } catch (e) { error = error ?? (e as Error).message; }
+      }
+      return { text: checkResult(selfCheck, error), tray: trayState() };
     },
     // Install the version the workspace recommends now, instead of at the next six-hourly check.
     "POST /update": async () => {
@@ -724,6 +787,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (answer.decision === "unavailable") return { outcome: "unavailable", text: "The Scopebond window could not be shown." };
       const done = actOnBlocked(options.dir, id, answer);
       if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
+      if (done.outcome === "asked") pollAnswers();
       log(`earlier block under "${q.title}": ${done.outcome}`);
       return { outcome: done.outcome, text: blockedText(done.outcome) };
     },
@@ -747,6 +811,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         : { decision: "allow" as const, reason: parsed.reason, lasts, ...(os_user ? { os_user } : {}) };
       const done = actOnBlocked(options.dir, parsed.action_id, answer);
       if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
+      if (done.outcome === "asked") pollAnswers();
       log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
       return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed) };
     },

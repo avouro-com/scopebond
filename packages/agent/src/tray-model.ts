@@ -6,6 +6,7 @@ import type { StatusJson } from "@scopebond/hook";
 import type { Health } from "./health.js";
 import type { AllowedItem, AskedItem } from "./allowed-asked.js";
 import type { LiveQuestion } from "./live-prompt.js";
+import type { BlockOutcome, BlockRequest } from "./block-outcome.js";
 
 /** The six icon states of the "S" tile: no badge when protected; a badge with its own glyph otherwise. */
 type TrayState = "protected" | "working" | "offline" | "attention" | "problem" | "disconnected";
@@ -30,14 +31,16 @@ export interface TrayModel {
   actions: TrayAction[];
   /** A sign-in or similar step no button can do, in words. */
   hint: string | null;
-  /** Up to 20 blocks, newest first (today's, then earlier ones). */
+  /** Up to 200 blocks of the last seven days, newest first (today's, then earlier ones); an agent's retries of one block
+   *  are one entry with its number of tries. */
   recent_blocks: RecentBlock[];
   /** The line under the state when it is protected ("Rules checked 3 min ago · 2 blocked today"); null otherwise (the
    *  headline says it). */
   detail?: string | null;
   /** The workspace's name, when the workspace said it (for "Open … in Scopebond Cloud" and "Recorded and sent to …"). */
   workspace?: string | null;
-  /** Since local midnight. */
+  /** Since local midnight. `blocked` is the number of distinct blocks (retries folded): the header, the tab, the menu and
+   *  the Today row all show this one number. */
   today?: { actions: number; blocked: number } | null;
   /** Whether the workspace lets a person ask an admin under any rule (so the tray shows its Requests list even before the
    *  person has asked anything); absent from an older agent. */
@@ -66,10 +69,15 @@ export interface RecentBlock {
   action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | null;
   what?: string; action_text?: string; rule_title?: string | null; project?: string | null; tool?: string | null;
   offers?: BlockOffers | null; reason_min?: number | null;
+  /** Newer still (an older tray leaves them out): how many times the coding agent tried it (retries folded, 1 for a single
+   *  block) and when it first did; the one outcome the row shows (block-outcome.ts), the sentence that stands in for a
+   *  button, the text "Copy details" copies, and the person's request for it, when they asked. */
+  tries?: number; first_at?: string;
+  outcome?: BlockOutcome; outcome_text?: string | null; copy_details?: string | null; request?: BlockRequest | null;
 }
 
-/** The most blocks the tray lists. */
-export const RECENT_BLOCKS_MAX = 20;
+/** The most blocks the tray lists (the last seven days; the panel shows them 50 at a time). */
+export const RECENT_BLOCKS_MAX = 200;
 
 const TOOL_NAMES: Readonly<Record<string, string>> = {
   claude: "Claude Code", cursor: "Cursor", codex: "Codex", copilot: "GitHub Copilot", windsurf: "Windsurf", gemini: "Gemini CLI",
@@ -162,6 +170,9 @@ function refusedStatus(error: string | null | undefined): number | null {
   const m = error ? /HTTP (\d{3})/.exec(error) : null;
   return m ? Number(m[1]) : null;
 }
+
+/** A count as people read it ("16,867"), formatted here once so every surface shows the same text. */
+export const count = (n: number): string => n.toLocaleString("en-US");
 
 export function ago(at: number, now: number): string {
   const s = Math.max(0, Math.round((now - at) / 1000));
@@ -279,7 +290,7 @@ export function trayModel(input: TrayInput): TrayModel {
     rows.push({ label: "Delivery", value });
   }
   if (input.today) {
-    const parts = [`${input.today.actions} action${input.today.actions === 1 ? "" : "s"}`, `${input.today.blocked} blocked`];
+    const parts = [`${count(input.today.actions)} action${input.today.actions === 1 ? "" : "s"}`, `${count(input.today.blocked)} blocked`];
     if (input.today.recorded_after) parts.push(`${input.today.recorded_after} recorded, not prevented`);
     if (input.today.allowed_by_person) parts.push(`${input.today.allowed_by_person} allowed by a person`);
     if (input.openReviews) parts.push(`${input.openReviews} in Review`);
@@ -308,7 +319,7 @@ export function trayModel(input: TrayInput): TrayModel {
   let detail: string | null = null;
   if (state === "protected") {
     const checked = input.rules?.checked_at ? `Rules checked ${ago(input.rules.checked_at, now)}` : input.rules && !input.rules.managed ? "Using this computer's own rules" : null;
-    const blocked = input.today ? (input.today.blocked ? `${input.today.blocked} blocked today` : "nothing blocked today") : null;
+    const blocked = input.today ? (input.today.blocked ? `${count(input.today.blocked)} blocked today` : "nothing blocked today") : null;
     detail = [checked, blocked].filter(Boolean).join(" · ") || null;
     if (detail) detail = detail[0].toUpperCase() + detail.slice(1);
   }

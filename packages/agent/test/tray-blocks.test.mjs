@@ -81,15 +81,16 @@ test("a block by Scopebond's own protection, from a receipt with no context, sti
   } finally { await service.stop(); }
 });
 
-test("up to 20 blocks, newest first", async () => {
+test("every block of the week, newest first (no cap at 20)", async () => {
   const dir = computer();
   await blockActions(dir, Array.from({ length: 24 }, (_, i) => ({ tool_name: "Bash", tool_input: { command: `rm -rf build${i}` } })));
   const service = await serviceFor(dir);
   try {
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
-    assert.equal(tray.recent_blocks.length, 20);
+    assert.equal(tray.recent_blocks.length, 24);
     assert.equal(tray.recent_blocks[0].what, "rm -rf build23");
-    assert.equal(tray.recent_blocks[19].what, "rm -rf build4");
+    assert.equal(tray.recent_blocks[23].what, "rm -rf build0");
+    assert.equal(tray.today.blocked, 24, "the header counts the blocks the list shows");
   } finally { await service.stop(); }
 });
 
