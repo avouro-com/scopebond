@@ -639,19 +639,28 @@ fn act_on_block(shared: &Arc<Shared>, action_id: String) {
     shared.wake();
 }
 
-fn copy_diagnostics(shared: &Arc<Shared>) {
-    let text = match shared.client.call("GET", "/status", None, Duration::from_secs(10)) {
-        Ok(status) => {
-            let report = json!({ "tray": env!("CARGO_PKG_VERSION"), "status": status });
-            if win::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default()) {
-                "Diagnostics copied (no keys or credentials)".to_string()
-            } else {
-                "The clipboard could not be used; try again".to_string()
-            }
+/// "Get help…": copy a support report (the agent's, with no keys, records, commands or reasons; the tray's version and how
+/// it stands with the agent) and open the Help page. Nothing in the Scopebond folder is opened or attached.
+fn get_help(shared: &Arc<Shared>) {
+    {
+        let mut busy = lock(&shared.busy);
+        if busy.is_some() {
+            return;
         }
-        Err(e) => format!("Diagnostics could not be read: {e}"),
-    };
-    shared.set_note(text);
+        *busy = Some("help".into());
+    }
+    let link = link_name(*lock(&shared.link));
+    let agent = shared.client.call("GET", "/support", None, Duration::from_secs(15)).map_err(|e| e.to_string());
+    let report = panel::help_report(env!("CARGO_PKG_VERSION"), link, agent);
+    let copied = win::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default());
+    let opened = std::process::Command::new("explorer.exe").arg(panel::HELP_URL).spawn().is_ok();
+    *lock(&shared.busy) = None;
+    shared.set_note(match (copied, opened) {
+        (true, true) => "Support report copied (no keys, records or commands): paste it in your message. The Help page is opening.".into(),
+        (true, false) => format!("Support report copied (no keys, records or commands). Help: {}", panel::HELP_URL),
+        (false, _) => format!("The support report could not be copied; try again. Help: {}", panel::HELP_URL),
+    });
+    shared.wake();
 }
 
 fn about(shared: &Arc<Shared>) {
@@ -700,11 +709,8 @@ fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
                 s.wake();
             });
         }
-        Command::CopyDiagnostics => {
-            thread::spawn(move || copy_diagnostics(&s));
-        }
-        Command::OpenLogs => {
-            let _ = std::process::Command::new("explorer.exe").arg(shared.client.home()).spawn();
+        Command::GetHelp => {
+            thread::spawn(move || get_help(&s));
         }
         Command::About => {
             thread::spawn(move || about(&s));
@@ -961,8 +967,7 @@ fn panel_hold(hold: bool, shared: State<'_, Arc<Shared>>) {
 fn panel_command(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> bool {
     // The same commands the menu has (Settings in the panel offers them too); anything else does nothing.
     let command = match id.as_str() {
-        "copy_diagnostics" => Command::CopyDiagnostics,
-        "open_logs" => Command::OpenLogs,
+        "get_help" => Command::GetHelp,
         "start_agent" => Command::StartAgent,
         "autostart" => Command::ToggleAutostart,
         "about" => Command::About,

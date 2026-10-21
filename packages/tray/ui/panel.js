@@ -515,6 +515,7 @@
         el("button", { class: "btn", type: "button", "data-key": "help", "aria-describedby": "help-small", disabled: s.busy === "help", "aria-busy": s.busy === "help" ? "true" : null,
           text: "Get help…", onclick: () => run("command", "get_help") }),
         el("small", { id: "help-small", text: "Copies a support report (no keys, records or commands) and opens the Help page." }),
+        el("button", { class: "btn text", type: "button", "data-key": "about", text: "About Scopebond", onclick: () => run("command", "about") }),
       ]),
     ]);
   }

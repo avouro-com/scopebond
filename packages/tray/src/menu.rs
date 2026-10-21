@@ -66,8 +66,8 @@ pub enum Command {
     StartAgent,
     ToggleAutostart,
     Notifications(Notifications),
-    CopyDiagnostics,
-    OpenLogs,
+    /// Copy a support report (no keys, records or commands) and open the Help page.
+    GetHelp,
     About,
     HideIcon,
 }
@@ -156,7 +156,7 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
     if !help.is_empty() {
         help.push(Entry::Separator);
     }
-    help.extend([item("copy_diagnostics", "Copy diagnostics"), item("open_logs", "Open logs folder"), item("about", "About Scopebond")]);
+    help.extend([item("get_help", "Get help…"), item("about", "About Scopebond")]);
     out.push(Entry::Submenu { label: "Help".into(), entries: help });
     out.push(item("hide_icon", "Hide icon"));
     out
@@ -177,8 +177,7 @@ pub fn command_for(id: &str, answer: Option<&TrayAnswer>) -> Option<Command> {
         "open_status" | "blocked" => Command::OpenStatus,
         "start_agent" => Command::StartAgent,
         "autostart" => Command::ToggleAutostart,
-        "copy_diagnostics" => Command::CopyDiagnostics,
-        "open_logs" => Command::OpenLogs,
+        "get_help" => Command::GetHelp,
         "about" => Command::About,
         "hide_icon" => Command::HideIcon,
         _ => return None,
@@ -243,8 +242,7 @@ mod tests {
                 "Help >",
                 "  Check now",
                 "  -",
-                "  Copy diagnostics",
-                "  Open logs folder",
+                "  Get help…",
                 "  About Scopebond",
                 "Hide icon",
             ]

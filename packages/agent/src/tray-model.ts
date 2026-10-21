@@ -440,6 +440,71 @@ function computerRows(input: TrayInput, state: TrayState, updatedAt: number | nu
   return rows;
 }
 
+export interface SupportInput {
+  now: number;
+  model: TrayModel;
+  status: StatusJson;
+  versions: { scopebond: string; agent: string; hook: string; install_kind: string; platform: string; os: string; node: string };
+  settings: { notifications: string };
+  selfCheck: { ok: boolean; failed: string[] } | null;
+  /** The last maintenance pass's error, and a version that did not install here. */
+  maintenanceError: string | null;
+  failedUpdate: { version: string; reason: string | null } | null;
+  /** The agent's log, newest last (the caller reads its tail); only lines about a failure are kept. */
+  logLines: string[];
+  /** This computer's Scopebond folder and the person's home folder, never written into the report. */
+  home: string;
+  userHome: string;
+}
+
+/** The most log lines a support report carries, and the longest line. */
+const SUPPORT_LOG_LINES = 30;
+const SUPPORT_LINE_MAX = 300;
+const FAILURE_LINE = /\b(?:fail|failed|error|could not|cannot|did not|refused|unavailable|problem|timed out|not answering)\b/i;
+// A sign-in code ("ABCD-EFGH"): it lets someone approve this computer while it waits, so it never goes in a report.
+const SIGN_IN_CODE = /\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/g;
+
+/** One line made safe for a report: the folders named as <scopebond> and ~ (not the person's user name), anything shaped
+ *  like a token or a sign-in code masked, cut to 300 characters. */
+export function redactLine(line: string, home: string, userHome: string, scrub: (text: string) => string = (t) => t): string {
+  let out = line;
+  for (const [folder, name] of [[home, "<scopebond>"], [userHome, "~"]] as const) {
+    if (!folder) continue;
+    for (const spelling of new Set([folder, folder.replace(/\\/g, "/"), folder.replace(/\//g, "\\")])) out = out.split(spelling).join(name);
+  }
+  out = scrub(out).replace(SIGN_IN_CODE, "****-****");
+  // eslint-disable-next-line no-control-regex -- control characters are taken out of the log text
+  out = out.replace(/[\u0000-\u001f\u007f]/g, " ");
+  return out.length > SUPPORT_LINE_MAX ? `${out.slice(0, SUPPORT_LINE_MAX - 1)}…` : out;
+}
+
+/** What "Get help…" copies for a support conversation: the state, versions, settings, the facts Settings shows, delivery
+ *  counts and the last failures in the agent's log. Never a key, a credential, a record, a command, a reason, a file from
+ *  the Scopebond folder or the person's user name: only counts, versions, states and redacted failure lines. */
+export function supportBundle(i: SupportInput, scrub: (text: string) => string = (t) => t): Record<string, unknown> {
+  const d = i.status.delivery;
+  const clean = (text: string | null | undefined): string | null => (text ? redactLine(text, i.home, i.userHome, scrub) : null);
+  return {
+    schema: "scopebond.support.v1",
+    created_at: new Date(i.now).toISOString(),
+    versions: i.versions,
+    state: { state: i.model.state, headline: clean(i.model.headline), hint: clean(i.model.hint), fix: i.model.fix?.id ?? null },
+    computer: (i.model.computer_rows ?? []).map((r) => ({ label: r.label, value: clean(r.value), ...(r.items ? { items: r.items } : {}) })),
+    delivery: {
+      connected: d.connected, pending: d.pending, oldest_pending_age_s: d.oldest_pending_age_s,
+      last_success_at: d.last_success_at ? new Date(d.last_success_at).toISOString() : null,
+      last_error: clean(d.last_error), connection_refused_since: d.connection_refused_since ? new Date(d.connection_refused_since).toISOString() : null,
+    },
+    installation_id: i.status.identity?.installation_id ?? null,
+    today: i.model.today ?? null,
+    settings: i.settings,
+    self_check: i.selfCheck ? { ok: i.selfCheck.ok, failed: i.selfCheck.failed.map((f) => clean(f)) } : null,
+    maintenance_error: clean(i.maintenanceError),
+    failed_update: i.failedUpdate ? { version: i.failedUpdate.version, why: clean(i.failedUpdate.reason) } : null,
+    last_errors: i.logLines.filter((l) => FAILURE_LINE.test(l)).slice(-SUPPORT_LOG_LINES).map((l) => clean(l)),
+  };
+}
+
 /** What "Check now" says afterwards, for five seconds: never silence. */
 export function checkResult(selfCheck: { ok: boolean; failed: string[] } | null, error: string | null): string {
   if (error) return `Check could not finish: ${error}`.slice(0, 200);

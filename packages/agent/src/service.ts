@@ -4,11 +4,11 @@
 // versions to run, and once a day it runs the end-to-end self-check.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { hostname, uptime, userInfo } from "node:os";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, findClause, hookVersion, loadPacks, readPackIndex, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
+  actOnBlocked, blockedQuestion, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
   writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -29,7 +29,7 @@ import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
 import { allowedList, askedList, blockStates } from "./allowed-asked.js";
 import { blockOutcome } from "./block-outcome.js";
-import { checkResult, projectName, RECENT_BLOCKS_MAX, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
+import { checkResult, projectName, RECENT_BLOCKS_MAX, supportBundle, toolName, trayModel, whyOf, type RecentBlock, type TrayModel } from "./tray-model.js";
 import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary } from "./summary.js";
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
@@ -843,6 +843,19 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
       return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed) };
     },
+    // "Get help…": a support report the tray copies for the person (tray-model.ts supportBundle: no keys, records, commands
+    // or reasons; failures in the log with the folders and anything token-shaped masked).
+    "GET /support": () => {
+      let os = process.platform as string;
+      try { os = `${process.platform} ${release()}`; } catch { /* the platform alone */ }
+      return { bundle: supportBundle({
+        now: Date.now(), model: trayState(), status: computerStatus(options.dir),
+        versions: { scopebond: agentVersion(), agent: agentVersion(), hook: hookVersion(), install_kind: kind, platform: process.platform, os, node: process.version },
+        settings: readTraySettings(options.dir), selfCheck: lastSelfCheck ? { ok: lastSelfCheck.ok, failed: lastSelfCheck.failed } : null,
+        maintenanceError: lastMaintenance?.error ?? null, failedUpdate: failedUpdate(options.dir),
+        logLines: logTail(join(options.dir, "agent.log")), home: options.dir, userHome: homedir(),
+      }, scrubSecrets) };
+    },
     // What the person let through (in force, or waiting for an admin) and what they asked an admin, with the answers.
     "GET /allowances": () => ({ allowances: allowedList(options.dir) }),
     "GET /requests": () => ({ requests: askedList(options.dir) }),
@@ -964,6 +977,21 @@ export function workspaceLetsAsk(dir: string): boolean {
     const doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as { rules?: Record<string, { mode?: unknown; override?: { requests?: unknown } } | undefined> };
     return Object.values(doc.rules ?? {}).some((r) => !!r?.override && (r.mode === "ask" || (r.mode === "override" && r.override.requests === true)));
   } catch { return false; }
+}
+
+/** The last lines of a log file (its last 128 KB), oldest first; none when it cannot be read. */
+export function logTail(file: string, bytes = 128 * 1024): string[] {
+  let fd: number | null = null;
+  try {
+    fd = openSync(file, "r");
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, bytes);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.toString("utf8").split(/\r?\n/).filter((l) => l.trim());
+    // The first line may start mid-way when the file was cut.
+    return size > length ? lines.slice(1) : lines;
+  } catch { return []; } finally { if (fd !== null) try { closeSync(fd); } catch { /* closed */ } }
 }
 
 /** When the workspace's rules were last checked successfully, for the tray: the time the rules check records for its last

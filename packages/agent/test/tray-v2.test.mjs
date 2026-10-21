@@ -5,7 +5,9 @@ import assert from "node:assert/strict";
 import { callAgent } from "../dist/index.js";
 import { makeAllowance, readBlocked, writeAllowances } from "@scopebond/hook";
 import { computer, blockActions, serviceFor } from "./tray-helpers.mjs";
-import { groupBlocks, trayModel, whyOf } from "../dist/tray-model.js";
+import { groupBlocks, redactLine, trayModel, whyOf } from "../dist/tray-model.js";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { healthOf } from "../dist/health.js";
 import { lastGoodCheck } from "../dist/service.js";
 
@@ -137,4 +139,43 @@ test("the last good rules check: the field the rules check keeps for a success, 
   assert.equal(lastGoodCheck({ checked_at: "2026-10-21T10:00:00Z", last_error: "could not reach the workspace" }), null, "a failed check is never 'updated'");
   assert.equal(lastGoodCheck({ checked_at: "2026-10-21T10:00:00Z", last_error: "x", checked_ok_at: "2026-10-21T09:00:00Z" }), Date.parse("2026-10-21T09:00:00Z"));
   assert.equal(lastGoodCheck({}), null);
+});
+
+// Made here, so no token-shaped text sits in the repository.
+const TOKEN = ["ghp", "_", "q".repeat(36)].join("");
+
+test("Get help's support report: state, versions, settings and failures, with nothing private in it", async () => {
+  const dir = computer();
+  await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf ../build --token=SECRET-ARG-123" } }]);
+  const lines = [
+    "2026-10-21T10:00:00.000Z Scopebond Agent 0.11.5 running",
+    `2026-10-21T10:01:00.000Z delivery problem: fetch failed reading ${dir}/receipts.db`,
+    "2026-10-21T10:02:00.000Z signing in again: waiting for approval of code ABCD-EFGH (failed once)",
+    `2026-10-21T10:03:00.000Z could not reach https://cloud.example.test/v1?token=${TOKEN}`,
+  ];
+  writeFileSync(join(dir, "agent.log"), lines.join("\n") + "\n");
+  const service = await serviceFor(dir);
+  try {
+    const { bundle } = await callAgent(dir, "GET", "/support", undefined, 10_000);
+    const text = JSON.stringify(bundle);
+    assert.equal(bundle.schema, "scopebond.support.v1");
+    assert.match(bundle.versions.scopebond, /^\d+\.\d+\.\d+/);
+    assert.equal(bundle.settings.notifications, "blocks");
+    assert.equal(typeof bundle.state.state, "string");
+    assert.ok(Array.isArray(bundle.computer) && bundle.computer.some((r) => r.label === "Version"));
+    assert.equal(bundle.last_errors.length, 3, "only the lines about a failure");
+    assert.match(bundle.last_errors[0], /<scopebond>\/receipts\.db/, "the folder is named, not spelled out");
+    assert.ok(!text.includes(dir) && !text.includes(dir.replace(/\\/g, "/")), "no path to the Scopebond folder");
+    assert.ok(!text.includes("ABCD-EFGH"), "no sign-in code");
+    assert.ok(!text.includes(TOKEN), "nothing token-shaped");
+    assert.ok(!text.includes("SECRET-ARG-123") && !text.includes("rm -rf"), "no record and no command");
+    assert.ok(!/"(?:key|private_key|token|credential|reason)"\s*:/.test(text), "no key, token, credential or reason field");
+  } finally { await service.stop(); }
+});
+
+test("a report line names the folders, never the person's user name, and masks codes", () => {
+  assert.equal(redactLine("D:\\work\\sb\\.scopebond\\agent.log failed", "D:\\work\\sb\\.scopebond", "D:\\work\\sb"), "<scopebond>\\agent.log failed");
+  assert.equal(redactLine("D:/work/sb/x failed", "D:\\work\\sb\\.scopebond", "D:\\work\\sb"), "~/x failed");
+  assert.equal(redactLine("code WXYZ-1234", "", ""), "code ****-****");
+  assert.equal(redactLine("x".repeat(400), "", "").length, 300);
 });

@@ -114,6 +114,45 @@ pub fn block_button(block: &RecentBlock) -> Option<&'static str> {
     }
 }
 
+/// The Help page "Get help…" opens.
+pub const HELP_URL: &str = "https://scopebond.com/documentation";
+
+/// Field names a support report never carries, whatever the agent sends: keys, credentials, records, commands and reasons.
+const PRIVATE_FIELDS: [&str; 14] = [
+    "key", "private_key", "secret", "token", "credential", "password", "reason", "command", "action_text", "summary", "what",
+    "recent_blocks", "receipts", "records",
+];
+
+/// The report without any field named like a key, a credential, a record, a command or a reason (a second guard: the agent
+/// builds the report without them).
+pub fn strip_private(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(k, _)| !PRIVATE_FIELDS.contains(&k.to_ascii_lowercase().as_str()))
+                .map(|(k, v)| (k.clone(), strip_private(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(strip_private).collect()),
+        other => other.clone(),
+    }
+}
+
+/// What "Get help…" copies: the tray's version and how it stands with the agent, and the agent's support report (or why
+/// there is none).
+pub fn help_report(version: &str, link: &str, agent: Result<Value, String>) -> Value {
+    let (bundle, error) = match agent {
+        Ok(answer) => (answer.get("bundle").map(strip_private), None),
+        Err(e) => (None, Some(e)),
+    };
+    json!({
+        "schema": "scopebond.help.v1",
+        "tray": { "version": version, "agent_link": link },
+        "agent": bundle,
+        "agent_error": error,
+    })
+}
+
 /// The longest reason the agent accepts.
 pub const REASON_MAX: usize = 500;
 
@@ -285,6 +324,28 @@ mod tests {
         let mut odd = answerable();
         odd.action_id = Some("../flush".into());
         assert!(check_answer(&odd, "once", "The tests need the API URL").is_err());
+    }
+
+    #[test]
+    fn the_help_report_carries_versions_and_the_agents_report_never_a_key_or_a_record() {
+        let agent = json!({ "bundle": {
+            "schema": "scopebond.support.v1", "versions": { "scopebond": "0.11.5" },
+            "delivery": { "pending": 3, "token": "abc" },
+            "last_errors": [{ "line": "x", "private_key": "-----BEGIN" }],
+            "recent_blocks": [{ "what": "rm -rf /" }], "Reason": "mine",
+        } });
+        let r = help_report("0.11.5", "answering", Ok(agent));
+        assert_eq!(r["tray"]["version"], "0.11.5");
+        assert_eq!(r["agent"]["versions"]["scopebond"], "0.11.5");
+        assert_eq!(r["agent"]["delivery"]["pending"], 3);
+        let text = r.to_string();
+        for private in ["abc", "BEGIN", "rm -rf", "mine", "recent_blocks"] {
+            assert!(!text.contains(private), "{private} in the report");
+        }
+        let down = help_report("0.11.5", "not_answering", Err("the agent did not answer".into()));
+        assert_eq!(down["agent"], Value::Null);
+        assert_eq!(down["agent_error"], "the agent did not answer");
+        assert!(HELP_URL.starts_with("https://scopebond.com/"));
     }
 
     #[test]
