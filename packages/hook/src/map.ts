@@ -48,6 +48,9 @@ export interface Mapped {
   derived?: true;
   /** On a folded derived intent (`capDerived`): how many derived intents of its type it stands for. */
   count?: number;
+  /** On a shell command that only prints its help or version, or rehearses (`rm --help`, `sudo --version`): it changes
+   *  nothing, so the runtime records it and never judges it, in every mode. Not part of the signed intent. */
+  describesOnly?: true;
   /** On a shell command that installs named packages: the manager and every package name it names (`unreadable` when it names
    *  some and none can be read). Not part of the signed intent; the runtime reads it only to evaluate a package a workspace
    *  blocks (service-rules.ts). */
@@ -1466,6 +1469,7 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
       params: { command: redact(sc.raw), program: basename(scrubSecrets(sc.programRaw)), ...(cwd ? { cwd } : {}) },
     },
     evaluated: true, source: "shell",
+    ...(sc.describes ? { describesOnly: true as const } : {}),
   };
   const installs = packagesToCheck(sc);
   if (installs) exec.packages = installs;

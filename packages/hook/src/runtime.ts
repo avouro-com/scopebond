@@ -499,7 +499,8 @@ export function createHookRuntime(config: RuntimeConfig) {
       // has. A derived intent the mapper marks not evaluated (a file written through a remote API) is always recorded. Strict
       // mode does not change this: the call's own intent is still evaluated.
       const derivedRecorded = mapped.derived === true && (!optedIn || !mapped.evaluated || !named.has(mapped.intent.action_type));
-      if ((!mapped.evaluated && !config.strict) || derivedRecorded) {
+      // A command that only prints its help or version, or rehearses, changes nothing: recorded, in every mode.
+      if ((!mapped.evaluated && !config.strict) || derivedRecorded || mapped.describesOnly === true) {
         // Unknown tool or unparseable command, non-strict: observe without
         // evaluating — grants nothing.
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);

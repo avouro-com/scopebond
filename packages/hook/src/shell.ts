@@ -37,6 +37,31 @@ export interface SimpleCommand {
   assigns?: string[];
   /** A segment of assignments alone (`X=1; …`): it runs nothing and sets shell variables for the commands after it. */
   assignOnly?: boolean;
+  /** Read as POSIX, the command only prints its help or version, or rehearses (`rm --help`, `sudo --version`, `rm -h`):
+   *  it changes nothing (see `describesItself`). */
+  describes?: true;
+}
+
+/** The options by which a command line only describes itself or rehearses, in any program: `--help`, `--version`, and
+ *  `--dry-run` (also `--dry-run=<mode>`, but not `=none` or `=false`, which turn it off). */
+export function isDescribeOption(word: string): boolean {
+  if (word === "--help" || word === "--version" || word === "--dry-run") return true;
+  return word.startsWith("--dry-run=") && !/^(?:none|false)$/i.test(word.slice("--dry-run=".length));
+}
+
+/** Programs whose `-h` is not help: it halts the computer (`shutdown -h`, and the `-h` of halt, poweroff and reboot). */
+const HALTS = new Set(["shutdown", "halt", "poweroff", "reboot"]);
+
+/** Whether a POSIX program given `argv` only prints its help or version, or rehearses: a describe option among the options
+ *  it reads before its first operand (option reading stops there, and at `--`: after it `--help` is a file to act on), or
+ *  `-h` as its only argument (elsewhere `-h` often means something else, such as a host or a halt). */
+export function describesItself(program: string, argv: readonly string[]): boolean {
+  if (argv.length === 1 && argv[0] === "-h") return !HALTS.has(canonProgram(program));
+  for (const a of argv) {
+    if (a === "--" || a === "-" || !a.startsWith("-")) return false;
+    if (isDescribeOption(a)) return true;
+  }
+  return false;
 }
 
 /** The canonical program name used for every decision: basename, lower-cased, with
@@ -322,7 +347,7 @@ const WRAPPERS = new Map<string, WrapperSpec>([
 // the command after them is the real one (`if rm …`, `then rm …`, `{ rm …`, `! rm …`).
 const KEYWORDS = new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "{", "}", "!", "coproc", "esac"]);
 
-interface Wrapper { name: string; raw: string; redirects: Redirect[] }
+interface Wrapper { name: string; raw: string; redirects: Redirect[]; describes?: true }
 
 /** Words of a string as the shell would split it (quotes honored, operators dropped). */
 const words = (s: string): string[] => tokenize(s).filter((t) => !t.op).map((t) => t.t);
@@ -370,7 +395,8 @@ function stripPrefixes(input: string[]): { tokens: string[]; wrappers: Wrapper[]
       if (query) break;
     }
     const redirects: Redirect[] = [];
-    wrappers.push({ name: w, raw: t, redirects });
+    const wrapper: Wrapper = { name: w, raw: t, redirects };
+    wrappers.push(wrapper);
     i++;
     let split: string | undefined;
     const value = (name: string, attached: string | undefined): void => {
@@ -386,6 +412,8 @@ function stripPrefixes(input: string[]): { tokens: string[]; wrappers: Wrapper[]
       if (o === "--") { i++; break; }
       if (!o.startsWith("-") || o === "-") break;
       i++;
+      // `sudo --help`, `time --version`, `sudo -h` alone: the wrapper only describes itself.
+      if (isDescribeOption(o) || (o === "-h" && i === tokens.length)) wrapper.describes = true;
       if (o.startsWith("--")) {
         const eq = o.indexOf("=");
         if (eq > 0) value(o.slice(0, eq), o.slice(eq + 1));
@@ -748,7 +776,7 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
     const redirects = split.redirects;
     // Each wrapper is recorded as a command of its own (`sudo` is a program a policy
     // may deny), carrying any file its options name (`time -o f`, `xargs -a f`).
-    for (const w of wrappers) out.push({ program: basename(w.raw), programRaw: w.raw, argv: [], redirects: w.redirects, raw: seg, opaque: false, assigns: [...inherited] });
+    for (const w of wrappers) out.push({ program: basename(w.raw), programRaw: w.raw, argv: [], redirects: w.redirects, raw: seg, opaque: false, assigns: [...inherited], ...(w.describes && !ps ? { describes: true as const } : {}) });
     if (tokens.length === 0) {
       // A bare redirection (`> file`) still writes its target.
       if (redirects.length) out.push({ program: "", programRaw: "", argv: [], redirects, raw: seg, opaque: false, assigns });
@@ -761,7 +789,9 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
     if (isDynamicProgram(tokens[0])) { out.push(...opaque(seg)); continue; }
     const program = basename(tokens[0]);
     const argv = tokens.slice(1);
-    out.push({ program, programRaw: tokens[0], argv, redirects, raw: seg, opaque: false, assigns });
+    // Read as POSIX, a command that only prints its help or version is marked so (PowerShell's own commands take no `--help`:
+    // there `rm --help` is Remove-Item given a path).
+    out.push({ program, programRaw: tokens[0], argv, redirects, raw: seg, opaque: false, assigns, ...(!ps && describesItself(program, argv) ? { describes: true as const } : {}) });
     // A script block handed over in a variable (`Invoke-Command -ScriptBlock $sb`) runs code only known at run time.
     if (ps && argv.some((a, k) => PS_BLOCK_PARAMETER.test(a) && /^\$/.test(argv[k + 1] ?? ""))) out.push(...opaque(seg));
 
@@ -960,6 +990,12 @@ export function parseGitPush(cmd: SimpleCommand, lineConfigs: readonly string[] 
   let del = false;
   let repo: string | undefined;
   const positional: string[] = [];
+  // A rehearsal (`--dry-run`) or a help page updates no branch: not a push. git reads its options anywhere before `--`;
+  // an option's value (`-o --dry-run`, `--repo --dry-run`) is not one.
+  for (let k = 0; k < rest.length && rest[k] !== "--"; k++) {
+    if (/^(?:-o|--push-option|--receive-pack|--exec|--repo)$/.test(rest[k])) k++;
+    else if (isDescribeOption(rest[k]) && rest[k] !== "--version") return null;
+  }
   for (let k = 0; k < rest.length; k++) {
     const t = rest[k];
     if (t === "--force" || t === "--force-with-lease" || t.startsWith("--force-with-lease=") || t === "--force-if-includes") { force = true; continue; }
