@@ -97,7 +97,7 @@ test("loaded by the shim from a staged folder, the bundle decides a Claude Code 
   for (const [tool, input] of [["Write", { file_path: join(project, ".scopebond", "policy.json"), content: "{}" }], ["Bash", { command: "git status" }], ["Bash", { command: "rm -rf /" }]]) {
     const viaBundle = decide(runner, event(tool, input));
     const viaNpm = decide(hookCli, event(tool, input));
-    assert.match(viaBundle.stderr, new RegExp(`engine ${version.replace(/\./g, "\\.")}`));
+    assert.ok(viaBundle.stderr.includes(`engine ${version}`), viaBundle.stderr);
     assert.deepEqual({ status: viaBundle.status, decision: viaBundle.decision }, { status: viaNpm.status, decision: viaNpm.decision }, `${tool} ${JSON.stringify(input)}: ${viaBundle.stderr}`);
   }
 });

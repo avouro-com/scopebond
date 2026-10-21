@@ -7,7 +7,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, classifyIntent, defaultRules, gitRestorable, withRestorableScope, isRestorableDelete, RESTORABLE_SUFFIX,
@@ -16,7 +16,16 @@ import { ENFORCE } from "./enforce-all.mjs";
 
 const dirs = [];
 after(() => { for (const d of dirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 5 }); } catch { /* a handle still open on Windows */ } } });
-const temp = (prefix) => { const d = realpathSync(mkdtempSync(join(tmpdir(), prefix))); dirs.push(d); return d; };
+// Not under /tmp, which safe-shell already treats as the temp folder, and by its long name (an 8.3 short name such as
+// RUNNER~1 is never a known target): the runner's own temp folder when there is one.
+const base = () => {
+  if (process.env.RUNNER_TEMP) return process.env.RUNNER_TEMP;
+  if (!tmpdir().startsWith("/tmp")) return tmpdir();
+  const d = join(homedir(), ".cache", "sb-git-restorable");
+  mkdirSync(d, { recursive: true });
+  return d;
+};
+const temp = (prefix) => { const d = realpathSync.native(mkdtempSync(join(base(), prefix))); dirs.push(d); return d; };
 const slash = (p) => p.replace(/\\/g, "/");
 
 const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args],

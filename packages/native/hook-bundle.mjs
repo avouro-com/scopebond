@@ -13,7 +13,7 @@
 // it checks the archive's digest, the version and the commit against the unsigned manifest before it signs.
 
 import { createHash, createPrivateKey, sign } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { COMMIT_ID, keyIdOfPrivate } from "./manifest.mjs";
@@ -87,9 +87,14 @@ export async function buildBundle(folder, commit, version = hookVersion()) {
 export function signBundle(folder, commit, privateKeyPem, version = hookVersion()) {
   const manifestFile = join(folder, manifestName(version));
   const archive = join(folder, bundleName(version));
-  if (!existsSync(manifestFile) || !existsSync(archive)) throw new Error(`no bundle ${version} in ${folder}`);
-  const unsigned = JSON.parse(readFileSync(manifestFile, "utf8"));
-  const tgz = readFileSync(archive);
+  let unsigned, tgz;
+  try {
+    unsigned = JSON.parse(readFileSync(manifestFile, "utf8"));
+    tgz = readFileSync(archive);
+  } catch (error) {
+    if (error?.code === "ENOENT") throw new Error(`no bundle ${version} in ${folder}`);
+    throw error;
+  }
   if (unsigned.type !== "scopebond:hook-bundle" || unsigned.version !== version) throw new Error(`the manifest is not for the hook bundle ${version}`);
   if (unsigned.sha256 !== sha256(tgz)) throw new Error("the archive is not the one the manifest names");
   if (unsigned.built_from !== commit) throw new Error(`the manifest names commit ${unsigned.built_from}, not ${commit}`);
