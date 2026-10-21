@@ -159,13 +159,13 @@ test("through the agent, the window retired: with no tray listening the hook hea
 
 test("the window's words: ask to unblock; macOS and Linux offer the workspace's one length", () => {
   const ask = question({ mode: "ask", offers: { allow: false, always: false, ask: true } });
-  assert.ok(windowsScript(ask).includes(b64("Ask to unblock")));
+  assert.ok(windowsScript(ask).includes(b64("Send request")));
   assert.ok(!windowsScript(ask).includes(b64("Ask an admin")));
   assert.match(questionText(ask), /You may ask to unblock it; an admin decides\./);
   assert.deepEqual(singleChoice(ask), { label: "Ask to unblock", decision: "ask" });
   assert.deepEqual(singleChoice(question()), { label: "Allow once", decision: "allow", lasts: "once" });
-  assert.deepEqual(singleChoice(question({ offers: { allow: false, always: false, ask: false, fifteen: true } })), { label: "Allow for 15 min", decision: "allow", lasts: "15m" });
-  assert.deepEqual(singleChoice(question({ offers: { allow: false, always: true, ask: false, fifteen: false } })), { label: "Always allow", decision: "allow", lasts: "always" });
+  assert.deepEqual(singleChoice(question({ offers: { allow: false, always: false, ask: false, fifteen: true } })), { label: "Allow for 15 minutes", decision: "allow", lasts: "15m" });
+  assert.deepEqual(singleChoice(question({ offers: { allow: false, always: true, ask: false, fifteen: false } })), { label: "Allow for 30 days", decision: "allow", lasts: "always" });
   assert.equal(singleChoice(question({ offers: { allow: false, always: false, ask: false, fifteen: false } })), null);
   const extra = question({ harness: "Not A Tool", reviewed: true, always_days: 999, project: "checkout" });
   assert.equal(extra.harness, undefined, "only a tool id");

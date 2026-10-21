@@ -17,7 +17,7 @@ export interface BlockRequest {
 
 export interface OutcomeInput {
   /** What the workspace offers for it now (null: nothing). */
-  offers: { once: boolean; fifteen: boolean; always: boolean; ask: boolean } | null;
+  offers: { once: boolean; fifteen: boolean; always: boolean; ask: boolean; hour?: boolean; tomorrow?: boolean } | null;
   /** The clause that denied it, the workspace rule and what blocked it when no rule did (block-notes.ts). */
   clause: string | null;
   rule: string | null;
@@ -62,7 +62,7 @@ export function blockOutcome(b: OutcomeInput): OutcomeOutput {
   }
   if (b.allowed) return { outcome: "allowed", outcome_text: `Allowed: ask ${tool} to try again`, copy_details: null };
   if (b.quiet) return { outcome: "quiet", outcome_text: "Kept blocked: you won't be asked about it again. Undo it under Allowed.", copy_details: null };
-  if (b.offers && (b.offers.once || b.offers.fifteen || b.offers.always)) return { outcome: "unblock", outcome_text: null, copy_details: null };
+  if (b.offers && (b.offers.once || b.offers.fifteen || b.offers.always || b.offers.hour || b.offers.tomorrow)) return { outcome: "unblock", outcome_text: null, copy_details: null };
   if (b.offers?.ask) return { outcome: "ask", outcome_text: null, copy_details: null };
   if (b.clause && ALWAYS_ON_CLAUSES.has(b.clause)) {
     return { outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", copy_details: null };

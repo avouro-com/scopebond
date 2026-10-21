@@ -50,12 +50,17 @@ pub struct BlockOffers {
     pub ask: bool,
     /// The workspace reviews every unblock later and may undo it (false from an older agent).
     pub reviewed: bool,
+    /// Allow it for 1 hour, or until tomorrow (24 hours); false from an older agent.
+    pub hour: bool,
+    pub tomorrow: bool,
+    /// Keep it blocked without being asked again ("Keep blocking without asking me"); false from an older agent.
+    pub quiet: bool,
 }
 
 impl BlockOffers {
-    /// Whether the person may let it through here (once, for 15 minutes or always), not only ask an admin.
+    /// Whether the person may let it through here (once, for a length, or for `always_days`), not only ask an admin.
     pub fn allows(&self) -> bool {
-        self.once || self.fifteen || self.always
+        self.once || self.fifteen || self.hour || self.tomorrow || self.always
     }
 }
 

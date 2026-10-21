@@ -15,7 +15,8 @@
   // `stopping`: the allowance whose "Stop allowing" waits for the person to confirm.
   // `shown`: how many rows the list shows (50 at a time).
   // `details`: the block whose details are open; `expanded`: the group whose tries are listed.
-  const ui = { view: "list", tab: "blocked", open: null, choice: null, reason: "", stopping: null, shown: PAGE, details: null, expanded: null };
+  // `mode`, `why`: the form is the request to an admin ("ask") or the unblock ("allow"), and the quick reason chosen.
+  const ui = { view: "list", tab: "blocked", open: null, mode: "allow", choice: null, why: null, reason: "", stopping: null, shown: PAGE, details: null, expanded: null };
   let last = null;
   let lastJson = "";
   // Whether the tray was told the page has drawn (it made the window hidden, and shows it then).
@@ -83,10 +84,14 @@
     return [model.fix].concat(model.actions || []).find((a) => a && a.id === id) || null;
   }
 
-  // ---- The Unblock form: the choices the workspace offers for this block, a reason, and a button named for the result.
-  const CHOICES = ["once", "fifteen", "always", "ask"];
-  const BUTTON = { once: "Allow once", fifteen: "Allow for 15 minutes", always: "Always allow", ask: "Send request" };
-  const choicesOf = (b) => CHOICES.filter((c) => b.offers && b.offers[c]);
+  // ---- The Unblock form, in three plain steps and one button: what to allow (just this command, exactly as shown), for how
+  // long (the lengths the workspace offers; one that needs an admin says so, and lets it through for 15 minutes meanwhile),
+  // and why (optional quick choices; a note only for Other… or where the workspace asks for a reason). The button names the
+  // result. Below it: Ask an admin instead (the same command, a reason, Send request) and Keep blocking without asking me.
+  const LENGTHS = ["once", "fifteen", "hour", "tomorrow", "always"];
+  const REASONS = [["own", "My own files"], ["build", "Test or build output"], ["task", "Needed for this task"], ["other", "Other…"]];
+  const lengthsOf = (b) => LENGTHS.filter((c) => b.offers && b.offers[c]);
+  const allowsAny = (o) => !!o && LENGTHS.some((c) => o[c]);
   let holding = false;
   function hold(on) {
     if (on === holding) return;
@@ -107,7 +112,10 @@
     // The person opened the waiting question here: no Scopebond window for it.
     if (b.live) invoke("panel_live", { actionId: b.action_id }).catch(() => {});
     ui.open = b.action_id;
-    ui.choice = choicesOf(b)[0] || null;
+    // Where an admin decides, the form is the request; otherwise the shortest length is chosen to start with.
+    ui.mode = allowsAny(b.offers) ? "allow" : "ask";
+    ui.choice = lengthsOf(b)[0] || null;
+    ui.why = null;
     ui.reason = "";
     ui.view = "list";
     ui.tab = "blocked";
@@ -116,80 +124,113 @@
   function closeForm() {
     ui.open = null;
     ui.choice = null;
+    ui.why = null;
     ui.reason = "";
     hold(false);
   }
-  async function submit(b) {
+  /** The shortest reason the workspace accepts (0: none needed). An older agent that does not say: 10. */
+  const minReason = (b) => (typeof b.reason_min === "number" && b.reason_min >= 0 ? b.reason_min : 10);
+  /** The reason sent: the quick choice in words, with the note when there is one (Other… is the note alone). */
+  function reasonText() {
+    const note = ui.reason.trim();
+    const chosen = REASONS.find(([k]) => k === ui.why && k !== "other");
+    return chosen ? (note ? chosen[1] + ": " + note : chosen[1]) : note;
+  }
+  async function submit(b, choice) {
     let sent = false;
-    try { sent = await invoke(b.live ? "panel_live" : "panel_block", { actionId: b.action_id, choice: ui.choice, reason: ui.reason }); } catch (_) { /* the note says why */ }
+    const reason = choice === "quiet" ? "" : reasonText();
+    try { sent = await invoke(b.live ? "panel_live" : "panel_block", { actionId: b.action_id, choice, reason }); } catch (_) { /* the note says why */ }
     if (sent) closeForm();
     setTimeout(refresh, 150);
   }
-  function choiceWords(b, c) {
-    const until = new Date(Date.now() + 15 * 60000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    const o = b.offers || {};
-    const days = o.always_days || 30;
-    return {
-      once: ["Just this once", "The next time it runs"],
-      fifteen: ["For 15 minutes", "This action, until " + until],
-      always: ["Always on this computer", o.always_needs_admin ? "After an admin approves; allowed for 15 minutes meanwhile" : "For " + days + " days"],
-      ask: ["Ask an admin to unblock it instead", "An admin decides; the answer shows on the block"],
-    }[c];
+  /** A length as the person chooses it: Once · 15 minutes (older terms) · 1 hour · Until tomorrow · 30 days. Never "always". */
+  function lengthName(b, c) {
+    const days = (b.offers && b.offers.always_days) || 30;
+    return { once: "Once", fifteen: "15 minutes", hour: "1 hour", tomorrow: "Until tomorrow", always: days + (days === 1 ? " day" : " days") }[c] || "";
   }
-  /** The length on its own, for a form with nothing to choose. */
-  function lengthWords(b, c) {
-    const o = b.offers || {};
-    return { once: "Just this once", fifteen: "For 15 minutes", always: "For " + (o.always_days || 30) + " days" }[c] || "";
+  /** The one button, named for the result. */
+  function buttonText(b, c) {
+    if (c === "always" && b.offers.always_needs_admin) return "Ask for " + lengthName(b, c);
+    return { once: "Allow once", fifteen: "Allow for 15 minutes", hour: "Allow for 1 hour", tomorrow: "Allow until tomorrow", always: "Allow for " + lengthName(b, c) }[c] || "Allow";
   }
   function countText(b) {
-    const min = b.reason_min || 10;
-    const left = min - ui.reason.trim().length;
+    const left = minReason(b) - reasonText().length;
     return left > 0 ? left + (left === 1 ? " more character" : " more characters") : "Enough";
+  }
+  /** Quick reasons: a radio group the person may leave empty (unless the workspace asks for a reason). */
+  function whyChoices(b, id) {
+    const min = minReason(b);
+    const note = ui.why === "other" || min > 0;
+    return [
+      el("fieldset", { class: "whys" }, [el("legend", {}, ["Why ", el("span", { class: "count", id: "count-" + id, text: min > 0 ? countText(b) : "(optional)" })])].concat(
+        el("div", { class: "pills" }, REASONS.map(([k, label]) => el("label", { class: "pill" }, [
+          el("input", { type: "radio", name: "why-" + id, value: k, "data-key": "why-" + k, checked: ui.why === k,
+            onchange: () => { ui.why = k; hold(true); draw(k === "other" ? "reason" : "why-" + k); } }),
+          el("span", { text: label }),
+        ]))))),
+      note ? el("label", { class: "reason" }, [
+        el("span", { class: "sr-only", text: ui.why === "other" ? "Say why" : "A note for the admins" }),
+        el("textarea", { id: "reason", "data-key": "reason", rows: "2", maxlength: "500", "aria-describedby": "count-" + id,
+          placeholder: ui.why === "other" ? "Say why" : "Add a note (optional unless your workspace asks)",
+          oninput: (e) => { ui.reason = e.target.value; hold(true); refreshForm(b, id); } }),
+      ]) : null,
+    ];
+  }
+  /** Keep the count and the button in step with what is typed, without redrawing the form. */
+  function refreshForm(b, id) {
+    const count = document.getElementById("count-" + id);
+    if (count && minReason(b) > 0) count.textContent = countText(b);
+    const go = root.querySelector('[data-key="confirm-' + CSS.escape(id) + '"]');
+    if (go) go.disabled = !!(last && last.busy) || reasonText().length < minReason(b);
   }
   function unblockForm(s, model, b) {
     const id = b.action_id;
+    const o = b.offers || {};
     const busy = s.busy === "answer:" + id;
-    const enough = ui.reason.trim().length >= (b.reason_min || 10);
-    const choices = choicesOf(b);
-    // Where an admin decides, there is nothing to choose: the action, the reason and Send request.
-    const askOnly = choices.length === 1 && choices[0] === "ask";
-    // Where the workspace set the one length (and, it may be, reviews every unblock later), nothing to choose either: one
-    // line names the length.
-    const oneLength = choices.length === 1 && !askOnly;
-    const reviewed = !!(b.offers && b.offers.reviewed);
-    const where = askOnly ? "An admin decides; the answer shows on the block"
-      : model.workspace ? "Recorded and sent to " + model.workspace : "Recorded and sent to your workspace";
-    const fixedLine = oneLength ? lengthWords(b, choices[0]) + (reviewed ? ", set by your workspace; an admin reviews it later" : "") : null;
-    const update = () => {
-      const count = document.getElementById("count-" + id);
-      if (count) count.textContent = countText(b);
-      const go = root.querySelector('[data-key="confirm-' + CSS.escape(id) + '"]');
-      if (go) go.disabled = !!s.busy || ui.reason.trim().length < (b.reason_min || 10);
-    };
-    return el("div", { class: "form", role: "group", "aria-label": (askOnly ? "Ask to unblock " : "Unblock ") + (b.what || b.summary) }, [
-      el("div", { class: "cmd", "aria-label": "What ran", text: b.action_text || b.what || b.summary }),
-      fixedLine ? el("p", { class: "fixed", text: fixedLine }) : null,
-      askOnly || oneLength ? null : el("fieldset", { class: "choices" }, [el("legend", { text: choices.some((c) => c !== "ask") ? "Let it through" : "What to do" })].concat(choices.map((c) => {
-        const [title, small] = choiceWords(b, c);
-        return el("label", { class: "choice" }, [
-          el("input", { type: "radio", name: "choice-" + id, value: c, "data-key": "choice-" + c, checked: ui.choice === c,
-            onchange: () => { ui.choice = c; draw("choice-" + c); } }),
-          el("span", {}, [title, el("small", { text: small })]),
-        ]);
-      }))),
-      el("label", { class: "reason" }, [
-        el("span", {}, ["Why ", el("span", { class: "count", id: "count-" + id, text: countText(b) })]),
-        el("textarea", { id: "reason", "data-key": "reason", rows: "2", maxlength: "500", "aria-describedby": "count-" + id,
-          placeholder: "For example: the tests need the production API URL",
-          oninput: (e) => { ui.reason = e.target.value; hold(true); update(); } }),
+    const lengths = lengthsOf(b);
+    const allows = lengths.length > 0;
+    const asking = ui.mode === "ask" || !allows;
+    const enough = reasonText().length >= minReason(b);
+    // Where the workspace set the one length (and, it may be, reviews every unblock later), nothing to choose: one line says it.
+    const oneLength = !asking && lengths.length === 1;
+    const reviewed = !!o.reviewed;
+    const choice = asking ? "ask" : lengths.indexOf(ui.choice) >= 0 ? ui.choice : lengths[0];
+    const waitsForAdmin = !asking && choice === "always" && o.always_needs_admin;
+    const where = asking ? "An admin decides; the answer shows on the block"
+      : "Recorded in " + (model.workspace || "your workspace");
+    const label = (asking ? "Ask to unblock " : "Unblock ") + (b.what || b.summary);
+    return el("div", { class: "form", role: "group", "aria-label": label }, [
+      el("div", { class: "step" }, [
+        el("span", { class: "step-h", text: asking ? "What to ask for" : "What to allow" }),
+        el("span", { class: "fixed", text: "Just this command" }),
+        el("div", { class: "cmd", text: b.action_text || b.what || b.summary }),
       ]),
+      asking ? null : oneLength
+        ? el("p", { class: "fixed", text: lengthName(b, lengths[0]) + (reviewed ? ", set by your workspace; an admin reviews it later" : "") })
+        : el("fieldset", { class: "lengths" }, [el("legend", { class: "step-h", text: "For how long" }), el("div", { class: "pills" }, lengths.map((c) => {
+          const admin = c === "always" && o.always_needs_admin;
+          return el("label", { class: "pill" + (admin ? " admin" : "") }, [
+            el("input", { type: "radio", name: "length-" + id, value: c, "data-key": "choice-" + c, checked: choice === c,
+              "aria-describedby": admin ? "admin-" + id : null, onchange: () => { ui.choice = c; hold(true); draw("choice-" + c); } }),
+            el("span", {}, [lengthName(b, c), admin ? el("small", { id: "admin-" + id, text: "needs admin approval" }) : null]),
+          ]);
+        }))]),
+      waitsForAdmin ? el("p", { class: "meta", text: "Allowed for 15 minutes while you wait for an admin." }) : null,
+    ].concat(whyChoices(b, id), [
       el("div", { class: "acts" }, [
         el("button", { class: "btn primary", type: "button", "data-key": "confirm-" + id, disabled: !enough || !!s.busy, "aria-busy": busy ? "true" : null,
-          text: busy ? "Sending…" : oneLength && reviewed ? "Unblock now" : BUTTON[ui.choice] || "Send", onclick: () => submit(b) }),
+          text: busy ? "Sending…" : asking ? "Send request" : oneLength && reviewed ? "Unblock now" : buttonText(b, choice), onclick: () => submit(b, choice) }),
         el("button", { class: "btn", type: "button", "data-key": "cancel-" + id, text: "Cancel", onclick: () => { closeForm(); draw("block-" + id); } }),
       ]),
       el("span", { class: "meta", text: where }),
-    ]);
+      el("div", { class: "links" }, [
+        allows && o.ask ? el("button", { class: "btn text", type: "button", "data-key": "mode-" + id,
+          text: asking ? "Unblock it myself instead" : "Ask an admin instead",
+          onclick: () => { ui.mode = asking ? "allow" : "ask"; draw("mode-" + id); } }) : null,
+        o.quiet ? el("button", { class: "btn text", type: "button", "data-key": "quiet-" + id, disabled: !!s.busy,
+          text: "Keep blocking without asking me", onclick: () => submit(b, "quiet") }) : null,
+      ]),
+    ]));
   }
 
   // ---- The header: the S tile and its badge, the state, one line under it.
@@ -319,7 +360,7 @@
     const repeated = times > 1 && b.at ? times + " times · last " + when(b.at) : null;
     const meta = [ruleOf(b), repeated, b.project, b.tool].filter(Boolean).join(" · ");
     const offers = b.offers;
-    const allows = offers ? offers.once || offers.fifteen || offers.always : b.can_act;
+    const allows = offers ? allowsAny(offers) : b.can_act;
     let act = null;
     if (b.outcome_text && !(ui.open === b.action_id && offers)) act = outcomeLine(b);
     else if (b.acted === "allowed") act = el("span", { class: "chip ok", text: "Allowed" });

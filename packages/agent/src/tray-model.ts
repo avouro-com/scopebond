@@ -62,12 +62,15 @@ export interface TrayModel {
 /** A fact about this computer for Settings; `items` are what the row lists when opened (the rule packs in force). */
 export interface ComputerRow { label: string; value: string; items?: string[] }
 
-/** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes, or
- *  always (for `always_days`, after an admin approves when `always_needs_admin`), or ask an admin. */
+/** What the person may do about a block, as the workspace allows it now: allow it once (the next try), for 15 minutes (older
+ *  terms), or for `always_days` (30 days; after an admin approves when `always_needs_admin`), or ask an admin. */
 export interface BlockOffers {
   once: boolean; fifteen: boolean; always: boolean; always_days: number | null; always_needs_admin: boolean; ask: boolean;
   /** The workspace reviews every unblock later and may undo it; absent from an older agent. */
   reviewed?: boolean;
+  /** Newer: allow it for 1 hour or until tomorrow, and keep it blocked without being asked again ("Keep blocking without
+   *  asking me"); absent or false from an older hook. */
+  hour?: boolean; tomorrow?: boolean; quiet?: boolean;
 }
 
 /** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did. The

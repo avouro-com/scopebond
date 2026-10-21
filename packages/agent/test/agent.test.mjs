@@ -319,7 +319,7 @@ test("an override request is checked before any window opens, and its text reach
   const text = questionText(optional);
   assert.match(text, /You may say why\./);
   assert.doesNotMatch(text, /at least 0/);
-  assert.ok(windowsScript(optional).includes("$b.Enabled = ($min -le 0)"), "the buttons start enabled when no reason is needed");
+  assert.ok(windowsScript(optional).includes("$global:min = 0") && windowsScript(optional).includes("$go.Enabled = ((SbReason).Length -ge $global:min)"), "the button starts enabled when no reason is needed");
   assert.match(questionText(parseQuestion(question())), /Say why, in at least 10 characters\./, "a minimum above 0 is still asked for");
   assert.equal(parseQuestion(question({ timeout_ms: 999_999 })).timeout_ms, 55_000, "never longer than the hook waits");
   const script = windowsScript(parseQuestion(question({ summary: "x'; Remove-Item -Recurse C:\\ ;'$(evil)" })));
@@ -372,7 +372,7 @@ test("from the tray, an earlier block is allowed or sent to an admin only throug
     const allowed = await callAgent(dir, "POST", "/blocked", { action_id: id }, 10_000);
     assert.deepEqual(allowed, { outcome: "allowed", text: "Allowed. Run it again, or let the coding agent retry." });
     assert.deepEqual(shown[1].offers, { allow: true, always: false, ask: true, fifteen: true });
-    assert.ok(windowsScript(shown[1]).includes(Buffer.from("Allow for 15 min", "utf8").toString("base64")), "the tray's window offers 15 minutes too");
+    assert.ok(windowsScript(shown[1]).includes(Buffer.from("Allow for 15 minutes", "utf8").toString("base64")), "the tray's window offers 15 minutes too");
     assert.equal(shown[1].summary, "rm -rf build");
     assert.equal(readAllowances(dir).filter((a) => a.once).length, 1);
     assert.equal(readBlocked(dir)[0].acted, "allowed");

@@ -162,8 +162,9 @@ fn reason_char(c: char) -> bool {
 }
 
 /// Check an answer from the panel's Unblock form before it goes to the agent (which checks it again): the block is one the
-/// person may still act on and says what may be done, the choice is one it offers, and the reason is long enough, at most
-/// 500 characters and free of control characters (line breaks aside). The body for `POST /blocked/answer`, or what to say.
+/// person may still act on and says what may be done, the choice is one it offers (a length, ask an admin, or keep it
+/// blocked without being asked), and the reason is long enough, at most 500 characters and free of control characters (line
+/// breaks aside). Keeping it blocked needs no reason and sends none. The body for `POST /blocked/answer`, or what to say.
 pub fn check_answer(block: &RecentBlock, choice: &str, reason: &str) -> Result<Value, String> {
     let id = block.action_id.as_deref().unwrap_or_default();
     let id_ok = !id.is_empty() && id.len() <= 200 && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'));
@@ -174,12 +175,18 @@ pub fn check_answer(block: &RecentBlock, choice: &str, reason: &str) -> Result<V
     let offered = match choice {
         "once" => offers.once,
         "fifteen" => offers.fifteen,
+        "hour" => offers.hour,
+        "tomorrow" => offers.tomorrow,
         "always" => offers.always,
         "ask" => offers.ask,
+        "quiet" => offers.quiet,
         _ => false,
     };
     if !offered {
         return Err("Your workspace does not offer that choice for this block.".into());
+    }
+    if choice == "quiet" {
+        return Ok(json!({ "action_id": id, "choice": choice, "reason": "" }));
     }
     let reason = reason.trim();
     let min = block.reason_min.unwrap_or(10) as usize;
@@ -346,6 +353,26 @@ mod tests {
         assert_eq!(down["agent"], Value::Null);
         assert_eq!(down["agent_error"], "the agent did not answer");
         assert!(HELP_URL.starts_with("https://scopebond.com/"));
+    }
+
+    #[test]
+    fn the_newer_lengths_and_keeping_a_block_are_checked_as_offered() {
+        use crate::model::BlockOffers;
+        let mut b = answerable();
+        b.reason_min = Some(0);
+        b.offers = Some(BlockOffers { once: true, hour: true, tomorrow: true, always: true, always_days: Some(30), ask: true, quiet: true, ..Default::default() });
+        assert_eq!(check_answer(&b, "hour", "").unwrap()["choice"], "hour", "no reason needed where the workspace asks for none");
+        assert!(check_answer(&b, "tomorrow", "My own files").is_ok());
+        assert!(check_answer(&b, "fifteen", "").is_err(), "15 minutes only for older terms that offer it");
+        assert_eq!(check_answer(&b, "quiet", "anything").unwrap(), json!({ "action_id": "act-read-env-0000000001", "choice": "quiet", "reason": "" }), "keeping it blocked sends no reason");
+        b.reason_min = Some(12);
+        assert!(check_answer(&b, "quiet", "").is_ok(), "nor needs one");
+        assert!(check_answer(&b, "hour", "short").is_err());
+        b.offers = Some(BlockOffers { ask: true, ..Default::default() });
+        assert!(check_answer(&b, "quiet", "").is_err(), "an older hook: not offered");
+        assert_eq!(block_button(&b), Some("Ask to unblock…"));
+        b.offers = Some(BlockOffers { tomorrow: true, ..Default::default() });
+        assert_eq!(block_button(&b), Some("Unblock…"), "a length alone is an unblock");
     }
 
     #[test]

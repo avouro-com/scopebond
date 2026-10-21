@@ -9,15 +9,17 @@
   const scene = params.get("scene") || "protected";
   const MIN = 60_000;
   const ago = (min) => new Date(Date.now() - min * MIN).toISOString();
-  const offers = (o) => ({ once: false, fifteen: false, always: false, always_days: null, always_needs_admin: false, ask: false, ...o });
+  const offers = (o) => ({ once: false, fifteen: false, hour: false, tomorrow: false, always: false, always_days: null, always_needs_admin: false, ask: false, quiet: false, ...o });
+  /** What a workspace with the newer terms offers a person: Once · 1 hour · Until tomorrow · 30 days, ask, keep it blocked. */
+  const self = () => offers({ once: true, hour: true, tomorrow: true, always: true, always_days: 30, ask: true, quiet: true });
 
   const blocks = () => [
     { action_id: "act-read-env-0000000001", summary: "file.read .env.production", at: ago(6), rule: "secret-read", can_act: true, acted: null,
       what: "Read .env.production", action_text: ".env.production", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
-      offers: offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true }), reason_min: 10 },
+      offers: self(), reason_min: 0 },
     { action_id: "act-push-main-00000001", summary: "git.push origin main", at: ago(28), rule: "force-push-protected", can_act: true, acted: null,
       what: "git push --force origin main", action_text: "git push origin main", rule_title: "Rewrite history on a protected branch", project: "checkout",
-      tool: "Claude Code", offers: offers({ ask: true }), reason_min: 20 },
+      tool: "Claude Code", offers: offers({ ask: true, quiet: true }), reason_min: 0 },
     { action_id: "act-rm-dist-0000000001", summary: "shell.exec rm", at: ago(95), rule: null, can_act: false, acted: null,
       what: "rm -rf ./dist --token=***", action_text: "rm -rf ./dist --token=***", rule_title: null, project: "billing-api", tool: "Cursor", offers: null, reason_min: null },
     { action_id: "act-policy-0000000001", summary: "file.write .scopebond/policy.json", at: ago(140), rule: "guardrail-config-write", can_act: false, acted: null,
@@ -31,11 +33,11 @@
   const outcomeBlocks = () => [
     { action_id: "act-out-unblock-000001", summary: "file.read .env.production", at: ago(3), rule: "secret-read", can_act: true, acted: null,
       what: "Read .env.production", action_text: ".env.production", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
-      offers: offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true }), reason_min: 0, outcome: "unblock", outcome_text: null, tries: 1,
+      offers: self(), reason_min: 0, outcome: "unblock", outcome_text: null, tries: 1,
       rule_why: "Allow workspace reads, but never signing keys, environment secret files, SSH keys or cloud credentials." },
     { action_id: "act-out-ask-0000000001", summary: "git.push origin main", at: ago(9), rule: "push-protected", can_act: true, acted: null,
       what: "git push origin main", action_text: "git push origin main", rule_title: "Push straight to a protected branch", project: "checkout", tool: "Claude Code",
-      offers: offers({ ask: true }), reason_min: 0, outcome: "ask", outcome_text: null, tries: 3 },
+      offers: offers({ ask: true, quiet: true }), reason_min: 0, outcome: "ask", outcome_text: null, tries: 3 },
     { action_id: "act-out-always-000001", summary: "file.read receipts.db", at: ago(15), rule: "secret-read", can_act: false, acted: null,
       what: "Read ~/.scopebond/receipts.db", action_text: "~/.scopebond/receipts.db", rule_title: "Read passwords, keys or secrets", project: "checkout", tool: "Claude Code",
       offers: null, reason_min: null, outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", tries: 12,
@@ -168,14 +170,18 @@
     model.detail = (today ? today.toLocaleString("en-US") + " blocked today" : "Nothing blocked today") + " · rules updated 3 min ago";
   }
   // What the workspace lets a person do (mode=self, the default; approval: only ask to unblock, an admin decides;
-  // automatic: one length the workspace set, applied at once and reviewed by an admin later; final: nothing): the agent
-  // says it per block in `offers`, and `can_ask` says whether asking is on under any rule.
+  // automatic: one length the workspace set, applied at once and reviewed by an admin later; admin30: 30 days needs an
+  // admin; legacy: an older hook's once · 15 minutes · always, nothing quiet; final: nothing): the agent says it per block in
+  // `offers`, and `can_ask` says whether asking is on under any rule. reason=required: the workspace asks for a reason.
   const mode = params.get("mode") || "self";
   if (model) {
     model.can_ask = mode !== "final" && mode !== "automatic";
     for (const b of model.recent_blocks) {
-      if (mode === "approval" && b.can_act) b.offers = offers({ ask: true });
+      if (mode === "approval" && b.can_act) b.offers = offers({ ask: true, quiet: true });
       if (mode === "automatic" && b.can_act) b.offers = offers({ fifteen: true, reviewed: true });
+      if (mode === "admin30" && b.can_act && b.offers && b.offers.once) b.offers.always_needs_admin = true;
+      if (mode === "legacy" && b.can_act && b.offers && b.offers.once) b.offers = offers({ once: true, fifteen: true, always: true, always_days: 30, ask: true });
+      if (params.get("required") && b.can_act) b.reason_min = 10;
     }
     if (mode === "automatic" && model.allowed) model.allowed[0].unblocked = "automatic";
     for (const b of model.recent_blocks) {
@@ -195,12 +201,21 @@
   // live=1: a question the hook is waiting on now (the live prompt), as the agent hands it to the tray.
   let pending = params.get("live") ? {
     action_id: "act-live-000000000001", what: "git push --force origin release/2.4", action_text: "git push origin release/2.4", rule: "force-push-protected",
-    rule_title: "Rewrite history on a protected branch", tool: "Claude Code", project: "checkout", reason_min: 10,
-    offers: offers(mode === "approval" ? { ask: true } : { once: true, fifteen: true, ask: true }),
+    rule_title: "Rewrite history on a protected branch", tool: "Claude Code", project: "checkout", reason_min: params.get("required") ? 10 : 0,
+    offers: mode === "approval" ? offers({ ask: true, quiet: true }) : self(),
     deadline: new Date(Date.now() + 41_000).toISOString(), opened: false,
   } : null;
   let openBlock = params.get("toast") || null;
   const say = (text) => { note = text; };
+  // How long each answer lasts (once: until the next try, kept a day), and the line the agent says for it (service.ts answerText).
+  const LENGTH_MIN = { once: 1440, fifteen: 15, hour: 60, tomorrow: 1440, always: 30 * 1440, quiet: 30 * 1440, ask: 0 };
+  const resultText = (choice, o, what) => {
+    if (choice === "ask") return "Request sent: " + what + " · the answer shows on the block";
+    if (choice === "quiet") return "Kept blocked without asking you: " + what + " · undo it under Allowed";
+    if (choice === "always" && o.always_needs_admin) return "Allowed for 15 minutes while an admin decides on " + (o.always_days || 30) + " days: " + what + " · recorded in Acme";
+    const words = { once: "Allowed once", fifteen: "Allowed for 15 minutes", hour: "Allowed for 1 hour", tomorrow: "Allowed until tomorrow", always: "Allowed for " + (o.always_days || 30) + " days" }[choice];
+    return words + ": " + what + " · recorded in Acme";
+  };
 
   const state = () => ({
     link: model ? "answering" : "not_answering",
@@ -226,11 +241,12 @@
     panel_live: ({ actionId, choice, reason }) => {
       if (!pending || pending.action_id !== actionId) return false;
       if (!choice) { pending.opened = true; return true; }
-      if (!pending.offers[choice] || String(reason || "").trim().length < pending.reason_min) { say("Say why in at least " + pending.reason_min + " characters."); return false; }
+      if (!pending.offers[choice] || (choice !== "quiet" && String(reason || "").trim().length < pending.reason_min)) { say("Say why in at least " + pending.reason_min + " characters."); return false; }
       const what = pending.action_text;
+      const offered = pending.offers;
       pending = null;
-      say(choice === "ask" ? "Request sent · the answer shows on the block" : (choice === "fifteen" ? "Allowed for 15 minutes" : "Allowed once") + " · Recorded and sent to Acme");
-      if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", rule: "force-push-protected", rule_title: "Rewrite history on a protected branch", what, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + 15 * MIN).toISOString(), answered_by: null, unblocked: "person" });
+      say(resultText(choice, offered, what));
+      if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", kind: choice === "quiet" ? "quiet" : "allow", rule: "force-push-protected", rule_title: "Rewrite history on a protected branch", what, choice: choice === "quiet" ? "always" : choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + LENGTH_MIN[choice] * MIN).toISOString(), answered_by: null, unblocked: "person" });
       return true;
     },
     panel_stop: ({ id }) => {
@@ -243,20 +259,21 @@
     panel_block: ({ actionId, choice, reason }) => {
       const b = model && model.recent_blocks.find((x) => x.action_id === actionId);
       if (choice) {
-        if (!b || !b.offers || !b.offers[choice] || String(reason || "").trim().length < (b.reason_min || 10)) { say("Say why in at least " + ((b && b.reason_min) || 10) + " characters."); return false; }
+        const min = b && typeof b.reason_min === "number" ? b.reason_min : 10;
+        if (!b || !b.offers || !b.offers[choice] || (choice !== "quiet" && String(reason || "").trim().length < min)) { say("Say why in at least " + min + " characters."); return false; }
         busy = "answer:" + actionId;
         setTimeout(() => {
           busy = null;
           b.can_act = false;
-          b.acted = choice === "ask" ? "asked" : "allowed";
-          const words = { once: "Allowed once", fifteen: "Allowed for 15 minutes", always: "Always allowed on this computer for " + (b.offers.always_days || 30) + " days", ask: "Request sent" }[choice];
+          const outcome = choice === "ask" ? "asked" : choice === "quiet" ? "quiet" : choice === "always" && b.offers.always_needs_admin ? "proposed" : "allowed";
+          b.acted = outcome === "proposed" ? "allowed" : outcome;
           const until = new Date(Date.now() + 15 * MIN).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-          const text = choice === "ask" ? "Request sent · the answer shows on the block"
-            : b.offers.reviewed ? "Unblocked until " + until + " · an admin will review it" : words + " · Recorded and sent to Acme";
-          answered = { actionId, outcome: choice === "ask" ? "asked" : "allowed", text };
+          const text = b.offers.reviewed ? "Unblocked until " + until + ": " + b.action_text + " · an admin will review it" : resultText(choice, b.offers, b.action_text);
+          answered = { actionId, outcome, text };
           say(text);
+          if (choice === "quiet") { b.outcome = "quiet"; b.outcome_text = "Kept blocked: you won't be asked about it again. Undo it under Allowed."; }
           if (choice === "ask") model.asked.unshift({ id: "req_new", rule: b.rule, rule_title: b.rule_title, what: b.action_text, reason: String(reason).trim(), asked_at: new Date().toISOString(), sent: true, state: "waiting", answered_by: null, note: null, answered_at: null });
-          else model.allowed.unshift({ id: "alw_new", rule: b.rule, rule_title: b.rule_title, what: b.action_text, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + (choice === "fifteen" ? 15 : choice === "once" ? 1440 : 30 * 1440) * MIN).toISOString(), answered_by: null });
+          else model.allowed.unshift({ id: "alw_new", kind: choice === "quiet" ? "quiet" : "allow", rule: b.rule, rule_title: b.rule_title, what: b.action_text, choice: choice === "quiet" ? "always" : choice, state: outcome === "proposed" ? "proposed" : "active", needs_admin: outcome === "proposed", by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + LENGTH_MIN[choice] * MIN).toISOString(), answered_by: null });
         }, 600);
         return true;
       }
@@ -291,6 +308,9 @@
       if (params.get("details")) setTimeout(() => click('[data-key="what-' + params.get("details") + '"], [data-key="try-' + params.get("details") + '"]'), 30);
       // Fill the form as a person would: a choice, a reason, and (with submit) the button.
       if (params.get("choice")) click('[data-key="choice-' + params.get("choice") + '"]');
+      if (params.get("ask")) click('[data-key^="mode-"]');
+      if (params.get("why")) click('[data-key="why-' + params.get("why") + '"]');
+      if (params.get("quiet")) setTimeout(() => click('[data-key^="quiet-"]'), 50);
       const area = document.getElementById("reason");
       if (area && params.get("reason")) { area.value = params.get("reason"); area.dispatchEvent(new Event("input", { bubbles: true })); }
       if (params.get("submit")) setTimeout(() => click('[data-key^="confirm-"]'), 50);

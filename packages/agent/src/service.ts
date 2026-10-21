@@ -592,7 +592,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const q = item && !item.acted && b.action_id && !request && !allowed && !quiet && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
       const offers = q ? {
         once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
-        always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
+        always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed, ...newerOffers(q.offers),
       } : null;
       const what = b.what ?? b.summary;
       const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
@@ -760,7 +760,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const outcome = done.choice === "ask" ? "asked" as const : done.choice === "always" && waiting?.offers.always_needs_admin ? "proposed" as const : "allowed" as const;
       log(`question under "${waiting?.rule_title ?? "a rule"}", answered in the tray: ${outcome} (${done.choice})`);
       if (outcome === "asked") pollAnswers();
-      return { outcome, choice: done.choice, text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), done.reviewed) };
+      return { outcome, choice: done.choice, text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), done.reviewed, Date.now(), waiting?.action_text || waiting?.what || null) };
     },
     "POST /settings": (body) => ({ settings: writeTraySettings(options.dir, body) }),
     // "Check now" always says what it found.
@@ -813,7 +813,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const answer = await windowPrompt({ action_id: id, rule: q.item.rule, title: q.title, summary: q.item.summary, reason_min: q.reason_min,
         lasts: "the next time it runs", timeout_ms: 55_000, mode: q.mode, offers: q.offers });
       if (answer.decision === "unavailable") return { outcome: "unavailable", text: "The Scopebond window could not be shown." };
-      const done = actOnBlocked(options.dir, id, answer);
+      // The window offers "keep blocking" (quiet) and the newer lengths only where the hook's question does, so the hook
+      // takes every answer it can return.
+      const done = actOnBlocked(options.dir, id, answer as Parameters<typeof actOnBlocked>[2]);
       if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
       if (done.outcome === "asked") pollAnswers();
       log(`earlier block under "${q.title}": ${done.outcome}`);
@@ -841,7 +843,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
       if (done.outcome === "asked") pollAnswers();
       log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
-      return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed) };
+      return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed, Date.now(), q.item.summary || null) };
     },
     // "Get help…": a support report the tray copies for the person (tray-model.ts supportBundle: no keys, records, commands
     // or reasons; failures in the log with the folders and anything token-shaped masked).
@@ -1006,6 +1008,15 @@ export function lastGoodCheck(meta: object): number | null {
   return m.last_error ? null : at(m.checked_at);
 }
 
+/** What a newer hook offers besides once, 15 minutes, always and ask: 1 hour and until tomorrow, and keeping the block
+ *  without being asked again. A hook that knows the new lengths keeps a block quietly as well (one release), so "Keep
+ *  blocking without asking me" is offered only by such a hook; an older one hears nothing it cannot answer. */
+export function newerOffers(offers: object): { hour: boolean; tomorrow: boolean; quiet: boolean } {
+  const o = offers as Record<string, unknown>;
+  const lengths = typeof o.hour === "boolean" || typeof o.tomorrow === "boolean";
+  return { hour: o.hour === true, tomorrow: o.tomorrow === true, quiet: o.quiet === true || (lengths && o.quiet !== false) };
+}
+
 /** What the tray says after a person acted on an earlier block. */
 function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone"): string {
   switch (outcome) {
@@ -1033,23 +1044,37 @@ export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: B
   return { action_id: r.action_id, choice: r.choice, reason };
 }
 
-/** What the tray says after a person answered a block in its form: what happened, and where it was recorded. */
-export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone", choice: BlockedChoice, alwaysDays: number, workspace: string | null, connected: boolean, reviewed = false, now = Date.now()): string {
+/** A choice in the tray's form: the lengths (once, 15 minutes for older terms, 1 hour, until tomorrow, 30 days or the
+ *  workspace's "always" length), asking an admin, or keeping it blocked without being asked. */
+export type AnswerChoice = BlockedChoice | "hour" | "tomorrow" | "quiet";
+
+/** What the tray says after a person answered a block in its form, in one line: the result, the command as the form showed
+ *  it (when known), and where it was recorded ("Allowed for 1 hour: rm -rf ./dist · recorded in Acme"). Never "always". */
+export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone" | "quiet", choice: AnswerChoice, alwaysDays: number, workspace: string | null,
+  connected: boolean, reviewed = false, now = Date.now(), command: string | null = null): string {
   if (outcome === "gone") return blockedText("gone");
   if (outcome === "declined") return blockedText("declined");
+  const on = command ? `: ${command.length > 120 ? `${command.slice(0, 119)}…` : command}` : "";
+  const days = `${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`;
+  if (outcome === "quiet" || choice === "quiet") return `Kept blocked without asking you${on} · undo it under Allowed`;
   // A request: where the answer will show (it is recorded and sent like everything else).
-  if (outcome === "asked") return connected ? "Request sent · the answer shows on the block" : "Request saved, sent once this computer is connected · the answer shows on the block";
+  if (outcome === "asked") return connected ? `Request sent${on} · the answer shows on the block` : `Request saved${on}, sent once this computer is connected · the answer shows on the block`;
+  const time = (ms: number) => new Date(now + ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   // Applied at once, reviewed by an admin later: when it ends, and that it will be reviewed.
   if (reviewed && outcome === "allowed") {
     const until = choice === "once" ? "for the next try"
-      : choice === "fifteen" ? `until ${new Date(now + 15 * 60_000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+      : choice === "fifteen" ? `until ${time(15 * 60_000)}`
+      : choice === "hour" ? `until ${time(60 * 60_000)}`
+      : choice === "tomorrow" ? `until tomorrow ${time(24 * 60 * 60_000)}`
       : `until ${new Date(now + alwaysDays * 86_400_000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
-    return `Unblocked ${until} · an admin will review it`;
+    return `Unblocked ${until}${on} · an admin will review it`;
   }
-  const what = outcome === "proposed" ? "Allowed for 15 minutes; always once an admin approves"
+  const what = outcome === "proposed" ? `Allowed for 15 minutes while an admin decides on ${days}`
     : choice === "fifteen" ? "Allowed for 15 minutes"
-    : choice === "always" ? `Always allowed on this computer for ${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`
+    : choice === "hour" ? "Allowed for 1 hour"
+    : choice === "tomorrow" ? "Allowed until tomorrow"
+    : choice === "always" ? `Allowed for ${days}`
     : "Allowed once";
-  const where = connected ? `Recorded and sent to ${workspace ?? "your workspace"}` : "Recorded on this computer";
-  return `${what} · ${where}`;
+  const where = connected ? `recorded in ${workspace ?? "your workspace"}` : "recorded on this computer";
+  return `${what}${on} · ${where}`;
 }

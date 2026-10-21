@@ -15,18 +15,19 @@ import { sendAllowancesAndRequests, ALLOWANCE_DOMAIN, REQUEST_DOMAIN } from "../
 const question = (extra = {}) => ({ action_id: "act-0123456789abcdef", rule: "destructive-shell", title: "Run a command that deletes data or shuts down the computer", summary: "rm -rf build", reason_min: 10, lasts: "this action only", timeout_ms: 45_000, ...extra });
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
 
-test("the window offers what the rule allows: allow (once, 15 minutes, always) or ask to unblock", () => {
+test("the window offers what the rule allows: allow (once, 15 minutes, 30 days) or ask an admin, never the word always", () => {
   const legacy = parseQuestion(question());
   assert.deepEqual(legacy.offers, { allow: true, always: false, ask: false }, "an older hook's question still gets Allow once");
   const full = parseQuestion(question({ mode: "override", offers: { allow: true, always: true, ask: true } }));
   const script = windowsScript(full);
-  for (const label of ["Allow once", "Allow for 15 min", "Always allow this here…", "Ask to unblock", "Don't allow"]) assert.ok(script.includes(b64(label)), label);
+  for (const label of ["Once", "Allow once", "15 minutes", "Allow for 15 minutes", "30 days", "Allow for 30 days", "Ask an admin instead", "Don't allow", "Why (at least 10 characters)", "My own files", "Other…"]) assert.ok(script.includes(b64(label)), label);
+  for (const label of ["Always allow this here…", "Always allow", "Keep blocking without asking me"]) assert.ok(!script.includes(b64(label)), `${label}: never "always", and no quiet block an older hook cannot keep`);
   const asking = parseQuestion(question({ mode: "ask", offers: { allow: true, always: true, ask: true } }));
   assert.deepEqual(asking.offers, { allow: false, always: false, ask: true, fifteen: false }, "'Block, person may ask' never allows on the spot");
   const noFifteen = windowsScript(parseQuestion(question({ mode: "override", offers: { allow: true, always: false, ask: false, fifteen: false } })));
-  assert.ok(!noFifteen.includes(b64("Allow for 15 min")), "15 minutes only where the workspace knows allowances");
+  assert.ok(!noFifteen.includes(b64("Allow for 15 minutes")), "15 minutes only where the workspace knows allowances");
   const askScript = windowsScript(asking);
-  assert.ok(askScript.includes(b64("Ask to unblock")));
+  assert.ok(askScript.includes(b64("Send request")) && askScript.includes(b64("What to ask for: just this command")));
   assert.ok(!askScript.includes(b64("Allow once")));
   assert.match(questionText(asking), /ask to unblock it; an admin decides/);
 });
@@ -71,8 +72,8 @@ test("allowances and requests a person made are sent once, signed by the compute
 test("where the workspace sets one length, the window offers only it", () => {
   const fixed = parseQuestion(question({ mode: "override", offers: { allow: false, always: false, ask: false, fifteen: true } }));
   const script = windowsScript(fixed);
-  assert.ok(script.includes(b64("Allow for 15 min")));
-  assert.ok(!script.includes(b64("Allow once")) && !script.includes(b64("Always allow this here…")));
+  assert.ok(script.includes(b64("Allow for 15 minutes")));
+  assert.ok(!script.includes(b64("Allow once")) && !script.includes(b64("Allow for 30 days")));
   assert.doesNotMatch(questionText(fixed), /ask an admin/, "it may be allowed, not only asked about");
 });
 

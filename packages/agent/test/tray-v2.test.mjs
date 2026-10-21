@@ -9,7 +9,7 @@ import { groupBlocks, redactLine, trayModel, whyOf } from "../dist/tray-model.js
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { healthOf } from "../dist/health.js";
-import { lastGoodCheck } from "../dist/service.js";
+import { answerText, lastGoodCheck, newerOffers } from "../dist/service.js";
 
 const NOW = new Date(2026, 9, 21, 16, 30).getTime();
 const at = (hoursAgo) => new Date(NOW - hoursAgo * 3_600_000).toISOString();
@@ -178,4 +178,27 @@ test("a report line names the folders, never the person's user name, and masks c
   assert.equal(redactLine("D:/work/sb/x failed", "D:\\work\\sb\\.scopebond", "D:\\work\\sb"), "~/x failed");
   assert.equal(redactLine("code WXYZ-1234", "", ""), "code ****-****");
   assert.equal(redactLine("x".repeat(400), "", "").length, 300);
+});
+
+test("the form's result line names the length, the command and where it was recorded; never 'always'", () => {
+  const now = new Date(2026, 9, 21, 15, 52).getTime();
+  assert.equal(answerText("allowed", "hour", 30, "Avouro", true, false, now, "rm -rf ./dist"), "Allowed for 1 hour: rm -rf ./dist · recorded in Avouro");
+  assert.equal(answerText("allowed", "tomorrow", 30, "Avouro", true, false, now, "rm -rf ./dist"), "Allowed until tomorrow: rm -rf ./dist · recorded in Avouro");
+  assert.equal(answerText("allowed", "always", 30, "Avouro", true, false, now, "rm -rf ./dist"), "Allowed for 30 days: rm -rf ./dist · recorded in Avouro");
+  assert.equal(answerText("allowed", "once", 30, null, false, false, now, null), "Allowed once · recorded on this computer");
+  assert.equal(answerText("proposed", "always", 30, "Avouro", true, false, now, "rm -rf ./dist"), "Allowed for 15 minutes while an admin decides on 30 days: rm -rf ./dist · recorded in Avouro");
+  assert.equal(answerText("allowed", "hour", 30, "Avouro", true, true, now, "rm -rf ./dist"), "Unblocked until 4:52 PM: rm -rf ./dist · an admin will review it");
+  assert.equal(answerText("allowed", "tomorrow", 30, "Avouro", true, true, now, null), "Unblocked until tomorrow 3:52 PM · an admin will review it");
+  assert.equal(answerText("quiet", "quiet", 30, "Avouro", true, false, now, "rm -rf ./dist"), "Kept blocked without asking you: rm -rf ./dist · undo it under Allowed");
+  assert.equal(answerText("asked", "ask", 30, "Avouro", true, false, now, "rm -rf ./dist"), "Request sent: rm -rf ./dist · the answer shows on the block");
+  assert.ok(answerText("allowed", "once", 30, "A", true, false, now, "x".repeat(300)).length < 180, "a long command is cut");
+  for (const choice of ["once", "fifteen", "hour", "tomorrow", "always"]) {
+    assert.doesNotMatch(answerText("allowed", choice, 30, "Avouro", true, false, now, "x"), /always/i);
+  }
+});
+
+test("the newer lengths and keeping a block quietly are offered only by a hook that knows them", () => {
+  assert.deepEqual(newerOffers({ allow: true, fifteen: true, always: true, ask: true }), { hour: false, tomorrow: false, quiet: false }, "an older hook");
+  assert.deepEqual(newerOffers({ allow: true, hour: true, tomorrow: false, always: true, ask: true }), { hour: true, tomorrow: false, quiet: true });
+  assert.deepEqual(newerOffers({ hour: false, tomorrow: false, quiet: false }), { hour: false, tomorrow: false, quiet: false }, "said no");
 });
