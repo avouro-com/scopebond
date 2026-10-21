@@ -196,6 +196,10 @@ input[role="switch"]:disabled { opacity: 0.55; cursor: default; }
 @media (forced-colors: active) {
   .tile, .dot, .mark { forced-color-adjust: none; }
   .seg button[aria-selected="true"] { outline: 2px solid CanvasText; }
+  /* High contrast: the switch is the system's check box, and a chosen pill is outlined. */
+  input[role="switch"] { appearance: auto; width: 16px; height: 16px; box-shadow: none; }
+  input[role="switch"]::after { display: none; }
+  .pill input:checked + span { outline: 2px solid Highlight; outline-offset: 1px; }
 }
 
 /* The sentence in place of a button: why it stays blocked, or where the request stands. */

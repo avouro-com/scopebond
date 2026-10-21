@@ -1,7 +1,9 @@
 // The status panel. It draws what the tray holds from the agent's tray model (`panel_state`) and asks the tray to run
-// the actions the model offers. Blocked comes first: what was blocked, the rule, the project and the tool, and what the
-// person may do about it, with the Unblock form right there; then what was allowed and what was asked. Text from the agent
-// is only ever set as text, never parsed as markup.
+// the actions the model offers. Two tabs: Blocked (today's repeats of one action under one rule as one row, each try and
+// each block's details a click away, a request's answer on its block, and the Unblock form right there) and Allowed (what is
+// let through now, and what the person chose to keep blocked). Settings is one screen of switches and facts, with Get help.
+// Keyboard: Tab through the controls, arrow keys between the tabs and between choices, Esc steps back one level. Text from
+// the agent is only ever set as text, never parsed as markup.
 "use strict";
 
 (function () {
@@ -390,9 +392,9 @@
       meta ? el("span", { class: "meta", text: meta }) : null,
       !b.live && b.action_id && ui.details === b.action_id ? details(model, b) : null,
       answered ? el("span", { class: "done", text: answered }) : act,
-      members ? el("div", {}, [el("button", { class: "btn text", type: "button", "data-key": "tries-" + group.key, "aria-expanded": expanded ? "true" : "false",
+      members ? el("div", {}, [el("button", { class: "btn text", type: "button", "data-key": "tries-" + group.key, "aria-expanded": expanded ? "true" : "false", "aria-controls": expanded ? "tries-" + i : null,
         text: (expanded ? "Hide each try" : "Show each try") + " (" + members.length + ")", onclick: () => { ui.expanded = expanded ? null : group.key; draw("tries-" + group.key); } })]) : null,
-      expanded ? el("ul", { class: "tries-list", "aria-label": "Each try: " + words }, members.map((m) => tryItem(model, m, b))) : null,
+      expanded ? el("ul", { class: "tries-list", id: "tries-" + i, "aria-label": "Each try: " + words }, members.map((m) => tryItem(model, m, b))) : null,
     ]);
   }
   /** One try inside a group: when, where, and its own details. */
@@ -520,8 +522,8 @@
   /** A setting that is on or off: the whole row is the switch's label, with a line under it saying what it does. */
   function switchRow(key, title, small, on, disabled, onchange) {
     return el("label", { class: "switch-row" + (disabled ? " off" : "") }, [
-      el("span", { class: "grow" }, [el("span", { class: "title", text: title }), small ? el("small", { id: key + "-small", text: small }) : null]),
-      el("input", { type: "checkbox", role: "switch", "data-key": key, checked: on, disabled, "aria-describedby": small ? key + "-small" : null, onchange }),
+      el("span", { class: "grow" }, [el("span", { class: "title", id: key + "-title", text: title }), small ? el("small", { id: key + "-small", text: small }) : null]),
+      el("input", { type: "checkbox", role: "switch", "data-key": key, checked: on, disabled, "aria-labelledby": key + "-title", "aria-describedby": small ? key + "-small" : null, onchange }),
     ]);
   }
   /** One fact about this computer; a row with items (the packs in force) lists them when opened. */
@@ -638,8 +640,12 @@
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     e.preventDefault();
-    // Esc first leaves the form, then closes the panel.
+    // Esc steps back one level at a time: the form, a block's details, a group's tries, Settings; then it closes the panel.
+    // Focus goes back to the control that opened what was closed.
     if (ui.open) { const id = ui.open; closeForm(); draw("block-" + id); return; }
+    if (ui.details) { const id = ui.details; ui.details = null; draw(root.querySelector('[data-key="try-' + CSS.escape(id) + '"]') ? "try-" + id : "what-" + id); return; }
+    if (ui.expanded) { const key = ui.expanded; ui.expanded = null; draw("tries-" + key); return; }
+    if (ui.view === "settings") { ui.view = "list"; draw("settings"); return; }
     invoke("panel_close");
   });
   // No browser menu or reload in a status panel.
