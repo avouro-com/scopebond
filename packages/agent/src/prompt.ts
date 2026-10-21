@@ -88,7 +88,9 @@ function run(command: string, args: string[], timeoutMs: number): Promise<{ code
 
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 
-/** Windows: a small topmost form from Windows' own signed PowerShell. Closes itself at the timeout. */
+/** Windows: a small topmost form from Windows' own signed PowerShell. Closes itself at the timeout. Every control that shows
+ *  text has `UseMnemonic` off: Windows Forms otherwise reads "&" as a keyboard shortcut and hides it, so the person would
+ *  read "2>1" for a command that runs "2>&1". */
 export function windowsScript(q: OverrideQuestion): string {
   return `
 $ErrorActionPreference = 'Stop'
@@ -105,6 +107,7 @@ $f.MaximizeBox = $false
 $f.MinimizeBox = $false
 $f.ClientSize = New-Object Drawing.Size(640, 250)
 $l = New-Object Windows.Forms.Label
+$l.UseMnemonic = $false
 $l.Text = (T '${b64(questionText(q))}')
 $l.SetBounds(12, 10, 616, 130)
 $r = New-Object Windows.Forms.TextBox
@@ -115,6 +118,7 @@ $needReason = @()
 $x = 628
 function Btn($label, $width, $decision, $lasts, $needs) {
   $b = New-Object Windows.Forms.Button
+  $b.UseMnemonic = $false
   $b.Text = (T $label)
   $script:x0 = $x - $width
   $b.SetBounds($x - $width, 200, $width, 30)
