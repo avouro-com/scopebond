@@ -73,7 +73,8 @@ export interface BlockOffers {
   hour?: boolean; tomorrow?: boolean; quiet?: boolean;
 }
 
-/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did. The
+/** A recent block. `can_act`: the person may still allow it or ask an admin from the tray; `acted`: what they did ("quiet":
+ *  they kept it blocked without being asked again, or a quiet block they made denied it). The
  *  fields after `acted` are newer (an older tray reads `summary` and `rule`): `what` is the action in plain words and
  *  `action_text` the text the Scopebond window shows (both with secrets masked), `rule_title` the rule's name, `project`
  *  the repository's name and `tool` the coding tool's, each when the record has it; `offers` and `reason_min` what the

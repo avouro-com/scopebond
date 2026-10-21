@@ -61,6 +61,10 @@ export interface Allowance {
   end_sent_at?: string | null;
   /** The reason text, kept only until it is sent (the workspace shows it); the receipt carries its digest. */
   reason?: string;
+  /** "quiet": not an allowance but a quiet block ("Keep blocking without asking me", `makeQuietBlock`): the person chose to
+   *  keep this action blocked, so it is denied at once and no one is asked. It never lets anything through. Absent (or
+   *  "allow"): an allowance. */
+  kind?: "allow" | "quiet";
 }
 
 interface AllowanceFile { version: 1; items: Allowance[] }
@@ -99,16 +103,44 @@ function validAllowance(a: unknown): a is Allowance {
     && (x.created_by === "person" || x.created_by === "workspace") && typeof x.created_at === "string" && Number.isFinite(Date.parse(x.created_at))
     && typeof x.expires_at === "string" && Number.isFinite(Date.parse(x.expires_at)) && Number.isInteger(x.uses) && (x.uses as number) >= 0
     && (x.scope !== "person" || typeof x.os_user_digest === "string")
-    && (x.scope === "session" ? typeof x.session_id === "string" && x.session_id.length >= 1 && x.session_id.length <= 200 : x.session_id === undefined);
+    && (x.scope === "session" ? typeof x.session_id === "string" && x.session_id.length >= 1 && x.session_id.length <= 200 : x.session_id === undefined)
+    && (x.kind === undefined || x.kind === "allow" || x.kind === "quiet");
 }
 
+/** Whether an entry applies to this person or session (its scope): the same test for an allowance and a quiet block. */
+const inScope = (a: Allowance, query: { osUserDigest: string | null; sessionId?: string | null }): boolean =>
+  a.scope === "computer" || (a.scope === "session" ? !!query.sessionId && a.session_id === query.sessionId
+    : a.os_user_digest !== null && a.os_user_digest === query.osUserDigest);
+
 /** The allowance in force for this rule and action, for this person, now; or null. Revoked, proposed, expired and used
- *  one-time allowances never match. */
+ *  one-time allowances never match, and neither does a quiet block. */
 export function matchAllowance(items: Allowance[], query: { rule: string; actionKey: string; osUserDigest: string | null; now: number; sessionId?: string | null }): Allowance | null {
-  return items.find((a) => a.state === "active" && !a.ended_at && a.rule === query.rule && a.action_key === query.actionKey
-    && Date.parse(a.expires_at) > query.now && !(a.once && a.uses > 0)
-    && (a.scope === "computer" || (a.scope === "session" ? !!query.sessionId && a.session_id === query.sessionId
-      : a.os_user_digest !== null && a.os_user_digest === query.osUserDigest))) ?? null;
+  return items.find((a) => a.kind !== "quiet" && a.state === "active" && !a.ended_at && a.rule === query.rule && a.action_key === query.actionKey
+    && Date.parse(a.expires_at) > query.now && !(a.once && a.uses > 0) && inScope(a, query)) ?? null;
+}
+
+/** The quiet block in force for this rule and action, for this person, now; or null. Revoked, ended and expired ones never
+ *  match. */
+export function matchQuietBlock(items: Allowance[], query: { rule: string; actionKey: string; osUserDigest: string | null; now: number; sessionId?: string | null }): Allowance | null {
+  return items.find((a) => a.kind === "quiet" && a.state === "active" && !a.ended_at && a.rule === query.rule && a.action_key === query.actionKey
+    && Date.parse(a.expires_at) > query.now && inScope(a, query)) ?? null;
+}
+
+/** How long a quiet block lasts. */
+export const QUIET_BLOCK_DAYS = 30;
+
+/** Make a quiet block on this computer ("Keep blocking without asking me"): the same action stays blocked and no one is asked
+ *  for 30 days, or until the person undoes it (`endAllowance`). It carries no reason and no new personal data; the agent sends
+ *  it to the workspace as an allowance record with `kind: "quiet"`. */
+export function makeQuietBlock(input: { rule: string; actionKey: string; osUserDigest: string | null; now?: number }): Allowance {
+  const now = input.now ?? Date.now();
+  return {
+    id: newAllowanceId(), rule: input.rule, action_key: input.actionKey,
+    scope: input.osUserDigest ? "person" : "computer", os_user_digest: input.osUserDigest,
+    state: "active", once: false, reason_digest: null, reason_length: 0, created_by: "person",
+    created_at: new Date(now).toISOString(), expires_at: new Date(now + QUIET_BLOCK_DAYS * DAY_MS).toISOString(), uses: 0, sent_at: null,
+    kind: "quiet",
+  };
 }
 
 /** Make an allowance on this computer. `lasts`: once (the next try), 15 minutes, or `always` (the workspace's default expiry;
@@ -143,7 +175,9 @@ export function mergeWorkspaceAllowances(local: Allowance[], delivered: unknown,
     // Uses are counted here; the workspace's copy decides state and expiry.
     byId.set(a.id, { ...a, uses: Math.max(a.uses, mine?.uses ?? 0), sent_at: mine?.sent_at ?? a.sent_at ?? null, ...(mine?.reason ? { reason: mine.reason } : {}),
       // Stopped here: it stays stopped, whatever the workspace's copy says until it has the ended record.
-      ...(mine?.ended_at ? { ended_at: mine.ended_at, ended_by: mine.ended_by, end_sent_at: mine.end_sent_at ?? null } : {}) });
+      ...(mine?.ended_at ? { ended_at: mine.ended_at, ended_by: mine.ended_by, end_sent_at: mine.end_sent_at ?? null } : {}),
+      // A quiet block made here stays one: a workspace copy without the kind never turns it into an allowance.
+      ...(mine?.kind === "quiet" ? { kind: "quiet" as const } : {}) });
   }
   return [...byId.values()].map((a) => (revokedIds.has(a.id) ? { ...a, state: "revoked" as const } : a));
 }
@@ -157,8 +191,9 @@ export interface BlockedItem {
   action_key: string;
   summary: string;
   harness: string;
-  /** What a person did about it afterwards, from the tray: allowed it (an allowance), or asked an admin. */
-  acted?: "allowed" | "asked";
+  /** What a person did about it afterwards: allowed it (an allowance), asked an admin, or kept it blocked without being asked
+   *  again (a quiet block; also noted on each later block a quiet block denies). */
+  acted?: "allowed" | "asked" | "quiet";
   acted_at?: string;
 }
 
@@ -179,7 +214,7 @@ export function recordBlocked(dir: string, item: BlockedItem, now = Date.now()):
 }
 
 /** Note what a person did about a block, so the tray says so and does not offer it again. */
-export function markBlocked(dir: string, id: string, acted: "allowed" | "asked", now = Date.now()): void {
+export function markBlocked(dir: string, id: string, acted: "allowed" | "asked" | "quiet", now = Date.now()): void {
   const items = readBlocked(dir).map((b) => (b.id === id ? { ...b, acted, acted_at: new Date(now).toISOString() } : b));
   writeAtomic(join(dir, BLOCKED_FILE), `${JSON.stringify({ items }, null, 1)}\n`);
 }
@@ -206,7 +241,8 @@ export function rememberActionText(dir: string, actionKey: string, text: string,
   } catch { /* the tray shows the rule's name instead */ }
 }
 
-/** "Stop allowing": the person ends an allowance they made on this computer (or one made at once by the workspace's terms).
+/** "Stop allowing" (or "Undo" for a quiet block): the person ends an allowance they made on this computer (or one made at
+ *  once by the workspace's terms).
  *  It stops applying at once; the agent sends the ended record to the workspace. Only one in force or waiting for an admin,
  *  made by a person, and not already ended or expired. */
 export function endAllowance(dir: string, id: string, now = Date.now()): { outcome: "ended" | "gone" } {

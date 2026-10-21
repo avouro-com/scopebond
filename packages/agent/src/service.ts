@@ -8,7 +8,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
+  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleReport, ruleName, ruleTitle,
   writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -757,7 +757,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
       const done = live.answer(body, os_user);
       if (!done.ok) return { outcome: done.outcome, text: done.text };
-      const outcome = done.choice === "ask" ? "asked" as const : done.choice === "always" && waiting?.offers.always_needs_admin ? "proposed" as const : "allowed" as const;
+      const outcome = done.choice === "ask" ? "asked" as const : done.choice === "quiet" ? "quiet" as const
+        : done.choice === "always" && waiting?.offers.always_needs_admin ? "proposed" as const : "allowed" as const;
       log(`question under "${waiting?.rule_title ?? "a rule"}", answered in the tray: ${outcome} (${done.choice})`);
       if (outcome === "asked") pollAnswers();
       return { outcome, choice: done.choice, text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), done.reviewed, Date.now(), waiting?.action_text || waiting?.what || null) };
@@ -831,16 +832,19 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (!parsed) return { outcome: "invalid", text: "That answer could not be read." };
       const q = blockedQuestion(options.dir, parsed.action_id);
       if (!q) return { outcome: "gone", text: blockedText("gone") };
-      const offered = parsed.choice === "once" ? q.offers.allow : parsed.choice === "fifteen" ? q.offers.fifteen : parsed.choice === "always" ? q.offers.always : q.offers.ask;
+      // Keeping it blocked is always offered for a block a person may act on, and needs no reason.
+      const offered = parsed.choice === "once" ? q.offers.allow : parsed.choice === "fifteen" ? q.offers.fifteen : parsed.choice === "always" ? q.offers.always
+        : parsed.choice === "quiet" ? true : q.offers.ask;
       if (!offered) return { outcome: "not_offered", text: "Your workspace does not offer that choice for this block now." };
-      if (parsed.reason.length < q.reason_min) return { outcome: "reason_short", text: `Say why in at least ${q.reason_min} characters.` };
+      if (parsed.choice !== "quiet" && parsed.reason.length < q.reason_min) return { outcome: "reason_short", text: `Say why in at least ${q.reason_min} characters.` };
       let os_user: string | undefined;
       try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
       const lasts = parsed.choice === "fifteen" ? "15m" as const : parsed.choice === "always" ? "always" as const : "once" as const;
       const answer = parsed.choice === "ask" ? { decision: "ask" as const, reason: parsed.reason, ...(os_user ? { os_user } : {}) }
+        : parsed.choice === "quiet" ? { decision: "quiet" as const, ...(os_user ? { os_user } : {}) }
         : { decision: "allow" as const, reason: parsed.reason, lasts, ...(os_user ? { os_user } : {}) };
       const done = actOnBlocked(options.dir, parsed.action_id, answer);
-      if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked") setTimeout(() => { void sendReasons(); }, 1_000);
+      if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked" || done.outcome === "quiet") setTimeout(() => { void sendReasons(); }, 1_000);
       if (done.outcome === "asked") pollAnswers();
       log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
       return { outcome: done.outcome, choice: parsed.choice, text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed, Date.now(), q.item.summary || null) };
@@ -908,7 +912,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       log(`override ${answer.decision === "allow" ? "given" : answer.decision === "deny" ? "not given" : answer.later ? "not asked (no tray listening, no window): the person acts on it later" : "not available"} for "${question.title}"`);
       if (answer.decision === "allow" && answer.reason) { queueReason(options.dir, question.action_id, answer.reason); setTimeout(() => { void sendReasons(); }, 1_000); }
       // The hook writes the request or allowance after this answer; send it shortly after.
-      if (answer.decision === "ask" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);
+      if (answer.decision === "ask" || answer.decision === "quiet" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);
       return answer;
     },
   }, nativeTray ? { loopback: false } : {}); // beside the native tray nothing uses loopback: its tray and its hook use the pipe
@@ -1018,26 +1022,28 @@ export function newerOffers(offers: object): { hour: boolean; tomorrow: boolean;
 }
 
 /** What the tray says after a person acted on an earlier block. */
-function blockedText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone"): string {
+function blockedText(outcome: "allowed" | "proposed" | "asked" | "quiet" | "declined" | "gone"): string {
   switch (outcome) {
     case "allowed": return "Allowed. Run it again, or let the coding agent retry.";
     case "proposed": return "Allowed for 15 minutes. Your workspace's admins decide whether it stands; run it again meanwhile.";
     case "asked": return "Request sent to your workspace's admins. Scopebond shows the answer; then run it again.";
+    case "quiet": return `Kept blocked for ${QUIET_BLOCK_DAYS} days. You won't be asked about it again.`;
     case "declined": return "Nothing was allowed.";
     case "gone": return "This block can no longer be allowed or sent to an admin from here.";
   }
 }
 
-export type BlockedChoice = "once" | "fifteen" | "always" | "ask";
+/** quiet: keep it blocked without asking again (a quiet block). */
+export type BlockedChoice = "once" | "fifteen" | "always" | "ask" | "quiet";
 
-/** Check an answer from the tray's form: an action id, one of the four choices, and a reason of at most 500 characters
+/** Check an answer from the tray's form: an action id, one of the choices, and a reason of at most 500 characters
  *  (control characters other than line breaks are refused; none is an empty one, enough where the workspace asks for none).
  *  The rest (offered, long enough) is checked against the block. */
 export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: BlockedChoice; reason: string } | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.action_id !== "string" || !/^[A-Za-z0-9._:-]{1,200}$/.test(r.action_id)) return null;
-  if (r.choice !== "once" && r.choice !== "fifteen" && r.choice !== "always" && r.choice !== "ask") return null;
+  if (r.choice !== "once" && r.choice !== "fifteen" && r.choice !== "always" && r.choice !== "ask" && r.choice !== "quiet") return null;
   if (r.reason !== undefined && typeof r.reason !== "string") return null;
   const reason = (r.reason ?? "").trim();
   if (reason.length > 500 || [...reason].some((c) => { const n = c.charCodeAt(0); return (n < 32 && n !== 10 && n !== 13) || n === 127; })) return null;
@@ -1053,10 +1059,10 @@ export type AnswerChoice = BlockedChoice | "hour" | "tomorrow" | "quiet";
 export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined" | "gone" | "quiet", choice: AnswerChoice, alwaysDays: number, workspace: string | null,
   connected: boolean, reviewed = false, now = Date.now(), command: string | null = null): string {
   if (outcome === "gone") return blockedText("gone");
+  if (outcome === "quiet") return `Kept blocked for ${QUIET_BLOCK_DAYS} days · you won't be asked about it again`;
   if (outcome === "declined") return blockedText("declined");
   const on = command ? `: ${command.length > 120 ? `${command.slice(0, 119)}…` : command}` : "";
   const days = `${alwaysDays} day${alwaysDays === 1 ? "" : "s"}`;
-  if (outcome === "quiet" || choice === "quiet") return `Kept blocked without asking you${on} · undo it under Allowed`;
   // A request: where the answer will show (it is recorded and sent like everything else).
   if (outcome === "asked") return connected ? `Request sent${on} · the answer shows on the block` : `Request saved${on}, sent once this computer is connected · the answer shows on the block`;
   const time = (ms: number) => new Date(now + ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });

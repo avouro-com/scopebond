@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
 import { compileManaged, floorDocument, managedEnforce, packRuleAdjustments, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms } from "./managed.js";
-import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem } from "./allowances.js";
+import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, mergeWorkspaceAllowances, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem, makeQuietBlock, matchQuietBlock, type Allowance } from "./allowances.js";
 import { queueRequest } from "./requests.js";
 import { defaultRules, loadRules } from "./rules.js";
 import { agentCommand } from "./windows-hints.js";
@@ -208,10 +208,11 @@ function legacyActionKeys(intent: { action_type?: string; params?: Record<string
 export type ShownOverrideHandler = (ctx: Parameters<OverrideHandler>[0] & { shown?: ShownCommand }) => ReturnType<OverrideHandler>;
 
 /** The window's answer. allow: allow this action (`lasts`: once, or also for 15 minutes, or always via an allowance). ask: send
- *  "Ask an admin" with the reason; the action stays blocked. unavailable with `later`: the agent runs but had no one to ask
- *  now (no tray listening, no window), so the person acts on the block afterwards; `link` is this computer's page in the
- *  workspace, when the agent knows it. */
-export interface AgentAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always"; later?: true; link?: string }
+ *  "Ask an admin" with the reason; the action stays blocked. quiet: keep it blocked without asking again (a quiet block, for
+ *  30 days or until the person undoes it). unavailable with `later`: the agent runs but had no one to ask now (no tray
+ *  listening, no window), so the person acts on the block afterwards; `link` is this computer's page in the workspace, when
+ *  the agent knows it. */
+export interface AgentAnswer { decision: "allow" | "deny" | "unavailable" | "ask" | "quiet"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always"; later?: true; link?: string }
 
 /** A link the denial may show: https, short, nothing a terminal would read as more than one word. */
 const safeLink = (v: unknown): string | null => {
@@ -250,6 +251,7 @@ export async function askAgent(home: string, request: Record<string, unknown>, t
     if (body.decision === "allow" && reason !== null) return { decision: "allow", reason, lasts, ...user };
     if (body.decision === "ask" && reason !== null) return { decision: "ask", reason, ...user };
     if (body.decision === "deny") return { decision: "deny" };
+    if (body.decision === "quiet") return { decision: "quiet", ...user };
     const link = body.later === true ? safeLink(body.link) : null;
     return { decision: "unavailable", ...(body.later === true ? { later: true as const } : {}), ...(link ? { link } : {}) };
   } catch { return { decision: "unavailable" }; }
@@ -283,7 +285,7 @@ function projectOfCall(ctx: OverrideContext): { project?: string } {
 /** What happened when the last override was considered, so a denial can say how an override would be possible. */
 export interface OverrideNote {
   rule: AnyManagedRuleId; title: string;
-  outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" | "later" | "ask_later" | "retry";
+  outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" | "later" | "ask_later" | "retry" | "quiet";
   /** This computer's page in the workspace (`later`, `ask_later`), when the agent gave it. */
   link?: string;
 }
@@ -324,16 +326,27 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     // A standing allowance for this rule and this exact action lets it through, and the receipt names it.
     let allowances = readAllowances(ctx.dir);
     if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, doc.allowances, doc.revoked_allowances);
-    const standing = keys.reduce<ReturnType<typeof matchAllowance>>(
-      (found, k) => found ?? matchAllowance(allowances, { rule, actionKey: k, osUserDigest: osDigest, now: t, sessionId: ctx.sessionId ?? null }), null);
+    const query = (k: string) => ({ rule, actionKey: k, osUserDigest: osDigest, now: t, sessionId: ctx.sessionId ?? null });
+    const summary = shownSummary(intent, shown);
+    const blocked = (acted?: "quiet") => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness,
+      ...(acted ? { acted, acted_at: new Date(t).toISOString() } : {}) }, t);
+    // The person chose to keep this action blocked without being asked (a quiet block): denied at once, no one is asked. An
+    // allowance made after it (an admin's answer) wins; one made before it does not.
+    const quiet = keys.reduce<Allowance | null>((found, k) => found ?? matchQuietBlock(allowances, query(k)), null);
+    const standing = quiet
+      ? allowances.find((a) => Date.parse(a.created_at) > Date.parse(quiet.created_at) && keys.some((k) => matchAllowance([a], query(k)))) ?? null
+      : keys.reduce<Allowance | null>((found, k) => found ?? matchAllowance(allowances, query(k)), null);
+    if (quiet && !standing) {
+      last = { rule, title, outcome: "quiet" };
+      blocked("quiet");
+      return null;
+    }
     if (standing) {
       standing.uses += 1;
       try { writeAllowances(ctx.dir, allowances, t); } catch { /* the receipt records the use; a one-time allowance may be used again */ }
       return { version: 1, rule, method: "allowance", state: "allowed", repeat_of: standing.id, reason_digest: standing.reason_digest,
         reason_length: standing.reason_length, os_user_digest: osDigest, decided_at: new Date(t).toISOString() };
     }
-    const summary = shownSummary(intent, shown);
-    const blocked = () => recordBlocked(ctx.dir, { id: action_id, at: new Date(t).toISOString(), rule, mode: setting.mode as "override" | "ask", action_key: key, summary, harness: ctx.harness }, t);
     const offers = offersFor(setting.mode, terms);
     const allowing = allowsAny(offers);
     const state = readState(ctx.dir);
@@ -364,6 +377,14 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     // Ask an admin: the action stays blocked; the request waits for the agent to send it.
     // An older Scopebond Agent shows only "Allow once"; where only asking is offered, its answer is a request to an admin.
     if (answer.decision === "allow" && !allowing && offers.ask) answer = { ...answer, decision: "ask" };
+    // Keep blocking without asking me: a quiet block for what the window showed; this action stays blocked too.
+    if (answer.decision === "quiet") {
+      try {
+        writeAllowances(ctx.dir, [...readAllowances(ctx.dir), makeQuietBlock({ rule, actionKey: key, osUserDigest: answer.os_user ? digestOf(answer.os_user) : osDigest, now: t })], t);
+        rememberActionText(ctx.dir, key, summary, t);
+      } catch { /* the block stands either way; the next one asks again */ }
+      last = { rule, title, outcome: "quiet" }; blocked("quiet"); return null;
+    }
     if (answer.decision === "ask" && offers.ask) {
       const reason = (answer.reason ?? "").trim();
       if (reason.length < terms.reason_min || reason.length > 500) { last = { rule, title, outcome: "declined" }; blocked(); return null; }
@@ -452,15 +473,23 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
 }
 
 /** Act on an earlier block with the window's answer. Allowing makes an allowance (once: the next try; 15 minutes; or always,
- *  waiting for an admin when the workspace says so) and counts as one of today's overrides; asking queues "Ask an admin".
+ *  waiting for an admin when the workspace says so) and counts as one of today's overrides; asking queues "Ask an admin";
+ *  `quiet` keeps the action blocked without asking again (a quiet block, undone with `endAllowance`).
  *  Scopebond never runs the action itself: the person or the coding agent runs it again. */
-export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now = Date.now()): { outcome: "allowed" | "proposed" | "asked" | "declined" | "gone" } {
+export function actOnBlocked(dir: string, id: string, answer: AgentAnswer, now = Date.now()): { outcome: "allowed" | "proposed" | "asked" | "quiet" | "declined" | "gone" } {
   const q = blockedQuestion(dir, id, now);
   if (!q) return { outcome: "gone" };
+  const osDigest = answer.os_user ? digestOf(answer.os_user) : osUserDigest();
+  // Keep blocking without asking me: needs no reason, and is not one of today's overrides.
+  if (answer.decision === "quiet") {
+    writeAllowances(dir, [...readAllowances(dir), makeQuietBlock({ rule: q.item.rule, actionKey: q.item.action_key, osUserDigest: osDigest, now })], now);
+    rememberActionText(dir, q.item.action_key, q.item.summary, now);
+    markBlocked(dir, id, "quiet", now);
+    return { outcome: "quiet" };
+  }
   const reason = (answer.reason ?? "").trim();
   if (answer.decision !== "allow" && answer.decision !== "ask") return { outcome: "declined" };
   if (reason.length < q.reason_min || reason.length > 500) return { outcome: "declined" };
-  const osDigest = answer.os_user ? digestOf(answer.os_user) : osUserDigest();
   if (answer.decision === "ask") {
     if (!q.offers.ask) return { outcome: "declined" };
     queueRequest(dir, { rule: q.item.rule, action_key: q.item.action_key, action_id: q.item.id, summary: q.item.summary, reason, os_user_digest: osDigest, harness: q.item.harness, now });
@@ -498,6 +527,7 @@ export function overrideHint(note: OverrideNote | null): string | null {
     case "unavailable": return `Your workspace lets you allow this once with a reason in the Scopebond window, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
     case "limit": return `You have used today's overrides for "${note.title}". It blocks until tomorrow.`;
     case "retry": return `This was blocked a few minutes ago and the person has not answered yet. Don't try it again: tell the person what you were trying to do; they can act on it from the Scopebond icon.`;
+    case "quiet": return "The person chose to keep this blocked; do not ask again.";
     case "declined": return `The override was not given.`;
     case "not_overridable": return null;
     case "asked": return `A request to allow "${note.title}" was sent to your workspace's admins. The Scopebond icon shows their answer; then run it again.`;
