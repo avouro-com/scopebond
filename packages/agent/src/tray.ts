@@ -121,12 +121,11 @@ function Refresh {
     }
   }
   [void]$menu.Items.Add('-')
-  $notes = $menu.Items.Add('Notifications')
-  foreach ($choice in @(@('blocks', 'Blocks and problems'), @('problems', 'Problems only'), @('off', 'Off'))) {
-    $value = $choice[0]
-    $n = $notes.DropDownItems.Add($choice[1]); $n.Checked = ($script:settings.notifications -eq $value)
-    $n.Add_Click({ try { $script:settings = (Call 'POST' '/settings' @{ notifications = $value }).settings } catch {} ; Refresh }.GetNewClosure())
-  }
+  # One switch: tell me when something is blocked (an admin's answer to a request comes with it). Off is the only other choice.
+  $on = $script:settings.notifications -ne 'off'
+  $notes = $menu.Items.Add('Tell me when something is blocked'); $notes.Checked = $on
+  $next = $(if ($on) { 'off' } else { 'blocks' })
+  $notes.Add_Click({ try { $script:settings = (Call 'POST' '/settings' @{ notifications = $next }).settings } catch {} ; Refresh }.GetNewClosure())
   $help = $menu.Items.Add('Help')
   [void]$help.DropDownItems.Add('Copy diagnostics', $null, { try { (Call 'GET' '/status') | ConvertTo-Json -Depth 8 | Set-Clipboard; Tell 'Scopebond' 'Diagnostics copied (no keys or credentials)' 'Info' } catch {} })
   [void]$help.DropDownItems.Add('Open the Scopebond folder', $null, { Start-Process explorer.exe $home0 })

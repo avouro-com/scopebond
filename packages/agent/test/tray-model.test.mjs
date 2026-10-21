@@ -107,7 +107,8 @@ test("the tray script takes the home and agent id as data and draws all six stat
   assert.doesNotMatch(script, /Remove-Item C:/);
   for (const s of ["protected", "working", "offline", "attention", "problem", "disconnected"]) assert.ok(script.includes(`'${s}'`), `draws '${s}'`);
   assert.match(script, /GET' '\/tray'/);
-  assert.match(script, /'Problems only'/);
+  assert.match(script, /'Tell me when something is blocked'/);
+  assert.doesNotMatch(script, /Problems only/, "one switch: no 'Problems only' choice");
 });
 
 test("a workspace at its monthly limit is said plainly, not 'sending'; another refusal names its status", () => {
