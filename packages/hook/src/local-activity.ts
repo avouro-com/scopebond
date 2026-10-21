@@ -40,6 +40,8 @@ export interface RecentBlockRecord {
   clause?: string | null;
   kind?: BlockNote["kind"];
   verdict?: string | null;
+  /** Safe Install held it for the person to decide (not a final block). */
+  held?: boolean;
 }
 
 export interface LocalActivity {
@@ -124,6 +126,7 @@ export function localActivity(dir: string, options: { now?: Date; limit?: number
           clause,
           ...(note?.kind ? { kind: note.kind } : {}),
           ...(note?.verdict ? { verdict: note.verdict } : {}),
+          ...(note?.held ? { held: true } : {}),
           session: note?.session ?? (typeof context.session === "string" ? context.session : null),
         }];
       } catch { return []; }
@@ -148,7 +151,7 @@ export function localActivity(dir: string, options: { now?: Date; limit?: number
 
 /** One retry group's key: the same action (as shown) under the same rule, in the same project, tool and session. */
 const retryKey = (b: RecentBlockRecord & { session: string | null }): string =>
-  JSON.stringify([b.session ?? "", b.harness ?? "", b.rule ?? b.clause ?? b.kind ?? "", b.project ?? "", b.action_text ?? b.what ?? b.summary]);
+  JSON.stringify([b.session ?? "", b.harness ?? "", b.rule ?? b.clause ?? b.kind ?? "", b.project ?? "", b.summary, b.action_text || b.what || ""]);
 
 /** Fold retries (newest-first input) into one block each: each try within RETRY_WINDOW_MS of the one before it in the same
  *  group. Returns the groups newest first, each named by its newest try. */

@@ -87,3 +87,18 @@ test("the hook's notes give a block its session, so retries fold in the list and
   assert.equal(activity.today.attempts, 4);
   assert.equal(activity.recent_blocks[0].rule_title, "Run a command that deletes data or shuts down the computer");
 });
+
+test("a Safe Install refusal is noted with its verdict in words, and a hold for the person is told apart from a block", async () => {
+  const { noteBlock, readBlockNotes } = await import("../dist/index.js");
+  const dir = mkdtempSync(join(tmpdir(), "sb-week-notes-"));
+  const deny = (id, reason) => ({ decision: "deny", code: "install_verdict", reason, receipt: { payload: { action_ref: { action_id: id } } } });
+  noteBlock(dir, deny("i1", "Scopebond Safe Install blocked installing left-pad 9.9.9 (npm). It is on your workspace's list of known malware."), { harness: "claude", project: "app", session: "k" });
+  noteBlock(dir, deny("i2", "Scopebond Safe Install stopped installing left-pad 1.0.0 (npm) to check with you first. It was published less than 7 days ago. If you meant to install it, run the install yourself in your own terminal, then go on."), { harness: "claude", project: "app" });
+  const [blocked, held] = readBlockNotes(dir);
+  assert.equal(blocked.kind, "install");
+  assert.equal(blocked.verdict, "It is on your workspace's list of known malware");
+  assert.equal(blocked.held, undefined);
+  assert.equal(blocked.session, "k");
+  assert.equal(held.held, true);
+  assert.equal(held.verdict, "It was published less than 7 days ago");
+});

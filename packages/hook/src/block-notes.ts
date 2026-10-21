@@ -38,6 +38,9 @@ export interface BlockNote {
   kind?: "install" | "service" | "budget" | null;
   /** Safe Install's verdict in words ("known malware", "published 2 hours ago"), for an install it refused. */
   verdict?: string | null;
+  /** Safe Install held the install for the person to decide (its verdict was "ask") and this coding tool could not ask them:
+   *  not a final block. */
+  held?: boolean;
 }
 
 /** The project's name for a person: the repository's last part, else the working folder's name. Never the home folder or a
@@ -84,7 +87,7 @@ export function noteBlock(dir: string, decision: { decision: string; clauseId?: 
       id, at: new Date(now).toISOString(), clause, rule, ...(title !== blockTitle(rule, clause, []) ? { title } : {}), harness: where.harness, project: where.project,
       ...(where.session ? { session: where.session } : {}),
       ...(kind ? { kind } : {}),
-      ...(kind === "install" ? { verdict: installVerdictWords(decision.reason) } : {}),
+      ...(kind === "install" ? { verdict: installVerdictWords(decision.reason), ...(installHeld(decision.reason) ? { held: true } : {}) } : {}),
     };
     const notes = [...readBlockNotes(dir).filter((n) => n.id !== id), note].filter((n) => now - Date.parse(n.at) < WEEK_MS).slice(-KEEP);
     writeAtomic(join(dir, BLOCK_NOTES_FILE), `${JSON.stringify({ notes })}\n`);
@@ -98,6 +101,9 @@ function blockKind(code: string | undefined): BlockNote["kind"] {
   if (code === "session_budget") return "budget";
   return null;
 }
+
+/** Safe Install stopped the install to check with the person first (its verdict was "ask"), rather than blocking it. */
+const installHeld = (message: string | null | undefined): boolean => !!message && /to check with you first/.test(message);
 
 /** Safe Install's verdict in words, from its message ("Scopebond Safe Install blocked installing left-pad 1.0.0 (npm). It is
  *  on your workspace's list of known malware."): the first sentence after the one naming the install, at most 160

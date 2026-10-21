@@ -28,6 +28,10 @@ test("one outcome per block, with the sentence the row shows when there is no bu
   assert.equal(install.outcome_text, "Blocked by Safe Install: it is on your workspace's list of known malware.");
   assert.ok(install.copy_details);
   assert.equal(blockOutcome({ ...base, kind: "install" }).outcome_text, "Blocked by Safe Install.");
+  // Held for the person (the verdict was "ask") where the coding tool could not ask: not a silent block.
+  const held = blockOutcome({ ...base, kind: "install", held: true, verdict: "It was published less than 7 days ago" });
+  assert.equal(held.outcome, "safe_install");
+  assert.equal(held.outcome_text, "Waiting for you: Safe Install held this install to check with you first. It was published less than 7 days ago. If you meant to install it, run the install yourself in your terminal.");
 });
 
 test("a request's state replaces the buttons: waiting, approved by whom (run it again), declined", () => {

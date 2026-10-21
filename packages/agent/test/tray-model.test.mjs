@@ -209,3 +209,10 @@ test("one line under Protected, the workspace's name and today's counts; up to 2
   assert.equal(trayModel(input(status(), { rules: null, today: null })).detail, null);
   assert.equal(trayModel(input(status({ pending: 42, oldest_pending_age_s: 40 * 60 }))).detail, null, "the headline says what is wrong");
 });
+
+test("the npm tray icon's menu shows & in the agent's text as it is (a single & would vanish as a keyboard shortcut)", async () => {
+  const { trayScript } = await import("../dist/tray.js");
+  const script = trayScript("D:/work/x", 42);
+  assert.match(script, /function Esc\(\$s\) \{ \(\[string\]\$s\) -replace '&', '&&' \}/);
+  for (const use of ["(Esc $m.headline)", "(Esc $row.value)", "(Esc $m.hint)", "(Esc $words)"]) assert.ok(script.includes(use), use);
+});

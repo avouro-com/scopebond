@@ -594,7 +594,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
       const tool = toolName(b.harness ?? item?.harness ?? null);
       const outcome = blockOutcome({
-        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, request, allowed,
+        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, held: b.held === true, request, allowed,
         workspace, tool, what, rule_title: ruleTitleText, action_id: b.action_id,
       });
       return {

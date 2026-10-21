@@ -23,6 +23,8 @@ export interface OutcomeInput {
   rule: string | null;
   kind: "install" | "service" | "budget" | null;
   verdict: string | null;
+  /** Safe Install held the install for the person (its verdict was "ask") and the coding tool could not ask them. */
+  held?: boolean;
   /** The person's newest request for this action, and whether an allowance in force covers it. */
   request: BlockRequest | null;
   allowed: boolean;
@@ -61,6 +63,11 @@ export function blockOutcome(b: OutcomeInput): OutcomeOutput {
   if (b.offers?.ask) return { outcome: "ask", outcome_text: null, copy_details: null };
   if (b.clause && ALWAYS_ON_CLAUSES.has(b.clause)) {
     return { outcome: "always_on", outcome_text: "Always on. Scopebond protects its own keys and records on this computer.", copy_details: null };
+  }
+  if (b.kind === "install" && b.held) {
+    // Not a final block: the coding tool could not ask, so the person decides by running the install themselves.
+    const why = b.verdict ? ` ${b.verdict.replace(/\.$/, "")}.` : "";
+    return { outcome: "safe_install", outcome_text: `Waiting for you: Safe Install held this install to check with you first.${why} If you meant to install it, run the install yourself in your terminal.`, copy_details: copy };
   }
   if (b.kind === "install") {
     return { outcome: "safe_install", outcome_text: `Blocked by Safe Install${b.verdict ? `: ${lowerFirst(b.verdict)}` : ""}.`.replace(/\.\.$/, "."), copy_details: copy };

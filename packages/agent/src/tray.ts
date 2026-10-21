@@ -20,6 +20,8 @@ $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 function T($s) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)) }
+# A menu item's text from the agent, shown as it is: a single & would be taken for a keyboard shortcut and disappear.
+function Esc($s) { ([string]$s) -replace '&', '&&' }
 $home0 = T '${b64(home)}'
 $endpointFile = Join-Path $home0 '${AGENT_FILE}'
 $agentPid = ${Math.trunc(agentPid)}
@@ -88,10 +90,10 @@ function Refresh {
   $tray.Icon = $icons[$m.state]
   $tray.Text = $(if ($m.tooltip.Length -gt 63) { $m.tooltip.Substring(0, 62) } else { $m.tooltip })
   $menu.Items.Clear()
-  $head = Item $menu ('Scopebond — ' + $m.headline) $false $null
+  $head = Item $menu ('Scopebond — ' + (Esc $m.headline)) $false $null
   $head.Font = New-Object Drawing.Font($head.Font, [Drawing.FontStyle]::Bold)
-  foreach ($row in $m.rows) { [void](Item $menu ('    ' + $row.label + ':  ' + $row.value) $false $null) }
-  if ($m.hint) { [void](Item $menu $m.hint $false $null) }
+  foreach ($row in $m.rows) { [void](Item $menu ('    ' + $row.label + ':  ' + (Esc $row.value)) $false $null) }
+  if ($m.hint) { [void](Item $menu (Esc $m.hint) $false $null) }
   [void]$menu.Items.Add('-')
   if ($m.fix) {
     $route = $m.fix.route
@@ -112,7 +114,7 @@ function Refresh {
       $when = $(try { ([datetime]$b.at).ToLocalTime().ToString('HH:mm') } catch { '' })
       $note = $(if ($b.acted -eq 'allowed') { '   (allowed)' } elseif ($b.acted -eq 'asked') { '   (asked an admin)' } elseif ($b.can_act) { '   Allow or ask…' } else { '' })
       $words = $(if ($b.what) { $b.what } else { $b.summary })
-      $row = $blocks.DropDownItems.Add($words + '   ' + $when + $note)
+      $row = $blocks.DropDownItems.Add((Esc $words) + '   ' + $when + $note)
       # The Scopebond window asks; the person allows it (once, 15 min, always) or asks an admin. Nothing runs again by itself.
       if ($b.can_act) { $id = $b.action_id; $row.Add_Click({ try { $r = Call 'POST' '/blocked' @{ action_id = $id }; [Windows.Forms.MessageBox]::Show($r.text, 'Scopebond') | Out-Null } catch {} ; Refresh }.GetNewClosure()) }
       else { $row.Enabled = $false }
