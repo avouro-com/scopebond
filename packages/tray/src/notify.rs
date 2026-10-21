@@ -12,7 +12,9 @@
 //!   notifications are off: the person asked and is waiting for it;
 //! - one per block, never again for the coding agent's retries of it (the agent folds them into the block);
 //! - with notifications off, only what the person must act on: a problem (protection is off, the workspace refused this
-//!   computer) and the word that it is fixed. Never a block, an admin's answer or "needs attention".
+//!   computer) and the word that it is fixed. Never a block, an admin's answer or "needs attention";
+//! - when the agent could not be brought back (two failed restarts within ten minutes, supervise.rs), the problem told is
+//!   "Protection is off on this computer" with *Restart it*; restarts before that are silent.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -52,6 +54,28 @@ pub struct Toast {
     pub unblock: Option<String>,
     /// That button's words: *Unblock…*, or *Ask to unblock…* where an admin decides.
     pub button: Option<&'static str>,
+}
+
+/// What the tray knows besides the state, for the notifications about it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Situation {
+    /// Supervision could not bring the agent back (two failed restarts within ten minutes): the problem told is that
+    /// protection is off, with *Restart it*.
+    pub protection_off: bool,
+}
+
+/// The button of the "protection is off" notification: it starts the agent at once.
+pub const RESTART_IT: &str = "Restart it";
+
+/// The one notification when the agent could not be brought back: protection is off, and *Restart it*.
+pub fn protection_off_toast() -> Toast {
+    Toast {
+        kind: Kind::Problem,
+        title: "Protection is off on this computer".into(),
+        text: "The Scopebond Agent stopped and didn't start again. Restart it.".into(),
+        unblock: None,
+        button: Some(RESTART_IT),
+    }
 }
 
 /// How bad a state is: protected and working are fine, offline is not yet worth a word.
@@ -134,7 +158,7 @@ impl Notifier {
     }
 
     /// Look at the state now; the notifications to show, if any.
-    pub fn observe(&mut self, state: IconState, headline: &str, blocks: &[RecentBlock], setting: Notifications, now: Instant) -> Vec<Toast> {
+    pub fn observe(&mut self, state: IconState, headline: &str, blocks: &[RecentBlock], setting: Notifications, situation: Situation, now: Instant) -> Vec<Toast> {
         let mut out = Vec::new();
         if rank(state) >= 2 {
             self.worse_since.get_or_insert(now);
@@ -146,7 +170,11 @@ impl Notifier {
             // Better than what was told (a problem eased to attention) is remembered without a word.
             if self.told.is_none_or(|told| rank(state) > rank(told)) {
                 let kind = if rank(state) >= 3 { Kind::Problem } else { Kind::Attention };
-                out.push(Toast { kind, title: "Scopebond".into(), text: headline.to_string(), unblock: None, button: None });
+                if kind == Kind::Problem && situation.protection_off {
+                    out.push(protection_off_toast());
+                } else {
+                    out.push(Toast { kind, title: "Scopebond".into(), text: headline.to_string(), unblock: None, button: None });
+                }
             }
             self.told = Some(state);
         } else if state == IconState::Protected && self.told.is_some() {
@@ -282,10 +310,10 @@ mod tests {
             Run { n: Notifier::new(), start: Instant::now() }
         }
         fn at(&mut self, secs: u64, state: IconState, setting: Notifications) -> Vec<Kind> {
-            self.n.observe(state, "headline", &[], setting, self.start + Duration::from_secs(secs)).into_iter().map(|t| t.kind).collect()
+            self.n.observe(state, "headline", &[], setting, Situation::default(), self.start + Duration::from_secs(secs)).into_iter().map(|t| t.kind).collect()
         }
         fn blocks(&mut self, secs: u64, blocks: &[RecentBlock], setting: Notifications) -> Vec<Toast> {
-            self.n.observe(IconState::Protected, "", blocks, setting, self.start + Duration::from_secs(secs))
+            self.n.observe(IconState::Protected, "", blocks, setting, Situation::default(), self.start + Duration::from_secs(secs))
         }
     }
 
@@ -318,6 +346,31 @@ mod tests {
         assert_eq!(r.at(200, Attention, Blocks), NONE);
         assert_eq!(r.at(499, Attention, Blocks), NONE, "the five minutes start again");
         assert_eq!(r.at(500, Attention, Blocks), [Kind::Attention]);
+    }
+
+    #[test]
+    fn protection_off_is_told_once_with_restart_it_and_its_return_once() {
+        let mut n = Notifier::new();
+        let start = Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        let off = Situation { protection_off: true, ..Default::default() };
+        let t = n.observe(Problem, "The Scopebond Agent is not answering", &[], Blocks, off, at(0));
+        assert_eq!(t, vec![protection_off_toast()]);
+        assert_eq!(t[0].title, "Protection is off on this computer");
+        assert_eq!((t[0].button, t[0].unblock.as_deref()), (Some("Restart it"), None));
+        for s in 1..100 {
+            assert!(n.observe(Problem, "The Scopebond Agent is not answering", &[], Blocks, off, at(s)).is_empty(), "once");
+        }
+        // Started again meanwhile (working): nothing; protected again: told once.
+        assert!(n.observe(Working, "", &[], Blocks, Situation::default(), at(100)).is_empty());
+        let back = n.observe(Protected, "Protected", &[], Blocks, Situation::default(), at(110));
+        assert_eq!(back.iter().map(|t| t.kind).collect::<Vec<_>>(), [Kind::Recovered]);
+        // With notifications off it is told all the same: the person must act.
+        let mut quiet = Notifier::new();
+        assert_eq!(quiet.observe(Problem, "", &[], Off, off, at(0)), vec![protection_off_toast()]);
+        // Any other problem is told in the agent's words.
+        let mut other = Notifier::new();
+        assert_eq!(other.observe(Problem, "Not connected to your workspace", &[], Blocks, Situation::default(), at(0))[0].text, "Not connected to your workspace");
     }
 
     #[test]

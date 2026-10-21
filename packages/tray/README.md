@@ -77,10 +77,11 @@ PowerShell tray.
   where an admin decides; none where the block stays blocked); blocks that follow within a
   minute are told together ("3 actions blocked in the last minute"). With *Blocks and problems* the person is also told when
   an admin answers one of their requests ("Your request was approved", with who and their note). A question waiting now
-  (above) is told unless notifications are *Off*. *Problems only* says nothing about blocks, and *Off* nothing at all. An agent that has not answered for two minutes while the tray keeps trying
-  counts as a problem, and so, at once, does one whose pipe accepts connections but that has given no model for half a
-  minute; one stopped on purpose does not. An agent that stopped without anyone asking and with nothing in its place is
-  told about once when the tray starts it again. *Check now* chosen from the menu says what it found. They carry
+  (above) is told unless notifications are *Off*. *Problems only* says nothing about blocks, and *Off* nothing at all. The tray restarts an agent that crashed, hung or stopped
+  with nothing in its place without a word; only when two restarts in a row fail within ten minutes is the person told,
+  once and whatever the notification setting: "Protection is off on this computer" with *Restart it*, which starts the
+  agent at once (and "Scopebond is protecting again" once it answers). One stopped on purpose is not told about; a
+  missing agent program is a problem once it has lasted two minutes. *Check now* chosen from the menu says what it found. They carry
   the AppUserModelID `Avouro.Scopebond`, the one the installer's Start-menu entry sets. The rules are plain decisions in
   `src/notify.rs` with unit tests.
 
@@ -106,14 +107,18 @@ a while. It never runs two: an agent that is updating itself exits and its repla
 replacement to answer before starting anything, and the agent's lock file refuses a second agent anyway. An agent that
 was stopped on purpose (`scopebond-agent stop`, which leaves `agent-stopped.json` in the Scopebond folder) stays stopped;
 the menu offers to start it. An agent that exited cleanly with no replacement answering within a minute, and that nobody
-asked to stop, is started again with the same waits as after a crash, and the person is told. An agent whose pipe
+asked to stop, is started again with the same waits as after a crash. An agent whose pipe
 accepts connections but that gives no model (or only errors) for half a minute is shown as not answering; half a minute
 later the tray ends it (only the process that runs the agent program beside the tray) and starts it again. A clean
 stop is told apart from a crash by the exit code of the agent the tray started (0), or, for an agent something else
 started, by its endpoint file: a clean stop removes it, a crash leaves it. The tray starts the agent with
-`SCOPEBOND_AGENT_TRAY=off`, so the agent does not draw its PowerShell tray as well. The rules are plain decisions in
+`SCOPEBOND_AGENT_TRAY=off`, so the agent does not draw its PowerShell tray as well. All of this is silent. A restart
+fails when the agent is lost again (a crash, a hang, a start that cannot run) before it has answered for five minutes;
+two failed restarts within ten minutes mean protection is off on this computer, and the person is told once, with
+*Restart it* (it keeps trying meanwhile). *Restart it*, or *Start the Scopebond Agent* in the menu, starts it at once,
+ends a hung agent without the half-minute wait, and starts the count over. The rules are plain decisions in
 `src/supervise.rs`, unit-tested case by case (first start, crash and backoff, reset after five minutes, update handover,
-stop on purpose, another agent starting, no agent program).
+stop on purpose, another agent starting, no agent program, failed restarts within ten minutes or further apart).
 
 ## Threat model of the local channel
 

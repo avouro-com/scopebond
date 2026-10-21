@@ -15,7 +15,7 @@ use scopebond_tray::icon::{self, IconState};
 use scopebond_tray::menu::{self, AgentLink, Autostart, Command, Entry, MenuContext};
 use scopebond_tray::live::{self, LiveWatch};
 use scopebond_tray::model::{LiveQuestion, Notifications, TrayAction, TrayAnswer};
-use scopebond_tray::notify::{Kind, Notifier, RequestWatch, Toast};
+use scopebond_tray::notify::{Kind, Notifier, RequestWatch, Situation, Toast};
 use scopebond_tray::panel::{self, Area, PANEL_HEIGHT, PANEL_WIDTH};
 use scopebond_tray::supervise::{self, Decision, Observation, Supervisor};
 use scopebond_tray::{log, win};
@@ -71,6 +71,8 @@ struct Shared {
     supervised: Mutex<AgentLink>,
     /// The person asked for the agent to be started.
     start_requested: AtomicBool,
+    /// Supervision could not bring the agent back (two failed restarts within ten minutes): protection is off.
+    protection_off: AtomicBool,
     notifier: Mutex<Notifier>,
     /// Since when the agent has not answered (for a notification when that lasts).
     silent_since: Mutex<Option<Instant>>,
@@ -101,6 +103,7 @@ impl Shared {
             anchor: Mutex::new(None),
             supervised: Mutex::new(AgentLink::Starting),
             start_requested: AtomicBool::new(false),
+            protection_off: AtomicBool::new(false),
             notifier: Mutex::new(Notifier::new()),
             silent_since: Mutex::new(None),
             open_block: Mutex::new(None),
@@ -330,23 +333,18 @@ fn supervise_agent(shared: &Arc<Shared>) {
                     }
                 }
             }
+            // Restarts are silent: only the log says so. The person is told once two restarts failed (below).
             if let Some(notice) = sup.take_notice() {
                 log::line(match notice {
                     supervise::Notice::StartingAgain => "the agent stopped and nothing replaced it: starting it again",
                     supervise::Notice::Restarting => "the agent has not answered: restarting it",
                 });
-                // An agent that stopped without anyone asking is told about (as the person's setting allows). A hung agent
-                // was already told about once, as a problem, when it was shown as not answering.
-                let setting = lock(&shared.answer).as_ref().map(|a| a.settings.notifications).unwrap_or_default();
-                if notice == supervise::Notice::StartingAgain && setting != Notifications::Off {
-                    show_toast(Toast {
-                        kind: Kind::Problem,
-                        title: "Scopebond".into(),
-                        text: "The Scopebond Agent stopped and nothing started in its place; starting it again".into(),
-                        unblock: None,
-                        button: None,
-                    }, None);
-                }
+            }
+            // Two restarts failed within ten minutes: protection is off. The refresh tells the person once, with Restart it.
+            let off = sup.protection_off();
+            if shared.protection_off.swap(off, Ordering::SeqCst) != off {
+                log::line(if off { "two restarts of the agent failed within ten minutes: protection is off" } else { "protection is no longer off" });
+                shared.wake();
             }
             if sup.link() != before || *lock(&shared.supervised) != sup.link() {
                 log::line(&format!("agent: {}", link_name(sup.link())));
@@ -391,32 +389,38 @@ fn refresh(app: &AppHandle, shared: &Arc<Shared>) {
     notify(app, shared, answer.as_ref(), link, setting);
 }
 
-/// How long the agent may not answer (while the tray tries to start it) before that is worth a notification.
+/// How long the agent program may be missing beside the tray before that is worth a notification.
 const SILENT_FOR: Duration = Duration::from_secs(2 * 60);
 
 fn notify(app: &AppHandle, shared: &Arc<Shared>, answer: Option<&TrayAnswer>, link: AgentLink, setting: Notifications) {
     let now = Instant::now();
+    let off = answer.is_none() && shared.protection_off.load(Ordering::SeqCst);
     let (state, headline, blocks) = match (answer, link) {
         (Some(a), _) => {
             *lock(&shared.silent_since) = None;
             (a.tray.icon_state(), a.tray.headline.clone(), a.tray.recent_blocks.clone())
         }
-        // Not answering although the tray keeps trying: a problem once it has lasted. Stopped on purpose, waiting for an
-        // update's replacement or starting: nothing to tell.
-        (None, AgentLink::NotAnswering | AgentLink::Missing) => {
+        // Supervision could not bring the agent back (two restarts failed within ten minutes): protection is off, told once
+        // with Restart it.
+        (None, _) if off => {
+            *lock(&shared.silent_since) = None;
+            (IconState::Problem, menu::header(None, link).trim_start_matches("Scopebond — ").to_string(), Vec::new())
+        }
+        // No agent program beside the tray: a problem once it has lasted.
+        (None, AgentLink::Missing) => {
             let since = *lock(&shared.silent_since).get_or_insert(now);
-            // An agent whose pipe accepts but that has given no model for half a minute already waited its time: a
-            // problem at once (one notification; the notifier says it once).
-            let hung = link == AgentLink::NotAnswering && unresponsive(shared, now);
-            let state = if hung || now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
+            let state = if now.duration_since(since) >= SILENT_FOR { IconState::Problem } else { IconState::Working };
             (state, menu::header(None, link).trim_start_matches("Scopebond — ").to_string(), Vec::new())
         }
+        // Starting, restarted after a crash or a hang (silently), stopped on purpose, waiting for an update's replacement:
+        // nothing to tell.
         (None, _) => {
             *lock(&shared.silent_since) = None;
             (IconState::Working, String::new(), Vec::new())
         }
     };
-    for toast in lock(&shared.notifier).observe(state, &headline, &blocks, setting, now) {
+    let situation = Situation { protection_off: off };
+    for toast in lock(&shared.notifier).observe(state, &headline, &blocks, setting, situation, now) {
         show_toast(toast, Some((app.clone(), shared.clone())));
     }
     // An admin's answer to one of the person's requests.
@@ -500,6 +504,23 @@ fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
             (Kind::Request, Some((app, shared))) => {
                 t = t.on_activated(move |_| {
                     open_panel(&app, &shared, None);
+                    Ok(())
+                });
+            }
+            // Protection is off: *Restart it* starts the agent at once (with a fresh count of failed restarts); a click on the
+            // notification itself opens the panel.
+            (Kind::Problem, Some((app, shared))) => {
+                if let Some(words) = toast.button {
+                    t = t.add_button(words, "restart");
+                }
+                t = t.on_activated(move |action| {
+                    if action.as_deref() == Some("restart") {
+                        log::line("asked to restart the agent (from the notification)");
+                        shared.start_requested.store(true, Ordering::SeqCst);
+                        shared.wake();
+                    } else {
+                        open_panel(&app, &shared, None);
+                    }
                     Ok(())
                 });
             }
