@@ -406,7 +406,7 @@ test("health says green, amber or red in plain words, with the one fix", async (
   assert.match(check.headline, /autostart/);
 });
 
-test("the tray script carries the home folder only as data, and notifications fire when things get worse or recover", async () => {
+test("the tray script carries the home folder only as data, and notifications fire only when the person must act, and when that is over", async () => {
   const { trayScript, notifyChange } = await import("../dist/tray.js");
   assert.doesNotMatch(trayScript("D:/work/x';Remove-Item C:/ -Recurse;'", 42), /Remove-Item C:/);
   assert.match(trayScript("C:/sb", 42), /\$agentPid = 42/);
@@ -420,12 +420,13 @@ test("the tray script carries the home folder only as data, and notifications fi
     return;
   }
   assert.equal(notifyChange(null, red, run), false, "nothing on start");
-  assert.equal(notifyChange("green", amber, run), true);
+  assert.equal(notifyChange("green", amber, run), false, "records waiting are Scopebond's chore: quiet");
   assert.equal(notifyChange("amber", red, run), true);
   assert.equal(notifyChange("red", amber, run), false, "better but not fixed: quiet");
-  assert.equal(notifyChange("amber", green, run), true, "recovered");
+  assert.equal(notifyChange("red", green, run), true, "recovered from what the person had to do");
+  assert.equal(notifyChange("amber", green, run), false, "a chore that finished: quiet");
   assert.equal(notifyChange("green", green, run), false);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 2);
 });
 
 test("against a workspace without the self-check, only this computer's own checks count", async () => {

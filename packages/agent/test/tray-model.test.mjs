@@ -2,7 +2,7 @@
 // the one fix when something is wrong, and time asleep never counted as records waiting.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkResult, trayModel, unreachable, WAITING_ATTENTION_MS } from "../dist/tray-model.js";
+import { checkResult, trayModel, unreachable, RECORDS_STUCK_MS } from "../dist/tray-model.js";
 import { healthOf } from "../dist/health.js";
 
 const MIN = 60_000;
@@ -41,17 +41,18 @@ test("protected: no badge, the rows that have data, Check now, and a tooltip nam
   assert.ok(m.tooltip.length <= 63);
 });
 
-test("records waiting: attention only after 15 minutes of awake time, with Send records now as the fix", () => {
-  const waiting = (ageMin, awakeMin) => trayModel(input(status({ pending: 42, oldest_pending_age_s: ageMin * 60 }), { awakeSince: NOW - awakeMin * MIN }));
+test("records waiting are the agent's job: never attention and no Send records now; a quiet Settings row after a day awake", () => {
+  const waiting = (ageMin, awakeMin) => trayModel(input(status({ pending: 42, oldest_pending_age_s: ageMin * 60, last_success_at: NOW - ageMin * MIN }), { awakeSince: NOW - awakeMin * MIN }));
   assert.equal(waiting(5, 600).state, "protected", "five minutes is normal");
-  assert.deepEqual(waiting(5, 600).actions.map((a) => a.id), ["send_now", "check_now"]);
+  assert.deepEqual(waiting(5, 600).actions.map((a) => a.id), ["check_now"]);
   const stuck = waiting(40, 600);
-  assert.equal(stuck.state, "attention");
-  assert.equal(stuck.headline, "42 records waiting to send");
-  assert.equal(stuck.fix.id, "send_now");
-  // The laptop slept: the records are four hours old but it woke two minutes ago.
-  assert.equal(waiting(240, 2).state, "protected", "time asleep never counts");
-  assert.ok(WAITING_ATTENTION_MS === 15 * MIN);
+  assert.equal(stuck.state, "protected");
+  assert.equal(stuck.fix, null);
+  assert.ok(!stuck.computer_rows.some((r) => r.label === "Delivery"));
+  assert.match(waiting(26 * 60, 48 * 60).computer_rows.find((r) => r.label === "Delivery").value, /^Records can't reach Avouro since /);
+  // The laptop slept: the records are a day and a half old but it woke two minutes ago.
+  assert.ok(!waiting(36 * 60, 2).computer_rows.some((r) => r.label === "Delivery"), "time asleep never counts");
+  assert.ok(RECORDS_STUCK_MS === 24 * 60 * MIN);
 });
 
 test("workspace unreachable is offline (grey) for four hours, then needs attention; records wait", () => {
@@ -122,7 +123,7 @@ test("a workspace at its monthly limit is said plainly, not 'sending'; another r
   assert.equal(refused.rows.find((r) => r.label === "Delivery")?.value, "4 waiting · last try refused (HTTP 413)");
 });
 
-test("after a restart of the agent alone, waiting counts from the saved wake time, so a backlog is attention at once", async () => {
+test("after a restart of the agent alone, waiting counts from the saved wake time (a backlog still never needs the person)", async () => {
   const { awakeSinceAtStart } = await import("../dist/index.js");
   const H = 60 * MIN;
   const gap = 5 * MIN;
@@ -132,7 +133,7 @@ test("after a restart of the agent alone, waiting counts from the saved wake tim
   const since = awakeSinceAtStart({ saved: { awake_since: NOW - 4 * H, last_cycle_at: NOW - 30_000 }, now: NOW, uptimeMs, allowedGapMs: gap });
   assert.equal(since, NOW - 4 * H);
   const model = trayModel(input(status({ pending: 42, oldest_pending_age_s: 4 * 3600 }), { awakeSince: since }));
-  assert.equal(model.state, "attention");
+  assert.equal(model.state, "protected", "records waiting are the agent's job");
   // Restarted soon after a cycle, with a saved wake time from before the computer last started: from its start.
   assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 30_000 }, now: NOW, uptimeMs: 2 * H, allowedGapMs: gap }), NOW - 2 * H);
   // The computer was switched off and started 10 minutes ago: awake since it started, never since before.
@@ -155,7 +156,7 @@ test("after a long gap without a restart of the computer, the waiting records de
   const written = awakeSinceAtStart({ saved, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: NOW - 2 * H });
   assert.equal(written, NOW - 2 * H);
   const backlog = trayModel(input(status({ pending: 12, oldest_pending_age_s: 2 * 3600 }), { awakeSince: written }));
-  assert.equal(backlog.state, "attention");
+  assert.equal(backlog.state, "protected", "records waiting are the agent's job");
   // ...never from before the computer's start.
   assert.equal(awakeSinceAtStart({ saved: { awake_since: NOW - 30 * H, last_cycle_at: NOW - 3 * H }, now: NOW, uptimeMs: 2.5 * H, allowedGapMs: gap, oldestPendingAt: NOW - 2.75 * H }), NOW - 2.5 * H);
   // A record already waiting at the last cycle: the 40 minutes it waited while the agent ran still count, the three-hour
@@ -163,7 +164,7 @@ test("after a long gap without a restart of the computer, the waiting records de
   const older = awakeSinceAtStart({ saved, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: NOW - 3 * H - 40 * MIN });
   assert.equal(older, NOW - 40 * MIN);
   const carried = trayModel(input(status({ pending: 3, oldest_pending_age_s: (3 * 3600) + 40 * 60 }), { awakeSince: older }));
-  assert.equal(carried.state, "attention");
+  assert.equal(carried.state, "protected");
   // Only five minutes before the gap: not yet attention, and the gap still never counts.
   const brief = awakeSinceAtStart({ saved, now: NOW, uptimeMs, allowedGapMs: gap, oldestPendingAt: NOW - 3 * H - 5 * MIN });
   assert.equal(brief, NOW - 5 * MIN);
@@ -176,7 +177,7 @@ test("after a long gap without a restart of the computer, the waiting records de
   // After the computer was switched off, the record counts from the computer's start.
   const rebooted = awakeSinceAtStart({ saved, now: NOW, uptimeMs: 30 * MIN, allowedGapMs: gap, oldestPendingAt: NOW - 5 * H });
   assert.equal(rebooted, NOW - 30 * MIN);
-  assert.equal(trayModel(input(status({ pending: 3, oldest_pending_age_s: 5 * 3600 }), { awakeSince: rebooted })).state, "attention");
+  assert.equal(trayModel(input(status({ pending: 3, oldest_pending_age_s: 5 * 3600 }), { awakeSince: rebooted })).state, "protected");
 });
 
 test("an agent the workspace's plan paused says so, with Open workspace as the fix, not Send records now", () => {
@@ -208,7 +209,8 @@ test("one line under Protected, the workspace's name and today's counts; up to 2
   assert.equal(trayModel(input(status(), { canAsk: true })).can_ask, true);
   assert.equal(trayModel(input(status(), { today: { actions: 4, blocked: 0, allowed_by_person: 0 } })).detail, "Nothing blocked today · rules updated 3 min ago");
   assert.equal(trayModel(input(status(), { rules: null, today: null })).detail, null);
-  assert.equal(trayModel(input(status({ pending: 42, oldest_pending_age_s: 40 * 60 }))).detail, null, "the headline says what is wrong");
+  assert.equal(trayModel(input(status({ pending: 42, oldest_pending_age_s: 40 * 60 }))).detail, "3 blocked today · rules updated 3 min ago", "records waiting are the agent's job: still the usual line");
+  assert.equal(trayModel(input(status({ connected: false }), { canSignIn: true })).detail, null, "the headline says what is wrong");
 });
 
 test("the npm tray icon's menu shows & in the agent's text as it is (a single & would vanish as a keyboard shortcut)", async () => {

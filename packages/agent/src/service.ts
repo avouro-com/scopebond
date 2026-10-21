@@ -9,7 +9,7 @@ import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
-  writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
+  readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -363,6 +363,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   // runs no self-check does not clear it).
   let lastSelfCheck: MaintenanceResult["selfCheck"] = null;
   let failures = 0;
+  // When the last cycle that could not deliver ended.
+  let failedAt = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   let running: Promise<CycleResult> | null = null;
@@ -446,6 +448,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       try { noticeHealth(); } catch { /* status is best effort */ }
       last = result;
       failures = result.deliveryError ? failures + 1 : 0;
+      if (result.deliveryError) failedAt = Date.now();
       if (result.delivered) log(`delivered ${result.delivered} record(s); ${result.pending} waiting`);
       if (result.deliveryError) log(`delivery problem: ${result.deliveryError}`);
       // Asked from the workspace's computer page. Send again now (the cycle sent before its rules check), or run the
@@ -570,7 +573,24 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const delay = failures ? Math.min(MAX_BACKOFF_MS, interval * 2 ** Math.min(failures, 6))
       : requestWaiting(options.dir, Date.now()) ? Math.min(interval, ANSWER_POLL_MS) : interval;
     timerWaiting = true;
-    timer = setTimeout(() => { timerWaiting = false; void cycle().finally(schedule); }, delay);
+    const due = Date.now() + delay;
+    let lastTick = Date.now();
+    // While backing off, the agent looks again every interval and starts the next cycle at once (the backoff starts over)
+    // when a delivery worked elsewhere since its last failed one (a hook call reached the workspace) or the computer has just
+    // woken. Sending is the agent's job: nobody has to press "Send now".
+    const tick = () => {
+      const at = Date.now();
+      const woke = at - lastTick > allowedGapMs + interval;
+      lastTick = at;
+      if (failures && at < due && !woke && !deliveredSince(failedAt)) { timer = setTimeout(tick, Math.min(interval, due - at)); return; }
+      timerWaiting = false;
+      void cycle().finally(schedule);
+    };
+    timer = setTimeout(tick, failures ? Math.min(delay, interval) : delay);
+  };
+  /** A delivery that worked after `at` (any process: the hook delivers on its own too). */
+  const deliveredSince = (at: number): boolean => {
+    try { const success = readDeliveryState(options.dir).last_success_at; return success !== null && success > at; } catch { return false; }
   };
 
   // A block under a rule a person may allow or ask about can be acted on afterwards, from the tray: what the workspace offers

@@ -239,8 +239,9 @@ export interface TrayInput {
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
-/** Records waiting this long while the computer is awake and online need attention. */
-export const WAITING_ATTENTION_MS = 15 * MIN;
+/** Sending records is the agent's job, never the person's: only after this long awake and online without a delivery does
+ *  Settings say so, in one quiet row (no attention state, no toast). */
+export const RECORDS_STUCK_MS = 24 * HOUR;
 /** Offline (the workspace unreachable) this long needs attention. */
 const OFFLINE_ATTENTION_MS = 4 * HOUR;
 /** Rules not checked for this long while online need attention. */
@@ -298,6 +299,11 @@ function clock(at: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/** "Tue 09:14": a time at least a day ago, with its weekday. */
+function dayAndClock(at: number): string {
+  return `${new Date(at).toLocaleDateString("en-US", { weekday: "short" })} ${clock(at)}`;
+}
+
 const newer = (want: string | null, have: string): boolean => {
   if (!want) return false;
   const a = want.split(".").map(Number), b = have.split(".").map(Number);
@@ -321,9 +327,13 @@ export function trayModel(input: TrayInput): TrayModel {
   const d = status.delivery;
   const pending = d.pending;
   const oldestAt = d.oldest_pending_age_s === null ? null : now - d.oldest_pending_age_s * 1000;
-  // Sleep-aware: time the computer was asleep or off never counts as waiting.
-  const waitingMs = oldestAt === null ? 0 : now - Math.max(oldestAt, input.awakeSince);
   const offline = d.connected && unreachable(d.last_error);
+  // How long records have waited without a delivery while the computer was awake and online: time asleep or off never counts,
+  // nor time before the last delivery that worked.
+  const reachedAt = oldestAt === null ? null : Math.max(oldestAt, d.last_success_at ?? 0);
+  const stuckFor = reachedAt === null || pending === 0 || offline ? 0 : now - Math.max(reachedAt, input.awakeSince);
+  const stuck = d.connected && stuckFor > RECORDS_STUCK_MS && reachedAt !== null
+    ? `Records can't reach ${input.workspace?.name ?? "your workspace"} since ${dayAndClock(reachedAt)}` : null;
   const offlineFor = offline ? now - Math.max(d.last_success_at ?? input.awakeSince, input.awakeSince) : 0;
   const failed = input.version.failedUpdate ?? null;
   const offered = (want: string | null) => want !== null && want !== failed?.version ? want : null;
@@ -372,8 +382,6 @@ export function trayModel(input: TrayInput): TrayModel {
   } else if (offline) {
     state = offlineFor > OFFLINE_ATTENTION_MS ? "attention" : "offline";
     headline = pending ? `Workspace unreachable: ${pending} record${pending === 1 ? "" : "s"} waiting` : "Workspace unreachable: still checking actions";
-  } else if (pending > 0 && waitingMs > WAITING_ATTENTION_MS) {
-    state = "attention"; headline = `${pending} record${pending === 1 ? "" : "s"} waiting to send`; fix = ACTIONS.send_now;
   } else if (health.level === "amber" && health.fix?.route === "/maintain") {
     state = "attention"; headline = health.headline; fix = ACTIONS.check_now;
   } else if (input.rules?.checked_at && d.connected && now - input.rules.checked_at > RULES_STALE_MS) {
@@ -413,8 +421,8 @@ export function trayModel(input: TrayInput): TrayModel {
       : `Up to date (agent ${input.version.agent})`,
   });
 
+  // No "Send records now": the agent retries by itself (and starts again at once when a delivery works elsewhere).
   const actions: TrayAction[] = [];
-  if (pending > 0 && fix?.id !== "send_now" && state !== "disconnected") actions.push(ACTIONS.send_now);
   if (updateAvailable && !input.working) actions.push(ACTIONS.update_now);
   if (fix?.id !== "check_now") actions.push(ACTIONS.check_now);
   if (input.workspace?.computer_url) actions.push(ACTIONS.open_workspace);
@@ -448,7 +456,7 @@ export function trayModel(input: TrayInput): TrayModel {
       managed: input.rules.managed, blocking: input.rules.blocking ?? input.rules.block, monitoring: input.rules.monitoring ?? input.rules.monitor,
       packs: input.rules.packs ?? [], checked_at: input.rules.checked_at, last_attempt_at: input.rules.last_attempt_at ?? null, last_error: input.rules.last_error ?? null,
     } : null,
-    computer_rows: computerRows(input, state, updatedAt, updateAvailable),
+    computer_rows: computerRows(input, state, updatedAt, updateAvailable, stuck),
     version_label: `Scopebond ${input.version.agent}`,
     sign_in_code: input.signingIn?.user_code ?? null,
     first_sign_in: !d.connected && (input.canSignIn === true || !!input.signingIn),
@@ -458,8 +466,10 @@ export function trayModel(input: TrayInput): TrayModel {
 
 /** Settings' "This computer", as facts a person reads (no queues, no internals), each only when known:
  *  Protection ("On · 9 rules blocking · 4 packs", the packs listed when opened), Workspace ("Avouro · Production"), Rules
- *  updated (the last successful check) and Version ("Scopebond 0.11.4 · up to date": one version for the whole client). */
-function computerRows(input: TrayInput, state: TrayState, updatedAt: number | null, updateAvailable: boolean): ComputerRow[] {
+ *  updated (the last successful check) and Version ("Scopebond 0.11.4 · up to date": one version for the whole client).
+ *  Quiet lines about chores Scopebond keeps doing by itself go here too, never in the header: Delivery, after a day of
+ *  records not reaching the workspace. */
+function computerRows(input: TrayInput, state: TrayState, updatedAt: number | null, updateAvailable: boolean, delivery: string | null): ComputerRow[] {
   const rows: ComputerRow[] = [];
   const plural = (n: number, one: string, many: string) => `${count(n)} ${n === 1 ? one : many}`;
   const packs = input.packs ?? [];
@@ -473,6 +483,7 @@ function computerRows(input: TrayInput, state: TrayState, updatedAt: number | nu
   else if (!input.status.delivery.connected) rows.push({ label: "Workspace", value: "Not connected: using this computer's own rules" });
   if (updatedAt) rows.push({ label: "Rules updated", value: ago(updatedAt, input.now) });
   else if (input.rules && !input.rules.managed) rows.push({ label: "Rules updated", value: "Using this computer's own rules" });
+  if (delivery) rows.push({ label: "Delivery", value: delivery });
   const failed = input.version.failedUpdate ?? null;
   const version = `Scopebond ${input.version.agent}`;
   rows.push({
