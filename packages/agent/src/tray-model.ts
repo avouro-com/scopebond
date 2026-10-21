@@ -213,7 +213,7 @@ export interface TrayInput {
   /** `recommendedAgent`/`recommendedHook`: what this install can update to (the signed install: the workspace's signed
    *  build, and never a separate hook; an install for every user: nothing). `failedUpdate`: a version that did not install
    *  or start here within the last day (not offered again until then). */
-  version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null; failedUpdate?: { version: string; reason: string | null } | null };
+  version: { agent: string; hook: string; policy: "recommended" | "hold" | "unknown"; recommendedAgent: string | null; recommendedHook: string | null; failedUpdate?: { version: string; reason: string | null; failures?: number } | null };
   workspace: { name: string | null; environment: string | null; computer_url: string | null } | null;
   computerName: string;
   /** Items about this computer waiting in the workspace's Review (from the workspace's summary). */
@@ -254,6 +254,8 @@ const OFFLINE_ATTENTION_MS = 4 * HOUR;
 /** Rules not checked for this long: the agent checks again at once and keeps trying; the last-known rules stay in force, so
  *  the person sees nothing (Settings' "Rules updated" says when). */
 export const RULES_STALE_MS = HOUR;
+/** Failed tries of an update before Settings says it did not install (an older agent's record counts as said). */
+const UPDATE_TRIES_BEFORE_SAYING = 3;
 
 /** A delivery error that means the workspace could not be reached (no answer at all), not a refusal. */
 export function unreachable(error: string | null | undefined): boolean {
@@ -504,8 +506,11 @@ function computerRows(input: TrayInput, state: TrayState, updatedAt: number | nu
   const version = `Scopebond ${input.version.agent}`;
   rows.push({
     label: "Version",
+    // An update that did not install is tried again by itself (1 hour, 6 hours, then daily) while this version keeps
+    // protecting: nothing is said until three tries failed.
     value: updateAvailable ? `${version} · ${input.version.recommendedAgent ?? "a newer version"} ready to install`
-      : failed ? `${version} · the update to ${failed.version} didn't install; trying again later`
+      : failed && (failed.failures ?? UPDATE_TRIES_BEFORE_SAYING) >= UPDATE_TRIES_BEFORE_SAYING ? `Update didn't install; Scopebond keeps protecting on ${input.version.agent}`
+      : failed ? version
       : input.version.policy === "hold" ? `${version} · updates set by your workspace`
       : `${version} · up to date`,
   });

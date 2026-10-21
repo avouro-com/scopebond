@@ -99,7 +99,7 @@ test("msiexec failing is recorded with its exit code and log; the next start rec
   assert.match(outcome.reason, /exit code 1603 \(log: .*msi-9\.9\.9\.log\)/);
   const lines = [];
   noteUpdateOutcome(dir, (l) => lines.push(l), "9.9.8");
-  assert.equal(failedUpdate(dir)?.version, VERSION, "not tried again for a day");
+  assert.equal(failedUpdate(dir)?.version, VERSION, "not tried again at once");
   assert.match(lines.join("\n"), /was not installed/);
 });
 
@@ -202,7 +202,7 @@ test("on Windows, the check refuses a changed or unsigned installer and holds a 
   assert.ok(existsSync(copy));
 });
 
-test("a failed update is kept for a day with its reason, then offered again", () => {
+test("a failed update is kept with its reason until it is tried again (after an hour for a first failure), then offered again", () => {
   const dir = home();
   const at = Date.parse("2026-10-11T12:00:00Z");
   recordFailedUpdate(dir, VERSION, at, "x".repeat(400));

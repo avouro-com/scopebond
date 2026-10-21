@@ -36,7 +36,7 @@ import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorksp
 import { migrateFromNpm, readMigration, npmRemovalCommand } from "./migrate.js";
 import { enableAutostart } from "./autostart.js";
 import {
-  agentVersion, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
+  agentVersion, clearFailedUpdate, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
   updateTarget, type ClientVersion,
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
@@ -370,12 +370,12 @@ export function noteUpdateOutcome(dir: string, log: (line: string) => void, runn
       const why = `the installer reported ${installed.version} installed, but the agent that started is ${running}${installed.log ? ` (log: ${installed.log})` : ""}`;
       recordFailedUpdate(dir, installed.version, now, why);
       log(`the update to ${installed.version} did not take: ${why}`);
-    } else log(`the Scopebond Agent ${installed.version} was installed`);
+    } else { clearFailedUpdate(dir); log(`the Scopebond Agent ${installed.version} was installed`); }
     return;
   }
   if (!pending) return;
   // Installed, and its result already read by an earlier start of this version.
-  if (pending.version === running) { clearUpdatePending(dir); return; }
+  if (pending.version === running) { clearUpdatePending(dir); clearFailedUpdate(dir); return; }
   // Still under way (the helper waits for the old agent and runs msiexec), unless it has been far too long.
   if (now >= pending.at && now - pending.at < UPDATE_PENDING_MS) return;
   clearUpdatePending(dir);
@@ -618,7 +618,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
             result.error = `update to ${newer} could not start its installer: ${(error as Error).message}; nothing was installed`;
           }
         } else {
-          // Tried again at the next check: a download or a release not yet complete can pass then.
+          // Tried again after 1 hour, 6 hours, then daily: a download or a release not yet complete can pass then.
+          recordFailedUpdate(options.dir, newer, Date.now(), verified.ok ? "the installer changed after it was checked" : verified.reason);
           result.error = `update to ${newer} could not be verified: ${verified.ok ? "the installer changed after it was checked" : verified.reason}; nothing was installed`;
         }
         log(result.error);
@@ -627,6 +628,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
         const installed = await installAgent(newer, { fetchImpl: options.fetchImpl });
         const started = installed.ok ? await (options.startCheck ?? startCheck)(newer) : null;
         if (installed.ok && started?.ok) {
+          clearFailedUpdate(options.dir);
           result.updatedTo = newer;
           lastMaintenance = result;
           if (options.onUpdated) options.onUpdated(newer);
@@ -638,7 +640,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
           recordFailedUpdate(options.dir, newer);
           const back = await installAgent(current, { provenance: false });
           result.error = `the Scopebond Agent ${newer} did not start (${(started?.output ?? "").slice(-200)}); ${back.ok ? `went back to ${current}` : `going back to ${current} failed: ${back.output.slice(-200)}`}`;
-        } else result.error = `update to ${newer} failed: ${installed.output.slice(-300)}`;
+        } else {
+          result.error = `update to ${newer} failed: ${installed.output.slice(-300)}`;
+          recordFailedUpdate(options.dir, newer, Date.now(), installed.output.slice(-300));
+        }
         log(result.error);
       }
       // The local store: older rows rewritten, acknowledged receipts past the retention window removed, space returned.
@@ -659,7 +664,18 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       }
     } catch (error) { result.error = (error as Error).message; }
     lastMaintenance = result;
+    retryUpdateWhenDue();
     return result;
+  };
+  // A failed update is tried again when its wait is over (1 hour, 6 hours, then daily), not only at the six-hourly check.
+  let updateRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  const retryUpdateWhenDue = () => {
+    if (updateRetryTimer) { clearTimeout(updateRetryTimer); updateRetryTimer = null; }
+    const failed = failedUpdate(options.dir);
+    if (stopped || options.maintenance === false || !failed || kind === "per-machine") return;
+    const wait = failed.retry_at - Date.now() + 1_000;
+    updateRetryTimer = setTimeout(() => { updateRetryTimer = null; if (!stopped) void maintain(); }, Math.max(wait, 1_000));
+    updateRetryTimer.unref?.();
   };
 
   // A request was just sent: check for the answer every 10 seconds from now (schedule picks the shorter wait).
@@ -1074,6 +1090,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     try { endSignIn?.(); } catch { /* already over */ }
     if (timer) clearTimeout(timer);
     if (maintenanceTimer) clearInterval(maintenanceTimer);
+    if (updateRetryTimer) clearTimeout(updateRetryTimer);
     // A cycle under way gets a moment to finish; stop never waits on one that does not.
     if (running) await Promise.race([running.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2_000).unref?.())]);
     await control.close();

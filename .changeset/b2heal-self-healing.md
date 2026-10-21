@@ -11,3 +11,5 @@ Rules not checked for over an hour no longer turn the tray to "Rules not checked
 A self-check that did not pass no longer turns the tray to attention: Settings shows "Last check didn't pass: …" in words (never check ids), the line stays until a check passes, and "Check now" names what it found in the same words.
 
 A credential that ends within a week is renewed by the agent itself (at most once an hour, besides the rules check's own renewal), silently when the workspace renews it or does not answer; only when the workspace refuses does the tray ask "Sign in again to keep this computer connected" with "Sign in again…", and `status` reports the last renewal as `credential_renewal`.
+
+An update that does not install (a failed download or check, an install or start that failed) is now tried again after 1 hour, then 6 hours, then every 24 hours while the running version keeps protecting; `failedUpdate` reports how many tries failed, a version that installs forgets them, and Settings says "Update didn't install; Scopebond keeps protecting on <version>" only from the third failed try (nothing before).

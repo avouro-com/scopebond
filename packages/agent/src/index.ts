@@ -23,7 +23,7 @@ export {
 } from "./autostart.js";
 export {
   agentVersion, fetchClientVersion, compareVersions, commandHookVersion, maintainedHookCommand, maintainHookEntries, installAgent, ownNpm,
-  isVersion, npmInstallArgs, npmEnvironment, checkProvenance, startCheck, recordFailedUpdate, recentlyFailedUpdate, failedUpdate, updateTarget,
+  isVersion, npmInstallArgs, npmEnvironment, checkProvenance, startCheck, recordFailedUpdate, recentlyFailedUpdate, failedUpdate, clearFailedUpdate, updateRetryMs, updateTarget, UPDATE_RETRY_MS,
   NPM_REGISTRY, PROVENANCE_REPOSITORY, PROVENANCE_REF, CLIENT_VERSION_MAX_BYTES, FAILED_UPDATE_FILE, FAILED_UPDATE_RETRY_MS,
 } from "./update.js";
 export type { ClientVersion, ProvenanceResult } from "./update.js";

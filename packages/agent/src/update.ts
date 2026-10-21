@@ -8,7 +8,7 @@
 // version that did not start is rolled back and not retried for a day.
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isQuotedWindowsHookCommand, isScopebondHookCommand, isSingleExecutable,
@@ -299,26 +299,50 @@ export function startCheck(version: string, cli = agentCliPath(), timeoutMs = 60
   });
 }
 
-/** A version that was installed but did not start, kept so it is not installed again for a while. */
+/** A version that did not install or start, kept so it is not tried again for a while: after 1 hour, then 6 hours, then
+ *  every 24 hours (`failures` counts the tries of that version). The running version keeps protecting meanwhile. */
 export const FAILED_UPDATE_FILE = "update-failed.json";
 export const FAILED_UPDATE_RETRY_MS = 24 * 60 * 60 * 1000;
+export const UPDATE_RETRY_MS: readonly number[] = [60 * 60 * 1000, 6 * 60 * 60 * 1000, FAILED_UPDATE_RETRY_MS];
 
-export function recordFailedUpdate(dir: string, version: string, now = Date.now(), reason: string | null = null): void {
-  try { writeFileSync(join(dir, FAILED_UPDATE_FILE), `${JSON.stringify({ version, at: now, ...(reason ? { reason: reason.slice(0, 300) } : {}) })}\n`, { mode: 0o600 }); } catch { /* best effort */ }
+/** How long after its `failures`-th failed try a version is tried again. */
+export function updateRetryMs(failures: number): number {
+  return UPDATE_RETRY_MS[Math.min(Math.max(failures, 1), UPDATE_RETRY_MS.length) - 1];
 }
 
-/** The update that did not install or start here within the last day, with why, or null. */
-export function failedUpdate(dir: string, now = Date.now()): { version: string; at: number; reason: string | null } | null {
+interface FailedRecord { version: string; at: number; reason: string | null; failures: number }
+
+function readFailed(dir: string): FailedRecord | null {
   try {
-    const r = JSON.parse(readFileSync(join(dir, FAILED_UPDATE_FILE), "utf8")) as { version?: unknown; at?: unknown; reason?: unknown };
-    if (typeof r.version !== "string" || typeof r.at !== "number" || !(now - r.at >= 0 && now - r.at < FAILED_UPDATE_RETRY_MS)) return null;
-    return { version: r.version, at: r.at, reason: typeof r.reason === "string" ? r.reason : null };
+    const r = JSON.parse(readFileSync(join(dir, FAILED_UPDATE_FILE), "utf8")) as { version?: unknown; at?: unknown; reason?: unknown; failures?: unknown };
+    if (typeof r.version !== "string" || typeof r.at !== "number") return null;
+    // A record from before tries were counted stood for a day, as the third try's does.
+    const failures = typeof r.failures === "number" && Number.isInteger(r.failures) && r.failures > 0 ? r.failures : UPDATE_RETRY_MS.length;
+    return { version: r.version, at: r.at, reason: typeof r.reason === "string" ? r.reason : null, failures };
   } catch { return null; }
 }
 
+/** Record a failed try of `version`: one more than the last when it was the same version, else the first. */
+export function recordFailedUpdate(dir: string, version: string, now = Date.now(), reason: string | null = null): void {
+  const before = readFailed(dir);
+  const failures = before?.version === version ? before.failures + 1 : 1;
+  try { writeFileSync(join(dir, FAILED_UPDATE_FILE), `${JSON.stringify({ version, at: now, failures, ...(reason ? { reason: reason.slice(0, 300) } : {}) })}\n`, { mode: 0o600 }); } catch { /* best effort */ }
+}
+
+/** The update installed and running: its failed tries are forgotten. */
+export function clearFailedUpdate(dir: string): void {
+  try { rmSync(join(dir, FAILED_UPDATE_FILE), { force: true }); } catch { /* read as none once it is retried */ }
+}
+
+/** The update that did not install or start here, with why and how many tries failed, until it is tried again (`retry_at`);
+ *  null when there is none or its retry is due. */
+export function failedUpdate(dir: string, now = Date.now()): { version: string; at: number; reason: string | null; failures: number; retry_at: number } | null {
+  const r = readFailed(dir);
+  if (!r) return null;
+  const retryAt = r.at + updateRetryMs(r.failures);
+  return now - r.at >= 0 && now < retryAt ? { ...r, retry_at: retryAt } : null;
+}
+
 export function recentlyFailedUpdate(dir: string, version: string, now = Date.now()): boolean {
-  try {
-    const r = JSON.parse(readFileSync(join(dir, FAILED_UPDATE_FILE), "utf8")) as { version?: unknown; at?: unknown };
-    return r.version === version && typeof r.at === "number" && now - r.at >= 0 && now - r.at < FAILED_UPDATE_RETRY_MS;
-  } catch { return false; }
+  return failedUpdate(dir, now)?.version === version;
 }

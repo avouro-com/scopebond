@@ -32,15 +32,18 @@ export const HOUR = 60 * MIN;
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 /** A workspace the test controls: `faults[route]` is an HTTP status (or "down": no answer at all) for that route; every call is
- *  counted. Routes: ingest (records and summaries), policy, self-check, refresh, client-version. */
+ *  counted. Routes: ingest (records and summaries), policy, self-check, refresh, client-version; a signed release's download
+ *  always fails (404). */
 export function workspace() {
   const faults = {};
-  const calls = { ingest: 0, policy: 0, "self-check": 0, refresh: 0, "client-version": 0 };
+  const calls = { ingest: 0, policy: 0, "self-check": 0, refresh: 0, "client-version": 0, download: 0 };
   const answers = { "self-check": { ok: true, signature_verified: true, failed: [] }, refresh: null, "client-version": null };
   const routeOf = (path) => path === "/v1/ingest" || path === "/v1/summaries" ? "ingest" : path === "/v1/policy" ? "policy" : path === "/v1/self-check" ? "self-check"
     : path === "/v1/credential/refresh" ? "refresh" : path === "/v1/client-version" ? "client-version" : null;
   const fetchImpl = async (url) => {
     const path = new URL(String(url)).pathname;
+    // A signed release's files (manifest, signature, installer): the download fails.
+    if (path.includes("/agent-native-v")) { calls.download += 1; return new Response("not found", { status: 404 }); }
     const route = routeOf(path);
     if (route) calls[route] += 1;
     const fault = route ? faults[route] : undefined;
