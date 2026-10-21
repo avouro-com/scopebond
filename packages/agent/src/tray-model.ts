@@ -450,7 +450,8 @@ export function trayModel(input: TrayInput): TrayModel {
   if (hint === null && input.notice) hint = input.notice;
 
   const where = [input.workspace?.name, input.workspace?.environment].filter(Boolean).join(" · ");
-  const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : headline;
+  // Offline: the short form (the line itself does not fit the 63 characters of a tooltip).
+  const label = state === "protected" ? `Protected${where ? ` · ${where}` : ""}` : state === "offline" ? "Offline: using this computer's rules" : headline;
   // A sign-in waiting: the code, whole (the headline would be cut at 63 characters before it).
   const tooltip = input.signingIn ? `Scopebond: approve code ${input.signingIn.user_code}` : `Scopebond — ${label}`;
   // One line under "Protected": what was blocked today and when the rules were last updated (Settings says the rest).

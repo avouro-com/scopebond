@@ -16,6 +16,8 @@ test("offline for 30 minutes, 5 hours or 2 days: Offline with the same line, nev
     assert.equal(m.fix, null);
     assert.equal(m.row("Delivery"), null, "offline is said once, in the header");
   }
+  const raw = trayModel(modelInput(NOW, { last_error: "fetch failed (ENOTFOUND)" }));
+  assert.equal(raw.tooltip, "Scopebond — Offline: using this computer's rules", "a tooltip that fits, not cut off");
 });
 
 test("the workspace unreachable: the agent says Offline with the line, and keeps trying", async () => {
