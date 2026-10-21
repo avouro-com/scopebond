@@ -3,7 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,4 +113,47 @@ test("the single executable says it is the Scopebond Agent at this release, and 
   assert.ok(run.stdout.startsWith(`agent/${agent} hook/`), run.stdout);
   assert.doesNotMatch(run.stderr, /SingleExecutableApplication|experimental/i, "it starts as the application, not as plain Node");
   assert.ok(existsSync(join(here, "..", "build", "scopebond.ico")), "the icon the installer uses is written beside it");
+});
+
+test("inside the single executable: a signed plugin loads and fills the slot; an unverifiable engine bundle never runs", { skip: !enabled && "set SCOPEBOND_SEA=1 to build and run the executable" }, async () => {
+  const built = join(here, "..", "build", process.platform === "win32" ? "scopebond-agent.exe" : "scopebond-agent");
+  const exe = existsSync(built) ? built : await buildSea();
+  const home = mkdtempSync(join(tmpdir(), "sb-sea-slot-"));
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const sbHome = join(home, ".sbhome");
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const keyEntry = { key_id: "pol_sea_test", public_key: publicKey.export({ type: "spki", format: "pem" }).toString(), not_before: "2026-01-01T00:00:00Z", not_after: "2030-01-01T00:00:00Z" };
+  const env = {
+    ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData"), LOCALAPPDATA: join(home, "Local"),
+    SCOPEBOND_HOME: sbHome, SCOPEBOND_OBSERVATIONS_HEARTBEAT: "off", SCOPEBOND_HOOK_DIR: join(project, ".scopebond"),
+    SCOPEBOND_POLICY_KEYS_JSON: JSON.stringify([keyEntry]),
+  };
+  assert.equal(spawnSync(exe, ["hook", "init", "--claude", "--yes"], { cwd: project, env, encoding: "utf8" }).status, 0);
+  // The plugin: loaded by the executable through Node's default loader (the executable's own code cannot import a file).
+  const source = Buffer.from('export function inspect(action) { return { pattern_id: "' + "c".repeat(64) + '", slot: Buffer.from(action.action_type).toString("base64") }; }\n');
+  const sha256 = createHash("sha256").update(source).digest("hex");
+  mkdirSync(join(sbHome, "intel", "current"), { recursive: true });
+  writeFileSync(join(sbHome, "intel", "current", "intel.mjs"), source);
+  writeFileSync(join(sbHome, "intel", "current", "manifest.json"), JSON.stringify({ version: "1.0.0", sha256, signature: sign(null, Buffer.from(`scopebond:component/intel/v1\n${sha256}`), privateKey).toString("base64"), key_id: "pol_sea_test" }));
+  // An engine bundle no updater key signed, named as current: the executable must not run it.
+  mkdirSync(join(sbHome, "engine", "99.0.0"), { recursive: true });
+  writeFileSync(join(sbHome, "engine", "99.0.0", "scopebond-hook.cjs"), 'module.exports.run = async () => { process.stdout.write("hijacked"); };\n');
+  writeFileSync(join(sbHome, "engine", "99.0.0", "manifest.json"), "{}");
+  writeFileSync(join(sbHome, "engine", "99.0.0", "manifest.json.sig"), "AAAA");
+  writeFileSync(join(sbHome, "engine", "current.json"), JSON.stringify({ version: "99.0.0", at: Date.now(), previous: null }));
+  const input = JSON.stringify({ hook_event_name: "PreToolUse", session_id: "sea-slot", tool_name: "Bash", tool_input: { command: "git status" }, cwd: project });
+  const run = spawnSync(exe, ["hook", "claude"], { input, env, cwd: project, encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.doesNotMatch(run.stdout, /hijacked/);
+  assert.match(readFileSync(join(sbHome, "engine", "start-failures.log"), "utf8"), /99\.0\.0/, "the refusal is recorded");
+  const { openReceiptStore } = await import(new URL("../../gateway/dist/node.js", import.meta.url).href);
+  const { store } = openReceiptStore({ db: join(project, ".scopebond", "receipts.db") });
+  const receipts = await Promise.resolve(store.list());
+  await Promise.resolve(store.close?.());
+  assert.ok(receipts.length > 0 && receipts.every((r) => r.payload.pattern_id === "c".repeat(64)), "every receipt carries the plugin's pattern id");
+  // A candidate that does not verify fails the check instead of passing on the engine inside.
+  const candidate = spawnSync(exe, ["hook", "packs", "test", "--all", "--json"], { cwd: project, env: { ...env, SCOPEBOND_ENGINE_CANDIDATE: "99.0.0" }, encoding: "utf8" });
+  assert.equal(candidate.status, 3, candidate.stdout + candidate.stderr);
+  assert.match(candidate.stderr, /candidate engine 99\.0\.0/);
 });
