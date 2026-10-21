@@ -31,7 +31,8 @@ export const HOUR = 60 * MIN;
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-/** A workspace the test controls: `faults[route]` is an HTTP status (or "down": no answer at all) for that route; every call is
+/** A workspace the test controls: `faults[route]` is an HTTP status, a refusal `{ status, code }`, or "down" (no answer at
+ *  all) for that route; every call is
  *  counted. Routes: ingest (records and summaries), policy, self-check, refresh, client-version; a signed release's download
  *  always fails (404). */
 export function workspace() {
@@ -49,6 +50,8 @@ export function workspace() {
     const fault = route ? faults[route] : undefined;
     if (fault === "down") throw new TypeError("fetch failed (ECONNREFUSED)");
     if (typeof fault === "number") return json({ error: "fault", message: "injected" }, fault);
+    // A refusal with the workspace's code ({ status: 402, code: "not_licensed" }).
+    if (fault && typeof fault === "object") return json({ error: fault.code, code: fault.code }, fault.status);
     if (route === "ingest") return json({ ok: true, accepted: 1 });
     if (route === "policy") return new Response(null, { status: 204 });
     if (route === "self-check") return json(answers["self-check"]);

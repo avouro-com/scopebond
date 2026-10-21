@@ -112,11 +112,11 @@ test("the tray script takes the home and agent id as data and draws all six stat
   assert.doesNotMatch(script, /Problems only/, "one switch: no 'Problems only' choice");
 });
 
-test("a workspace at its monthly limit is said plainly, not 'sending'; another refusal names its status", () => {
+test("a workspace at its monthly limit is said plainly in Settings, not 'sending', and the tray stays Protected; another refusal names its status", () => {
   const atLimit = trayModel(input(status({ pending: 6037, oldest_pending_age_s: 4 * 3600, last_error: "ingest failed: HTTP 429 (quota): The workspace reached its monthly limit. Records stay queued on the computer and send once the limit allows." })));
-  assert.equal(atLimit.state, "attention");
-  assert.equal(atLimit.headline, "Workspace limit reached: 6037 records waiting");
-  assert.equal(atLimit.fix?.id, "open_workspace");
+  assert.equal(atLimit.state, "protected");
+  assert.equal(atLimit.computer_rows.find((r) => r.label === "Records").value, "Workspace limit reached · 6,037 records wait on this computer");
+  assert.equal(atLimit.fix, null);
   assert.match(atLimit.hint, /monthly limit/);
   assert.equal(atLimit.rows.find((r) => r.label === "Delivery")?.value, "6037 waiting · workspace limit reached");
   const refused = trayModel(input(status({ pending: 4, oldest_pending_age_s: 60, last_error: "ingest failed: HTTP 413: too large" })));
@@ -180,18 +180,19 @@ test("after a long gap without a restart of the computer, the waiting records de
   assert.equal(trayModel(input(status({ pending: 3, oldest_pending_age_s: 5 * 3600 }), { awakeSince: rebooted })).state, "protected");
 });
 
-test("an agent the workspace's plan paused says so, with Open workspace as the fix, not Send records now", () => {
+test("an agent the workspace's plan paused says so in Settings, with no button and no Send records now", () => {
   const m = trayModel(input(status({ pending: 12, oldest_pending_age_s: 3 * 60 * 60, last_error: "ingest failed: HTTP 402 (agent_paused)" }), { awakeSince: NOW - 3 * 60 * MIN }));
-  assert.match(m.headline, /^Paused by your workspace's plan: 12 records waiting$/);
-  assert.equal(m.fix.id, "open_workspace");
+  assert.equal(m.state, "protected");
+  assert.equal(m.computer_rows.find((r) => r.label === "Records").value, "Paused by your workspace's plan · 12 records wait on this computer");
+  assert.equal(m.fix, null);
 });
 
-test("an agent the workspace does not license says so in one plain line, with Open workspace as the fix", () => {
+test("an agent the workspace does not license says so in one plain Settings line, with no button", () => {
   const m = trayModel(input(status({ pending: 4, oldest_pending_age_s: 3 * 60 * 60, last_error: "ingest failed: HTTP 402 (not_licensed): This agent is not licensed." }), { awakeSince: NOW - 3 * 60 * MIN }));
-  assert.equal(m.state, "attention");
-  assert.match(m.headline, /^Not licensed: 4 records waiting$/);
+  assert.equal(m.state, "protected");
+  assert.equal(m.computer_rows.find((r) => r.label === "Records").value, "Not licensed · 4 records wait on this computer");
   assert.match(m.hint, /starter protections stay on/);
-  assert.equal(m.fix.id, "open_workspace");
+  assert.equal(m.fix, null);
 });
 
 test("today: an edit recorded after it ran is shown apart from blocks, never added to them", () => {

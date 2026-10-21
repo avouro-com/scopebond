@@ -285,6 +285,27 @@ function notLicensed(error: string | null | undefined): boolean {
   return !!error && /HTTP 402 \(not_licensed\)/.test(error);
 }
 
+/** A billing refusal as Settings says it: the line ("Not licensed · 4 records wait on this computer") and the note. Null for
+ *  any other error. A plan change is named only when the workspace said one lifts the limit, with the limit it gives. */
+function billingLine(error: string | null | undefined, pending: number): { line: string; note: string } | null {
+  const waiting = `${count(pending)} record${pending === 1 ? " waits" : "s wait"} on this computer`;
+  if (overQuota(error)) {
+    const liftsTo = planLiftsTo(error);
+    return { line: `Workspace limit reached · ${waiting}`, note: liftsTo !== null
+      ? `Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows, or sooner if a workspace owner moves to a plan that allows ${liftsTo.toLocaleString("en-US")} records a month.`
+      : "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows." };
+  }
+  if (notLicensed(error)) {
+    return { line: `Not licensed · ${waiting}`,
+      note: "This agent is not covered by your workspace's licenses. The starter protections stay on, and this computer keeps its records; they send once an owner adds licenses in Settings, Billing." };
+  }
+  if (planPaused(error)) {
+    return { line: `Paused by your workspace's plan · ${waiting}`,
+      note: "Your workspace's plan keeps fewer agents active than it has, and this one is paused. This computer keeps checking actions and keeps its records; they send once an owner keeps this agent active or changes the plan." };
+  }
+  return null;
+}
+
 /** The HTTP status of a refusal the workspace answered (not "unreachable"), or null. */
 function refusedStatus(error: string | null | undefined): number | null {
   const m = error ? /HTTP (\d{3})/.exec(error) : null;
@@ -343,7 +364,10 @@ export function trayModel(input: TrayInput): TrayModel {
   // nor time before the last delivery that worked.
   const reachedAt = oldestAt === null ? null : Math.max(oldestAt, d.last_success_at ?? 0);
   const stuckFor = reachedAt === null || pending === 0 || offline ? 0 : now - Math.max(reachedAt, input.awakeSince);
-  const stuck = d.connected && stuckFor > RECORDS_STUCK_MS && reachedAt !== null
+  // Billing refusals (the workspace's monthly limit, no license, paused by the plan): nothing a developer can do, Scopebond
+  // Cloud tells the workspace's owner, and the hook keeps checking every action. One quiet Settings line and the note.
+  const billing = pending > 0 ? billingLine(d.last_error, pending) : null;
+  const stuck = !billing && d.connected && stuckFor > RECORDS_STUCK_MS && reachedAt !== null
     ? `Records can't reach ${input.workspace?.name ?? "your workspace"} since ${dayAndClock(reachedAt)}` : null;
   const offlineFor = offline ? now - Math.max(d.last_success_at ?? input.awakeSince, input.awakeSince) : 0;
   const failed = input.version.failedUpdate ?? null;
@@ -376,25 +400,6 @@ export function trayModel(input: TrayInput): TrayModel {
   } else if (input.repairFailed?.length) {
     // The agent repaired at once and checked again; this one did not take. Repair tries again, as the person asks.
     state = "problem"; headline = `Scopebond couldn't reconnect to ${input.repairFailed.join(" and ")}`; fix = ACTIONS.repair;
-  } else if (pending > 0 && overQuota(d.last_error) && health.fix?.route !== "/repair") {
-    // Not "sending": the workspace refuses them until its limit allows. Nothing is lost; say so. A plan change is named only
-    // when the workspace said one lifts the limit, with the limit it gives: on some plans none does.
-    state = "attention"; headline = `Workspace limit reached: ${pending} record${pending === 1 ? "" : "s"} waiting`;
-    const liftsTo = planLiftsTo(d.last_error);
-    hint = liftsTo !== null
-      ? `Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows, or sooner if a workspace owner moves to a plan that allows ${liftsTo.toLocaleString("en-US")} records a month.`
-      : "Your workspace reached its monthly limit. Records stay on this computer and send once the limit allows.";
-    fix = ACTIONS.open_workspace;
-  } else if (pending > 0 && notLicensed(d.last_error) && health.fix?.route !== "/repair") {
-    // Not a delivery problem to retry: this agent holds no license. Sending again changes nothing; an owner decides.
-    state = "attention"; headline = `Not licensed: ${pending} record${pending === 1 ? "" : "s"} waiting`;
-    hint = "This agent is not covered by your workspace's licenses. The starter protections stay on, and this computer keeps its records; they send once an owner adds licenses in Settings, Billing.";
-    fix = ACTIONS.open_workspace;
-  } else if (pending > 0 && planPaused(d.last_error) && health.fix?.route !== "/repair") {
-    // Not a delivery problem to retry: the plan paused this agent. Sending again changes nothing; an owner decides.
-    state = "attention"; headline = `Paused by your workspace's plan: ${pending} record${pending === 1 ? "" : "s"} waiting`;
-    hint = "Your workspace's plan keeps fewer agents active than it has, and this one is paused. This computer keeps checking actions and keeps its records; they send once an owner keeps this agent active or changes the plan.";
-    fix = ACTIONS.open_workspace;
   } else if (health.level === "red") {
     state = "problem"; headline = health.headline; hint = health.hint;
     if (health.fix?.route === "/repair") fix = ACTIONS.repair;
@@ -442,6 +447,8 @@ export function trayModel(input: TrayInput): TrayModel {
   if (fix?.id !== "check_now") actions.push(ACTIONS.check_now);
   if (input.workspace?.computer_url) actions.push(ACTIONS.open_workspace);
 
+  // A billing refusal: Settings' note under "This computer" (the panel shows a hint there while protected).
+  if (hint === null && state === "protected" && billing) hint = billing.note;
   if (hint === null && input.notice) hint = input.notice;
 
   const where = [input.workspace?.name, input.workspace?.environment].filter(Boolean).join(" · ");
@@ -471,7 +478,7 @@ export function trayModel(input: TrayInput): TrayModel {
       managed: input.rules.managed, blocking: input.rules.blocking ?? input.rules.block, monitoring: input.rules.monitoring ?? input.rules.monitor,
       packs: input.rules.packs ?? [], checked_at: input.rules.checked_at, last_attempt_at: input.rules.last_attempt_at ?? null, last_error: input.rules.last_error ?? null,
     } : null,
-    computer_rows: computerRows(input, state, updatedAt, updateAvailable, stuck),
+    computer_rows: computerRows(input, state, updatedAt, updateAvailable, stuck, billing?.line ?? null),
     version_label: `Scopebond ${input.version.agent}`,
     sign_in_code: input.signingIn?.user_code ?? null,
     first_sign_in: !d.connected && (input.canSignIn === true || !!input.signingIn),
@@ -482,9 +489,9 @@ export function trayModel(input: TrayInput): TrayModel {
 /** Settings' "This computer", as facts a person reads (no queues, no internals), each only when known:
  *  Protection ("On · 9 rules blocking · 4 packs", the packs listed when opened), Workspace ("Avouro · Production"), Rules
  *  updated (the last successful check) and Version ("Scopebond 0.11.4 · up to date": one version for the whole client).
- *  Quiet lines about chores Scopebond keeps doing by itself go here too, never in the header: Delivery, after a day of
- *  records not reaching the workspace. */
-function computerRows(input: TrayInput, state: TrayState, updatedAt: number | null, updateAvailable: boolean, delivery: string | null): ComputerRow[] {
+ *  Quiet lines about chores Scopebond keeps doing by itself go here too, never in the header: Records, while the workspace
+ *  refuses them for billing reasons; Delivery, after a day of records not reaching the workspace. */
+function computerRows(input: TrayInput, state: TrayState, updatedAt: number | null, updateAvailable: boolean, delivery: string | null, records: string | null): ComputerRow[] {
   const rows: ComputerRow[] = [];
   const plural = (n: number, one: string, many: string) => `${count(n)} ${n === 1 ? one : many}`;
   const packs = input.packs ?? [];
@@ -498,6 +505,7 @@ function computerRows(input: TrayInput, state: TrayState, updatedAt: number | nu
   else if (!input.status.delivery.connected) rows.push({ label: "Workspace", value: "Not connected: using this computer's own rules" });
   if (updatedAt) rows.push({ label: "Rules updated", value: ago(updatedAt, input.now) });
   else if (input.rules && !input.rules.managed) rows.push({ label: "Rules updated", value: "Using this computer's own rules" });
+  if (records) rows.push({ label: "Records", value: records });
   if (delivery) rows.push({ label: "Delivery", value: delivery });
   // A self-check that did not pass, until one does: nothing in it is the person's to do (setup problems are repaired at once).
   const failedChecks = input.selfCheck && !input.selfCheck.ok ? selfCheckWords(input.selfCheck.failed.filter((id) => !OWN_LINE_CHECKS.has(id))) : [];

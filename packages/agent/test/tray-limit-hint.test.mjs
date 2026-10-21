@@ -1,4 +1,4 @@
-// At the workspace's monthly limit the tray says what is true: records wait on this computer and send once the limit
+// At the workspace's monthly limit the tray stays Protected (a developer cannot change billing) and Settings says what is true: records wait on this computer and send once the limit
 // allows. It says a plan change lifts the limit only when the workspace said so, and then names the limit that plan gives.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -27,9 +27,9 @@ const atLimit = (lastError) => trayModel(input(status({ pending: 120, oldest_pen
 
 test("the monthly limit is named and, with no word from the workspace about plans, the hint promises no plan change", () => {
   const m = atLimit(REFUSED);
-  assert.equal(m.state, "attention");
-  assert.match(m.headline, /^Workspace limit reached/);
-  assert.equal(m.fix?.id, "open_workspace");
+  assert.equal(m.state, "protected", "nothing a developer can do");
+  assert.match(m.computer_rows.find((r) => r.label === "Records").value, /^Workspace limit reached/);
+  assert.equal(m.fix, null);
   assert.match(m.hint, /monthly limit/);
   assert.match(m.hint, /send once the limit allows/);
   assert.doesNotMatch(m.hint, /plan/i, "nothing says a plan change lifts it");
@@ -37,7 +37,7 @@ test("the monthly limit is named and, with no word from the workspace about plan
 
 test("when the workspace says a plan change lifts the limit, the hint says to how many records a month", () => {
   const m = atLimit(`${REFUSED} [plan_lifts_to=250000]`);
-  assert.match(m.headline, /^Workspace limit reached/);
+  assert.match(m.computer_rows.find((r) => r.label === "Records").value, /^Workspace limit reached/);
   assert.match(m.hint, /send once the limit allows/);
   assert.match(m.hint, /plan that allows 250,000 records a month/);
 });
