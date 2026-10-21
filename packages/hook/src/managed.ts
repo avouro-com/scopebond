@@ -25,6 +25,12 @@
 // (its Off clause denies that alone). A document that sets one of the always-on rules (`NEVER_OFF_RULE_IDS`) to anything but
 // Block is read as Block and the inspection says so in `notes`; the document itself is not refused for it.
 //
+// A workspace sets the rules the rule packs define beyond the target rules in `pack_rules` (sent only to a hook that reports the
+// `pack_rules` capability): `{ <rule id>: { mode, override?, exceptions? } }`, with the same modes and terms as `rules`. They
+// apply to the pack rule of that id while a pack in force defines it (pack-rules.ts). A rule id in `rules` this version does not
+// know, and an entry of `pack_rules` that is not well formed, is skipped and reported (`skipped`, sent back on the rules
+// confirmation as `skipped_rules`); it is never a reason to refuse the document. `pack_rules` is digested with the rules.
+//
 // Loading is checked and atomic: the document must be well formed, name this computer, carry a matching digest and be newer
 // than the one in force; the merged policy must build; policy.json is written through a temp file and a rename, the previous
 // one kept. Disconnecting, or a workspace that stops managing this computer, restores the computer's own rules. A signed
@@ -41,7 +47,8 @@ import type { Recommended } from "./client-health.js";
 import type { SignatureState } from "./policy-signature.js";
 import { validSessionBudgets } from "./session-budget-shape.js";
 import { blockedServiceClauses, validBlockedServices, type BlockedService } from "./service-rules.js";
-import { exceptionHosts, packExceptionBounds, shellExceptionBounds, validRuleExceptions, type ExceptionBounds, type RuleException } from "./rule-exceptions.js";
+import { exceptionHosts, packExceptionBounds, shellExceptionBounds, validPackRuleExceptions, validRuleExceptions, type ExceptionBounds, type RuleException } from "./rule-exceptions.js";
+import type { PackRuleMode } from "./pack-rules.js";
 
 export const MANAGED_DOC_FILE = "managed-rules.json";
 export const MANAGED_META_FILE = "managed-meta.json";
@@ -171,7 +178,7 @@ export const RULE_OF_CLAUSE: Readonly<Record<string, AnyManagedRuleId>> = {
  *  denies under it is never allowed on the spot (another rule on Block, another rule a person may only ask about, or
  *  Scopebond's own floor). */
 export function floorDocument(doc: ManagedDocument, decided?: string): ManagedDocument {
-  const rules = Object.fromEntries(Object.entries(doc.rules).map(([id, rule]) => {
+  const floor = (entries: Record<string, ManagedRule | undefined>): Record<string, ManagedRule | undefined> => Object.fromEntries(Object.entries(entries).map(([id, rule]) => {
     if (!(rule?.mode === "override" || (id === decided && personMayAct(rule)))) return [id, rule];
     const rest = { ...rule };
     delete rest.override;
@@ -179,8 +186,10 @@ export function floorDocument(doc: ManagedDocument, decided?: string): ManagedDo
     delete rest.excluded_branches;
     delete rest.exceptions;
     return [id, { ...rest, mode: "monitor" }];
-  })) as ManagedDocument["rules"];
-  return { ...doc, rules };
+  }));
+  const rules = floor(doc.rules) as ManagedDocument["rules"];
+  // A rule pack's rule a person may allow is recorded on the floor too; its digest is not checked again.
+  return { ...doc, rules, ...(doc.pack_rules !== undefined ? { pack_rules: floor(packRulesOf(doc)) as Record<string, ManagedRule> } : {}) };
 }
 export interface ManagedDocument {
   type: "scopebond:managed-rules";
@@ -203,6 +212,10 @@ export interface ManagedDocument {
   /** MCP servers, hosts, programs and packages the workspace blocks by name (service-rules.ts), sent only to a hook that reports
    *  the `service_rules` capability. Digested with the rules (`digestManaged`): a changed list is refused like changed rules. */
   blocked_services?: BlockedService[];
+  /** The modes the workspace sets for the rules the rule packs define, by rule id (sent only to a hook that reports the
+   *  `pack_rules` capability). Digested with the rules (`digestManaged`). Read through `packRulesOf`, which leaves out an
+   *  entry that is not well formed. */
+  pack_rules?: Record<string, ManagedRule>;
   /** Signed rules (policy-signature.ts): `true` on a rules document when present; the workspace's id; when it was issued
    *  (RFC 3339); the signing key's id and the base64 Ed25519 signature. All optional while unsigned documents are accepted. */
   managed?: true;
@@ -240,14 +253,46 @@ export const isUnmanagedAnswer = (raw: unknown): raw is UnmanagedAnswer =>
 
 export type RefusalReason = "invalid_document" | "stale_revision" | "wrong_computer" | "unsupported" | "write_failed";
 /** A checked document, with `notes` on what is read differently from what it says (an always-on rule set to anything but
- *  Block is read as Block). */
-export type Inspection = { ok: true; doc: ManagedDocument; notes: string[] } | { ok: false; reason: RefusalReason; message: string };
+ *  Block is read as Block) and `skipped`: the rule ids it names that this version skipped (unknown in `rules`, or not well
+ *  formed in `pack_rules`). */
+export type Inspection = { ok: true; doc: ManagedDocument; notes: string[]; skipped: string[] } | { ok: false; reason: RefusalReason; message: string };
 
 export const digestRules = (rules: unknown): string => createHash("sha256").update(canonical(rules)).digest("hex");
-/** A document's `rules_digest`: the digest of its rules, or, when it carries `blocked_services`, of `{ rules, blocked_services }`
- *  (canonical JSON, so the members' order in the document does not matter; the list's own order does). */
-export const digestManaged = (rules: unknown, blockedServices?: unknown): string =>
-  blockedServices === undefined ? digestRules(rules) : createHash("sha256").update(canonical({ rules, blocked_services: blockedServices })).digest("hex");
+/** A document's `rules_digest`: the digest of its rules alone, or, when it carries `blocked_services` or `pack_rules`, of the
+ *  object of `rules` and those it carries (`{ rules, blocked_services?, pack_rules? }`; canonical JSON, so the members' order
+ *  in the document does not matter; a list's own order does). */
+export const digestManaged = (rules: unknown, blockedServices?: unknown, packRules?: unknown): string =>
+  blockedServices === undefined && packRules === undefined ? digestRules(rules)
+    : createHash("sha256").update(canonical({ rules, ...(blockedServices !== undefined ? { blocked_services: blockedServices } : {}), ...(packRules !== undefined ? { pack_rules: packRules } : {}) })).digest("hex");
+
+const PACK_RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
+/** Why a `pack_rules` entry is not well formed, or null when it is: a pack rule id that names no rule of this document's own,
+ *  a mode, the override terms its mode needs, and exceptions on the fields the packs' actions carry. */
+function packRuleProblem(id: string, rule: unknown): string | null {
+  if (!PACK_RULE_ID.test(id) || ([...MANAGED_RULE_IDS, ...OPTIONAL_RULE_IDS, ...NEVER_OFF_RULE_IDS] as readonly string[]).includes(id)) return "not a pack rule id";
+  if (!isObject(rule) || typeof rule.mode !== "string" || !MODES.has(rule.mode)) return "no valid mode";
+  const acts = rule.mode === "override" || rule.mode === "ask";
+  if (acts !== ("override" in rule) || (acts && !validTerms(rule.override))) return "invalid override terms";
+  if (rule.exceptions !== undefined && !validPackRuleExceptions(rule.exceptions)) return "invalid exceptions";
+  if (Object.keys(rule).some((k) => k !== "mode" && k !== "override" && k !== "exceptions")) return "an unknown setting";
+  return null;
+}
+
+/** The well-formed entries of a document's `pack_rules` (an entry that is not is skipped, as the inspection reported). */
+export function packRulesOf(doc: Pick<ManagedDocument, "pack_rules"> | null | undefined): Record<string, ManagedRule> {
+  const raw = doc?.pack_rules;
+  if (!isObject(raw)) return {};
+  const out: Record<string, ManagedRule> = {};
+  for (const [id, rule] of Object.entries(raw)) if (packRuleProblem(id, rule) === null) out[id] = rule;
+  return out;
+}
+
+/** The workspace's setting for a rule, by its id: a rule of `rules`, else a rule pack's rule in `pack_rules`. */
+export function managedSetting(doc: ManagedDocument, id: string | null | undefined): ManagedRule | undefined {
+  if (!id) return undefined;
+  const known = ([...MANAGED_RULE_IDS, ...OPTIONAL_RULE_IDS, ...NEVER_OFF_RULE_IDS] as readonly string[]).includes(id);
+  return known ? (doc.rules as Record<string, ManagedRule | undefined>)[id] : packRulesOf(doc)[id];
+}
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -266,10 +311,16 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   if (installationId !== context.installationId || exportId !== `rev-${revision as number}-${installationId}`) {
     return { ok: false, reason: "wrong_computer", message: "these rules were issued for a different computer" };
   }
-  const keys = Object.keys(rules);
   const known: readonly string[] = [...MANAGED_RULE_IDS, ...OPTIONAL_RULE_IDS, ...NEVER_OFF_RULE_IDS];
-  if (!MANAGED_RULE_IDS.every((id) => keys.includes(id)) || !keys.every((id) => known.includes(id))) {
-    return { ok: false, reason: "unsupported", message: "the rules document names rules this version does not know; update Scopebond" };
+  if (!MANAGED_RULE_IDS.every((id) => Object.keys(rules).includes(id))) {
+    return { ok: false, reason: "unsupported", message: "the rules document leaves out a rule every document sets; update Scopebond" };
+  }
+  // A rule this version does not know is skipped and reported, never a reason to refuse the rules it does know.
+  const skipped = Object.keys(rules).filter((id) => !known.includes(id));
+  const keys = Object.keys(rules).filter((id) => known.includes(id));
+  if (raw.pack_rules !== undefined) {
+    if (!isObject(raw.pack_rules)) skipped.push("pack_rules");
+    else for (const [id, rule] of Object.entries(raw.pack_rules)) if (packRuleProblem(id, rule) !== null) skipped.push(id);
   }
   const notes: string[] = [];
   for (const id of keys as AnyManagedRuleId[]) {
@@ -302,7 +353,7 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   // Blocked services are checked whole, like session budgets, and are digested with the rules: a malformed or changed list
   // refuses the document (the rules in force stay), so a bad delivery never reads as "nothing blocked".
   if (raw.blocked_services !== undefined && !validBlockedServices(raw.blocked_services)) return bad("the blocked services are malformed");
-  if (digestManaged(rules, raw.blocked_services) !== rulesDigest) return bad("the rules do not match their digest; the document was changed or damaged");
+  if (digestManaged(rules, raw.blocked_services, raw.pack_rules) !== rulesDigest) return bad("the rules do not match their digest; the document was changed or damaged");
   // Session budgets are checked whole: a malformed list refuses the document (the rules and budgets in force stay), so a bad
   // delivery never reads as "no limit".
   if (raw.session_budgets !== undefined && !validSessionBudgets(raw.session_budgets)) return bad("the session budgets are malformed");
@@ -312,7 +363,7 @@ export function inspectManaged(raw: unknown, context: { installationId: string; 
   if (context.currentRevision !== null && (revision as number) <= context.currentRevision && !sameVersionChanged) {
     return { ok: false, reason: "stale_revision", message: `version ${String(revision)} is not newer than the version in force (${context.currentRevision})` };
   }
-  return { ok: true, doc: raw as unknown as ManagedDocument, notes };
+  return { ok: true, doc: raw as unknown as ManagedDocument, notes, skipped: [...new Set(skipped.map((id) => id.slice(0, 100)))].slice(0, 100) };
 }
 
 const union = (a: readonly string[], b: readonly string[] | undefined): string[] => [...new Set([...a, ...(b ?? [])])];
@@ -390,17 +441,38 @@ export function offRuleIds(local: RuleSet, doc: ManagedDocument): Set<string> {
 }
 
 /** What the workspace document changes in the rule packs' clauses (pack-rules.ts), which join the policy when it is loaded:
- *  the target rules it switched Off, and each target rule's exceptions as bounds on the actions the packs derive. */
-export interface PackRuleAdjustments { off: ReadonlySet<string>; exceptions: Readonly<Record<string, ExceptionBounds[]>> }
-/** `PackRuleAdjustments` from a workspace document (none: nothing changes). Pure. */
+ *  the target rules it switched Off, the mode it (or a person, where allowed) set for each pack rule, and each rule's
+ *  exceptions as bounds on the actions the packs derive. */
+export interface PackRuleAdjustments { off: ReadonlySet<string>; modes: Readonly<Record<string, PackRuleMode>>; exceptions: Readonly<Record<string, ExceptionBounds[]>> }
+/** A workspace mode as a pack rule's mode: Block (with or without a person's answer) blocks. */
+const packModeOf = (rule: ManagedRule): PackRuleMode => (rule.mode === "off" ? "off" : blocks(rule) ? "enforce" : "monitor");
+/** A person's own choice for a pack rule beyond the starter and target rules (`local_overrides`, from `rules enforce|monitor`). */
+function personalPackModes(local: RuleSet): Record<string, PackRuleMode> {
+  const out: Record<string, PackRuleMode> = {};
+  for (const [id, mode] of Object.entries(local.local_overrides ?? {})) {
+    if (!SWITCHABLE_RULES.includes(id) && (mode === "enforce" || mode === "monitor")) out[id] = mode;
+  }
+  return out;
+}
+/** `PackRuleAdjustments` from a workspace document (none: only a person's own choices on this computer). Pure. */
 export function packRuleAdjustments(doc: ManagedDocument | null, local: RuleSet = defaultRules()): PackRuleAdjustments {
-  if (!doc) return { off: new Set(), exceptions: {} };
+  if (!doc) return { off: new Set(), modes: personalPackModes(local), exceptions: {} };
   const exceptions: Record<string, ExceptionBounds[]> = {};
+  const modes: Record<string, PackRuleMode> = {};
+  // A target rule the document sets has that mode, as `managedEnforce` reads it (so a pack's default never overrides it).
+  const enforced = new Set(managedEnforce(local, doc));
   for (const id of OPTIONAL_RULE_IDS) {
     const bounds = packExceptionBounds(doc.rules[id]?.exceptions ?? []);
     if (bounds.length) exceptions[id] = bounds;
+    if (doc.rules[id] !== undefined) modes[id] = enforced.has(id) ? "enforce" : "monitor";
   }
-  return { off: new Set([...offRuleIds(local, doc)].filter((id) => (OPTIONAL_RULE_IDS as readonly string[]).includes(id))), exceptions };
+  for (const [id, rule] of Object.entries(packRulesOf(doc))) {
+    modes[id] = packModeOf(rule);
+    const bounds = packExceptionBounds(rule.exceptions ?? []);
+    if (bounds.length) exceptions[id] = bounds;
+  }
+  if (doc.local_changes === true) Object.assign(modes, personalPackModes(local));
+  return { off: new Set([...offRuleIds(local, doc)].filter((id) => (OPTIONAL_RULE_IDS as readonly string[]).includes(id))), modes, exceptions };
 }
 
 /** The workspace document in force on this computer, or null (none, or unreadable). */
@@ -418,10 +490,9 @@ export function enforcedRuleIds(dir: string, docOverride?: ManagedDocument): Set
   return new Set(doc ? managedEnforce(local, doc) : local.enforce ?? []);
 }
 
-/** `packRuleAdjustments` for the workspace document in force on this computer (none: nothing changes). */
+/** `packRuleAdjustments` for the workspace document in force on this computer (none: a person's own choices). */
 export function packRuleAdjustmentsAt(dir: string): PackRuleAdjustments {
-  const doc = readManagedDoc(dir);
-  return packRuleAdjustments(doc, doc ? loadRules(dir) ?? defaultRules() : defaultRules());
+  return packRuleAdjustments(readManagedDoc(dir), loadRules(dir) ?? defaultRules());
 }
 
 /** The policy this computer enforces under workspace rules: its own compiled rules, adjusted rule by rule. Pure. */
@@ -492,6 +563,8 @@ export interface ManagedMeta {
   last_error: string | null;
   /** What the document in force says that this computer reads differently (an always-on rule set to anything but Block). */
   rule_notes?: string[] | null;
+  /** The rule ids the document in force named that this version skipped (managed.ts `inspectManaged`). */
+  skipped_rules?: string[] | null;
   /** When the last rules check was tried, whether it worked or not. */
   last_attempt_at?: string | null;
   /** The same time as `checked_at` (the last successful rules check), under a name that cannot be read as "last tried". */

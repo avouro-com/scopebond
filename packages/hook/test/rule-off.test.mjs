@@ -135,8 +135,10 @@ test("a rule that may never be off: Off is read as Block and reported, never ref
     assert.equal((await runtime.evaluate(call("Write", { file_path: "/repo/.claude/settings.json", content: "{}" }))).decision, "deny");
     assert.equal((await runtime.evaluate(call("Read", { file_path: "/repo/.scopebond/agent.key" }))).decision, "deny");
   } finally { runtime.close(); }
-  // Only the always-on rules may be named this way; any other unknown rule still refuses the document.
-  assert.equal(inspectManaged(doc(10, { "made-up-rule": { mode: "block" } }), { installationId: INSTALLATION, currentRevision: null }).ok, false);
+  // Any other rule this version does not know is skipped and reported, never a reason to refuse the document.
+  const unknown = inspectManaged(doc(10, { "made-up-rule": { mode: "block" } }), { installationId: INSTALLATION, currentRevision: null });
+  assert.equal(unknown.ok, true);
+  assert.deepEqual(unknown.skipped, ["made-up-rule"]);
 });
 
 test("a person's own choice wins over Off only where the workspace allows changes on computers", () => {

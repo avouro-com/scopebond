@@ -17,7 +17,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
-import { compileManaged, floorDocument, managedEnforce, packRuleAdjustments, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms } from "./managed.js";
+import { compileManaged, floorDocument, managedEnforce, packRuleAdjustments, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms, managedSetting, packRulesOf } from "./managed.js";
 import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, matchPatternAllowance, mergeWorkspaceAllowances, patternKey, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem, makeQuietBlock, matchQuietBlock, type Allowance } from "./allowances.js";
 import { validAllowanceMatch } from "@scopebond/policy-schema/allow-patterns";
 import { enginePath, packRecipesFor, patternSetting, rulePatternable, similarFor, type SimilarOffer, type SimilarProposal } from "./pattern-recipes.js";
@@ -323,12 +323,13 @@ const RETRY_MS = 10 * 60 * 1000;
 export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOverrideHandler; note(): OverrideNote | null } | null {
   let doc: ManagedDocument;
   try { doc = JSON.parse(readFileSync(join(ctx.dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
-  if (!Object.values(doc.rules ?? {}).some((r) => personMayAct(r))) return null;
+  if (![...Object.values(doc.rules ?? {}), ...Object.values(packRulesOf(doc))].some((r) => personMayAct(r))) return null;
   const now = ctx.now ?? Date.now;
   let last: OverrideNote | null = null;
   const handler: ShownOverrideHandler = async ({ verdict, action_id, intent, intent_hash, shown }) => {
-    const rule = RULE_OF_CLAUSE[verdict.clause_id ?? ""];
-    const setting = rule ? doc.rules[rule] : undefined;
+    // A rule pack's rule the workspace sets in `pack_rules` carries its own id as its clause's.
+    const rule = (RULE_OF_CLAUSE[verdict.clause_id ?? ""] ?? (packRulesOf(doc)[verdict.clause_id ?? ""] ? verdict.clause_id : undefined)) as AnyManagedRuleId | undefined;
+    const setting = managedSetting(doc, rule);
     if (!rule || !personMayAct(setting) || !setting?.override) return null;
     // Keyed on what the window shows, the project among it; an allowance or unblock made under an older key still counts.
     // The project is read only for a key that has it, or when a person is asked.
@@ -510,7 +511,7 @@ export function blockedQuestion(dir: string, id: string, now = Date.now()): Bloc
   if (!item || item.acted || !(now - Date.parse(item.at) < 7 * DAY_MS)) return null;
   let doc: ManagedDocument;
   try { doc = JSON.parse(readFileSync(join(dir, MANAGED_DOC_FILE), "utf8")) as ManagedDocument; } catch { return null; }
-  const setting = doc.rules?.[item.rule as AnyManagedRuleId];
+  const setting = managedSetting(doc, item.rule);
   if (!personMayAct(setting) || !setting?.override) return null;
   const terms = setting.override;
   const dayStart = now - (now % DAY_MS);

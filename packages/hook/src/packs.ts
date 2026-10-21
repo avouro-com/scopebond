@@ -597,12 +597,18 @@ export function deriveFromProfile(profile: PackProfile, server: string, tool: st
 // ---- the packs in force ------------------------------------------------------------------------------------------------------
 
 let active: readonly Pack[] = [];
+let shadow: ReadonlySet<string> = new Set();
 
 /** Set the packs the mapper reads (pack-store.ts `activatePacks`, after verifying them). Sorted by id, so the result never
- *  depends on the order they were found in. An empty list switches every pack off. */
-export function setActivePacks(packs: readonly Pack[]): void {
+ *  depends on the order they were found in. An empty list switches every pack off. `shadowIds` names the packs whose signed
+ *  list says `shadow`: their rules record what they would block and never block (pack-rules.ts). */
+export function setActivePacks(packs: readonly Pack[], shadowIds: Iterable<string> = []): void {
   active = [...packs].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : comparePackVersions(a.version, b.version)));
+  shadow = new Set(shadowIds);
 }
+
+/** The ids of the packs in force that are in shadow. */
+export const shadowPackIds = (): ReadonlySet<string> => shadow;
 
 /** The packs in force, as `id@version`. */
 export const activePackRefs = (): string[] => active.map(packRef);

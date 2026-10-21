@@ -98,8 +98,9 @@ export function ruleTitle(rule: string | null | undefined): string | null {
   return own(RULE_TITLE, rule) ? RULE_TITLE[rule as AnyManagedRuleId] : null;
 }
 
-/** The workspace rule's name, or "A Scopebond rule": never empty, never a rule id. */
-export const ruleName = (rule: string | null | undefined): string => ruleTitle(rule) ?? GENERIC_RULE_TITLE;
+/** The workspace rule's name (or the title of a rule pack's rule by that id), or "A Scopebond rule": never empty, never a
+ *  rule id. */
+export const ruleName = (rule: string | null | undefined): string => ruleTitle(rule) ?? packRuleTitle(rule) ?? GENERIC_RULE_TITLE;
 
 /** The workspace rule a denying clause carries, or null when it carries none (a local rule, a blocked service). */
 export function ruleOfClause(clause: string | null | undefined): string | null {
@@ -126,14 +127,15 @@ function titleOfDescription(text: string): string | null {
   return `${cut.slice(0, cut.lastIndexOf(" ") > 20 ? cut.lastIndexOf(" ") : cut.length).replace(/[\s,;:]+$/, "")}...`;
 }
 
-/** The title of a rule a pack in force defines: the rule's `title` when it has one, else its description's first sentence,
- *  else what its first action type does, else the pack's own title. Null when no pack in force defines `clause`. */
+/** The title of a rule a pack in force defines: the rule's `title` (level 2) as the pack says it, else its description's
+ *  first sentence, else what its first action type does, else the pack's own title. Null when no pack in force defines
+ *  `clause`. */
 export function packRuleTitle(clause: string | null | undefined, packs: readonly Pack[] = activePacks()): string | null {
   if (!clause) return null;
   for (const pack of packs) {
     const rule = pack.rules.find((r) => String(r.id) === clause);
     if (!rule) continue;
-    const named = typeof rule.title === "string" ? titleOfDescription(rule.title) : null;
+    const named = typeof rule.title === "string" && rule.title.trim() !== "" ? rule.title.replace(/\s+/g, " ").trim() : null;
     const described = typeof rule.description === "string" ? titleOfDescription(rule.description) : null;
     const types = Array.isArray(rule.action_types) ? (rule.action_types as unknown[]).map(String) : [];
     const acted = types.map((t) => (own(ACTION_TITLE, t) ? ACTION_TITLE[t] : null)).find((t) => t !== null) ?? null;

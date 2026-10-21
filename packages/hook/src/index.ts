@@ -23,9 +23,10 @@ export { gitRestorable, repositoryTop, realEnginePath, GIT_RESTORE_TIMEOUT_MS, G
 export type { DeleteScope, DeleteVerdict } from "./delete-scope.js";
 // Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
 // this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.
-export { setActivePacks, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
+export { setActivePacks, shadowPackIds, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
 export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
-export { packRuleClauses, switchablePackRules, withPackRules } from "./pack-rules.js";
+export { packRuleClauses, switchablePackRules, withPackRules, packRuleOf, packRuleSaferWay } from "./pack-rules.js";
+export type { PackRuleSettings, PackRuleMode } from "./pack-rules.js";
 export {
   activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
 } from "./pack-store.js";
@@ -60,7 +61,7 @@ export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLIC
 export {
   inspectManaged, compileManaged, managedEnforce, enforcedRuleIds, installManaged, restoreLocal, isManaged, readMeta, digestRules, digestManaged, ruleReport,
   MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, NEVER_OFF_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
-  offRuleIds, packRuleAdjustments, packRuleAdjustmentsAt,
+  offRuleIds, packRuleAdjustments, packRuleAdjustmentsAt, packRulesOf, managedSetting,
   inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
   MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY, ANSWER_LENGTHS,
 } from "./managed.js";

@@ -76,6 +76,7 @@ import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
+import { switchablePackRules } from "./pack-rules.js";
 import { runPackVectors } from "./packs.js";
 import { describePackSync } from "./pack-sync.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
@@ -990,8 +991,11 @@ async function runRules(args: string[]): Promise<void> {
     case "monitor": {
       // Monitor is the default: a rule records what it would have stopped. "enforce" makes it block.
       const id = String(value ?? "");
-      if (!SWITCHABLE_RULES.includes(id)) {
-        console.error(`rules ${verb} <rule>: one of ${SWITCHABLE_RULES.join(", ")}`);
+      // A rule pack's own rule that may block can be switched too, while its pack is in force.
+      activatePacks(dir);
+      const packOnly = switchablePackRules().filter((r) => !SWITCHABLE_RULES.includes(r));
+      if (!SWITCHABLE_RULES.includes(id) && !packOnly.includes(id)) {
+        console.error(`rules ${verb} <rule>: one of ${[...SWITCHABLE_RULES, ...packOnly].join(", ")}`);
         process.exit(1);
       }
       if (isManaged(dir)) {
@@ -1012,6 +1016,8 @@ async function runRules(args: string[]): Promise<void> {
         await reportRules(dir);
         process.exit(0);
       }
+      // A rule pack's own rule keeps the person's choice by its id (it wins over the rule's default).
+      if (packOnly.includes(id)) rules.local_overrides = { ...(rules.local_overrides ?? {}), [id]: verb };
       const set = new Set(rules.enforce ?? []);
       if (verb === "enforce") set.add(id); else set.delete(id);
       rules.enforce = SWITCHABLE_RULES.filter((r) => set.has(r));

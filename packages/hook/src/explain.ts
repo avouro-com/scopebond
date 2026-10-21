@@ -13,6 +13,7 @@
 // agent pick a different approach instead of retrying the same blocked call.
 
 import { blockTitle, ruleOfClause } from "./rule-titles.js";
+import { packRuleSaferWay } from "./pack-rules.js";
 import { plainAction } from "./action-words.js";
 import { BLOCKED_SERVICE_CLAUSES, BLOCKED_SERVICE_LABEL, blockedServiceKindOf, blockedServiceOf, isUnreadablePackageKey, type BlockedService } from "./service-rules.js";
 
@@ -129,7 +130,7 @@ const ALWAYS_ON_PERSON = "this is Scopebond's own protection, always on: no one 
  *
  *    Scopebond blocked: <the action in plain words> ("<the rule's name>").
  *    Why: <the rule's one-line why>
- *    What to do: <the final instruction, by outcome>
+ *    What to do: <the final instruction, by outcome>[ A safer way: <a rule pack rule's hint>]
  *    For the person: <where to act>
  *    Ref: <clause id> · <mode> · <record id> (<the engine's own reason>)
  *
@@ -169,13 +170,15 @@ export function explainDeny(input: ExplainDenyInput): string {
   const title = blockTitle(ruleOfClause(clauseId), clauseId);
   // Scopebond's own protection and a blocked service stay blocked, whatever an override handler said.
   const instruction = ALWAYS_ON.has(clauseId) || kind ? FINAL_INSTRUCTION.stays : input.instruction || FINAL_INSTRUCTION.stays;
+  // A rule pack's rule may name a safer way to get the same thing done (its `safer_way`): said after the instruction.
+  const safer = ALWAYS_ON.has(clauseId) || kind ? null : packRuleSaferWay(clauseId);
   // The ids, the mode and the engine's own reason, last, so an admin can find the rule and the record, and support can match it.
   const ref = [clauseId, mode, str(input.actionId)].filter(Boolean).join(" · ") + (detail !== "denied" ? ` (${detail})` : "");
   const verbLine = input.postHoc ? "Scopebond recorded an out-of-policy action" : "Scopebond blocked";
   return [
     `${verbLine}: ${words || "an action"} ("${title}").`,
     ...(why ? [`Why: ${why}`] : []),
-    ...(input.postHoc ? [] : [`What to do: ${instruction}`]),
+    ...(input.postHoc ? [] : [`What to do: ${instruction}${safer ? ` A safer way: ${safer}` : ""}`]),
     `For the person: ${person}`,
     `Ref: ${ref}`,
   ].join("\n");

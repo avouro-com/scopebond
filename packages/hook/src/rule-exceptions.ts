@@ -97,9 +97,19 @@ const VALID: Record<ExceptionField, (v: string) => boolean> = {
   hosts: (v) => HOST.test(v),
 };
 
+/** The fields a rule pack's rule set in a workspace's `pack_rules` may take exceptions on: those the packs' derived actions
+ *  carry (packExceptionBounds). */
+export const PACK_RULE_EXCEPTION_FIELDS: readonly ExceptionField[] = ["environments", "kube_contexts", "terraform_workspaces", "database_urls"];
+
+/** Whether `value` is a valid exception list for a rule pack's rule set in `pack_rules`. Pure. */
+export const validPackRuleExceptions = (value: unknown): value is RuleException[] => validExceptionList(PACK_RULE_EXCEPTION_FIELDS, value, false);
+
 /** Whether `value` is a valid exception list for `ruleId`. A rule that takes no exceptions accepts none. Pure. */
 export function validRuleExceptions(ruleId: string, value: unknown): value is RuleException[] {
-  const fields = EXCEPTION_FIELDS[ruleId];
+  return validExceptionList(EXCEPTION_FIELDS[ruleId], value, ruleId === "destructive-shell");
+}
+
+function validExceptionList(fields: readonly ExceptionField[] | undefined, value: unknown, shell: boolean): value is RuleException[] {
   if (!fields || !Array.isArray(value) || value.length < 1 || value.length > MAX_EXCEPTIONS) return false;
   return value.every((e) => {
     if (typeof e !== "object" || e === null || Array.isArray(e)) return false;
@@ -111,7 +121,7 @@ export function validRuleExceptions(ruleId: string, value: unknown): value is Ru
     }
     const ex = e as RuleException;
     // A program names what runs; a program that deletes also names the folders it may delete in.
-    if (ruleId === "destructive-shell") return !!ex.programs && (!ex.programs.some((p) => DELETE_PROGRAMS.has(p)) || !!ex.targets);
+    if (shell) return !!ex.programs && (!ex.programs.some((p) => DELETE_PROGRAMS.has(p)) || !!ex.targets);
     return true;
   });
 }

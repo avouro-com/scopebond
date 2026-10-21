@@ -97,9 +97,10 @@ import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
  *  unblock lasts and its review (`unblock_terms`), "unlimited" for an override's `minutes` and `daily_limit`
  *  (`unlimited_terms`; an older hook gets numbers), and the signed list of rule packs to hold (`packs`, pack-sync.ts), and the
- *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts), and who may allow "Similar
- *  commands in this project" (`pattern_allowances`: an override's `patterns`, pattern-recipes.ts). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances"] as const;
+ *  lengths a person's unblock may last (`answer_lengths`: an override's `lengths`, managed.ts), who may allow "Similar
+ *  commands in this project" (`pattern_allowances`: an override's `patterns`, pattern-recipes.ts), and the modes of the rule packs' rules (`pack_rules`, managed.ts;
+ *  an unknown rule id is skipped and reported, never a refusal). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules"] as const;
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_FILE = "managed-sync.lock";
@@ -184,13 +185,14 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, ...patch,
     last_attempt_at: now.toISOString(), ...(patch.last_error === null ? { checked_at: now.toISOString(), checked_ok_at: now.toISOString() } : {}) });
 
-  const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason }): Promise<ManagedMeta["last_ack"]> => {
+  const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason; skipped_rules?: string[] }): Promise<ManagedMeta["last_ack"]> => {
     try {
       const res = await fetchImpl(`${base}/v1/policy/ack`, {
         // The same capabilities as the rules check: the workspace rebuilds the document it expects from them to compare the
         // digest this confirms (with blocked services, the digest covers the list).
         method: "POST", headers: { ...auth, "content-type": "application/json", "x-scopebond-hook-capabilities": HOOK_CAPABILITIES.join(",") }, redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
-        body: JSON.stringify({ ...body, reason: body.reason ?? null, hook_version: options.hookVersion }),
+        // The rule ids the document named that this version skipped are sent only when there are some.
+        body: JSON.stringify({ ...body, reason: body.reason ?? null, hook_version: options.hookVersion, skipped_rules: body.skipped_rules?.length ? body.skipped_rules : undefined }),
       });
       return res.ok ? { revision: body.revision, result: body.result, at: now.toISOString() } : meta.last_ack;
     } catch { return meta.last_ack; }
@@ -371,8 +373,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   }
   options.afterPolicyWrite?.(dir);
   await syncPackList(r);
-  const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded" });
-  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, rule_notes: inspected.notes.length ? inspected.notes : null,
+  const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded", skipped_rules: inspected.skipped });
+  save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, rule_notes: inspected.notes.length ? inspected.notes : null, skipped_rules: inspected.skipped.length ? inspected.skipped : null,
     policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
   return { state: "applied", revision: doc.revision };
 }
