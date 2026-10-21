@@ -30,6 +30,7 @@ import { blockedPackagePattern, blockedServiceKindOf, readBlockedServices, unrea
 import { containedDeletesSentence, withProgramScope, withRestorableScope } from "./delete-scope.js";
 import { gitRestorable } from "./git-restore.js";
 import { DESTRUCTIVE_FORMS, DESTRUCTIVE_FORMS_SENTENCE } from "./destructive-forms.js";
+import type { IntelPlugin } from "./intel-plugin.js";
 export { policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
@@ -75,6 +76,9 @@ export interface RuntimeConfig {
   /** Whether git can restore every target a delete outside the working folder names (git-restore.ts `gitRestorable`, the
    *  default): such a delete is recorded instead of blocked. Tests pass their own. */
   restorable?: (targets: string[]) => boolean;
+  /** The signed plugin this hook loaded (intel-plugin.ts), asked about each action before it is decided; its answer is
+   *  signed into the receipt as `pattern_id` and `intel`. Absent or null: receipts carry neither, exactly as before. */
+  intel?: IntelPlugin | null;
 }
 
 export interface Decision {
@@ -455,6 +459,12 @@ export function createHookRuntime(config: RuntimeConfig) {
   } : null;
 
   const contextOption: { context?: ReceiptPayloadContext } = config.context ? { context: config.context } : {};
+  /** The receipt options for one intent: the context, and the plugin's members when a plugin gave any. Never throws. */
+  const optionsFor = (intent: { action_type: string; params: Record<string, unknown> }): { context?: ReceiptPayloadContext; intel?: { pattern_id?: string; intel?: string } } => {
+    if (!config.intel) return contextOption;
+    const intel = config.intel.inspect(intent);
+    return Object.keys(intel).length ? { ...contextOption, intel } : contextOption;
+  };
   const named = namedActionTypes(policy);
   // A policy decides derived actions only when it opts in (target-rules.ts): it names a type Action Taxonomy 1.1 introduced.
   const optedIn = policyOptsIntoTargets(policy);
@@ -527,6 +537,7 @@ export function createHookRuntime(config: RuntimeConfig) {
     async evaluateOne(input: Mapped, budget?: ReceiptBudget): Promise<Decision> {
       const mapped = masked(input);
       const signed = agent.sign(mapped.intent);
+      const receiptOptions = optionsFor(signed.intent as { action_type: string; params: Record<string, unknown> });
       // Safe Install (install-verdicts.ts): an install the workspace's verdict blocks, or holds for a person this host cannot
       // ask, is refused with a denied receipt whose intent carries the verdict and its reason codes; one held for a person a
       // host can ask is recorded and answered "ask". An install that is allowed goes on to the rules below.
@@ -535,13 +546,13 @@ export function createHookRuntime(config: RuntimeConfig) {
         if (check.verdict === "block" || (config.installAsk ?? "deny") === "deny") {
           boundaryVerdict = { allow: false, reason: "install_refused", detail: check.reasons.map((r) => r.code).join(","), consumed_approvals: [], budgets: [] };
           let refused;
-          try { refused = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(contextOption).length ? contextOption : undefined); }
+          try { refused = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(receiptOptions).length ? receiptOptions : undefined); }
           finally { boundaryVerdict = null; }
           // A block is final: the coding agent is told so. An install held for a person this host cannot ask says what to do.
           const reason = check.verdict === "block" ? `${check.message}\nWhat to do: ${FINAL_INSTRUCTION.stays}` : check.message;
           return { decision: "deny", reason, clauseId: null, code: "install_verdict", receipt: refused.receipt };
         }
-        const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);
+        const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, receiptOptions);
         return { decision: "ask", reason: check.message, receipt };
       }
       // A derived intent (the taxonomy action a shell command or MCP call performs, beside the call itself) is evaluated only
@@ -555,14 +566,14 @@ export function createHookRuntime(config: RuntimeConfig) {
       if ((!mapped.evaluated && !config.strict) || derivedRecorded || mapped.describesOnly === true) {
         // Unknown tool or unparseable command, non-strict: observe without
         // evaluating — grants nothing.
-        const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);
+        const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, receiptOptions);
         return { decision: "not_evaluated", reason: `no policy applies to ${mapped.intent.action_type}`, receipt };
       }
       // Evaluated actions, and (in strict mode) unmapped tool.<name>/opaque commands,
       // go through policy — a closed allowlist denies an unlisted action.
       // An action the coding agent reported only after it ran (Cursor's afterFileEdit) is signed as recorded after the
       // fact when a rule denies it: the receipt must not claim it was prevented.
-      const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}), ...contextOption, ...(budget ? { budget } : {}) };
+      const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}), ...receiptOptions, ...(budget ? { budget } : {}) };
       deciding = mapped.shown;
       let result;
       try { result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(options).length ? options : undefined); }
@@ -623,7 +634,7 @@ export function createHookRuntime(config: RuntimeConfig) {
         boundaryVerdict = { allow: false, reason: "budget_exceeded", detail: "session budget", consumed_approvals: [], budgets: [] };
         try {
           const signed = agent.sign(target.intent);
-          const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, { ...contextOption, budget: reservation.budget });
+          const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, { ...optionsFor(signed.intent as { action_type: string; params: Record<string, unknown> }), budget: reservation.budget });
           if (result.receipt !== undefined) receipts.push(result.receipt);
           dispatched.push({ action: { action_type: target.intent.action_type, params: target.intent.params }, ...(result.receipt !== undefined ? { receipt: result.receipt } : {}) });
         } finally { boundaryVerdict = null; }
@@ -658,7 +669,8 @@ export function createHookRuntime(config: RuntimeConfig) {
           try {
             const last = list[list.length - 1];
             const signed = agent.sign(last.intent);
-            const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(contextOption).length ? contextOption : undefined);
+            const refusalOptions = optionsFor(signed.intent as { action_type: string; params: Record<string, unknown> });
+            const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(refusalOptions).length ? refusalOptions : undefined);
             if (result.receipt !== undefined) receipts.push(result.receipt);
           } finally { boundaryVerdict = null; }
           release();

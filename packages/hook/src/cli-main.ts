@@ -78,6 +78,7 @@ import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
 import { switchablePackRules } from "./pack-rules.js";
 import { runPackVectors } from "./packs.js";
+import { loadIntelPlugin } from "./intel-plugin.js";
 import { describePackSync } from "./pack-sync.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, waitWithinDeadline } from "./hook-deadline.js";
@@ -361,7 +362,9 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const context = receiptContextFor({ harness, input: input!, dir, cwd, connected: !!loadConnection(dir), branch });
     const installAsk = installAskFor(harness, permissionMode);
     const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch, () => upstreamBranch(cwd)), ...databaseGuard(dir, cwd, input!)], installAsk);
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+    // The signed plugin in this computer's home, when there is one that verifies (intel-plugin.ts); none: receipts unchanged.
+    const intel = await loadIntelPlugin();
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, intel, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
       const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
@@ -587,7 +590,8 @@ async function runCursor(): Promise<void> {
     // Rules written before monitor became the default move to it once (never fails the call).
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+    const intel = await loadIntelPlugin();
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", intel, sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
       const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
