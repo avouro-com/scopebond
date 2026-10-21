@@ -586,6 +586,96 @@ function lastSegment(url: string): string | undefined {
 
 const SHELL_RUNNERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "fish", "python", "python3", "py", "node", "perl", "ruby", "php", "deno", "bun", "pwsh", "powershell",
   "iex", "invoke-expression", "eval", "source", "."]);
+
+/** How a script interpreter reads its command line: the options that give it the code to run (so what is piped in is its
+ *  input data), the options that take a value (attached or as the next word), the short options that take only an attached
+ *  value (`perl -i.bak`) or attached digits (`perl -l`, `perl -0777`), the long options known to take none, and the
+ *  subcommands that name inline code (`deno eval`) or a script file (`deno run`, `bun run`). */
+interface Interpreter {
+  code: ReadonlySet<string>;
+  valued: ReadonlySet<string>;
+  attached?: ReadonlySet<string>;
+  digits?: ReadonlySet<string>;
+  switches?: RegExp;
+  subs?: Readonly<Record<string, "code" | "file">>;
+}
+const JS_SWITCHES = /^--(?:no-|experimental-|enable-|disable-|trace-|inspect|expose-|harmony|allow-|deny-|unstable|preserve-symlinks|pending-deprecation|throw-deprecation|abort-on-uncaught-exception|frozen-intrinsics|watch$|test$|smol$|hot$|bun$|quiet$|silent$|verbose$|reload$|check$|cached-only$)/;
+const INTERPRETERS: Readonly<Record<string, Interpreter>> = {
+  python: { code: new Set(["-c", "-m"]), valued: new Set(["-W", "-X", "--check-hash-based-pycs"]) },
+  node: {
+    code: new Set(["-e", "--eval", "-p", "--print", "-c", "--check"]),
+    valued: new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--input-type", "--title", "--env-file", "--env-file-if-exists", "-C",
+      "--conditions", "--inspect-port", "--icu-data-dir", "--openssl-config", "--redirect-warnings", "--diagnostic-dir", "--report-dir", "--report-directory",
+      "--report-filename", "--cpu-prof-dir", "--cpu-prof-name", "--heap-prof-dir", "--heap-prof-name", "--watch-path", "--test-reporter", "--test-reporter-destination",
+      "--test-name-pattern", "--disable-warning", "--secure-heap", "--stack-trace-limit", "--max-old-space-size", "--unhandled-rejections", "--dns-result-order",
+      "--experimental-sea-config", "--experimental-config-file", "--snapshot-blob", "--localstorage-file", "--tls-keylog", "--trace-event-file-pattern", "--trace-event-categories"]),
+    switches: JS_SWITCHES,
+  },
+  bun: {
+    code: new Set(["-e", "--eval", "-p", "--print"]), valued: new Set(["-r", "--preload", "--cwd", "-c", "--config", "--env-file", "--tsconfig-override", "--conditions"]),
+    switches: JS_SWITCHES, subs: { run: "file" },
+  },
+  deno: {
+    code: new Set(["--eval"]), valued: new Set(["--config", "-c", "--import-map", "--location", "--cert", "--lock", "--env-file", "--ext"]),
+    switches: JS_SWITCHES, subs: { eval: "code", run: "file" },
+  },
+  ruby: { code: new Set(["-e"]), valued: new Set(["-I", "-r", "-C", "-E", "--encoding", "-F"]) },
+  perl: { code: new Set(["-e", "-E"]), valued: new Set(["-I", "-M", "-m", "-C", "-d", "-D", "-x"]), attached: new Set(["-i"]), digits: new Set(["-l", "-0"]) },
+  php: { code: new Set(["-r", "-R", "-B", "-E", "-F", "-f"]), valued: new Set(["-c", "-d", "-z", "-t", "-S"]) },
+};
+const INTERPRETER_OF: Readonly<Record<string, string>> = { python: "python", python3: "python", py: "python", node: "node", bun: "bun", deno: "deno", ruby: "ruby", perl: "perl", php: "php" };
+/** A word that names a local script file: it has a path separator or a file extension, and is not a URL. */
+const isScriptFile = (w: string): boolean => !/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(w) && !w.includes(SUBST) && !w.includes("$") && (/[\\/]/.test(w) || /\.[A-Za-z0-9]{1,10}$/.test(w));
+
+/**
+ * Whether a simple command that a fetch is piped into runs what it is fed as code. A shell, `iex`, `eval` or PowerShell
+ * does. An interpreter does when nothing else gives it its code: bare (`| python`), told to read standard input
+ * (`| node -`, `| python - --user`), or given options only (`| python -u`, `| node -r ./preload.js`). It does not when an
+ * option gives it the code (`| python -c "…"`, `| python -m json.tool`, `| node -e`, `| node --eval`, `| ruby -e`,
+ * `| perl -lane`, `| php -r`, `| bun -e`, `| deno eval`) or its first word that is not an option names a local script file
+ * (`| node summarize.mjs`, `| python tool.py`, `| deno run x.ts`): then the piped text is that code's input data. What this
+ * reader cannot place keeps the answer yes: a long option it does not know followed by a file name (the name may be the
+ * option's value), or a first word that is not a file name.
+ */
+function runsPipedCode(sc: SimpleCommand): boolean {
+  const program = canonProgram(sc.program);
+  if (!SHELL_RUNNERS.has(program) || program === "source" || program === ".") return false;
+  const spec = Object.hasOwn(INTERPRETER_OF, program) ? INTERPRETERS[INTERPRETER_OF[program]] : undefined;
+  if (spec === undefined) return true;
+  const argv = sc.argv;
+  let sub = false;
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "--") return argv[i + 1] === undefined || !isScriptFile(argv[i + 1]);
+    if (t === "-") return true;
+    if (!t.startsWith("-")) {
+      const as = !sub && spec.subs && Object.hasOwn(spec.subs, t) ? spec.subs[t] : undefined;
+      if (as === "code") return false;
+      if (as === "file") { sub = true; continue; }
+      return !isScriptFile(t);
+    }
+    if (t.startsWith("--")) {
+      const eq = t.indexOf("=");
+      const name = eq > 0 ? t.slice(0, eq) : t;
+      if (spec.code.has(name)) return false;
+      if (eq > 0) continue;
+      if (spec.valued.has(name)) { i++; continue; }
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("-") && !spec.switches?.test(name)) return true;
+      continue;
+    }
+    // A short option or a cluster of them (`-lane`, `-uc`, `-Wignore`, `-mjson.tool`), read letter by letter.
+    for (let k = 1; k < t.length; k++) {
+      const opt = `-${t[k]}`;
+      if (spec.code.has(opt)) return false;
+      if (spec.attached?.has(opt)) break;
+      if (spec.digits?.has(opt)) { while (k + 1 < t.length && /[0-9]/.test(t[k + 1])) k++; continue; }
+      if (spec.valued.has(opt)) { if (k + 1 === t.length) i++; break; }
+    }
+  }
+  return true;
+}
+
 const EXECUTABLE = /\.(?:exe|msi|msix|msixbundle|appx|pkg|mpkg|dmg|deb|rpm|apk|apkg|sh|bash|zsh|ps1|psm1|bat|cmd|run|bin|appimage|jar|com|scr|vbs|js|py|command)$/i;
 const READ_ONLY = new Set(["git", "ls", "dir", "cat", "type", "less", "more", "head", "tail", "grep", "rg", "find", "tree", "pwd", "echo", "code", "cursor", "open", "wc",
   "stat", "file", "du", "cd", "pushd", "popd", "get-childitem", "gci", "get-content", "gc", "set-location", "sl", "chdir", "test", "[", "true", "false", "printf", "sort", "diff"]);
@@ -919,11 +1009,15 @@ function scriptInstalls(command: string, dialect: "posix" | "powershell", depth 
     ?? decomposed[i].find((sc) => !sc.opaque && sc.program !== "");
   for (let i = 0; i < parts.length; i++) {
     const head = main(i);
-    // `curl … | sh`, `wget -qO- … | sudo bash`, `iwr … | iex`.
+    // `curl … | sh`, `wget -qO- … | sudo bash`, `iwr … | iex`, `curl … | python`, and the same through filters on the way
+    // (`curl … | python -c "…" | sh`); not `curl … | python -c "…"` alone, where the fetched text is data.
     if (parts[i].sep === "|" && i + 1 < parts.length) {
       const fetch = decomposed[i].map((sc) => readFetch(sc, dialect)).find((f): f is Fetch => f !== null && f.stdout);
-      const next = decomposed[i + 1].filter((sc) => !sc.opaque && sc.program !== "").map((sc) => canonProgram(sc.program));
-      if (fetch && next.some((p) => SHELL_RUNNERS.has(p) && p !== "source" && p !== ".")) out.push(scriptFacts(fetch));
+      let runs = false;
+      for (let j = i + 1; fetch && !runs && j < parts.length && parts[j - 1].sep === "|"; j++) {
+        runs = decomposed[j].some((sc) => !sc.opaque && sc.program !== "" && runsPipedCode(sc));
+      }
+      if (fetch && runs) out.push(scriptFacts(fetch));
     }
     if (!head) continue;
     const program = canonProgram(head.program);

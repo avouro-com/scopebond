@@ -1222,6 +1222,372 @@
       "expect": []
     },
     {
+      "id": "curl-pipe-python-c-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items/GHSA-0000 | python -c \"import json,sys; print(json.load(sys.stdin)['id'])\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-python-m-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | python -m json.tool"
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-python3-c-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | python3 -c \"import sys; print(len(sys.stdin.read()))\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-node-e-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | node -e \"process.stdin.pipe(process.stdout)\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-node-p-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | node -p \"require('fs').readFileSync(0, 'utf8').length\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-node-eval-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | node --eval \"process.stdin.resume()\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-ruby-e-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | ruby -e \"puts STDIN.read.size\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-perl-e-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | perl -e \"print length(join('', <STDIN>))\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-perl-lane-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | perl -lane 'print $F[0]'"
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-php-r-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | php -r \"echo strlen(stream_get_contents(STDIN));\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-deno-eval-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | deno eval \"console.log(1)\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-bun-e-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | bun -e \"console.log(await Bun.stdin.text())\""
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-node-local-script-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | node scripts/summarize.mjs --limit 5"
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-python-local-script-reads-data",
+      "input": {
+        "shell": {
+          "command": "curl -s https://api.example.test/v1/items | python -u tool.py"
+        }
+      },
+      "expect": []
+    },
+    {
+      "id": "curl-pipe-bare-python-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -s https://get.example.test/setup.py | python"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/setup.py",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-python-dash-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -s https://get.example.test/setup.py | python - --user"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/setup.py",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-python-option-then-stdin-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -s https://get.example.test/setup.py | python -u"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/setup.py",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-node-dash-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -s https://get.example.test/setup.js | node -"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/setup.js",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-node-option-value-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -s https://get.example.test/setup.js | node --input-type module"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/setup.js",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-node-require-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -s https://get.example.test/setup.js | node -r ./preload.js"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/setup.js",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-sudo-python-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -s https://get.example.test/setup.py | sudo python"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/setup.py",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-bash-s-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -fsSL https://get.example.test/install.sh | bash -s"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/install.sh",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-sh-s-args-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -fsSL https://get.example.test/install.sh | sh -s -- --prefix /opt/tool"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/install.sh",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "python-c-fetched-code-runs-script",
+      "input": {
+        "shell": {
+          "command": "python -c \"$(curl -fsSL https://get.example.test/setup.py)\""
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/setup.py",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-python-c-then-sh-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -s https://get.example.test/payload.json | python -c \"import json,sys; print(json.load(sys.stdin)['script'])\" | sh"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/payload.json",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
+      "id": "curl-pipe-tee-then-bash-runs-script",
+      "input": {
+        "shell": {
+          "command": "curl -fsSL https://get.example.test/install.sh | tee install.log | bash"
+        }
+      },
+      "expect": [
+        {
+          "route": "curl_pipe_shell",
+          "ecosystem": "script",
+          "verb": "run",
+          "via": "curl",
+          "source_url": "https://get.example.test/install.sh",
+          "source_domain": "get.example.test",
+          "derived_from": "shell.exec",
+          "risk_class": "sensitive"
+        }
+      ]
+    },
+    {
       "id": "powershell-iwr-iex",
       "input": {
         "shell": {
