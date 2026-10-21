@@ -29,7 +29,9 @@ export interface OverrideQuestion {
   always_days?: number;
   always_needs_admin?: boolean;
 }
-export interface OverrideAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always" }
+/** `later` (with "unavailable"): the agent runs but asked no one now (no tray listening, no window); the person acts on the
+ *  block afterwards. `link`: this computer's page in the workspace, when known. */
+export interface OverrideAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always"; later?: true; link?: string }
 export type Prompter = (question: OverrideQuestion) => Promise<OverrideAnswer>;
 
 const ID = /^[A-Za-z0-9._:-]{16,200}$/;

@@ -288,7 +288,11 @@ in the tray, and only there: no Scopebond window opens beside it, so one block a
 - `POST /override/open` with `{ action_id }`: the person opened it in the tray.
 - `POST /override/answer` with `{ action_id, choice, reason }`: the person's answer, checked as the window's would be,
   becomes the hook's answer. The question stays in the tray for the hook's whole wait; unanswered at the deadline,
-  nothing is allowed. With no tray listening the window opens at once, as before.
+  nothing is allowed. With no tray listening, the window opens at once on macOS and Linux. On Windows the Windows Forms
+  window is retired: it opens only with `SCOPEBOND_PROMPT_WINDOW=1` (kept for one release); otherwise the agent answers
+  `{ decision: "unavailable", later: true, link? }` at once, and the hook's denial tells the person to allow the block,
+  or ask an admin, from the Scopebond icon's recent blocks afterwards (`link`: this computer's page in the workspace,
+  when connected).
 
 ## Status
 

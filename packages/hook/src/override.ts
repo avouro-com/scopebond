@@ -184,8 +184,16 @@ function legacyActionKeys(intent: { action_type?: string; params?: Record<string
 }
 
 /** The window's answer. allow: allow this action (`lasts`: once, or also for 15 minutes, or always via an allowance). ask: send
- *  "Ask an admin" with the reason; the action stays blocked. */
-export interface AgentAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always" }
+ *  "Ask an admin" with the reason; the action stays blocked. unavailable with `later`: the agent runs but had no one to ask
+ *  now (no tray listening, no window), so the person acts on the block afterwards; `link` is this computer's page in the
+ *  workspace, when the agent knows it. */
+export interface AgentAnswer { decision: "allow" | "deny" | "unavailable" | "ask"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "always"; later?: true; link?: string }
+
+/** A link the denial may show: https, short, nothing a terminal would read as more than one word. */
+const safeLink = (v: unknown): string | null => {
+  if (typeof v !== "string" || v.length > 300 || !/^https:\/\/[^\s"'<>`\\]+$/.test(v)) return null;
+  try { return new URL(v).protocol === "https:" ? v : null; } catch { return null; }
+};
 
 /** Ask the resident Scopebond Agent to show its window. Returns "unavailable" when no agent answers. */
 export async function askAgent(home: string, request: Record<string, unknown>, timeoutMs: number, fetchImpl: typeof fetch = fetch): Promise<AgentAnswer> {
@@ -215,7 +223,9 @@ export async function askAgent(home: string, request: Record<string, unknown>, t
     const lasts = body.lasts === "15m" || body.lasts === "always" ? body.lasts : "once";
     if (body.decision === "allow" && typeof body.reason === "string") return { decision: "allow", reason: body.reason, lasts, ...user };
     if (body.decision === "ask" && typeof body.reason === "string") return { decision: "ask", reason: body.reason, ...user };
-    return { decision: body.decision === "deny" ? "deny" : "unavailable" };
+    if (body.decision === "deny") return { decision: "deny" };
+    const link = body.later === true ? safeLink(body.link) : null;
+    return { decision: "unavailable", ...(body.later === true ? { later: true as const } : {}), ...(link ? { link } : {}) };
   } catch { return { decision: "unavailable" }; }
 }
 
@@ -245,7 +255,12 @@ function projectOfCall(ctx: OverrideContext): { project?: string } {
 }
 
 /** What happened when the last override was considered, so a denial can say how an override would be possible. */
-export interface OverrideNote { rule: AnyManagedRuleId; title: string; outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" }
+export interface OverrideNote {
+  rule: AnyManagedRuleId; title: string;
+  outcome: "declined" | "limit" | "unavailable" | "not_overridable" | "asked" | "ask_unavailable" | "later" | "ask_later";
+  /** This computer's page in the workspace (`later`, `ask_later`), when the agent gave it. */
+  link?: string;
+}
 
 export function createOverrideHandler(ctx: OverrideContext): { handler: OverrideHandler; note(): OverrideNote | null } | null {
   let doc: ManagedDocument;
@@ -347,7 +362,10 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: Override
       return { version: 1, rule, method: "harness_prompt", state: "offered", repeat_of: null, reason_digest: null, reason_length: null,
         os_user_digest: osUserDigest(), decided_at: new Date(t).toISOString() };
     }
-    last = { rule, title, outcome: allowing ? "unavailable" : "ask_unavailable" };
+    // The agent runs but had no one to ask now: the person acts on the block afterwards (the denial says where).
+    last = answer.later
+      ? { rule, title, outcome: allowing ? "later" : "ask_later", ...(answer.link ? { link: answer.link } : {}) }
+      : { rule, title, outcome: allowing ? "unavailable" : "ask_unavailable" };
     blocked();
     return null;
   };
@@ -444,5 +462,18 @@ export function overrideHint(note: OverrideNote | null): string | null {
     case "not_overridable": return null;
     case "asked": return `A request to allow "${note.title}" was sent to your workspace's admins. The Scopebond icon shows their answer; then run it again.`;
     case "ask_unavailable": return `Your workspace lets you ask an admin to allow this, from the Scopebond window, but the Scopebond Agent is not running. Start it (${agentCommand("autostart on")}) and try again.`;
+    // The line for the person says it (overrideRemedy).
+    case "later": case "ask_later": return null;
   }
+}
+
+/** The denial's line for the person when no one could be asked now (no tray listening, no window) but the person may act:
+ *  where to allow the block, or ask an admin, afterwards. Null otherwise, and the workspace's own line stands. There is no
+ *  command that unblocks a record: the Scopebond icon's recent blocks, or this computer's page in the workspace, do. */
+export function overrideRemedy(note: OverrideNote | null): string | null {
+  if (!note || (note.outcome !== "later" && note.outcome !== "ask_later")) return null;
+  const what = note.outcome === "later" ? "allow it with a reason" : "ask an admin to unblock it";
+  const page = note.link ? `, or on this computer's page in your Scopebond workspace (${note.link})` : "";
+  const then = note.outcome === "later" ? "then run it again" : "the Scopebond icon shows the answer; then run it again";
+  return `your workspace lets you ${what} from the Scopebond icon in the notification area (its recent blocks: choose the record below)${page}; ${then}`;
 }

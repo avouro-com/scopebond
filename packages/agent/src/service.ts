@@ -23,7 +23,7 @@ import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
-import { livePrompt } from "./live-prompt.js";
+import { livePrompt, windowAllowed } from "./live-prompt.js";
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
@@ -109,6 +109,9 @@ export interface ServiceOptions {
   onUpdated?: (version: string) => void;
   /** Confirms the newly installed agent starts and reports its version before this one hands over (tests replace it). */
   startCheck?: (version: string) => Promise<{ ok: boolean; output: string }>;
+  /** Whether the Scopebond window may open for the hook's question when no tray listens (default: `windowAllowed()`, off on
+   *  Windows unless SCOPEBOND_PROMPT_WINDOW=1). */
+  promptWindow?: boolean;
   /** Shows the Scopebond window for an override (tests replace it). */
   prompter?: Prompter;
   /** The Windows tray icon (default on Windows; SCOPEBOND_AGENT_TRAY=off turns it off). */
@@ -394,9 +397,13 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     summary = connection ? await fetchComputerSummary(connection, options.fetchImpl) : null;
   };
 
-  // The Scopebond window, one at a time; and the hook's questions, asked only in the tray when one is listening (else the window).
+  // The Scopebond window, one at a time; and the hook's questions, asked only in the tray when one is listening, else in the
+  // window where it may open, else no one now (the hook's denial points at this computer's page, when connected).
   const windowPrompt = serialized(options.prompter ?? systemPrompter);
-  const live = livePrompt({ fallback: windowPrompt });
+  const live = livePrompt({
+    fallback: windowPrompt, window: () => options.promptWindow ?? windowAllowed(),
+    link: () => { const connection = loadConnection(options.dir); const url = summary?.computer_url; return connection && url && sameOrigin(url, connection.url) ? url : null; },
+  });
   const prompt = serialized(live.prompter);
   let shownLevel: HealthLevel | null = null;
   const health = () => healthOf(computerStatus(options.dir), lastSelfCheck);
@@ -849,13 +856,14 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       setTimeout(() => { void stop().finally(() => options.onStopped?.()); }, 50);
       return { stopping: true };
     },
-    // Warn mode: the hook asks; only the window answers. The caller learns the answer, never decides it.
+    // Warn mode: the hook asks; only the person answers (the tray's form or the window). The caller learns the answer, never
+    // decides it.
     "POST /override": async (body) => {
       const question = parseQuestion(body);
       if (!question) return { decision: "unavailable" };
       log(`asking whether to allow "${question.title}"`);
       const answer = await prompt(question);
-      log(`override ${answer.decision === "allow" ? "given" : answer.decision === "deny" ? "not given" : "not available"} for "${question.title}"`);
+      log(`override ${answer.decision === "allow" ? "given" : answer.decision === "deny" ? "not given" : answer.later ? "not asked (no tray listening, no window): the person acts on it later" : "not available"} for "${question.title}"`);
       if (answer.decision === "allow" && answer.reason) { queueReason(options.dir, question.action_id, answer.reason); setTimeout(() => { void sendReasons(); }, 1_000); }
       // The hook writes the request or allowance after this answer; send it shortly after.
       if (answer.decision === "ask" || answer.lasts === "always" || answer.lasts === "15m") setTimeout(() => { void sendReasons(); }, 2_000);

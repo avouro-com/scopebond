@@ -10,9 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, inspectManaged, compileManaged, digestRules, defaultRules,
-  createOverrideHandler, overrideHint, digestOf, MANAGED_DOC_FILE, HOOK_CAPABILITIES,
+  createOverrideHandler, overrideHint, overrideRemedy, digestOf, MANAGED_DOC_FILE, HOOK_CAPABILITIES,
 } from "../dist/index.js";
-import { actionSummary, revealHidden } from "../dist/override.js";
+import { actionSummary, askAgent, revealHidden } from "../dist/override.js";
 
 const INSTALLATION = "gw-test-1";
 const terms = (extra = {}) => ({ reason_min: 10, minutes: 0, daily_limit: 5, harness_prompt: false, ...extra });
@@ -46,7 +46,7 @@ async function run(dir, toolUse, { answers = [], permissionMode = "default", now
     override: (agentKid) => {
       const made = createOverrideHandler({ dir, home: dir, agentKid, harness: "claude", permissionMode, now, waitMs: 50, ...(project ? { project } : {}),
         ask: async (_home, request) => { asked.push(request); return answers.shift() ?? { decision: "unavailable" }; } });
-      return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
+      return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     },
   });
   try {
@@ -240,6 +240,42 @@ test("without the window, Claude Code's prompt is offered only where allowed and
       assert.equal(auto.decision, "deny", `permission mode ${mode}`);
     }
   } finally { for (const s of [off, on]) rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("no tray and no window: the denial's line for the person says where to allow it or ask, with the record, and asks no one twice", async () => {
+  const allow = setup({ "destructive-shell": { mode: "override", override: terms() } });
+  const ask = setup({ "destructive-shell": { mode: "ask", override: terms({ requests: true }) } });
+  try {
+    const link = "https://app.scopebond.example/computers/c-1";
+    const later = await run(allow.dir, bash("rm -rf build"), { answers: [{ decision: "unavailable", later: true, link }] });
+    assert.equal(later.decision, "deny");
+    assert.equal(later.asked.length, 1, "the agent was asked once");
+    const person = later.reason.split("\n").find((l) => l.startsWith("For the person: "));
+    assert.match(person, /allow it with a reason from the Scopebond icon in the notification area \(its recent blocks: choose the record below\)/);
+    assert.ok(person.includes(link), "the computer's page in the workspace, when the agent knows it");
+    assert.match(later.reason, /\nRecord: \S+/, "the record the person picks");
+    assert.doesNotMatch(later.reason, /not running/);
+    const asking = await run(ask.dir, bash("rm -rf build"), { answers: [{ decision: "unavailable", later: true }] });
+    const askLine = asking.reason.split("\n").find((l) => l.startsWith("For the person: "));
+    assert.match(askLine, /ask an admin to unblock it from the Scopebond icon in the notification area \(its recent blocks: choose the record below\)/);
+    assert.doesNotMatch(askLine, /https:/, "no link the agent did not give");
+    // An agent that is not running: as before, the denial says to start it, and the line for the person is the workspace's.
+    const down = await run(allow.dir, bash("rm -rf build"), { answers: [{ decision: "unavailable" }] });
+    assert.match(down.reason, /Scopebond Agent is not running/);
+    assert.doesNotMatch(down.reason, /recent blocks/);
+  } finally { for (const s of [allow, ask]) rmSync(s.dir, { recursive: true, force: true }); }
+});
+
+test("the agent's 'nobody to ask now' answer reaches the hook, with an https link only", async () => {
+  const home = mkdtempSync(join(tmpdir(), "scopebond-ask-later-"));
+  try {
+    writeFileSync(join(home, "agent.json"), JSON.stringify({ port: 4999, token: "t" }));
+    const reply = (body) => async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    assert.deepEqual(await askAgent(home, {}, 1_000, reply({ decision: "unavailable", later: true, link: "https://app.example/c/1" })), { decision: "unavailable", later: true, link: "https://app.example/c/1" });
+    assert.deepEqual(await askAgent(home, {}, 1_000, reply({ decision: "unavailable", later: true, link: "javascript:alert(1)" })), { decision: "unavailable", later: true });
+    assert.deepEqual(await askAgent(home, {}, 1_000, reply({ decision: "unavailable" })), { decision: "unavailable" });
+    assert.deepEqual(await askAgent(home, {}, 1_000, reply({ decision: "deny", later: true })), { decision: "deny" });
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 test("the one-line summary writes out control, bidi and zero-width characters, so it reads as what runs", () => {

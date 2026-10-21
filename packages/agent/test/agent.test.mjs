@@ -329,7 +329,7 @@ test("the agent answers an override only from its window, and sends the reason t
   const ws = await workspace();
   const dir = await computerWithQueue(ws.url, 0);
   const shown = [];
-  const service = await startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false,
+  const service = await startService({ dir, intervalMs: 60 * 60_000, log: () => {}, maintenance: false, tray: false, promptWindow: true,
     prompter: async (q) => { shown.push(q); return q.summary === "rm -rf build" ? { decision: "allow", reason: "Cleaning the build folder", os_user: "dev" } : { decision: "deny" }; } });
   try {
     const allowed = await callAgent(dir, "POST", "/override", question(), 10_000);

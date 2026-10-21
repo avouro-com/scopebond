@@ -52,8 +52,9 @@ export interface RuntimeConfig {
    *  (`HOT_PATH_STORE_BUSY_MS`, hook-deadline.ts), so a lock wait cannot by itself carry the call past its deadline. */
   storeBusyTimeoutMs?: number;
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
-   *  (see override.ts). `hint` explains, in a denial, how an override would have been possible. */
-  override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null } | null;
+   *  (see override.ts). `hint` explains, in a denial, how an override would have been possible; `remedy`, when it says
+   *  something, replaces the denial's line for the person (where to act on the block afterwards). */
+  override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null; remedy?(): string | null } | null;
   /** The current account's home folder, in every spelling to mask (see home-mask.ts). Defaults to `os.homedir()`,
    *  `HOME` and `USERPROFILE`; tests pass their own. */
   homeFolders?: readonly string[];
@@ -396,6 +397,7 @@ export function createHookRuntime(config: RuntimeConfig) {
   // log's lock (a write that still fails denies the call, and the open action is closed later as an interrupted one).
   const override = made ? {
     hint: () => made.hint(),
+    remedy: () => made.remedy?.() ?? null,
     handler: (async (ctx) => {
       try { return await made.handler(ctx); }
       finally { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(Math.min(AFTER_OVERRIDE_STORE_BUSY_MS, storeBusyMs)); } catch { /* keeps its wait */ } }
@@ -528,7 +530,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           // Point at the editable surface when there is one. `policy.json` is compiled
           // from `rules.json`, so telling someone to hand-edit it invites a change the
           // next `rules` run would overwrite.
-          remedy: rulesRemedy,
+          remedy: override?.remedy() ?? rulesRemedy,
           actionId: (result.receipt as { payload?: { action_ref?: { action_id?: string } } } | undefined)?.payload?.action_ref?.action_id ?? null,
         }) + (override?.hint() ? `\n${override.hint()}` : ""),
         clauseId,

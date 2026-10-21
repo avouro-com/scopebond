@@ -835,8 +835,11 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   and this computer's own opt-ins (`allowed_roots`, `protect_remote_database`).
 - **Overrides.** The workspace can set a rule to *Block, user may override* and say who may
   override. A matching action is then blocked until the person at the computer allows it once,
-  with a reason, in the Scopebond Agent's window (`@scopebond/agent`): the hook asks the running
-  agent and waits up to 45 seconds (20 seconds for Codex and Cursor), then blocks. The receipt
+  with a reason, in the Scopebond tray or the Scopebond Agent's window (`@scopebond/agent`): the hook asks the running
+  agent and waits up to 45 seconds (20 seconds for Codex and Cursor), then blocks. On Windows with no tray listening, the
+  agent asks no one at once (its window is off unless `SCOPEBOND_PROMPT_WINDOW=1`), and the denial's line for the person
+  says where to allow the block, or ask an admin, afterwards: the Scopebond icon's recent blocks, or this computer's page
+  in the workspace when the agent knows it. The receipt
   records the override, the reason's digest and the rule; the workspace adds who and why. Where the
   workspace allows it and the window is not available, Claude Code's own prompt is offered instead,
   but only in a permission mode where Claude Code really asks; that prompt takes no reason and is
