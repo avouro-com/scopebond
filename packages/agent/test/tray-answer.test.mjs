@@ -16,7 +16,7 @@ const REASON = "Integration tests need the production API URL";
 
 async function blockedComputer(rules) {
   const dir = computer(rules);
-  await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf build" } }]);
+  await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf ../build" } }]);
   return { dir, id: readBlocked(dir).at(-1).id };
 }
 const answer = (dir, body) => callAgent(dir, "POST", "/blocked/answer", body, 10_000);
@@ -24,9 +24,11 @@ const answer = (dir, body) => callAgent(dir, "POST", "/blocked/answer", body, 10
 test("an answer from the form is read strictly", () => {
   assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "fifteen", reason: `  ${REASON}  ` }), { action_id: "act-1", choice: "fifteen", reason: REASON });
   for (const bad of [null, {}, { action_id: "act-1", choice: "forever", reason: REASON }, { action_id: "a b", choice: "once", reason: REASON },
-    { action_id: "act-1", choice: "once", reason: "x".repeat(501) }, { action_id: "act-1", choice: "once", reason: "ok\u0007bell" }, { action_id: "act-1", choice: "once" }]) {
+    { action_id: "act-1", choice: "once", reason: "x".repeat(501) }, { action_id: "act-1", choice: "once", reason: "ok\u0007bell" }, { action_id: "act-1", choice: "once", reason: 42 }]) {
     assert.equal(parseBlockedAnswer(bad), null, JSON.stringify(bad));
   }
+  // No reason is an empty one; the workspace's minimum decides whether that is enough.
+  assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "once" }), { action_id: "act-1", choice: "once", reason: "" });
   assert.equal(answerText("allowed", "once", 30, "Acme", true), "Allowed once · Recorded and sent to Acme");
   assert.equal(answerText("allowed", "always", 14, null, true), "Always allowed on this computer for 14 days · Recorded and sent to your workspace");
   assert.equal(answerText("asked", "ask", 30, "Acme", true), "Request sent · you'll see the answer under Requests");
@@ -50,7 +52,7 @@ test("allow once from the tray: checked as the window would be, applied once, th
     const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.equal(allowances.length, 1);
     assert.equal(allowances[0].choice, "once");
-    assert.equal(allowances[0].what, "rm -rf build");
+    assert.equal(allowances[0].what, "rm -rf ../build (in /repo)");
     assert.equal(allowances[0].rule_title, "Run a command that deletes data or shuts down the computer");
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
     assert.equal(tray.allowed.length, 1);
@@ -69,7 +71,7 @@ test("only a choice the workspace offers is applied; always waits for an admin a
     assert.equal(done.text, "Allowed for 15 minutes; always once an admin approves · Recorded on this computer");
     const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.deepEqual(allowances.map((a) => [a.choice, a.state, a.needs_admin]).sort(), [["always", "proposed", true], ["fifteen", "active", false]]);
-    assert.ok(allowances.every((a) => a.what === "rm -rf build"));
+    assert.ok(allowances.every((a) => a.what === "rm -rf ../build (in /repo)"));
   } finally { await service.stop(); }
 });
 
@@ -88,7 +90,7 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
     let { requests } = await callAgent(dir, "GET", "/requests", undefined, 10_000);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].state, "waiting");
-    assert.equal(requests[0].what, "rm -rf build");
+    assert.equal(requests[0].what, "rm -rf ../build (in /repo)");
     assert.equal(requests[0].reason, REASON);
     // The workspace approves: its allowance for the same rule and action arrives in the rules document.
     const request = readRequests(dir)[0];
@@ -101,7 +103,7 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
     assert.equal(requests[0].answered_by, "morgan@acme.test");
     const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.equal(allowances[0].by, "admin");
-    assert.equal(allowances[0].what, "rm -rf build");
+    assert.equal(allowances[0].what, "rm -rf ../build (in /repo)");
     // A workspace that says it declined, with a note.
     writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ ...doc, request_answers: [{ request_id: request.id, state: "declined", by: "morgan@acme.test", note: "Use the clean script\u0007" }] }));
     ({ requests } = await callAgent(dir, "GET", "/requests", undefined, 10_000));
@@ -160,7 +162,7 @@ test("notifications: blocks and problems for a new install; the older 'all' read
 
 test("blocks are final: nothing offered for a block, and no Requests list", async () => {
   const dir = computer({ "destructive-shell": { mode: "block" } });
-  await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf build" } }]);
+  await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf ../build" } }]);
   const service = await serviceFor(dir);
   try {
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
@@ -209,7 +211,7 @@ test("stop allowing from the tray: the person's allowance ends at once and leave
     const [mine] = (await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances;
     assert.equal(mine.by, "person");
     const stopped = await callAgent(dir, "POST", "/allowances/stop", { id: mine.id }, 10_000);
-    assert.deepEqual(stopped, { outcome: "stopped", text: "Stopped allowing rm -rf build on this computer" });
+    assert.deepEqual(stopped, { outcome: "stopped", text: "Stopped allowing rm -rf ../build (in /repo) on this computer" });
     assert.deepEqual((await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances, []);
     assert.ok(readAllowances(dir).find((a) => a.id === mine.id).ended_at);
     assert.equal((await callAgent(dir, "POST", "/allowances/stop", { id: mine.id }, 10_000)).outcome, "gone");
@@ -219,4 +221,22 @@ test("stop allowing from the tray: the person's allowance ends at once and leave
     writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify({ ...doc, allowances: [admins] }));
     assert.equal((await callAgent(dir, "POST", "/allowances/stop", { id: admins.id }, 10_000)).outcome, "gone");
   } finally { await service.stop(); }
+});
+
+test("where the workspace asks for no reason, the tray's answer needs none; a minimum above 0 still needs one", async () => {
+  const { dir, id } = await blockedComputer({ "destructive-shell": { mode: "override", override: { reason_min: 0, minutes: 0, daily_limit: 5, harness_prompt: false, always: "at_once", requests: true } } });
+  const service = await serviceFor(dir);
+  try {
+    const done = await answer(dir, { action_id: id, choice: "always" });
+    assert.equal(done.outcome, "allowed");
+    const made = readAllowances(dir).at(-1);
+    assert.equal(made.reason_length, 0, "recorded with no reason");
+    assert.equal(made.reason_digest, null);
+    assert.equal("reason" in made, false, "no text to send");
+  } finally { await service.stop(); }
+  const { dir: strict, id: blocked } = await blockedComputer();
+  const again = await serviceFor(strict);
+  try {
+    assert.equal((await answer(strict, { action_id: blocked, choice: "once" })).outcome, "reason_short", "the workspace's minimum (12)");
+  } finally { await again.stop(); }
 });

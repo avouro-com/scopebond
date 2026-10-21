@@ -58,7 +58,7 @@ import { loadPolicyExport, policyBuilds } from "./policy-load.js";
 import { compileManaged, isManaged, readMeta, writeMeta, MANAGED_DOC_FILE, type ManagedDocument } from "./managed.js";
 import { agentPresence, healthLines, recommendedFrom, NATIVE_DOWNLOAD_URL } from "./client-health.js";
 import { localRetentionDays, runStoreUpkeep, upkeepIfDue } from "./store-upkeep.js";
-import { createOverrideHandler, overrideHint, PROMPTING_MODES } from "./override.js";
+import { createOverrideHandler, overrideHint, overrideRemedy, PROMPTING_MODES } from "./override.js";
 import { checkInstalls, VERDICT_TIMEOUT_MS } from "./install-verdicts.js";
 import { markRulesDroppedTold, rulesDroppedNotice, syncIfDue, syncPolicy, type SyncOptions, type SyncOutcome } from "./policy-sync.js";
 import { loadBudgetExport } from "./budget-load.js";
@@ -76,6 +76,7 @@ import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
 import { runPackVectors } from "./packs.js";
+import { describePackSync } from "./pack-sync.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, waitWithinDeadline } from "./hook-deadline.js";
 import { policyKeyProblems } from "./policy-keys.js";
@@ -324,9 +325,9 @@ async function withInstallVerdicts(dir: string, mapped: Mapped[], ask: "ask" | "
 }
 
 /** For the tray: the rule, project and tool of a blocked call, noted on this computer (block-notes.ts). Never throws. */
-function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision): void {
+function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision, input?: Record<string, unknown>): void {
   if (decision.decision !== "deny") return;
-  try { noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd) }); } catch { /* the receipt is the record */ }
+  try { noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd), session: input ? sessionKeyOf(decisionStateDir(dir), input) : null }); } catch { /* the receipt is the record */ }
 }
 
 /** `deadlineAt`: a time after which the call is denied rather than evaluated (GitHub Copilot, whose hook timeouts fail
@@ -360,12 +361,12 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch), ...databaseGuard(dir, cwd, input!)], installAsk);
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
       const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
-      return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
+      return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
     if (deadlineAt !== undefined && Date.now() > deadlineAt) { runtime.close(); runtime = undefined; recordHookError("deadline", copilotDeadlineReason()); deny(copilotDeadlineReason()); }
     const decision = await runtime.evaluate(actions, { groupKey: callId(input!) });
-    noteIfBlocked(dir, cwd, harness, decision);
+    noteIfBlocked(dir, cwd, harness, decision, input!);
     // Allowed: what is left is record delivery, which must not turn an allowed call into a "did not finish" deny.
     if (decision.decision === "allow" && copilotDeadlineTimer !== undefined) { clearTimeout(copilotDeadlineTimer); copilotDeadlineTimer = undefined; }
     const observer = recordObservations(dir, cwd, input!, decision, harness);
@@ -533,15 +534,17 @@ function denyCursor(reason: string): never {
   process.exit(0);
 }
 
-/** A clean evaluated allow: the call was allowed and every action in it was checked and permitted (or allowed by a person).
- *  An action a monitored rule found out of policy is signed `deny` and still allowed; an unchecked one is `not_evaluated`. */
-function cleanAllow(decision: { decision: string; receipt?: unknown; receipts?: unknown[] }): boolean {
-  if (decision.decision !== "allow") return false;
+/** An evaluated allow: the call was allowed and every action in it was checked, permitted (or allowed by a person) or found
+ *  out of policy by a monitored rule, which is signed `deny` and still allowed. An unchecked action is `not_evaluated`.
+ *  `monitored` says whether a monitored rule matched any of them. */
+function evaluatedAllow(decision: { decision: string; receipt?: unknown; receipts?: unknown[] }): { ok: boolean; monitored: boolean } {
+  if (decision.decision !== "allow") return { ok: false, monitored: false };
   const list = decision.receipts?.length ? decision.receipts : decision.receipt !== undefined ? [decision.receipt] : [];
-  return list.length > 0 && list.every((r) => {
-    const result = (r as { payload?: { realtime_result?: unknown } } | null)?.payload?.realtime_result;
-    return result === "allow" || result === "approved";
-  });
+  const results = list.map((r) => (r as { payload?: { realtime_result?: unknown } } | null)?.payload?.realtime_result);
+  return {
+    ok: results.length > 0 && results.every((result) => result === "allow" || result === "approved" || result === "deny"),
+    monitored: results.includes("deny"),
+  };
 }
 
 /** Keep the local store small when the Scopebond Agent does not (it keeps the user home while it runs). */
@@ -584,11 +587,11 @@ async function runCursor(): Promise<void> {
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
     runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
       const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
-      return made ? { handler: made.handler, hint: () => overrideHint(made.note()) } : null;
+      return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
     const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
-    noteIfBlocked(dir, cwd, "cursor", decision);
+    noteIfBlocked(dir, cwd, "cursor", decision, input);
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
     await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
     observer?.close();
@@ -600,19 +603,19 @@ async function runCursor(): Promise<void> {
     postHoc = mapped.some((m) => m.postHoc);
     // The answers:
     //   deny  — out of policy, blocked outright.
-    //   allow — only a clean evaluated allow: every action of the call was checked and
-    //           permitted. Returning "ask" here put a confirmation prompt in front of
-    //           every ordinary command, which is not "your agent works as normal"; it
-    //           also trained people to click through prompts, which makes the real
-    //           denials easier to miss.
-    //   ask   — anything else: no rule covers the action, or a rule that records rather
-    //           than blocks found it out of policy. Cursor's own approval stays in
-    //           charge, exactly as Claude Code's and Codex's do when the hook stays
-    //           silent. Answering "allow" to a recorded violation would approve it on
-    //           the person's behalf and skip the prompt Cursor would otherwise show.
-    permission = decision.decision === "deny" ? "deny" : cleanAllow(decision) ? "allow" : "ask";
-    message = decision.decision === "allow" && permission === "ask"
-      ? "Scopebond recorded this as out of policy under a rule that records rather than blocks; Cursor's own approval decides."
+    //   allow — an evaluated allow: every action of the call was checked and permitted,
+    //           or found out of policy by a rule that records rather than blocks.
+    //           Monitor is silent for the developer: answering "ask" for a monitored
+    //           match put Cursor's approval prompt in front of every one of them, which
+    //           is not "your agent works as normal" and trained people to click through
+    //           prompts, so the real denials were easier to miss. The match is recorded.
+    //   ask   — anything else: Scopebond could not evaluate the action (no rule covers
+    //           it, or the event could not be read into one), or it holds the action for
+    //           a person. Cursor's own approval stays in charge.
+    const evaluated = evaluatedAllow(decision);
+    permission = decision.decision === "deny" ? "deny" : evaluated.ok ? "allow" : "ask";
+    message = permission === "allow" && evaluated.monitored
+      ? "Scopebond recorded this under a rule that records rather than blocks."
       : decision.reason;
   } catch (error) {
     permission = "deny";
@@ -1857,6 +1860,7 @@ function runStatus(args: string[] = []): void {
     console.log(`  rules            ${managed ? `set by your workspace (version ${meta.revision})${checked}` : `this computer's own (${rulesPath(activeDir)})${connected ? checked : ""}`}`);
     console.log(`                   always on: protection of Scopebond's own settings and the agents' hook settings`);
     if (meta.last_error) console.log(`                   last problem: ${meta.last_error}`);
+    for (const line of describePackSync(meta.packs)) console.log(`  rule packs       ${line}`);
   }
   {
     const activeDir = resolveConfigDir(process.cwd());
@@ -2313,13 +2317,18 @@ function runPacks(args: string[]): void {
   if (sub === "list") {
     const loaded = loadPacks(dir);
     if (json) {
-      console.log(JSON.stringify({ dir: packsDir(dir), expires_at: loaded.expiresAt, packs: loaded.packs.map((p) => ({ id: p.id, version: p.version, issued_at: p.issued_at, title: p.title ?? null })), problems: loaded.problems }, null, 2));
+      console.log(JSON.stringify({ dir: packsDir(dir), expires_at: loaded.expiresAt, packs: loaded.packs.map((p) => ({ id: p.id, version: p.version, issued_at: p.issued_at, title: p.title ?? null, expires_at: loaded.expires[`${p.id}@${p.version}`] ?? null })), problems: loaded.problems, not_updated: readMeta(dir).packs?.failed ?? [] }, null, 2));
       return;
     }
-    if (loaded.packs.length === 0 && loaded.problems.length === 0) { console.log("No rule packs on this computer. The open detection and the starter protections apply."); return; }
-    for (const p of loaded.packs) console.log(`  ${p.id}@${p.version}  issued ${p.issued_at}${p.title ? `  ${p.title}` : ""}`);
-    if (loaded.expiresAt && loaded.packs.length) console.log(`In force until ${loaded.expiresAt} unless this computer checks in again.`);
+    const notUpdated = describePackSync(readMeta(dir).packs);
+    if (loaded.packs.length === 0 && loaded.problems.length === 0 && notUpdated.length === 0) { console.log("No rule packs on this computer. The open detection and the starter protections apply."); return; }
+    for (const p of loaded.packs) {
+      const until = loaded.expires[`${p.id}@${p.version}`];
+      console.log(`  ${p.id}@${p.version}  issued ${p.issued_at}${p.title ? `  ${p.title}` : ""}${until ? `  in force until ${until}` : ""}`);
+    }
+    if (loaded.packs.length) console.log("Each pack stays in force for 30 days after this computer last confirmed it with the workspace.");
     for (const problem of loaded.problems) console.log(`  not used: ${problem.ref}: ${problem.message}`);
+    for (const line of notUpdated) console.log(`  not updated: ${line}`);
     return;
   }
   if ((sub === "verify" || sub === "add") && target) {
@@ -2439,8 +2448,9 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
     summary: "the rule packs on this computer: what is in force, and checking or adding a pack file",
     detail: [
       "Rule packs are signed data from Scopebond Cloud that teach the hook what more command-line tools and MCP servers do.",
-      "list shows the packs in force and why any other is not used (bad signature, expired, damaged). A pack stays in force",
-      "for 30 days after this computer last checked in; without one, the open detection and the starter protections apply.",
+      "list shows the packs in force and why any other is not used (bad signature, expired, damaged). Each pack stays in force",
+      "for 30 days after this computer last confirmed it; a pack whose update could not be used keeps its last good version on",
+      "its own clock, and the others renew as usual. Without one, the open detection and the starter protections apply.",
       "verify <file> checks a pack file (format, signature, its own vectors) and changes nothing.",
       "add <file> checks it the same way, then puts it in force here; remove <id> takes one out. Both need a terminal or --yes.",
       "Packs live in the packs folder of .scopebond/ (index.json and one <id>@<version>.json per pack).",

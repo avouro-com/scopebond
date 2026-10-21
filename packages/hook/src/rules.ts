@@ -17,7 +17,8 @@
 // quietly alter what is enforced.
 
 import { join } from "node:path";
-import { ci, under, named, dir, DESTRUCTIVE, selfProtectionClauses } from "./runtime.js";
+import { ci, under, named, dir, DESTRUCTIVE, SAFE_SHELL_PARAM, selfProtectionClauses } from "./runtime.js";
+import { containedDeletesSentence } from "./delete-scope.js";
 import { TARGET_RULES } from "./target-rules.js";
 import { switchablePackRules } from "./pack-rules.js";
 export { TARGET_RULES } from "./target-rules.js";
@@ -145,6 +146,8 @@ export const SWITCHABLE_RULES: readonly string[] = [...ENFORCEABLE_RULES, ...TAR
 export function compile(rules: RuleSet, agentKid: string): Record<string, unknown> {
   const enforced = new Set(rules.enforce ?? []);
   const mode = (id: string): "enforce" | "monitor" => (enforced.has(id) ? "enforce" : "monitor");
+  // What a delete on the list may still do (delete-scope.ts): the block message quotes it.
+  const deletes = containedDeletesSentence(rules.destructive_programs);
   return {
     vocabulary_version: "1.0", policy_id: "coding-agent", version: 1,
     clauses: [
@@ -156,8 +159,8 @@ export function compile(rules: RuleSet, agentKid: string): Record<string, unknow
       },
       {
         id: "safe-shell", type: "action_allowlist", mode: mode("safe-shell"), action_types: ["shell.exec"],
-        param_bounds: { program: { pattern: programPattern(rules.destructive_programs) } },
-        description: `Deny destructive programs (${sentence(rules.destructive_programs, 10)}) in any case and with or without .exe. An empty program — a command that could not be parsed, or whose program is only known at run time ($VAR, $(…), eval of a variable) — is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here. Change this list in .scopebond/${RULES_FILE}.`,
+        param_bounds: { [SAFE_SHELL_PARAM]: { pattern: programPattern(rules.destructive_programs) } },
+        description: `Deny destructive programs (${sentence(rules.destructive_programs, 10)}) in any case and with or without .exe. ${deletes ? `${deletes} ` : ""}An empty program — a command that could not be parsed, or whose program is only known at run time ($VAR, $(…), eval of a variable) — is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here. Change this list in .scopebond/${RULES_FILE}.`,
       },
       {
         id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],
@@ -341,6 +344,7 @@ export function describeRules(rules: RuleSet): string {
   lines.push("");
   lines.push(`  [${how("protect-branches")}] protect-branches   pushes to ${rules.protected_branches.join(", ")}, and any push whose destination cannot be read`);
   lines.push(`  [${how("safe-shell")}] safe-shell         programs ${rules.destructive_programs.join(", ")}`);
+  if (containedDeletesSentence(rules.destructive_programs)) lines.push("                       (a delete of only paths inside the working folder, build output or temp files runs)");
   lines.push(`  [${how("protect-write")}] protect-write      writes to ${rules.protected_write.length} protected location(s):`);
   for (const rule of rules.protected_write) lines.push(`                       ${rule.label}`);
   lines.push(`  [${how("protect-read")}] protect-read       reads of ${rules.protected_read.length} protected location(s):`);

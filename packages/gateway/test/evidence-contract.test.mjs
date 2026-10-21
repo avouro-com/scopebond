@@ -83,6 +83,9 @@ test("cooperative_allow is a valid check-only (M0) execution state and never cla
   // M0 cooperative allow: policy allowed the action, but the gateway did not execute
   // it — the agent does, cooperatively. Honest evidence, never labeled executed.
   const coop = structuredClone(denied.receipt.payload);
+  // An allow names no matched clause.
+  delete coop.clause_id;
+  delete coop.failed_bound;
   coop.realtime_result = "allow";
   coop.executed = false;
   coop.execution_ref = null;

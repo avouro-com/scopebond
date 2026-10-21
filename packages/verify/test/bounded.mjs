@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { violates, historyNeed, boundPrior } from "../dist/violates.js";
 
 const decision = (v) => ({
-  violated: v.violated, clause_id: v.clause_id, explanation: v.explanation, undetermined: !!v.undetermined,
+  violated: v.violated, clause_id: v.clause_id, failed_bound: v.failed_bound, explanation: v.explanation, undetermined: !!v.undetermined,
 });
 
 export function violatesBoth(policy, receipts, claimed, opts = {}) {

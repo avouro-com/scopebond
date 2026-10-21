@@ -125,6 +125,29 @@ test("the cache: a newer version replaces the older one, and remove takes a pack
   assert.equal(removePack(dir, "example"), false);
 });
 
+test("the cache: each pack keeps its own clock, so one pack expiring never takes the others with it", () => {
+  const dir = stateDir();
+  const s = signer();
+  const base = structuredClone(example);
+  delete base.signature;
+  const DAY = 24 * 60 * 60 * 1000;
+  assert.equal(installPack(dir, text(s.signPack(base)), { keys: [s.entry], now: NOW }).ok, true);
+  const later = new Date(NOW.getTime() + 20 * DAY);
+  assert.equal(installPack(dir, text(s.signPack({ ...base, id: "other" })), { keys: [s.entry], now: later }).ok, true);
+  // Adding a pack does not renew the one already there: it keeps its own time.
+  assert.deepEqual(readPackIndex(dir).packs.map((p) => [p.id, p.checked_at ?? null]), [["example", NOW.toISOString()], ["other", null]]);
+  const loaded = loadPacks(dir, { keys: [s.entry], now: new Date(NOW.getTime() + 31 * DAY) });
+  assert.deepEqual(loaded.packs.map((p) => p.id), ["other"]);
+  assert.deepEqual(loaded.problems.map((p) => [p.ref, p.reason]), [["example@1.0.0", "expired"]]);
+  assert.equal(loaded.expiresAt, new Date(later.getTime() + PACK_TTL_MS).toISOString());
+  assert.deepEqual(loaded.expires, { "other@1.0.0": new Date(later.getTime() + PACK_TTL_MS).toISOString() });
+  // An index that names a pack's own time in a form that is not RFC 3339 is not read.
+  const index = JSON.parse(readFileSync(join(packsDir(dir), "index.json"), "utf8"));
+  index.packs[0].checked_at = "yesterday";
+  writeFileSync(join(packsDir(dir), "index.json"), JSON.stringify(index));
+  assert.equal(readPackIndex(dir), null);
+});
+
 test("activatePacks puts the verified packs in force for the mapper, and no packs (or bad ones) switch them off", () => {
   const dir = stateDir();
   installPack(dir, text(example), { keys: TEST_KEYS, now: NOW });

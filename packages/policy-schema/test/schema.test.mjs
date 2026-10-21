@@ -7,6 +7,7 @@ import {
   policySchema, actionSchema, receiptSchema, legacyReceiptSchema, CLAUSE_TYPES, CLAUSE_MODES,
   VOCABULARY_VERSION, EVIDENCE_VERSION, CANONICALIZATION, EXECUTION_STATES, REALTIME_RESULTS,
   canonical, RECEIPT_CONTEXT_KEYS, sessionBudgetsSchema, SESSION_BUDGET_DEFAULT_SECONDS, SESSION_BUDGET_MODES, RECEIPT_BUDGET_STATES,
+  RECEIPT_FAILED_BOUND_PATTERN,
 } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -206,4 +207,52 @@ test("receipt budget: an optional, closed payload member; valid ones validate, i
   };
   for (const vector of sessionVectors.receipt_budget.valid) assert.equal(conforms(receiptSchema, withBudget(vector.budget)), true, vector.name);
   for (const vector of sessionVectors.receipt_budget.invalid) assert.equal(conforms(receiptSchema, withBudget(vector.budget)), false, vector.name);
+});
+
+test("an override record carries a reason by its digest and length, or none: no digest and length 0", () => {
+  const AT = "2026-01-01T00:00:00.000Z";
+  const record = (extra = {}) => ({ version: 1, rule: "destructive-shell", method: "agent_dialog", state: "allowed", repeat_of: null,
+    reason_digest: "a".repeat(64), reason_length: 36, os_user_digest: null, decided_at: AT, ...extra });
+  const withOverride = (override) => {
+    const receipt = structuredClone(evidence.receipt_context.receipt);
+    receipt.payload.realtime_result = "approved";
+    receipt.payload.override = override;
+    return receipt;
+  };
+  assert.equal(conforms(receiptSchema, withOverride(record())), true, "with a reason");
+  assert.equal(conforms(receiptSchema, withOverride(record({ reason_digest: null, reason_length: 0 }))), true, "no reason given");
+  assert.equal(conforms(receiptSchema, withOverride(record({ method: "allowance", repeat_of: "alw_0123456789abcdefghij", reason_digest: null, reason_length: 0 }))), true);
+  for (const bad of [
+    record({ reason_length: 0 }), record({ reason_digest: null }), record({ reason_digest: null, reason_length: null }),
+    record({ method: "harness_prompt", state: "offered", reason_digest: null, reason_length: 0 }),
+  ]) assert.equal(conforms(receiptSchema, withOverride(bad)), false, JSON.stringify(bad));
+});
+
+const withMatch = (fields, realtime = "deny") => {
+  const receipt = structuredClone(evidence.receipt_context.receipt);
+  receipt.payload.realtime_result = realtime;
+  Object.assign(receipt.payload, fields);
+  return receipt;
+};
+
+test("receipt match: clause_id and failed_bound are optional payload members", () => {
+  const payload = receiptSchema.properties.payload;
+  for (const key of ["clause_id", "failed_bound"]) {
+    assert.ok(payload.properties[key], `payload.properties.${key} exists`);
+    assert.equal(payload.required.includes(key), false, `${key} is optional`);
+  }
+  assert.equal(payload.properties.failed_bound.pattern, RECEIPT_FAILED_BOUND_PATTERN);
+  assert.match(payload.properties.clause_id.description, /first .*policy order/);
+  // A receipt without them (every receipt made before them) is unchanged and still valid.
+  assert.equal(conforms(receiptSchema, evidence.receipt_context.receipt), true);
+});
+
+test("receipt match vectors: valid matches validate, invalid ones do not", () => {
+  const vectors = evidence.receipt_match;
+  assert.ok(vectors.valid.length > 0 && vectors.invalid.length > 0);
+  for (const vector of vectors.valid) assert.equal(conforms(receiptSchema, withMatch(vector.fields, vector.realtime_result)), true, vector.name);
+  for (const vector of vectors.invalid) assert.equal(conforms(receiptSchema, withMatch(vector.fields, vector.realtime_result)), false, vector.name);
+  for (const name of ["bound-without-clause", "allow-with-clause", "bound-with-value", "empty-clause"]) {
+    assert.ok(vectors.invalid.some((vector) => vector.name === name), name);
+  }
 });

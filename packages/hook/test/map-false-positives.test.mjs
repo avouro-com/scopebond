@@ -47,7 +47,9 @@ test("a bare variable or glob is not a read of a file by that name; one that cou
   assert.deepEqual(paths(bash(`cat "$FILE"`), "file.read"), []);
   assert.deepEqual(paths(bash("cat *"), "file.read"), []);
   assert.deepEqual(paths(bash("cat $D/notes.txt"), "file.read"), ["$D/notes.txt"]);
-  assert.ok(paths(bash("cat $HOME/.scopebond/agent.key"), "file.read").includes(".scopebond/agent.key"));
+  // `$HOME` is the home folder, so this one is no longer a pattern: it is the home folder's key.
+  assert.ok(paths(bash("cat $HOME/.scopebond/agent.key"), "file.read").includes("~/.scopebond/agent.key"));
+  assert.ok(paths(bash("cat $KEYS/.scopebond/agent.key"), "file.read").includes(".scopebond/agent.key"));
   assert.ok(paths(bash("cat $D/agent.key"), "file.read").some((p) => p.endsWith("agent.key")), "it could name a signing key");
 });
 

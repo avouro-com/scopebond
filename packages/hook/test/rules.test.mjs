@@ -62,10 +62,10 @@ test("a description lists what it actually covers, so an edit cannot make it lie
 
 test("removing a program from the list stops it being denied", () => {
   const rules = defaultRules();
-  const before = compile(rules, "k").clauses.find((c) => c.id === "safe-shell").param_bounds.program.pattern;
+  const before = compile(rules, "k").clauses.find((c) => c.id === "safe-shell").param_bounds.program_scope.pattern;
   assert.equal(policyPattern(before).test("dd"), false, "dd is denied by default");
   rules.destructive_programs = rules.destructive_programs.filter((p) => p !== "dd");
-  const after = compile(rules, "k").clauses.find((c) => c.id === "safe-shell").param_bounds.program.pattern;
+  const after = compile(rules, "k").clauses.find((c) => c.id === "safe-shell").param_bounds.program_scope.pattern;
   assert.equal(policyPattern(after).test("dd"), true, "dd is allowed once removed");
   assert.equal(policyPattern(after).test("rm"), false, "the rest of the list still applies");
 });

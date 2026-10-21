@@ -61,7 +61,7 @@ test("a decomposed call counts as one parent action, and a policy denial consume
   const dir = home();
   writeBudget(dir, { max: 1 });
   const rt = open(dir);
-  const denied = await rt.evaluate(shell("git status && rm -rf /tmp/x"), { groupKey: "bad" });
+  const denied = await rt.evaluate(shell("git status && rm -rf ~/x"), { groupKey: "bad" });
   assert.equal(denied.decision, "deny", "policy denies the destructive part");
   assert.equal(denied.dispatch, undefined, "denied before the boundary");
   const multi = await rt.evaluate(shell("git status && git log && git diff"), { groupKey: "multi" });

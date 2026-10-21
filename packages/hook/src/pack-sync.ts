@@ -9,8 +9,10 @@
 //     `runPackVectors`);
 //   - the index is rewritten to exactly the listed packs, and any other pack file is removed: a list without packs (a computer
 //     that is not licensed) leaves none, so only the open detection and the starter protections apply;
-//   - `checked_at` is set to now only when every listed pack is in the cache; when one could not be fetched or checked, the
-//     version already held stays and the cache keeps the time of the last complete check-in, so it still expires 30 days later.
+//   - each pack is checked and kept on its own: a pack confirmed by this answer (held byte for byte, or fetched and checked)
+//     is renewed to now; a pack that could not be fetched or checked is skipped and named in the result (id, version, why),
+//     and the version already held of it stays on its own clock (pack-store.ts), so it still expires 30 days after it was
+//     last confirmed. One pack that cannot be read never holds back the others.
 // An answer without `packs` (an older workspace, an unsigned answer) changes nothing, and an answer whose list does not verify
 // changes nothing either. A `304 Not Modified` rules check is a check-in that confirms the list in force (`restampPacks`).
 // Nothing here throws to the caller: a failure leaves the cache as it was.
@@ -19,8 +21,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { packRef } from "@scopebond/policy-schema/pack";
-import { writeAtomic } from "./managed.js";
-import { checkPackText, packsDir, readPackIndex, PACK_INDEX_FILE, type PackIndexEntry } from "./pack-store.js";
+import { writeAtomic, type ManagedMeta } from "./managed.js";
+import { checkPackText, packCheckedAt, packsDir, readPackIndex, writePackIndex, PACK_INDEX_FILE, PACK_TTL_MS, type PackIndexEntry } from "./pack-store.js";
 import { runPackVectors } from "./packs.js";
 import { checkPacksSignature } from "./policy-signature.js";
 import type { PolicyKey } from "./policy-keys.js";
@@ -48,11 +50,15 @@ export interface PackSyncOptions {
   keys?: PolicyKey[];
 }
 
+/** A pack the answer names that could not be fetched or checked: its id and version, why, and the version of it that stays
+ *  in force (and until when), if any. */
+export interface PackSyncFailure { ref: string; id: string; version: string; message: string; held: string | null; held_until: string | null }
+
 export type PackSyncResult =
   | { state: "not_named" }
   | { state: "refused"; message: string }
   | { state: "synced"; packs: string[]; fetched: string[]; removed: string[] }
-  | { state: "partial"; packs: string[]; fetched: string[]; removed: string[]; failed: Array<{ ref: string; message: string }> };
+  | { state: "partial"; packs: string[]; fetched: string[]; removed: string[]; failed: PackSyncFailure[] };
 
 /** The pack list an answer names, or null when it is not exactly the documented shape. */
 export function packRefsOf(answer: Record<string, unknown>): PackIndexEntry[] | null {
@@ -88,20 +94,23 @@ export async function syncPacks(dir: string, answer: Record<string, unknown>, op
     const held = readPackIndex(dir);
     const kept: PackIndexEntry[] = [];
     const fetched: string[] = [];
-    const failed: Array<{ ref: string; message: string }> = [];
+    const failed: PackSyncFailure[] = [];
     for (const ref of wanted) {
       const name = packRef(ref);
       const have = held?.packs.find((p) => p.id === ref.id);
-      if (have && have.version === ref.version && have.sha256 === ref.sha256 && existsSync(fileOf(dir, name))) { kept.push(have); continue; }
+      // Confirmed by this answer: renewed to now (an entry without its own clock takes the index's).
+      if (have && have.version === ref.version && have.sha256 === ref.sha256 && existsSync(fileOf(dir, name))) { kept.push(ref); continue; }
       const got = await fetchPack(dir, ref, options);
       if (got.ok) { kept.push(ref); fetched.push(name); continue; }
-      failed.push({ ref: name, message: got.message });
-      // The version already held (a genuine, earlier pack) stays until it expires.
-      if (have && existsSync(fileOf(dir, packRef(have)))) kept.push(have);
+      // The version already held (a genuine, earlier pack) stays on its own clock until it expires; the others are not held back.
+      const holding = have && held && existsSync(fileOf(dir, packRef(have))) ? { ...have, checked_at: packCheckedAt(held, have) } : null;
+      if (holding) kept.push(holding);
+      failed.push({
+        ref: name, id: ref.id, version: ref.version, message: got.message, held: holding ? packRef(holding) : null,
+        held_until: holding ? new Date(Date.parse(holding.checked_at) + PACK_TTL_MS).toISOString() : null,
+      });
     }
-    const checkedAt = failed.length === 0 || !held ? now.toISOString() : held.checked_at;
-    mkdirSync(packsDir(dir), { recursive: true });
-    writeAtomic(join(packsDir(dir), PACK_INDEX_FILE), `${JSON.stringify({ v: 1, checked_at: checkedAt, packs: kept }, null, 2)}\n`);
+    writePackIndex(dir, { v: 1, checked_at: now.toISOString(), packs: kept });
     const removed = removeUnlisted(dir, kept);
     const packs = kept.map(packRef);
     return failed.length ? { state: "partial", packs, fetched, removed, failed } : { state: "synced", packs, fetched, removed };
@@ -146,13 +155,27 @@ function removeUnlisted(dir: string, listed: readonly PackIndexEntry[]): string[
   return removed;
 }
 
-/** A rules check the workspace answered `304 Not Modified` confirms the pack list in force: the cache's `checked_at` moves to
- *  now when every pack it lists is there. Never throws. */
-export function restampPacks(dir: string, now: Date = new Date()): boolean {
+/** A rules check the workspace answered `304 Not Modified` confirms the pack list in force: every pack the cache lists moves
+ *  to now, except the ids in `unconfirmed` (packs the last list named at a version this computer could not fetch or check)
+ *  and any whose file is missing, which keep their own clock. False when there is no index to renew. Never throws. */
+export function restampPacks(dir: string, now: Date = new Date(), unconfirmed: readonly string[] = []): boolean {
   try {
     const held = readPackIndex(dir);
-    if (!held || !held.packs.every((p) => existsSync(fileOf(dir, packRef(p))))) return false;
-    writeAtomic(join(packsDir(dir), PACK_INDEX_FILE), `${JSON.stringify({ ...held, checked_at: now.toISOString() }, null, 2)}\n`);
+    if (!held) return false;
+    const packs = held.packs.map((p): PackIndexEntry => {
+      const ref = { id: p.id, version: p.version, sha256: p.sha256 };
+      return unconfirmed.includes(p.id) || !existsSync(fileOf(dir, packRef(p))) ? { ...ref, checked_at: packCheckedAt(held, p) } : ref;
+    });
+    writePackIndex(dir, { v: 1, checked_at: now.toISOString(), packs });
     return true;
   } catch { return false; }
+}
+
+/** What `status` and `packs list` say about the last pack list the workspace named: one line for each pack that could not be
+ *  updated (its id, the version named, why, and what stays in force), or why the list was not used. Empty when it was taken in
+ *  full. */
+export function describePackSync(state: ManagedMeta["packs"] | undefined): string[] {
+  if (!state || state.complete) return [];
+  if (!state.failed?.length) return state.error ? [`the last pack list was not used: ${state.error}`] : [];
+  return state.failed.map((f) => `${f.id} ${f.version} could not be updated (${f.reason}); ${f.held && f.held_until ? `${f.held} stays in force until ${f.held_until}` : "no version of it is in force"}`);
 }

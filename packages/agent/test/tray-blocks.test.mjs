@@ -26,13 +26,13 @@ test("the tray model lists today's blocks in plain words, with the rule's name, 
   const dir = computer();
   await blockActions(dir, [
     { tool_name: "Read", tool_input: { file_path: "/repo/.env.production" } },
-    { tool_name: "Bash", tool_input: { command: "rm -rf build --token=SECRET-ARG-123" } },
+    { tool_name: "Bash", tool_input: { command: "rm -rf ../build --token=SECRET-ARG-123" } },
   ]);
   const service = await serviceFor(dir);
   try {
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
     const [rm, read] = tray.recent_blocks;
-    assert.equal(rm.what, "rm -rf build --token=***", "the secret is masked as the window masks it");
+    assert.equal(rm.what, "rm -rf ../build --token=***", "the secret is masked as the window masks it");
     assert.equal(rm.action_text, readBlocked(dir).at(-1).summary, "the text the Scopebond window shows");
     assert.equal(rm.rule, "destructive-shell");
     assert.equal(rm.rule_title, "Run a command that deletes data or shuts down the computer");
@@ -57,7 +57,7 @@ test("a block by Scopebond's own protection, from a receipt with no context, sti
   const dir = computer();
   await blockActions(dir, [
     { tool_name: "Write", tool_input: { file_path: "/repo/.scopebond/policy.json", content: "{}" } },
-    { tool_name: "Bash", tool_input: { command: "rm -rf build" } },
+    { tool_name: "Bash", tool_input: { command: "rm -rf ../build" } },
   ], { context: null, note: { project: "checkout" } });
   await blockActions(dir, [{ tool_name: "Read", tool_input: { file_path: "/repo/.env" } }], { context: null });
   const service = await serviceFor(dir);
@@ -73,23 +73,24 @@ test("a block by Scopebond's own protection, from a receipt with no context, sti
     assert.equal(rm.rule, "destructive-shell");
     assert.equal(rm.rule_title, "Run a command that deletes data or shuts down the computer");
     assert.equal(rm.tool, "Claude Code");
-    // Nothing noted and no context: a plain name, never empty and never a rule id.
+    // Nothing noted and no context: the receipt names the clause that matched, so the rule still has its name.
     assert.equal(unnoted.what, "Read .env");
-    assert.equal(unnoted.rule_title, "A Scopebond rule");
+    assert.equal(unnoted.rule_title, "Read passwords, keys or secrets");
     assert.equal(unnoted.project, null);
     assert.equal(unnoted.tool, null);
   } finally { await service.stop(); }
 });
 
-test("up to 20 blocks, newest first", async () => {
+test("every block of the week, newest first (no cap at 20)", async () => {
   const dir = computer();
-  await blockActions(dir, Array.from({ length: 24 }, (_, i) => ({ tool_name: "Bash", tool_input: { command: `rm -rf build${i}` } })));
+  await blockActions(dir, Array.from({ length: 24 }, (_, i) => ({ tool_name: "Bash", tool_input: { command: `rm -rf ../build${i}` } })));
   const service = await serviceFor(dir);
   try {
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
-    assert.equal(tray.recent_blocks.length, 20);
-    assert.equal(tray.recent_blocks[0].what, "rm -rf build23");
-    assert.equal(tray.recent_blocks[19].what, "rm -rf build4");
+    assert.equal(tray.recent_blocks.length, 24);
+    assert.equal(tray.recent_blocks[0].what, "rm -rf ../build23");
+    assert.equal(tray.recent_blocks[23].what, "rm -rf ../build0");
+    assert.equal(tray.today.blocked, 24, "the header counts the blocks the list shows");
   } finally { await service.stop(); }
 });
 

@@ -91,7 +91,7 @@ test("with no pack in force, nothing is derived and every call is decided by the
       assert.deepEqual(mapped.filter((m) => m.derived), [], `${command}: nothing derived`);
       assert.equal((await runtime.evaluate(mapped)).decision, "allow", command);
     }
-    assert.equal((await runtime.evaluate(bash("rm -rf build"))).decision, "deny", "the starter rules still block");
+    assert.equal((await runtime.evaluate(bash("rm -rf ../build"))).decision, "deny", "the starter rules still block");
   } finally { runtime.close(); }
 });
 
@@ -107,7 +107,7 @@ test("a pack that derives actions but brings no rules: the policy does not opt i
         assert.ok(derived.length > 0, "the derived action is recorded");
         for (const p of derived) assert.equal(p.realtime_result, "not_evaluated", `${command}: recorded, not decided`);
       }
-      assert.equal((await runtime.evaluate(bash("rm -rf build"))).decision, "deny");
+      assert.equal((await runtime.evaluate(bash("rm -rf ../build"))).decision, "deny");
     } finally { runtime.close(); }
   }
 });

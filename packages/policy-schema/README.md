@@ -107,6 +107,19 @@ action), `max` and `state` (`within`, `at_limit`, `over` or `unavailable`,
 `RECEIPT_BUDGET_STATES`). As with `context`, a receipt check older than this release reports a
 receipt carrying it as invalid.
 
+## Matched clause
+
+A receipt whose action a clause denied, recorded under monitor, held for approval or a person
+overrode names the clause in the optional `payload.clause_id`, and the bound of it that failed
+in the optional `payload.failed_bound` (`<param>:<bound>`, `RECEIPT_FAILED_BOUND_PATTERN`:
+`program:pattern`, `path:pattern`, `amount:max_per_action`). The bound names the param, never
+its value. `failed_bound` appears only with `clause_id`, and both only with a `realtime_result`
+of `deny`, `approved` or `timeout` (`RECEIPT_MATCH_RESULTS`); an allowed action carries neither.
+When several clauses matched, `clause_id` names an enforced clause first, then one that needs
+approval, then a monitored one, and among clauses of one mode the first by policy order.
+Receipts without them are unchanged. `vectors/evidence-contract.json` (`receipt_match`) holds
+valid and invalid examples.
+
 ## Observation envelope
 
 An observation is signed as Ed25519 over the UTF-8 bytes of the literal domain

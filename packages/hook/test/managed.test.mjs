@@ -75,7 +75,7 @@ test("the workspace defaults enforce exactly what the computer's own rules enfor
   try {
     const local = compile({ ...defaultRules(), ...ENFORCE }, agentKid);
     const managed = compileManaged(defaultRules(), doc(1), agentKid);
-    const cases = [bash("git push origin main"), bash("git push --force origin main"), bash("git push origin feature/x"), bash("rm -rf build"),
+    const cases = [bash("git push origin main"), bash("git push --force origin main"), bash("git push origin feature/x"), bash("rm -rf ../build"),
       read("/repo/.env"), write("/repo/.github/workflows/ci.yml"), write("/repo/.scopebond/policy.json"), write("/repo/src/app.ts"), fetchUrl("https://evil.example.com/x")];
     assert.deepEqual(await decide(dir, managed, cases), await decide(dir, local, cases));
     assert.ok(policyBuilds(managed));
@@ -93,14 +93,14 @@ test("Monitor records and allows; Block stops; the guardrail floor never relaxes
       "force-push-protected": { mode: "monitor" }, "push-protected": { mode: "monitor" }, "destructive-shell": { mode: "monitor" },
       "secret-read": { mode: "monitor" }, "ci-config-write": { mode: "monitor" },
     }), agentKid);
-    assert.deepEqual(await decide(dir, watch, [bash("git push --force origin main"), bash("rm -rf build"), read("/repo/.env"), write("/repo/.github/workflows/ci.yml")]), ["allow", "allow", "allow", "allow"]);
+    assert.deepEqual(await decide(dir, watch, [bash("git push --force origin main"), bash("rm -rf ../build"), read("/repo/.env"), write("/repo/.github/workflows/ci.yml")]), ["allow", "allow", "allow", "allow"]);
     // The floor: Scopebond's own settings and the agents' hook settings are always protected.
     assert.deepEqual(await decide(dir, watch, [write("/repo/.scopebond/policy.json"), write("/repo/.claude/settings.json"), write("/repo/.git/hooks/pre-push")]), ["deny", "deny", "deny"]);
     // Reads of Scopebond's own folder (the computer's key and connection) stay stopped with secret reads on Monitor.
     assert.deepEqual(await decide(dir, watch, [read("/repo/.scopebond/agent.key"), read("/srv/work/.scopebond/connection.json"), read("/repo/.SCOPEBOND/attester.key"), read("/repo/src/x.ts")]), ["deny", "deny", "deny", "allow"]);
     // List additions extend the computer's own list; they never shorten it.
     const more = compileManaged(defaultRules(), doc(4, { "destructive-shell": { mode: "block", destructive_programs: ["terraform"] }, "push-protected": { mode: "block", protected_branches: ["prod"] } }), agentKid);
-    assert.deepEqual(await decide(dir, more, [bash("terraform destroy"), bash("rm -rf build"), bash("git push origin prod"), bash("git push origin main")]), ["deny", "deny", "deny", "deny"]);
+    assert.deepEqual(await decide(dir, more, [bash("terraform destroy"), bash("rm -rf ../build"), bash("git push origin prod"), bash("git push origin main")]), ["deny", "deny", "deny", "deny"]);
     // Allowed sites: a request elsewhere is stopped only when the workspace switches network to Block.
     const sites = compileManaged(defaultRules(), doc(5, { "network-egress": { mode: "block", allowed_hosts: ["api.github.com", "*.npmjs.org"] } }), agentKid);
     assert.deepEqual(await decide(dir, sites, [fetchUrl("https://api.github.com/repos"), fetchUrl("https://registry.npmjs.org/x"), fetchUrl("https://evil.example.com/")]), ["allow", "allow", "deny"]);

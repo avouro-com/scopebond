@@ -92,6 +92,10 @@ export interface Verdict {
   explanation: string;
   inputs_hash: string;
   undetermined?: boolean;
+  /** The bound of `clause_id` that failed, as `<param>:<bound>` (`program:pattern`, `amount:max_per_action`,
+   *  `host:hosts`, `action_type:action_types`): the param the clause checked and the clause field it failed. It names
+   *  the param, never its value. Present only when `clause_id` names a clause that matched. */
+  failed_bound?: string;
 }
 
 export interface Options {
@@ -461,13 +465,15 @@ export function violates(
 
   const p = paramsOf(c);
   let undetermined: string | null = null;
+  // Matches of one mode are ranked by the clause's place in the policy (not by the order they were checked in: the
+  // allowlist union below is checked first), so a verdict names the first matching clause by policy order.
   const found: Array<{ verdict: Verdict; mode: Mode; order: number }> = [];
-  let order = 0;
-  const record = (clause: EvalClause, explanation: string): void => {
+  const policyOrder = new Map<Clause, number>((policy.clauses ?? []).map((clause, index) => [clause, index]));
+  const record = (clause: EvalClause, explanation: string, failedBound: string): void => {
     found.push({
-      verdict: verdict(true, clause.id, explanation, hash),
+      verdict: verdict(true, clause.id, explanation, hash, { failed_bound: failedBound }),
       mode: (clause.type === "require_approval" ? "require_approval" : (clause.mode ?? "enforce")),
-      order: order++,
+      order: policyOrder.get(clause) ?? -1,
     });
   };
 
@@ -476,7 +482,7 @@ export function violates(
   // prior path where an unlisted action silently skipped the allowlist.
   const actionAllowlists = ((policy.clauses ?? []) as EvalClause[]).filter((clause) => clause.type === "action_allowlist");
   if (actionAllowlists.length > 0 && !actionAllowlists.some((clause) => listHas(clause.action_types, c.intent?.action_type))) {
-    for (const clause of actionAllowlists) record(clause, `action type ${c.intent?.action_type} is not allowlisted`);
+    for (const clause of actionAllowlists) record(clause, `action type ${c.intent?.action_type} is not allowlisted`, "action_type:action_types");
   }
   const actionCovered = ((policy.clauses ?? []) as EvalClause[]).some((clause) => {
     switch (clause.type) {
@@ -500,7 +506,8 @@ export function violates(
     found.push({
       verdict: verdict(true, null, `action type ${c.intent?.action_type} is not covered by a supported policy clause`, hash),
       mode: "enforce",
-      order: order++,
+      // After every clause: a clause that matched is named rather than this.
+      order: Number.MAX_SAFE_INTEGER,
     });
   }
 
@@ -510,12 +517,12 @@ export function violates(
     if (t === "spend_limit") {
       const asset = clause.asset;
       if (c.intent?.asset === asset && !Number.isSafeInteger(c.intent?.amount)) {
-        record(clause, `amount for asset ${asset} must be a nonnegative safe integer`);
+        record(clause, `amount for asset ${asset} must be a nonnegative safe integer`, "amount:type");
         continue;
       }
       const amt = c.intent?.asset === asset ? (c.intent?.amount ?? 0) : 0;
       if (clause.max_per_action != null && amt > clause.max_per_action) {
-        record(clause, `per-action ${amt} exceeds max_per_action ${clause.max_per_action}`);
+        record(clause, `per-action ${amt} exceeds max_per_action ${clause.max_per_action}`, "amount:max_per_action");
         continue;
       }
       if (clause.max_per_window != null) {
@@ -523,13 +530,13 @@ export function violates(
         const w = durationToMs(clause.window);
         const relevant = executedUnique.filter((r) => r.intent?.asset === asset && inWindow(r, w));
         if (relevant.some((r) => !Number.isSafeInteger(r.intent?.amount))) {
-          record(clause, `window for asset ${asset} contains an invalid amount`);
+          record(clause, `window for asset ${asset} contains an invalid amount`, "amount:type");
           continue;
         }
         const sum = relevant
           .reduce((s, r) => s + (r.intent?.amount ?? 0), 0);
         if (sum > clause.max_per_window) {
-          record(clause, `windowed total ${sum} exceeds max_per_window ${clause.max_per_window}`);
+          record(clause, `windowed total ${sum} exceeds max_per_window ${clause.max_per_window}`, "amount:max_per_window");
           continue;
         }
       }
@@ -542,7 +549,7 @@ export function violates(
         (r) => listHas(clause.action_types, r.intent?.action_type) && inWindow(r, w),
       ).length;
       if (count > clause.max_count) {
-        record(clause, `count ${count} exceeds max_count ${clause.max_count}`);
+        record(clause, `count ${count} exceeds max_count ${clause.max_count}`, "action_type:max_count");
         continue;
       }
     }
@@ -551,21 +558,22 @@ export function violates(
       if (listHas(clause.action_types, c.intent?.action_type)) {
         const a = c.approval;
         const ok = a && listHas(clause.approvers, a.approver) && a.intent_hash === c.intent_hash;
-        if (!ok) { record(clause, "executed without a valid approval record"); continue; }
+        if (!ok) { record(clause, "executed without a valid approval record", "approval:approvers"); continue; }
       }
     }
 
     else if (t === "sequence") {
       if (listHas(clause.then_action_types, c.intent?.action_type) && (clause.min_gap || clause.forbidden_within)) {
-        const gap = Math.max(
-          clause.min_gap ? durationToMs(clause.min_gap) : 0,
-          clause.forbidden_within ? durationToMs(clause.forbidden_within) : 0,
-        );
+        const minGap = clause.min_gap ? durationToMs(clause.min_gap) : 0;
+        const forbiddenWithin = clause.forbidden_within ? durationToMs(clause.forbidden_within) : 0;
+        const gap = Math.max(minGap, forbiddenWithin);
+        // The bound that set the gap (min_gap on a tie).
+        const gapBound = minGap >= forbiddenWithin ? "min_gap" : "forbidden_within";
         const prior = executedUnique.find(
           (r) => r !== c && listHas(clause.first_action_types, r.intent?.action_type) &&
                  at - ms(r.timestamp) < gap && ms(r.timestamp) <= at,
         );
-        if (prior) { record(clause, `then-action occurred before the required sequence gap`); continue; }
+        if (prior) { record(clause, `then-action occurred before the required sequence gap`, `timestamp:${gapBound}`); continue; }
       }
     }
 
@@ -577,7 +585,7 @@ export function violates(
       const timeOk = clause.start <= clause.end
         ? hhmm >= clause.start && hhmm <= clause.end
         : hhmm >= clause.start || hhmm <= clause.end;
-      if (!(dayOk && timeOk)) { record(clause, `executed outside allowed window (${hhmm} UTC)`); continue; }
+      if (!(dayOk && timeOk)) { record(clause, `executed outside allowed window (${hhmm} UTC)`, dayOk ? "timestamp:hours" : "timestamp:days"); continue; }
     }
 
     else if (t === "endpoint_allowlist") {
@@ -591,7 +599,7 @@ export function violates(
         const pathOk = typeof path === "string" && path.startsWith("/")
           && (!clause.paths || clause.paths.length === 0 || clause.paths.some((g: string) => globMatch(g, path)));
         const methodOk = !clause.methods || clause.methods.length === 0 || listHas(clause.methods, p.method);
-        if (!(hostOk && pathOk && methodOk)) { record(clause, `HTTP ${shown(p.method ?? "")} ${shown(p.host)}${shown(p.path ?? "")} not allowlisted`); continue; }
+        if (!(hostOk && pathOk && methodOk)) { record(clause, `HTTP ${shown(p.method ?? "")} ${shown(p.host)}${shown(p.path ?? "")} not allowlisted`, !hostOk ? "host:hosts" : !pathOk ? "path:paths" : "method:methods"); continue; }
       }
     }
 
@@ -601,21 +609,26 @@ export function violates(
         // loopback name or address denies every loopback destination. A host or path that cannot be compared safely is
         // denied: it may name a denied host another way.
         const denial = denylistDenial(clause, p.host, p.path, p.method);
-        if (denial !== null) { record(clause, denial); continue; }
+        if (denial !== null) {
+          const path = p.path ?? "/";
+          record(clause, denial, endpointDestination(p.host) === null ? "host:format"
+            : typeof path !== "string" || !path.startsWith("/") ? "path:format" : "host:hosts");
+          continue;
+        }
       }
     }
 
     else if (t === "address_allowlist") {
       if (p.to != null) {
         const chainOk = !clause.chain_ids || clause.chain_ids.length === 0 || listHas(clause.chain_ids, p.chain_id);
-        if (chainOk && !listHas(clause.addresses, p.to)) { record(clause, `destination ${shown(p.to)} not allowlisted`); continue; }
+        if (chainOk && !listHas(clause.addresses, p.to)) { record(clause, `destination ${shown(p.to)} not allowlisted`, "to:addresses"); continue; }
       }
     }
 
     else if (t === "address_denylist") {
       if (p.to != null && listHas(clause.addresses, p.to)) {
         const chainOk = !clause.chain_ids || clause.chain_ids.length === 0 || listHas(clause.chain_ids, p.chain_id);
-        if (chainOk) { record(clause, `destination ${shown(p.to)} is denied`); continue; }
+        if (chainOk) { record(clause, `destination ${shown(p.to)} is denied`, "to:addresses"); continue; }
       }
     }
 
@@ -625,7 +638,7 @@ export function violates(
         if (chainOk) {
           const contractOk = listHas(clause.contracts, p.contract);
           const selOk = !clause.selectors || clause.selectors.length === 0 || (p.selector != null && listHas(clause.selectors, p.selector));
-          if (!(contractOk && selOk)) { record(clause, `contract ${shown(p.contract)} ${shown(p.selector ?? "")} not allowlisted`); continue; }
+          if (!(contractOk && selOk)) { record(clause, `contract ${shown(p.contract)} ${shown(p.selector ?? "")} not allowlisted`, contractOk ? "selector:selectors" : "contract:contracts"); continue; }
         }
       }
     }
@@ -640,24 +653,24 @@ export function violates(
             // (match:"any") element must satisfy the item bound. A bounded array
             // that is absent or not an array denies (fail closed).
             const match = b.match === "any" ? "any" : "all";
-            if (!Array.isArray(val)) { record(clause, `param ${field} must be an array`); continue clauses; }
+            if (!Array.isArray(val)) { record(clause, `param ${field} must be an array`, `${field}:type`); continue clauses; }
             const ok = match === "any"
               ? val.some((el) => elementSatisfiesBound(el, items))
               : val.every((el) => elementSatisfiesBound(el, items));
-            if (!ok) { record(clause, `param ${field} array fails ${match}-match bound`); continue clauses; }
+            if (!ok) { record(clause, `param ${field} array fails ${match}-match bound`, `${field}:items`); continue clauses; }
             continue; // this field is handled by its array bound
           }
-          if (b.enum && !b.enum.includes(val)) { record(clause, `param ${field}=${shown(val)} not in enum`); continue clauses; }
+          if (b.enum && !b.enum.includes(val)) { record(clause, `param ${field}=${shown(val)} not in enum`, `${field}:enum`); continue clauses; }
           if (b.min != null || b.max != null) {
             if (typeof val !== "number" || !Number.isFinite(val)) {
-              record(clause, `param ${field} must be a finite number`); continue clauses;
+              record(clause, `param ${field} must be a finite number`, `${field}:type`); continue clauses;
             }
-            if (b.min != null && val < b.min) { record(clause, `param ${field}=${val} below min ${b.min}`); continue clauses; }
-            if (b.max != null && val > b.max) { record(clause, `param ${field}=${val} above max ${b.max}`); continue clauses; }
+            if (b.min != null && val < b.min) { record(clause, `param ${field}=${val} below min ${b.min}`, `${field}:min`); continue clauses; }
+            if (b.max != null && val > b.max) { record(clause, `param ${field}=${val} above max ${b.max}`, `${field}:max`); continue clauses; }
           }
           // eslint-disable-next-line security/detect-non-literal-regexp -- the policy author's own param_bounds pattern, already compiled once by validatePolicy(); never built from action text
           if (b.pattern && (typeof val !== "string" || !new RegExp(b.pattern).test(val))) {
-            record(clause, `param ${field} fails pattern`); continue clauses;
+            record(clause, `param ${field} fails pattern`, `${field}:pattern`); continue clauses;
           }
         }
       }
@@ -666,7 +679,7 @@ export function violates(
     else if (t === "key_policy") {
       const signer = c.intent?.signer;
       if (signer != null && !listHas(clause.active_keys, signer)) {
-        record(clause, `signed by key ${signer} outside the active key set`);
+        record(clause, `signed by key ${signer} outside the active key set`, "signer:active_keys");
         continue;
       }
     }
@@ -692,19 +705,19 @@ export function violates(
         // `--all`/`--mirror` under force reach every branch: they hit the protected set
         // whatever its members are.
         if (p.all === true && p.force === true) {
-          record(clause, "force-push to all branches (--all/--mirror) reaches protected refs and is denied");
+          record(clause, "force-push to all branches (--all/--mirror) reaches protected refs and is denied", "ref:protected_refs");
           continue;
         }
         if (p.delete === true && hitsProtected) {
           record(clause, ref === undefined
             ? "delete of an unresolved target ref is denied"
-            : `delete of protected ref ${ref} is denied`);
+            : `delete of protected ref ${ref} is denied`, "ref:protected_refs");
           continue;
         }
         if (p.force === true && hitsProtected) {
           record(clause, ref === undefined
             ? "force-push with an unresolved target ref is denied"
-            : `force-push to protected ref ${ref} is denied`);
+            : `force-push to protected ref ${ref} is denied`, "ref:protected_refs");
           continue;
         }
       }
@@ -720,7 +733,7 @@ export function violates(
     return found[0].verdict;
   }
   if (undetermined) {
-    return verdict(false, undetermined, "global-scope clause needs all gateways' receipts; set incomplete", hash, { undetermined: true });
+    return verdict(false, undetermined, "global-scope clause needs all gateways' receipts; set incomplete", hash, { undetermined: true, failed_bound: "receipts:scope" });
   }
   return verdict(false, null, "no clause violated", hash);
 }

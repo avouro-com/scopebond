@@ -5,7 +5,9 @@
 //! - one when it is protected again after one of those;
 //! - with *Blocks and problems*, one for a new block (with *Unblock…* when the person may act on it); further blocks within
 //!   a minute of that one wait and are told together ("3 actions blocked in the last minute");
-//! - with *Blocks and problems*, one when an admin answers one of the person's requests ("Your request was approved");
+//! - one when an admin answers one of the person's requests ("Approved: ask Claude Code to try again"), unless
+//!   notifications are off: the person asked and is waiting for it;
+//! - one per block, never again for the coding agent's retries of it (the agent folds them into the block);
 //! - nothing about blocks with *Problems only*, and nothing at all with *Off*.
 
 use std::collections::VecDeque;
@@ -131,7 +133,8 @@ impl Notifier {
             self.told = None;
         }
 
-        let ids = blocks.iter().filter_map(|b| b.action_id.clone().map(|id| (id, b)));
+        // A retry keeps its block's group id, so it is not a new block.
+        let ids = blocks.iter().filter_map(|b| b.group_id.clone().or_else(|| b.action_id.clone()).map(|id| (id, b)));
         match &mut self.seen {
             None => self.seen = Some(ids.map(|(id, _)| id).collect()),
             Some(seen) => {
@@ -183,12 +186,13 @@ impl RequestWatch {
             for r in asked {
                 let was = before.get(&r.id).map(String::as_str);
                 let answered = r.state == "approved" || r.state == "declined";
-                if answered && was != Some(r.state.as_str()) && setting == Notifications::Blocks {
+                if answered && was != Some(r.state.as_str()) && setting != Notifications::Off {
                     let by = r.answered_by.as_deref().map(|b| format!(" · by {b}")).unwrap_or_default();
                     let note = r.note.as_deref().map(|n| format!(" · \u{201c}{n}\u{201d}")).unwrap_or_default();
+                    let tool = r.tool.as_deref().unwrap_or("your coding agent");
                     out.push(Toast {
                         kind: Kind::Request,
-                        title: format!("Your request was {}", r.state),
+                        title: if r.state == "approved" { format!("Approved: ask {tool} to try again") } else { "Your request was declined".to_string() },
                         text: cut(&format!("{}{by}{note}", r.what), 200),
                         unblock: None,
                         button: None,
@@ -322,7 +326,7 @@ mod tests {
         assert!(w.observe(&[req("waiting")], Blocks).is_empty());
         let t = w.observe(&[req("approved")], Blocks);
         assert_eq!(t.len(), 1);
-        assert_eq!(t[0].title, "Your request was approved");
+        assert_eq!(t[0].title, "Approved: ask your coding agent to try again");
         assert_eq!(t[0].text, "rm -rf ./dist · by morgan@acme.test");
         assert!(w.observe(&[req("approved")], Blocks).is_empty(), "once");
         let mut declined = req("declined");
@@ -332,9 +336,28 @@ mod tests {
         let t = w.observe(&[req("approved"), declined.clone()], Blocks);
         assert_eq!(t[0].title, "Your request was declined");
         assert_eq!(t[0].text, "rm -rf ./dist · by morgan@acme.test · \u{201c}Use the clean script\u{201d}");
-        let mut quiet = RequestWatch::new();
-        quiet.observe(&[AskedItem { state: "waiting".into(), ..declined.clone() }], Problems);
-        assert!(quiet.observe(&[declined], Problems).is_empty(), "problems only: not told");
+        // An admin's answer is told whatever the setting, unless notifications are off: the person asked and is waiting.
+        let mut problems = RequestWatch::new();
+        problems.observe(&[AskedItem { state: "waiting".into(), ..declined.clone() }], Problems);
+        assert_eq!(problems.observe(&[declined.clone()], Problems).len(), 1, "problems only: still told");
+        let mut off = RequestWatch::new();
+        off.observe(&[AskedItem { state: "waiting".into(), ..declined.clone() }], Off);
+        assert!(off.observe(&[declined], Off).is_empty(), "off: not told");
+        let mut named = RequestWatch::new();
+        let tool = |state: &str| AskedItem { tool: Some("Claude Code".into()), ..req(state) };
+        named.observe(&[tool("waiting")], Blocks);
+        assert_eq!(named.observe(&[tool("approved")], Blocks)[0].title, "Approved: ask Claude Code to try again");
+    }
+
+    #[test]
+    fn a_retry_of_a_block_is_not_told_again() {
+        let mut r = Run::new();
+        r.blocks(0, &[], Blocks);
+        let first = RecentBlock { group_id: Some("g1".into()), ..block("a1") };
+        assert_eq!(r.blocks(10, std::slice::from_ref(&first), Blocks).len(), 1);
+        // The agent tried again: the folded block now carries the newest try's id, and the same group id.
+        let retried = RecentBlock { group_id: Some("g1".into()), tries: 2, ..block("a2") };
+        assert!(r.blocks(200, std::slice::from_ref(&retried), Blocks).is_empty(), "a retry is not a new block");
     }
 
     #[test]

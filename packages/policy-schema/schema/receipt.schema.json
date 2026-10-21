@@ -189,9 +189,21 @@
             "state": { "enum": ["within", "at_limit", "over", "unavailable"] }
           }
         },
+        "clause_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Optional. The id of the policy clause that matched (a starter rule such as safe-shell or protect-read, or a pack rule's clause id), on a receipt whose action a clause denied, recorded under monitor (realtime_result deny with the action allowed), held for approval or a person overrode. An allowed action carries none. When several clauses matched, it names an enforced clause first, then one that needs approval, then a monitored one, and among clauses of one mode the first by policy order. Covered by the signature. A receipt check that predates this member reports a receipt carrying it as invalid (the payload is closed)."
+        },
+        "failed_bound": {
+          "type": "string",
+          "maxLength": 97,
+          "pattern": "^[A-Za-z0-9_.-]{1,64}:[a-z_]{1,32}$",
+          "description": "Optional, only with clause_id. The bound of that clause that failed, as <param>:<bound>: the param the clause checked and the clause field it failed (program:pattern, path:pattern, ref:pattern, amount:max_per_action, host:hosts, action_type:action_types, timestamp:hours). It names the param, never the param's value, file contents or secrets."
+        },
         "override": {
           "type": "object",
-          "description": "A person at the computer allowed an action a rule blocked (agent_dialog, with a reason whose SHA-256 is reason_digest), the coding agent's own permission prompt was offered for it (harness_prompt), or it matched a standing allowance (allowance: repeat_of names the allowance and reason_digest is the SHA-256 of the reason it was made with). Present only with realtime_result \"approved\".",
+          "description": "A person at the computer allowed an action a rule blocked (agent_dialog, with a reason whose SHA-256 is reason_digest, or with none where the workspace asks for none: reason_digest null and reason_length 0), the coding agent's own permission prompt was offered for it (harness_prompt), or it matched a standing allowance (allowance: repeat_of names the allowance and reason_digest is the SHA-256 of the reason it was made with). Present only with realtime_result \"approved\".",
           "required": ["version", "rule", "method", "state", "repeat_of", "reason_digest", "reason_length", "os_user_digest", "decided_at"],
           "additionalProperties": false,
           "properties": {
@@ -201,14 +213,14 @@
             "state": { "enum": ["allowed", "offered"] },
             "repeat_of": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 16, "maxLength": 200 }] },
             "reason_digest": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-f]{64}$" }] },
-            "reason_length": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 1, "maximum": 500 }] },
+            "reason_length": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 0, "maximum": 500 }] },
             "os_user_digest": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-f]{64}$" }] },
             "decided_at": { "type": "string", "format": "date-time" }
           },
           "oneOf": [
-            { "properties": { "method": { "const": "agent_dialog" }, "state": { "const": "allowed" }, "reason_digest": { "type": "string" }, "reason_length": { "type": "integer" } } },
+            { "properties": { "method": { "const": "agent_dialog" }, "state": { "const": "allowed" } }, "oneOf": [{ "properties": { "reason_digest": { "type": "string" }, "reason_length": { "type": "integer", "minimum": 1 } } }, { "properties": { "reason_digest": { "type": "null" }, "reason_length": { "const": 0 } } }] },
             { "properties": { "method": { "const": "harness_prompt" }, "state": { "const": "offered" }, "reason_digest": { "type": "null" }, "reason_length": { "type": "null" }, "repeat_of": { "type": "null" } } },
-            { "properties": { "method": { "const": "allowance" }, "state": { "const": "allowed" }, "repeat_of": { "type": "string" }, "reason_digest": { "type": "string" }, "reason_length": { "type": "integer" } } }
+            { "properties": { "method": { "const": "allowance" }, "state": { "const": "allowed" }, "repeat_of": { "type": "string" } }, "oneOf": [{ "properties": { "reason_digest": { "type": "string" }, "reason_length": { "type": "integer", "minimum": 1 } } }, { "properties": { "reason_digest": { "type": "null" }, "reason_length": { "const": 0 } } }] }
           ]
         }
       },
@@ -216,6 +228,14 @@
         {
           "if": { "required": ["override"] },
           "then": { "properties": { "realtime_result": { "const": "approved" } } }
+        },
+        {
+          "if": { "required": ["failed_bound"] },
+          "then": { "required": ["clause_id"] }
+        },
+        {
+          "if": { "required": ["clause_id"] },
+          "then": { "properties": { "realtime_result": { "enum": ["deny", "approved", "timeout"] } } }
         },
         {
           "if": { "required": ["evidence_class"], "properties": { "evidence_class": { "const": "boundary" } } },

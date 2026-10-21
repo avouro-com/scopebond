@@ -333,7 +333,7 @@ test("test subcommand shows the decision without recording a receipt", () => {
   const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
   execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
   execFileSync(process.execPath, [cli, "rules", "enforce", "safe-shell", "--yes"], { encoding: "utf8", cwd: project, env });
-  const denied = run(dir, ["test", "echo hi && rm -rf x"]);
+  const denied = run(dir, ["test", "echo hi && rm -rf ~/x"]);
   assert.equal(denied.status, 2, "a command containing rm is denied");
   assert.match(denied.stdout, /overall: deny/);
   const allowed = run(dir, ["test", "npm run build"]);

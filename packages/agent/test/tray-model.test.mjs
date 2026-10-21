@@ -197,15 +197,22 @@ test("today: an edit recorded after it ran is shown apart from blocks, never add
   assert.equal(m.rows.find((r) => r.label === "Today").value, "10 actions · 2 blocked · 1 recorded, not prevented");
 });
 
-test("one line under Protected, the workspace's name and today's counts; up to 20 blocks", () => {
-  const m = trayModel(input(status(), { recentBlocks: Array.from({ length: 25 }, (_, i) => ({ action_id: `a${i}`, summary: "shell.exec rm", at: "", rule: null })) }));
+test("one line under Protected, the workspace's name and today's counts; up to 200 blocks", () => {
+  const m = trayModel(input(status(), { recentBlocks: Array.from({ length: 230 }, (_, i) => ({ action_id: `a${i}`, summary: "shell.exec rm", at: "", rule: null })) }));
   assert.equal(m.detail, "Rules checked 3 min ago · 3 blocked today");
   assert.equal(m.workspace, "Avouro");
   assert.deepEqual(m.today, { actions: 312, blocked: 3 });
-  assert.equal(m.recent_blocks.length, 20);
+  assert.equal(m.recent_blocks.length, 200);
   assert.equal(m.can_ask, false, "not said: no Requests list");
   assert.equal(trayModel(input(status(), { canAsk: true })).can_ask, true);
   assert.equal(trayModel(input(status(), { today: { actions: 4, blocked: 0, allowed_by_person: 0 } })).detail, "Rules checked 3 min ago · nothing blocked today");
   assert.equal(trayModel(input(status(), { rules: null, today: null })).detail, null);
   assert.equal(trayModel(input(status({ pending: 42, oldest_pending_age_s: 40 * 60 }))).detail, null, "the headline says what is wrong");
+});
+
+test("the npm tray icon's menu shows & in the agent's text as it is (a single & would vanish as a keyboard shortcut)", async () => {
+  const { trayScript } = await import("../dist/tray.js");
+  const script = trayScript("D:/work/x", 42);
+  assert.match(script, /function Esc\(\$s\) \{ \(\[string\]\$s\) -replace '&', '&&' \}/);
+  for (const use of ["(Esc $m.headline)", "(Esc $row.value)", "(Esc $m.hint)", "(Esc $words)"]) assert.ok(script.includes(use), use);
 });

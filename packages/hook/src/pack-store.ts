@@ -2,16 +2,22 @@
 //
 // Where packs live: the `packs` folder of the hook's state directory (the folder that holds policy.json):
 //
-//   packs/index.json             { "v": 1, "checked_at": "<RFC 3339>", "packs": [{ "id", "version", "sha256" }] }
+//   packs/index.json             { "v": 1, "checked_at": "<RFC 3339>", "packs": [{ "id", "version", "sha256", "checked_at"? }] }
 //   packs/<id>@<version>.json    one signed pack (scopebond:pack/v1), byte for byte as Scopebond Cloud serves it
 //
 // Whoever delivers packs (the client that checks in with the workspace) writes each pack file first and the index last, with
 // `checked_at` set to the time of the successful check-in and `sha256` the hex SHA-256 of the pack file's bytes. Only packs
 // the index lists are read, and only one version of each id.
 //
+// Each pack keeps its own clock: a pack's `checked_at` is the time its listed version was last confirmed, and an entry
+// without one was confirmed at the index's `checked_at`. An entry carries its own only when a check-in could not confirm it
+// (a newer version that could not be fetched or checked), so the version held stays in force until its own 30 days run out
+// while every other pack is renewed as usual.
+//
 // A pack is used only when all of these hold; otherwise it is skipped, and the open detection and the starter protections
 // are all that apply (the pack fails closed, never open):
-//   - the index is readable and its `checked_at` is no more than 30 days ago (and not more than an hour ahead of this clock);
+//   - the index is readable, its `checked_at` is not more than an hour ahead of this clock, and the pack's own `checked_at`
+//     is no more than 30 days ago (and not more than an hour ahead of this clock);
 //   - the file is there, at most 4 MiB, and its SHA-256 matches the index;
 //   - it is a valid pack (closed format; @scopebond/policy-schema `validatePack`) with the id and version the index names;
 //   - its signature verifies with a policy-signing key this release trusts (policy-keys.ts), the key's validity window holds
@@ -34,7 +40,8 @@ export const PACK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const FUTURE_SKEW_MS = 60 * 60 * 1000;
 const MAX_INDEX_BYTES = 64 * 1024;
 
-export interface PackIndexEntry { id: string; version: string; sha256: string }
+/** One cached pack. `checked_at`, when present, is when this version was last confirmed; otherwise the index's `checked_at`. */
+export interface PackIndexEntry { id: string; version: string; sha256: string; checked_at?: string }
 export interface PackIndex { v: 1; checked_at: string; packs: PackIndexEntry[] }
 
 export type PackRefusal = "invalid" | "unknown_key" | "key_not_valid" | "bad_signature" | "issued_in_future" | "missing" | "too_large" | "digest_mismatch" | "wrong_ref" | "expired";
@@ -43,8 +50,24 @@ export interface LoadedPacks {
   packs: Pack[];
   /** Why a pack (or the whole cache) was not used, one line each. */
   problems: Array<{ ref: string; reason: PackRefusal; message: string }>;
-  /** When the cache stops being usable (30 days after the last check-in), or null without a readable index. */
+  /** When the first pack in force stops being usable (30 days after its last confirmed check-in); without a pack in force,
+   *  30 days after the index's last check-in; null without a readable index. */
   expiresAt: string | null;
+  /** When each pack in force stops being usable, by `<id>@<version>`. */
+  expires: Record<string, string>;
+}
+
+/** When an index entry's version was last confirmed. */
+export const packCheckedAt = (index: PackIndex, entry: PackIndexEntry): string => entry.checked_at ?? index.checked_at;
+
+/** Write the index. An entry keeps its own `checked_at` only when it differs from the index's. */
+export function writePackIndex(dir: string, index: PackIndex): void {
+  const packs = index.packs.map((p) => {
+    const { checked_at: own, ...rest } = p;
+    return own !== undefined && own !== index.checked_at ? { ...rest, checked_at: own } : rest;
+  });
+  mkdirSync(packsDir(dir), { recursive: true });
+  writeAtomic(join(packsDir(dir), PACK_INDEX_FILE), `${JSON.stringify({ v: 1, checked_at: index.checked_at, packs }, null, 2)}\n`);
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -81,10 +104,11 @@ export function readPackIndex(dir: string): PackIndex | null {
     const packs: PackIndexEntry[] = [];
     for (const entry of doc.packs as unknown[]) {
       const e = entry as Record<string, unknown>;
-      if (!e || typeof e !== "object" || Array.isArray(e) || Object.keys(e).some((k) => !["id", "version", "sha256"].includes(k))) return null;
+      if (!e || typeof e !== "object" || Array.isArray(e) || Object.keys(e).some((k) => !["id", "version", "sha256", "checked_at"].includes(k))) return null;
       if (typeof e.id !== "string" || typeof e.version !== "string" || typeof e.sha256 !== "string" || !HEX64.test(e.sha256)) return null;
       if (!/^[a-z0-9-]{1,64}$/.test(e.id) || !/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(e.version)) return null;
-      packs.push({ id: e.id, version: e.version, sha256: e.sha256 });
+      if (e.checked_at !== undefined && (typeof e.checked_at !== "string" || !RFC3339.test(e.checked_at) || !Number.isFinite(Date.parse(e.checked_at)))) return null;
+      packs.push({ id: e.id, version: e.version, sha256: e.sha256, ...(typeof e.checked_at === "string" ? { checked_at: e.checked_at } : {}) });
     }
     return { v: 1, checked_at: doc.checked_at, packs };
   } catch { return null; }
@@ -130,25 +154,30 @@ export function loadPacks(dir: string, options: { keys?: PolicyKey[]; now?: Date
   const index = readPackIndex(dir);
   if (!index) {
     if (existsSync(join(packsDir(dir), PACK_INDEX_FILE))) problems.push({ ref: PACK_INDEX_FILE, reason: "invalid", message: "the pack index cannot be read; no pack is used" });
-    return { packs: [], problems, expiresAt: null };
+    return { packs: [], problems, expiresAt: null, expires: {} };
   }
   const now = (options.now ?? new Date()).getTime();
   const checked = Date.parse(index.checked_at);
-  const expiresAt = new Date(checked + PACK_TTL_MS).toISOString();
+  const indexExpiresAt = new Date(checked + PACK_TTL_MS).toISOString();
   if (checked > now + FUTURE_SKEW_MS) {
     problems.push({ ref: PACK_INDEX_FILE, reason: "issued_in_future", message: "the pack index says it was checked in the future; no pack is used" });
-    return { packs: [], problems, expiresAt };
-  }
-  if (now > checked + PACK_TTL_MS) {
-    problems.push({ ref: PACK_INDEX_FILE, reason: "expired", message: `the rule packs expired on ${expiresAt}, 30 days after this computer last checked in; no pack is used until it checks in again` });
-    return { packs: [], problems, expiresAt };
+    return { packs: [], problems, expiresAt: indexExpiresAt, expires: {} };
   }
   const packs: Pack[] = [];
+  const expires: Record<string, string> = {};
   const seen = new Set<string>();
   for (const entry of index.packs) {
     const ref = `${entry.id}@${entry.version}`;
     if (seen.has(entry.id)) { problems.push({ ref, reason: "invalid", message: `the index lists ${entry.id} twice; only the first is used` }); continue; }
     seen.add(entry.id);
+    // Each pack on its own clock: one that could not be renewed expires alone.
+    const own = Date.parse(packCheckedAt(index, entry));
+    const ownExpiresAt = new Date(own + PACK_TTL_MS).toISOString();
+    if (own > now + FUTURE_SKEW_MS) { problems.push({ ref, reason: "issued_in_future", message: "the pack index says this pack was checked in the future" }); continue; }
+    if (now > own + PACK_TTL_MS) {
+      problems.push({ ref, reason: "expired", message: `the pack expired on ${ownExpiresAt}, 30 days after this computer last confirmed it; it is not used until a check-in confirms it again` });
+      continue;
+    }
     const read = readBounded(fileOf(dir, ref), PACK_LIMITS.maxBytes);
     if (read === "too_large") { problems.push({ ref, reason: "too_large", message: "the pack file is too large" }); continue; }
     if (read === null) { problems.push({ ref, reason: "missing", message: "the pack file is missing" }); continue; }
@@ -158,8 +187,10 @@ export function loadPacks(dir: string, options: { keys?: PolicyKey[]; now?: Date
     if (!checkedPack.ok) { problems.push({ ref, reason: checkedPack.reason, message: checkedPack.message }); continue; }
     if (packRef(checkedPack.pack) !== ref) { problems.push({ ref, reason: "wrong_ref", message: `the file holds ${packRef(checkedPack.pack)}` }); continue; }
     packs.push(checkedPack.pack);
+    expires[ref] = ownExpiresAt;
   }
-  return { packs, problems, expiresAt };
+  const first = Object.values(expires).sort()[0];
+  return { packs, problems, expiresAt: first ?? indexExpiresAt, expires };
 }
 
 /** Load the packs in this state directory and put them in force for the mapper. Never throws; on any failure no pack is in
@@ -171,13 +202,12 @@ export function activatePacks(dir: string, options: { keys?: PolicyKey[]; now?: 
     return loaded;
   } catch {
     setActivePacks([]);
-    return { packs: [], problems: [{ ref: PACK_INDEX_FILE, reason: "invalid", message: "the packs could not be read" }], expiresAt: null };
+    return { packs: [], problems: [{ ref: PACK_INDEX_FILE, reason: "invalid", message: "the packs could not be read" }], expiresAt: null, expires: {} };
   }
 }
 
-/** Put a checked pack into the cache, replacing any other version of its id, and stamp the index `checked_at` (the delivery
- *  client calls this after a successful check-in; `packs add` after a person loads a file). The pack's own vectors must all
- *  pass first. */
+/** Put a checked pack into the cache, replacing any other version of its id, and stamp its `checked_at` (`packs add`, after a
+ *  person loads a file). Every other pack keeps its own clock. The pack's own vectors must all pass first. */
 export function installPack(dir: string, text: string, options: { keys?: PolicyKey[]; now?: Date } = {}): { ok: true; pack: Pack } | { ok: false; reason: PackRefusal | "vectors_failed"; message: string } {
   const checked = checkPackText(text, options);
   if (!checked.ok) return checked;
@@ -189,9 +219,10 @@ export function installPack(dir: string, text: string, options: { keys?: PolicyK
   const index = readPackIndex(dir) ?? { v: 1 as const, checked_at: now.toISOString(), packs: [] };
   const stale = index.packs.filter((p) => p.id === checked.pack.id && p.version !== checked.pack.version);
   writeAtomic(fileOf(dir, ref), text);
-  const packs = [...index.packs.filter((p) => p.id !== checked.pack.id), { id: checked.pack.id, version: checked.pack.version, sha256: createHash("sha256").update(text, "utf8").digest("hex") }]
+  const others = index.packs.filter((p) => p.id !== checked.pack.id).map((p) => ({ ...p, checked_at: packCheckedAt(index, p) }));
+  const packs = [...others, { id: checked.pack.id, version: checked.pack.version, sha256: createHash("sha256").update(text, "utf8").digest("hex") }]
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  writeAtomic(join(packsDir(dir), PACK_INDEX_FILE), `${JSON.stringify({ v: 1, checked_at: now.toISOString(), packs }, null, 2)}\n`);
+  writePackIndex(dir, { v: 1, checked_at: now.toISOString(), packs });
   for (const old of stale) { try { rmSync(fileOf(dir, `${old.id}@${old.version}`), { force: true }); } catch { /* left behind, never read */ } }
   return { ok: true, pack: checked.pack };
 }
@@ -202,7 +233,7 @@ export function removePack(dir: string, id: string): boolean {
   if (!index) return false;
   const gone = index.packs.filter((p) => p.id === id);
   if (gone.length === 0) return false;
-  writeAtomic(join(packsDir(dir), PACK_INDEX_FILE), `${JSON.stringify({ ...index, packs: index.packs.filter((p) => p.id !== id) }, null, 2)}\n`);
+  writePackIndex(dir, { ...index, packs: index.packs.filter((p) => p.id !== id) });
   for (const p of gone) { try { rmSync(fileOf(dir, `${p.id}@${p.version}`), { force: true }); } catch { /* never read again */ } }
   return true;
 }

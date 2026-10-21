@@ -9,3 +9,13 @@ export function textOf(value: unknown): string {
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
   return JSON.stringify(value) ?? "";
 }
+
+/** The text without the given characters at either end. A loop, not an end-anchored pattern: a regular expression for this
+ *  takes time that grows with the square of a long run of those characters. */
+export function trimChars(text: string, chars: string): string {
+  let start = 0;
+  let end = text.length;
+  while (start < end && chars.includes(text[start])) start++;
+  while (end > start && chars.includes(text[end - 1])) end--;
+  return text.slice(start, end);
+}

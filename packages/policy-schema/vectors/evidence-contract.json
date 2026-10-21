@@ -226,5 +226,119 @@
         "context": "claude"
       }
     ]
+  },
+  "receipt_match": {
+    "description": "Optional payload.clause_id and payload.failed_bound (the clause that matched and the bound that failed). Schema shape only: each vector is applied to receipt_context.receipt with the realtime_result given. A receipt without them is unchanged.",
+    "valid": [
+      {
+        "name": "denied-shell",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": "safe-shell",
+          "failed_bound": "program:pattern"
+        }
+      },
+      {
+        "name": "monitored-read",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": "protect-read",
+          "failed_bound": "path:pattern"
+        }
+      },
+      {
+        "name": "overridden-push",
+        "realtime_result": "approved",
+        "fields": {
+          "clause_id": "protect-branches",
+          "failed_bound": "ref:pattern"
+        }
+      },
+      {
+        "name": "held-for-approval",
+        "realtime_result": "timeout",
+        "fields": {
+          "clause_id": "approve-deploys",
+          "failed_bound": "approval:approvers"
+        }
+      },
+      {
+        "name": "pack-rule",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": "example-pack:no-force-delete",
+          "failed_bound": "risk:pattern"
+        }
+      },
+      {
+        "name": "clause-only",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": "safe-shell"
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "bound-without-clause",
+        "realtime_result": "deny",
+        "fields": {
+          "failed_bound": "program:pattern"
+        }
+      },
+      {
+        "name": "allow-with-clause",
+        "realtime_result": "allow",
+        "fields": {
+          "clause_id": "safe-shell",
+          "failed_bound": "program:pattern"
+        }
+      },
+      {
+        "name": "not-evaluated-with-clause",
+        "realtime_result": "not_evaluated",
+        "fields": {
+          "clause_id": "safe-shell"
+        }
+      },
+      {
+        "name": "bound-with-value",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": "safe-shell",
+          "failed_bound": "program:pattern=rm -rf /"
+        }
+      },
+      {
+        "name": "bound-without-param",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": "safe-shell",
+          "failed_bound": ":pattern"
+        }
+      },
+      {
+        "name": "bound-without-colon",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": "safe-shell",
+          "failed_bound": "program"
+        }
+      },
+      {
+        "name": "empty-clause",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": ""
+        }
+      },
+      {
+        "name": "non-string-clause",
+        "realtime_result": "deny",
+        "fields": {
+          "clause_id": 7
+        }
+      }
+    ]
   }
 }

@@ -1,9 +1,10 @@
-// The live prompt: when the hook asks during a coding session and a tray is listening, the question waits in the tray; the
-// person answers there, or, when they do not open it in time, the Scopebond window opens for the time left. With no tray
-// listening the window opens at once, as before.
+// The live prompt: when the hook asks during a coding session and a tray is listening, the question waits in the tray for the
+// hook's whole wait and the person answers there; no Scopebond window ever opens for it. One block, one question. With no
+// tray listening, the window opens only where it may (macOS, Linux, or SCOPEBOND_PROMPT_WINDOW=1 on Windows); else no one is
+// asked now, and the hook's denial says where the person acts on the block afterwards.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { livePrompt } from "../dist/live-prompt.js";
+import { livePrompt, promptRoute, windowAllowed } from "../dist/live-prompt.js";
 import { parseQuestion, singleChoice, questionText, windowsScript } from "../dist/prompt.js";
 import { callAgent } from "../dist/index.js";
 import { computer, serviceFor } from "./tray-helpers.mjs";
@@ -17,9 +18,9 @@ const question = (extra = {}) => parseQuestion({
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
 const later = (ms) => new Promise((r) => setTimeout(r, ms));
 
-test("with no tray listening, the Scopebond window opens at once, as before", async () => {
+test("with no tray listening and the window allowed, the Scopebond window opens at once, as before", async () => {
   const shown = [];
-  const live = livePrompt({ fallback: async (q) => { shown.push(q); return { decision: "deny" }; } });
+  const live = livePrompt({ fallback: async (q) => { shown.push(q); return { decision: "deny" }; }, window: () => true });
   assert.deepEqual(await live.prompter(question()), { decision: "deny" });
   assert.equal(shown.length, 1);
   assert.equal(live.current(), null);
@@ -48,21 +49,47 @@ test("a listening tray gets the question, and the person's answer from its form 
   assert.equal(live.answer({ action_id: q.action_id, choice: "once", reason: REASON }).outcome, "gone", "answered once");
 });
 
-test("not opened in the tray in time: withdrawn, and the window opens for the time that is left", async () => {
+test("where the question goes: a listening tray always, and the window never beside it", () => {
+  assert.equal(promptRoute({ trayListening: true, windowAllowed: true }), "tray");
+  assert.equal(promptRoute({ trayListening: true, windowAllowed: false }), "tray");
+  assert.equal(promptRoute({ trayListening: false, windowAllowed: true }), "window");
+  assert.equal(promptRoute({ trayListening: false, windowAllowed: false }), "none");
+});
+
+test("the Windows Forms window is retired on Windows unless SCOPEBOND_PROMPT_WINDOW=1; macOS and Linux keep their dialog", () => {
+  assert.equal(windowAllowed("win32", {}), false);
+  assert.equal(windowAllowed("win32", { SCOPEBOND_PROMPT_WINDOW: "1" }), true);
+  assert.equal(windowAllowed("win32", { SCOPEBOND_PROMPT_WINDOW: "0" }), false);
+  assert.equal(windowAllowed("darwin", {}), true);
+  assert.equal(windowAllowed("linux", {}), true);
+});
+
+test("no tray listening and no window: no one is asked now, and the hook hears where the person can act later", async () => {
   const shown = [];
-  const live = livePrompt({ fallback: async (q) => { shown.push(q); return { decision: "allow", reason: REASON, lasts: "once" }; }, openWithin: () => 50, minWindowMs: 1_000 });
+  const live = livePrompt({ fallback: async (q) => { shown.push(q); return { decision: "allow", reason: REASON }; }, window: () => false });
+  assert.deepEqual(await live.prompter(question()), { decision: "unavailable", later: true });
+  const linked = livePrompt({ fallback: async (q) => { shown.push(q); return { decision: "deny" }; }, window: () => false, link: () => "https://app.example/computers/c-1" });
+  assert.deepEqual(await linked.prompter(question()), { decision: "unavailable", later: true, link: "https://app.example/computers/c-1" });
+  assert.equal(shown.length, 0, "no popup at all");
+  assert.equal(live.current(), null);
+});
+
+test("not opened in the tray: it stays there for the hook's whole wait, no window opens, and nothing is allowed", async () => {
+  const shown = [];
+  const live = livePrompt({ fallback: async (q) => { shown.push(q); return { decision: "allow", reason: REASON, lasts: "once" }; } });
   const waited = live.wait(null, 5_000);
-  const asked = live.prompter(question({ timeout_ms: 20_000 }));
-  await waited;
-  assert.deepEqual(await asked, { decision: "allow", reason: REASON, lasts: "once" });
-  assert.equal(shown.length, 1);
-  assert.ok(shown[0].timeout_ms > 19_000 && shown[0].timeout_ms <= 20_000, `the time left: ${shown[0].timeout_ms}`);
-  assert.equal(live.current(), null, "the tray no longer shows it");
+  const asked = live.prompter(question({ timeout_ms: 600 }));
+  const q = await waited;
+  await later(400);
+  assert.equal(live.current()?.action_id, q.action_id, "still waiting in the tray after a third of the wait");
+  assert.deepEqual(await asked, { decision: "deny" });
+  assert.equal(shown.length, 0, "never a window beside the tray");
+  assert.equal(live.current(), null);
 });
 
 test("opened in the tray: no window; unanswered at the hook's deadline, nothing is allowed", async () => {
   let shown = 0;
-  const live = livePrompt({ fallback: async () => { shown += 1; return { decision: "allow", reason: REASON }; }, openWithin: () => 30 });
+  const live = livePrompt({ fallback: async () => { shown += 1; return { decision: "allow", reason: REASON }; }});
   const waited = live.wait(null, 5_000);
   const asked = live.prompter({ ...question(), timeout_ms: 300 });
   const q = await waited;
@@ -90,11 +117,11 @@ test("the tray's wait returns at once for a question it has not seen, and when t
 test("through the agent: the hook's POST /override waits for the tray's answer; without a tray the window answers", async () => {
   const shown = [];
   const dir = computer();
-  const service = await serviceFor(dir, { prompter: async (q) => { shown.push(q); return { decision: "deny" }; } });
+  const service = await serviceFor(dir, { prompter: async (q) => { shown.push(q); return { decision: "deny" }; }, promptWindow: true });
   try {
     const body = { action_id: "act-live-000000000001", rule: "secret-read", title: "Read passwords, keys or secrets", summary: ".env.production", reason_min: 12,
       lasts: "this action only", timeout_ms: 20_000, mode: "ask", offers: { allow: false, always: false, ask: true }, harness: "codex" };
-    // No tray: the window, as before.
+    // No tray, the window opted in: the window, as before.
     assert.deepEqual(await callAgent(dir, "POST", "/override", body, 10_000), { decision: "deny" });
     assert.equal(shown.length, 1);
     // A tray waits; the hook asks; the tray's person asks to unblock.
@@ -115,6 +142,18 @@ test("through the agent: the hook's POST /override waits for the tray's answer; 
     assert.equal(answer.reason, REASON);
     assert.equal(shown.length, 1, "no window for the answered question");
     assert.equal((await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray.pending, null);
+  } finally { await service.stop(); }
+});
+
+test("through the agent, the window retired: with no tray listening the hook hears 'later' and no window opens", async () => {
+  const shown = [];
+  const dir = computer();
+  const service = await serviceFor(dir, { prompter: async (q) => { shown.push(q); return { decision: "allow", reason: REASON }; }, promptWindow: false });
+  try {
+    const body = { action_id: "act-live-000000000002", rule: "destructive-shell", title: "Run a command that deletes data", summary: "rm -rf build 2>&1", reason_min: 12,
+      lasts: "this action only", timeout_ms: 20_000, mode: "override", offers: { allow: true, always: false, ask: false }, harness: "claude" };
+    assert.deepEqual(await callAgent(dir, "POST", "/override", body, 10_000), { decision: "unavailable", later: true });
+    assert.equal(shown.length, 0);
   } finally { await service.stop(); }
 });
 

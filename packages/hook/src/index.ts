@@ -8,7 +8,7 @@ export {
   COPILOT_CLOUD_ASK_IS_DENY, DOCUMENTED_COPILOT_TOOL_NAMES, COPILOT_PROBE_FILE, COPILOT_PROBE_WINDOW_MS,
   type CopilotSurface, type CopilotAnswer, type CopilotProbe, type ProbeEntry,
 } from "./copilot-surface.js";
-export type { Mapped, NormalizedIntent } from "./map.js";
+export type { Mapped, NormalizedIntent, ShownCommand } from "./map.js";
 export { createHookRuntime, starterPolicy, upgradeStarterPolicy, namedActionTypes, policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./runtime.js";
 export type { TargetRule } from "./runtime.js";
 // The shell reader every derivation starts from: a command line as the simple commands it runs.
@@ -16,24 +16,27 @@ export { decomposeShell } from "./shell.js";
 // The tool a command runs, directly or through a package runner (launchers.ts).
 export { launched, toolNames } from "./launchers.js";
 export type { SimpleCommand } from "./shell.js";
+// What a delete reaches: the safe-shell rule lets a delete through when every target is inside the working folder.
+export { DELETE_PROGRAMS, BUILD_OUTPUT, CONTAINED_SUFFIX, isContainedDelete } from "./delete-scope.js";
+export type { DeleteScope, DeleteVerdict } from "./delete-scope.js";
 // Rule packs: the interpreter (packs.ts), their rules in the policy in force (pack-rules.ts) and the cache of signed packs on
 // this computer (pack-store.ts). Every vendor command-line tool and MCP server is read through them.
 export { setActivePacks, activePackRefs, activePacks, derivePackTargets, derivePackMcp, deriveFromGrammar, deriveFromProfile, runPackVectors, packDigest } from "./packs.js";
 export type { PackAction, PackProbe, VectorFailure } from "./packs.js";
 export { packRuleClauses, switchablePackRules, withPackRules } from "./pack-rules.js";
 export {
-  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
+  activatePacks, loadPacks, installPack, removePack, verifyPackSignature, checkPackText, readPackIndex, writePackIndex, packCheckedAt, packsDir, PACKS_DIR, PACK_INDEX_FILE, PACK_TTL_MS,
 } from "./pack-store.js";
 export type { PackIndex, PackIndexEntry, LoadedPacks, PackRefusal } from "./pack-store.js";
 // Pack delivery: the signed list a workspace answer names, and the cache brought in step with it on each rules check.
-export { syncPacks, restampPacks, packRefsOf, MAX_PACK_REFS } from "./pack-sync.js";
+export { syncPacks, restampPacks, describePackSync, packRefsOf, MAX_PACK_REFS } from "./pack-sync.js";
 // Safe Install: verdicts on detected installs from the workspace, and the signed block list used offline.
 export {
   checkInstalls, checkable, checkBlocklistText, loadBlocklist, safeInstallOn, syncInstallBlocklist, removeBlocklist, comparableName,
   INSTALL_BLOCKLIST_FILE, INSTALL_STATE_FILE, INSTALL_VERDICTS_FILE, BLOCKLIST_FORMAT, SAFE_INSTALL_HEADER, BLOCKLIST_TTL_MS, BLOCKLIST_CHECK_MS, VERDICT_TIMEOUT_MS, AGE_GATE_MS,
 } from "./install-verdicts.js";
 export type { InstallVerdict, VerdictReason, VerdictSource, InstallCheck, CheckOptions, BlocklistSyncOptions, BlocklistSyncResult } from "./install-verdicts.js";
-export type { PackSyncOptions, PackSyncResult } from "./pack-sync.js";
+export type { PackSyncOptions, PackSyncResult, PackSyncFailure } from "./pack-sync.js";
 export type { RuntimeConfig, Decision } from "./runtime.js";
 export {
   compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, RULES_FILE, ENFORCEABLE_RULES, SWITCHABLE_RULES,
@@ -60,9 +63,9 @@ export type {
   ManagedDocument, ManagedRule, ManagedMeta, RefusalReason, OverrideTerms, AnyManagedRuleId, OptionalRuleId,
   ToolSettingsSection, ToolSettingsHarness, ToolSettingsList, HarnessToolSettings, ToolSettingsInspection,
 } from "./managed.js";
-export { createOverrideHandler, overrideHint, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked, plainAction, offersFor, allowsAny, offeredLength } from "./override.js";
-export { ruleTitle, ruleName, blockTitle, GENERIC_RULE_TITLE } from "./rule-titles.js";
-export { noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
+export { createOverrideHandler, overrideHint, overrideRemedy, askAgent, actionSummary, digestOf, PROMPTING_MODES, OVERRIDE_STATE_FILE, blockedQuestion, actOnBlocked, plainAction, offersFor, allowsAny, offeredLength } from "./override.js";
+export { ruleTitle, ruleName, blockTitle, packRuleTitle, checkOfCode, GENERIC_RULE_TITLE } from "./rule-titles.js";
+export { installVerdictWords, noteBlock, projectOf, readBlockNotes, BLOCK_NOTES_FILE } from "./block-notes.js";
 export type { BlockNote } from "./block-notes.js";
 export type { OverrideContext, OverrideNote, AgentAnswer, BlockedQuestion } from "./override.js";
 export { syncPolicy, syncIfDue, SYNC_INTERVAL_MS, INLINE_BUDGET_MS, MAX_TOOL_SETTINGS_REPORT, HOOK_CAPABILITIES } from "./policy-sync.js";
@@ -150,7 +153,7 @@ export { sessionBudgetGuard, sessionBudgetGuardFor, keyedSessionId, readSessionB
 export type { SessionBudget, SessionBudgetLimit, SessionBudgetGuard, BudgetReservation, BudgetIntent } from "./session-budgets.js";
 export { readRequests, writeRequests, queueRequest, REQUESTS_FILE } from "./requests.js";
 export type { AdminRequest } from "./requests.js";
-export { localActivity } from "./local-activity.js";
+export { foldRetries, localActivity, RECENT_BLOCKS_LIMIT, RETRY_WINDOW_MS } from "./local-activity.js";
 export { noteUnresolvableHooks, HOOK_OUTAGE_FILE } from "./hook-outage.js";
 export type { LocalActivity, RecentBlockRecord } from "./local-activity.js";
 export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEFAULT_RETENTION_DAYS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./store-upkeep.js";

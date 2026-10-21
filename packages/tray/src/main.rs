@@ -31,6 +31,8 @@ const PANEL: &str = "panel";
 const REFRESH_EVERY: Duration = Duration::from_secs(30);
 /// How long a result stays on the panel.
 const NOTE_FOR: Duration = Duration::from_secs(120);
+/// The panel shows when its page says it has drawn, or after this long whatever happens.
+const PANEL_SHOW_WAIT_MS: u64 = 1_500;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -757,8 +759,18 @@ fn build_panel(app: &AppHandle, shared: &Arc<Shared>, anchor: Option<(f64, f64)>
         let (x, y) = panel::place(anchor, area, (PANEL_WIDTH * scale, PANEL_HEIGHT * scale));
         window.set_position(PhysicalPosition::new(x, y))?;
     }
-    window.show()?;
-    window.set_focus()?;
+    // Opaque from the first frame: the webview's own background is the panel's (light or dark), never see-through while the
+    // page loads. The window is shown once the page has drawn (panel_ready), or after a short wait whatever happens.
+    let dark = matches!(window.theme(), Ok(tauri::Theme::Dark));
+    let _ = window.set_background_color(Some(if dark { tauri::window::Color(0x1d, 0x25, 0x33, 0xff) } else { tauri::window::Color(0xf9, 0xf9, 0xfb, 0xff) }));
+    let late = window.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(PANEL_SHOW_WAIT_MS));
+        if !late.is_visible().unwrap_or(true) {
+            let _ = late.show();
+            let _ = late.set_focus();
+        }
+    });
     shared.hold.store(false, Ordering::SeqCst);
     let (w, s) = (window.clone(), shared.clone());
     window.on_window_event(move |event| {
@@ -964,6 +976,15 @@ fn panel_command(id: String, app: AppHandle, shared: State<'_, Arc<Shared>>) -> 
     true
 }
 
+/// The panel's page has drawn: show the window now (it was made hidden, so it never shows a half-drawn, see-through frame).
+#[tauri::command]
+fn panel_ready(window: WebviewWindow) {
+    if !window.is_visible().unwrap_or(false) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[tauri::command]
 fn panel_close(window: WebviewWindow, shared: State<'_, Arc<Shared>>) {
     shared.hold.store(false, Ordering::SeqCst);
@@ -992,7 +1013,7 @@ fn main() {
             }
         }))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_live, panel_stop, panel_hold, panel_command, panel_close])
+        .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_live, panel_stop, panel_hold, panel_command, panel_ready, panel_close])
         .setup(move |app| {
             let handle = app.handle().clone();
             if let Err(e) = create_tray(&handle, &shared) {

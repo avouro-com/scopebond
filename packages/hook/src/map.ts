@@ -9,14 +9,16 @@
 // ambiguous Windows short path.
 
 import { existsSync } from "node:fs";
-import { digest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
+import { posix } from "node:path";
+import { digest, keyedDigest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
-import { textOf } from "./text.js";
+import { textOf, trimChars } from "./text.js";
 import { derivePackMcp, derivePackTargets, type PackAction } from "./packs.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
 import { packagesToCheck } from "./typed-ops.js";
 import { deriveInstalls, deriveSettingsInstalls, MCP_SETTINGS_FILE } from "./typed-install.js";
+import { deleteVerdicts, programScope, type DeleteVerdict } from "./delete-scope.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -48,6 +50,9 @@ export interface Mapped {
   derived?: true;
   /** On a folded derived intent (`capDerived`): how many derived intents of its type it stands for. */
   count?: number;
+  /** On a shell command that only prints its help or version, or rehearses (`rm --help`, `sudo --version`): it changes
+   *  nothing, so the runtime records it and never judges it, in every mode. Not part of the signed intent. */
+  describesOnly?: true;
   /** On a shell command that installs named packages: the manager and every package name it names (`unreadable` when it names
    *  some and none can be read). Not part of the signed intent; the runtime reads it only to evaluate a package a workspace
    *  blocks (service-rules.ts). */
@@ -55,7 +60,16 @@ export interface Mapped {
   /** On a `software.install` intent Safe Install checked (install-verdicts.ts): its verdict and the message for it. Not part of
    *  the signed intent (the intent carries the verdict and its reason codes); the runtime reads it to block, ask or go on. */
   install?: { verdict: "block" | "ask" | "allow"; reasons: Array<{ code: string; text: string }>; source: string; message: string };
+  /** On a shell command's own `shell.exec`: what a person is shown when a rule they may act on blocks it, and all an
+   *  allowance for it is keyed on (override.ts), worked out only when asked for. Not part of the signed intent. */
+  shown?: () => ShownCommand;
 }
+
+/** One simple command as a person judges it: the program and its arguments as the shell reads them (quotes gone, a trailing
+ *  slash dropped), after any wrapper written before the program (`sudo`, `X=1`); never its redirections or the commands
+ *  joined to it, which are judged on their own. `folder`, present when an argument names a place relative to it: the folder
+ *  the command runs in, after any `cd` earlier in the call. `digest`: a keyed digest of `command` (minimize.ts). */
+export interface ShownCommand { command: string; digest: string; folder?: string }
 
 const basename = (t: string): string => t.replace(/^.*[\\/]/, "");
 
@@ -275,17 +289,33 @@ function scrubPath(word: string): string {
   return word.split(PATH_PARTS).map((part) => (part === "/" || part === "\\" ? part : scrubParam(part))).join("");
 }
 
-/** The file intents for one path operand, resolving it against a `cd` prefix. */
+/** The home folder named through a variable at the start of a path, in any shell's spelling: `$HOME`, `${HOME}`, PowerShell's
+ *  `$env:USERPROFILE`, `$env:HOME` (also braced), cmd's `%USERPROFILE%` and `%HOME%`. */
+const HOME_VARIABLE = /^(?:\$HOME|\$\{HOME\}|\$\{env:(?:USERPROFILE|HOME)\}|\$env:(?:USERPROFILE|HOME)|%(?:USERPROFILE|HOME)%)(?=$|[\\/])/i;
+/** `word` with a home variable at its start written `~`, as the record writes the home folder (`$HOME/.x` is `~/.x`). */
+const expandHome = (word: string): string => word.replace(HOME_VARIABLE, "~");
+/** A word that still holds a variable (`$X`, `${X}`, `$env:X`, `%X%`) or a substitution: its value is only known at run time. */
+const HOLDS_VARIABLE = /\$|%[A-Za-z_]\w*%/;
+/** A path whose start does not depend on the working folder: rooted, a drive, or the home folder. */
+const STARTS_ELSEWHERE = /^(?:[\\/]|~|[A-Za-z]:)/;
+/** `word` read the way the path matcher reads variables: cmd's `%X%` and PowerShell's `$env:X` as `${X}`. */
+const asShellVariables = (word: string): string =>
+  word.replace(/%([A-Za-z_]\w*)%/g, "$${$1}").replace(/\$(?:env|script|global|local|private):(\w+)/gi, "$${$1}");
+
+/** The file intents for one path operand, resolving it against a `cd` prefix. A home variable at its start is the home
+ *  folder; a path that still holds a variable after that is never joined to the `cd` folder (where it leads is only known
+ *  at run time, so it is matched against the protected places as a pattern). */
 function fileIntent(action: "file.read" | "file.write", word: string, dir: string, cwd?: string): Mapped[] {
-  let w = word;
-  if (dir && !/^(?:[\\/]|~|[A-Za-z]:|\$)/.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
+  let w = expandHome(word);
+  if (dir && !STARTS_ELSEWHERE.test(w) && !HOLDS_VARIABLE.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
   const path = rel(scrubPath(w), cwd);
-  if (UNRESOLVED.test(w)) {
-    const hit = protectedCandidate(normPath(w));
+  const pattern = asShellVariables(w);
+  if (UNRESOLVED.test(pattern)) {
+    const hit = protectedCandidate(normPath(pattern));
     if (hit) return pathIntents(action, hit, "shell", { pattern: path });
     // `cat $f` or `cat *` names no file a rule could match: recording a read of a file literally called "$f" was a
     // wrong row. A word with any literal text (`$D/notes.txt`, `src/*`) is still recorded.
-    if (action === "file.read" && !/[^/\\]/.test(w.replace(EXPANSION, "").replace(/["']/g, ""))) return [];
+    if (action === "file.read" && !/[^/\\]/.test(pattern.replace(EXPANSION, "").replace(/["']/g, ""))) return [];
   }
   return pathIntents(action, path, "shell");
 }
@@ -544,6 +574,18 @@ const SENSITIVE = /(?:^|[/\\])(?:\.scopebond(?:[/\\]|$)|\.env(?:\.[^/\\]*)?$|\.e
 // a word character — so `process.env` is not `.env`) and has no overlapping repeats,
 // keeping the scan linear; input is capped per argument.
 // Scopebond's own folder, and what follows it, wherever it appears in an argument.
+/** A character a path written in code or an argument can hold (not a space, a quote, a bracket or an operator). */
+const PATH_CHAR = /[^\s'"`(),;=+<>|&[\]]/;
+/** The whole path a match found in `text` at `start` sits in: the text before it back to the start of its word, when that
+ *  ends in a separator and names a folder (`$HOME/`, `~/`, `D:/work/` before the match), so the path is read from where it
+ *  starts rather than as one relative to the working folder. Looks back at most 512 characters. */
+function pathAround(text: string, start: number, match: string): string {
+  let s = start;
+  while (s > 0 && start - s < 512 && PATH_CHAR.test(text[s - 1])) s--;
+  const prefix = text.slice(s, start);
+  return /[\\/]$/.test(prefix) && /[^\\/]/.test(prefix) ? prefix + match : match;
+}
+
 /** Code that builds a path from pieces (`'.scope' + 'bond'`, `".sco" "pebond"`, SQL `'.scope' || 'bond'`) is read with the
  *  pieces joined, so the scan sees the path the code will use. Linear: one pass of a bounded string. */
 function foldConcatenation(code: string): string {
@@ -942,18 +984,18 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       const code = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
       // Scopebond's own folder is read through any API (`DatabaseSync('…/.scopebond/receipts.db')`) or handed to a
       // script as an argument: naming it is enough. The read floor is a classifier, not a sandbox (see the README).
-      for (const m of code.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+      for (const m of code.matchAll(SCOPEBOND_IN_TEXT)) read(pathAround(code, m.index, m[0]));
       // A wildcard that starts like Scopebond's folder (`~/.scope*/receipts.db*`) can only mean it.
       if (SCOPEBOND_GLOB.test(code)) { read("~/.scopebond"); if (FILE_API.test(code)) write("~/.scopebond"); }
       if (!FILE_API.test(code)) continue;
-      for (const m of code.match(SENSITIVE_IN_CODE) ?? []) { read(m); write(m); }
+      for (const m of code.matchAll(SENSITIVE_IN_CODE)) { const path = pathAround(code, m.index, m[0]); read(path); write(path); }
     }
   } else if (prog === "sqlite3" || prog === "sqlite") {
     // Options (`-cmd`, `-init`, `-separator`) take values and SQL can ATTACH any file: the first operand is not enough.
     read(operands[0]);
     for (const w of args) {
       const sql = foldConcatenation(w.slice(0, CODE_SCAN_LIMIT));
-      for (const m of sql.match(SCOPEBOND_IN_TEXT) ?? []) read(m);
+      for (const m of sql.matchAll(SCOPEBOND_IN_TEXT)) read(pathAround(sql, m.index, m[0]));
       // ATTACH or .open of a path the statement computes (a function call, a parameter, a subquery) cannot be judged.
       for (const m of sql.matchAll(SQLITE_TARGET)) {
         const target = m[1];
@@ -984,6 +1026,18 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     const sources = [...operands];
     args.forEach((w, k) => { if (/^(?:-C|--directory|-Path|-LiteralPath|-SourcePath)$/i.test(w)) sources.push(args[k + 1] ?? ""); else if (/^--directory=/.test(w)) sources.push(w.slice(12)); });
     if (sources.some((s) => HOME_OR_ABOVE.test(s))) read("~/.scopebond");
+  }
+
+  // After a `cd`, a relative file any program is handed resolves in that folder: one that lands in Scopebond's own folder is a
+  // read of it, whatever the program does with it (`cd ~/.scopebond && node probe.mjs <file>`). A word with no dot or
+  // separator (a subcommand, a name) is not taken for a file.
+  if (dir) {
+    const seen = new Set(ops.map((m) => `${m.intent.action_type} ${String(m.intent.params.path)}`));
+    for (const o of operands) {
+      if (!isPathWord(o) || !/[./\\]/.test(o) || STARTS_ELSEWHERE.test(o) || HOLDS_VARIABLE.test(o)) continue;
+      if (!resolvedSegments(normPath(`${trimEnd(dir)}/${o}`)).includes(".scopebond")) continue;
+      for (const m of fileIntent("file.read", o, dir, cwd)) if (!seen.has(`file.read ${String(m.intent.params.path)}`)) ops.push(m);
+    }
   }
 
   for (const r of sc.redirects) {
@@ -1377,7 +1431,7 @@ function windowsParts(text: string, quoting: "cmd" | "powershell"): Array<{ text
 
 /** Whether a part starts with a search program (`grep`, `rg`, `findstr`, `Select-String`, `git grep`, …). */
 function isSearchPart(part: string): boolean {
-  const words = part.trim().split(/\s+/).map((w) => w.replace(/^["']+|["']+$/g, ""));
+  const words = part.trim().split(/\s+/).map((w) => trimChars(w, "\"'"));
   const prog = (words[0] ?? "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.exe$/, "");
   if (SEARCH_PROGRAMS.has(prog)) return true;
   if (prog !== "git") return false;
@@ -1411,10 +1465,45 @@ function mentionsOnlyInSearch(text: string, names: RegExp): boolean {
 
 const NOTHING_HIDDEN: readonly PipedSecret[] = [];
 
+/** A word that may name a place relative to the folder a command runs in: not an option, a number or an address, and not
+ *  absolute (`/x`, `~/x`, `C:/x`). A bare word counts (`rm -rf build`): which words are places is up to the program. */
+const relativeWord = (w: string): boolean => !w.startsWith("-") && isPathWord(w) && !/^(?:[\\/]|~(?:[\\/]|$)|[A-Za-z]:)/.test(w);
+
+/** The folder a command runs in: `runDir` (after the call's `cd`s; "~" after a `cd` home) inside `cwd` unless absolute, with
+ *  `.` and `..` resolved and no trailing slash. Empty when neither is known. */
+function runFolder(runDir: string, cwd?: string): string {
+  const at = /^(?:[\\/]|~|[A-Za-z]:)/.test(runDir) ? runDir : [cwd ?? "", runDir].filter(Boolean).join("/");
+  if (!at) return "";
+  const folder = posix.normalize(at.replace(/\\/g, "/"));
+  return folder.length > 1 && folder.endsWith("/") && !/^[A-Za-z]:\/$/.test(folder) ? folder.slice(0, -1) : folder;
+}
+
+/** What a person is shown for one simple command, and keyed on (see `ShownCommand`). `scrub` removes secrets from the text
+ *  as the recorded command's are. */
+function shownCommand(sc: SimpleCommand, runDir: string, cwd: string | undefined, scrub: (text: string) => string): ShownCommand {
+  // A wrapper written before the program (`sudo`, `env X=1`, `X=1`) changes how it runs, so it stays.
+  const raw = sc.raw.trim().split(/\s+/);
+  const at = raw.findIndex((w) => trimChars(w, "\"'") === sc.programRaw);
+  const prefix = at > 0 ? raw.slice(0, at).map((w) => trimChars(w, "\"'")) : [];
+  // `build/` and `build` name the same place; `/` and `C:/` keep theirs. (A loop: a pattern anchored at the end takes
+  // quadratic time on a long run of slashes.)
+  const unslashed = (w: string): string => {
+    let end = w.length;
+    while (end > 0 && (w[end - 1] === "/" || w[end - 1] === "\\")) end--;
+    const t = w.slice(0, end);
+    return t === "" || /^[A-Za-z]:$/.test(t) ? w : t;
+  };
+  // One way of quoting, so `rm "my dir"` (one target) never reads as `rm my dir` (two).
+  const quoted = (w: string): string => (w === "" || /[\s'"`]/.test(w) ? `'${w.replace(/'/g, "'\\''")}'` : w);
+  const command = scrub([...prefix, sc.programRaw || sc.program, ...sc.argv.map(unslashed)].map(quoted).join(" "));
+  return { command, digest: keyedDigest(command), ...(sc.argv.some(relativeWord) ? { folder: runFolder(runDir, cwd) } : {}) };
+}
+
 /** `searchReading`: the command text is the one cmd or PowerShell itself reads (a Windows reading, or a PowerShell command
  *  with no backtick, whose quoting the normalization left as it was), so a mention of Scopebond only in a search's
- *  pattern may be told apart from one that switches it off. */
-function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: readonly PipedSecret[] = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = [], searchReading = false): Mapped[] {
+ *  pattern may be told apart from one that switches it off. `runDir`: the folder the command runs in, for what a person is
+ *  shown (`shownCommand`); `dir` when not given. */
+function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsReading = false, hidden: readonly PipedSecret[] = NOTHING_HIDDEN, gitLineConfigs: readonly string[] = [], searchReading = false, runDir?: string): Mapped[] {
   // Words the whole command shows to be secret (a literal piped into a secret reader) are masked in this part's recorded
   // text too. Only the text: the program and paths a policy judges are never changed by what another part says.
   const redact = (raw: string): string => redactCommand(hidden.length ? maskWords(raw, hidden) : raw);
@@ -1466,6 +1555,8 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
       params: { command: redact(sc.raw), program: basename(scrubSecrets(sc.programRaw)), ...(cwd ? { cwd } : {}) },
     },
     evaluated: true, source: "shell",
+    ...(sc.describes ? { describesOnly: true as const } : {}),
+    shown: () => shownCommand(sc, runDir ?? dir, cwd, (text) => scrubSecrets(hidden.length ? maskWords(text, hidden) : text)),
   };
   const installs = packagesToCheck(sc);
   if (installs) exec.packages = installs;
@@ -1481,6 +1572,23 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
 }
 
 const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
+
+/** A simple command's intents with `program_scope` on its shell.exec (what safe-shell judges: delete-scope.ts). A delete whose
+ *  every target is contained also records each target as a write, so the file rules (protected places, workspace roots) judge
+ *  what it removes. */
+function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, cwd?: string): Mapped[] {
+  const out = mapped.map((m) => (m.intent.action_type === "shell.exec"
+    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict) } } }
+    : m));
+  if (verdict?.scope !== "contained") return out;
+  const seen = new Set(out.filter((m) => m.intent.action_type === "file.write").map((m) => String(m.intent.params.path)));
+  for (const path of verdict.paths) {
+    for (const w of fileIntent("file.write", path, "", cwd)) {
+      if (!seen.has(String(w.intent.params.path))) { seen.add(String(w.intent.params.path)); out.push(w); }
+    }
+  }
+  return out;
+}
 
 /** Decompose a shell command into the intents it will run. A `cd` earlier in the same
  *  call changes the directory later relative operands resolve against
@@ -1530,7 +1638,7 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
   const src = dialect === "powershell" ? command.replace(/`(.)/g, "$1").replace(/\\/g, "/") : command;
   // PowerShell text with no backtick keeps its own quoting through the normalization above.
   const plainPowerShell = dialect === "powershell" && !command.includes("`");
-  const commands = decomposeShell(src);
+  const commands = decomposeShell(src, 0, [], dialect);
   if (commands.length === 0) {
     return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
   }
@@ -1540,21 +1648,27 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
   // Variables the call sets, in order: git configuration an earlier `export GIT_CONFIG_PARAMETERS=…` gives a later git command
   // (as `-c` would), and a coding agent started with its config folder moved.
   const scan = scanCall(commands);
+  // What each delete reaches (delete-scope.ts): read once for the call, in both readings of a "Bash" command holding `\`.
+  const deletes = deleteVerdicts(commands, src, cwd, dialect === "posix" && src.includes("\\") ? src.replace(/\\/g, "/") : null, expandBraces);
   const isFile = (m: Mapped) => m.intent.action_type.startsWith("file.");
   const key = (m: Mapped) => `${m.intent.action_type} ${String(m.intent.params.path)}`;
   const into = (base: string, target: string | undefined): string => {
-    if (target === undefined || target === "~") return "";
-    if (/^(?:[\\/]|~[\\/]|[A-Za-z]:)/.test(target)) return normPath(target);
-    return normPath((base ? base + "/" : "") + target);
+    if (target === undefined) return "";
+    // `cd ~`, `cd $HOME/x`, `cd $env:USERPROFILE`: the home folder. A folder that still holds a variable is not joined to
+    // the one before it (where it leads is only known at run time).
+    const t = expandHome(target);
+    if (STARTS_ELSEWHERE.test(t) || HOLDS_VARIABLE.test(t)) return normPath(t);
+    return normPath((base ? base + "/" : "") + t);
   };
   const walk = (list: SimpleCommand[], filesOnly: boolean): Mapped[] => {
     let dir = "";
+    let shownDir = "";
     // Other folders a `cd` to a variable may have led to (`x=.claude; cd $x`), and whether a credential's value led there.
     let elsewhere: Array<{ dir: string; secret: boolean }> = [];
     const vars: Variables = new Map();
     const out: Mapped[] = [];
     for (const sc of list) {
-      const mapped = mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell);
+      const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir), deletes.get(sc), cwd);
       const kept = filesOnly ? mapped.filter(isFile) : mapped;
       out.push(...kept);
       // The command read with the values its variables may hold, and in each other folder it may run in: the file effects and
@@ -1593,6 +1707,8 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
           }
         }
         dir = next;
+        // What a person is shown: a `cd` home (or with no folder) leads home, not back to the working folder.
+        shownDir = target === undefined || target === "~" ? "~" : into(shownDir, target);
         elsewhere = [...others].map(([d, secret]) => ({ dir: d, secret }));
       }
       for (const { name, value } of shellVariablesSet(sc)) remember(vars, lookup, name, value);
@@ -1632,6 +1748,8 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
       if (!seen.has(key)) { seen.add(key); out.push(m); }
     }
   }
+  // Statements alone (`$x = 5`, `$_.Name`) run no program: recorded like an empty command, with nothing to grant.
+  if (out.length === 0) return [{ intent: { action_type: "shell.exec", params: { command: redactCommand(command), program: "" } }, evaluated: false, source: "shell" }];
   return out;
 }
 

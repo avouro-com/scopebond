@@ -1,55 +1,55 @@
 [
   {
     "category": "destructive-shell",
-    "command": "echo hi; rm -rf x"
+    "command": "echo hi; rm -rf ~/x"
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "echo hi && rm -rf build"
   },
   {
     "category": "destructive-shell",
-    "command": "false || rm -rf x"
+    "command": "false || rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "true | rm -rf x"
+    "command": "true | rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "echo a & rm -rf x"
+    "command": "echo a & rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "echo one\nrm -rf two"
+    "command": "echo one\nrm -rf ~/two"
   },
   {
     "category": "destructive-shell",
-    "command": "ls; ls; ls; rm -rf x"
+    "command": "ls; ls; ls; rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "rm -rf x; echo done"
+    "command": "rm -rf ~/x; echo done"
   },
   {
     "category": "destructive-shell",
-    "command": "echo start && echo mid && rm -rf x"
+    "command": "echo start && echo mid && rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "cat list.txt | sort | rm -rf x"
+    "command": "cat list.txt | sort | rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "FOO=1 rm -rf x"
+    "command": "FOO=1 rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "FOO=1 BAR=2 rm -rf x"
+    "command": "FOO=1 BAR=2 rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "FOO=$(echo 1) rm -rf x"
+    "command": "FOO=$(echo 1) rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
@@ -57,11 +57,11 @@
   },
   {
     "category": "destructive-shell",
-    "command": "env FOO=1 rm -rf x"
+    "command": "env FOO=1 rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "env rm -rf x"
+    "command": "env rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
@@ -77,19 +77,19 @@
   },
   {
     "category": "destructive-shell",
-    "command": "nice -n 10 rm -rf x"
+    "command": "nice -n 10 rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "nice rm -rf x"
+    "command": "nice rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "nohup rm -rf x"
+    "command": "nohup rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "timeout 5 rm -rf x"
+    "command": "timeout 5 rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
@@ -97,99 +97,99 @@
   },
   {
     "category": "destructive-shell",
-    "command": "stdbuf -oL rm -rf x"
+    "command": "stdbuf -oL rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "env FOO=1 timeout 3 nice -n 5 rm -rf x"
+    "command": "env FOO=1 timeout 3 nice -n 5 rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "command rm -rf x"
+    "command": "command rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "exec rm -rf x"
+    "command": "exec rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "(rm -rf x)"
+    "command": "(rm -rf ~/x)"
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "( cd notes && rm -rf todo.txt )"
   },
   {
     "category": "destructive-shell",
-    "command": "{ rm -rf x; }"
+    "command": "{ rm -rf ~/x; }"
   },
   {
     "category": "destructive-shell",
-    "command": "(echo hi; (rm -rf y))"
+    "command": "(echo hi; (rm -rf ~/y))"
   },
   {
     "category": "destructive-shell",
-    "command": "bash -c 'rm -rf x'"
+    "command": "bash -c 'rm -rf ~/x'"
   },
   {
     "category": "destructive-shell",
-    "command": "sh -c \"rm -rf x\""
+    "command": "sh -c \"rm -rf ~/x\""
   },
   {
     "category": "destructive-shell",
-    "command": "bash -c 'echo hi; rm -rf x'"
+    "command": "bash -c 'echo hi; rm -rf ~/x'"
   },
   {
     "category": "destructive-shell",
-    "command": "zsh -c 'rm -rf x'"
+    "command": "zsh -c 'rm -rf ~/x'"
   },
   {
     "category": "destructive-shell",
-    "command": "dash -c 'rm -rf x'"
+    "command": "dash -c 'rm -rf ~/x'"
   },
   {
     "category": "destructive-shell",
-    "command": "bash -lc 'rm -rf x'"
+    "command": "bash -lc 'rm -rf ~/x'"
   },
   {
     "category": "destructive-shell",
-    "command": "bash -c \"bash -c 'rm -rf x'\""
+    "command": "bash -c \"bash -c 'rm -rf ~/x'\""
   },
   {
     "category": "destructive-shell",
-    "command": "sh -c 'FOO=1 rm -rf x'"
+    "command": "sh -c 'FOO=1 rm -rf ~/x'"
   },
   {
     "category": "destructive-shell",
-    "command": "echo $(rm -rf x)"
+    "command": "echo $(rm -rf ~/x)"
   },
   {
     "category": "destructive-shell",
-    "command": "echo `rm -rf x`"
+    "command": "echo `rm -rf ~/x`"
   },
   {
     "category": "destructive-shell",
-    "command": "FOO=$(rm -rf x) echo hi"
+    "command": "FOO=$(rm -rf ~/x) echo hi"
   },
   {
     "category": "destructive-shell",
-    "command": "echo $(echo $(rm -rf x))"
+    "command": "echo $(echo $(rm -rf ~/x))"
   },
   {
     "category": "destructive-shell",
-    "command": "xargs rm < list.txt"
+    "command": "xargs rm <<< ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "echo x | xargs rm -rf"
+    "command": "echo ~/x | xargs rm -rf"
   },
   {
     "category": "destructive-shell",
-    "command": "xargs -I{} rm -rf {} < list.txt"
+    "command": "xargs -I{} rm -rf {} <<< ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "find . -name 'list.txt' -exec rm {} +"
+    "command": "find ~ -name '.npmrc' -exec rm {} +"
   },
   {
     "category": "destructive-shell",
@@ -201,19 +201,19 @@
   },
   {
     "category": "destructive-shell",
-    "command": "f() { rm -rf \"$1\"; }; f x"
+    "command": "f() { rm -rf \"$1\"; }; f ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "function g { rm -rf x; }; g"
+    "command": "function g { rm -rf ~/x; }; g"
   },
   {
     "category": "destructive-shell",
-    "command": "alias del='rm -rf'\ndel x"
+    "command": "alias del='rm -rf'\ndel ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "rm \\\n -rf x"
+    "command": "rm \\\n -rf ~/x"
   },
   {
     "category": "destructive-shell",
@@ -221,26 +221,26 @@
   },
   {
     "category": "destructive-shell",
-    "command": "echo a && \\\n rm -rf x"
+    "command": "echo a && \\\n rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "'rm' -rf x"
+    "command": "'rm' -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "\"rm\" -rf x"
+    "command": "\"rm\" -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "r''m -rf x"
+    "command": "r''m -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "\\rm -rf x"
+    "command": "\\rm -rf ~/x"
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "rm -rf 'my dir'"
   },
   {
@@ -248,20 +248,20 @@
     "command": "rm -rf \"$HOME/tmp\""
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "cd notes && rm -rf todo.txt"
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "pushd notes; rm -rf ."
   },
   {
     "category": "destructive-shell",
-    "command": "xargs rm <<'EOF'\nx\nEOF"
+    "command": "xargs rm <<'EOF'\n~/x\nEOF"
   },
   {
     "category": "destructive-shell",
-    "command": "bash <<'EOF'\nrm -rf x\nEOF"
+    "command": "bash <<'EOF'\nrm -rf ~/x\nEOF"
   },
   {
     "category": "destructive-shell",
@@ -272,7 +272,7 @@
     "command": "truncate -s 0 README.md"
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "unlink list.txt"
   },
   {
@@ -292,7 +292,7 @@
     "command": "reboot"
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "rmdir notes"
   },
   {
@@ -305,59 +305,59 @@
   },
   {
     "category": "destructive-shell",
-    "command": "echo $(git status) && rm -rf x"
+    "command": "echo $(git status) && rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "true && (FOO=1 rm -rf x)"
+    "command": "true && (FOO=1 rm -rf ~/x)"
   },
   {
     "category": "destructive-shell",
-    "command": "for f in a b; do rm -rf \"$f\"; done"
+    "command": "for f in ~/a ~/b; do rm -rf \"$f\"; done"
   },
   {
     "category": "destructive-shell",
-    "command": "while read l; do rm -rf \"$l\"; done < list.txt"
+    "command": "while read l; do rm -rf \"$l\"; done <<< ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "if true; then rm -rf x; fi"
+    "command": "if true; then rm -rf ~/x; fi"
   },
   {
     "category": "destructive-shell",
-    "command": "case x in x) rm -rf y;; esac"
+    "command": "case x in x) rm -rf ~/y;; esac"
   },
   {
     "category": "destructive-shell",
-    "command": "trap 'rm -rf x' EXIT; echo hi"
+    "command": "trap 'rm -rf ~/x' EXIT; echo hi"
   },
   {
     "category": "destructive-shell",
-    "command": "eval 'rm -rf x'"
+    "command": "eval 'rm -rf ~/x'"
   },
   {
     "category": "destructive-shell",
-    "command": "eval rm -rf x"
+    "command": "eval rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "test -f list.txt && rm -rf x"
+    "command": "test -f list.txt && rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "ls && { echo hi; rm -rf x; }"
+    "command": "ls && { echo hi; rm -rf ~/x; }"
   },
   {
     "category": "destructive-shell",
-    "command": "echo hi |& rm -rf x"
+    "command": "echo hi |& rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "rm -rf x 2>/dev/null"
+    "command": "rm -rf ~/x 2>/dev/null"
   },
   {
     "category": "destructive-shell",
-    "command": "rm -rf x >out.log 2>&1"
+    "command": "rm -rf ~/x >out.log 2>&1"
   },
   {
     "category": "destructive-shell",
@@ -365,35 +365,35 @@
   },
   {
     "category": "destructive-shell",
-    "command": "env -- rm -rf x"
+    "command": "env -- rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "nice -n5 -- rm -rf x"
+    "command": "nice -n5 -- rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "readonly Z=1; rm -rf x"
+    "command": "readonly Z=1; rm -rf ~/x"
   },
   {
     "category": "destructive-shell",
-    "command": "declare -x Y=2\nrm -rf x"
+    "command": "declare -x Y=2\nrm -rf ~/x"
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "rm -- -rf"
   },
   {
-    "category": "destructive-shell",
+    "category": "benign",
     "command": "cd notes/.. && rm -rf notes"
   },
   {
     "category": "destructive-shell",
-    "command": "x=rm; $x -rf a"
+    "command": "x=rm; $x -rf ~/a"
   },
   {
     "category": "destructive-shell",
-    "command": "\"$(echo rm)\" -rf a"
+    "command": "\"$(echo rm)\" -rf ~/a"
   },
   {
     "category": "force-push",
@@ -1282,5 +1282,61 @@
   {
     "category": "benign",
     "command": "python3 -c \"print('put secrets in .env, not in code')\""
+  },
+  {
+    "category": "benign",
+    "command": "rm -rf node_modules"
+  },
+  {
+    "category": "benign",
+    "command": "rm -rf dist build .next coverage target"
+  },
+  {
+    "category": "benign",
+    "command": "rm -f package-lock.json"
+  },
+  {
+    "category": "benign",
+    "command": "rm -rf ./tmp/cache"
+  },
+  {
+    "category": "benign",
+    "command": "rm -rf .turbo .cache tmp *.log"
+  },
+  {
+    "category": "benign",
+    "command": "rm -rf notes/*"
+  },
+  {
+    "category": "destructive-shell",
+    "command": "rm -rf ../other-repo"
+  },
+  {
+    "category": "destructive-shell",
+    "command": "rm -rf .git"
+  },
+  {
+    "category": "destructive-shell",
+    "command": "rm -rf ."
+  },
+  {
+    "category": "destructive-shell",
+    "command": "rm -rf ~"
+  },
+  {
+    "category": "destructive-shell",
+    "command": "rm -rf /tmp"
+  },
+  {
+    "category": "destructive-shell",
+    "command": "rm -f .env"
+  },
+  {
+    "category": "destructive-shell",
+    "command": "rm -rf $BUILD_DIR"
+  },
+  {
+    "category": "destructive-shell",
+    "command": "sudo rm -rf node_modules"
   }
 ]

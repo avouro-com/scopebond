@@ -31,7 +31,7 @@ function project() {
 test("today's counts and the newest blocks, newest first, summarised without arguments", () => {
   const { config, call } = project();
   call("git status");
-  call("rm -rf ./build --no-preserve-root SECRET-ARG-123");
+  call("rm -rf ../build --no-preserve-root SECRET-ARG-123");
   call("ls");
   call("dd if=/dev/zero of=/tmp/x");
   const activity = localActivity(config);
@@ -47,7 +47,7 @@ test("each block in plain words, as the Scopebond window shows the action (secre
   const { dir, config, call, tool, enforce } = project();
   enforce("protect-read");
   enforce("protect-branches");
-  call("rm -rf ./build --token=SECRET-ARG-123");
+  call("rm -rf ../build --token=SECRET-ARG-123");
   call("git push --force origin main");
   tool("Read", { file_path: join(dir, ".env.production") });
   const activity = localActivity(config, { limit: 20 });
@@ -55,7 +55,7 @@ test("each block in plain words, as the Scopebond window shows the action (secre
   assert.equal(read.what, "Read .env.production");
   assert.equal(read.action_text, ".env.production");
   assert.equal(push.what, "git push --force origin main");
-  assert.equal(rm.what, "rm -rf ./build --token=***", "a secret is masked as the window masks it");
+  assert.equal(rm.what, "rm -rf ../build --token=***", "a secret is masked as the window masks it");
   assert.equal(rm.action_text, rm.what);
   assert.equal(rm.summary, "shell.exec rm", "the older summary stays for older trays");
   for (const b of activity.recent_blocks) assert.equal(b.harness, "claude");
@@ -106,9 +106,10 @@ test("the rule names are the workspace's, and a block always gets one: never emp
   assert.equal(blockTitle(null, "safe-shell"), "Run a command that deletes data or shuts down the computer");
   assert.equal(blockTitle(null, "protect-branch-history"), "Rewrite history on a protected branch");
   assert.equal(blockTitle(null, "allowed-sites"), "Contact websites and online services");
-  assert.equal(blockTitle(null, "blocked-hosts"), "Blocked service");
+  assert.equal(blockTitle(null, "blocked-hosts"), "Contact a blocked site");
+  assert.equal(blockTitle(null, "protect-root"), "Change files outside the allowed folders");
   assert.equal(blockTitle("secret-read", "protect-scopebond-write"), "Read passwords, keys or secrets", "the receipt's rule comes first");
-  for (const [rule, clause] of [[null, null], [null, "protect-root"], ["no-destroy", "no-destroy"], ["constructor", "__proto__"], [undefined, undefined]]) {
+  for (const [rule, clause] of [[null, null], ["no-destroy", "no-destroy"], ["constructor", "__proto__"], [undefined, undefined]]) {
     assert.equal(blockTitle(rule, clause), "A Scopebond rule");
   }
   assert.equal(ruleName("not-a-rule"), "A Scopebond rule");
@@ -131,7 +132,7 @@ test("the project's name: the repository's, else the folder's, never the home fo
 test("a block by Scopebond's own protection names its rule, the project and the tool, from the hook's note", () => {
   const { dir, config, tool, call } = project();
   tool("Write", { file_path: join(dir, ".scopebond", "policy.json"), content: "{}" });
-  call("rm -rf ./build");
+  call("rm -rf ../build");
   const [rm, guard] = localActivity(config, { limit: 20 }).recent_blocks;
   assert.equal(guard.what, "Edit .scopebond/policy.json");
   assert.equal(guard.rule, "guardrail-config-write");

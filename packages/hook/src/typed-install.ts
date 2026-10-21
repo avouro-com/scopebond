@@ -28,7 +28,7 @@
 import { canonProgram, decomposeShell, gitArgs, shellScriptArg, splitCommandLine, type SimpleCommand } from "./shell.js";
 import { scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { scan, flagValue } from "./scan.js";
-import { launched, skipOptions } from "./launchers.js";
+import { skipOptions } from "./launchers.js";
 
 export interface InstallAction { action_type: "software.install"; params: Record<string, unknown> }
 
@@ -268,27 +268,85 @@ function jsInstalls(sc: SimpleCommand, manager: "npm" | "pnpm" | "yarn" | "bun")
   return out;
 }
 
+/** The runner options that never take a value, so a word after one is not its value. */
+const JS_RUNNER_SWITCHES = new Set(["-y", "--yes", "--no", "--no-yes", "--no-install", "--ignore-existing", "-q", "--quiet", "-s", "--silent", "--offline", "--prefer-offline",
+  "--prefer-online", "--ws", "--workspaces", "--include-workspace-root", "--if-present", "-g", "--global", "--verbose", "--json", "--parseable", "--no-color",
+  "--foreground-scripts", "--legacy-peer-deps", "--force", "-f", "--bun", "--no-bun"]);
+const PY_RUNNER_SWITCHES = new Set(["-q", "--quiet", "-v", "--verbose", "--isolated", "--offline", "--no-cache", "-n", "--refresh", "-U", "--upgrade", "--native-tls",
+  "--no-progress", "--no-config", "--preview", "--no-python-downloads", "--managed-python", "--no-managed-python", "--no-build", "--no-sources", "--compile-bytecode",
+  "--reinstall", "--system-site-packages", "--include-deps", "--force", "--no-color"]);
+/** The subcommand of a manager that runs a package (`npm exec`, `pnpm dlx`, `yarn dlx`, `bun x`, `pipx run`); none for a
+ *  runner of its own (`npx`, `bunx`, `uvx`). */
+const RUNNER_SUBS: Readonly<Record<string, readonly string[]>> = { npm: ["exec", "x"], pnpm: ["dlx"], yarn: ["dlx"], bun: ["x"], pipx: ["run"] };
+
+interface RunnerCall { packages: string[]; command?: string; flags: Map<string, string | true> }
+
+/**
+ * What a package runner is asked to run, read from its own options only. The rules:
+ *   - The runner's options end at its command: the first word that is not an option or an option's value, or the word after
+ *     `--`. Every word after the command is the command's own argument, never a package and never a runner option
+ *     (`npx vite --port 4333`, `npx tsc -p tsconfig.json`, `npx example-tool --yes`).
+ *   - Before the command, only the runner's package option names packages: `-p`/`--package` for npx, `npm exec`, `pnpm dlx`,
+ *     `yarn dlx` and bunx; `--from`/`--spec` for uvx and `pipx run`. Each one names one (`npx -p typescript -p ts-node …`).
+ *     With any, the command is a program those packages provide and is not itself a package (`npx -p typescript tsc`).
+ *   - A runner option known to take a value has it skipped (`--registry <url>`); a known switch takes none (`-y`, `--yes`).
+ *   - An option this reader does not know, followed by a word: when the runner's words go on to a `--`, the word is read as
+ *     that option's value and the command is what follows the `--` (`npx --flag value -- tool`); otherwise the word is read as
+ *     the command (`npx --flag tool`), which records a package rather than missing one.
+ */
+function runnerCall(argv: readonly string[], subs: readonly string[], packageFlags: readonly string[], valued: ReadonlySet<string>, switches: ReadonlySet<string>): RunnerCall {
+  const packages: string[] = [];
+  const flags = new Map<string, string | true>();
+  let expectSub = subs.length > 0;
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "--") return { packages, command: argv[i + 1], flags };
+    if (!t.startsWith("-") || t === "-") {
+      if (expectSub && subs.includes(t)) { expectSub = false; continue; }
+      return { packages, command: t, flags };
+    }
+    const eq = t.startsWith("--") ? t.indexOf("=") : -1;
+    const name = eq > 0 ? t.slice(0, eq) : t;
+    const inline = eq > 0 ? t.slice(eq + 1) : undefined;
+    if (packageFlags.includes(name)) { const v = inline ?? argv[++i]; if (v !== undefined) packages.push(v); continue; }
+    if (valued.has(name)) { flags.set(name, inline ?? argv[++i] ?? ""); continue; }
+    flags.set(name, inline ?? true);
+    const next = argv[i + 1];
+    if (inline === undefined && !switches.has(name) && next !== undefined && !next.startsWith("-") && !(expectSub && subs.includes(next)) && argv.indexOf("--", i + 2) >= 0) {
+      flags.set(name, next);
+      i++;
+    }
+  }
+  return { packages, flags };
+}
+
 /** A package run through a runner that installs it first when it is missing: `npx`, `pnpm dlx`, `yarn dlx`, `bunx`, `npm exec`,
- *  `uvx`, `uv tool run`, `pipx run`. */
+ *  `uvx`, `uv tool run`, `pipx run`. One action per package the runner's options name, or one for its command. */
 function runner(sc: SimpleCommand, kind: "npx" | "pnpm" | "yarn" | "bun" | "npm" | "uvx" | "pipx"): Facts[] {
   const py = kind === "uvx" || kind === "pipx";
-  const s = scan(sc.argv, py ? PY_VALUED : JS_VALUED);
+  const program = canonProgram(sc.program);
+  const subs = Object.hasOwn(RUNNER_SUBS, program) ? RUNNER_SUBS[program] : [];
+  const call = py
+    ? runnerCall(sc.argv, subs, ["--from", "--spec"], new Set(PY_VALUED.filter((f) => f !== "--from" && f !== "--spec")), PY_RUNNER_SWITCHES)
+    : runnerCall(sc.argv, subs, ["-p", "--package"], new Set(JS_VALUED.filter((f) => f !== "-p" && f !== "--package")), JS_RUNNER_SWITCHES);
+  const s = { positionals: [], flags: call.flags };
   if (s.flags.has("--no") || s.flags.has("--no-install") || s.flags.has("--offline")) return [];
-  const yes = s.flags.has("-y") || s.flags.has("--yes");
   // `npm exec` installs without asking only with --yes (or when nothing can ask: then npm assumes yes).
-  const packageFlag = py ? flagValue(s, "--from", "--spec") : flagValue(s, "-p", "--package");
-  const l = launched(sc);
-  const spec = packageFlag ?? l?.spec;
-  if (spec === undefined) return [];
+  const yes = s.flags.has("-y") || s.flags.has("--yes");
+  const specs = call.packages.length > 0 ? call.packages : call.command !== undefined ? [call.command] : [];
   const route: Route = py ? (kind === "uvx" ? "uv" : "pipx") : kind === "npm" || kind === "npx" ? "npx" : kind;
   const via = kind === "uvx" ? "uvx" : kind === "npm" ? "npm" : kind;
-  const parsed = py ? pySpec(spec.replace(/@([^@]+)$/, "==$1")) : jsSpec(spec);
-  if (!parsed) return [];
   const registry = py ? hostOf(flagValue(s, "-i", "--index-url", "--default-index", "--index") ?? assigned(sc, "UV_INDEX_URL", "UV_DEFAULT_INDEX", "PIP_INDEX_URL")) : jsRegistry(sc, s);
-  return [{
-    route, ecosystem: py ? "pypi" : "npm", verb: "run", via, ...parsed,
-    ...(parsed.source_domain === undefined && registry ? { source_domain: registry } : {}), ...(yes ? { auto_confirm: true as const } : {}),
-  }];
+  const out: Facts[] = [];
+  for (const spec of specs.slice(0, MAX_ACTIONS)) {
+    const parsed = py ? pySpec(spec.replace(/@([^@]+)$/, "==$1")) : jsSpec(spec);
+    if (!parsed) continue;
+    out.push({
+      route, ecosystem: py ? "pypi" : "npm", verb: "run", via, ...parsed,
+      ...(parsed.source_domain === undefined && registry ? { source_domain: registry } : {}), ...(yes ? { auto_confirm: true as const } : {}),
+    });
+  }
+  return out;
 }
 
 function pyInstalls(sc: SimpleCommand, route: "pip" | "uv" | "poetry" | "pipx", argv: readonly string[], via: string, verb: Verb, global = false): Facts[] {
@@ -586,6 +644,96 @@ function lastSegment(url: string): string | undefined {
 
 const SHELL_RUNNERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "fish", "python", "python3", "py", "node", "perl", "ruby", "php", "deno", "bun", "pwsh", "powershell",
   "iex", "invoke-expression", "eval", "source", "."]);
+
+/** How a script interpreter reads its command line: the options that give it the code to run (so what is piped in is its
+ *  input data), the options that take a value (attached or as the next word), the short options that take only an attached
+ *  value (`perl -i.bak`) or attached digits (`perl -l`, `perl -0777`), the long options known to take none, and the
+ *  subcommands that name inline code (`deno eval`) or a script file (`deno run`, `bun run`). */
+interface Interpreter {
+  code: ReadonlySet<string>;
+  valued: ReadonlySet<string>;
+  attached?: ReadonlySet<string>;
+  digits?: ReadonlySet<string>;
+  switches?: RegExp;
+  subs?: Readonly<Record<string, "code" | "file">>;
+}
+const JS_SWITCHES = /^--(?:no-|experimental-|enable-|disable-|trace-|inspect|expose-|harmony|allow-|deny-|unstable|preserve-symlinks|pending-deprecation|throw-deprecation|abort-on-uncaught-exception|frozen-intrinsics|watch$|test$|smol$|hot$|bun$|quiet$|silent$|verbose$|reload$|check$|cached-only$)/;
+const INTERPRETERS: Readonly<Record<string, Interpreter>> = {
+  python: { code: new Set(["-c", "-m"]), valued: new Set(["-W", "-X", "--check-hash-based-pycs"]) },
+  node: {
+    code: new Set(["-e", "--eval", "-p", "--print", "-c", "--check"]),
+    valued: new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--input-type", "--title", "--env-file", "--env-file-if-exists", "-C",
+      "--conditions", "--inspect-port", "--icu-data-dir", "--openssl-config", "--redirect-warnings", "--diagnostic-dir", "--report-dir", "--report-directory",
+      "--report-filename", "--cpu-prof-dir", "--cpu-prof-name", "--heap-prof-dir", "--heap-prof-name", "--watch-path", "--test-reporter", "--test-reporter-destination",
+      "--test-name-pattern", "--disable-warning", "--secure-heap", "--stack-trace-limit", "--max-old-space-size", "--unhandled-rejections", "--dns-result-order",
+      "--experimental-sea-config", "--experimental-config-file", "--snapshot-blob", "--localstorage-file", "--tls-keylog", "--trace-event-file-pattern", "--trace-event-categories"]),
+    switches: JS_SWITCHES,
+  },
+  bun: {
+    code: new Set(["-e", "--eval", "-p", "--print"]), valued: new Set(["-r", "--preload", "--cwd", "-c", "--config", "--env-file", "--tsconfig-override", "--conditions"]),
+    switches: JS_SWITCHES, subs: { run: "file" },
+  },
+  deno: {
+    code: new Set(["--eval"]), valued: new Set(["--config", "-c", "--import-map", "--location", "--cert", "--lock", "--env-file", "--ext"]),
+    switches: JS_SWITCHES, subs: { eval: "code", run: "file" },
+  },
+  ruby: { code: new Set(["-e"]), valued: new Set(["-I", "-r", "-C", "-E", "--encoding", "-F"]) },
+  perl: { code: new Set(["-e", "-E"]), valued: new Set(["-I", "-M", "-m", "-C", "-d", "-D", "-x"]), attached: new Set(["-i"]), digits: new Set(["-l", "-0"]) },
+  php: { code: new Set(["-r", "-R", "-B", "-E", "-F", "-f"]), valued: new Set(["-c", "-d", "-z", "-t", "-S"]) },
+};
+const INTERPRETER_OF: Readonly<Record<string, string>> = { python: "python", python3: "python", py: "python", node: "node", bun: "bun", deno: "deno", ruby: "ruby", perl: "perl", php: "php" };
+/** A word that names a local script file: it has a path separator or a file extension, and is not a URL. */
+const isScriptFile = (w: string): boolean => !/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(w) && !w.includes(SUBST) && !w.includes("$") && (/[\\/]/.test(w) || /\.[A-Za-z0-9]{1,10}$/.test(w));
+
+/**
+ * Whether a simple command that a fetch is piped into runs what it is fed as code. A shell, `iex`, `eval` or PowerShell
+ * does. An interpreter does when nothing else gives it its code: bare (`| python`), told to read standard input
+ * (`| node -`, `| python - --user`), or given options only (`| python -u`, `| node -r ./preload.js`). It does not when an
+ * option gives it the code (`| python -c "…"`, `| python -m json.tool`, `| node -e`, `| node --eval`, `| ruby -e`,
+ * `| perl -lane`, `| php -r`, `| bun -e`, `| deno eval`) or its first word that is not an option names a local script file
+ * (`| node summarize.mjs`, `| python tool.py`, `| deno run x.ts`): then the piped text is that code's input data. What this
+ * reader cannot place keeps the answer yes: a long option it does not know followed by a file name (the name may be the
+ * option's value), or a first word that is not a file name.
+ */
+function runsPipedCode(sc: SimpleCommand): boolean {
+  const program = canonProgram(sc.program);
+  if (!SHELL_RUNNERS.has(program) || program === "source" || program === ".") return false;
+  const spec = Object.hasOwn(INTERPRETER_OF, program) ? INTERPRETERS[INTERPRETER_OF[program]] : undefined;
+  if (spec === undefined) return true;
+  const argv = sc.argv;
+  let sub = false;
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "--") return argv[i + 1] === undefined || !isScriptFile(argv[i + 1]);
+    if (t === "-") return true;
+    if (!t.startsWith("-")) {
+      const as = !sub && spec.subs && Object.hasOwn(spec.subs, t) ? spec.subs[t] : undefined;
+      if (as === "code") return false;
+      if (as === "file") { sub = true; continue; }
+      return !isScriptFile(t);
+    }
+    if (t.startsWith("--")) {
+      const eq = t.indexOf("=");
+      const name = eq > 0 ? t.slice(0, eq) : t;
+      if (spec.code.has(name)) return false;
+      if (eq > 0) continue;
+      if (spec.valued.has(name)) { i++; continue; }
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("-") && !spec.switches?.test(name)) return true;
+      continue;
+    }
+    // A short option or a cluster of them (`-lane`, `-uc`, `-Wignore`, `-mjson.tool`), read letter by letter.
+    for (let k = 1; k < t.length; k++) {
+      const opt = `-${t[k]}`;
+      if (spec.code.has(opt)) return false;
+      if (spec.attached?.has(opt)) break;
+      if (spec.digits?.has(opt)) { while (k + 1 < t.length && /[0-9]/.test(t[k + 1])) k++; continue; }
+      if (spec.valued.has(opt)) { if (k + 1 === t.length) i++; break; }
+    }
+  }
+  return true;
+}
+
 const EXECUTABLE = /\.(?:exe|msi|msix|msixbundle|appx|pkg|mpkg|dmg|deb|rpm|apk|apkg|sh|bash|zsh|ps1|psm1|bat|cmd|run|bin|appimage|jar|com|scr|vbs|js|py|command)$/i;
 const READ_ONLY = new Set(["git", "ls", "dir", "cat", "type", "less", "more", "head", "tail", "grep", "rg", "find", "tree", "pwd", "echo", "code", "cursor", "open", "wc",
   "stat", "file", "du", "cd", "pushd", "popd", "get-childitem", "gci", "get-content", "gc", "set-location", "sl", "chdir", "test", "[", "true", "false", "printf", "sort", "diff"]);
@@ -919,11 +1067,15 @@ function scriptInstalls(command: string, dialect: "posix" | "powershell", depth 
     ?? decomposed[i].find((sc) => !sc.opaque && sc.program !== "");
   for (let i = 0; i < parts.length; i++) {
     const head = main(i);
-    // `curl … | sh`, `wget -qO- … | sudo bash`, `iwr … | iex`.
+    // `curl … | sh`, `wget -qO- … | sudo bash`, `iwr … | iex`, `curl … | python`, and the same through filters on the way
+    // (`curl … | python -c "…" | sh`); not `curl … | python -c "…"` alone, where the fetched text is data.
     if (parts[i].sep === "|" && i + 1 < parts.length) {
       const fetch = decomposed[i].map((sc) => readFetch(sc, dialect)).find((f): f is Fetch => f !== null && f.stdout);
-      const next = decomposed[i + 1].filter((sc) => !sc.opaque && sc.program !== "").map((sc) => canonProgram(sc.program));
-      if (fetch && next.some((p) => SHELL_RUNNERS.has(p) && p !== "source" && p !== ".")) out.push(scriptFacts(fetch));
+      let runs = false;
+      for (let j = i + 1; fetch && !runs && j < parts.length && parts[j - 1].sep === "|"; j++) {
+        runs = decomposed[j].some((sc) => !sc.opaque && sc.program !== "" && runsPipedCode(sc));
+      }
+      if (fetch && runs) out.push(scriptFacts(fetch));
     }
     if (!head) continue;
     const program = canonProgram(head.program);

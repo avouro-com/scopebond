@@ -91,15 +91,15 @@ for (const [label, sign] of [["signed grants", (b, o) => signed(b, o)], ["an old
   test(`${label}: an allowance revoked at the same revision is installed, and the action is denied afterwards`, async () => {
     const h = connected();
     try {
-      const allowance = makeAllowance({ rule: "destructive-shell", actionKey: keyOf("rm -rf build"), reason: "release clean-up step", osUserDigest: null, lasts: "always" });
+      const allowance = makeAllowance({ rule: "destructive-shell", actionKey: keyOf("rm -rf ../build"), reason: "release clean-up step", osUserDigest: null, lasts: "always" });
       writeAllowances(h.dir, [allowance]);
       assert.deepEqual((await sync(h, sign(doc(1)))).outcome, { state: "applied", revision: 1 });
-      assert.equal(await decide(h, "rm -rf build"), "allow", "the person's allowance stands");
+      assert.equal(await decide(h, "rm -rf ../build"), "allow", "the person's allowance stands");
       // The reviewer revokes it: the same revision and rules digest, the revoked id, a new ETag.
       const revoked = await sync(h, sign(doc(1, { revoked_allowances: [allowance.id] }), { issuedAt: T(16) }));
       assert.deepEqual(revoked.outcome, { state: "applied", revision: 1 });
       assert.deepEqual(installed(h).revoked_allowances, [allowance.id]);
-      assert.equal(await decide(h, "rm -rf build"), "deny", "the revocation applies on the computer");
+      assert.equal(await decide(h, "rm -rf ../build"), "deny", "the revocation applies on the computer");
       // The same answer again is unchanged.
       assert.deepEqual((await sync(h, sign(doc(1, { revoked_allowances: [allowance.id] }), { issuedAt: T(16) }))).outcome, { state: "unchanged", revision: 1 });
     } finally { rmSync(h.dir, { recursive: true, force: true }); }
@@ -122,7 +122,7 @@ test("an ETag saved before grants were compared is not sent, so a revocation alr
   } finally { rmSync(h.dir, { recursive: true, force: true }); }
 });
 
-const delivered = () => ({ ...makeAllowance({ rule: "destructive-shell", actionKey: keyOf("rm -rf build"), reason: "never approved by anyone", osUserDigest: null, lasts: "always" }), created_by: "workspace" });
+const delivered = () => ({ ...makeAllowance({ rule: "destructive-shell", actionKey: keyOf("rm -rf ../build"), reason: "never approved by anyone", osUserDigest: null, lasts: "always" }), created_by: "workspace" });
 const tamperings = [
   ["an allowance added after signing", (good) => ({ ...good, allowances: [delivered()] }), "bad_signature"],
   ["a revocation removed after signing", (good) => { const out = { ...good }; delete out.revoked_allowances; return out; }, "bad_signature"],
@@ -148,7 +148,7 @@ for (const mode of ["dual", "enforce"]) {
           assert.equal(readFileSync(join(h.dir, MANAGED_DOC_FILE), "utf8"), inForce, "a refused answer never changes the document in force");
           assert.ok(!calls.some((c) => c.url.endsWith("/v1/policy/ack") && c.body.result === "loaded"));
         }
-        assert.equal(await decide(h, "rm -rf build"), "deny");
+        assert.equal(await decide(h, "rm -rf ../build"), "deny");
       } finally { rmSync(h.dir, { recursive: true, force: true }); }
     });
   }

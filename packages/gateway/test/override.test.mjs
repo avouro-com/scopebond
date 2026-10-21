@@ -63,7 +63,11 @@ test("an override record has one exact shape, and only an approved decision may 
   assert.equal(validateOverrideRecord(record({ method: "allowance", repeat_of: "alw_0123456789abcdefghij" })), true);
   assert.equal(validateOverrideRecord(record({ method: "allowance", repeat_of: null })), false, "an allowance is always named");
   assert.equal(validateOverrideRecord(record({ method: "allowance", state: "offered", repeat_of: "alw_0123456789abcdefghij" })), false);
+  // No reason given, where the workspace asks for none: no digest and length 0, for an unblock and for an allowance.
+  assert.equal(validateOverrideRecord(record({ reason_digest: null, reason_length: 0 })), true);
+  assert.equal(validateOverrideRecord(record({ method: "allowance", repeat_of: "alw_0123456789abcdefghij", reason_digest: null, reason_length: 0 })), true);
   for (const bad of [
+    record({ reason_length: 0 }), record({ reason_digest: null, reason_length: null }), record({ method: "harness_prompt", state: "offered", reason_digest: null, reason_length: 0 }),
     record({ reason_digest: null }), record({ state: "offered" }), record({ method: "harness_prompt", state: "offered" }),
     record({ rule: "Not A Rule" }), record({ repeat_of: "short" }), record({ person: "x" }), record({ version: 2 }), null,
   ]) assert.equal(validateOverrideRecord(bad), false, JSON.stringify(bad));

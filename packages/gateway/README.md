@@ -286,6 +286,13 @@ A connector that counts actions against a session budget passes the decision the
 `max`, `state`), a closed object checked by `validateReceiptBudget`. A receipt check older than
 this release reports a receipt carrying it as invalid.
 
+When a policy clause matched the action, the gateway signs which one: `payload.clause_id` names
+the clause and `payload.failed_bound` the bound of it that failed (`program:pattern`), for a
+denial, a monitored match (`realtime_result: "deny"` on an action that was let through), a hold
+and an override. An allowed action carries neither. `receiptMatch(verdict, realtimeResult)`
+returns the two members for a verdict; `validateEvidencePayload` checks them. A receipt check
+older than this release reports a receipt carrying them as invalid.
+
 Swappable interfaces (each an interface with a local implementation):
 `ReceiptStore` and `Executor`. Node-only durable stores and the key loader live
 under the `@scopebond/gateway/node` subpath (they use `node:fs` / `node:sqlite`):

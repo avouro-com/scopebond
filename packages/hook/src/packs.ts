@@ -7,7 +7,8 @@
 //   - Deterministic and pure: the same command and the same packs give the same actions, with no model, no network and no
 //     clock. A pack reads local files or the environment only through an optional probe; the mapper passes none, so those
 //     facts are unknown there (left out), never guessed.
-//   - Bounded: only the subcommand paths a grammar lists are read. A help or dry run (the grammar's `skip`) derives nothing.
+//   - Bounded: only the subcommand paths a grammar lists are read. A help, version or dry run (`--help`, `-h` alone, a `help`
+//     first word, `--version` with no operand, `--dry-run`, and whatever the grammar's `skip` adds) derives nothing.
 //     A command a grammar does not match derives nothing, unless an option the grammar does not know stopped it reading
 //     and one of its `fallback` conditions holds: then the fallback's actions are derived, with every name left out, so an
 //     option placed before the subcommand cannot move a command out of a rule's reach.
@@ -23,7 +24,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import { comparePackVersions, packRef, type Pack, type PackEmit, type PackGrammar, type PackProfile, type PathWord } from "@scopebond/policy-schema/pack";
-import { canonProgram, decomposeShell, type SimpleCommand } from "./shell.js";
+import { canonProgram, decomposeShell, isDescribeOption, type SimpleCommand } from "./shell.js";
 import { digest, scrubParam } from "./minimize.js";
 import { classifySql } from "./sql-classify.js";
 import { launched } from "./launchers.js";
@@ -159,9 +160,22 @@ function readArgs(grammar: PackGrammar, argv: readonly string[]): Reading & { sk
   let uncertain = false;
   let stopped = false;
   let skipped = false;
+  // Whatever the grammar lists, help (`--help`, `-h` alone, a `help` first word), a version (`--version` with no operand) and
+  // a dry run (`--dry-run`) derive nothing. A word an unknown option before it may take as its value is not one of them.
+  let mayBeValue = false;
+  let versionAsked = false;
+  if (argv.length === 1 && argv[0] === "-h") skipped = true;
   const put = (name: string, value: string | true): void => { const list = flags.get(name) ?? []; list.push(value); flags.set(name, list); };
   for (let i = 0; i < argv.length; i++) {
     let t = argv[i];
+    const afterUnknown = mayBeValue;
+    mayBeValue = false;
+    // `--dry-run none` turns it off where the grammar reads `--dry-run` as taking a value.
+    const off = argv[i] === "--dry-run" && valuedOptions.has(argv[i]) && /^(?:none|false)$/i.test(argv[i + 1] ?? "");
+    if (!afterUnknown && !off && isDescribeOption(argv[i])) {
+      if (argv[i] === "--version") versionAsked = true;
+      else skipped = true;
+    }
     if (t === "--") {
       // Some tools read the words after `--` as positionals too.
       if (grammar.double_dash === "positionals") pos.push(...argv.slice(i + 1));
@@ -198,6 +212,7 @@ function readArgs(grammar: PackGrammar, argv: readonly string[]): Reading & { sk
       if (!t.startsWith("--") && t.length > 2 && valued.has(t.slice(0, 2))) { put(t.slice(0, 2), t.slice(2)); continue; }
       put(t, true);
       if (!known.has(t)) {
+        mayBeValue = true;
         uncertain = true;
         if (grammar.unknown_options === "stop") stopped = true;
         if (certain < 0) certain = pos.length;
@@ -213,7 +228,8 @@ function readArgs(grammar: PackGrammar, argv: readonly string[]): Reading & { sk
   while (lead < pos.length && lead < pathAll && strip.has(pos[lead])) lead++;
   const words = pos.slice(lead);
   const certainCount = certainAll - lead;
-  if (words[0] !== undefined && certainCount > 0 && (grammar.skip?.words ?? []).includes(words[0])) skipped = true;
+  if (words[0] !== undefined && certainCount > 0 && (words[0] === "help" || (grammar.skip?.words ?? []).includes(words[0]))) skipped = true;
+  if (versionAsked && pos.length === 0) skipped = true;
   return { tool: "", argv: [...argv], pos: words, certain: Math.max(0, certainCount), pathCertain: Math.max(0, pathAll - lead), flags, uncertain, stopped, skipped };
 }
 

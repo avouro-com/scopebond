@@ -8,12 +8,17 @@
   const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args || {});
   const root = document.getElementById("panel");
   const SVG = "http://www.w3.org/2000/svg";
+  // Blocks shown at a time; "Show more" adds as many again.
+  const PAGE = 50;
   // What the person is looking at; kept across redraws.
   // `open`: the block whose Unblock form is open, with the choice and the reason typed so far.
   // `stopping`: the allowance whose "Stop allowing" waits for the person to confirm.
-  const ui = { view: "list", tab: "blocked", open: null, choice: null, reason: "", stopping: null };
+  // `shown`: how many blocks the list shows (50 at a time).
+  const ui = { view: "list", tab: "blocked", open: null, choice: null, reason: "", stopping: null, shown: PAGE };
   let last = null;
   let lastJson = "";
+  // Whether the tray was told the page has drawn (it made the window hidden, and shows it then).
+  let ready = false;
 
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
@@ -62,7 +67,6 @@
     return d.toLocaleDateString([], { month: "short", day: "numeric" });
   }
   const isToday = (iso) => { const d = new Date(iso); return !Number.isNaN(d.getTime()) && day(d) === day(new Date()); };
-  const plural = (n, one, many) => n.toLocaleString() + " " + (n === 1 ? one : many);
 
   async function run(kind, value) {
     try {
@@ -241,7 +245,9 @@
     return model.can_ask === true || (model.asked || []).length > 0 || (model.recent_blocks || []).some((b) => b.offers && b.offers.ask);
   }
   function tabs(model) {
-    const blocked = (model && model.recent_blocks || []).filter((b) => isToday(b.at) && !b.acted).length;
+    // The agent's one count of today's distinct blocks (the header and the menu show the same); an older agent's list otherwise.
+    const blocked = model && model.today && typeof model.today.blocked === "number" ? model.today.blocked
+      : (model && model.recent_blocks || []).filter((b) => isToday(b.at) && !b.acted).length;
     const counts = { blocked, allowed: model && model.allowed ? model.allowed.length : 0, asked: model && model.asked ? model.asked.length : 0 };
     const shown = TABS.filter(([k]) => k !== "asked" || showsAsked(model));
     if (!shown.some(([k]) => k === ui.tab)) ui.tab = "blocked";
@@ -266,14 +272,33 @@
     return el("div", { class: "empty" }, [el("strong", { text: title }), el("span", { text })]);
   }
 
+  async function copyDetails(text) {
+    let copied = false;
+    try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* said below */ }
+    if (last) { last.note = copied ? "Details copied: paste them in a chat or a ticket" : "Couldn't copy the details"; draw(); }
+  }
+  /** The sentence that stands in for a button (always on, set by the workspace, Safe Install, a request's answer), with
+   *  Copy details where it helps to ask someone. */
+  function outcomeLine(b) {
+    const tone = b.outcome === "requested" && b.request && b.request.state === "approved" ? " ok"
+      : b.outcome === "requested" && b.request && b.request.state === "declined" ? " no" : b.outcome === "allowed" ? " ok" : "";
+    return el("div", { class: "outcome" + tone }, [
+      el("span", { text: b.outcome_text }),
+      b.copy_details ? el("button", { class: "btn text", type: "button", "data-key": "copy-" + b.action_id, "aria-label": "Copy details: " + (b.what || b.summary),
+        text: "Copy details", onclick: () => copyDetails(b.copy_details) }) : null,
+    ]);
+  }
+
   function blockItem(s, model, b, i) {
     const busy = s.busy;
     const words = b.what || b.summary;
     const meta = [ruleOf(b), b.project, b.tool].filter(Boolean).join(" · ");
     const offers = b.offers;
     const allows = offers ? offers.once || offers.fifteen || offers.always : b.can_act;
+    const tries = b.tries && b.tries > 1 ? b.tries : 0;
     let act = null;
-    if (b.acted === "allowed") act = el("span", { class: "chip ok", text: "Allowed" });
+    if (b.outcome_text && !(ui.open === b.action_id && offers)) act = outcomeLine(b);
+    else if (b.acted === "allowed") act = el("span", { class: "chip ok", text: "Allowed" });
     else if (b.acted === "asked") act = el("span", { class: "chip wait", text: "Request sent" });
     else if (b.can_act && b.action_id && ui.open === b.action_id && offers) act = unblockForm(s, model, b);
     else if (b.can_act && b.action_id && (allows || (offers && offers.ask))) {
@@ -292,6 +317,7 @@
       el("div", { class: "row" }, [
         el("span", { class: "mark", "aria-hidden": "true" }),
         el("span", { class: "what", text: words }),
+        tries ? el("span", { class: "tries", "aria-label": "tried " + tries + " times", text: "×" + tries }) : null,
         b.live ? el("span", { class: "when", id: "countdown", "data-deadline": b.deadline, text: secondsLeft(b.deadline) + " s left" })
           : el("span", { class: "when", text: when(b.at) }),
       ]),
@@ -308,9 +334,15 @@
     if (!blocks.length) return out.concat(live ? [] : [empty("Nothing blocked today", "Scopebond checks every action your coding agents take.")]);
     const today = blocks.filter((b) => isToday(b.at));
     const earlier = blocks.filter((b) => !isToday(b.at));
+    // All of today, newest first, then earlier this week; PAGE at a time, with Show more.
+    const todayShown = today.slice(0, ui.shown);
+    const earlierShown = earlier.slice(0, Math.max(0, ui.shown - todayShown.length));
     if (!today.length) out.push(empty("Nothing blocked today", "Earlier blocks are below."));
-    else out.push(el("h2", { id: "today-h", text: "Today" }), el("ul", { "aria-labelledby": "today-h" }, today.map((b, i) => blockItem(s, model, b, i))));
-    if (earlier.length) out.push(el("h2", { id: "earlier-h", text: "Earlier" }), el("ul", { "aria-labelledby": "earlier-h" }, earlier.map((b, i) => blockItem(s, model, b, today.length + i))));
+    else out.push(el("h2", { id: "today-h", text: "Today" }), el("ul", { "aria-labelledby": "today-h" }, todayShown.map((b, i) => blockItem(s, model, b, i))));
+    if (earlierShown.length) out.push(el("h2", { id: "earlier-h", text: "Earlier this week" }), el("ul", { "aria-labelledby": "earlier-h" }, earlierShown.map((b, i) => blockItem(s, model, b, todayShown.length + i))));
+    const left = blocks.length - todayShown.length - earlierShown.length;
+    if (left > 0) out.push(el("div", { class: "more" }, [el("button", { class: "btn", type: "button", "data-key": "more",
+      text: "Show " + Math.min(PAGE, left) + " more", onclick: () => { ui.shown += PAGE; draw("more"); } })]));
     return out;
   }
 
@@ -419,10 +451,9 @@
 
   function footer(model) {
     const open = offered(model, "open_workspace");
-    const today = model && model.today;
-    if (!open && !today) return null;
+    if (!open) return null;
     return el("footer", { class: "foot" }, [
-      el("span", { class: "grow", text: today ? "Today: " + plural(today.actions, "action", "actions") : "" }),
+      el("span", { class: "grow" }),
       open ? el("button", {
         class: "btn text", type: "button", "data-key": "cloud", text: (model.workspace ? "Open " + model.workspace + " in Scopebond Cloud" : "Open in Scopebond Cloud") + " ↗",
         onclick: () => run("action", "open_workspace"),
@@ -465,6 +496,7 @@
     const again = focused && root.querySelector('[data-key="' + CSS.escape(focused) + '"]');
     if (again && !again.disabled) again.focus();
     if (area && typing && document.activeElement === area) area.setSelectionRange(typing[0], typing[1]);
+    if (!ready) { ready = true; invoke("panel_ready").catch(() => {}); }
   }
 
   async function refresh() {

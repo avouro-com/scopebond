@@ -23,6 +23,7 @@ for (const c of cases) {
     const v = violates(c.policy, c.receipts || [], c.claimed, c.opts || {});
     assert.equal(v.violated, c.expect.violated, `${c.name}: violated`);
     if (c.expect.clause_id !== undefined) assert.equal(v.clause_id, c.expect.clause_id, `${c.name}: clause_id`);
+    if (c.expect.failed_bound !== undefined) assert.equal(v.failed_bound, c.expect.failed_bound, `${c.name}: failed_bound`);
     if (c.expect.undetermined !== undefined) assert.equal(!!v.undetermined, c.expect.undetermined, `${c.name}: undetermined`);
     assert.match(v.inputs_hash, /^[0-9a-f]{64}$/, `${c.name}: inputs_hash`);
   });

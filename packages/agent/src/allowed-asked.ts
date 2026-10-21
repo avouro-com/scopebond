@@ -5,6 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { toolName } from "./tray-model.js";
 import { MANAGED_DOC_FILE, mergeWorkspaceAllowances, readActionText, readAllowances, readBlocked, readRequests, ruleName, type Allowance } from "@scopebond/hook";
 
 /** An allowance in force or waiting for an admin. `choice`: once (the next try), fifteen (15 minutes) or always (until
@@ -42,6 +43,8 @@ export interface AskedItem {
   answered_by: string | null;
   note: string | null;
   answered_at: string | null;
+  /** The coding tool that asked ("Claude Code"), for "Approved: ask Claude Code to try again"; null when unknown. */
+  tool: string | null;
 }
 
 const MAX_ITEMS = 50;
@@ -106,6 +109,31 @@ function requestAnswers(dir: string): Map<string, RequestAnswer> {
   return out;
 }
 
+/** For the tray's Blocked list: the state of the person's newest request about a block (by the block's record, else by the
+ *  same rule and action), and whether an allowance in force already covers it. A block either covers needs no Unblock or
+ *  Ask any more. */
+export function blockStates(dir: string, now = Date.now()): {
+  requestFor(actionId: string | null, rule: string | null, actionKey: string | null): { state: AskedItem["state"]; answered_by: string | null; answered_at: string | null } | null;
+  allowedFor(rule: string | null, actionKey: string | null): boolean;
+} {
+  const asked = new Map(askedList(dir).map((a) => [a.id, a]));
+  const requests = readRequests(dir).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  const byAction = new Map<string, string>();
+  const byKey = new Map<string, string>();
+  for (const r of requests) { if (r.action_id) byAction.set(r.action_id, r.id); byKey.set(`${r.rule}\n${r.action_key}`, r.id); }
+  const live = allAllowances(dir).filter((a) => a.state === "active" && !a.ended_at && Date.parse(a.expires_at) > now && !(a.once && a.uses > 0));
+  return {
+    requestFor(actionId, rule, actionKey) {
+      const id = (actionId ? byAction.get(actionId) : undefined) ?? (rule && actionKey ? byKey.get(`${rule}\n${actionKey}`) : undefined);
+      const item = id ? asked.get(id) : undefined;
+      return item ? { state: item.state, answered_by: item.answered_by, answered_at: item.answered_at } : null;
+    },
+    allowedFor(rule, actionKey) {
+      return !!rule && !!actionKey && live.some((a) => a.rule === rule && a.action_key === actionKey);
+    },
+  };
+}
+
 /** Requests to an admin, newest first: waiting, approved (an allowance came back for the same rule and action, or the
  *  workspace said so) or declined (the workspace said so), with who answered and their note when the workspace sent them. */
 export function askedList(dir: string): AskedItem[] {
@@ -123,6 +151,7 @@ export function askedList(dir: string): AskedItem[] {
         answered_by: said?.by ?? (approved ? extra(approved, "approved_by", 120) : null),
         note: said?.note ?? (approved ? extra(approved, "note", 300) : null),
         answered_at: said?.at ?? (state === "approved" && approved ? approved.created_at : null),
+        tool: toolName(r.harness),
       };
     });
 }

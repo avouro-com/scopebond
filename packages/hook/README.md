@@ -227,10 +227,11 @@ before-edit hook), so an out-of-policy edit there is signed as recorded after th
 than claiming otherwise. For edits that must be stopped before they land, make
 `@scopebond/github-action` a required check on pull requests.
 
-Cursor is told `allow` only when every action of the call was checked and permitted. An
-action a monitored rule finds out of policy (recorded, not blocked) gets no opinion
-(`ask`), so Cursor's own approval still decides, as Claude Code's and Codex's do when the
-hook stays silent.
+Cursor is told `allow` when every action of the call was checked and either permitted or
+found out of policy by a monitored rule: monitor records the match and stays silent for the
+developer, with no approval prompt. Cursor is told `ask`, so its own approval decides, only
+for an action Scopebond could not evaluate (no rule covers it, or the event could not be
+read) or one it holds for a person.
 
 A hook entry the coding agent cannot start at all (a moved Node, a removed install) lets
 actions run with no check: the agents treat that as a non-blocking error. Any failure the
@@ -315,10 +316,10 @@ is safe. A rule (or Scopebond Cloud's verdicts) decides that.
 | Route (`route`) | Read from |
 |---|---|
 | `npm`, `pnpm`, `yarn`, `bun` | `install`/`i`/`add`/`update` with named packages (`name@range`, `@scope/name@tag`, aliases, git and tarball URLs), `-g`, `--registry` or `NPM_CONFIG_REGISTRY=`, `--ignore-scripts`; `npm ci`, a bare `install` (`from_manifest`); `create`/`init <initializer>` (the `create-*` package) |
-| `npx` | `npx`, `npm exec` (with `--yes`: `auto_confirm`), `--package`; `pnpm dlx`, `yarn dlx`, `bunx` and `bun x` use the manager's route |
+| `npx` | `npx`, `npm exec` (with `--yes`: `auto_confirm`), `--package`; `pnpm dlx`, `yarn dlx`, `bunx` and `bun x` use the manager's route. The package is the command, or each `-p`/`--package` given before it (`npx -p typescript tsc`); the words after the command are its own arguments and never name a package (`npx vite --port 4333`, `npx tsc -p tsconfig.json`). The same holds for `uvx` and `pipx run` with `--from`/`--spec` |
 | `pip`, `uv`, `poetry`, `pipx` | `pip install` (also `python -m pip`), requirements with `==`, ranges and extras, VCS and URL specs, `-r` (`from_manifest`), `-i`/`--index-url`; `uv add`, `uv pip install`, `uv tool install`, `uvx`, `uv tool run`, `uv sync`; `poetry add`/`install`/`update`; `pipx install`/`run`/`inject` |
 | `cargo`, `go`, `gem`, `brew` | `cargo install`/`add` (`--git`, `--version`); `go install`, `go get`, `go run module@version`; `gem install`, `bundle add`/`install`; `brew install`/`reinstall`/`upgrade`, `brew tap`, `brew bundle` |
-| `curl_pipe_shell` | a fetch fed to a shell or interpreter: `curl … \| sh`, `wget -qO- … \| sudo bash`, `sh -c "$(curl …)"`, `bash <(curl …)`, `bash -c '…'` around any of these, `iwr … \| iex`, `iex (…DownloadString(…))` |
+| `curl_pipe_shell` | a fetch fed to a shell or interpreter that runs it: `curl … \| sh`, `wget -qO- … \| sudo bash`, `curl … \| python` (or `python -`, `node -`), the same through filters (`curl … \| tee log \| bash`), `sh -c "$(curl …)"`, `bash <(curl …)`, `bash -c '…'` around any of these, `iwr … \| iex`, `iex (…DownloadString(…))`. Not a fetch piped to an interpreter given its code another way, where the fetched text is data: `\| python -c "…"`, `\| python -m json.tool`, `\| node -e`, `\| ruby -e`, `\| perl -e`, `\| php -r`, `\| deno eval`, `\| bun -e`, `\| node script.mjs`, `\| python tool.py` |
 | `download_exec` | a fetch saved to a file that the same command line makes executable or runs (`chmod +x`, `./file`, `bash file`, `Start-Process`, `msiexec`, `dpkg -i`; `executed: true`), or that is a program or installer by its name (`.exe`, `.msi`, `.pkg`, `.dmg`, `.deb`, `.rpm`, `.sh`, `.AppImage`, …; `executed: false`) |
 | `git_clone`, `git_clone_run` | `git clone` and `gh repo clone`; `git_clone_run` when the same command line goes on to run what is in the clone (`cd repo && npm install`, `./repo/install.sh`, `make -C repo`) |
 | `docker_pull`, `docker_run` | `docker`/`podman`/`nerdctl` `pull`, `run`, `create` (the image, its tag or digest, and its registry when the reference names one); `docker compose pull/up/run` (`from_manifest`) |
@@ -372,13 +373,18 @@ read MCP calls; they derive taxonomy actions beside the command's own `shell.exe
 decide them like any other action.
 
 **Where they live.** In the `packs` folder of the hook's state directory (the folder that holds `policy.json`):
-`packs/index.json` is `{ "v": 1, "checked_at": "<RFC 3339>", "packs": [{ "id", "version", "sha256" }] }`, and each
-pack is `packs/<id>@<version>.json`, byte for byte as it was served. Whoever delivers packs writes the pack files
-first and the index last, with `checked_at` the time of the successful check-in and `sha256` the hex SHA-256 of
+`packs/index.json` is `{ "v": 1, "checked_at": "<RFC 3339>", "packs": [{ "id", "version", "sha256", "checked_at"? }] }`,
+and each pack is `packs/<id>@<version>.json`, byte for byte as it was served. Whoever delivers packs writes the pack
+files first and the index last, with `checked_at` the time of the successful check-in and `sha256` the hex SHA-256 of
 each file. Only listed packs are read, one version per id.
 
-**When a pack is used.** On every tool call, and only when all of these hold: the index is readable and was checked
-in no more than 30 days ago; the file matches its `sha256`; it is a valid pack with the listed id and version; and its
+Each pack keeps its own clock. A pack's own `checked_at` is there only when a check-in could not confirm it (the
+workspace named a newer version that could not be fetched or checked): that pack's last good version stays in force
+until 30 days after it was last confirmed, while every other pack renews as usual. `scopebond status` and
+`scopebond packs list` name such a pack, the version the workspace named, and why it was not used.
+
+**When a pack is used.** On every tool call, and only when all of these hold: the index is readable and the pack was
+confirmed by a check-in no more than 30 days ago; the file matches its `sha256`; it is a valid pack with the listed id and version; and its
 Ed25519 signature verifies with a policy-signing key this release trusts (the same keys as signed rules), inside that
 key's validity window. Otherwise the pack is not used, and only the open detection and the starter protections
 apply: a missing, damaged, unsigned or expired pack never allows anything, it only stops adding actions. No network
@@ -835,8 +841,11 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   and this computer's own opt-ins (`allowed_roots`, `protect_remote_database`).
 - **Overrides.** The workspace can set a rule to *Block, user may override* and say who may
   override. A matching action is then blocked until the person at the computer allows it once,
-  with a reason, in the Scopebond Agent's window (`@scopebond/agent`): the hook asks the running
-  agent and waits up to 45 seconds (20 seconds for Codex and Cursor), then blocks. The receipt
+  with a reason, in the Scopebond tray or the Scopebond Agent's window (`@scopebond/agent`): the hook asks the running
+  agent and waits up to 45 seconds (20 seconds for Codex and Cursor), then blocks. On Windows with no tray listening, the
+  agent asks no one at once (its window is off unless `SCOPEBOND_PROMPT_WINDOW=1`), and the denial's line for the person
+  says where to allow the block, or ask an admin, afterwards: the Scopebond icon's recent blocks, or this computer's page
+  in the workspace when the agent knows it. The receipt
   records the override, the reason's digest and the rule; the workspace adds who and why. Where the
   workspace allows it and the window is not available, Claude Code's own prompt is offered instead,
   but only in a permission mode where Claude Code really asks; that prompt takes no reason and is

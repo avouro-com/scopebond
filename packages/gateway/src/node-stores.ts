@@ -185,6 +185,10 @@ export interface StoreMaintenanceOptions {
 }
 
 const LAYOUT_VERSION = 2;
+/** The denied receipts, newest first, for the tray's blocked list: a partial index holds only the denials, so listing a week of
+ *  blocks reads those rows and nothing else. A fresh store has it from the start; an older one gets it from `maintain()`, never
+ *  from a tool call (building it reads the whole file once). */
+const DENIED_INDEX = "CREATE INDEX IF NOT EXISTS receipts_denied ON receipts (id) WHERE realtime_result = 'deny';";
 const HELD_STATES = "('reserved','dispatching','outcome_unknown')";
 
 /** SQLite-backed receipt store using Node's built-in `node:sqlite` (no native
@@ -259,6 +263,7 @@ export class SqliteReceiptStore implements ReceiptStore {
       addColumn(this.db, "authority_actions", "terminal_receipt_id", "INTEGER");
       if (fresh) {
         this.db.exec("CREATE INDEX IF NOT EXISTS receipts_action ON receipts (action_id) WHERE action_id IS NOT NULL;");
+        this.db.exec(DENIED_INDEX);
         this.db.prepare("INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('layout', ?)").run(String(LAYOUT_VERSION));
       }
     } catch (error) {
@@ -604,6 +609,9 @@ export class SqliteReceiptStore implements ReceiptStore {
         report.layoutCurrent = true;
       }
     }
+
+    // 1b. The index of denials (the tray's blocked list), once the layout is current.
+    if (report.layoutCurrent && timeLeft()) step(() => { this.db.exec(DENIED_INDEX); return 0; });
 
     // 2. Finished authority records: a signed authorization lives minutes, so after a week they protect nothing.
     const stateCutoff = new Date(now - (options.stateRetentionMs ?? 7 * 24 * 60 * 60 * 1000)).toISOString();

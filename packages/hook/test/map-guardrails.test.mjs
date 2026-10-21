@@ -62,14 +62,15 @@ test("Claude's Grep tool reads what it searches, so Scopebond's folder is refuse
   assert.equal(intents("Grep", { pattern: "x" })[0].intent.action_type, "file.read");
 });
 
-test("deleting Scopebond's own files or the agents' hook settings is a protected write; other deletes stay plain", () => {
+test("deleting Scopebond's own files or the agents' hook settings is a protected write; other deletes write only their targets", () => {
   for (const command of ["rm .scopebond/policy.json", "rm -rf .scopebond", "rm -f .scopebond/receipts.db-wal", "find .scopebond -delete", "rmdir /s /q .scopebond"]) {
     assert.ok(writes("Bash", { command }).some((p) => p.startsWith(".scopebond")), command);
   }
   assert.ok(writes("PowerShell", { command: "Remove-Item -Recurse -Force .scopebond" }).some((p) => p.startsWith(".scopebond")));
   assert.ok(writes("PowerShell", { command: "Remove-Item -Path .claude\\settings.json" }).some((p) => /\.claude\/settings\.json$/.test(p)));
-  assert.deepEqual(writes("Bash", { command: "rm -rf node_modules dist" }), []);
-  assert.deepEqual(writes("Bash", { command: "rm -rf packages/scopebond-notes" }), []);
+  // A delete inside the working folder records each target as a write (delete-scope.ts), and nothing protected.
+  assert.deepEqual(writes("Bash", { command: "rm -rf node_modules dist" }), ["node_modules", "dist"]);
+  assert.deepEqual(writes("Bash", { command: "rm -rf packages/scopebond-notes" }), ["packages/scopebond-notes"]);
 });
 
 test("with the default setup, the hook refuses each of these, whatever rules the workspace sets", async () => {

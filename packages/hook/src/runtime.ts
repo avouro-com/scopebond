@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { createGateway, StaticPrincipalKeyRegistry, withCloudExporter, type CloudExporter } from "@scopebond/gateway";
 import { ensurePrivateDir, loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
-import type { Mapped } from "./map.js";
+import type { Mapped, ShownCommand } from "./map.js";
+import type { ShownOverrideHandler } from "./override.js";
 import { attachExporter, flushBounded, DeliveryQueueError, type HookConnection } from "./cloud.js";
 import { explainDeny } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
@@ -26,6 +27,7 @@ import type { ReceiptBudget, ReceiptPayloadContext } from "@scopebond/gateway";
 import type { SessionBudgetGuard } from "./session-budgets.js";
 import { policyOptsIntoTargets } from "./target-rules.js";
 import { blockedPackagePattern, blockedServiceKindOf, readBlockedServices, unreadablePackageKey, BLOCKED_SERVICE_REASON, type BlockedService } from "./service-rules.js";
+import { containedDeletesSentence, withProgramScope } from "./delete-scope.js";
 export { policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
@@ -52,8 +54,9 @@ export interface RuntimeConfig {
    *  (`HOT_PATH_STORE_BUSY_MS`, hook-deadline.ts), so a lock wait cannot by itself carry the call past its deadline. */
   storeBusyTimeoutMs?: number;
   /** Warn mode: asked when policy denies an action, so a person may override a rule the workspace made overridable
-   *  (see override.ts). `hint` explains, in a denial, how an override would have been possible. */
-  override?: (agentKid: string) => { handler: OverrideHandler; hint(): string | null } | null;
+   *  (see override.ts). `hint` explains, in a denial, how an override would have been possible; `remedy`, when it says
+   *  something, replaces the denial's line for the person (where to act on the block afterwards). */
+  override?: (agentKid: string) => { handler: ShownOverrideHandler; hint(): string | null; remedy?(): string | null } | null;
   /** The current account's home folder, in every spelling to mask (see home-mask.ts). Defaults to `os.homedir()`,
    *  `HOME` and `USERPROFILE`; tests pass their own. */
   homeFolders?: readonly string[];
@@ -76,7 +79,7 @@ export interface Decision {
   clauseId?: string | null;
   /** Why a deny was made, where a reason beyond the clause applies: `blocked_service` when the workspace blocks the MCP server,
    *  host, program or package the action names (service-rules.ts). */
-  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict";
+  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict" | "session_budget" | "dispatch_refused";
   /** The deciding receipt (the denied one, or the first allow). */
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
@@ -197,7 +200,12 @@ export const DESTRUCTIVE = [
   "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "shred", "truncate", "unlink", "wipe", "srm",
   "del", "rd", "rmdir", "erase", "deltree", "format", "diskpart", "remove-item", "ri", "clear-content", "clc", "stop-computer", "restart-computer",
 ];
+// Bound on `program_scope` (delete-scope.ts): the program, with `/contained` after it for a delete whose every target is
+// inside the working folder. The pattern denies a listed program alone, so a contained delete is the one form that passes.
 const SAFE_SHELL = `^(?!(?:${DESTRUCTIVE.map(ci).join("|")})(?:${ci("\\.(?:exe|cmd|bat|com|ps1)")})?$).+`;
+/** The parameter safe-shell bounds. Earlier policies bound `program` with the same pattern. */
+export const SAFE_SHELL_PARAM = "program_scope";
+const CONTAINED_DELETES = containedDeletesSentence(DESTRUCTIVE);
 
 // A push destination the starter policy refuses: main, master, release/*, the
 // "every branch" flags (`--all`, `--mirror`, `--branches`) and a push whose
@@ -228,10 +236,16 @@ const LEGACY_STARTER_PATTERNS: Record<string, string> = {
  *  installed an earlier version gets the current protections without re-running init.
  *  Only exact legacy strings are replaced; any other pattern is the operator's own. */
 export function upgradeStarterPolicy<T>(policy: T): T {
-  const p = policy as { clauses?: Array<{ param_bounds?: Record<string, { pattern?: string }> }> };
+  const p = policy as { clauses?: Array<{ id?: unknown; param_bounds?: Record<string, { pattern?: string }> }> };
   for (const clause of p?.clauses ?? []) {
     for (const bound of Object.values(clause?.param_bounds ?? {})) {
       if (bound && typeof bound.pattern === "string" && LEGACY_STARTER_PATTERNS[bound.pattern]) bound.pattern = LEGACY_STARTER_PATTERNS[bound.pattern];
+    }
+    // The starter's safe-shell bound its pattern to `program`, which refused every delete; the same pattern on
+    // `program_scope` lets a delete inside the working folder through.
+    const bounds = clause?.param_bounds;
+    if (clause?.id === "safe-shell" && bounds && Object.keys(bounds).length === 1 && bounds.program?.pattern === SAFE_SHELL) {
+      clause.param_bounds = { [SAFE_SHELL_PARAM]: bounds.program };
     }
   }
   return policy;
@@ -253,8 +267,8 @@ export function starterPolicy(agentKid: string, opts: { enforce?: readonly strin
       },
       {
         id: "safe-shell", type: "action_allowlist", mode: mode("safe-shell"), action_types: ["shell.exec"],
-        param_bounds: { program: { pattern: SAFE_SHELL } },
-        description: "Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.",
+        param_bounds: { [SAFE_SHELL_PARAM]: { pattern: SAFE_SHELL } },
+        description: `Deny destructive programs — POSIX (rm, sudo, doas, shutdown, reboot, mkfs, dd, shred, truncate, unlink, wipe) and Windows/PowerShell (del, rd, rmdir, erase, deltree, format, diskpart, Remove-Item, Clear-Content) — in any case and with or without .exe. ${CONTAINED_DELETES} An empty program (a command that could not be parsed, or whose program is only known at run time: $VAR, $(…), eval of a variable) is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here.`,
       },
       {
         id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],
@@ -325,7 +339,9 @@ export function createHookRuntime(config: RuntimeConfig) {
   /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */
-  const masked = (m: Mapped): Mapped => {
+  const masked = (input: Mapped): Mapped => {
+    // A shell command built without `program_scope` (by hand, or by an older mapper) is judged by its program alone.
+    const m = withProgramScope(input);
     const params = maskHomeInValue(m.intent.params, homes);
     return params === m.intent.params ? m : { ...m, intent: { ...m.intent, params } };
   };
@@ -392,12 +408,15 @@ export function createHookRuntime(config: RuntimeConfig) {
   const gatewayGuard: DispatchGuard = { authorize: () => Promise.resolve(boundaryVerdict ?? { allow: true, reason: "ok", consumed_approvals: [], budgets: [] }) };
   const gateway = createGateway({ policy, authentication: { keys }, attester, store, mode: "check_only", dispatchGuard: gatewayGuard });
   const made = config.override?.(agent.kid) ?? null;
+  /** What the action being decided shows a person (map.ts), handed to the override handler with it, masked as the action is. */
+  let deciding: (() => ShownCommand) | undefined;
   // Once a person has been asked, most of the hook's time limit is gone: the receipt that follows waits less for the local
   // log's lock (a write that still fails denies the call, and the open action is closed later as an interrupted one).
   const override = made ? {
     hint: () => made.hint(),
+    remedy: () => made.remedy?.() ?? null,
     handler: (async (ctx) => {
-      try { return await made.handler(ctx); }
+      try { return await made.handler(deciding ? { ...ctx, shown: maskHomeInValue(deciding(), homes) } : ctx); }
       finally { try { (baseStore as { setBusyTimeout?: (ms: number) => void }).setBusyTimeout?.(Math.min(AFTER_OVERRIDE_STORE_BUSY_MS, storeBusyMs)); } catch { /* keeps its wait */ } }
     }) as OverrideHandler,
   } : null;
@@ -497,7 +516,8 @@ export function createHookRuntime(config: RuntimeConfig) {
       // has. A derived intent the mapper marks not evaluated (a file written through a remote API) is always recorded. Strict
       // mode does not change this: the call's own intent is still evaluated.
       const derivedRecorded = mapped.derived === true && (!optedIn || !mapped.evaluated || !named.has(mapped.intent.action_type));
-      if ((!mapped.evaluated && !config.strict) || derivedRecorded) {
+      // A command that only prints its help or version, or rehearses, changes nothing: recorded, in every mode.
+      if ((!mapped.evaluated && !config.strict) || derivedRecorded || mapped.describesOnly === true) {
         // Unknown tool or unparseable command, non-strict: observe without
         // evaluating — grants nothing.
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, contextOption);
@@ -508,7 +528,10 @@ export function createHookRuntime(config: RuntimeConfig) {
       // An action the coding agent reported only after it ran (Cursor's afterFileEdit) is signed as recorded after the
       // fact when a rule denies it: the receipt must not claim it was prevented.
       const options = { ...(override && !mapped.postHoc ? { override: override.handler } : {}), ...(mapped.postHoc ? { observedAfter: true } : {}), ...contextOption, ...(budget ? { budget } : {}) };
-      const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(options).length ? options : undefined);
+      deciding = mapped.shown;
+      let result;
+      try { result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(options).length ? options : undefined); }
+      finally { deciding = undefined; }
       const granted = (result.receipt as { payload?: { override?: { state?: string } } } | undefined)?.payload?.override;
       if (result.allowed && granted?.state === "offered") {
         return { decision: "ask", reason: "Scopebond: a workspace rule blocks this, and your workspace lets you allow it once. Allow only if you meant it; your answer is recorded.", receipt: result.receipt };
@@ -528,7 +551,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           // Point at the editable surface when there is one. `policy.json` is compiled
           // from `rules.json`, so telling someone to hand-edit it invites a change the
           // next `rules` run would overwrite.
-          remedy: rulesRemedy,
+          remedy: override?.remedy() ?? rulesRemedy,
           actionId: (result.receipt as { payload?: { action_ref?: { action_id?: string } } } | undefined)?.payload?.action_ref?.action_id ?? null,
         }) + (override?.hint() ? `\n${override.hint()}` : ""),
         clauseId,
@@ -567,7 +590,7 @@ export function createHookRuntime(config: RuntimeConfig) {
           if (result.receipt !== undefined) receipts.push(result.receipt);
           dispatched.push({ action: { action_type: target.intent.action_type, params: target.intent.params }, ...(result.receipt !== undefined ? { receipt: result.receipt } : {}) });
         } finally { boundaryVerdict = null; }
-        return { decision: "deny", reason: reservation.reason, receipts, dispatched };
+        return { decision: "deny", reason: reservation.reason, code: "session_budget", receipts, dispatched };
       }
       const release = (): void => { if (reservation?.allow) reservation.release(); };
       for (const m of list) {
@@ -602,7 +625,7 @@ export function createHookRuntime(config: RuntimeConfig) {
             if (result.receipt !== undefined) receipts.push(result.receipt);
           } finally { boundaryVerdict = null; }
           release();
-          return { decision: "deny", reason: `Scopebond blocked this before it ran: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`, receipts, dispatched, dispatch: verdict };
+          return { decision: "deny", reason: `Scopebond blocked this before it ran: ${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`, code: "dispatch_refused", receipts, dispatched, dispatch: verdict };
         }
         return { ...chosen, receipts, dispatched, dispatch: verdict };
       }

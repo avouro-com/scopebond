@@ -102,7 +102,7 @@ export interface OverrideRecord {
   state: "allowed" | "offered";
   /** The action an earlier override allowed, when this one is the same action inside the time that override allowed. */
   repeat_of: string | null;
-  /** SHA-256 of the trimmed reason text; null for harness_prompt. */
+  /** SHA-256 of the trimmed reason text; null for harness_prompt, and with reason_length 0 when the person gave no reason. */
   reason_digest: string | null;
   reason_length: number | null;
   /** SHA-256 of the operating-system account name, when known. */
@@ -122,9 +122,11 @@ export function validateOverrideRecord(o: unknown): o is OverrideRecord {
   if (o.os_user_digest !== null && (typeof o.os_user_digest !== "string" || !HEX_64.test(o.os_user_digest))) return false;
   if (typeof o.decided_at !== "string" || !Number.isFinite(Date.parse(o.decided_at))) return false;
   if (o.method === "agent_dialog" || o.method === "allowance") {
-    return o.state === "allowed" && typeof o.reason_digest === "string" && HEX_64.test(o.reason_digest)
-      && Number.isInteger(o.reason_length) && (o.reason_length as number) >= 1 && (o.reason_length as number) <= 500
-      && (o.method === "agent_dialog" || typeof o.repeat_of === "string");
+    // A reason, by its digest and length; or none (where the workspace asks for none): no digest, length 0.
+    const reason = (typeof o.reason_digest === "string" && HEX_64.test(o.reason_digest)
+      && Number.isInteger(o.reason_length) && (o.reason_length as number) >= 1 && (o.reason_length as number) <= 500)
+      || (o.reason_digest === null && o.reason_length === 0);
+    return o.state === "allowed" && reason && (o.method === "agent_dialog" || typeof o.repeat_of === "string");
   }
   return o.state === "offered" && o.reason_digest === null && o.reason_length === null && o.repeat_of === null;
 }
@@ -238,6 +240,42 @@ export interface ReceiptPayload {
   context?: ReceiptPayloadContext;
   /** A session budget counted or refused this action (optional; see ReceiptBudget). */
   budget?: ReceiptBudget;
+  /** The policy clause that matched a denied, monitored, held or overridden action (optional; see receiptMatch). */
+  clause_id?: string;
+  /** The bound of `clause_id` that failed, as `<param>:<bound>`; never the param's value (optional; see receiptMatch). */
+  failed_bound?: string;
+}
+
+/** The payload members that name the policy clause a verdict matched and the bound of it that failed. */
+export interface ReceiptMatch { clause_id?: string; failed_bound?: string }
+const MATCH_RESULTS = new Set(["deny", "approved", "timeout"]);
+// The receipt schema's failed_bound pattern (RECEIPT_FAILED_BOUND_PATTERN): a param name and a clause field, no value.
+const FAILED_BOUND = /^[A-Za-z0-9_.-]{1,64}:[a-z_]{1,32}$/;
+const validClauseId = (value: unknown): value is string => typeof value === "string" && value.length >= 1 && value.length <= 200;
+
+/** The match members a receipt with this realtime result carries for a verdict: `clause_id` when the verdict names a clause
+ *  that matched (a violation, or a global-scope clause it could not decide) and the result is deny (denied, or recorded under
+ *  monitor), approved (overridden) or timeout (held), and `failed_bound` with it when the verdict names one. Empty for any
+ *  other result, a verdict that names no clause, and a clause id or bound the receipt schema would refuse. */
+export function receiptMatch(
+  verdict: { violated: boolean; clause_id: string | null; undetermined?: boolean; failed_bound?: string } | undefined,
+  realtimeResult: RealtimeResult,
+): ReceiptMatch {
+  if (!verdict || !MATCH_RESULTS.has(realtimeResult) || !(verdict.violated || verdict.undetermined) || !validClauseId(verdict.clause_id)) return {};
+  return {
+    clause_id: verdict.clause_id,
+    ...(typeof verdict.failed_bound === "string" && FAILED_BOUND.test(verdict.failed_bound) ? { failed_bound: verdict.failed_bound } : {}),
+  };
+}
+
+/** The shape payload.clause_id and payload.failed_bound must have (the receipt schema's): both optional, failed_bound only with
+ *  clause_id, and only on a receipt whose realtime result is deny, approved or timeout. */
+function validateReceiptMatch(payload: Record<string, unknown>): boolean {
+  const hasClause = payload.clause_id !== undefined;
+  const hasBound = payload.failed_bound !== undefined;
+  if (!hasClause) return !hasBound;
+  if (!validClauseId(payload.clause_id) || !MATCH_RESULTS.has(String(payload.realtime_result))) return false;
+  return !hasBound || (typeof payload.failed_bound === "string" && FAILED_BOUND.test(payload.failed_bound));
 }
 
 export interface SignedReceipt {
@@ -460,8 +498,9 @@ export function validateEvidencePayload(payload: unknown): payload is ReceiptPay
     "type", "evidence_version", "canonicalization", "intent", "intent_hash", "action_ref",
     "policy_hash", "policy_version", "policy_ref", "verifier_version", "realtime_result",
     "executed", "execution_ref", "execution", "redaction", "authorization", "attester", "timestamp",
-    "evidence_class", "principal", "boundary", "override", "context", "budget",
+    "evidence_class", "principal", "boundary", "override", "context", "budget", "clause_id", "failed_bound",
   ]) && evidenceClassValid(payload as unknown as ReceiptPayload) &&
+    validateReceiptMatch(payload) &&
     (payload.context === undefined || validateReceiptContext(payload.context)) &&
     (payload.budget === undefined || validateReceiptBudget(payload.budget)) &&
     (payload.override === undefined || (validateOverrideRecord(payload.override) && payload.realtime_result === "approved")) &&
