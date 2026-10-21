@@ -103,15 +103,22 @@ const ML_DEPENDENCIES = [
 const ML_DEPENDENCY_PREFIXES = ["@tensorflow/", "ml-", "@mlc-ai/", "@langchain/", "langchain"];
 const INTEL_TERM_SALT = "scopebond-intel-gate:v1";
 const INTEL_TERM_DIGESTS = new Set([
-  "0856f74747fa", "0af7234a6f2c", "0cce096751f4", "109be5f6b7f4", "10db2f10a652", "14e3c3126dc4",
-  "151280b57691", "1772b8c0a371", "1d5af1e2c3f9", "25633c6e34dc", "2734d0af9ea6", "2ae21cccc122",
-  "2b3dbdc69518", "2cffa6b1aa6b", "2eb443d5a40c", "2f65294c99d7", "3015f2c22a4a", "3e0cba37bc7c",
-  "3e52e5090b0a", "414e662912ed", "44325989af99", "4c397dc71ce7", "51214520d561", "5d522ac90d97",
-  "64fa90702350", "692f3faf3449", "6cd8d69aa9e9", "6d2c0101bbea", "7aee28febd42", "7cabbe67f963",
-  "802441045c66", "8361f5dff242", "83b1d7d8a0f9", "87bec969b31b", "88b3a33a359d", "8d2aa43a30a2",
-  "95da506afb7d", "9ef058c3cc48", "a2c569130693", "aeff40a50283", "b05dc0c79528", "baed9d766914",
-  "c486d6227a02", "ccd46faa7b6b", "dcaca1796839", "dcfa13ce6f3e", "e3d04aeb7d4d", "e932197d511f",
-  "edbe5dcc334d", "f57676d18418", "f65e2ab53cd7",
+  "0856f74747fa", "08f3be80e668", "0af7234a6f2c", "0cce096751f4", "0e2a02d83dc1", "109be5f6b7f4",
+  "10db2f10a652", "14e3c3126dc4", "151280b57691", "15b09912aad0", "1772b8c0a371", "1aaf2e58e235",
+  "1ae28e0eb15d", "1d5af1e2c3f9", "228fa8fb880e", "2357c442c138", "25633c6e34dc", "2734d0af9ea6",
+  "2838cd82a7f3", "2ae21cccc122", "2b3dbdc69518", "2cffa6b1aa6b", "2eb443d5a40c", "2f65294c99d7",
+  "3015f2c22a4a", "3e0cba37bc7c", "3e52e5090b0a", "414e662912ed", "43f7542ec1b3", "44325989af99",
+  "4c397dc71ce7", "4ce96fea7ce6", "4d575994e1b4", "4ef714099d8a", "51214520d561", "5bce66d81f59",
+  "5d522ac90d97", "64fa90702350", "670e44a0ec38", "68149cc38311", "692f3faf3449", "69b73c4033c6",
+  "6cd8d69aa9e9", "6d2c0101bbea", "6ea5b3a522e3", "79e9a6dca8b2", "7aee28febd42", "7cabbe67f963",
+  "7f3f436b8fd8", "802441045c66", "8361f5dff242", "83b1d7d8a0f9", "83bbfbd1b0a1", "852ac58b9953",
+  "87bec969b31b", "88b3a33a359d", "8a90497fd240", "8af5771b9259", "8d2aa43a30a2", "95da506afb7d",
+  "9646c5eac1ca", "99d4c64a50fc", "9ef058c3cc48", "9fe8977cfa44", "a0cca1b7ce87", "a2c569130693",
+  "a6befcd11e64", "a980b1f1e210", "aba0b8e872ad", "aeff40a50283", "b05dc0c79528", "baed9d766914",
+  "c486d6227a02", "c4ea56f8788f", "c6e91523c9dd", "ccd46faa7b6b", "d58af96d874d", "d766555acbe3",
+  "d9e5c558bf0a", "dcaca1796839", "dcfa13ce6f3e", "e3367719f7d1", "e3d04aeb7d4d", "e4455807b282",
+  "e4f3e70bd444", "e6ed835648d3", "e932197d511f", "e9ad7dee553c", "edbe5dcc334d", "f57676d18418",
+  "f65e2ab53cd7", "f7ad6f4a9ddb", "fb188e6c6462", "ff3aaa726d6b",
 ]);
 const normaliseTerm = (t) => t.toLowerCase().replace(/[_-]/g, "");
 const termDigest = (t) => createHash("sha256").update(INTEL_TERM_SALT + normaliseTerm(t)).digest("hex").slice(0, 12);
