@@ -1,7 +1,10 @@
 ---
 "@scopebond/policy-schema": patch
 "@scopebond/hook": patch
+"@scopebond/agent": patch
 ---
+
+The agent now counts, per day, the questions it asks a person and the notifications the tray reports showing (`POST /fatigue`), and each rules check sends the counts as `x-scopebond-fatigue: toasts=n;prompts=n;day=YYYY-MM-DD` (counts only, never what was shown).
 
 The pack format now has engine levels: `PACK_ENGINE_LEVEL` is 2, a pack may say `requires: { engine, action_types? }`, and a pack rule may carry `title`, `blockable`, `default_mode`, `safer_way` and `allow_patterns`; a pack that uses any of them must say `requires.engine: 2`, every existing pack validates and reads exactly as before, `validatePack(doc, { engine: 1 })` reads a pack as an older engine does, and `packEngineProblem` says why an engine cannot run a pack (`engine_too_old` or `unknown_action_type`).
 

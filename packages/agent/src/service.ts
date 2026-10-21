@@ -9,7 +9,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
+  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, recordFatigue, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
   dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -923,6 +923,12 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const seen = typeof (body as { seen?: unknown } | null)?.seen === "string" ? String((body as { seen: string }).seen) : null;
       return { question: await live.wait(seen, 20_000) };
     },
+    // The tray says it showed a notification: counted for the workspace's view of how often people are interrupted (fatigue.ts).
+    "POST /fatigue": (body) => {
+      const kind = (body as { kind?: unknown } | null)?.kind;
+      if (kind !== "toast") return { counted: false };
+      return { counted: recordFatigue(options.dir, "toast") !== null };
+    },
     "POST /override/open": (body) => {
       const id = (body as { action_id?: unknown } | null)?.action_id;
       return { opened: typeof id === "string" && live.open(id) };
@@ -1102,6 +1108,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (!question) return { decision: "unavailable" };
       log(`asking whether to allow "${question.title}"`);
       const answer = await prompt(question);
+      // A person was asked (not "later", not unavailable): one prompt today.
+      if (answer.decision !== "unavailable" && !answer.later) recordFatigue(options.dir, "prompt");
       log(`override ${answer.decision === "allow" ? "given" : answer.decision === "deny" ? "not given" : answer.later ? "not asked (no tray listening, no window): the person acts on it later" : "not available"} for "${question.title}"`);
       if (answer.decision === "allow" && answer.reason) { queueReason(options.dir, question.action_id, answer.reason); setTimeout(() => { void sendReasons(); }, 1_000); }
       // The hook writes the request or allowance after this answer; send it shortly after.

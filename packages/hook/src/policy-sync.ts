@@ -36,6 +36,7 @@ import { pinNextKey, signatureModeAt, useNextKey } from "./policy-next-key.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
 import { packsHeaderValue, restampPacks, syncPacks, PACK_ENGINE_HEADER, PACKS_HEADER } from "./pack-sync.js";
 import { packEngineLevel } from "./pack-store.js";
+import { fatigueHeaderValue, FATIGUE_HEADER } from "./fatigue.js";
 import { removeBlocklist, syncInstallBlocklist, SAFE_INSTALL_HEADER } from "./install-verdicts.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
@@ -64,6 +65,8 @@ function deliveryHeaders(dir: string): Record<string, string> {
       ...signatureHeader(dir),
       // The packs in force, those not taken and why, and this engine's level (pack-sync.ts).
       ...packsHeader(dir),
+      // How often the person was interrupted today: toasts and prompts, counts only (fatigue.ts).
+      ...fatigueHeader(dir),
     };
   } catch { return {}; }
 }
@@ -83,6 +86,10 @@ function installedToolSettingsMark(dir: string): string | null {
 function rulesHeader(dir: string): Record<string, string> {
   const report = ruleReport(dir);
   return report ? { "x-scopebond-rules": JSON.stringify(report) } : {};
+}
+function fatigueHeader(dir: string): Record<string, string> {
+  const value = fatigueHeaderValue(dir);
+  return value !== null ? { [FATIGUE_HEADER]: value } : {};
 }
 function packsHeader(dir: string): Record<string, string> {
   const value = packsHeaderValue(dir);
