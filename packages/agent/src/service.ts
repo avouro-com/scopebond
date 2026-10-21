@@ -587,8 +587,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const rule = b.rule ?? item?.rule ?? null;
       const request = states.requestFor(b.action_id, rule, item?.action_key ?? null);
       const allowed = !request && states.allowedFor(rule, item?.action_key ?? null);
+      const quiet = !request && !allowed && ((item?.acted as string | null | undefined) === "quiet" || states.quietFor(rule, item?.action_key ?? null));
       // What the workspace offers, for the newest QUESTIONS_MAX blocks not acted on (each question reads the hook's files).
-      const q = item && !item.acted && b.action_id && !request && !allowed && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
+      const q = item && !item.acted && b.action_id && !request && !allowed && !quiet && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
       const offers = q ? {
         once: q.offers.allow, fifteen: q.offers.fifteen, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
         always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
@@ -597,11 +598,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
       const tool = toolName(b.harness ?? item?.harness ?? null);
       const outcome = blockOutcome({
-        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, held: b.held === true, request, allowed,
+        offers, clause: b.clause ?? null, rule, kind: b.kind ?? null, verdict: b.verdict ?? null, held: b.held === true, request, allowed, quiet,
         workspace, tool, what, rule_title: ruleTitleText, action_id: b.action_id,
       });
       return {
-        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: item?.acted ?? (request ? "asked" : allowed ? "allowed" : null),
+        action_id: b.action_id, summary: b.summary, at: b.at, rule, can_act: Boolean(q), acted: (quiet ? "quiet" : null) ?? item?.acted ?? (request ? "asked" : allowed ? "allowed" : null),
         what, action_text: item?.summary ?? b.action_text ?? b.summary, rule_title: ruleTitleText,
         project: projectName(b.repository) ?? b.project ?? null, tool,
         offers,
@@ -838,8 +839,13 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       setTimeout(() => { void sendReasons(); }, 1_000);
       const what = item.what ?? item.rule_title ?? "it";
       const connected = !!loadConnection(options.dir);
+      const where = connected ? ` · Recorded and sent to ${summary?.workspace_name ?? "your workspace"}` : " on this computer";
+      if (item.kind === "quiet") {
+        log(`no longer keeping an action under "${item.rule_title ?? item.rule}" blocked without asking, from the tray`);
+        return { outcome: "stopped", text: `You'll be asked about ${what} again${where}` };
+      }
       log(`stopped allowing an action under "${item.rule_title ?? item.rule}", from the tray`);
-      return { outcome: "stopped", text: connected ? `Stopped allowing ${what} · Recorded and sent to ${summary?.workspace_name ?? "your workspace"}` : `Stopped allowing ${what} on this computer` };
+      return { outcome: "stopped", text: `Stopped allowing ${what}${where}` };
     },
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
     "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
@@ -975,7 +981,7 @@ export function answerText(outcome: "allowed" | "proposed" | "asked" | "declined
   if (outcome === "gone") return blockedText("gone");
   if (outcome === "declined") return blockedText("declined");
   // A request: where the answer will show (it is recorded and sent like everything else).
-  if (outcome === "asked") return connected ? "Request sent · you'll see the answer under Requests" : "Request saved, sent once this computer is connected · you'll see the answer under Requests";
+  if (outcome === "asked") return connected ? "Request sent · the answer shows on the block" : "Request saved, sent once this computer is connected · the answer shows on the block";
   // Applied at once, reviewed by an admin later: when it ends, and that it will be reviewed.
   if (reviewed && outcome === "allowed") {
     const until = choice === "once" ? "for the next try"

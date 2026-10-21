@@ -31,8 +31,8 @@ test("an answer from the form is read strictly", () => {
   assert.deepEqual(parseBlockedAnswer({ action_id: "act-1", choice: "once" }), { action_id: "act-1", choice: "once", reason: "" });
   assert.equal(answerText("allowed", "once", 30, "Acme", true), "Allowed once · Recorded and sent to Acme");
   assert.equal(answerText("allowed", "always", 14, null, true), "Always allowed on this computer for 14 days · Recorded and sent to your workspace");
-  assert.equal(answerText("asked", "ask", 30, "Acme", true), "Request sent · you'll see the answer under Requests");
-  assert.equal(answerText("asked", "ask", 30, "Acme", false), "Request saved, sent once this computer is connected · you'll see the answer under Requests");
+  assert.equal(answerText("asked", "ask", 30, "Acme", true), "Request sent · the answer shows on the block");
+  assert.equal(answerText("asked", "ask", 30, "Acme", false), "Request saved, sent once this computer is connected · the answer shows on the block");
 });
 
 test("allow once from the tray: checked as the window would be, applied once, then no longer offered", async () => {
@@ -86,7 +86,7 @@ test("ask an admin from the tray: the request waits, then shows the admin's answ
     assert.equal(before.can_ask, true);
     const done = await answer(dir, { action_id: id, choice: "ask", reason: REASON });
     assert.equal(done.outcome, "asked");
-    assert.equal(done.text, "Request saved, sent once this computer is connected · you'll see the answer under Requests");
+    assert.equal(done.text, "Request saved, sent once this computer is connected · the answer shows on the block");
     let { requests } = await callAgent(dir, "GET", "/requests", undefined, 10_000);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].state, "waiting");

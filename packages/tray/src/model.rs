@@ -180,15 +180,17 @@ pub struct LiveQuestion {
     pub opened: bool,
 }
 
-/// An allowance in force or waiting for an admin.
+/// An allowance in force or waiting for an admin, or a block the person chose to keep without being asked.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AllowedItem {
     pub id: String,
+    /// "allow" (let through) or "quiet" (kept blocked, nobody asked; Undo ends it); none from an older agent (an allowance).
+    pub kind: Option<String>,
     pub rule: String,
     pub rule_title: Option<String>,
     pub what: Option<String>,
-    /// "once", "fifteen" or "always".
+    /// "once", "fifteen", "hour", "tomorrow" or "always".
     pub choice: String,
     /// "active" or "proposed".
     pub state: String,
@@ -460,6 +462,7 @@ mod tests {
           "recent_blocks":[{"action_id":"a1","summary":"rm","at":"2026-10-21T15:00:00.000Z","what":"rm -rf ../build",
             "first_at":"2026-10-21T14:58:00.000Z","copy_details":"rm -rf ../build\nRule: Delete","rule_why":"Deny destructive programs.",
             "request":{"state":"waiting","answered_by":null,"answered_at":null},"outcome":"requested"}],
+          "allowed":[{"id":"alw_quiet","kind":"quiet","rule":"secret-read","choice":"always","state":"active","by":"person"}],
           "blocked_groups":[{"key":"Delete\nrm -rf ../build","members":[0],"times":3,"first_at":"2026-10-21T14:58:00.000Z","last_at":"2026-10-21T15:00:00.000Z","today":true}]}}"#;
         let a = TrayAnswer::parse(json.as_bytes()).unwrap();
         let again = serde_json::to_value(&a).unwrap();
@@ -470,6 +473,9 @@ mod tests {
         assert_eq!(b["request"]["state"], "waiting");
         assert_eq!(again["tray"]["blocked_groups"][0]["times"], 3);
         assert_eq!(a.tray.blocked_groups[0].members, vec![0]);
+        assert_eq!(a.tray.allowed[0].kind.as_deref(), Some("quiet"));
+        assert_eq!(again["tray"]["allowed"][0]["kind"], "quiet");
+        assert!(crate::live::stoppable(&a.tray.allowed[0]), "Undo for a block the person kept");
         assert!(TrayAnswer::parse(fixtures::PROTECTED.as_bytes()).unwrap().tray.blocked_groups.is_empty(), "an older agent sends none");
     }
 

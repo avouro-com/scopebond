@@ -58,7 +58,6 @@ const SCENES = [
   ["disconnected", "Not connected"],
   ["not_answering", "The agent is not answering"],
   ["protected&tab=allowed", "Allowed"],
-  ["protected&tab=asked", "Requests"],
   ["protected&view=settings", "Settings"],
 ];
 

@@ -106,6 +106,10 @@
   ];
   const ahead = (min) => new Date(Date.now() + min * MIN).toISOString();
   const allowed = () => [
+    { id: "alw_quiet000000000000001", kind: "quiet", rule: "secret-read", rule_title: "Read passwords, keys or secrets", what: "Read ~/.aws/credentials", choice: "always",
+      state: "active", needs_admin: false, by: "person", created_at: ago(3 * 60), ends_at: ahead(30 * 24 * 60 - 180), answered_by: null },
+    { id: "alw_hour00000000000000001", kind: "allow", rule: "destructive-shell", rule_title: "Run a command that deletes data or shuts down the computer", what: "rm -rf ./dist",
+      choice: "hour", state: "active", needs_admin: false, by: "person", created_at: ago(10), ends_at: ahead(50), answered_by: null },
     { id: "alw_staging00000000000001", rule: "secret-read", rule_title: "Read passwords, keys or secrets", what: ".env.staging", choice: "fifteen", state: "active",
       needs_admin: false, by: "person", created_at: ago(4), ends_at: ahead(11), answered_by: null },
     { id: "alw_release00000000000001", rule: "push-protected", rule_title: "Push straight to a protected branch", what: "git push origin release/2.4", choice: "always",
@@ -214,7 +218,7 @@
       if (!pending.offers[choice] || String(reason || "").trim().length < pending.reason_min) { say("Say why in at least " + pending.reason_min + " characters."); return false; }
       const what = pending.action_text;
       pending = null;
-      say(choice === "ask" ? "Request sent · you'll see the answer under Requests" : (choice === "fifteen" ? "Allowed for 15 minutes" : "Allowed once") + " · Recorded and sent to Acme");
+      say(choice === "ask" ? "Request sent · the answer shows on the block" : (choice === "fifteen" ? "Allowed for 15 minutes" : "Allowed once") + " · Recorded and sent to Acme");
       if (choice !== "ask" && model) model.allowed.unshift({ id: "alw_live", rule: "force-push-protected", rule_title: "Rewrite history on a protected branch", what, choice, state: "active", needs_admin: false, by: "person", created_at: new Date().toISOString(), ends_at: new Date(Date.now() + 15 * MIN).toISOString(), answered_by: null, unblocked: "person" });
       return true;
     },
@@ -222,7 +226,7 @@
       const a = model && model.allowed.find((x) => x.id === id);
       if (!a) return false;
       model.allowed = model.allowed.filter((x) => x.id !== id);
-      say("Stopped allowing " + (a.what || "it") + " · Recorded and sent to Acme");
+      say((a.kind === "quiet" ? "You'll be asked about " + (a.what || "it") + " again" : "Stopped allowing " + (a.what || "it")) + " · Recorded and sent to Acme");
       return true;
     },
     panel_block: ({ actionId, choice, reason }) => {
@@ -236,7 +240,7 @@
           b.acted = choice === "ask" ? "asked" : "allowed";
           const words = { once: "Allowed once", fifteen: "Allowed for 15 minutes", always: "Always allowed on this computer for " + (b.offers.always_days || 30) + " days", ask: "Request sent" }[choice];
           const until = new Date(Date.now() + 15 * MIN).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-          const text = choice === "ask" ? "Request sent · you'll see the answer under Requests"
+          const text = choice === "ask" ? "Request sent · the answer shows on the block"
             : b.offers.reviewed ? "Unblocked until " + until + " · an admin will review it" : words + " · Recorded and sent to Acme";
           answered = { actionId, outcome: choice === "ask" ? "asked" : "allowed", text };
           say(text);
@@ -250,7 +254,7 @@
         busy = null;
         const b = model && model.recent_blocks.find((x) => x.action_id === actionId);
         if (b) { b.can_act = false; b.acted = b.offers && b.offers.once ? "allowed" : "asked"; }
-        say(b && b.acted === "allowed" ? "Allowed. Run it again, or let the coding agent retry." : "Request sent · you'll see the answer under Requests");
+        say(b && b.acted === "allowed" ? "Allowed. Run it again, or let the coding agent retry." : "Request sent · the answer shows on the block");
       }, 1200);
       return true;
     },

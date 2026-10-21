@@ -133,7 +133,7 @@
       once: ["Just this once", "The next time it runs"],
       fifteen: ["For 15 minutes", "This action, until " + until],
       always: ["Always on this computer", o.always_needs_admin ? "After an admin approves; allowed for 15 minutes meanwhile" : "For " + days + " days"],
-      ask: ["Ask an admin to unblock it instead", "An admin decides; you'll see the answer under Requests"],
+      ask: ["Ask an admin to unblock it instead", "An admin decides; the answer shows on the block"],
     }[c];
   }
   /** The length on its own, for a form with nothing to choose. */
@@ -157,7 +157,7 @@
     // line names the length.
     const oneLength = choices.length === 1 && !askOnly;
     const reviewed = !!(b.offers && b.offers.reviewed);
-    const where = askOnly ? "An admin decides; you'll see the answer under Requests"
+    const where = askOnly ? "An admin decides; the answer shows on the block"
       : model.workspace ? "Recorded and sent to " + model.workspace : "Recorded and sent to your workspace";
     const fixedLine = oneLength ? lengthWords(b, choices[0]) + (reviewed ? ", set by your workspace; an admin reviews it later" : "") : null;
     const update = () => {
@@ -236,21 +236,15 @@
     ]);
   }
 
-  // ---- Blocked · Allowed · Requests (the requests to an admin are "asked" in the agent's model)
-  const TABS = [["blocked", "Blocked"], ["allowed", "Allowed"], ["asked", "Requests"]];
-  /** Requests is there when the workspace lets the person ask an admin (under any rule, or for a listed block), or when they
-   *  have asked before; otherwise the panel does not mention asking at all. Allowed always is (it also lists what an admin
-   *  approved). */
-  function showsAsked(model) {
-    if (!model) return false;
-    return model.can_ask === true || (model.asked || []).length > 0 || (model.recent_blocks || []).some((b) => b.offers && b.offers.ask);
-  }
+  // ---- Blocked · Allowed. A request to an admin shows on its block's row (waiting, approved, declined), not in a list of its
+  // own; Allowed lists what is let through now and what the person chose to keep blocked without being asked.
+  const TABS = [["blocked", "Blocked"], ["allowed", "Allowed"]];
   function tabs(model) {
     // The agent's one count of today's distinct blocks (the header and the menu show the same); an older agent's list otherwise.
     const blocked = model && model.today && typeof model.today.blocked === "number" ? model.today.blocked
       : (model && model.recent_blocks || []).filter((b) => isToday(b.at) && !b.acted).length;
-    const counts = { blocked, allowed: model && model.allowed ? model.allowed.length : 0, asked: model && model.asked ? model.asked.length : 0 };
-    const shown = TABS.filter(([k]) => k !== "asked" || showsAsked(model));
+    const counts = { blocked, allowed: model && model.allowed ? model.allowed.length : 0 };
+    const shown = TABS;
     if (!shown.some(([k]) => k === ui.tab)) ui.tab = "blocked";
     const keys = shown.map(([k]) => k);
     const move = (e) => {
@@ -411,12 +405,39 @@
     if (left < 36 * 3600000) return "Ends " + when(iso);
     return Math.round(left / 86400000) + " days left";
   }
+  /** How long an allowance was made for, in the words the form uses (never "always"). */
+  function lengthOf(a) {
+    if (a.unblocked === "automatic") return "Unblocked automatically";
+    const words = { once: "Once", fifteen: "For 15 minutes", hour: "For 1 hour", tomorrow: "Until tomorrow" }[a.choice];
+    const days = Math.max(1, Math.round((Date.parse(a.ends_at) - Date.parse(a.created_at)) / 86400000));
+    const length = words || (Number.isFinite(days) ? "For " + days + (days === 1 ? " day" : " days") : "");
+    return a.by === "admin" ? ["Approved by " + (a.answered_by || "an admin"), length].filter(Boolean).join(" · ") : length;
+  }
   function allowedList(model) {
-    const items = model.allowed || [];
-    if (!items.length) return [empty("Nothing allowed right now", "What you let through shows here until it ends.")];
-    return [el("ul", { "aria-label": "Allowed" }, items.map((a) => {
-      const how = a.unblocked === "automatic" ? "Unblocked automatically"
-        : a.choice === "once" ? "Just this once" : a.choice === "fifteen" ? "For 15 minutes" : a.by === "admin" ? "Approved by " + (a.answered_by || "an admin") : "Always on this computer";
+    const all = model.allowed || [];
+    const items = all.filter((a) => a.kind !== "quiet");
+    const quiet = all.filter((a) => a.kind === "quiet");
+    const out = [];
+    if (!items.length) out.push(empty("Nothing allowed right now", "What you let through shows here until it ends."));
+    else out.push(el("h2", { id: "allowed-h", text: "Allowed now" }), allowedItems(items));
+    if (quiet.length) out.push(el("h2", { id: "quiet-h", text: "Kept blocked" }), el("p", { class: "note pad", text: "Blocked without asking you. Undo to be asked again." }), keptItems(quiet));
+    return out;
+  }
+  /** What the person chose to keep blocked without being asked, each with Undo. */
+  function keptItems(items) {
+    return el("ul", { "aria-labelledby": "quiet-h" }, items.map((a) => {
+      const what = a.what || underRule(a);
+      return el("li", { class: "item" }, [
+        el("div", { class: "row" }, [el("span", { class: "what", text: what }), el("span", { class: "chip", text: "Kept blocked" })]),
+        el("span", { class: "meta", text: [ends(a.ends_at), a.what ? ruleOf(a) : null].filter(Boolean).join(" · ") }),
+        a.by === "person" ? el("div", { class: "acts" }, [el("button", { class: "btn", type: "button", "data-key": "undo-" + a.id, "aria-label": "Undo: ask me again about " + what, text: "Undo",
+          onclick: async () => { try { await invoke("panel_stop", { id: a.id }); } catch (_) { /* the note says why */ } setTimeout(refresh, 150); } })]) : null,
+      ]);
+    }));
+  }
+  function allowedItems(items) {
+    return el("ul", { "aria-labelledby": "allowed-h" }, items.map((a) => {
+      const how = lengthOf(a);
       const end = a.state === "proposed" ? "Waiting for an admin" : a.choice === "once" ? "Until it runs again" : ends(a.ends_at);
       const what = a.what || underRule(a);
       // "Stop allowing" for what the person let through, with a confirm in the row.
@@ -440,28 +461,12 @@
         el("span", { class: "meta", text: [how, end, a.what ? ruleOf(a) : null].filter(Boolean).join(" · ") }),
         stop,
       ]);
-    }))];
-  }
-  function askedList(model) {
-    const items = model.asked || [];
-    if (!items.length) return [empty("No requests", "When you ask to unblock something, the answer shows here.")];
-    return [el("ul", { "aria-label": "Requests" }, items.map((r) => {
-      const chip = r.state === "approved" ? ["ok", "Approved"] : r.state === "declined" ? ["no", "Declined"] : ["wait", "Waiting for an admin"];
-      const who = r.answered_by ? " by " + r.answered_by : "";
-      const said = r.state === "approved" ? "Approved" + who : r.state === "declined" ? "Declined" + who : "Requested " + when(r.asked_at) + (r.sent ? "" : " · not sent yet");
-      return el("li", { class: "item" }, [
-        el("div", { class: "row" }, [el("span", { class: "what", text: r.what }), el("span", { class: "chip " + chip[0], text: chip[1] })]),
-        el("span", { class: "meta", text: [said, ruleOf(r)].join(" · ") }),
-        r.note ? el("span", { class: "meta", text: "“" + r.note + "”" }) : null,
-        el("span", { class: "meta", text: "Your reason: " + r.reason }),
-      ]);
-    }))];
+    }));
   }
 
   function list(s, model) {
     let body;
     if (ui.tab === "allowed") body = allowedList(model);
-    else if (ui.tab === "asked") body = askedList(model);
     else body = blockedList(s, model);
     return el("div", { class: "list", id: "list", role: "tabpanel", "aria-labelledby": "tab-" + ui.tab, tabindex: "-1" }, body);
   }

@@ -162,6 +162,7 @@ h1 { margin: 0; font: 600 16px/1.25 "Segoe UI Variable Display", "Segoe UI", san
 .rows dd { margin: 0; overflow-wrap: anywhere; }
 .linkrow { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .note { margin: 0; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+.note.pad { margin: -2px 4px 6px; }
 
 .foot { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
 .foot .grow { flex: 1; min-width: 0; }

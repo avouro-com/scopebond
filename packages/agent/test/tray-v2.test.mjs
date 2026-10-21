@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { callAgent } from "../dist/index.js";
+import { makeAllowance, readBlocked, writeAllowances } from "@scopebond/hook";
 import { computer, blockActions, serviceFor } from "./tray-helpers.mjs";
 import { groupBlocks, whyOf } from "../dist/tray-model.js";
 
@@ -55,5 +56,34 @@ test("each block carries why its rule exists, and the model lists today's blocks
     assert.ok(typeof read.rule_why === "string" || read.rule_why === null);
     assert.deepEqual(tray.blocked_groups.map((g) => g.members), [[0], [1]]);
     assert.equal(tray.blocked_groups[0].times, 1);
+  } finally { await service.stop(); }
+});
+
+test("a block the person chose to keep blocked is listed under Kept blocked, offers nothing, and Undo asks again", async () => {
+  const dir = computer();
+  await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf ../build" } }]);
+  const key = readBlocked(dir).at(-1).action_key;
+  const quiet = { ...makeAllowance({ rule: "destructive-shell", actionKey: key, reason: "", osUserDigest: null, lasts: "always", alwaysDays: 30 }), kind: "quiet" };
+  const hour = makeAllowance({ rule: "destructive-shell", actionKey: "a".repeat(64), reason: "", osUserDigest: null, lasts: "always", alwaysDays: 1 });
+  hour.expires_at = new Date(Date.parse(hour.created_at) + 3_600_000).toISOString();
+  writeAllowances(dir, [hour, quiet]);
+  const service = await serviceFor(dir);
+  try {
+    const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
+    const kept = tray.allowed.find((a) => a.id === quiet.id);
+    assert.equal(kept.kind, "quiet");
+    assert.equal(tray.allowed.find((a) => a.id === hour.id).kind, "allow");
+    assert.equal(tray.allowed.find((a) => a.id === hour.id).choice, "hour", "an hour reads as an hour, never as always");
+    const [rm] = tray.recent_blocks;
+    assert.equal(rm.outcome, "quiet");
+    assert.equal(rm.acted, "quiet");
+    assert.equal(rm.can_act, false, "nothing to unblock or ask: the person chose to keep it blocked");
+    assert.match(rm.outcome_text, /^Kept blocked/);
+    const undone = await callAgent(dir, "POST", "/allowances/stop", { id: quiet.id }, 10_000);
+    assert.equal(undone.outcome, "stopped");
+    assert.match(undone.text, /^You'll be asked about .* again on this computer$/);
+    const after = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
+    assert.ok(!after.allowed.some((a) => a.id === quiet.id));
+    assert.notEqual(after.recent_blocks[0].outcome, "quiet");
   } finally { await service.stop(); }
 });

@@ -69,7 +69,7 @@ export interface BlockOffers {
  *  the repository's name and `tool` the coding tool's, each when the record has it; `offers` and `reason_min` what the
  *  person may do now and the shortest reason the workspace accepts (null when nothing can be done). */
 export interface RecentBlock {
-  action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | null;
+  action_id: string | null; summary: string; at: string; rule: string | null; can_act?: boolean; acted?: "allowed" | "asked" | "quiet" | null;
   what?: string; action_text?: string; rule_title?: string | null; project?: string | null; tool?: string | null;
   offers?: BlockOffers | null; reason_min?: number | null;
   /** Newer still (an older tray leaves them out): how many times the coding agent tried it (retries folded, 1 for a single
