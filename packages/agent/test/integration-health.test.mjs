@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expectedHarnesses, integrationHealth, missingHookEntries, localChecks, repairHookEntries, maintainHookEntries } from "../dist/index.js";
@@ -59,6 +59,26 @@ test("native disablement is preserved and lifecycle-only configuration still nee
   writeFileSync(file, " ".repeat(4 * 1024 * 1024 + 1));
   assert.equal(integrationHealth(["codex"])[0].reason, "invalid_configuration");
   assert.throws(() => writeHarnessConfig(file, "codex", "scopebond-hook codex"), /too large/);
+});
+
+test("repair recognizes a profile alias as the same hook file and refuses a linked secondary settings file", (t) => {
+  const root = profile(t); const selected = join(root, "selected"); const alias = join(root, "alias");
+  mkdirSync(join(selected, ".claude"), { recursive: true });
+  symlinkSync(selected, alias, process.platform === "win32" ? "junction" : "dir");
+  process.env.HOME = alias; process.env.USERPROFILE = alias;
+  const file = userHarnessFile("claude");
+  writeHarnessConfig(file, "claude", "scopebond-hook claude");
+  const repaired = repairSetup(["claude"]);
+  assert.deepEqual(repaired.failed, []);
+  assert.deepEqual(repaired.duplicates, [], "one physical file is one hook scope");
+  assert.equal(integrationHealth(["claude"])[0].entry, true, "the aliased project path cannot remove the user entry");
+  const other = join(root, "other.json"); const original = readFileSync(file, "utf8"); writeFileSync(other, original);
+  process.env.HOME = selected; process.env.USERPROFILE = selected;
+  const secondary = join(selected, ".claude", "settings.local.json");
+  linkSync(other, secondary);
+  repairSetup(["claude"]);
+  assert.equal(readFileSync(other, "utf8"), original, "duplicate cleanup cannot follow a linked settings file");
+  assert.equal(readFileSync(secondary, "utf8"), original);
 });
 
 test("automatic install and upkeep preserve exclusions and native disablement", (t) => {
