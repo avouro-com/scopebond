@@ -1,4 +1,4 @@
-// The tuning digest of a blocked record and the workspace's quiet list. The digest is computed on this computer from the signed
+// The block digest of a blocked record and the workspace's quiet list. The digest is computed on this computer from the signed
 // record's own intent and the clause that denied it, exactly as the workspace computes it (fixtures/tune-digest-vectors.json is
 // shared with the workspace's own tests). A block whose digest is on the quiet list stays blocked, but nobody is asked about it
 // and the tray lists it without a notification; Scopebond's own protection is never quiet.

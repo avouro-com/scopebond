@@ -22,7 +22,7 @@
     "cursor",
     "openai-codex",
     "mcp",
-    "guardrails",
+    "github-copilot",
     "policy-enforcement",
     "hooks",
     "github-actions",
