@@ -189,7 +189,7 @@ function leftoverProjectComputer(base = tmpdir()) {
   writeHarnessConfig(projectSettings, "claude", "npx -y @scopebond/hook@0.16.0 claude");
   const env = { ...process.env, SCOPEBOND_HOME: home, HOME: profile, USERPROFILE: profile };
   delete env.SCOPEBOND_HOOK_DIR;
-  return { profile, home, kids, folder, project, projectSettings, env, userSettings: join(profile, ".claude", "settings.json") };
+  return { profile, home, kids, folder, project, projectSettings, env, userSettings: join(realpathSync(profile), ".claude", "settings.json") };
 }
 
 test("login: from a folder with a leftover project setup, it signs in the user, not the project", async () => {
