@@ -14,7 +14,7 @@ import { verifyReceipt, canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, loadIntelPlugin, intelComponentState, pluginFrom, checkIntelComponent,
-  INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_FIRST_CALL_BUDGET_MS, importVerifiedModule,
+  INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_COLD_ALLOWANCE_MS, importVerifiedModule,
 } from "../dist/index.js";
 import { ENFORCE } from "./enforce-all.mjs";
 
@@ -104,10 +104,9 @@ test("inspect: a throw, a promise, a wrong shape or an answer over the time budg
     () => null,
   ];
   for (const answer of answers) assert.deepEqual(pluginFrom("1.0.0", answer).inspect(action), {}, String(answer));
-  // Over the budget: the clock says the call took longer than allowed (a call after the first; the first has its own budget).
+  // Over the budget: the clock says the call took longer than allowed (the budget and all of the cold-start allowance).
   let t = 0;
-  const slow = pluginFrom("1.0.0", () => ({ pattern_id: PATTERN }), INTEL_BUDGET_MS, () => (t += INTEL_BUDGET_MS + 1));
-  slow.inspect(action);
+  const slow = pluginFrom("1.0.0", () => ({ pattern_id: PATTERN }), INTEL_BUDGET_MS, () => (t += INTEL_BUDGET_MS + INTEL_COLD_ALLOWANCE_MS + 1));
   assert.deepEqual(slow.inspect(action), {});
   assert.equal(INTEL_BUDGET_MS, 2);
   // Within it, with only the members given.
@@ -117,21 +116,29 @@ test("inspect: a throw, a promise, a wrong shape or an answer over the time budg
   assert.deepEqual(action, { action_type: "file.read", params: { path: "a.txt" } });
 });
 
-test("the first call a plugin answers may take up to the first-call budget (its code is cold); every later call has the budget", () => {
+test("while the plugin's code is cold, a process's calls may run over the budget by the cold-start allowance in all", () => {
   const action = { action_type: "file.read", params: { path: "a.txt" } };
-  assert.ok(INTEL_FIRST_CALL_BUDGET_MS > INTEL_BUDGET_MS);
-  assert.equal(INTEL_FIRST_CALL_BUDGET_MS, 25);
-  // Each call takes `took` ms by the clock.
-  const timed = (took) => { let t = 0; let start = true; return () => { const now = start ? t : (t += took); start = !start; return now; }; };
-  const cold = pluginFrom("1.0.0", () => ({ pattern_id: PATTERN }), INTEL_BUDGET_MS, timed(INTEL_FIRST_CALL_BUDGET_MS - 1));
-  assert.deepEqual(cold.inspect(action), { pattern_id: PATTERN }, "a slow first call within the first-call budget");
-  assert.deepEqual(cold.inspect(action), {}, "the same time on a later call is over the budget");
-  const tooCold = pluginFrom("1.0.0", () => ({ pattern_id: PATTERN }), INTEL_BUDGET_MS, timed(INTEL_FIRST_CALL_BUDGET_MS + 1));
-  assert.deepEqual(tooCold.inspect(action), {}, "over the first-call budget");
-  // A first call that gave nothing (a throw) still uses up the allowance.
+  assert.equal(INTEL_COLD_ALLOWANCE_MS, 25);
+  // A clock by which each call takes the next of `times` ms.
+  const timed = (...times) => { let t = 0; let start = true; return () => { const now = start ? t : (t += times.shift() ?? 0); start = !start; return now; }; };
+  const answer = () => ({ pattern_id: PATTERN });
+  const ok = { pattern_id: PATTERN };
+  // One cold call may take the budget and the whole allowance; a call that takes more gives nothing.
+  assert.deepEqual(pluginFrom("1.0.0", answer, INTEL_BUDGET_MS, timed(INTEL_BUDGET_MS + INTEL_COLD_ALLOWANCE_MS)).inspect(action), ok);
+  assert.deepEqual(pluginFrom("1.0.0", answer, INTEL_BUDGET_MS, timed(INTEL_BUDGET_MS + INTEL_COLD_ALLOWANCE_MS + 1)).inspect(action), {});
+  // The allowance is shared: 20 ms (18 over), then 20 ms again (18 over, 7 left) gives nothing and ends it; then even 3 ms is over.
+  const shared = pluginFrom("1.0.0", answer, INTEL_BUDGET_MS, timed(20, 20, 3, 1));
+  assert.deepEqual(shared.inspect(action), ok);
+  assert.deepEqual(shared.inspect(action), {});
+  assert.deepEqual(shared.inspect(action), {});
+  assert.deepEqual(shared.inspect(action), ok, "within the budget itself");
+  // Several cold calls of 6 ms (4 over each): six fit in 25 ms, the seventh does not.
+  const many = pluginFrom("1.0.0", answer, INTEL_BUDGET_MS, timed(6, 6, 6, 6, 6, 6, 6));
+  for (let i = 0; i < 6; i++) assert.deepEqual(many.inspect(action), ok, `call ${i + 1}`);
+  assert.deepEqual(many.inspect(action), {});
+  // A call that throws is charged too.
   let calls = 0;
-  let t = 0;
-  const throwsFirst = pluginFrom("1.0.0", () => { if (calls++ === 0) throw new Error("x"); return { pattern_id: PATTERN }; }, INTEL_BUDGET_MS, () => (t += INTEL_BUDGET_MS + 1));
+  const throwsFirst = pluginFrom("1.0.0", () => { if (calls++ === 0) throw new Error("x"); return ok; }, INTEL_BUDGET_MS, timed(20, 20));
   assert.deepEqual(throwsFirst.inspect(action), {});
   assert.deepEqual(throwsFirst.inspect(action), {});
 });

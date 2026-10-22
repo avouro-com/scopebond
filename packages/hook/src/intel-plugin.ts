@@ -6,8 +6,9 @@
 // The module exports `inspect(action)`, which returns `{ pattern_id, slot }` or nothing: a pattern id (64 lowercase hex)
 // and an opaque slot (base64 of at most 4 KiB). The hook signs them into the action's receipt as `pattern_id` and `intel`
 // and never reads what the slot holds. `inspect` is called synchronously, with a copy of the action, and must answer
-// within INTEL_BUDGET_MS (the first call of a process, whose code has not run yet, within INTEL_FIRST_CALL_BUDGET_MS): a throw,
-// a promise, an answer of the wrong shape or one that took longer gives no slot. It never changes the decision.
+// within INTEL_BUDGET_MS, beyond which the calls of one process may run INTEL_COLD_ALLOWANCE_MS in all while its code runs for
+// the first time: a throw, a promise, an answer of the wrong shape or one that took longer gives no slot. It never changes the
+// decision.
 //
 // The hook runs once per tool call, so loading the module is paid on every call. The checked bytes are handed to Node's module
 // loader from memory (`module.registerHooks`, where Node has it) rather than as a `data:` URL, which Node decodes slowly.
@@ -34,9 +35,10 @@ import type { HeldArtifact } from "./signed-artifacts.js";
 export const INTEL_COMPONENT_DOMAIN = "scopebond:component/intel/v1\n";
 /** How long `inspect` may take for one action, in milliseconds. */
 export const INTEL_BUDGET_MS = 2;
-/** How long the first call to `inspect` may take, in milliseconds: its code runs for the first time in this process (a module
- *  that prepared itself while loading would only move that time into the load, which has no budget at all). */
-export const INTEL_FIRST_CALL_BUDGET_MS = 25;
+/** How much longer than INTEL_BUDGET_MS the calls of one process may take in all, in milliseconds: the module's code runs for
+ *  the first time in each process, so its first calls are slower (a module that prepared itself while loading would only move
+ *  that time into the load, which has no budget at all). */
+export const INTEL_COLD_ALLOWANCE_MS = 25;
 /** The largest module the hook reads. */
 export const INTEL_MAX_BYTES = 8 * 1024 * 1024;
 export const INTEL_MODULE = "intel.mjs";
@@ -214,19 +216,26 @@ export function handArtifacts(exported: Record<string, unknown>, held: (kinds: r
   } catch { return 0; }
 }
 
-/** Wrap a module's `inspect` so it never throws, never takes the action itself, and answers only within the budget (the first
- *  call within `firstCallBudgetMs`). */
-export function pluginFrom(version: string, inspect: (action: IntelAction) => unknown, budgetMs: number = INTEL_BUDGET_MS, clock: () => number = () => performance.now(), firstCallBudgetMs: number = Math.max(budgetMs, INTEL_FIRST_CALL_BUDGET_MS)): IntelPlugin {
-  let first = true;
+/** Wrap a module's `inspect` so it never throws, never takes the action itself, and answers only within the budget: each call
+ *  `budgetMs`, and over all calls together at most `coldAllowanceMs` beyond it. A call that takes longer than what is left gives
+ *  no slot and ends the allowance. */
+export function pluginFrom(version: string, inspect: (action: IntelAction) => unknown, budgetMs: number = INTEL_BUDGET_MS, clock: () => number = () => performance.now(), coldAllowanceMs: number = INTEL_COLD_ALLOWANCE_MS): IntelPlugin {
+  let cold = coldAllowanceMs;
+  /** Whether a call that took `took` ms is within its budget; charges the time over the budget to the allowance. */
+  const within = (took: number): boolean => {
+    const over = took - budgetMs;
+    if (over <= 0) return true;
+    if (over > cold) { cold = 0; return false; }
+    cold -= over;
+    return true;
+  };
   return {
     version,
     inspect(action: IntelAction): IntelMembers {
       let answer: unknown;
-      const allowed = first ? firstCallBudgetMs : budgetMs;
-      first = false;
       const started = clock();
-      try { answer = inspect(structuredClone({ action_type: action.action_type, params: action.params })); } catch { return {}; }
-      if (clock() - started > allowed) return {};
+      try { answer = inspect(structuredClone({ action_type: action.action_type, params: action.params })); } catch { within(clock() - started); return {}; }
+      if (!within(clock() - started)) return {};
       if (!answer || typeof answer !== "object" || typeof (answer as { then?: unknown }).then === "function") return {};
       const { pattern_id: patternId, slot } = answer as { pattern_id?: unknown; slot?: unknown };
       if ((patternId !== undefined && !isReceiptPatternId(patternId)) || (slot !== undefined && !isReceiptIntel(slot))) return {};

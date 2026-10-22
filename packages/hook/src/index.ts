@@ -97,7 +97,7 @@ export { recordFatigue, readFatigue, fatigueHeaderValue, localDay, FATIGUE_FILE,
 export { checkNextKey, pinNextKey, readNextKey, useNextKey, signatureModeAt, nextKeySigningInput, NEXT_KEY_FORMAT, NEXT_KEY_SIGNATURE_DOMAIN, NEXT_KEY_FILE, type NextKeyDocument } from "./policy-next-key.js";
 export {
   loadIntelPlugin, intelComponentState, checkIntelComponent, readIntelManifest, pluginFrom, importVerifiedModule, intelDir, intelCurrentDir,
-  artifactKindsOf, handArtifacts, INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_FIRST_CALL_BUDGET_MS, INTEL_MODULE, INTEL_MANIFEST, INTEL_MAX_BYTES, MAX_ARTIFACT_KINDS,
+  artifactKindsOf, handArtifacts, INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_COLD_ALLOWANCE_MS, INTEL_MODULE, INTEL_MANIFEST, INTEL_MAX_BYTES, MAX_ARTIFACT_KINDS,
   type IntelPlugin, type IntelManifest, type IntelAction, type IntelMembers, type IntelCheck,
 } from "./intel-plugin.js";
 export {
