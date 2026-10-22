@@ -111,15 +111,18 @@ test("a blocked call whose digest the workspace lists is noted quiet and listed 
         return "allow";
       } catch { return "deny"; }
     };
-    const rm = tuneDigest(tuneDigestParts({ action_type: "shell.exec", params: { program: "rm" } }, "destructive-shell"));
+    // A delete in the home folder: the record names its target, so the digest says where it reaches.
+    const rm = tuneDigest(tuneDigestParts({ action_type: "shell.exec", params: { program: "rm", targets: ["~/build"] } }, "destructive-shell"));
     // A workspace's rules document (destructive-shell on Block, as this computer's own rules have it) with its quiet list.
     const rules = { "force-push-protected": { mode: "block" }, "push-protected": { mode: "block" }, "destructive-shell": { mode: "block" }, "secret-read": { mode: "block" }, "ci-config-write": { mode: "block" }, "network-egress": { mode: "monitor" } };
     writeFileSync(join(config, MANAGED_DOC_FILE), JSON.stringify({ type: "scopebond:managed-rules", version: 1, revision: 2, export_id: "rev-2-gw-1", environment_id: "env-1", agent_id: "agent-1",
       installation_id: "gw-1", rules, rules_digest: digestRules(rules), quiet_patterns: [rm] }));
-    assert.equal(call("rm -rf ../build"), "deny", "still blocked");
+    assert.equal(call("rm -rf ~/build"), "deny", "still blocked");
     assert.equal(call("dd if=/dev/zero of=/tmp/x"), "deny");
+    // The same program on a system folder is another kind of place: the quiet entry for the home folder does not reach it.
+    assert.equal(call("rm -rf /etc/build"), "deny");
     const blocks = localActivity(config, { limit: 10 }).recent_blocks;
-    assert.equal(blocks.find((b) => b.summary === "shell.exec rm")?.quiet, true);
+    assert.deepEqual(blocks.filter((b) => b.summary === "shell.exec rm").map((b) => b.quiet === true).sort(), [false, true]);
     assert.equal(blocks.find((b) => b.summary === "shell.exec dd")?.quiet, undefined);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -148,4 +151,45 @@ test("the synthetic workspace: questions and notifications per developer per day
     assert.deepEqual(before, w.expect.before);
     assert.deepEqual(after, w.expect.after);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a shell record's targets give its digest a target kind, and targets of more than one kind give none", () => {
+  const kind = (targets, extra = {}) => tuneDigestParts({ action_type: "shell.exec", params: { program: "rm", command: "rm -rf x", ...extra, ...(targets ? { targets } : {}) } }, "destructive-shell").target_class;
+  assert.equal(kind(["dist"]), "build_output");
+  assert.equal(kind(["dist", "packages/web/node_modules"]), "build_output");
+  assert.equal(kind(["src/old"]), "repository");
+  assert.equal(kind(["~/scratch/x"]), "home");
+  assert.equal(kind(["/etc/nginx"]), "system");
+  assert.equal(kind(["c:/Windows/System32"]), "system");
+  assert.equal(kind(["dist/../../etc/x"]), "unknown", "a path that climbs is never build output, whatever it climbs from");
+  assert.equal(targetClassOf("/tmp/../etc/passwd"), "unknown");
+  // A folder named like build output or temp is that class only inside the working folder.
+  assert.equal(kind(["~/build"]), "home");
+  assert.equal(kind(["~/projects/app/node_modules"]), "home");
+  assert.equal(kind(["/etc/x/dist"]), "system");
+  assert.equal(kind(["/usr/local/tmp"]), "system");
+  assert.equal(kind(["/web/dist"]), "unknown", "build output of another folder outside this one");
+  assert.equal(kind(["tmp/cache"]), "temp");
+  assert.equal(kind(["~/AppData/Local/Temp/x"]), "temp", "the account's own temp folder");
+  assert.equal(kind([["C:", "Users", "dev", "AppData", "Local", "Temp", "x"].join("/")]), "temp");
+  assert.equal(kind(["c:/windows/temp/x"]), "temp");
+  assert.equal(targetClassOf("c:/users/dev/repo/dist/a.js", "inside"), "build_output", "the hook placed it inside the working folder");
+  assert.equal(kind(["$TMPDIR/build-cache"]), "temp");
+  assert.equal(kind(["$TEMP/build-cache"]), "temp", "every spelling of the temp folder the delete rule knows");
+  assert.equal(kind(["${env:TMP}/x"]), "temp");
+  assert.equal(kind(["dist", "~/x"]), "unknown", "build output and home in one command: no single kind");
+  assert.equal(kind(["dist", "/etc/x"]), "unknown");
+  assert.equal(kind([]), "unknown");
+  assert.equal(kind(undefined), "unknown", "an older record without targets keeps the digest it had");
+  assert.equal(kind(["", "dist", 7, null]), "build_output", "entries that are not paths are skipped, as before");
+  assert.equal(kind(Array.from({ length: 65 }, () => "dist")), "unknown", "more targets than a record carries is not read");
+  // A record's own path still decides first.
+  assert.equal(kind(["~/x"], { path: "dist/a.js" }), "build_output");
+  // The shared vectors carry the hook's records of deletes and writes, each with a known kind.
+  const shell = vectors.digest.filter((v) => v.receipt.payload.intent.action_type === "shell.exec" && Array.isArray(v.receipt.payload.intent.params.targets));
+  assert.ok(shell.length >= 6);
+  for (const v of shell) {
+    const parts = tuneDigestParts(v.receipt.payload.intent, "destructive-shell");
+    assert.equal(parts.target_class, v.target_class, v.name);
+  }
 });

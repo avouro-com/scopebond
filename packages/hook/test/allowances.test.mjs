@@ -393,3 +393,14 @@ test("the folder a cd leads to is part of a relative target", async () => {
   const home = await run(dir, bash("cd ~ && shred build.bin"), { project: "repo" });
   assert.equal(home.decision, "deny", "a cd home leads elsewhere too");
 });
+
+test("an allowance's key is the same whether or not the record names a shell command's targets", () => {
+  const exec = mapClaudeToolUse({ cwd: "/repo", ...bash("rm -rf ../build") }).find((m) => m.intent.action_type === "shell.exec").intent;
+  assert.deepEqual(exec.params.targets, ["/build"]);
+  const older = { ...exec.params };
+  delete older.targets;
+  assert.equal(actionKey(exec), actionKey({ ...exec, params: older }), "an answer given by a hook that did not record targets still matches");
+  // Another kind of action keeps its targets in its key.
+  const read = (targets) => actionKey({ action_type: "file.read", params: { targets } });
+  assert.notEqual(read(["git@example.com:a/b.git"]), read(["git@example.com:c/d.git"]));
+});

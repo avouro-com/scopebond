@@ -1606,14 +1606,39 @@ function protectedFolderOf(dir: string): string | null {
   return null;
 }
 
+/** The most targets a shell command's record names: a command that names more records none, and its kind of place is then
+ *  unknown. */
+export const MAX_SHELL_TARGETS = 16;
+/** The longest target a record names: a longer one leaves the command's targets out. */
+const MAX_SHELL_TARGET = 1024;
+
+/** Every place a deleting or writing simple command names, as its record shows it: a delete's targets as delete-scope.ts read
+ *  them, else the paths of the file writes the command implies (never the files it only reads). Undefined when it names
+ *  none, when any one is not known from the text (a value known only at run time, a write its text does not name, a
+ *  protected place matched only as a pattern), or when it names more than MAX_SHELL_TARGETS. Paths only, never contents. */
+function shellTargets(mapped: Mapped[], verdict: DeleteVerdict | undefined): string[] | undefined {
+  let named: string[] | undefined;
+  if (verdict) named = verdict.named?.map(scrubPath);
+  else {
+    const writes = mapped.filter((m) => m.intent.action_type === "file.write" && !m.derived);
+    const known = (m: Mapped): boolean => m.evaluated && typeof m.intent.params.path === "string" && m.intent.params.path !== "" && m.intent.params.pattern === undefined;
+    if (!writes.every(known)) return undefined;
+    named = [...new Set(writes.map((m) => String(m.intent.params.path)))];
+  }
+  if (!named?.length || named.length > MAX_SHELL_TARGETS || named.some((t) => t.length > MAX_SHELL_TARGET)) return undefined;
+  return named;
+}
+
 /** A simple command's intents with `program_scope` on its shell.exec (what safe-shell judges: delete-scope.ts). A delete whose
  *  every target is contained also records each target as a write, so the file rules (protected places, workspace roots) judge
  *  what it removes. A destructive form of a program (destructive-forms.ts: `mkfs.ext4`, `crontab -r`, a recursive `chmod`
  *  of a system folder) is judged as that form. */
 function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, cwd?: string, form?: string | null): Mapped[] {
   // A delete that reaches outside the working folder also carries those targets, for a workspace's exception to compare.
+  // A delete or a write carries every target it names (`targets`), so a block's digest knows the kind of place it reaches.
+  const named = shellTargets(mapped, verdict);
   const out = mapped.map((m) => (m.intent.action_type === "shell.exec"
-    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: form ?? programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict), ...(verdict?.targets ? { delete_targets: verdict.targets } : {}) } } }
+    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: form ?? programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict), ...(verdict?.targets ? { delete_targets: verdict.targets } : {}), ...(named ? { targets: named } : {}) } } }
     : m));
   if (verdict?.scope !== "contained") return out;
   const seen = new Set(out.filter((m) => m.intent.action_type === "file.write").map((m) => String(m.intent.params.path)));
