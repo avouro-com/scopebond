@@ -43,6 +43,11 @@ export interface DeleteVerdict {
    *  wildcard or names a protected place. What a workspace's exception for the program compares with its folders; absent,
    *  no exception can apply. */
   targets?: string[];
+  /** Every target the delete names, in order: a contained one as in `paths`, one outside the working folder as in
+   *  `targets`. Absent when any target could not be read (a value known only at run time, a protected place, a root, a
+   *  wildcard that takes a whole folder), or none is named. What the record shows as the command's `targets`, so a block's
+   *  digest knows what kind of place it reaches. */
+  named?: string[];
 }
 
 // cmd's own deleters read `/s`, `/q`, `/a:h` as switches, not paths.
@@ -309,21 +314,26 @@ function judgeDelete(sc: SimpleCommand, base: Base, cwd: string | undefined, exp
   // The first target that is not contained decides the scope; every such target is read on, for an exception to compare.
   let scope: DeleteScope = "contained";
   let targets: string[] | null = [];
+  let named: string[] | null = [];
+  const name = (path: string): void => { if (named !== null && !named.includes(path)) named.push(path); };
   for (const word of words) {
     // Brace lists first (`{dist,build}`), then a PowerShell list (`Remove-Item dist, build`) names each part.
     for (const alt of expand(word).flatMap((w) => w.split(",")).filter((w) => w !== "")) {
       const judged = judgeTarget(alt, base, cwd);
       if (judged.scope === "contained") {
         if (judged.path !== undefined && !paths.includes(judged.path)) paths.push(judged.path);
+        if (judged.path !== undefined) name(judged.path); else named = null;
         continue;
       }
       if (scope === "contained") scope = judged.scope;
+      if (judged.scope === "outside" && judged.target) name(judged.target); else named = null;
       if (targets !== null && judged.scope === "outside" && judged.target) { if (!targets.includes(judged.target)) targets.push(judged.target); }
       else targets = null;
     }
   }
-  if (scope === "contained") return { scope, paths };
-  return { scope, paths: [], ...(targets?.length ? { targets } : {}) };
+  const all = named?.length ? { named } : {};
+  if (scope === "contained") return { scope, paths, ...all };
+  return { scope, paths: [], ...(targets?.length ? { targets } : {}), ...all };
 }
 
 /** Walk the simple commands of one call in order, following `cd`, and judge each delete. */

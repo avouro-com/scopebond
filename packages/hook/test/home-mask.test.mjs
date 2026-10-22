@@ -76,7 +76,11 @@ for (const sys of SYSTEMS) {
       const exec = shell.receipts.map(paramsOf).find((p) => typeof p.cwd === "string");
       assert.equal(exec.cwd, `~${sys.sep}repo`);
       assert.match(exec.command, /^cat ~\/notes\/plan\.md/);
-      const all = [outside, inside, shell].flatMap((d) => d.receipts ?? [d.receipt]);
+      // A delete names its targets in the record, masked like every other path, and the record still verifies.
+      const del = await runtime.evaluate(bashTool(sys.cwd, `rm -rf ${forward(sys.home)}/notes/old dist`));
+      const delExec = (del.receipts ?? [del.receipt]).map(paramsOf).find((p) => p.program === "rm");
+      assert.deepEqual(delExec.targets, ["~/notes/old", "dist"]);
+      const all = [outside, inside, shell, del].flatMap((d) => d.receipts ?? [d.receipt]);
       for (const receipt of all) {
         assert.doesNotMatch(JSON.stringify(receipt), /jane/i, "no record names the account");
       }

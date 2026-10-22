@@ -1,8 +1,8 @@
 {
-  "about": "Shared vectors for the block digest. `digest` lists records and the digest both sides compute; `none` records neither side digests; `computer_none` records the computer never digests. `grants` pins the grants digest of a rules document with and without a quiet list (`quiet_patterns`). `workspace` is a synthetic workspace with its quiet list and the questions and notifications per developer per day before and after.",
+  "about": "Shared vectors for the block digest. `digest` lists records and the digest both sides compute; `none` records neither side digests; a vector with `target_class` is a shell record that names its `targets`, and the class its digest uses; `computer_none` records the computer never digests. `grants` pins the grants digest of a rules document with and without a quiet list (`quiet_patterns`). `workspace` is a synthetic workspace with its quiet list and the questions and notifications per developer per day before and after.",
   "digest": [
     {
-      "name": "shell delete of build output",
+      "name": "a shell delete recorded before targets has no target kind",
       "receipt": {
         "payload": {
           "intent": {
@@ -544,6 +544,249 @@
         }
       },
       "digest": null
+    },
+    {
+      "name": "a delete of build output inside the folder",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "rm -rf dist",
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm/contained",
+              "targets": [
+                "dist"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "f33a88e92fd614ad6bc4ba18fd0d200c474d5cebc3260480efa0c2e97b6a1654",
+      "target_class": "build_output"
+    },
+    {
+      "name": "a delete outside the folder, neither home nor system, has no kind",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "rm -rf ../web/dist",
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm",
+              "delete_targets": [
+                "/web/dist"
+              ],
+              "targets": [
+                "/web/dist"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4",
+      "target_class": "unknown"
+    },
+    {
+      "name": "a delete in the home folder",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "rm -rf ~/scratch",
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm",
+              "delete_targets": [
+                "~/scratch"
+              ],
+              "targets": [
+                "~/scratch"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "72b06ee6dcbbc3e2b173415d849a1b104937e264b474de576fcd3d4c9a0c6771",
+      "target_class": "home"
+    },
+    {
+      "name": "a delete of a system folder",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "rm -rf /etc/nginx",
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm",
+              "delete_targets": [
+                "/etc/nginx"
+              ],
+              "targets": [
+                "/etc/nginx"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "9fb7f5d6d4dd44a64cd535e6fbc63583ad5c4423bd389fffa78691f1b4a13a50",
+      "target_class": "system"
+    },
+    {
+      "name": "a delete of the temp folder itself",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "rm -rf /tmp",
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm",
+              "delete_targets": [
+                "/tmp"
+              ],
+              "targets": [
+                "/tmp"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "608b2f2f6a0f2650156c84f9cbb23a28794baa0d748d185e1cfcc407650cf4c4",
+      "target_class": "temp"
+    },
+    {
+      "name": "a write to a disk device",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "dd if=/dev/zero of=/dev/sda",
+              "program": "dd",
+              "cwd": "/repo",
+              "program_scope": "dd",
+              "targets": [
+                "/dev/sda"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "173e155a3adc3ee34c9f54f5181b6d261d522471a0841296f97ae71ab48a0077",
+      "target_class": "system"
+    },
+    {
+      "name": "a shred inside the repository",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "shred notes.txt",
+              "program": "shred",
+              "cwd": "/repo",
+              "program_scope": "shred",
+              "targets": [
+                "notes.txt"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "427ace6e96f47908a06953550e78523d901a225d9ca6bbba5ea4b2719c04ff95",
+      "target_class": "repository"
+    },
+    {
+      "name": "a delete of build output and the home folder has no single kind",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "rm -rf dist ~/x",
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm",
+              "delete_targets": [
+                "~/x"
+              ],
+              "targets": [
+                "dist",
+                "~/x"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4",
+      "target_class": "unknown"
+    },
+    {
+      "name": "a delete known only at run time names no targets",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "rm -rf $X",
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm"
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4",
+      "target_class": "unknown"
+    },
+    {
+      "name": "a write through a path that climbs",
+      "receipt": {
+        "payload": {
+          "intent": {
+            "action_type": "shell.exec",
+            "params": {
+              "command": "shred dist/../../x",
+              "program": "shred",
+              "cwd": "/repo",
+              "program_scope": "shred",
+              "targets": [
+                "dist/../../x"
+              ]
+            }
+          },
+          "realtime_result": "deny",
+          "clause_id": "safe-shell"
+        }
+      },
+      "digest": "490647c9f4a4a7c95c1275b4d4f7f604324940e7652314704f6dbd2322e373e6",
+      "target_class": "unknown"
     }
   ],
   "computer_none": [
@@ -617,9 +860,13 @@
           "intent": {
             "action_type": "shell.exec",
             "params": {
-              "program": "rm",
               "command": "rm -rf dist",
-              "program_scope": "inside"
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm/contained",
+              "targets": [
+                "dist"
+              ]
             }
           },
           "realtime_result": "deny",
@@ -631,8 +878,13 @@
           "intent": {
             "action_type": "shell.exec",
             "params": {
+              "command": "shred ~/notes.txt",
               "program": "shred",
-              "command": "shred ~/notes.txt"
+              "cwd": "/repo",
+              "program_scope": "shred",
+              "targets": [
+                "~/notes.txt"
+              ]
             }
           },
           "realtime_result": "deny",
@@ -670,8 +922,13 @@
           "intent": {
             "action_type": "shell.exec",
             "params": {
-              "program": "rimraf",
-              "command": "rimraf .turbo"
+              "command": "rm -rf /tmp/cache",
+              "program": "rm",
+              "cwd": "/repo",
+              "program_scope": "rm/contained",
+              "targets": [
+                "/tmp/cache"
+              ]
             }
           },
           "realtime_result": "deny",
@@ -683,8 +940,16 @@
           "intent": {
             "action_type": "shell.exec",
             "params": {
+              "command": "rmdir /tmp",
               "program": "rmdir",
-              "command": "rmdir /tmp/x"
+              "cwd": "/repo",
+              "program_scope": "rmdir",
+              "delete_targets": [
+                "/tmp"
+              ],
+              "targets": [
+                "/tmp"
+              ]
             }
           },
           "realtime_result": "deny",
@@ -1145,8 +1410,8 @@
       ]
     ],
     "quiet_patterns": [
-      "86114d2f07d4f8d60fde2bc148d415fdaa3c35d718e3c1a528ce7d437b6c0356",
-      "d1739bbb870f91b9b877e5be518604126e4740b14aee3680f7b3c45467bc0ff4"
+      "608b2f2f6a0f2650156c84f9cbb23a28794baa0d748d185e1cfcc407650cf4c4",
+      "f33a88e92fd614ad6bc4ba18fd0d200c474d5cebc3260480efa0c2e97b6a1654"
     ],
     "expect": {
       "before": {

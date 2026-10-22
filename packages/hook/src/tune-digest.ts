@@ -11,7 +11,8 @@
 //   workspace rule, or that a session budget decided, has no digest;
 // - the program (or package manager) in its canonical form: the file name, lower case, without .exe/.cmd/.bat/.com/.ps1;
 // - the class of the action's path: inside the repository, build output, temp, home, system, remote or unknown, never the
-//   path itself;
+//   path itself. A deleting or writing shell command names its paths in `targets`: the class they all share, or unknown when
+//   they are of more than one class (a record from before `targets` has none, and keeps the digest it had);
 // - the environment it names, lower case, and the host, lower case without port.
 //
 // It is computed here from the signed record's own intent, exactly as the workspace computes it from the same record, so the
@@ -49,7 +50,8 @@ const ALWAYS_ON_CLAUSES: ReadonlySet<string> = new Set(["protect-scopebond-read"
 
 const BUILD_SEGMENTS = new Set(["node_modules", "dist", "build", "out", ".next", "coverage", "target", ".turbo", ".cache"]);
 const TEMP_SEGMENTS = new Set(["tmp", "temp"]);
-const TEMP_ROOTS = new Set(["$env:temp", "$env:tmp", "%temp%", "%tmp%", "$tmpdir", "${tmpdir}"]);
+// Every spelling of the temp folder's variable the delete rule knows (delete-scope.ts), in lower case.
+const TEMP_ROOTS = new Set(["$env:temp", "$env:tmp", "${env:temp}", "${env:tmp}", "%temp%", "%tmp%", "$tmpdir", "${tmpdir}", "$temp", "${temp}", "$tmp", "${tmp}"]);
 const HOME_ROOTS = new Set(["~", "$home", "${home}", "$env:userprofile", "%userprofile%", "%homepath%"]);
 const SYSTEM_ROOTS = new Set(["etc", "usr", "bin", "sbin", "boot", "lib", "lib64", "opt", "sys", "proc", "dev", "var", "system", "library", "windows", "program files", "program files (x86)", "programdata"]);
 const PROGRAM_SUFFIXES = [".exe", ".cmd", ".bat", ".com", ".ps1"];
@@ -57,6 +59,8 @@ const PROGRAM = /^[a-z0-9][a-z0-9._+-]{0,63}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const MAX_PATH = 4096;
 const MAX_ENVIRONMENT = 100;
+/** The most targets read from a record: one that names more has no single class of place. */
+const MAX_TARGETS = 64;
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
 const normPath = (s: string): string => s.split("\\").join("/").toLowerCase();
@@ -92,33 +96,50 @@ export function canonicalHost(value: unknown): string | undefined {
   return plainHost(host) && !host.includes("..") ? host : undefined;
 }
 
-/** The class of a path. `rootScope` is the hook's own inside/outside answer for a file action, where it set one. Pure. */
+/** The class of a path. `rootScope` is the hook's own inside/outside answer for a file action, where it set one. A folder
+ *  named like build output or temp is that class only inside the working folder: under the home folder or a system folder
+ *  the path is home or system (`~/dist` is home, `/etc/x/tmp` is system). Pure. */
 export function targetClassOf(path: string | undefined, rootScope?: unknown): TargetClass {
   if (!path || path.length > MAX_PATH || path.includes("\0")) return rootScope === "inside" ? "repository" : "unknown";
   const p = normPath(path.trim());
   // A URL or an scp-style remote (host:path) names something on another machine.
   if (/^[a-z][a-z0-9+.-]*:\/\//.test(p) || /^[^/\s:@]+@[^/\s:]+:/.test(p)) return "remote";
   const segs = segments(p);
+  // A path that climbs (`dist/../../etc`) may land anywhere: never build output, temp or home because of what it climbs from.
+  if (segs.includes("..")) return rootScope === "inside" ? "repository" : "unknown";
   const first = segs[0] ?? "";
   const drive = /^[a-z]:$/.test(first);
   const rest = drive ? segs.slice(1) : segs;
-  if (TEMP_ROOTS.has(first) || segs.some((s) => TEMP_SEGMENTS.has(s)) || (first === "var" && segs[1] === "tmp")) return "temp";
-  if (segs.some((s) => BUILD_SEGMENTS.has(s))) return "build_output";
-  if (p === "/" || (drive && rest.length === 0)) return "system";
-  if (rootScope === "inside") return "repository";
-  if (HOME_ROOTS.has(first)) return "home";
   const absolute = p.startsWith("/") || drive;
-  if (absolute && (rest[0] === "home" || rest[0] === "users") && rest.length >= 2) return "home";
-  if (absolute && SYSTEM_ROOTS.has(rest[0] ?? "")) return "system";
-  if (absolute || rootScope === "outside" || segs.includes("..") || first.startsWith("$") || first.startsWith("%")) return "unknown";
+  // What follows the home folder (`~/x`, or an account folder under `home` or `Users`), or null when the path is not under it.
+  const underHome = HOME_ROOTS.has(first) ? segs.slice(1) : absolute && (rest[0] === "home" || rest[0] === "users") && rest.length >= 2 ? rest.slice(2) : null;
+  // The temp folder: by its variable, the system's (`/tmp`, `/var/tmp`, `C:/Windows/Temp`) or the account's (`AppData/Local/Temp`).
+  if (TEMP_ROOTS.has(first)) return "temp";
+  if (absolute && (rest[0] === "tmp" || (rest[0] === "var" && rest[1] === "tmp") || (rest[0] === "windows" && rest[1] === "temp"))) return "temp";
+  if (underHome && underHome[0] === "appdata" && underHome[1] === "local" && underHome[2] === "temp") return "temp";
+  if (p === "/" || (drive && rest.length === 0)) return "system";
+  if (rootScope !== "inside") {
+    if (underHome) return "home";
+    if (absolute && SYSTEM_ROOTS.has(rest[0] ?? "")) return "system";
+    if (absolute || rootScope === "outside" || first.startsWith("$") || first.startsWith("%")) return "unknown";
+  }
+  // Inside the working folder: its temp and build output folders by name, else the repository.
+  if (segs.some((s) => TEMP_SEGMENTS.has(s))) return "temp";
+  if (segs.some((s) => BUILD_SEGMENTS.has(s))) return "build_output";
   return "repository";
 }
 
-function pathOf(params: Record<string, unknown>): string | undefined {
+/** The class of the place an action reaches: its own path or target, else the one class every path in its `targets` shares
+ *  (a deleting or writing shell command names its targets there). Targets of more than one class, or more than MAX_TARGETS
+ *  of them, have none: unknown. Entries that are not paths are skipped. */
+function targetClassOfParams(params: Record<string, unknown>): TargetClass {
   const direct = str(params.path) ?? str(params.target);
-  if (direct) return direct;
-  const targets = params.targets;
-  return Array.isArray(targets) ? str(targets.find((t) => typeof t === "string" && t.length > 0)) : undefined;
+  if (direct) return targetClassOf(direct, params.root_scope);
+  const targets: unknown[] = Array.isArray(params.targets) ? params.targets : [];
+  if (targets.length > MAX_TARGETS) return "unknown";
+  const classes = new Set(targets.filter((t): t is string => typeof t === "string" && t.length > 0).map((t) => targetClassOf(t, params.root_scope)));
+  if (classes.size === 0) return targetClassOf(undefined, params.root_scope);
+  return classes.size === 1 ? [...classes][0] : "unknown";
 }
 
 function environmentOf(params: Record<string, unknown>): string | null {
@@ -137,7 +158,7 @@ export function tuneDigestParts(intent: { action_type: string; params?: unknown 
     action_type: intent.action_type.slice(0, 64),
     rule,
     program: canonicalProgram(p.program) ?? canonicalProgram(p.manager) ?? null,
-    target_class: targetClassOf(pathOf(p), p.root_scope),
+    target_class: targetClassOfParams(p),
     environment: environmentOf(p),
     host: canonicalHost(p.host) ?? null,
   };

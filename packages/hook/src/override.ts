@@ -159,6 +159,8 @@ export function actionKey(intent: { action_type?: string; params?: Record<string
   delete params.action_group_seq;
   // A delete's targets outside the working folder are read from the command and the working folder, which the key holds.
   delete params.delete_targets;
+  // So are the targets a shell command names (an answer given before they were recorded still matches).
+  if (intent.action_type === "shell.exec") delete params.targets;
   const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
     : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
   return digestOf(JSON.stringify({ action_type: intent.action_type ?? "", params: sorted(params) }));

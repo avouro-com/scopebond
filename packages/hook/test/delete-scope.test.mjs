@@ -198,3 +198,30 @@ test("a delete that reaches outside the working folder records where, for a work
     assert.equal(targets(command), undefined, command);
   }
 });
+
+test("a deleting or writing command records every target it names, so a block's digest knows what kind of place it reaches", () => {
+  const targetsOf = (command, tool = "Bash", cwd = POSIX) => [mapClaudeToolUse({ tool_name: tool, tool_input: { command }, cwd })].flat()
+    .find((m) => m.intent.action_type === "shell.exec").intent.params.targets;
+  // A delete: contained targets as the file rules read them, the rest as full paths.
+  assert.deepEqual(targetsOf("rm -rf dist"), ["dist"]);
+  assert.deepEqual(targetsOf("rm -rf /repo/dist build"), ["dist", "build"]);
+  assert.deepEqual(targetsOf("rm -rf $TMPDIR/build-cache"), ["$TMPDIR/build-cache"]);
+  assert.deepEqual(targetsOf("rm -rf ~/scratch/x"), ["~/scratch/x"]);
+  assert.deepEqual(targetsOf("rm -rf /etc/nginx"), ["/etc/nginx"]);
+  assert.deepEqual(targetsOf("rm -rf ../shared/cache"), ["/shared/cache"]);
+  assert.deepEqual(targetsOf("rm -rf dist ~/x"), ["dist", "~/x"], "a contained target is named beside one outside");
+  assert.deepEqual(targetsOf("Remove-Item -Recurse -Force C:\\Builds\\old", "PowerShell", WINDOWS), ["c:/Builds/old"]);
+  // A write: the files the command writes, never the ones it only reads.
+  assert.deepEqual(targetsOf("echo hi > out.txt"), ["out.txt"]);
+  assert.deepEqual(targetsOf("cp notes.txt ~/backup.txt"), ["~/backup.txt"]);
+  assert.deepEqual(targetsOf("shred ~/notes.txt"), ["~/notes.txt"]);
+  assert.deepEqual(targetsOf("chmod -R 777 /etc"), ["/etc"]);
+  // Nothing when a target is not known from the text, is a protected place, a root or a whole-folder wildcard, when the
+  // command writes nothing, or when it names more targets than are recorded.
+  for (const command of ["rm -rf $X", "rm -rf ~/.ssh", "rm -rf /", "rm -rf *", "rm -rf dist $X", "rm", "cat notes.txt", "tar xf a.tar", "echo hi > \"$OUT\"", "ls -la",
+    `rm -rf ${Array.from({ length: 17 }, (_, i) => `dist${i}/out`).join(" ")}`]) {
+    assert.equal(targetsOf(command), undefined, command);
+  }
+  // Bounded: at most 16 targets, each a path the record already shows, never file contents.
+  assert.equal(targetsOf(`rm -rf ${Array.from({ length: 16 }, (_, i) => `dist${i}/out`).join(" ")}`).length, 16);
+});
