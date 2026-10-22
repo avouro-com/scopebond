@@ -10,7 +10,7 @@ import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, recordFatigue, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
-  dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
+  automaticHarnesses, checkConfigPath, dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -24,6 +24,9 @@ import { maintainIntel } from "./intel-install.js";
 import { AGENT_LOG_ENV, autostartHealth, launcherIsCurrent, launcherPath, refreshLauncher, retireLauncherRunValue, startCommands } from "./autostart.js";
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
+import { integrationHealth } from "./integration-health.js";
+import { startDiscoveryLoop } from "./discovery-loop.js";
+import { createInventoryReporter } from "./inventory.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
 import { livePrompt, windowAllowed } from "./live-prompt.js";
@@ -146,6 +149,8 @@ export interface ServiceOptions {
   /** The agent puts a lost hook entry back, takes a second copy out and starts broken autostart again as soon as it sees them
    *  (default: on with maintenance; a test turns it on with a temp home). The person's Repair works either way. */
   selfRepair?: boolean;
+  /** Continuous inventory; off in fixtures that have not supplied an isolated profile. */
+  discovery?: boolean;
   /** This computer's autostart, for that repair (tests replace it). */
   autostart?: AutostartRepair;
 }
@@ -163,11 +168,13 @@ export interface SetupRepair { at: number; repaired: Harness[]; deduped: Harness
  *  taken out (the user settings keep theirs), and autostart that is on but broken started again (autostart the person turned
  *  off stays off). Each step is checked again afterwards. */
 export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostart: AutostartRepair | null = null, now = Date.now()): SetupRepair {
+  harnesses = automaticHarnesses(harnesses);
   const home = homedir();
   const repaired = repairHookEntries(missingHookEntries(harnesses)).map((r) => r.harness);
   const deduped: Harness[] = [];
   for (const harness of harnesses) {
     try {
+      checkConfigPath(userHarnessFile(harness));
       if (!duplicateHooks(harness, home, home)) continue;
       if (dedupeHooks(harness, "user", home, home).removed.length) deduped.push(harness);
     } catch (error) {
@@ -425,6 +432,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let cycleStartedAt: number | null = null;
   const cycleLimit = options.cycleLimitMs ?? CYCLE_LIMIT_MS;
   let stopped = false;
+  let discovery: ReturnType<typeof startDiscoveryLoop> | null = null;
+  const inventory = createInventoryReporter({ dir: options.dir, connection: () => loadConnection(options.dir), fetchImpl: options.fetchImpl });
   let lastSelfCheckAt = 0;
   // Repairs of this computer's setup: done as soon as they are seen (each cycle, when the tray asks, before each self-check),
   // recorded, and shown only while one fails.
@@ -1094,7 +1103,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return { outcome: "stopped", text: `Stopped allowing ${what}${where}` };
     },
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
-    "GET /status": () => ({ ...computerStatus(options.dir), health: health(), agent: {
+    "GET /status": () => ({ ...computerStatus(options.dir), integrations: integrationHealth(expectedHarnesses()), inventory: inventory.state(), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
       failed_update: failedUpdate(options.dir), signing_in: reconnecting, last_repair: lastRepair, credential_renewal: renewal,
     } }),
@@ -1102,6 +1111,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     // The person's Repair: the same repair the agent makes by itself, whatever its setting, with what it did and what failed.
     "POST /repair": () => heal(true, true) ?? { repaired: [], deduped: [], failed: [], duplicates: [], autostart: null },
     "POST /maintain": async () => ({ maintenance: await maintain(true) }),
+    "POST /rescan": () => { discovery?.rescan(); return { scheduled: discovery !== null }; },
     // `scopebond-agent stop` and `autostart off`: answer first, then stop, so the caller hears back.
     "POST /stop": () => {
       log("stopping: asked to by this computer's user");
@@ -1137,6 +1147,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     try { endSignIn?.(); } catch { /* already over */ }
     if (timer) clearTimeout(timer);
     if (maintenanceTimer) clearInterval(maintenanceTimer);
+    discovery?.stop();
+    inventory.stop();
     if (updateRetryTimer) clearTimeout(updateRetryTimer);
     // A cycle under way gets a moment to finish; stop never waits on one that does not.
     if (running) await Promise.race([running.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2_000).unref?.())]);
@@ -1181,6 +1193,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     maintenanceTimer = setInterval(() => { if (!stopped) void maintain(); }, UPDATE_EVERY_MS);
     maintenanceTimer.unref?.();
   }
+  if (options.discovery ?? options.maintenance !== false) discovery = startDiscoveryLoop({ reconcile: async () => { if (!stopped) { heal(); await inventory.reconcile(); } } });
   await cycle();
   schedule();
   return { port: control.endpoint.port, cycleNow: cycle, maintainNow: () => maintain(true), stop };

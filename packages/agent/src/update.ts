@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  absoluteHookCommand, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isQuotedWindowsHookCommand, isScopebondHookCommand, isSingleExecutable,
+  absoluteHookCommand, automaticHarnesses, configuredHookCommands, ensureDurableRuntime, hookCliPath, hookCommandResolves, hookVersion, isQuotedWindowsHookCommand, isScopebondHookCommand, isSingleExecutable,
   nativeHookCommand, userHarnessFile, writeHarnessConfig, type Harness, type HookConnection,
 } from "@scopebond/hook";
 import { findProgram, windowsSystemProgram } from "@scopebond/gateway/node";
@@ -173,6 +173,7 @@ export function npmOnPath(args: string[], env: NodeJS.ProcessEnv = process.env, 
  *  "hold" only broken entries and `npx` entries that name no version or the carried one are (their version does not
  *  change). Entries of other tools are never touched. Returns the files changed. */
 export function maintainHookEntries(harnesses: Harness[], moveVersions = true, platform: NodeJS.Platform = process.platform): Array<{ harness: Harness; file: string; reason: string }> {
+  harnesses = automaticHarnesses(harnesses);
   // The signed install: every Scopebond entry runs this executable, whatever wrote it (an npm install before it, an npx
   // form), under either policy: the hook is the one inside this program, so no version moves.
   if (isSingleExecutable()) return useNativeHookEntries(harnesses);

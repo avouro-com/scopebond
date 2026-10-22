@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -184,11 +184,12 @@ function leftoverProjectComputer(base = tmpdir()) {
   const folder = mkdtempSync(join(base, "sb-hook-login-leftover-"));
   const project = join(folder, ".scopebond");
   scaffold(project, ENFORCE);
-  const projectSettings = join(folder, ".claude", "settings.json");
+  // Set up the fixture at its canonical target; the login/status assertions below still traverse the alias.
+  const projectSettings = join(realpathSync(folder), ".claude", "settings.json");
   writeHarnessConfig(projectSettings, "claude", "npx -y @scopebond/hook@0.16.0 claude");
   const env = { ...process.env, SCOPEBOND_HOME: home, HOME: profile, USERPROFILE: profile };
   delete env.SCOPEBOND_HOOK_DIR;
-  return { profile, home, kids, folder, project, projectSettings, env, userSettings: join(profile, ".claude", "settings.json") };
+  return { profile, home, kids, folder, project, projectSettings, env, userSettings: join(realpathSync(profile), ".claude", "settings.json") };
 }
 
 test("login: from a folder with a leftover project setup, it signs in the user, not the project", async () => {
