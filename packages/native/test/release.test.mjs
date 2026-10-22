@@ -43,7 +43,19 @@ test("no build tool or dependency runs in a release job that can ask for the sig
   assert.match(all.installer, /node packages\/native\/build-msi\.mjs out\/scopebond-agent\.exe out\/scopebond-tray\.exe/);
   assert.match(all.installer, /verify-signed\.ps1 -Folder out/, "it checks the signed programs before it builds around them");
   assert.match(all["sign-installer"], /needs: \[build, installer\]/);
-  assert.match(all.release, /needs: \[build, sign-installer\]/);
+  assert.match(all.release, /needs: \[build, sign-installer, defender-scan\]/);
+});
+
+test("Microsoft Defender scans the programs and the signed files before a release exists", () => {
+  const all = jobs(workflow("native-release.yml"));
+  assert.match(all.build, /defender-scan\.ps1 packages\/native\/build\/scopebond-agent\.exe packages\/native\/build\/scopebond-tray\.exe/);
+  assert.match(all["defender-scan"], /needs: sign-installer/);
+  assert.match(all["defender-scan"], /defender-scan\.ps1 @files/);
+  assert.ok(!/id-token/.test(all["defender-scan"]), "the scan has no OIDC token");
+  const script = readFileSync(join(native, "defender-scan.ps1"), "utf8");
+  assert.match(script, /Update-MpSignature/, "it scans on current definitions");
+  assert.match(script, /-DisableRemediation/, "it never removes a file");
+  assert.match(script, /exit 1/, "a detection or a scan that cannot run stops the release");
 });
 
 test("every signature check in the release uses the updater's anchored publisher rule", () => {
