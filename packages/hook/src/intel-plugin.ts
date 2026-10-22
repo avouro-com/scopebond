@@ -6,8 +6,12 @@
 // The module exports `inspect(action)`, which returns `{ pattern_id, slot }` or nothing: a pattern id (64 lowercase hex)
 // and an opaque slot (base64 of at most 4 KiB). The hook signs them into the action's receipt as `pattern_id` and `intel`
 // and never reads what the slot holds. `inspect` is called synchronously, with a copy of the action, and must answer
-// within INTEL_BUDGET_MS: a throw, a promise, an answer of the wrong shape or one that took longer gives no slot. It never
-// changes the decision.
+// within INTEL_BUDGET_MS, beyond which the calls of one process may run INTEL_COLD_ALLOWANCE_MS in all while its code runs for
+// the first time: a throw, a promise, an answer of the wrong shape or one that took longer gives no slot. It never changes the
+// decision.
+//
+// The hook runs once per tool call, so loading the module is paid on every call. The checked bytes are handed to Node's module
+// loader from memory (`module.registerHooks`, where Node has it) rather than as a `data:` URL, which Node decodes slowly.
 //
 // The module may also export `artifactKinds` (the kinds of signed artifact it reads, at most MAX_ARTIFACT_KINDS) and
 // `acceptArtifact(artifact)`: when it loads, it is handed each signed artifact this computer holds of one of those kinds
@@ -19,6 +23,7 @@
 
 import { createHash, verify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import * as nodeModule from "node:module";
 import { join } from "node:path";
 import { compileFunction, constants as vmConstants } from "node:vm";
 import { isReceiptIntel, isReceiptPatternId } from "@scopebond/policy-schema";
@@ -30,6 +35,10 @@ import type { HeldArtifact } from "./signed-artifacts.js";
 export const INTEL_COMPONENT_DOMAIN = "scopebond:component/intel/v1\n";
 /** How long `inspect` may take for one action, in milliseconds. */
 export const INTEL_BUDGET_MS = 2;
+/** How much longer than INTEL_BUDGET_MS the calls of one process may take in all, in milliseconds: the module's code runs for
+ *  the first time in each process, so its first calls are slower (a module that prepared itself while loading would only move
+ *  that time into the load, which has no budget at all). */
+export const INTEL_COLD_ALLOWANCE_MS = 25;
 /** The largest module the hook reads. */
 export const INTEL_MAX_BYTES = 8 * 1024 * 1024;
 export const INTEL_MODULE = "intel.mjs";
@@ -89,12 +98,66 @@ export function checkIntelComponent(manifest: IntelManifest, bytes: Buffer, opti
   return { ok: false, reason: "the manifest's signature does not verify against a pinned key" };
 }
 
+/** The URL scheme the checked bytes are served under from memory. */
+const MEMORY_SCHEME = "scopebond-plugin:";
+/** Checked module bytes by their memory URL, once the loader hooks are in place; null where Node cannot serve from memory. */
+let fromMemory: Map<string, Buffer> | null | undefined;
+
+/** Serve modules from memory: a resolve and a load hook for this scheme alone (every other specifier goes on unchanged). */
+function memoryModules(): Map<string, Buffer> | null {
+  if (fromMemory !== undefined) return fromMemory;
+  const register = (nodeModule as { registerHooks?: typeof nodeModule.registerHooks }).registerHooks;
+  if (typeof register !== "function") return (fromMemory = null);
+  const modules = new Map<string, Buffer>();
+  try {
+    register({
+      resolve: (specifier, context, nextResolve) => (modules.has(specifier) ? { url: specifier, format: "module", shortCircuit: true } : nextResolve(specifier, context)),
+      load: (url, context, nextLoad) => {
+        const source = modules.get(url);
+        return source ? { format: "module", source, shortCircuit: true } : nextLoad(url, context);
+      },
+    });
+  } catch { return (fromMemory = null); }
+  return (fromMemory = modules);
+}
+
 /** Import an ES module from bytes already checked, never from the file again (it could change in between). Through a
  *  function compiled with Node's default loader for `import()`, so the same code works from npm and from the single
- *  executable (whose own code cannot `import()` a file). */
-export async function importVerifiedModule(bytes: Buffer): Promise<Record<string, unknown>> {
-  const load = compileFunction("return import(url)", ["url"], { importModuleDynamically: vmConstants.USE_MAIN_CONTEXT_DEFAULT_LOADER }) as (url: string) => Promise<Record<string, unknown>>;
-  return load(`data:text/javascript;base64,${bytes.toString("base64")}`);
+ *  executable (whose own code cannot `import()` a file). The bytes are served from memory under a URL named by their
+ *  SHA-256 (`via: "data"`, or a Node without `module.registerHooks`: a `data:` URL, which costs several milliseconds more
+ *  for a module of some size). */
+export async function importVerifiedModule(bytes: Buffer, options: { via?: "memory" | "data" } = {}): Promise<Record<string, unknown>> {
+  const load = withoutLoaderNotice(() => compileFunction("return import(url)", ["url"], { importModuleDynamically: vmConstants.USE_MAIN_CONTEXT_DEFAULT_LOADER })) as (url: string) => Promise<Record<string, unknown>>;
+  const viaData = (): Promise<Record<string, unknown>> => load(`data:text/javascript;base64,${bytes.toString("base64")}`);
+  const modules = options.via === "data" ? null : memoryModules();
+  if (!modules) return viaData();
+  const url = `${MEMORY_SCHEME}${createHash("sha256").update(bytes).digest("hex")}`;
+  if (!modules.has(url)) modules.set(url, Buffer.from(bytes));
+  // A loader that does not reach the hooks (a build of Node that resolves the scheme itself) refuses the URL: the data: URL
+  // still works there. A module that fails to load fails both ways.
+  try { return await load(url); } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ERR_UNSUPPORTED_ESM_URL_SCHEME") return viaData();
+    throw error;
+  }
+}
+
+/** Run `compile` without Node's one-time notice that the default-loader constant is experimental: printed on stderr, it
+ *  would land in the agent's transcript on every call. Any other warning still prints. */
+function withoutLoaderNotice<T>(compile: () => T): T {
+  const handlers = process.listeners("warning");
+  const drop = (warning: Error): void => {
+    if (warning.name === "ExperimentalWarning" && /USE_MAIN_CONTEXT_DEFAULT_LOADER/.test(warning.message)) return;
+    for (const handler of handlers) handler.call(process, warning);
+  };
+  process.removeAllListeners("warning");
+  process.on("warning", drop);
+  try { return compile(); } finally {
+    // Node emits the warning on the next tick: keep the filter until then, then put the handlers back as they were.
+    process.nextTick(() => {
+      process.removeListener("warning", drop);
+      for (const handler of handlers) process.on("warning", handler);
+    });
+  }
 }
 
 /** Why the plugin in `<home>/intel/current` is not used, or the check that let it load. Reads the files; loads nothing. */
@@ -153,15 +216,26 @@ export function handArtifacts(exported: Record<string, unknown>, held: (kinds: r
   } catch { return 0; }
 }
 
-/** Wrap a module's `inspect` so it never throws, never takes the action itself, and answers only within the budget. */
-export function pluginFrom(version: string, inspect: (action: IntelAction) => unknown, budgetMs: number = INTEL_BUDGET_MS, clock: () => number = () => performance.now()): IntelPlugin {
+/** Wrap a module's `inspect` so it never throws, never takes the action itself, and answers only within the budget: each call
+ *  `budgetMs`, and over all calls together at most `coldAllowanceMs` beyond it. A call that takes longer than what is left gives
+ *  no slot and ends the allowance. */
+export function pluginFrom(version: string, inspect: (action: IntelAction) => unknown, budgetMs: number = INTEL_BUDGET_MS, clock: () => number = () => performance.now(), coldAllowanceMs: number = INTEL_COLD_ALLOWANCE_MS): IntelPlugin {
+  let cold = coldAllowanceMs;
+  /** Whether a call that took `took` ms is within its budget; charges the time over the budget to the allowance. */
+  const within = (took: number): boolean => {
+    const over = took - budgetMs;
+    if (over <= 0) return true;
+    if (over > cold) { cold = 0; return false; }
+    cold -= over;
+    return true;
+  };
   return {
     version,
     inspect(action: IntelAction): IntelMembers {
       let answer: unknown;
       const started = clock();
-      try { answer = inspect(structuredClone({ action_type: action.action_type, params: action.params })); } catch { return {}; }
-      if (clock() - started > budgetMs) return {};
+      try { answer = inspect(structuredClone({ action_type: action.action_type, params: action.params })); } catch { within(clock() - started); return {}; }
+      if (!within(clock() - started)) return {};
       if (!answer || typeof answer !== "object" || typeof (answer as { then?: unknown }).then === "function") return {};
       const { pattern_id: patternId, slot } = answer as { pattern_id?: unknown; slot?: unknown };
       if ((patternId !== undefined && !isReceiptPatternId(patternId)) || (slot !== undefined && !isReceiptIntel(slot))) return {};

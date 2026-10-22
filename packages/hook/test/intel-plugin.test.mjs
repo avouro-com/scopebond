@@ -14,7 +14,7 @@ import { verifyReceipt, canonical } from "@scopebond/gateway";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import {
   scaffold, createHookRuntime, mapClaudeToolUse, loadIntelPlugin, intelComponentState, pluginFrom, checkIntelComponent,
-  INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS,
+  INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_COLD_ALLOWANCE_MS, importVerifiedModule,
 } from "../dist/index.js";
 import { ENFORCE } from "./enforce-all.mjs";
 
@@ -104,9 +104,9 @@ test("inspect: a throw, a promise, a wrong shape or an answer over the time budg
     () => null,
   ];
   for (const answer of answers) assert.deepEqual(pluginFrom("1.0.0", answer).inspect(action), {}, String(answer));
-  // Over the budget: the clock says the call took longer than allowed.
+  // Over the budget: the clock says the call took longer than allowed (the budget and all of the cold-start allowance).
   let t = 0;
-  const slow = pluginFrom("1.0.0", () => ({ pattern_id: PATTERN }), INTEL_BUDGET_MS, () => (t += INTEL_BUDGET_MS + 1));
+  const slow = pluginFrom("1.0.0", () => ({ pattern_id: PATTERN }), INTEL_BUDGET_MS, () => (t += INTEL_BUDGET_MS + INTEL_COLD_ALLOWANCE_MS + 1));
   assert.deepEqual(slow.inspect(action), {});
   assert.equal(INTEL_BUDGET_MS, 2);
   // Within it, with only the members given.
@@ -114,6 +114,47 @@ test("inspect: a throw, a promise, a wrong shape or an answer over the time budg
   const mutating = pluginFrom("1.0.0", (a) => { a.params.path = "/etc/shadow"; a.action_type = "x"; return undefined; });
   assert.deepEqual(mutating.inspect(action), {});
   assert.deepEqual(action, { action_type: "file.read", params: { path: "a.txt" } });
+});
+
+test("while the plugin's code is cold, a process's calls may run over the budget by the cold-start allowance in all", () => {
+  const action = { action_type: "file.read", params: { path: "a.txt" } };
+  assert.equal(INTEL_COLD_ALLOWANCE_MS, 25);
+  // A clock by which each call takes the next of `times` ms.
+  const timed = (...times) => { let t = 0; let start = true; return () => { const now = start ? t : (t += times.shift() ?? 0); start = !start; return now; }; };
+  const answer = () => ({ pattern_id: PATTERN });
+  const ok = { pattern_id: PATTERN };
+  // One cold call may take the budget and the whole allowance; a call that takes more gives nothing.
+  assert.deepEqual(pluginFrom("1.0.0", answer, INTEL_BUDGET_MS, timed(INTEL_BUDGET_MS + INTEL_COLD_ALLOWANCE_MS)).inspect(action), ok);
+  assert.deepEqual(pluginFrom("1.0.0", answer, INTEL_BUDGET_MS, timed(INTEL_BUDGET_MS + INTEL_COLD_ALLOWANCE_MS + 1)).inspect(action), {});
+  // The allowance is shared: 20 ms (18 over), then 20 ms again (18 over, 7 left) gives nothing and ends it; then even 3 ms is over.
+  const shared = pluginFrom("1.0.0", answer, INTEL_BUDGET_MS, timed(20, 20, 3, 1));
+  assert.deepEqual(shared.inspect(action), ok);
+  assert.deepEqual(shared.inspect(action), {});
+  assert.deepEqual(shared.inspect(action), {});
+  assert.deepEqual(shared.inspect(action), ok, "within the budget itself");
+  // Several cold calls of 6 ms (4 over each): six fit in 25 ms, the seventh does not.
+  const many = pluginFrom("1.0.0", answer, INTEL_BUDGET_MS, timed(6, 6, 6, 6, 6, 6, 6));
+  for (let i = 0; i < 6; i++) assert.deepEqual(many.inspect(action), ok, `call ${i + 1}`);
+  assert.deepEqual(many.inspect(action), {});
+  // A call that throws is charged too.
+  let calls = 0;
+  const throwsFirst = pluginFrom("1.0.0", () => { if (calls++ === 0) throw new Error("x"); return ok; }, INTEL_BUDGET_MS, timed(20, 20));
+  assert.deepEqual(throwsFirst.inspect(action), {});
+  assert.deepEqual(throwsFirst.inspect(action), {});
+});
+
+test("the checked bytes are imported from memory, not from a data: URL; the data: URL remains the fallback", async () => {
+  const source = "export const url = import.meta.url;\nexport function inspect() { return undefined; }\n";
+  const fromMemory = await importVerifiedModule(Buffer.from(source));
+  assert.match(String(fromMemory.url), /^scopebond-plugin:[0-9a-f]{64}$/);
+  assert.equal(typeof fromMemory.inspect, "function");
+  // The same bytes again: the same module.
+  assert.equal(await importVerifiedModule(Buffer.from(source)), fromMemory);
+  const viaData = await importVerifiedModule(Buffer.from(`${source}// data\n`), { via: "data" });
+  assert.match(String(viaData.url), /^data:text\/javascript;base64,/);
+  // A module that fails to load fails the same way either way.
+  await assert.rejects(importVerifiedModule(Buffer.from("this is not javascript")));
+  await assert.rejects(importVerifiedModule(Buffer.from("this is not javascript"), { via: "data" }));
 });
 
 /** The receipt payload without what differs between two runs (time, ids, the agent's signature over them). */
@@ -185,6 +226,8 @@ test("the hook process loads a signed module from its home and signs its answer 
   const input = { hook_event_name: "PreToolUse", session_id: "s1", cwd: dir, tool_name: "Bash", tool_input: { command: "ls" }, tool_use_id: "call-1" };
   const run = await runHook(dir, h, input, { SCOPEBOND_POLICY_KEYS_JSON: JSON.stringify([key.entry]) });
   assert.equal(run.status, 0, run.stderr);
+  // Loading the module prints nothing into the agent's transcript (no Node warning about how it is loaded).
+  assert.doesNotMatch(run.stderr, /Warning/, run.stderr);
   const receipts = await storedReceipts(dir);
   assert.ok(receipts.length > 0);
   for (const r of receipts) {
