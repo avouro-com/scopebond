@@ -1,4 +1,4 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findProgram } from "@scopebond/gateway/node";
@@ -19,7 +19,10 @@ export function isHarness(value: unknown): value is Harness {
 
 export interface AdapterProfile { home?: string; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform }
 export function adapterDirectory(harness: Harness, profile: AdapterProfile = {}): string {
-  const home = profile.home ?? homedir();
+  let home = profile.home ?? homedir();
+  // Resolve the explicitly selected profile root, not links inside a tool's configuration.
+  // This preserves intentional home-directory aliases without following a swapped hooks path.
+  try { home = realpathSync(home); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   const env = profile.env ?? process.env;
   return harness === "copilot" ? env.COPILOT_HOME || join(home, ADAPTERS[harness].directory) : join(home, ADAPTERS[harness].directory);
 }

@@ -28,6 +28,6 @@ export function automaticHarnesses(harnesses: readonly Harness[], dir = userHome
   return intent.automatic ? harnesses.filter((h) => {
     if (intent.excluded.includes(h)) return false;
     try { const config = readHarnessConfig(userHarnessFile(h)); return config.disableAllHooks !== true && config.hooksEnabled !== false; }
-    catch { return false; }
+    catch { return true; } // inspection/repair reports the error; the guarded writer leaves malformed data untouched
   }) : [];
 }

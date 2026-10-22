@@ -5,7 +5,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFil
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expectedHarnesses, integrationHealth, missingHookEntries, localChecks, repairHookEntries, maintainHookEntries } from "../dist/index.js";
-import { ADAPTERS, HARNESSES, isHarness, writeHarnessConfig, removeHarnessConfig, writeIntegrationIntent, pruneHarnessEntries, wireLifecycleHooks, unwireLifecycleHooks } from "@scopebond/hook";
+import { repairSetup } from "../dist/service.js";
+import { ADAPTERS, HARNESSES, isHarness, writeHarnessConfig, removeHarnessConfig, writeIntegrationIntent, pruneHarnessEntries, wireLifecycleHooks, unwireLifecycleHooks, userHarnessFile } from "@scopebond/hook";
 import { editHarnessConfig } from "../../hook/dist/config-edit.js";
 
 function profile(t) {
@@ -25,6 +26,26 @@ test("a detected Codex without hooks.json needs enrollment", (t) => {
   const root = profile(t);
   mkdirSync(join(root, ".codex"));
   assert.deepEqual(missingHookEntries(["codex"]), ["codex"]);
+});
+
+test("an unreadable settings target stays a visible failed repair", (t) => {
+  const root = profile(t);
+  mkdirSync(join(root, ".claude", "settings.json"), { recursive: true });
+  assert.deepEqual(repairSetup(["claude"]).failed, ["claude"]);
+  assert.equal(integrationHealth(["claude"])[0].reason, "invalid_configuration");
+});
+
+test("a selected profile alias is canonicalized while links inside the tool directory remain refused", (t) => {
+  const root = profile(t); const selected = join(root, "selected"); const alias = join(root, "alias");
+  mkdirSync(join(selected, ".codex"), { recursive: true });
+  symlinkSync(selected, alias, process.platform === "win32" ? "junction" : "dir");
+  process.env.HOME = alias; process.env.USERPROFILE = alias;
+  const file = userHarnessFile("codex");
+  writeHarnessConfig(file, "codex", "scopebond-hook codex");
+  assert.equal(existsSync(join(selected, ".codex", "hooks.json")), true);
+  const other = join(root, "other"); mkdirSync(other);
+  symlinkSync(other, join(selected, ".cursor"), process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => writeHarnessConfig(userHarnessFile("cursor"), "cursor", "scopebond-hook cursor"), /unsafe/);
 });
 
 test("native disablement is preserved and lifecycle-only configuration still needs a decision hook", (t) => {

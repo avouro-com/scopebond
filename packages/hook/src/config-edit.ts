@@ -1,4 +1,4 @@
-import { closeSync, copyFileSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, rmSync } from "node:fs";
+import { closeSync, copyFileSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { errorCode, replaceFile } from "./safe-fs.js";
 
@@ -30,6 +30,9 @@ export function checkConfigPath(file: string): void {
   for (;;) {
     try {
       const stat = lstatSync(part);
+      // macOS ships these root-owned aliases. They are outside the writable profile;
+      // tool directories and every other linked ancestor remain refused.
+      if (part !== resolve(file) && process.platform === "darwin" && (part === "/var" || part === "/tmp") && stat.uid === 0 && stat.isSymbolicLink() && realpathSync(part) === `/private${part}`) return;
       if (stat.isSymbolicLink() || (part === resolve(file) ? !stat.isFile() || stat.nlink > 1 : !stat.isDirectory())) throw new Error("unsafe configuration path");
     } catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
     const parent = dirname(part);

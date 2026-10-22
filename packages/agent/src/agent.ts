@@ -57,7 +57,7 @@ export function expectedHarnesses(): Harness[] {
 
 /** Agent settings that lost their Scopebond hook entry (an update or a reset can remove it). */
 export function missingHookEntries(harnesses: Harness[] = expectedHarnesses()): Harness[] {
-  return integrationHealth(automaticHarnesses(harnesses)).filter((h) => h.presence === "detected" && h.integration === "not_configured" && !h.entry).map((h) => h.harness);
+  return integrationHealth(automaticHarnesses(harnesses)).filter((h) => h.presence === "detected" && h.integration !== "disabled" && !h.entry).map((h) => h.harness);
 }
 
 export async function runCycle(options: CycleOptions): Promise<CycleResult> {
