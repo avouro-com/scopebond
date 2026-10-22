@@ -146,6 +146,7 @@ const INTEL_TERM_DIGESTS = new Set([
   "fce6345ae786", "fe75fe812b67", "ff3aaa726d6b",
   "98809d57cdb9", "a28d47f4ce59",
   "2fdab7cf12ae", "5a4f51efa432",
+  "8ce1339d318f",
 ]);
 const normaliseTerm = (t) => t.toLowerCase().replace(/[_-]/g, "");
 const termDigest = (t) => createHash("sha256").update(INTEL_TERM_SALT + normaliseTerm(t)).digest("hex").slice(0, 12);
