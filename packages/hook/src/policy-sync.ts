@@ -108,6 +108,7 @@ import {
 import { SERVICE_RULES_CAPABILITY } from "./service-rules.js";
 import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
 import { QUIET_PATTERNS_CAPABILITY } from "./tune-digest.js";
+import { SIGNED_ARTIFACTS_CAPABILITY, syncArtifacts } from "./signed-artifacts.js";
 
 /** What this hook reads in a workspace's rules document beyond what its version implies, as `x-scopebond-hook-capabilities`
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
@@ -117,8 +118,9 @@ import { QUIET_PATTERNS_CAPABILITY } from "./tune-digest.js";
  *  (`pattern_allowances`: an override's `patterns`, pattern-recipes.ts), and the modes of the rule packs'
  *  rules (`pack_rules`, managed.ts; an unknown rule id is skipped and reported, never a refusal), and pack engine level 2
  *  (`pack_engine_2`: a pack list's `requires_engine`, `shadow` and `killed`, and the taxonomy extension, pack-sync.ts), and the
- *  blocks the workspace keeps quiet (`quiet_patterns`: blocked without asking or a notification, tune-digest.ts). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules", "pack_engine_2", QUIET_PATTERNS_CAPABILITY] as const;
+ *  blocks the workspace keeps quiet (`quiet_patterns`: blocked without asking or a notification, tune-digest.ts), and signed
+ *  artifacts for the plugin slot (`signed_artifacts_1`: a pack list's `artifacts`, signed-artifacts.ts). */
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules", "pack_engine_2", QUIET_PATTERNS_CAPABILITY, SIGNED_ARTIFACTS_CAPABILITY] as const;
 
 /** The capabilities this hook reports now: `HOOK_CAPABILITIES`, without `pack_engine_2` while the pack engine level is lowered
  *  below 2 (`SCOPEBOND_PACK_ENGINE_LEVEL`, pack-store.ts). */
@@ -277,6 +279,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
    *  nothing. Never throws. */
   const syncPackList = async (raw: Record<string, unknown>): Promise<void> => {
     const result = await syncPacks(dir, raw, { base, headers: auth, fetchImpl, workspace: workspaceId, computer: installationId, lastIssuedAt: lastIssuedAt(), now, timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
+    // The signed artifacts the same list names (signed-artifacts.ts); they never hold back the packs, and the packs never them.
+    await syncArtifacts(dir, raw, { base, headers: { ...auth, [PACK_ENGINE_HEADER]: String(packEngineLevel()) }, fetchImpl, workspace: workspaceId, computer: installationId, lastIssuedAt: lastIssuedAt(), now, timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
     if (result.state === "not_named") return;
     const error = result.state === "synced" ? null : result.state === "refused" ? result.message : result.failed.map((f) => `${f.ref}: ${f.message}`).join("; ");
     packState = {

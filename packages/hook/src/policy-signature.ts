@@ -249,9 +249,13 @@ export function checkGrantsSignature(doc: Record<string, unknown>, context: Tool
 // the way.
 
 /** The digest the packs signature covers: the sha256 (lowercase hex) of the canonical JSON of the answer's `packs`, or, when
- *  the answer kills pack versions (`killed`, sent only to a hook that reports `pack_engine_2`), of `{ packs, killed }`. */
+ *  the answer kills pack versions (`killed`, sent only to a hook that reports `pack_engine_2`) or names signed artifacts
+ *  (`artifacts`, sent only to a hook that reports `signed_artifacts_1`, signed-artifacts.ts), of `{ packs, killed, artifacts }`
+ *  with only the members the answer carries. */
 export const digestPacks = (doc: Record<string, unknown>): string =>
-  createHash("sha256").update(canonical(doc.killed === undefined ? doc.packs ?? [] : { packs: doc.packs ?? [], killed: doc.killed })).digest("hex");
+  createHash("sha256").update(canonical(doc.killed === undefined && doc.artifacts === undefined
+    ? doc.packs ?? []
+    : { packs: doc.packs ?? [], ...(doc.killed !== undefined ? { killed: doc.killed } : {}), ...(doc.artifacts !== undefined ? { artifacts: doc.artifacts } : {}) })).digest("hex");
 
 /** Check the signature of an answer's pack list. `unsigned` when the answer names no packs; refused when the list, its digest
  *  or its signature is missing, does not match, or does not verify. */

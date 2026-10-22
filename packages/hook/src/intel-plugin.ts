@@ -9,6 +9,11 @@
 // within INTEL_BUDGET_MS: a throw, a promise, an answer of the wrong shape or one that took longer gives no slot. It never
 // changes the decision.
 //
+// The module may also export `artifactKinds` (the kinds of signed artifact it reads, at most MAX_ARTIFACT_KINDS) and
+// `acceptArtifact(artifact)`: when it loads, it is handed each signed artifact this computer holds of one of those kinds
+// (signed-artifacts.ts: checked against its signed list and its signature when it was fetched, and against that digest now) as
+// `{ kind, id, version, shadow, bytes }`, the exact bytes served, which the hook never reads. A throw or a promise is ignored.
+//
 // Without the module (any build of this repository, or a computer that has none), nothing is loaded, no member is added,
 // and every receipt is exactly what it was before.
 
@@ -19,6 +24,7 @@ import { compileFunction, constants as vmConstants } from "node:vm";
 import { isReceiptIntel, isReceiptPatternId } from "@scopebond/policy-schema";
 import { policyKeys, publicKeyFrom, type PolicyKey } from "./policy-keys.js";
 import { userHome } from "./install.js";
+import type { HeldArtifact } from "./signed-artifacts.js";
 
 /** What the signature covers: this domain, then the module's SHA-256 (64 lowercase hex). */
 export const INTEL_COMPONENT_DOMAIN = "scopebond:component/intel/v1\n";
@@ -28,6 +34,8 @@ export const INTEL_BUDGET_MS = 2;
 export const INTEL_MAX_BYTES = 8 * 1024 * 1024;
 export const INTEL_MODULE = "intel.mjs";
 export const INTEL_MANIFEST = "manifest.json";
+/** The most artifact kinds a plugin may say it reads. */
+export const MAX_ARTIFACT_KINDS = 20;
 
 /** The manifest beside the module. `key_id`, when present, names the pinned key that signed it. */
 export interface IntelManifest { version: string; sha256: string; signature: string; key_id?: string }
@@ -104,16 +112,45 @@ export function intelComponentState(home: string = userHome(), options: { keys?:
   return checked.ok ? { ...checked, bytes } : checked;
 }
 
-/** Load the plugin from `<home>/intel/current` when there is one and it verifies; null otherwise (and on any error). */
-export async function loadIntelPlugin(home: string = userHome(), options: { keys?: readonly PolicyKey[]; now?: Date; budgetMs?: number; clock?: () => number } = {}): Promise<IntelPlugin | null> {
+/** Load the plugin from `<home>/intel/current` when there is one and it verifies; null otherwise (and on any error).
+ *  `artifacts` gives the signed artifacts held of the kinds the plugin reads (signed-artifacts.ts `heldArtifacts`). */
+export async function loadIntelPlugin(home: string = userHome(), options: { keys?: readonly PolicyKey[]; now?: Date; budgetMs?: number; clock?: () => number; artifacts?: (kinds: readonly string[]) => HeldArtifact[] } = {}): Promise<IntelPlugin | null> {
   try {
     const state = intelComponentState(home, options);
     if (!state.ok || !state.bytes) return null;
     const exported = await importVerifiedModule(state.bytes);
     const inspect = exported.inspect;
     if (typeof inspect !== "function") return null;
+    if (options.artifacts) handArtifacts(exported, options.artifacts);
     return pluginFrom(state.manifest.version, inspect as (action: IntelAction) => unknown, options.budgetMs ?? INTEL_BUDGET_MS, options.clock);
   } catch { return null; }
+}
+
+/** The artifact kinds a module says it reads: its `artifactKinds` when that is a short list of kind names, else none. */
+export function artifactKindsOf(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_ARTIFACT_KINDS) return [];
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, a bounded run of one class with an optional repeat of separators
+  return [...new Set(value.filter((k): k is string => typeof k === "string" && /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(k)))];
+}
+
+/** Hand a module the held artifacts of the kinds it reads, through its `acceptArtifact`; each call on its own, never awaited,
+ *  and a throw or a rejected promise is ignored. Returns how many were handed over. Never throws. */
+export function handArtifacts(exported: Record<string, unknown>, held: (kinds: readonly string[]) => HeldArtifact[]): number {
+  try {
+    const accept = exported.acceptArtifact;
+    const kinds = artifactKindsOf(exported.artifactKinds);
+    if (typeof accept !== "function" || !kinds.length) return 0;
+    let handed = 0;
+    for (const artifact of held(kinds)) {
+      if (!kinds.includes(artifact.kind)) continue;
+      try {
+        const answer: unknown = accept({ kind: artifact.kind, id: artifact.id, version: artifact.version, shadow: artifact.shadow, bytes: new Uint8Array(artifact.bytes) });
+        if (answer && typeof (answer as { then?: unknown }).then === "function") (answer as Promise<unknown>).then(undefined, () => undefined);
+        handed++;
+      } catch { /* the plugin's own problem: the next artifact */ }
+    }
+    return handed;
+  } catch { return 0; }
 }
 
 /** Wrap a module's `inspect` so it never throws, never takes the action itself, and answers only within the budget. */

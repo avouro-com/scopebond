@@ -957,6 +957,13 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   it works out never leaves this computer. A quiet list never lets an action through (an allowance in force still
   does, as before), and it never applies to Scopebond's own protection, a session budget, Safe
   Install or a blocked service.
+- **Signed artifacts.** To a hook that reports `signed_artifacts_1`, the workspace's signed pack list may also
+  name `artifacts` (`{ id, version, sha256, shadow? }`, covered by the list's digest and signature). The hook
+  fetches each from `GET /v1/packs/<id>@<version>`, keeps it only when its sha256 is the one listed and its
+  Ed25519 signature (over `scopebond:artifact/v1\n` and the canonical document) verifies with a pinned key, and
+  keeps exactly the listed ones in `artifacts/` beside the packs. It never reads what an artifact says: an
+  installed plugin that names the artifact's kind is handed its bytes when it loads. A list without
+  `artifacts` leaves none; a list that does not verify changes nothing.
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
   refused here. If the connection is revoked, or the workspace stops setting rules for this
   computer, the hook recompiles `policy.json` from `rules.json`: a computer is never left
