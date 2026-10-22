@@ -9,6 +9,7 @@ name: Native release (signed)
 #   sign-installer  the installer signed (the `signing` environment again), then every file verified, summed, the
 #              release manifest signed (required) and everything attested
 #   sign-macos the Apple build (Developer ID + notarization), designed in and off until its secrets exist
+#   defender-scan  the signed files scanned by Microsoft Defender on current definitions; a detection stops the release
 #   release    a draft GitHub release with the signed files, for a person to check and publish
 #
 # The build job also builds the engine bundle (hook-bundle.mjs: the hook as one file, for signed installs to update their
@@ -53,6 +54,7 @@ on:
       - packages/native/updater-key.mjs
       - packages/native/updater-public-key.txt
       - packages/native/verify-signed.ps1
+      - packages/native/defender-scan.ps1
       - packages/native/wix/**
 
 permissions: {}
@@ -151,6 +153,9 @@ jobs:
             if ($info.FileVersion -ne "$env:VERSION.0" -or $info.ProductVersion -ne "$env:VERSION.0") { throw "$($pair[0]) is version $($info.FileVersion), not $env:VERSION.0" }
             if ($info.FileDescription -ne $pair[1] -or $info.CompanyName -ne 'Avouro LLC' -or $info.OriginalFilename -ne $pair[0]) { throw "$($pair[0]) does not name itself" }
           }
+      - name: Microsoft Defender finds nothing in the programs
+        shell: pwsh
+        run: ./packages/native/defender-scan.ps1 packages/native/build/scopebond-agent.exe packages/native/build/scopebond-tray.exe
       - name: SBOM
         run: node packages/native/sbom.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -446,9 +451,34 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # The signed files as published, scanned by Microsoft Defender on current definitions. A clean scan means nothing has to
+  # be submitted to Microsoft by hand: reputation follows the signing identity. A detection stops the release here.
+  defender-scan:
+    name: defender scan (windows)
+    needs: sign-installer
+    runs-on: windows-latest
+    permissions:
+      contents: read # check out the scan script
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: packages/native/defender-scan.ps1
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed-windows
+          path: out
+      - name: Microsoft Defender finds nothing in the signed files
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem out -File | Where-Object { $_.Extension -in '.exe', '.msi', '.tgz' } | ForEach-Object { $_.FullName }
+          if (-not $files) { throw "no signed files to scan" }
+          ./packages/native/defender-scan.ps1 @files
+
   release:
     name: draft release
-    needs: [build, sign-installer]
+    needs: [build, sign-installer, defender-scan]
     if: github.event_name == 'workflow_dispatch' && inputs.release
     runs-on: ubuntu-latest
     permissions:
