@@ -97,9 +97,14 @@ export { recordFatigue, readFatigue, fatigueHeaderValue, localDay, FATIGUE_FILE,
 export { checkNextKey, pinNextKey, readNextKey, useNextKey, signatureModeAt, nextKeySigningInput, NEXT_KEY_FORMAT, NEXT_KEY_SIGNATURE_DOMAIN, NEXT_KEY_FILE, type NextKeyDocument } from "./policy-next-key.js";
 export {
   loadIntelPlugin, intelComponentState, checkIntelComponent, readIntelManifest, pluginFrom, importVerifiedModule, intelDir, intelCurrentDir,
-  INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_MODULE, INTEL_MANIFEST, INTEL_MAX_BYTES,
+  artifactKindsOf, handArtifacts, INTEL_COMPONENT_DOMAIN, INTEL_BUDGET_MS, INTEL_MODULE, INTEL_MANIFEST, INTEL_MAX_BYTES, MAX_ARTIFACT_KINDS,
   type IntelPlugin, type IntelManifest, type IntelAction, type IntelMembers, type IntelCheck,
 } from "./intel-plugin.js";
+export {
+  syncArtifacts, artifactRefsOf, checkArtifactText, readArtifactIndex, heldArtifacts, artifactsDir, SIGNED_ARTIFACTS_CAPABILITY, ARTIFACT_FORMAT,
+  ARTIFACT_SIGNATURE_DOMAIN, MAX_ARTIFACT_REFS, ARTIFACT_MAX_BYTES, ARTIFACTS_DIR, ARTIFACT_INDEX_FILE,
+  type ArtifactRef, type HeldArtifact, type HeldArtifactEntry, type ArtifactSyncOptions, type ArtifactSyncResult, type ArtifactSyncFailure, type ArtifactCheck,
+} from "./signed-artifacts.js";
 export {
   engineToRun, readCurrentEngine, writeCurrentEngine, engineStartFailures, recordEngineStartFailure, checkStagedEngine, verifyEngineManifest, compileEngine,
   engineHome, engineDir, engineVersionDir, engineKeysFrom, engineStaged, isEngineVersion, compareEngineVersions,
