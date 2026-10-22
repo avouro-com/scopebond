@@ -18,7 +18,7 @@ silently closed.
 
 1. Use the [Node version pinned for this repository](.nvmrc) and pnpm 10.34.6
    (the `packageManager` in `package.json`). Individual packages have their own
-   runtime requirements; the hook and Scopebond Agent require Node >=22.13.
+   runtime requirements; the hook and the Scopebond service (`@scopebond/agent`) require Node >=22.13.
 2. `pnpm install` — this also activates the local git hooks
    (`git config core.hooksPath .githooks`).
 3. Make your change on a branch, add tests, and run `pnpm run gate` and
@@ -26,9 +26,8 @@ silently closed.
 
 ## The open-source content gate
 
-This is a **public** repository. Avouro's private business/strategy/legal design
-documents live in a separate private repository and must never be committed here.
-A hard gate (`scripts/oss-gate.mjs`) runs on **commit** (`.githooks/pre-commit`),
+This is a **public** repository. Documents that are not part of the open-source
+project are not kept here and must never be committed. A hard gate (`scripts/oss-gate.mjs`) runs on **commit** (`.githooks/pre-commit`),
 **push** (`.githooks/pre-push`), and every **pull request** (CI required check).
 It enforces a path allowlist, blocks known-private paths and prior-project
 codenames, and scans for secrets. If it blocks a file that legitimately belongs in
@@ -38,9 +37,8 @@ and explain why. Do not bypass the gate.
 ## Contributor License Agreement (CLA)
 
 Contributions are accepted under a CLA (Apache ICLA-style) — see [CLA.md](CLA.md).
-This preserves the option to relicense the proprietary control plane later; it
-does **not** change the Apache-2.0 terms of your contribution to this repository.
-The CLA check must pass before a PR is merged.
+The CLA lets Avouro LLC offer the hosted service under its own terms. Your
+contribution stays available under Apache-2.0. The CLA check must pass before a PR is merged.
 
 ## Coding standards
 

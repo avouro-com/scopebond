@@ -1,5 +1,5 @@
 {
-  "about": "Shared vectors for the tuning digest of a blocked record: sha256 of the JSON array [action type, workspace rule, program, target class, environment, host]. `digest` lists records and the digest both sides compute; `none` records neither side digests; `computer_none` records the computer never digests. `grants` pins the grants digest of a rules document with and without a quiet list (`quiet_patterns`). `workspace` is a synthetic workspace (developers, days, the block of each kind, the blocks per developer per day) with the quiet list its tuning arrives at and the questions and notifications per developer per day before and after.",
+  "about": "Shared vectors for the block digest. `digest` lists records and the digest both sides compute; `none` records neither side digests; `computer_none` records the computer never digests. `grants` pins the grants digest of a rules document with and without a quiet list (`quiet_patterns`). `workspace` is a synthetic workspace with its quiet list and the questions and notifications per developer per day before and after.",
   "digest": [
     {
       "name": "shell delete of build output",

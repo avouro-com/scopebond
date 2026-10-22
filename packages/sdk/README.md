@@ -11,7 +11,10 @@ Scopebond gateway. Zero dependencies (`node:crypto` + `fetch`).
 import { createSigner, submit } from "@scopebond/sdk";
 
 const agent = createSigner(); // or load a persisted PKCS8 privateKeyPem
-const signed = agent.sign({ action_type: "payout.create", asset: "USDC", amount: 500000 });
+const signed = agent.sign({
+  action_type: "shell.exec",
+  params: { program: "git", command: "git push origin main" },
+});
 
 const result = await submit("http://localhost:8787", signed);
 // → { allowed, reason, receipt }  (the gateway's decision + countersigned receipt)

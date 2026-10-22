@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Free, open-source guardrails and verifiable evidence for AI coding agents: Claude Code, Cursor, Codex, MCP, and GitHub. Scopebond Cloud is a separate proprietary hosted workspace.",
+  "description": "See what your AI coding agents do and block what they shouldn't: Claude Code, Cursor, OpenAI Codex and GitHub Copilot. Open source (Apache-2.0). Scopebond Cloud is a separate proprietary hosted workspace.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://scopebond.com",

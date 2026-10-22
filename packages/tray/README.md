@@ -1,7 +1,7 @@
 # scopebond-tray (Windows, not published)
 
 The Scopebond tray for Windows: the icon in the taskbar's notification area, its right-click menu and a small status
-panel, for the Scopebond Agent installed by the signed Windows installer. It is a [Tauri 2](https://v2.tauri.app) program
+panel, for the Scopebond service (`@scopebond/agent`) installed by the signed Windows installer. It is a [Tauri 2](https://v2.tauri.app) program
 (Rust, and the WebView2 that Windows already has). It is not an npm package; npm installs keep the agent's own
 PowerShell tray.
 

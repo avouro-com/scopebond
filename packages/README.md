@@ -4,22 +4,23 @@ All ten packages below are free, Apache-2.0 open-source software. The hosted
 shared workspace, Scopebond Cloud, is a separate proprietary service and is not
 included here. Its Free and paid plans are distinct from these packages.
 
-The hook and gateway can run locally without a Cloud account. The Scopebond Agent
-is a companion for connected computers, not the AI coding agent doing the work.
+The hook and gateway can run locally without a Cloud account. The Scopebond service
+on the computer (`@scopebond/agent`) keeps a connected computer connected to its
+workspace.
 See the [root README](../README.md) for product scope and hosted versus local setup.
 
 | Package | Purpose | Status |
 |---|---|---|
-| `policy-schema` | Policy, action, receipt, and observation schemas and shared evidence vectors. | **experimental** (published 0.11.3) |
-| `verify` | Deterministic policy evaluation and independent evidence verification. | **experimental** (published 0.6.12) |
-| `gateway` | HTTP/MCP policy engine, constrained execution, signed evidence, and a kill switch. Default execution is a simulation. | **experimental alpha; not production-qualified** (published 0.20.6) |
+| `policy-schema` | Policy, action, receipt, and observation schemas and shared signed-record vectors. | **experimental** (published 0.11.3) |
+| `verify` | Deterministic policy evaluation and independent checking of signed records. | **experimental** (published 0.6.12) |
+| `gateway` | Checks agent actions sent over HTTP and MCP, with constrained execution, signed records, and a way to stop one agent or all of them. Default execution is a simulation. | **experimental alpha; not production-qualified** (published 0.20.6) |
 | `sdk` | Signing action intents and approvals and submitting them to a gateway. | **experimental** (published 0.1.11) |
-| `hook` | Claude Code, Cursor, and Codex checks and signed local records. Coverage depends on the tool; Cursor file edits are recorded after writing. | **experimental** (published 0.31.2) |
+| `hook` | Claude Code, Cursor, OpenAI Codex and GitHub Copilot checks and signed local records. Coverage depends on the tool; Cursor file edits are recorded after writing. | **experimental** (published 0.31.2) |
 | `github-action` | Agent pull-request checks in your own runner. Make the check required to gate merge; signing is configurable. | **experimental** (published 0.5.17) |
 | `mcp` | Checks routed MCP tools/call requests before forwarding; other MCP operations are outside the tool-call policy. | **experimental** (published 2.0.18) |
 | `framework` | Guards supported tools in Vercel AI SDK, LangGraph/LangChain, and custom loops; the application must honor the decision. | **experimental** (published 0.3.18) |
 | `fake-cloud` | A stand-in Scopebond workspace for tests: device sign-in, enrollment, delivery, rules, self-check and client version, with fault injection (401, 409, 429, 500, slow, dropped). | **experimental** (private test tool; not published) |
-| `agent` | Open-source companion for delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.11.6) |
+| `agent` | The Scopebond service on the computer: delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.11.6) |
 
 **Core-package rule:** `policy-schema`, `verify`, `gateway`, and `sdk` carry no
 vendor or agent-framework SDK dependencies. External services sit behind an
@@ -40,5 +41,5 @@ Worked examples live in [`../examples/`](../examples/). After `pnpm -r build`, r
 | `gateway` | `quickstart.mjs` | Signed request allowed within policy and denied over its limit. |
 
 Conformance vectors are already included in the schema and verifier packages.
-Curated rule packs and Safe Install checks are part of Scopebond Cloud and are not
+Protection packs and Safe Install checks are part of Scopebond Cloud and are not
 packages in this repository.
