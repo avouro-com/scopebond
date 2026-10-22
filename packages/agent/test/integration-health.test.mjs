@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expectedHarnesses, integrationHealth, missingHookEntries, localChecks, repairHookEntries, maintainHookEntries } from "../dist/index.js";
-import { ADAPTERS, HARNESSES, isHarness, writeHarnessConfig, removeHarnessConfig, writeIntegrationIntent } from "@scopebond/hook";
+import { ADAPTERS, HARNESSES, isHarness, writeHarnessConfig, removeHarnessConfig, writeIntegrationIntent, pruneHarnessEntries, wireLifecycleHooks, unwireLifecycleHooks } from "@scopebond/hook";
 import { editHarnessConfig } from "../../hook/dist/config-edit.js";
 
 function profile(t) {
@@ -24,6 +25,47 @@ test("a detected Codex without hooks.json needs enrollment", (t) => {
   const root = profile(t);
   mkdirSync(join(root, ".codex"));
   assert.deepEqual(missingHookEntries(["codex"]), ["codex"]);
+});
+
+test("native disablement is preserved and lifecycle-only configuration still needs a decision hook", (t) => {
+  const root = profile(t);
+  mkdirSync(join(root, ".codex"));
+  const file = join(root, ".codex", "hooks.json");
+  writeFileSync(file, JSON.stringify({ disableAllHooks: true }));
+  assert.deepEqual(missingHookEntries(["codex"]), []);
+  writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "scopebond-hook codex" }] }] } }));
+  assert.deepEqual(missingHookEntries(["codex"]), ["codex"]);
+  writeFileSync(file, " ".repeat(4 * 1024 * 1024 + 1));
+  assert.equal(integrationHealth(["codex"])[0].reason, "invalid_configuration");
+  assert.throws(() => writeHarnessConfig(file, "codex", "scopebond-hook codex"), /too large/);
+});
+
+test("automatic install and upkeep preserve exclusions and native disablement", (t) => {
+  const root = profile(t);
+  mkdirSync(join(root, ".codex")); mkdirSync(join(root, ".claude"));
+  const file = join(root, ".claude", "settings.json");
+  const disabled = JSON.stringify({ disableAllHooks: true, hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "npx @scopebond/hook claude" }] }] } });
+  writeFileSync(file, disabled);
+  writeIntegrationIntent({ version: 1, automatic: true, excluded: ["codex"] }, join(root, "state"));
+  assert.deepEqual(maintainHookEntries(["claude", "codex"]), []);
+  assert.equal(readFileSync(file, "utf8"), disabled);
+  const output = execFileSync(process.execPath, [new URL("../../hook/dist/cli.js", import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, ""), "install", "--dry-run"], { encoding: "utf8", env: process.env });
+  assert.equal(output.includes("Would create"), false);
+  assert.equal(output.includes("Would modify"), false);
+});
+
+test("automatic pruning and lifecycle removal preserve another command in a shared group", (t) => {
+  const root = profile(t); const file = join(root, "hooks.json");
+  const other = { type: "command", command: "other-tool verify" };
+  writeFileSync(file, JSON.stringify({ theme: "dark", hooks: { PreToolUse: [{ matcher: "*", hooks: [other, { type: "command", command: "scopebond-hook claude" }] }] } }));
+  assert.equal(pruneHarnessEntries(file, () => true), 1);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).hooks.PreToolUse[0].hooks, [other]);
+  wireLifecycleHooks(file, "scopebond-hook claude");
+  const config = JSON.parse(readFileSync(file, "utf8")); config.hooks.SessionStart[0].hooks.push(other);
+  writeFileSync(file, JSON.stringify(config));
+  assert.equal(unwireLifecycleHooks(file), 4);
+  const remaining = JSON.parse(readFileSync(file, "utf8"));
+  assert.deepEqual(remaining.hooks.SessionStart[0].hooks, [other]); assert.equal(remaining.theme, "dark");
 });
 
 test("a Claude entry cannot certify a missing Codex integration", (t) => {

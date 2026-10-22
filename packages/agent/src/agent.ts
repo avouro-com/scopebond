@@ -16,6 +16,7 @@ import {
 } from "@scopebond/hook";
 import { applyToolSettings, toolSettingsReport } from "./tool-settings.js";
 import { agentVersion } from "./update.js";
+import { integrationHealth } from "./integration-health.js";
 
 export interface CycleOptions {
   /** The Scopebond home this agent serves (the user's ~/.scopebond by default). */
@@ -56,7 +57,7 @@ export function expectedHarnesses(): Harness[] {
 
 /** Agent settings that lost their Scopebond hook entry (an update or a reset can remove it). */
 export function missingHookEntries(harnesses: Harness[] = expectedHarnesses()): Harness[] {
-  return automaticHarnesses(harnesses).filter((h) => adapterPresent(h) && !isHarnessConfigured(userHarnessFile(h)));
+  return integrationHealth(automaticHarnesses(harnesses)).filter((h) => h.presence === "detected" && h.integration === "not_configured" && !h.entry).map((h) => h.harness);
 }
 
 export async function runCycle(options: CycleOptions): Promise<CycleResult> {

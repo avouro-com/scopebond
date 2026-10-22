@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findProgram } from "@scopebond/gateway/node";
@@ -29,9 +29,13 @@ export function adapterFile(harness: Harness, profile: AdapterProfile = {}): str
 
 /** Detection is presence evidence, never invocation or authorization. A Copilot Chat folder alone is not CLI evidence. */
 export function adapterPresent(harness: Harness, profile: AdapterProfile = {}): boolean {
+  const exists = (file: string) => {
+    try { lstatSync(file); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  };
   const directory = adapterDirectory(harness, profile);
-  if (harness !== "copilot") return existsSync(directory);
-  if (existsSync(join(directory, "settings.json")) || existsSync(join(directory, "logs"))) return true;
+  if (harness !== "copilot") return exists(directory);
+  if (exists(join(directory, "settings.json")) || exists(join(directory, "logs"))) return true;
   const platform = profile.platform ?? process.platform;
   return (platform === "win32" ? ["copilot", "copilot.cmd"] : ["copilot"]).some((name) => {
     try { return findProgram(name, { platform, env: profile.env ?? process.env }) !== null; }

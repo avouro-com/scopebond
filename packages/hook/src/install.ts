@@ -16,7 +16,7 @@ import { canonical } from "@scopebond/gateway";
 import { findProgram, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 import { hookCliPath } from "./self.js";
-import { editHarnessConfig } from "./config-edit.js";
+import { editHarnessConfig, readConfigText as readBoundedConfigText } from "./config-edit.js";
 
 import { adapterFile, adapterPresent, type Harness } from "./adapters.js";
 export { HARNESSES, type Harness } from "./adapters.js";
@@ -157,27 +157,27 @@ export function excludeFromGit(file: string): boolean {
 
 /** Remove the Scopebond entries whose command `remove` selects, leaving every other
  *  setting alone. Returns the number of entries removed. */
-export function pruneHarnessEntries(file: string, remove: (command: string) => boolean): number {
-  let config: Record<string, unknown> | undefined;
-  try { config = readHarnessConfigIfPresent(file); } catch { return 0; }
-  if (config === undefined) return 0;
-  const hooks = isRecord(config.hooks) ? config.hooks : null;
-  if (!hooks) return 0;
+export function pruneHarnessEntries(file: string, remove: (command: string) => boolean, events?: readonly string[]): number {
+  if (readHarnessConfigIfPresent(file) === undefined) return 0;
   let removed = 0;
-  const commandsOf = (e: unknown): string[] => {
-    if (!isRecord(e)) return [];
+  const prune = (list: unknown[]): unknown[] => list.flatMap((e): unknown[] => {
+    if (!isRecord(e)) return [e];
     const command = harnessEntryCommand(e);
-    const own = command !== undefined && isScopebond(command) ? [command] : [];
-    const nested = Array.isArray(e.hooks) ? e.hooks.flatMap(commandsOf) : [];
-    return [...own, ...nested];
-  };
-  for (const [event, value] of Object.entries(hooks)) {
-    if (!Array.isArray(value)) continue;
-    const kept = value.filter((e) => !(entryMatches(e) && commandsOf(e).some(remove)));
-    removed += value.length - kept.length;
-    (hooks as Record<string, unknown[]>)[event] = kept;
-  }
-  if (removed > 0) writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+    if (command !== undefined && isScopebond(command) && remove(command)) { removed++; return []; }
+    if (!Array.isArray(e.hooks)) return [e];
+    const hooks = prune(e.hooks);
+    return hooks.length || e.hooks.length === 0 ? [{ ...e, hooks }] : [];
+  });
+  editHarnessConfig(file, (config) => {
+    removed = 0;
+    const hooks = isRecord(config.hooks) ? config.hooks : {};
+    for (const [event, value] of Object.entries(hooks)) {
+      if (!Array.isArray(value) || (events && !events.includes(event))) continue;
+      const kept = prune(value);
+      if (events && !kept.length) delete hooks[event];
+      else (hooks as Record<string, unknown[]>)[event] = kept;
+    }
+  }, { mustExist: true });
   return removed;
 }
 
@@ -438,7 +438,7 @@ export function readHarnessConfig(file: string): Record<string, unknown> {
 /** `readHarnessConfig`, but undefined when there is no file. The file is read directly (a missing file is the read's
  *  ENOENT), never checked first: a check followed by the read and a later write races a path swap between them. */
 function readHarnessConfigIfPresent(file: string): Record<string, unknown> | undefined {
-  const raw = readIfPresent(file);
+  const raw = readBoundedConfigText(file);
   if (raw === undefined) return undefined;
   const text = raw.replace(/^\uFEFF/, "");
   if (!text.trim()) return {};
@@ -870,35 +870,18 @@ export const LIFECYCLE_EVENTS = ["SessionStart", "SessionEnd", "PostToolUse", "P
  *  command tells the events apart. Only Claude Code is wired: its lifecycle events are the
  *  ones the hook's tested mapping covers. Nothing else in the file changes. */
 export function wireLifecycleHooks(file: string, command: string): string {
-  const config = readHarnessConfig(file);
-  backupHarnessConfig(file);
-  mkdirSync(dirname(file), { recursive: true });
+  return editHarnessConfig(file, (config) => {
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   for (const event of LIFECYCLE_EVENTS) {
     const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
     const hook = { type: "command", command };
     placeGroupedHook(list, hook, () => (event.startsWith("Session") ? { hooks: [hook] } : { matcher: "*", hooks: [hook] }));
   }
-  writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-  return file;
+  });
 }
 
 /** Remove only the lifecycle entries `wireLifecycleHooks` added, leaving PreToolUse and every
  *  other setting alone. Returns the number removed. */
 export function unwireLifecycleHooks(file: string): number {
-  let config: Record<string, unknown> | undefined;
-  try { config = readHarnessConfigIfPresent(file); } catch { return 0; }
-  if (config === undefined) return 0;
-  const hooks = isRecord(config.hooks) ? config.hooks : null;
-  if (!hooks) return 0;
-  let removed = 0;
-  for (const event of LIFECYCLE_EVENTS) {
-    const value = (hooks)[event];
-    if (!Array.isArray(value)) continue;
-    const kept = value.filter((e) => !entryMatches(e));
-    removed += value.length - kept.length;
-    if (kept.length) (hooks as Record<string, unknown[]>)[event] = kept; else delete (hooks)[event];
-  }
-  if (removed > 0) writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-  return removed;
+  return pruneHarnessEntries(file, () => true, LIFECYCLE_EVENTS);
 }

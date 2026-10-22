@@ -26,6 +26,7 @@ import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { integrationHealth } from "./integration-health.js";
 import { startDiscoveryLoop } from "./discovery-loop.js";
+import { createInventoryReporter } from "./inventory.js";
 import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
 import { livePrompt, windowAllowed } from "./live-prompt.js";
@@ -432,6 +433,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const cycleLimit = options.cycleLimitMs ?? CYCLE_LIMIT_MS;
   let stopped = false;
   let discovery: ReturnType<typeof startDiscoveryLoop> | null = null;
+  const inventory = createInventoryReporter({ dir: options.dir, connection: () => loadConnection(options.dir), fetchImpl: options.fetchImpl });
   let lastSelfCheckAt = 0;
   // Repairs of this computer's setup: done as soon as they are seen (each cycle, when the tray asks, before each self-check),
   // recorded, and shown only while one fails.
@@ -1101,7 +1103,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return { outcome: "stopped", text: `Stopped allowing ${what}${where}` };
     },
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
-    "GET /status": () => ({ ...computerStatus(options.dir), integrations: integrationHealth(expectedHarnesses()), health: health(), agent: {
+    "GET /status": () => ({ ...computerStatus(options.dir), integrations: integrationHealth(expectedHarnesses()), inventory: inventory.state(), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
       failed_update: failedUpdate(options.dir), signing_in: reconnecting, last_repair: lastRepair, credential_renewal: renewal,
     } }),
@@ -1146,6 +1148,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     if (timer) clearTimeout(timer);
     if (maintenanceTimer) clearInterval(maintenanceTimer);
     discovery?.stop();
+    inventory.stop();
     if (updateRetryTimer) clearTimeout(updateRetryTimer);
     // A cycle under way gets a moment to finish; stop never waits on one that does not.
     if (running) await Promise.race([running.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2_000).unref?.())]);
@@ -1190,7 +1193,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     maintenanceTimer = setInterval(() => { if (!stopped) void maintain(); }, UPDATE_EVERY_MS);
     maintenanceTimer.unref?.();
   }
-  if (options.discovery ?? options.maintenance !== false) discovery = startDiscoveryLoop({ reconcile: () => { if (!stopped) heal(); return Promise.resolve(); } });
+  if (options.discovery ?? options.maintenance !== false) discovery = startDiscoveryLoop({ reconcile: async () => { if (!stopped) { heal(); await inventory.reconcile(); } } });
   await cycle();
   schedule();
   return { port: control.endpoint.port, cycleNow: cycle, maintainNow: () => maintain(true), stop };

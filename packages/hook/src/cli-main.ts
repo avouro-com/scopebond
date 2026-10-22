@@ -10,6 +10,8 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync, readdirSync } from "node:fs";
 import { hookCliPath, isSingleExecutable } from "./self.js";
+import { adapterPresent } from "./adapters.js";
+import { automaticHarnesses } from "./integration-intent.js";
 import { textOf } from "./text.js";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -38,7 +40,7 @@ import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand
 import { approvalSummary, retryAfterSeconds } from "./login-approval.js";
 import { createInterface } from "node:readline/promises";
 import {
-  userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
+  userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig, readHarnessConfig,
   cursorDetected, codexDetected, copilotDetected, harnessDetected, HARNESSES, COPILOT_DECISION_DEADLINE_MS,
   absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
@@ -1746,7 +1748,11 @@ function runInstall(args: string[]): void {
     : args.includes("--cursor") ? ["cursor"]
     : args.includes("--copilot") ? ["copilot"]
     : args.includes("--claude") ? ["claude"]
-    : HARNESSES.filter(harnessDetected);
+    : automaticHarnesses(HARNESSES).filter((h) => {
+      if (!adapterPresent(h)) return false;
+      try { const config = readHarnessConfig(userHarnessFile(h)); return config.disableAllHooks !== true && config.hooksEnabled !== false; }
+      catch { return false; }
+    });
   // `install` rewrites agent config files the user did not create — their theme, plugins
   // and permissions live in ~/.claude/settings.json — so there is a way to see exactly
   // what it would touch before it touches anything.
