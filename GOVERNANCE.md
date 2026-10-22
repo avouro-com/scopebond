@@ -6,7 +6,7 @@ Scopebond is stewarded by the maintainer (Avouro LLC) as the final authority on
 scope, architecture, and releases. This is a benevolent-dictator model
 appropriate to an early, single-maintainer project; it will formalize (a
 maintainers team, then a steering process) as contributors earn trust. Contact:
-scopebond@avouro.com.
+support@scopebond.com.
 
 ## What we accept — the contribution ladder
 

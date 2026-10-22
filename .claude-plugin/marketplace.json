@@ -8,7 +8,7 @@
     {
       "name": "scopebond",
       "source": "./packages/hook",
-      "description": "Free, open-source guardrails and signed decision records for supported Claude Code actions. Scopebond Cloud is a separate proprietary hosted workspace."
+      "description": "See and block what Claude Code, Cursor, OpenAI Codex and GitHub Copilot do. Monitor or Block rules and a signed record for each action. Open source (Apache-2.0); works without an account."
     }
   ]
 }

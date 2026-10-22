@@ -1,7 +1,7 @@
 # Security Policy
 
 Scopebond's open-source components check supported agent actions and produce
-signed evidence. Enforcement integrity, record integrity, credentials, and local
+signed records. Enforcement integrity, record integrity, credentials, and local
 workspace connections are security-sensitive, so we take reports seriously.
 
 ## Reporting a vulnerability
@@ -35,12 +35,10 @@ The hosted shared workspace (Scopebond Cloud) is a separate proprietary service,
 not open source and not included in this repository. Report issues affecting it
 to the same address, security@scopebond.com.
 
-Enforcement boundary: the connectors are cooperative (they govern an agent that
-routes through them); an agent that bypasses the hook or gateway is out of scope for
-a "bypass" report. Reports that a *routed* action escaped its policy, that a receipt
+What Scopebond checks: the connectors check the actions an agent routes through
+them; an agent that bypasses the hook or gateway is out of scope for a "bypass"
+report. Reports that a *routed* action escaped its policy, that a receipt
 misrepresents a decision, or that a secret leaked into a receipt are in scope.
-
-> `[PLANNED]` A bug-bounty program will be published at general availability.
 
 ## Past advisories
 

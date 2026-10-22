@@ -1,15 +1,14 @@
 # @scopebond/gateway
 
-> **Experimental alpha:** use controlled test systems only. The constrained refund
-> adapter demonstrates idempotency and result-query reconciliation; wider upstream
-> coverage and distributed hosted coordination remain release gates. With no `executor` configured, allowed
-> requests run the built-in simulation and are recorded as `simulated`, never
-> `executed`.
+> **Experimental alpha:** use controlled test systems only. With no `executor`
+> configured, allowed requests run the built-in simulation and are recorded as
+> `simulated`, never `executed`.
 
-The **Scopebond Gateway** is a free, Apache-2.0 open-source policy-enforcement
-proxy for actions routed through its HTTP and MCP interfaces. It connects rules,
-control, and signed decision evidence. Built on [Hono](https://hono.dev), it runs
-on Node and Workers.
+The **Scopebond Gateway** is a free, Apache-2.0 open-source, self-hosted gateway for
+agent actions sent over HTTP and MCP, such as a coding agent's command, file write or
+tool call. It checks each action against your rules, blocks what they say to block,
+and signs a record of each decision. Built on [Hono](https://hono.dev), it runs on
+Node and Workers.
 
 Scopebond Cloud, the hosted shared workspace, is a separate proprietary service;
 it is not included in this package. You can self-host the gateway without a Cloud
@@ -19,10 +18,10 @@ account and optionally export configured records to a workspace.
 
 - **Prevent** — evaluates each proposed action against your policy with
   `@scopebond/verify` in real time and **denies out-of-policy actions, failing closed.**
-- **Prove** — countersigns every action into an **Ed25519-signed `scopebond:receipt`**
+- **Sign a record** — countersigns every action into an **Ed25519-signed `scopebond:receipt`**
   with a **persistent attester key**, stored in a **durable receipt log** (the track
   record). Anyone can verify a receipt against the attester's published public key.
-- **Kill switch** — durable global or per-agent stops, checked again immediately before dispatch.
+- **Stop** — durable global or per-agent stops, checked again immediately before dispatch.
 
 Clause modes: `enforce` blocks in real time; `monitor` lets the action through but
 signs and flags it (covered at claim time); `require_approval` holds without a valid
@@ -136,7 +135,7 @@ each `kid`; do not put private keys in this file:
 ]
 ```
 
-## Dispatch boundary: approvals, delegation and action budgets
+## Before dispatch: approvals, delegation and action budgets
 
 `createGateway({ dispatchGuard })` (and the hook and MCP proxy, through the same guard) checks three things once per parent action, after policy has allowed it and immediately before it is dispatched. They are decided in one SQLite transaction (`dispatch.db`), so two processes cannot both take the last slot or the same approval, and a refusal spends nothing.
 
@@ -180,7 +179,7 @@ workspace's id in `scopebond-machine-id.json` (`SCOPEBOND_MACHINE_ID_FILE`) so `
 uses the same one `enroll` did. Without an OS machine id (some containers), nothing is
 sent; the host name or a network address is never used instead. `computeMachineId`,
 `readRawMachineId` and `cachedMachineId` (from `@scopebond/gateway/node`) are the shared
-implementation the hook and the Scopebond Agent use.
+implementation the hook and the Scopebond service use.
 
 ## Tamper-evidence (anchoring)
 
@@ -223,7 +222,7 @@ missed. The key registry (`SCOPEBOND_PRINCIPAL_KEYS_FILE`) is followed the same 
 `"status": "revoked"` is refused without a restart. `POST`ing a policy over HTTP is deliberately **not** supported
 (that would let anyone weaken enforcement); the watched file is the only source of policy changes.
 
-## Prove it — verify a receipt
+## Check a signed record — verify a receipt
 
 Every receipt is independently verifiable against the attester's public key — no
 trust in the gateway required.

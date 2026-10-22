@@ -13,8 +13,8 @@ outside the guarded loop are not covered.
 - **Label:** cooperative · prevents if honored. Enforcement depends on the
   framework honoring the guard; code that calls a tool outside the framework's
   tool loop is not covered.
-- **Receipt class:** signed-intent — the agent's key signs the intent, so it is
-  the strongest evidence class.
+- **Receipt class:** signed-intent — the agent's key signs the intent, so the
+  signed record carries the agent's own signature for the action it asked to take.
 
 Adapters for the **Vercel AI SDK** and **LangGraph/LangChain** ship here; each
 framework is an optional peer, never a dependency.

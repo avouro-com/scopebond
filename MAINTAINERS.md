@@ -2,7 +2,7 @@
 
 | Area | Maintainer |
 |---|---|
-| Everything (interim) | Avouro LLC — scopebond@avouro.com |
+| Everything (interim) | Avouro LLC — support@scopebond.com |
 
 Maintainers are the `@avouro-com/maintainers` team (see `.github/CODEOWNERS`).
 As contributors earn trust, per-area maintainers will be added here and to the

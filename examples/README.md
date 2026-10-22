@@ -8,13 +8,13 @@
 
 - **`framework-guard.mjs`** — the framework connector (`@scopebond/framework`): wraps a
   Vercel AI SDK-shaped `tools` record so every tool call is checked against policy
-  in-process (cooperative M0) and records a **signed-intent** receipt before it runs.
+  in-process and records a **signed-intent** receipt before it runs.
   Shows a read-only tool allowed, a mapped money tool allowed within its cap and denied
   over it, and a non-allowlisted tool denied (fail-closed). A denied call returns a
   synthetic denial to the model instead of executing; `executed` is `false` because the
   guard never runs the tool itself.
 
-- **`github-pr-gate.mjs`** — the GitHub connector's boundary lane
+- **`github-pr-gate.mjs`** — the GitHub connector's merge check
   (`@scopebond/github-action`): decides whether an agent's pull request may merge, as a
   required status check would in your own Actions runner. Pure and deterministic (no
   credential, no network). Shows a human PR never blocked, an agent PR within policy

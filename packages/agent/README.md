@@ -1,10 +1,10 @@
 # @scopebond/agent
 
-**Free, open-source companion (Apache-2.0).** Scopebond Cloud, the hosted shared
+**Free and open source (Apache-2.0).** Scopebond Cloud, the hosted shared
 workspace it connects to, is a separate proprietary service. This package is the
-Scopebond Agent companion, not the AI coding agent doing the work.
+Scopebond service on the computer, which keeps the computer connected to its workspace.
 
-The Scopebond Agent keeps a computer connected to its Scopebond workspace without anyone running a command.
+The Scopebond service (`@scopebond/agent`) keeps a computer connected to its Scopebond workspace without anyone running a command.
 It is one resident process per user. The hook (`@scopebond/hook`) keeps evaluating supported actions on its own; the
 agent never takes part in a decision. It only keeps everything around the decisions working:
 
@@ -44,7 +44,7 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
 
 - **First run.** After the installer, the tray starts the agent, and on its very first start the agent signs in by
   itself, once: the approval page opens in your browser and the tray shows the code to check there. Once you approve it,
-  the agent puts the hook into the settings of the coding agents on this computer (Claude Code, and Cursor and Codex where
+  the agent puts the hook into the settings of the coding agents on this computer (Claude Code, and Cursor and OpenAI Codex where
   they are installed) and turns autostart on, as `setup` does. If you close the page, **Sign in…** in the tray's menu
   starts it again. The workspace is the one the installer was given (`msiexec /i … WORKSPACE=https://<your-workspace>`,
   kept as `Workspace` under `HKCU\Software\Avouro\Scopebond`, or `HKLM` for an install for every user), else

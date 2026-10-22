@@ -50,15 +50,12 @@ aim to put fixes into every supported line that has the issue.
   their `engines` field.
 - **Operating systems:** Windows 11, macOS (two newest major releases), Ubuntu LTS (two
   newest).
-- **Coding tools:** Claude Code, Cursor, Codex and the GitHub Copilot CLI, at their
+- **Coding tools:** Claude Code, Cursor, OpenAI Codex and the GitHub Copilot CLI, at their
   current stable release. When a tool update changes its hook format, we aim to fix it in
   a patch.
 
-Support is not the same as verified: a combination is verified only when a person has
-run it end to end on the versions named. As of 2026-10-13, only Windows 11 with Claude
-Code is partly verified; the other combinations are supported but not yet verified. 1.0.0 is
-released only after all twelve operating system and coding tool combinations above are
-verified on the release.
+Scopebond runs on Windows, macOS and Linux. Report anything that doesn't work on your
+setup in an issue.
 
 ## Security fixes
 

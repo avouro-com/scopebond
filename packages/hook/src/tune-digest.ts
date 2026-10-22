@@ -1,7 +1,7 @@
-// The tuning digest of a blocked action, and the workspace's quiet list.
+// The block digest of a blocked action, and the workspace's quiet list.
 //
 // A connected workspace may keep some blocks quiet: the action is still blocked, but nobody is asked about it and the tray
-// shows no notification, only a row in its list of blocks. The workspace names those blocks by their tuning digest, a plain
+// shows no notification, only a row in its list of blocks. The workspace names those blocks by their block digest, a plain
 // sha256 over six fields every record already carries, in this order:
 //
 //   [action type, workspace rule, program, target class, environment, host]

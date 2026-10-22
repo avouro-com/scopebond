@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/agent",
   "version": "0.11.6",
-  "description": "Free, open-source Scopebond Agent companion: deliver queued records, maintain rules and connections, and report computer health to the separate proprietary Scopebond Cloud workspace.",
+  "description": "Keeps a computer connected to its Scopebond workspace: delivers records, keeps rules and the hook current, and reports health. Open source (Apache-2.0).",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/agent#readme",

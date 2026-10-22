@@ -1,5 +1,5 @@
 // The in-process tool guard: before an agent runs a tool, check the call against
-// policy (cooperative M0) and record a signed-intent receipt. The agent's key
+// policy and record a signed-intent receipt. The agent's key
 // signs the intent, so the receipt is the strongest class. Framework-agnostic —
 // the adapters wrap each framework's tool loop around `check`.
 

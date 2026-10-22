@@ -2,21 +2,22 @@
 
 The free, open-source Scopebond connector for **Claude Code**, **Cursor**,
 **OpenAI Codex** and **GitHub Copilot**. It checks supported actions delivered through the configured
-hook against your policy and signs decision records locally. Some actions are
+hook against your rules and signs a record of each decision locally. Some actions are
 observed after they happen: Cursor file edits are recorded, not prevented. See
 the coverage table below before choosing what to protect.
 
 **License and hosting:** this package is Apache-2.0 open-source software.
 Scopebond Cloud, the hosted shared workspace, is a separate proprietary service.
 You can use the hook locally without a Cloud account, or optionally connect it
-for shared activity, rule review, and retained evidence. For hosted setup, start
+for shared activity, rule review, and retained signed records. For hosted setup, start
 with the [workspace getting-started guide](https://scopebond.com/get-started).
 
-- **What it does:** records every supported action and what each rule would decide. A rule
-  blocks only once you (or your workspace) turn it on; Scopebond's own protection is always on,
-  so a coding agent can never switch Scopebond off, change its settings or uninstall it.
-- **Default:** monitor. Every rule starts by recording, not blocking. Turn one on with
-  `rules enforce <rule>`.
+- **What it does:** records each supported action and what each rule would decide. A rule
+  blocks only once you (or your workspace) set it to Block. Scopebond's own protection is on
+  from the start: Scopebond blocks a coding agent from changing its settings or uninstalling it
+  through its tools.
+- **Default:** Monitor. Each rule starts in Monitor, recording, not blocking. Set one to Block
+  with `rules enforce <rule>`.
 - **Where it works:** actions the coding agent routes through its tool system
   (shell, file, MCP, web). A process started outside the harness is not covered.
 
@@ -26,13 +27,13 @@ with the [workspace getting-started guide](https://scopebond.com/get-started).
 
 On Windows, install Scopebond with the signed installer
 ([scopebond.com/get-started](https://scopebond.com/get-started#desktop-agent), or `winget install Avouro.Scopebond`).
-It installs one signed program, `scopebond-agent.exe`, that is both the Scopebond Agent and this hook, and needs
+It installs one signed program, `scopebond-agent.exe`, that is both the Scopebond service on the computer and this hook, and needs
 neither Node.js nor npm. It installs for you alone in `%LOCALAPPDATA%\Programs\Scopebond`, or for every user in
 `%ProgramFiles%\Scopebond`, and puts that folder on PATH. Then:
 
 ```
-scopebond-agent setup https://<your-workspace>   # sign in, set up the coding agents, start with Windows
-scopebond-agent hook status                      # every hook command below, after `hook`
+scopebond-agent setup https://cloud.scopebond.com   # sign in, set up the coding agents, start with Windows
+scopebond-agent hook status                         # every hook command below, after `hook`
 scopebond-agent hook rules
 ```
 
@@ -51,7 +52,7 @@ or run `install` (or `init` for a project) to point it at the Scopebond that run
 
 ```
 npm i -g @scopebond/hook@latest
-scopebond install                   # detects Cursor and Codex
+scopebond install                   # detects Cursor, Codex and the GitHub Copilot CLI
 scopebond install --codex           # set up Codex only
 ```
 
@@ -66,8 +67,8 @@ scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
 absolute path in your user-level `~/.claude/settings.json`, `~/.cursor/hooks.json`,
 or `~/.codex/hooks.json`. After Codex setup, open Codex, run `/hooks`, review
-Scopebond, and choose **Trust** once. Every project you open is then governed by your
-user-level policy. A project's own `.scopebond/policy.json` applies only after you trust it
+Scopebond, and choose **Trust** once. Every project you open is then checked by your
+user-level rules. A project's own `.scopebond/policy.json` applies only after you trust it
 in that project (`scopebond trust`, or `init` there), pinned to its exact contents: a
 repository you clone, or an agent working in it, cannot swap in a weaker policy, and any
 later edit to that file stops it applying until you trust it again. The pin also covers the
@@ -99,7 +100,7 @@ no plain one:
 `status` and `doctor` then note that the Codex or Cursor entry uses the quoted form and may not
 start under PowerShell. A quoted path with `$` or a backtick in it is refused outright (Git Bash
 expands those even inside double quotes, so the hook could not start): install Scopebond under a
-folder without them. The Scopebond Agent rewrites a quoted Codex or Cursor entry into the plain
+folder without them. The Scopebond service (`@scopebond/agent`) rewrites a quoted Codex or Cursor entry into the plain
 form once that form is available (Claude Code runs hooks under Git Bash, which starts the quoted
 form). `uninstall` and upgrades recognise both forms, and replace or remove only Scopebond's own
 hook in a hook group another tool shares.
@@ -236,7 +237,7 @@ read) or one it holds for a person.
 A hook entry the coding agent cannot start at all (a moved Node, a removed install) lets
 actions run with no check: the agents treat that as a non-blocking error. Any failure the
 hook program itself can still catch answers deny (Claude Code: exit 2). For Codex and
-Cursor, which send nothing between actions, the Scopebond Agent checks their entries on
+Cursor, which send nothing between actions, the Scopebond service checks their entries on
 each maintenance pass and keeps each outage as a `hook_unresolvable` delivery gap that the
 rules check reports to the workspace; `doctor` reports it on any computer.
 
@@ -311,7 +312,7 @@ environment variables the command does not set itself.
 When a coding agent installs or runs software from outside the project, the hook records it as a `software.install`
 action (Action Taxonomy 1.2) beside the command or file write that does it, in the same action group and in the same
 signed receipts. It is detection only: the hook says what is installed, from where and how, and never judges whether it
-is safe. A rule (or Scopebond Cloud's verdicts) decides that.
+is safe. A rule (or Scopebond Cloud's Safe Install checks) decides that.
 
 | Route (`route`) | Read from |
 |---|---|
@@ -337,14 +338,14 @@ blocks scripts piped to a shell. The cases are public: `@scopebond/policy-schema
 Limits: an install inside a script file the agent runs (`./setup.sh`) or in a later tool call than its download or
 clone is not connected to it, and system package managers (`apt`, `dnf`, `winget`, `choco`) are not read yet.
 
-### Safe Install: verdicts before an install runs
+### Safe Install: checks before an install runs
 
 A computer connected to a workspace that offers Safe Install asks it about each install it detects, before the install
 runs: registry packages (npm, PyPI, crates.io, Go, RubyGems) by name and version, and scripts or programs fetched from
 a site by the site's host. Clones, containers, Homebrew formulas and installs from a manifest are not asked about. The
 workspace answers each one:
 
-| Verdict | What the hook does |
+| Answer | What the hook does |
 |---|---|
 | `block` | Denies the call, saying what was blocked and why. |
 | `ask` | Claude Code (in a permission mode that prompts), Cursor and GitHub Copilot show their own prompt with the reason. Codex, and Claude Code in a mode that never prompts, cannot ask, so the call is denied with the reason and how to go ahead (run the install yourself in your own terminal). |
@@ -811,7 +812,7 @@ folder's own setup takes precedence over your sign-in without being connected.
 the hook in your user settings and a project's, twice in one file, or an enabled Claude Code plugin
 beside a settings entry. Every action would then be signed and sent twice. `dedupe` keeps the
 user-level entry (`--keep project` or `--keep plugin` to keep another) and removes the rest,
-leaving other tools' hooks alone; the Scopebond Agent's daily self-check reports the same. It never leaves none:
+leaving other tools' hooks alone; the Scopebond service's daily self-check reports the same. It never leaves none:
 `--keep plugin` with no enabled Scopebond plugin changes nothing and says so. A settings file it edits is backed up
 first (`settings.json.scopebond-backup`, as the installer does) and replaced whole.
 
@@ -889,7 +890,7 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   and this computer's own opt-ins (`allowed_roots`, `protect_remote_database`).
 - **Overrides.** The workspace can set a rule to *Block, user may override* and say who may
   override. A matching action is then blocked until the person at the computer allows it once,
-  with a reason, in the Scopebond tray or the Scopebond Agent's window (`@scopebond/agent`): the hook asks the running
+  with a reason, in the Scopebond tray or the Scopebond service's window (`@scopebond/agent`): the hook asks the running
   agent and waits up to 45 seconds (20 seconds for Codex and Cursor), then blocks. On Windows with no tray listening, the
   agent asks no one at once (its window is off unless `SCOPEBOND_PROMPT_WINDOW=1`), and the denial's line for the person
   says where to allow the block, or ask an admin, afterwards: the Scopebond icon's recent blocks, or this computer's page
@@ -950,13 +951,10 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   `service_rules` is the blocked services below).
 - **Blocks kept quiet.** A workspace may keep some kinds of block quiet: the action is still
   blocked, but no one is asked about it and the tray lists it without a notification. It sends
-  them in its rules document as `quiet_patterns`, a list of tuning digests, only to a hook that
-  reports `quiet_patterns`, and signs the list with the allowances (`grants_digest`). A block's
-  tuning digest is the sha256 of the JSON array `[action type, workspace rule, program, target
-  class, environment, host]`, which the hook works out from the blocked record's own intent and
-  the clause that denied it (`tune-digest.ts`): the program by its file name, the path only as its
-  class (inside the repository, build output, temp, home, system, remote or unknown). It never
-  leaves this computer. A quiet list never lets an action through (an allowance in force still
+  them in its rules document as `quiet_patterns`, a list of opaque block digests, only to a hook
+  that reports `quiet_patterns`, and signs the list with the allowances (`grants_digest`). The
+  hook works out each block's digest on this computer and matches it against the list; the digest
+  it works out never leaves this computer. A quiet list never lets an action through (an allowance in force still
   does, as before), and it never applies to Scopebond's own protection, a session budget, Safe
   Install or a blocked service.
 - **Going back.** While the workspace sets the rules, `rules` edits and `policy load` are
@@ -1315,7 +1313,7 @@ rules check answers without it, receipts are recorded and sent without a context
 in to a workspace (`login`, `connect`) forgets what the previous one said and checks the
 rules at once, and only an accepted delivery answer counts.
 
-**The computer name.** Signing in (`login`, and the Scopebond Agent's first sign-in)
+**The computer name.** Signing in (`login`, and the Scopebond service's first sign-in)
 sends this computer's host name so the person approving it can tell which computer it
 is. Set `SCOPEBOND_HOSTNAME_MODE` to choose what is sent:
 
@@ -1351,7 +1349,7 @@ acknowledged it, once that is 30 days ago (the workspace can set 7–365 days); 
 the workspace has not acknowledged, or refused, is never removed, an anchored log is never
 pruned, and a policy that reads a longer window keeps that window (a window widened later
 counts only the history still kept). With no workspace, nothing is
-removed automatically — these are your evidence. The Scopebond Agent does this upkeep;
+removed automatically — these are your evidence. The Scopebond service does this upkeep;
 without it, a hook call does a short pass once a day. A log written by an older version
 is rewritten once to the current layout in a separate background process (767 MB became
 93 MB with every receipt kept). `prune` reports the footprint and the retention, and
@@ -1382,7 +1380,7 @@ project or to CI, agent or Scopebond settings — and the routine ones leave as 
 summary per five minutes (`scopebond:summary`, see `@scopebond/verify/summary`): their
 count, a Merkle root over them, counts by action type, program and folder, and the
 commands repeated. Every receipt stays here for the retention above, and anybody holding
-them can check them against the summary. The Scopebond Agent sends the summaries; without
+them can check them against the summary. The Scopebond service sends the summaries; without
 it, `flush` (for example at the end of a session) does; a hook call sends only when it
 recorded something notable.
 
@@ -1414,7 +1412,7 @@ the same as one given with `-c`; a push that names its destination is judged by 
 destination. The
 agent running the hook's own `init`, `install`, `trust`, `uninstall`, `connect` or
 `login` is denied, and those commands also refuse a non-interactive terminal unless
-`--yes` is passed. So is the agent switching off the Scopebond Agent: `scopebond-agent
+`--yes` is passed. So is the coding agent switching off the Scopebond service: `scopebond-agent
 autostart off`, stopping it by name (`pkill -f scopebond-agent`, `taskkill`, `wmic …
 terminate`), or a global uninstall of `@scopebond/agent` or `@scopebond/hook` (`npm
 uninstall -g`, `pnpm rm -g`, `yarn global remove`, `bun remove -g`). `scopebond-agent

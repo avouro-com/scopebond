@@ -1,7 +1,7 @@
 {
   "name": "@scopebond/framework",
   "version": "0.3.18",
-  "description": "Open-source policy guards and signed evidence for supported tools in Vercel AI SDK, LangGraph/LangChain, and custom agent applications.",
+  "description": "Open-source policy guards and signed records for supported tools in Vercel AI SDK, LangGraph/LangChain, and custom agent applications.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "homepage": "https://github.com/avouro-com/scopebond/tree/main/packages/framework#readme",

@@ -8,7 +8,7 @@ The Scopebond connector for **GitHub** — check every pull request an AI agent
 opens against your policy *before it can merge*, in your own Actions runner, with
 no Scopebond-held credential and no GitHub SDK.
 
-- **Label:** boundary · stops the consequence. Scopebond cannot see or stop what a
+- **Label:** merge check · stops the merge. Scopebond cannot see or stop what a
   sandboxed cloud agent does inside its sandbox; it can stop the **merge**, and it
   attests what was allowed or blocked. A repository that does not require the check,
   or an actor with ruleset bypass rights, is not gated.
@@ -46,11 +46,11 @@ pull-request API, and the policy is read from the base commit. Do not add steps 
 check out or execute the PR head in this job — `pull_request_target` runs with the
 base repository's token.
 
-A governed-agent PR that violates the policy fails the check (blocking the merge);
+An agent PR that violates the policy fails the check (blocking the merge);
 a human PR and non-pull-request events are **not evaluated** (never blocked). The
-governed-agent actors are the known coding-agent bots (Copilot, Devin, Jules,
-Codex, Cursor, Claude, and `github-actions[bot]` when an agent runs inside a
-workflow); to govern another actor, call `evaluatePullRequest` from your own script.
+checked actors are the known coding-agent bots (Copilot, Devin, Jules,
+OpenAI Codex, Cursor, Claude, and `github-actions[bot]` when an agent runs inside a
+workflow); to check another actor, call `evaluatePullRequest` from your own script.
 
 The policy is read from the pull request’s **base commit**, not from the branch
 under review, so a pull request cannot loosen the policy it is checked against: a PR
