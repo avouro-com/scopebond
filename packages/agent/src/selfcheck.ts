@@ -1,7 +1,7 @@
 // The daily end-to-end self-check. The agent checks this computer's side (the hook entry
 // is present and starts, autostart works, nothing is stuck, the connection is not about to lapse),
 // then signs the day with the key it enrolled with and sends everything to the workspace, which
-// verifies the signature. A pass means the whole path works, end to end; a failure names what broke.
+// verifies the signature. This checks configuration and transport, not native invocation or coverage.
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -17,6 +17,7 @@ import { installKind } from "./native-update.js";
 import { hookCli } from "./commands.js";
 import { missingPrograms } from "./hook-entries.js";
 import { discoverTools, type ToolDiscovery } from "./tools.js";
+import { integrationHealth } from "./integration-health.js";
 
 export interface SelfCheckItem { id: string; ok: boolean; detail?: string }
 
@@ -26,15 +27,17 @@ export function selfCheckProof(credentialId: string, gatewayId: string, day: str
 
 export function localChecks(dir: string, connection: HookConnection, harnesses: Harness[], now = Date.now()): SelfCheckItem[] {
   const checks: SelfCheckItem[] = [];
+  const integrations = integrationHealth(harnesses, now);
+  const missing = integrations.filter((h) => !h.entry).map((h) => h.harness);
   const entries = harnesses.flatMap((h) => configuredHookCommands(userHarnessFile(h)).filter((c) => isScopebondHookCommand(c)));
-  checks.push({ id: "hook_entry", ok: entries.length > 0, ...(entries.length ? {} : { detail: "no agent setting holds the Scopebond hook" }) });
+  checks.push({ id: "hook_entry", ok: integrations.length > 0 && missing.length === 0, ...(missing.length ? { detail: `missing or disabled Scopebond entry: ${missing.join(", ")}` } : integrations.length ? {} : { detail: "no supported coding tool detected" }) });
   const broken = entries.filter((c) => !hookCommandResolves(c));
   // A hook entry whose program is gone (Scopebond removed for every user of this computer, or an npm copy uninstalled)
   // names the missing file, so the person knows what to remove or install again.
   const gone = missingPrograms(broken);
-  checks.push({ id: "hook_starts", ok: entries.length > 0 && broken.length === 0, ...(broken.length ? { detail: `${broken.length} hook command(s) cannot start${gone.length ? ` (${gone.join(", ")} no longer there)` : ""}` } : {}) });
+  checks.push({ id: "hook_starts", ok: integrations.length > 0 && integrations.every((h) => h.executable), ...(broken.length ? { detail: `${broken.length} hook command(s) cannot start${gone.length ? ` (${gone.join(", ")} no longer there)` : ""}` } : {}) });
   // The hook twice in the user settings, or an enabled plugin beside them, signs and sends every action twice.
-  const dupes = harnesses.flatMap((h) => duplicateHooks(h, homedir()) ? [h] : []);
+  const dupes = harnesses.filter((h) => integrations.some((i) => i.harness === h && i.duplicates) || duplicateHooks(h, homedir()));
   checks.push({ id: "hook_duplicates", ok: dupes.length === 0, ...(dupes.length ? { detail: `the Scopebond hook runs more than once per action for ${dupes.join(", ")} (fix: ${hookCli("dedupe")})` } : {}) });
   const autostart = autostartHealth(dir);
   checks.push({ id: "autostart", ok: autostart.ok, ...(autostart.ok ? {} : { detail: autostart.detail }) });

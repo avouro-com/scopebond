@@ -10,7 +10,7 @@ import { createCloudExporter } from "@scopebond/gateway";
 import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, ensurePrivateDir } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
 import {
-  LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, cursorDetected, codexDetected, deliveryBackoff, hookVersion, ingestUrl,
+  LOSSLESS_OUTBOX, OUTBOX_FILE, buildStatusJson, HARNESSES, adapterPresent, automaticHarnesses, deliveryBackoff, hookVersion, ingestUrl,
   isHarnessConfigured, loadConnection, machineIdFor, policyBuilds, recordDeliveryAttempt, repairDeliveryAt, sequenceProofFor, summaryOptions, syncPolicy, userHarnessFile,
   type Harness, type StatusJson, type SyncOutcome,
 } from "@scopebond/hook";
@@ -51,12 +51,12 @@ export interface CycleResult {
 
 /** The agents on this computer whose user-level settings should hold the Scopebond hook. */
 export function expectedHarnesses(): Harness[] {
-  return ["claude", ...(cursorDetected() ? ["cursor" as const] : []), ...(codexDetected() ? ["codex" as const] : [])];
+  return HARNESSES.filter((h) => adapterPresent(h));
 }
 
 /** Agent settings that lost their Scopebond hook entry (an update or a reset can remove it). */
 export function missingHookEntries(harnesses: Harness[] = expectedHarnesses()): Harness[] {
-  return harnesses.filter((h) => existsSync(userHarnessFile(h)) && !isHarnessConfigured(userHarnessFile(h)));
+  return automaticHarnesses(harnesses).filter((h) => adapterPresent(h) && !isHarnessConfigured(userHarnessFile(h)));
 }
 
 export async function runCycle(options: CycleOptions): Promise<CycleResult> {

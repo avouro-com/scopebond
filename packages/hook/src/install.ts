@@ -16,11 +16,10 @@ import { canonical } from "@scopebond/gateway";
 import { findProgram, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 import { hookCliPath } from "./self.js";
+import { editHarnessConfig } from "./config-edit.js";
 
-export type Harness = "claude" | "cursor" | "codex" | "copilot";
-
-/** Every coding agent the hook can be wired into, in the order `status` and `doctor` list them. */
-export const HARNESSES: readonly Harness[] = ["claude", "cursor", "codex", "copilot"];
+import { adapterFile, adapterPresent, type Harness } from "./adapters.js";
+export { HARNESSES, type Harness } from "./adapters.js";
 
 /** GitHub Copilot reads every `*.json` file in its hooks folders, so Scopebond's entries live in a file of their own. */
 export const COPILOT_HOOK_FILE = "scopebond.json";
@@ -47,10 +46,7 @@ export function userHome(): string {
 /** The user-level agent config file for a harness. `HOME`/`USERPROFILE` (via homedir)
  *  roots it; SCOPEBOND_HOME does not move the agent's own config. */
 export function userHarnessFile(harness: Harness): string {
-  if (harness === "cursor") return join(homedir(), ".cursor", "hooks.json");
-  if (harness === "codex") return join(homedir(), ".codex", "hooks.json");
-  if (harness === "copilot") return join(copilotHome(), "hooks", COPILOT_HOOK_FILE);
-  return join(homedir(), ".claude", "settings.json");
+  return adapterFile(harness);
 }
 
 /** The project-level agent config file for a harness — what `init` writes, so the
@@ -511,18 +507,15 @@ export function addCopilotHooks(config: Record<string, unknown>, command: string
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   for (const event of COPILOT_EVENTS) {
     const list = Array.isArray(hooks[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
-    const at = list.findIndex(entryMatches);
     const entry = copilotHookEntry(command);
-    if (at >= 0) list[at] = entry; else list.push(entry);
+    placeFlatHook(list, entry);
   }
 }
 
 /** Write (idempotently) a harness hook entry pointing at an explicit command string.
  *  Shared by the project installer (npx command) and the user installer (absolute path). */
 export function writeHarnessConfig(file: string, harness: Harness, command: string): string {
-  const present = readHarnessConfigIfPresent(file);
-  const config = present ?? {};
-  const before = present !== undefined ? JSON.stringify(config) : null;
+  return editHarnessConfig(file, (config) => {
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   if (harness === "copilot") {
     addCopilotHooks(config, command);
@@ -530,9 +523,8 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
     config.version = config.version ?? 1;
     for (const event of ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit"]) {
       const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
-      const at = list.findIndex(entryMatches);
       const entry = { command: command.replace(/\bclaude$/, "cursor") };
-      if (at >= 0) list[at] = entry; else list.push(entry);
+      placeFlatHook(list, entry);
     }
   } else {
     const list = Array.isArray((hooks).PreToolUse) ? (hooks as Record<string, unknown[]>).PreToolUse : ((hooks as Record<string, unknown[]>).PreToolUse = []);
@@ -541,14 +533,17 @@ export function writeHarnessConfig(file: string, harness: Harness, command: stri
     // A literal "*" is not a valid regular expression and causes Codex to skip the group.
     placeGroupedHook(list, hook, () => (harness === "codex" ? { hooks: [hook] } : { matcher: "*", hooks: [hook] }));
   }
-  // A settings file that already holds exactly this entry is left byte-for-byte
-  // untouched — no rewrite, no backup. A running agent session watches this file, and
-  // rewriting it (even with the same content) is what disturbed a live session on re-login.
-  if (before !== null && JSON.stringify(config) === before) return file;
-  backupHarnessConfig(file);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-  return file;
+  });
+}
+
+function placeFlatHook(list: unknown[], entry: Record<string, unknown>): void {
+  let placed = false;
+  for (let i = 0; i < list.length; i++) {
+    if (!entryMatches(list[i])) continue;
+    if (!placed) { list[i] = entry; placed = true; }
+    else { list.splice(i, 1); i--; }
+  }
+  if (!placed) list.push(entry);
 }
 
 /** Put Scopebond's `hook` into a list of hook groups (`{ matcher?, hooks: [...] }`), in place of the Scopebond hook
@@ -621,22 +616,19 @@ function isCopilotHooksFolder(dir: string): boolean {
 
 /** Detect a Cursor install by its user config directory. */
 export function cursorDetected(): boolean {
-  return existsSync(join(homedir(), ".cursor"));
+  return adapterPresent("cursor");
 }
 
 /** Detect a Codex install by its user config directory. */
 export function codexDetected(): boolean {
-  return existsSync(join(homedir(), ".codex"));
+  return adapterPresent("codex");
 }
 
 /** Detect the GitHub Copilot CLI: its program on PATH, or what only the CLI leaves in its folder (`settings.json`, `logs`).
  *  The folder alone is not enough: VS Code's Copilot Chat creates `~/.copilot` too, and VS Code's agent mode is not covered
  *  yet, so a VS Code-only computer is not set up for Copilot by a plain `install`. */
 export function copilotDetected(platform: NodeJS.Platform = process.platform): boolean {
-  const home = copilotHome();
-  if (existsSync(join(home, "settings.json")) || existsSync(join(home, "logs"))) return true;
-  const names = platform === "win32" ? ["copilot", "copilot.cmd"] : ["copilot"];
-  return names.some((name) => { try { return findProgram(name, { platform }) !== null; } catch { return false; } });
+  return adapterPresent("copilot", { platform });
 }
 
 /** Whether a harness's user config directory exists (Claude Code is always offered). */

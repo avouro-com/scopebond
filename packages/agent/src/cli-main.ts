@@ -16,6 +16,7 @@ import { existsSync } from "node:fs";
 import { win32 } from "node:path";
 import { configuredHookCommands, hookCommandResolves, hookVersion, isEphemeralPath, userHarnessFile, userHome, UNINSTALL_CALLER_ENV } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses } from "./agent.js";
+import { integrationHealth } from "./integration-health.js";
 import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
 import { agentCliPath } from "./self.js";
@@ -104,7 +105,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // The coding tools as the running agent last reported them to the workspace; found out here when it has not yet.
       const reported = live?.agent?.last_maintenance?.selfCheck;
       const found: ToolDiscovery = reported && Array.isArray(reported.tools) ? { tools: reported.tools, mcp_servers: reported.mcp_servers ?? [] } : await discoverTools();
-      const status = { ...(live ?? { ...computerStatus(dir), agent: null }), autostart: autostartHealth(dir), notes, tools: found.tools, mcp_servers: found.mcp_servers };
+      const status = { ...(live ?? { ...computerStatus(dir), agent: null }), integrations: integrationHealth(expectedHarnesses()), autostart: autostartHealth(dir), notes, tools: found.tools, mcp_servers: found.mcp_servers };
       if (rest.includes("--json")) { console.log(JSON.stringify(status, null, 2)); return; }
       const d = status.delivery;
       console.log(`Scopebond Agent: ${live ? "running" : "not running"}`);
@@ -119,6 +120,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const lines = toolLines(status.tools);
       console.log(`  coding tools     ${lines[0] ?? "none found"}`);
       for (const line of lines.slice(1)) console.log(`                   ${line}`);
+      for (const tool of status.integrations) console.log(`  ${tool.harness.padEnd(16)} ${tool.integration.replaceAll("_", " ")} (${tool.reason.replaceAll("_", " ")}); runtime unverified`);
       const failed = failedUpdate(dir);
       if (failed) console.log(`  update           ${failed.version} did not install or start here${failed.reason ? ` (${failed.reason})` : ""}; tried again after a day`);
       for (const line of notes) console.log(`  note             ${line}`);

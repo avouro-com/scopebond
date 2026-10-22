@@ -1746,7 +1746,7 @@ function runInstall(args: string[]): void {
     : args.includes("--cursor") ? ["cursor"]
     : args.includes("--copilot") ? ["copilot"]
     : args.includes("--claude") ? ["claude"]
-    : ["claude", ...(cursorDetected() ? ["cursor" as const] : []), ...(codexDetected() ? ["codex" as const] : []), ...(copilotDetected() ? ["copilot" as const] : [])];
+    : HARNESSES.filter(harnessDetected);
   // `install` rewrites agent config files the user did not create — their theme, plugins
   // and permissions live in ~/.claude/settings.json — so there is a way to see exactly
   // what it would touch before it touches anything.

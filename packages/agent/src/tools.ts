@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { isHarnessConfigured, userHarnessFile, type Harness } from "@scopebond/hook";
+import { HARNESSES, isHarnessConfigured, userHarnessFile, type Harness } from "@scopebond/hook";
 import { findProgram } from "@scopebond/gateway/node";
 import { ownNpm, npmOnPath } from "./update.js";
 
@@ -39,7 +39,7 @@ const MAX_CONFIG_BYTES = 32 * 1024 * 1024;
 const VERSION_TIMEOUT_MS = 3_000;
 
 /** The tools the hook can be installed for. The others are reported present, never governed. */
-const HOOK_HARNESSES: Partial<Record<ToolId, Harness>> = { claude: "claude", cursor: "cursor", codex: "codex", copilot: "copilot" };
+const HOOK_HARNESSES: Partial<Record<ToolId, Harness>> = Object.fromEntries(HARNESSES.map((h) => [h, h]));
 
 /** The npm package of each tool that is published to npm; its version is read from the global install's package.json. */
 export const NPM_PACKAGES: Partial<Record<ToolId, string>> = {

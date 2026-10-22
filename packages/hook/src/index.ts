@@ -121,6 +121,9 @@ export type { SyncOutcome, SyncOptions } from "./policy-sync.js";
 export { VECTORS, mapVector } from "./vectors.js";
 export type { Vector, VectorAgent, Dialect } from "./vectors.js";
 export { scaffold, harnessSnippet, installHarness, placeHook, coverWithoutNpx, installRepositoryHooks, REPO_HARNESSES, REPO_HOOK_MARKER, repositoryHookCommand } from "./init.js";
+export { ADAPTERS, ADAPTER_REGISTRY_VERSION, adapterDirectory, adapterFile, adapterPresent, isHarness, type AdapterProfile } from "./adapters.js";
+export { checkConfigPath } from "./config-edit.js";
+export { readIntegrationIntent, writeIntegrationIntent, automaticHarnesses, INTEGRATION_INTENT_FILE, type IntegrationIntent } from "./integration-intent.js";
 export type { HookPlacement, RepoHookFile } from "./init.js";
 export {
   enrollRepository, repositoryConnectionDir, repositoryToken, tokenFingerprint, repositoryWorkspaceUrl, repositoryEnrollmentProof, isRepositoryConnection,
