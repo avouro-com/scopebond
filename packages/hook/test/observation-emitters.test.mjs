@@ -600,6 +600,8 @@ test("Codex lifecycle wiring uses only supported events and preserves other hook
   assert.equal(hooks.PostToolUseFailure, undefined, "Codex has no documented PostToolUseFailure event");
   for (const event of ["SessionStart", "SessionEnd", "PostToolUse"]) {
     assert.equal(hooks[event].flatMap((group) => group.hooks).filter((hook) => hook.command === command).length, 1);
+    assert.equal(hooks[event].find((group) => group.hooks.some((hook) => hook.command === command)).matcher, undefined, "Codex groups must not contain an invalid wildcard regex");
+    if (process.platform === "win32") assert.equal(hooks[event].flatMap((group) => group.hooks).find((hook) => hook.command === command).commandWindows, command);
   }
   assert.deepEqual(hooks.SessionStart[0].hooks[0], other);
   assert.equal(unwireLifecycleHooks(file), 3);
