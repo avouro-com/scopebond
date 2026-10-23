@@ -136,7 +136,7 @@ export async function runSetup(o: SetupOptions): Promise<number> {
     if (r.status !== 0) { console.error("Setup stopped: the sign-in did not finish. Run the same command again for a new code."); return 1; }
   } else {
     say(`✓ Already connected to ${o.origin} (to sign in again anyway, add --relogin).`);
-    for (const fixed of repairHookEntries()) say(`✓ Put the Scopebond hook back in ${fixed.file}`);
+    for (const fixed of repairHookEntries(undefined, o.dir)) say(`✓ Put the Scopebond hook back in ${fixed.file}`);
   }
 
   // 2. The agent, installed for this user so autostart points at a path npm will not clear.

@@ -94,10 +94,10 @@ test("install --copilot writes ~/.copilot/hooks/scopebond.json, and uninstall re
   assert.equal(existsSync(file), false, "Scopebond's own file goes once nothing else is in it");
 });
 
-test("install --copilot respects COPILOT_HOME", () => {
+test("install --copilot respects COPILOT_HOME within the selected profile", () => {
   const ctx = isolated();
-  const copilotHome = join(ctx.root, "copilot-home");
-  const env = { ...ctx.env, COPILOT_HOME: copilotHome };
+  const copilotHome = join(ctx.home, "copilot-home");
+  const env = { ...ctx.env, SCOPEBOND_HOME: join(ctx.home, "state"), COPILOT_HOME: copilotHome };
   const install = run(env, ["install", "--copilot"]);
   assert.equal(install.status, 0, install.stdout + install.stderr);
   assertCopilotFile(join(copilotHome, "hooks", "scopebond.json"));
