@@ -136,7 +136,7 @@ export function receiptContextFor(options: ContextInput): ReceiptPayloadContext 
     const raw = options.input.session_id;
     let session: string | null = null;
     if (typeof raw === "string" && raw !== "") {
-      try { session = loadOrCreateBindingKey(options.dir).sessionId(raw); } catch { session = null; }
+      try { session = loadOrCreateBindingKey(options.dir).sessionId(raw, options.harness); } catch { session = null; }
     }
     const { repository, branch } = repositoryFacts(options.cwd, options.probe, options.branch);
     const context: ReceiptPayloadContext = {

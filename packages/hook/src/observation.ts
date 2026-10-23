@@ -18,6 +18,7 @@
 
 import { createHash, createHmac, createPrivateKey, randomUUID, sign as edSign, type KeyObject } from "node:crypto";
 import { loadOrCreateHexKey } from "./safe-fs.js";
+import type { Harness } from "./adapters.js";
 import { join } from "node:path";
 import { redactCommand, scrubParam } from "./minimize.js";
 import { maskHomeFolder } from "./home-mask.js";
@@ -133,7 +134,7 @@ export interface BindingKey {
   /** A keyed opaque id for a resource (a path, a ref, a host-local target). */
   resourceId(kind: string, value: string): string;
   /** A keyed opaque id for a harness session id, stable across hook processes. */
-  sessionId(harnessSessionId: string): string;
+  sessionId(harnessSessionId: string, harness?: Harness): string;
 }
 
 export function bindingKeyFromHex(hex: string): BindingKey {
@@ -144,7 +145,7 @@ export function bindingKeyFromHex(hex: string): BindingKey {
     generation: `bk_${createHash("sha256").update(KEY_GENERATION_DOMAIN).update(key).digest("hex").slice(0, 16)}`,
     requestDigest: (request) => mac(REQUEST_BINDING_DOMAIN + canonical(request)),
     resourceId: (kind, value) => `sbr_${mac(`${RESOURCE_ID_DOMAIN}${kind}\0${value}`).slice(0, 32)}`,
-    sessionId: (id) => `sbs_${mac(SESSION_ID_DOMAIN + id).slice(0, 32)}`,
+    sessionId: (id, harness) => `sbs_${mac(SESSION_ID_DOMAIN + (harness ? JSON.stringify(["adapter-session/v1", harness, id]) : id)).slice(0, 32)}`,
   };
 }
 

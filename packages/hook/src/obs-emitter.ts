@@ -174,8 +174,7 @@ export class ObservationEmitter {
   // ---- session lifecycle ---------------------------------------------------------------------
 
   sessionIdOf(harnessSessionId: string): string {
-    return this.binding.sessionId(this.options.harness
-      ? JSON.stringify(["adapter-session/v1", this.options.harness, harnessSessionId]) : harnessSessionId);
+    return this.binding.sessionId(harnessSessionId, this.options.harness);
   }
 
   /** A local key for a harness tool call, so the after-action hook finds what the

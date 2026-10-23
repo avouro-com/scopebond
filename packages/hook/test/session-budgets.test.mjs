@@ -44,6 +44,30 @@ function setup(budgets) {
 }
 
 let call = 0;
+
+test("session scopes isolate tool budgets while retaining already-used legacy limits", () => {
+  const dir = setup();
+  const input = { session_id: "same-host-session" };
+  const legacy = keyedSessionId(dir, input);
+  const claude = keyedSessionId(dir, input, "claude");
+  const codex = keyedSessionId(dir, input, "codex");
+  assert.equal(new Set([legacy, claude, codex]).size, 3);
+  const action = [{ action_type: "file.write", params: { path: "/repo/file.txt" } }];
+  const legacyBudget = budget({ session_id: legacy, limits: [{ operations: ["file.write"], max: 1 }] });
+  const scopedBudget = budget({ budget_id: "sbud_scoped001", session_id: claude, limits: [{ operations: ["file.write"], max: 3 }] });
+  writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify(doc(3, { session_budgets: [legacyBudget] })));
+  assert.equal(sessionBudgetGuardFor(dir, input).reserve("before-upgrade", action).allow, true);
+  writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify(doc(4, { session_budgets: [legacyBudget, scopedBudget] })));
+  assert.equal(sessionBudgetGuardFor(dir, input, "claude").reserve("after-upgrade", action).allow, false,
+    "upgrading cannot reset an existing enforced count");
+  const counts = JSON.parse(readFileSync(join(dir, SESSION_BUDGETS_FILE), "utf8"));
+  assert.ok(Object.values(counts.sessions[claude]?.counts ?? {}).every((count) => count === 0),
+    "a denied legacy reservation releases the new scope's provisional count");
+  writeFileSync(join(dir, MANAGED_DOC_FILE), JSON.stringify(doc(5, { session_budgets: [scopedBudget] })));
+  assert.equal(sessionBudgetGuardFor(dir, input, "codex"), null, "another adapter does not inherit the new budget");
+  assert.equal(sessionBudgetGuardFor(dir, input, "claude").reserve("own-tool", action).allow, true);
+});
+
 async function run(dir, toolUse, { session = SESSION, groupKey = `call-${++call}` } = {}) {
   const runtime = createHookRuntime({
     policyPath: join(dir, "policy.json"), keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(dir, "receipts.db"), cwd: "/repo",

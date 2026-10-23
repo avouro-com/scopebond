@@ -142,8 +142,8 @@ function runtimePaths(dir: string, cwd?: string) {
 /** The harness's own id for this tool call, when it gives one (Claude Code and Codex send
  *  `tool_use_id`), so the receipts of one call share a stable action group. */
 /** The keyed session id for session-scoped allowances; null when it cannot be read (such an allowance then does not apply). */
-function sessionKeyOf(dir: string, input: Record<string, unknown>): string | null {
-  try { return keyedSessionId(dir, input); } catch { return null; }
+function sessionKeyOf(dir: string, input: Record<string, unknown>, harness: Harness): string | null {
+  try { return keyedSessionId(dir, input, harness); } catch { return null; }
 }
 
 function callId(input: Record<string, unknown>): string | undefined {
@@ -340,7 +340,7 @@ async function withInstallVerdicts(dir: string, mapped: Mapped[], ask: "ask" | "
 function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision, input?: Record<string, unknown>): void {
   if (decision.decision !== "deny") return;
   try {
-    noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd), session: input ? sessionKeyOf(decisionStateDir(dir), input) : null,
+    noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd), session: input ? sessionKeyOf(decisionStateDir(dir), input, harness) : null,
       quiet: quietBlock(decisionStateDir(dir), decision.receipt ?? decision.receipts?.at(-1)) });
   } catch { /* the receipt is the record */ }
 }
@@ -376,8 +376,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch, () => upstreamBranch(cwd)), ...databaseGuard(dir, cwd, input!)], installAsk);
     // The signed plugin in this computer's home, when there is one that verifies (intel-plugin.ts); none: receipts unchanged.
     const intel = await loadIntelPlugin(undefined, { artifacts: (kinds) => heldArtifacts(dir, kinds) });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, intel, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, intel, sessionBudgets: sessionBudgetGuardFor(dir, input!, harness), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!, harness), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -615,8 +615,8 @@ async function runCursor(): Promise<void> {
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
     const intel = await loadIntelPlugin(undefined, { artifacts: (kinds) => heldArtifacts(dir, kinds) });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", intel, sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", intel, sessionBudgets: sessionBudgetGuardFor(dir, input, "cursor"), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input, "cursor"), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
