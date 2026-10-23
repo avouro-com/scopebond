@@ -16,7 +16,7 @@ function fixture() {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "setup-intent-")));
   const state = join(home, "state"); mkdirSync(state);
   const env = { ...process.env, HOME: home, USERPROFILE: home, SCOPEBOND_HOME: state, SCOPEBOND_HOOK_DIR: state, COPILOT_HOME: join(home, ".copilot") };
-  return { home, state, run: (args) => run(process.execPath, [cli, ...args], { cwd: home, env, windowsHide: true, timeout: 30_000 }) };
+  return { home, state, env, run: (args) => run(process.execPath, [cli, ...args], { cwd: home, env, windowsHide: true, timeout: 30_000 }) };
 }
 
 for (const harness of ["claude", "codex", "cursor", "copilot"]) test(`connect preserves the ${harness} exclusion`, async (t) => {
@@ -50,4 +50,13 @@ test("an explicit install selection preserves exclusions in both preview and rep
   assert.doesNotMatch(preview.stdout, /Would create.*hooks.json/);
   await f.run(["install", "--codex"]);
   assert.equal(existsSync(join(f.home, ".codex", "hooks.json")), false);
+});
+
+test("an explicit selection cannot install into another profile", async () => {
+  const f = fixture();
+  const other = realpathSync(mkdtempSync(join(tmpdir(), "setup-other-profile-")));
+  f.env.COPILOT_HOME = other;
+  const result = await f.run(["install", "--copilot"]);
+  assert.equal(existsSync(join(other, "hooks", "scopebond.json")), false);
+  assert.match(result.stdout, /integrations left unchanged/i);
 });
