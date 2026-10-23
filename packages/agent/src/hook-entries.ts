@@ -48,12 +48,12 @@ export function useNativeHookEntries(harnesses: Harness[], exe: string = process
     }
     if (ours.every((c) => c === native)) continue;
     try {
-      const lifecycle = harness === "claude" && hasLifecycleEntries(file);
+      const lifecycle = (harness === "claude" || harness === "codex") && hasLifecycleEntries(file);
       // The first entry becomes this executable's (the hook keeps a backup of the file as it was), then every other copy
       // goes, and the session and after-action entries come back with the same command when there were any.
       writeHarnessConfig(file, harness, native);
       pruneHarnessEntries(file, (command) => command !== native);
-      if (lifecycle) wireLifecycleHooks(file, native);
+      if (lifecycle) wireLifecycleHooks(file, native, harness);
       changed.push({ harness, file, reason: "moved to the Scopebond Agent installed by the signed installer" });
     } catch (error) {
       changed.push({ harness, file, reason: `could not be moved to the signed install: ${(error as Error).message}` });

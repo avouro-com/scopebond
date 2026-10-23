@@ -171,23 +171,56 @@ test("policy decisions are identical whether the workspace accepts, errors, lack
   assert.deepEqual(outcomes[0], [0, "", 2, "deny"]);
 });
 
-test("Codex and Cursor emit tool intents from their tested pre-action mapping and no session or outcome events", async () => {
-  const server = await startServer();
+test("Codex and Cursor emit tool intents from their tested pre-action mapping and no session or outcome events", async (t) => {
+  const server = await startServer(); t.after(() => server.close());
   const home = makeHome({ url: server.url });
   const dir = home.dir;
   assert.equal((await run(dir, ["codex"], { hook_event_name: "PreToolUse", session_id: "codex-1", cwd: dir, tool_name: "Bash", tool_input: { command: "ls" }, tool_use_id: "c1" })).status, 0);
   const cursor = await run(dir, ["cursor"], { hook_event_name: "beforeShellExecution", cwd: dir, command: "npm test" });
   assert.equal(JSON.parse(cursor.stdout).permission, "allow");
-  // Lifecycle events are Claude Code only: a Codex/Cursor invocation with these names is not lifecycle.
+  // A pre-action event alone does not invent a session or completed outcome.
   await settled(() => server.observations().length >= 2);
   const items = server.observations();
   assert.deepEqual(kindsOf(items), ["tool_intent:requested", "tool_intent:requested"]);
   assertWellFormed(items, publicKeyOf(dir));
   assert.equal(items[1].payload.session_id, undefined, "Cursor gives no session id the hook relies on");
-  await server.close();
 });
 
 // ---- privacy canaries --------------------------------------------------------------------------------
+
+test("Codex lifecycle is observation-only and after-tool output cannot manufacture a successful outcome", async (t) => {
+  const server = await startServer(); t.after(() => server.close());
+  const { dir } = makeHome({ url: server.url });
+  const event = (name, extra = {}) => ({ hook_event_name: name, session_id: "codex-lifecycle", cwd: dir, ...extra });
+  const start = await run(dir, ["codex"], event("SessionStart"));
+  assert.equal(start.status, 0); assert.equal(start.stdout, "");
+  const input = { tool_name: "Bash", tool_use_id: "codex-call", tool_input: { command: "npm test" } };
+  assert.equal((await run(dir, ["codex"], event("PreToolUse", input))).status, 0);
+  const post = { ...input, tool_input: { command: "rm -rf /" }, tool_response: "Exit code: 0\nPRIVATE-OUTPUT" };
+  for (let n = 0; n < 2; n++) {
+    const result = await run(dir, ["codex"], event("PostToolUse", post));
+    assert.equal(result.status, 0); assert.equal(result.stdout, "", "after-tool must never emit a pre-tool denial");
+  }
+  assert.equal((await run(dir, ["codex"], event("SessionEnd", { reason: "unknown" }))).status, 0);
+  const items = server.observations();
+  assert.deepEqual(kindsOf(items), ["session:start", "tool_intent:requested", "tool_outcome:failed", "session:stop"]);
+  assertWellFormed(items, publicKeyOf(dir));
+  assert.equal(items[2].payload.data.exit_category, "unknown", "Codex PostToolUse also fires for failures; model-facing text is not an exit-code contract");
+  assert.equal(items[2].payload.parent_action_id, items[1].payload.parent_action_id);
+  assert.equal(items[2].payload.source_receipt_hash, items[1].payload.source_receipt_hash);
+  assert.equal(JSON.stringify(items).includes("PRIVATE-OUTPUT"), false);
+  assert.equal(items.some((item) => item.payload.kind === "capability"), false, "a fixture is not activation proof");
+});
+
+test("Codex lifecycle and unsupported events never enter the decision parser when observations are off", async () => {
+  const { dir } = makeHome({ scopes: ["receipts:write"] });
+  for (const name of ["SessionStart", "SessionEnd", "PostToolUse", "PermissionRequest", "FutureEvent"]) {
+    const result = await run(dir, ["codex"], { hook_event_name: name, session_id: "codex-off", cwd: dir,
+      tool_name: "Bash", tool_use_id: "call", tool_input: { command: "rm -rf /" } });
+    assert.equal(result.status, 0, name); assert.equal(result.stdout, "", name);
+  }
+  assert.equal(existsSync(join(dir, "observations.db")), false);
+});
 
 const CANARIES = ["CANARY-sk-abcdefghijklmnopqrstuvwx", "hunter2-CANARY-password", "AKIA" + "IOSFODNN7CANARY1", "canary-secret-path-8842", "CANARYSESSION9911", "toolu_CANARYCALL7", "gh" + "p_CANARYabcdefghijklmnopqrstuvwxyz0123"];
 
@@ -534,7 +567,7 @@ test("status names the queue, the terminal-error queue and the reason when unsup
   assert.match(s.stdout, /observations\s+off \(this enrollment does not grant observations:write\)/);
 });
 
-test("lifecycle wiring is idempotent, Claude Code only, and leaves every other setting alone; unwire removes only its own entries", () => {
+test("lifecycle wiring is idempotent and leaves every other setting alone; unwire removes only its own entries", () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-obs-wire-"));
   const file = join(dir, ".claude", "settings.json");
   mkdirSync(join(dir, ".claude"), { recursive: true });
@@ -555,6 +588,23 @@ test("lifecycle wiring is idempotent, Claude Code only, and leaves every other s
   assert.equal(cfg.hooks.SessionEnd, undefined);
   assert.equal(cfg.hooks.SessionStart.length, 1);
   assert.equal(existsSync(`${file}.scopebond-backup`), true, "the original was backed up before the first change");
+});
+
+test("Codex lifecycle wiring uses only supported events and preserves other hook definitions", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-codex-wire-"));
+  const file = join(dir, "hooks.json"), command = "scopebond-hook codex";
+  const other = { type: "command", command: "other-tool" };
+  writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [{ hooks: [other] }], PreToolUse: [{ hooks: [{ type: "command", command }] }] } }));
+  wireLifecycleHooks(file, command, "codex"); wireLifecycleHooks(file, command, "codex");
+  const hooks = JSON.parse(readFileSync(file, "utf8")).hooks;
+  assert.equal(hooks.PostToolUseFailure, undefined, "Codex has no documented PostToolUseFailure event");
+  for (const event of ["SessionStart", "SessionEnd", "PostToolUse"]) {
+    assert.equal(hooks[event].flatMap((group) => group.hooks).filter((hook) => hook.command === command).length, 1);
+  }
+  assert.deepEqual(hooks.SessionStart[0].hooks[0], other);
+  assert.equal(unwireLifecycleHooks(file), 3);
+  const after = JSON.parse(readFileSync(file, "utf8")).hooks;
+  assert.equal(after.PreToolUse.length, 1); assert.deepEqual(after.SessionStart[0].hooks[0], other);
 });
 
 test("connect wires the lifecycle hooks only in a temporary project, and only when the enrollment grants observations:write", async () => {

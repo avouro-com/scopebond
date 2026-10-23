@@ -18,7 +18,7 @@ import { readIfPresent, replaceFile } from "./safe-fs.js";
 import { hookCliPath } from "./self.js";
 import { editHarnessConfig, readConfigText as readBoundedConfigText } from "./config-edit.js";
 
-import { adapterFile, adapterPresent, type Harness } from "./adapters.js";
+import { adapterFile, adapterPresent, GROUPED_LIFECYCLE_EVENTS, type Harness } from "./adapters.js";
 export { HARNESSES, type Harness } from "./adapters.js";
 
 /** GitHub Copilot reads every `*.json` file in its hooks folders, so Scopebond's entries live in a file of their own. */
@@ -869,16 +869,16 @@ export function purgeHome(): void {
 }
 
 /** The Claude Code events the observation emitters listen to, beyond PreToolUse. */
-export const LIFECYCLE_EVENTS = ["SessionStart", "SessionEnd", "PostToolUse", "PostToolUseFailure"] as const;
+export const LIFECYCLE_EVENTS = GROUPED_LIFECYCLE_EVENTS.claude;
 
-/** Add (idempotently) the session lifecycle and after-action hook entries to a Claude Code
+/** Add (idempotently) the session lifecycle and after-action hook entries to a supported grouped
  *  config file, running the same Scopebond command that already handles PreToolUse: the
- *  command tells the events apart. Only Claude Code is wired: its lifecycle events are the
- *  ones the hook's tested mapping covers. Nothing else in the file changes. */
-export function wireLifecycleHooks(file: string, command: string): string {
+ *  command tells the events apart. Codex definitions still require native trust review.
+ *  Nothing else in the file changes. */
+export function wireLifecycleHooks(file: string, command: string, harness: keyof typeof GROUPED_LIFECYCLE_EVENTS = "claude"): string {
   return editHarnessConfig(file, (config) => {
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
-  for (const event of LIFECYCLE_EVENTS) {
+  for (const event of GROUPED_LIFECYCLE_EVENTS[harness]) {
     const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
     const hook = { type: "command", command };
     placeGroupedHook(list, hook, () => (event.startsWith("Session") ? { hooks: [hook] } : { matcher: "*", hooks: [hook] }));

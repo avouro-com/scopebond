@@ -196,11 +196,14 @@ async function completeSetup(dir: string, origin: string, enrollment: object, o:
       lines.push(`could not put the Scopebond hook in ${file}: ${(error as Error).message}`);
     }
   }
-  // Session and after-action observations, when the workspace granted them (Claude Code only), as the hook's sign-in does.
-  if (harnesses.includes("claude") && observationStatus(loadConnection(dir)).state === "on") {
-    const file = userHarnessFile("claude");
-    const command = configuredHookCommands(file)[0];
-    if (command) { wireLifecycleHooks(file, command); lines.push(`turned on session and after-action observations in ${file}`); }
+  // Only supported lifecycle events, still subject to each host's native review and restart requirements.
+  if (observationStatus(loadConnection(dir)).state === "on") {
+    for (const harness of harnesses) {
+      if (harness !== "claude" && harness !== "codex") continue;
+      const file = userHarnessFile(harness);
+      const command = configuredHookCommands(file)[0];
+      if (command) { wireLifecycleHooks(file, command, harness); lines.push(`turned on session and after-action observations in ${file}`); }
+    }
   }
   if (o.autostart) {
     try { lines.push(o.autostart()); } catch (error) { lines.push(`autostart was not turned on: ${(error as Error).message}`); }

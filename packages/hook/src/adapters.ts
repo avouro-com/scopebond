@@ -7,8 +7,14 @@ export const ADAPTER_REGISTRY_VERSION = 1;
 export const ADAPTERS = {
   claude: { label: "Claude Code", directory: ".claude", file: "settings.json", surfaces: ["cli"], approval: "restart", decisionEvents: ["PreToolUse"], capabilities: ["shell", "file_read", "file_write", "mcp", "block", "observe", "lifecycle"] },
   cursor: { label: "Cursor", directory: ".cursor", file: "hooks.json", surfaces: ["desktop"], approval: "restart", decisionEvents: ["beforeShellExecution", "beforeMCPExecution", "beforeReadFile"], capabilities: ["shell", "file_read", "mcp", "block", "observe"] },
-  codex: { label: "Codex", directory: ".codex", file: "hooks.json", surfaces: ["cli", "desktop"], approval: "trust", decisionEvents: ["PreToolUse"], capabilities: ["shell", "file_write", "mcp", "block", "observe"] },
+  codex: { label: "Codex", directory: ".codex", file: "hooks.json", surfaces: ["cli", "desktop"], approval: "trust", decisionEvents: ["PreToolUse"], capabilities: ["shell", "file_write", "mcp", "block", "observe", "lifecycle"] },
   copilot: { label: "GitHub Copilot CLI", directory: ".copilot", file: "hooks/scopebond.json", surfaces: ["cli"], approval: "restart", decisionEvents: ["PreToolUse"], capabilities: ["shell", "file_read", "file_write", "mcp", "block", "observe", "lifecycle"] },
+} as const;
+
+/** Grouped lifecycle events supported by each observation adapter. Other families retain their own event schemas. */
+export const GROUPED_LIFECYCLE_EVENTS = {
+  claude: ["SessionStart", "SessionEnd", "PostToolUse", "PostToolUseFailure"],
+  codex: ["SessionStart", "SessionEnd", "PostToolUse"],
 } as const;
 
 export type Harness = keyof typeof ADAPTERS;
