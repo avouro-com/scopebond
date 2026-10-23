@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { automaticHarnesses, integrationProfile, INTEGRATION_PROFILE_FILE, writeIntegrationIntent, writeHarnessConfig, userHarnessFile } from "@scopebond/hook";
+import { automaticHarnesses, integrationProfile, INTEGRATION_PROFILE_FILE, writeIntegrationIntent, writeHarnessConfig, removeHarnessConfig, userHarnessFile } from "@scopebond/hook";
 import { useNativeHookEntries } from "../dist/hook-entries.js";
 import { startFirstSignIn } from "../dist/signin.js";
 import { startFakeCloud } from "@scopebond/fake-cloud";
@@ -160,4 +160,46 @@ test("first sign-in preserves exclusions and native hook disablement", async (t)
   assert.equal(await first.done, true);
   assert.equal(existsSync(userHarnessFile("codex")), false);
   assert.equal(readFileSync(userHarnessFile("claude"), "utf8"), disabled);
+});
+
+test("uninstall honors the shared writer lock, including an otherwise removable owned file", (t) => {
+  profiles(t);
+  for (const harness of ["claude", "copilot"]) {
+    const file = userHarnessFile(harness);
+    writeHarnessConfig(file, harness, `scopebond-hook ${harness}`);
+    const before = readFileSync(file, "utf8");
+    writeFileSync(`${file}.scopebond-lock`, "another writer");
+    assert.throws(() => removeHarnessConfig(file), /EEXIST/);
+    assert.equal(readFileSync(file, "utf8"), before);
+    assert.equal(readFileSync(`${file}.scopebond-lock`, "utf8"), "another writer");
+  }
+});
+
+test("uninstall leaves unrelated settings byte-for-byte and removes only an empty owned hook file", (t) => {
+  const { home } = profiles(t);
+  const file = userHarnessFile("claude"); mkdirSync(join(home, ".claude"));
+  const original = '{ "theme" : "dark", "hooks": {"PreToolUse": [{"command":"other-tool"}]} }';
+  writeFileSync(file, original); removeHarnessConfig(file);
+  assert.equal(readFileSync(file, "utf8"), original);
+  const owned = userHarnessFile("copilot");
+  writeHarnessConfig(owned, "copilot", "scopebond-hook copilot");
+  assert.equal(removeHarnessConfig(owned), true); assert.equal(existsSync(owned), false);
+  assert.equal(removeHarnessConfig(owned), false);
+  const unfamiliar = '{"version":1,"hooks":"unrecognized configuration"}';
+  writeFileSync(owned, unfamiliar);
+  assert.equal(removeHarnessConfig(owned), false);
+  assert.equal(readFileSync(owned, "utf8"), unfamiliar);
+});
+
+test("a refused uninstall does not purge state needed by a remaining hook", (t) => {
+  const { home } = profiles(t);
+  const file = userHarnessFile("claude"), retained = join(home, "state", "retained.txt");
+  writeHarnessConfig(file, "claude", "scopebond-hook claude");
+  writeFileSync(`${file}.scopebond-lock`, "another writer");
+  writeFileSync(retained, "local evidence");
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../hook/dist/cli.js", import.meta.url)), "uninstall", "--purge", "--yes"], { encoding: "utf8", env: process.env, cwd: home });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Some hook settings could not be changed/);
+  assert.equal(result.stdout.includes("purged"), false);
+  assert.equal(readFileSync(retained, "utf8"), "local evidence");
 });

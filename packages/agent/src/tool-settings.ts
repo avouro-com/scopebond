@@ -34,7 +34,7 @@ import { closeSync, constants as fsConstants, existsSync, lstatSync, openSync, r
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  MANAGED_DOC_FILE, backupHarnessConfig, checkConfigPath, checkToolSettingsSignature, inspectToolSettings, integrationProfile, loadConnection, userHarnessFile, withinAdapterProfile, workspaceIdOf, writeAtomic,
+  MANAGED_DOC_FILE, adapterProfilePath, backupHarnessConfig, checkConfigPath, checkToolSettingsSignature, inspectToolSettings, integrationProfile, loadConnection, userHarnessFile, withinAdapterProfile, workspaceIdOf, writeAtomic,
   type PolicyKey, type ToolSettingsList, type ToolSettingsSection,
 } from "@scopebond/hook";
 
@@ -206,7 +206,7 @@ function applyHarness(harness: string, settings: Record<string, string[]> | unde
   if (!target) return refusedHarness("unsupported");
   const lists = Object.entries(settings ?? {});
   if (lists.some(([list, entries]) => entries.length > 0 && !target.lists[list as ToolSettingsList])) return refusedHarness("unsupported");
-  const file = target.file();
+  const file = adapterProfilePath(target.file());
   if (!withinAdapterProfile(file)) return refusedHarness("profile_boundary");
   try { checkConfigPath(file); } catch { return refusedHarness("symlink"); }
   const before = state.applied[harness];

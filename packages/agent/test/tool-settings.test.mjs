@@ -81,6 +81,18 @@ test("managed settings cannot follow a linked configuration ancestor", () => inH
   assert.equal(readFileSync(file, "utf8"), before);
 }));
 
+test("managed settings accept an alias of the selected profile without following links inside it", () => inHome(({ home, dir }) => {
+  const alias = join(home, "selected-alias");
+  symlinkSync(home, alias, process.platform === "win32" ? "junction" : "dir");
+  put(cursorFile(home), {}); put(join(home, "claude-config", "settings.json"), {});
+  process.env.HOME = alias; process.env.USERPROFILE = alias;
+  process.env.CLAUDE_CONFIG_DIR = join(alias, "claude-config");
+  install(dir, signed(section({ claude: CLAUDE, cursor: { permissions_deny: ["Shell(rm)"] } })));
+  const report = apply(dir);
+  assert.equal(report.harnesses.claude.state, "applied");
+  assert.equal(report.harnesses.cursor.state, "applied");
+}));
+
 test("a signed section is applied to Claude Code's user settings; every other key and entry stays", () => inHome(({ home, dir }) => {
   put(claudeFile(home), { theme: "dark", hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "x" }] }] }, permissions: { allow: ["Read(*)"], defaultMode: "default" }, deniedMcpServers: [{ serverUrl: "https://x.example/*" }] });
   install(dir, signed(section({ claude: CLAUDE })));
