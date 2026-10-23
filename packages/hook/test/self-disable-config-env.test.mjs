@@ -83,7 +83,7 @@ for (const command of DENIED_POWERSHELL) {
   });
 }
 
-const TRAILER = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";
+const TRAILER = "Co-Authored-By: Dev <dev@example.com>";
 const ALLOWED_BASH = [
   "claude -p 'explain this repo'",
   "echo \"$CLAUDE_CONFIG_DIR\" && claude -p x",
