@@ -5,7 +5,7 @@
 
 import { existsSync } from "node:fs";
 import {
-  configuredHookCommands, harnessEntryMatches, nativeHookCommand, pruneHarnessEntries, readHarnessConfig, userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
+  automaticHarnesses, configuredHookCommands, harnessEntryMatches, nativeHookCommand, pruneHarnessEntries, readHarnessConfig, userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
   type Harness,
 } from "@scopebond/hook";
 
@@ -35,9 +35,9 @@ export interface EntryChange { harness: Harness; file: string; reason: string }
 
 /** Point every Scopebond hook entry in this user's settings at `exe` (`"<exe>" hook <harness>`). Only settings that already
  *  hold a Scopebond entry are touched; the ones already in that form are left byte for byte. Returns the files changed. */
-export function useNativeHookEntries(harnesses: Harness[], exe: string = process.execPath): EntryChange[] {
+export function useNativeHookEntries(harnesses: Harness[], exe: string = process.execPath, dir?: string): EntryChange[] {
   const changed: EntryChange[] = [];
-  for (const harness of harnesses) {
+  for (const harness of automaticHarnesses(harnesses, dir)) {
     const file = userHarnessFile(harness);
     const ours = configuredHookCommands(file);
     if (!ours.length) continue;

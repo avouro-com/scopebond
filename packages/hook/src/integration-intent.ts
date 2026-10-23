@@ -1,7 +1,8 @@
 import { join } from "node:path";
-import { HARNESSES, isHarness, type Harness } from "./adapters.js";
+import { HARNESSES, isHarness, adapterWithinProfile, type Harness } from "./adapters.js";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 import { readHarnessConfig, userHarnessFile, userHome } from "./install.js";
+import { integrationProfile } from "./integration-profile.js";
 
 export interface IntegrationIntent { version: 1; automatic: boolean; excluded: Harness[] }
 export const INTEGRATION_INTENT_FILE = "integration-intent.json";
@@ -23,10 +24,14 @@ export function writeIntegrationIntent(intent: IntegrationIntent, dir = userHome
   replaceFile(join(dir, INTEGRATION_INTENT_FILE), JSON.stringify({ version: 1, automatic: intent.automatic, excluded: [...new Set(intent.excluded)] }) + "\n");
 }
 
-export function automaticHarnesses(harnesses: readonly Harness[], dir = userHome()): Harness[] {
-  const intent = readIntegrationIntent(dir);
-  return intent.automatic ? harnesses.filter((h) => {
+export function automaticHarnesses(harnesses: readonly Harness[], dir?: string, options: { createProfile?: boolean } = {}): Harness[] {
+  const stateDir = dir ?? userHome();
+  const intent = readIntegrationIntent(stateDir);
+  if (!intent.automatic) return [];
+  const profile = integrationProfile(stateDir, {}, { create: options.createProfile ?? dir !== undefined });
+  return (profile.state === "bound" || profile.state === "unbound") ? harnesses.filter((h) => {
     if (intent.excluded.includes(h)) return false;
+    if (!adapterWithinProfile(h)) return false;
     try { const config = readHarnessConfig(userHarnessFile(h)); return config.disableAllHooks !== true && config.hooksEnabled !== false; }
     catch { return true; } // inspection/repair reports the error; the guarded writer leaves malformed data untouched
   }) : [];

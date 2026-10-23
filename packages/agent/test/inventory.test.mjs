@@ -23,6 +23,9 @@ test("inventory negotiates, signs the actual report, strips diagnostics and does
       assert.equal(init.headers.authorization, "Bearer test-credential");
       if (init.method !== "POST") return json({ capability: "tool_inventory_1", sequence: 10 });
       const body = lastBody = JSON.parse(init.body);
+      assert.match(body.report.profile_id, /^[a-f0-9-]{36}$/);
+      assert.equal(JSON.stringify(body).includes('"salt"'), false);
+      assert.equal(JSON.stringify(body).includes('"binding"'), false);
       assert.equal(body.report.sequence, 11);
       assert.equal(verify(null, Buffer.from(inventoryProof(connection, sha256(canonical(body.report)))), attester.publicKeyPem, Buffer.from(body.signature, "base64")), true);
       assert.equal(JSON.stringify(body).includes("private"), false);

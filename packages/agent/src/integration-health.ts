@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
 import {
-  ADAPTERS, ADAPTER_REGISTRY_VERSION, adapterPresent, configuredHookCommands, harnessEntryCommand,
-  hookCommandResolves, hookVersion, isScopebondHookCommand, readHarnessConfig, readIntegrationIntent, userHarnessFile, type Harness,
+  ADAPTERS, ADAPTER_REGISTRY_VERSION, adapterPresent, adapterWithinProfile, configuredHookCommands, harnessEntryCommand,
+  hookCommandResolves, hookVersion, integrationProfile, isScopebondHookCommand, readHarnessConfig, readIntegrationIntent, userHarnessFile, userHome, type Harness, type IntegrationProfile,
 } from "@scopebond/hook";
+import { executionEnvironment, type ExecutionEnvironment } from "./execution-environment.js";
 
 export interface IntegrationHealth {
   harness: Harness;
   registry_version: number;
   presence: "detected" | "absent" | "unknown";
   integration: "not_configured" | "awaiting_trust" | "awaiting_restart" | "disabled" | "repair_failed";
-  reason: "missing_entry" | "native_approval" | "runtime_not_observed" | "excluded" | "native_disabled" | "invalid_configuration" | "executable_missing" | "duplicate_entries";
+  reason: "missing_entry" | "native_approval" | "runtime_not_observed" | "excluded" | "native_disabled" | "invalid_configuration" | "executable_missing" | "duplicate_entries" | "profile_boundary";
   entry: boolean;
   executable: boolean;
   duplicates: boolean;
@@ -19,6 +20,7 @@ export interface IntegrationHealth {
   license: { state: "unknown"; scope: "legacy_computer" };
   delivery: "unknown";
   checked_at: number;
+  scope: { profile: IntegrationProfile; execution: ExecutionEnvironment; coverage: "current_environment_only"; other_environments: "not_verified"; action: "install_on_execution_host" };
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -29,20 +31,26 @@ function entries(value: unknown): number {
 }
 
 /** Configuration inspection only. No fixture, process, or successful write can create runtime proof. */
-export function integrationHealth(harnesses: readonly Harness[], now = Date.now()): IntegrationHealth[] {
-  const intent = readIntegrationIntent();
+export function integrationHealth(harnesses: readonly Harness[], now = Date.now(), dir?: string): IntegrationHealth[] {
+  const stateDir = dir ?? userHome();
+  const intent = readIntegrationIntent(stateDir);
+  const profile = integrationProfile(stateDir, {}, { create: dir !== undefined });
+  const execution = executionEnvironment();
   return harnesses.map((harness) => {
     const adapter = ADAPTERS[harness];
     let presence: IntegrationHealth["presence"] = "unknown";
-    try { presence = adapterPresent(harness) ? "detected" : "absent"; } catch { /* unreadable presence stays unknown */ }
+    let local = false;
+    try { local = adapterWithinProfile(harness); if (local) presence = adapterPresent(harness) ? "detected" : "absent"; } catch { /* unreadable presence stays unknown */ }
     const health: IntegrationHealth = {
       harness, registry_version: ADAPTER_REGISTRY_VERSION, presence, integration: "not_configured", reason: "missing_entry",
       entry: false, executable: false, duplicates: false, definition_revision: null,
       runtime: { state: "never_verified", surfaces: adapter.surfaces },
       capabilities: { supported: adapter.capabilities, verified: [] },
       license: { state: "unknown", scope: "legacy_computer" }, delivery: "unknown", checked_at: now,
+      scope: { profile, execution, coverage: "current_environment_only", other_environments: "not_verified", action: "install_on_execution_host" },
     };
     if (intent.excluded.includes(harness)) return { ...health, integration: "disabled", reason: "excluded" };
+    if (!local || profile.state === "mismatch" || profile.state === "unknown") return { ...health, integration: "repair_failed", reason: "profile_boundary" };
     try {
       const file = userHarnessFile(harness);
       const config = readHarnessConfig(file);

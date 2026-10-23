@@ -34,13 +34,13 @@ import { closeSync, constants as fsConstants, existsSync, lstatSync, openSync, r
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  MANAGED_DOC_FILE, backupHarnessConfig, checkToolSettingsSignature, inspectToolSettings, loadConnection, userHarnessFile, workspaceIdOf, writeAtomic,
+  MANAGED_DOC_FILE, backupHarnessConfig, checkConfigPath, checkToolSettingsSignature, inspectToolSettings, integrationProfile, loadConnection, userHarnessFile, withinAdapterProfile, workspaceIdOf, writeAtomic,
   type PolicyKey, type ToolSettingsList, type ToolSettingsSection,
 } from "@scopebond/hook";
 
 export const TOOL_SETTINGS_STATE_FILE = "tool-settings.json";
 
-export type ToolSettingsRefusal = "unsigned" | "bad_signature" | "invalid" | "unsupported" | "unparseable" | "not_installed" | "write_failed" | "symlink";
+export type ToolSettingsRefusal = "unsigned" | "bad_signature" | "invalid" | "unsupported" | "unparseable" | "not_installed" | "write_failed" | "symlink" | "profile_boundary";
 export interface HarnessReport {
   state: "applied" | "drifted" | "refused";
   /** The settings (for example `permissions.deny`) that no longer hold the workspace's entries. Names only, never values. */
@@ -207,6 +207,8 @@ function applyHarness(harness: string, settings: Record<string, string[]> | unde
   const lists = Object.entries(settings ?? {});
   if (lists.some(([list, entries]) => entries.length > 0 && !target.lists[list as ToolSettingsList])) return refusedHarness("unsupported");
   const file = target.file();
+  if (!withinAdapterProfile(file)) return refusedHarness("profile_boundary");
+  try { checkConfigPath(file); } catch { return refusedHarness("symlink"); }
   const before = state.applied[harness];
   // What the workspace wants in each setting, as entries and as comparable keys.
   const desired = new Map<string, { path: readonly string[]; values: unknown[] }>();
@@ -272,6 +274,7 @@ function applyHarness(harness: string, settings: Record<string, string[]> | unde
     try { now = readFileSync(file, "utf8"); } catch { now = null; }
     if (now !== read.text) return previous ?? null;
     try {
+      checkConfigPath(file);
       if (read.text !== null) backupHarnessConfig(file);
       writeAtomic(file, render(read.config, read.text));
     } catch { return refusedHarness("write_failed"); }
@@ -330,6 +333,7 @@ export function applyToolSettings(dir: string, options: ApplyOptions = {}): Tool
       const unsigned = check.result === "unsigned" || check.reason === "unknown_key" || check.reason === "key_not_valid";
       return refuse(unsigned ? "unsigned" : "bad_signature", section);
     }
+    if (integrationProfile(dir).state !== "bound") return refuse("profile_boundary", section);
     const harnesses: Record<string, HarnessReport> = {};
     const names = new Set([...Object.keys(section.harnesses), ...Object.keys(state.applied)]);
     for (const harness of names) {

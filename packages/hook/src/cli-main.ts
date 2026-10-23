@@ -1748,7 +1748,7 @@ function runInstall(args: string[]): void {
     : args.includes("--cursor") ? ["cursor"]
     : args.includes("--copilot") ? ["copilot"]
     : args.includes("--claude") ? ["claude"]
-    : automaticHarnesses(HARNESSES).filter((h) => {
+    : automaticHarnesses(HARNESSES, dir, { createProfile: !args.includes("--dry-run") }).filter((h) => {
       if (!adapterPresent(h)) return false;
       try { const config = readHarnessConfig(userHarnessFile(h)); return config.disableAllHooks !== true && config.hooksEnabled !== false; }
       catch { return false; }

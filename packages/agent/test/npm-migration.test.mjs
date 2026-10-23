@@ -13,7 +13,7 @@ const root = mkdtempSync(join(tmpdir(), "sb-npm-migration-"));
 const userHome = join(root, "home");
 mkdirSync(userHome, { recursive: true });
 const saved = { ...process.env };
-Object.assign(process.env, { HOME: userHome, USERPROFILE: userHome, APPDATA: join(userHome, "AppData", "Roaming"), LOCALAPPDATA: join(userHome, "AppData", "Local"), SCOPEBOND_HOME: join(userHome, ".scopebond") });
+Object.assign(process.env, { HOME: userHome, USERPROFILE: userHome, APPDATA: join(userHome, "AppData", "Roaming"), LOCALAPPDATA: join(userHome, "AppData", "Local"), SCOPEBOND_HOME: join(userHome, "state") });
 after(() => { for (const k of ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SCOPEBOND_HOME"]) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
 
 const { configuredHookCommands, nativeHookCommand, userHarnessFile } = await import("@scopebond/hook");

@@ -172,11 +172,11 @@ export function npmOnPath(args: string[], env: NodeJS.ProcessEnv = process.env, 
  *  "recommended" (`moveVersions`) an entry naming an older hook, or any `npx` entry, is pinned to the carried hook; under
  *  "hold" only broken entries and `npx` entries that name no version or the carried one are (their version does not
  *  change). Entries of other tools are never touched. Returns the files changed. */
-export function maintainHookEntries(harnesses: Harness[], moveVersions = true, platform: NodeJS.Platform = process.platform): Array<{ harness: Harness; file: string; reason: string }> {
-  harnesses = automaticHarnesses(harnesses);
+export function maintainHookEntries(harnesses: Harness[], moveVersions = true, platform: NodeJS.Platform = process.platform, dir?: string): Array<{ harness: Harness; file: string; reason: string }> {
+  harnesses = automaticHarnesses(harnesses, dir);
   // The signed install: every Scopebond entry runs this executable, whatever wrote it (an npm install before it, an npx
   // form), under either policy: the hook is the one inside this program, so no version moves.
-  if (isSingleExecutable()) return useNativeHookEntries(harnesses);
+  if (isSingleExecutable()) return useNativeHookEntries(harnesses, process.execPath, dir);
   const carried = hookVersion();
   const changed: Array<{ harness: Harness; file: string; reason: string }> = [];
   for (const harness of harnesses) {

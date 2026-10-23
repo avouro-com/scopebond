@@ -1,7 +1,6 @@
 import { existsSync, watch } from "node:fs";
-import { homedir } from "node:os";
 import { dirname } from "node:path";
-import { HARNESSES, adapterDirectory } from "@scopebond/hook";
+import { HARNESSES, adapterDirectory, adapterFile, adapterProfileHome, adapterWithinProfile, checkConfigPath } from "@scopebond/hook";
 
 export const DISCOVERY_FALLBACK_MS = 60_000;
 export const DISCOVERY_DEBOUNCE_MS = 1_000;
@@ -14,12 +13,16 @@ export interface DiscoveryLoopOptions {
 }
 
 function watchDirectories(): string[] {
-  const paths = new Set([homedir()]);
+  const home = adapterProfileHome();
+  const paths = new Set<string>(existsSync(home) ? [home] : []);
   for (const harness of HARNESSES) {
+    if (!adapterWithinProfile(harness)) continue;
+    try { checkConfigPath(adapterFile(harness)); } catch { continue; } // the profile watcher still notices a repaired directory
     const directory = adapterDirectory(harness);
     for (const candidate of [directory, dirname(directory)]) {
+      if (candidate === dirname(home)) continue;
       let at = candidate;
-      while (!existsSync(at) && dirname(at) !== at) at = dirname(at);
+      while (!existsSync(at) && at !== home && dirname(at) !== at) at = dirname(at);
       if (existsSync(at)) paths.add(at);
     }
   }
