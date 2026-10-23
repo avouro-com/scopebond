@@ -186,7 +186,7 @@ test("uninstall leaves unrelated settings byte-for-byte and removes only an empt
   assert.equal(removeHarnessConfig(owned), true); assert.equal(existsSync(owned), false);
   assert.equal(removeHarnessConfig(owned), false);
   const unfamiliar = '{"version":1,"hooks":"unrecognized configuration"}';
-  writeFileSync(owned, unfamiliar);
+  writeFileSync(owned, unfamiliar, { flag: "wx" });
   assert.equal(removeHarnessConfig(owned), false);
   assert.equal(readFileSync(owned, "utf8"), unfamiliar);
 });
