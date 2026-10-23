@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { Harness } from "./adapters.js";
 import { requestOverSocket } from "./local-socket.js";
+import { readConfigText } from "./config-edit.js";
 
 export const HOOK_ACTIVITY_ROUTE = "/integration/callback";
 export const HOOK_ACTIVITY_EVENTS = ["decision", "session_start", "session_end", "outcome"] as const;
@@ -13,7 +13,9 @@ export interface HookActivityReport { version: 1; id: string; harness: Harness; 
  * not a native coding-tool process; this report cannot establish trust, execution success or coverage. */
 export async function reportHookActivity(home: string, harness: Harness, event: HookActivityEvent): Promise<boolean> {
   try {
-    const endpoint = JSON.parse(readFileSync(join(home, "agent.json"), "utf8")) as { socket?: unknown; token?: unknown };
+    const text = readConfigText(join(home, "agent.json"), 4096);
+    if (text === undefined) return false;
+    const endpoint = JSON.parse(text) as { socket?: unknown; token?: unknown };
     if (typeof endpoint.socket !== "string" || !endpoint.socket || typeof endpoint.token !== "string" || endpoint.token.length > 200) return false;
     if (process.platform === "win32" ? !/^\\\\\.\\pipe\\scopebond-agent-[0-9a-f]{32}$/.test(endpoint.socket) : !isAbsolute(endpoint.socket)) return false;
     // Use only the authenticated local pipe/socket. An older endpoint without it simply lacks this optional telemetry.

@@ -3,12 +3,12 @@ import { dirname, resolve } from "node:path";
 import { errorCode, replaceFile } from "./safe-fs.js";
 
 /** A hard byte bound also holds when a different writer grows the file during the read. */
-export function readConfigText(file: string): string | undefined {
+export function readConfigText(file: string, limit = 4 * 1024 * 1024): string | undefined {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4 * 1024 * 1024) throw new RangeError("invalid configuration byte limit");
   checkConfigPath(file);
   let fd: number;
   try { fd = openSync(file, "r"); } catch (error) { if (errorCode(error) === "ENOENT") return undefined; throw error; }
   try {
-    const limit = 4 * 1024 * 1024;
     const initial = fstatSync(fd).size;
     if (initial > limit) throw new Error("configuration too large");
     const buffer = Buffer.alloc(initial + 1);
