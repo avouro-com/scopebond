@@ -437,6 +437,7 @@ fn notify(app: &AppHandle, shared: &Arc<Shared>, answer: Option<&TrayAnswer>, li
     };
     // The first sign-in: nothing about the state while it waits, "Connected to …" once it is done.
     let situation = Situation {
+        block_history_unavailable: answer.is_none(),
         protection_off: off,
         first_sign_in: answer.is_some_and(|a| a.tray.first_sign_in),
         workspace: answer.and_then(|a| a.tray.workspace.as_deref()),
