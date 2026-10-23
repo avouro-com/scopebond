@@ -219,13 +219,13 @@ test("coding tools with identical session and call IDs cannot stop or settle eac
   t.after(() => server.close());
   const { dir } = makeHome({ url: server.url });
   const event = (name, extra = {}) => ({ hook_event_name: name, session_id: "shared-session", cwd: dir, ...extra });
-  for (const harness of ["claude", "codex"]) {
+  for (const harness of ["claude", "codex", "copilot"]) {
     assert.equal((await run(dir, [harness], event("SessionStart"))).status, 0);
     assert.equal((await run(dir, [harness], event("PreToolUse", {
       tool_name: "Bash", tool_input: { command: harness === "claude" ? "ls" : "pwd" }, tool_use_id: "shared-call",
     }))).status, 0);
   }
-  for (const harness of ["codex", "claude"]) {
+  for (const harness of ["copilot", "codex", "claude"]) {
     assert.equal((await run(dir, [harness], event("PostToolUse", { tool_use_id: "shared-call" }))).status, 0);
     assert.equal((await run(dir, [harness], event("SessionEnd", { reason: "logout" }))).status, 0);
   }
@@ -234,11 +234,11 @@ test("coding tools with identical session and call IDs cannot stop or settle eac
   const stops = items.filter((item) => item.payload.kind === "session" && item.payload.data.event === "stop");
   const intents = items.filter((item) => item.payload.kind === "tool_intent");
   const outcomes = items.filter((item) => item.payload.kind === "tool_outcome");
-  assert.equal(starts.length, 2, "each adapter owns an independent session");
-  assert.notEqual(starts[0].payload.session_id, starts[1].payload.session_id);
+  assert.equal(starts.length, 3, "each adapter owns an independent session");
+  assert.equal(new Set(starts.map((item) => item.payload.session_id)).size, 3);
   assert.deepEqual(stops.map((item) => item.payload.session_id), starts.map((item) => item.payload.session_id).reverse());
   assert.deepEqual(outcomes.map((item) => item.payload.parent_action_id), intents.map((item) => item.payload.parent_action_id).reverse());
-  assert.deepEqual(outcomes.map((item) => item.payload.data.exit_category), ["unknown", "ok"]);
+  assert.deepEqual(outcomes.map((item) => item.payload.data.exit_category), ["ok", "unknown", "ok"]);
   assertWellFormed(items, publicKeyOf(dir));
   assert.ok(!JSON.stringify(items).includes("shared-session"));
 });
