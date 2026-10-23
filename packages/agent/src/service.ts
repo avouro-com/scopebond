@@ -27,6 +27,8 @@ import { runSelfCheck } from "./selfcheck.js";
 import { integrationHealth } from "./integration-health.js";
 import { startDiscoveryLoop } from "./discovery-loop.js";
 import { createInventoryReporter } from "./inventory.js";
+import { createHookActivityTracker } from "./hook-activity.js";
+import { HOOK_ACTIVITY_ROUTE } from "@scopebond/hook";
 import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
 import { livePrompt, windowAllowed } from "./live-prompt.js";
@@ -434,6 +436,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   let stopped = false;
   let discovery: ReturnType<typeof startDiscoveryLoop> | null = null;
   const inventory = createInventoryReporter({ dir: options.dir, connection: () => loadConnection(options.dir), fetchImpl: options.fetchImpl });
+  const callbacks = createHookActivityTracker((harness) => integrationHealth([harness], Date.now(), options.dir)[0]);
   let lastSelfCheckAt = 0;
   // Repairs of this computer's setup: done as soon as they are seen (each cycle, when the tray asks, before each self-check),
   // recorded, and shown only while one fails.
@@ -1103,7 +1106,8 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return { outcome: "stopped", text: `Stopped allowing ${what}${where}` };
     },
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
-    "GET /status": () => ({ ...computerStatus(options.dir), integrations: integrationHealth(expectedHarnesses(), Date.now(), options.dir), inventory: inventory.state(), health: health(), agent: {
+    [`POST ${HOOK_ACTIVITY_ROUTE}`]: (body) => callbacks.accept(body),
+    "GET /status": () => ({ ...computerStatus(options.dir), integrations: integrationHealth(expectedHarnesses(), Date.now(), options.dir).map((health) => callbacks.apply(health)), inventory: inventory.state(), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
       failed_update: failedUpdate(options.dir), signing_in: reconnecting, last_repair: lastRepair, credential_renewal: renewal,
     } }),
