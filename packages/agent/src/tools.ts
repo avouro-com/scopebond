@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { HARNESSES, isHarnessConfigured, userHarnessFile, type Harness } from "@scopebond/hook";
+import { HARNESSES, adapterDirectory, adapterFile, adapterWithinProfile, checkConfigPath, isHarnessConfigured, type Harness } from "@scopebond/hook";
 import { findProgram } from "@scopebond/gateway/node";
 import { ownNpm } from "./update.js";
 
@@ -200,7 +200,7 @@ function vscodeUserDirs(home: string, platform: NodeJS.Platform, env: NodeJS.Pro
   return ["Code", "Code - Insiders"].map((product) => join(base, product, "User"));
 }
 
-interface Places { home: string; platform: NodeJS.Platform; env: NodeJS.ProcessEnv; copilotHome: string }
+interface Places { home: string; platform: NodeJS.Platform; env: NodeJS.ProcessEnv; copilotHome: string; codexHome: string }
 
 /** Whether each tool's user-level settings (file or folder) exist. */
 function settingsPresent(id: ToolId, p: Places, programOnPath: (name: string) => boolean): boolean {
@@ -211,8 +211,8 @@ function settingsPresent(id: ToolId, p: Places, programOnPath: (name: string) =>
     case "claude": return exists(join(home, ".claude", "settings.json")) || exists(join(home, ".claude"));
     // Cursor: ~/.cursor (its hooks.json and mcp.json). https://cursor.com/docs/context/mcp
     case "cursor": return exists(join(home, ".cursor"));
-    // Codex: ~/.codex (config.toml). https://developers.openai.com/codex/mcp
-    case "codex": return exists(join(home, ".codex"));
+    // Codex's active config root follows CODEX_HOME, defaulting to ~/.codex.
+    case "codex": return exists(p.codexHome);
     // GitHub Copilot CLI: as the hook detects it (copilotDetected): the CLI's own settings.json or logs in its folder, or the
     // `copilot` program on PATH. The folder alone is not enough: VS Code's Copilot Chat creates it too.
     // https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
@@ -241,7 +241,11 @@ function mcpNames(id: ToolId, p: Places): string[] {
     // https://cursor.com/docs/context/mcp: ~/.cursor/mcp.json, `mcpServers`.
     case "cursor": return jsonServerNames(join(home, ".cursor", "mcp.json"), "mcpServers");
     // https://developers.openai.com/codex/mcp: ~/.codex/config.toml, `[mcp_servers.<name>]`.
-    case "codex": return codexServerNames(join(home, ".codex", "config.toml"));
+    case "codex": {
+      const file = join(p.codexHome, "config.toml");
+      checkConfigPath(file);
+      return codexServerNames(file);
+    }
     // https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers: ~/.copilot/mcp-config.json.
     case "copilot": return jsonServerNames(join(p.copilotHome, "mcp-config.json"), "mcpServers");
     // ~/.codeium/windsurf/mcp_config.json, `mcpServers` (best effort, see above).
@@ -294,7 +298,8 @@ export async function discoverTools(options: DiscoveryOptions = {}): Promise<Too
   const home = homedir();
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const places: Places = { home, platform, env, copilotHome: env.COPILOT_HOME || join(home, ".copilot") };
+  const profile = { home, platform, env };
+  const places: Places = { ...profile, copilotHome: adapterDirectory("copilot", profile), codexHome: adapterDirectory("codex", profile) };
   const find = options.findProgram ?? ((name: string) => { try { return findProgram(name, { env, platform }); } catch { return null; } });
   const programOnPath = (name: string) => (platform === "win32" ? [name, `${name}.cmd`] : [name]).some((n) => find(n) !== null);
   const runVersion = options.runVersion;
@@ -305,12 +310,18 @@ export async function discoverTools(options: DiscoveryOptions = {}): Promise<Too
   const present = new Map<ToolId, boolean>();
   const governed = new Map<ToolId, boolean>();
   for (const id of TOOL_IDS) {
+    const harness = HOOK_HARNESSES[id];
+    if (harness) {
+      try {
+        if (!adapterWithinProfile(harness, profile)) continue;
+        checkConfigPath(adapterFile(harness, profile));
+      } catch { continue; }
+    }
     let found = false;
     try { found = settingsPresent(id, places, programOnPath); } catch { /* not present */ }
     present.set(id, found);
-    const harness = HOOK_HARNESSES[id];
     let on = false;
-    try { on = harness ? isHarnessConfigured(userHarnessFile(harness)) : false; } catch { /* not governed */ }
+    try { on = harness ? isHarnessConfigured(adapterFile(harness, profile)) : false; } catch { /* not governed */ }
     governed.set(id, on);
   }
   const reported = TOOL_IDS.filter((id) => present.get(id) || governed.get(id));

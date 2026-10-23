@@ -34,7 +34,8 @@ export function adapterProfileHome(profile: AdapterProfile = {}): string {
 export function adapterDirectory(harness: Harness, profile: AdapterProfile = {}): string {
   const home = adapterProfileHome(profile);
   const env = profile.env ?? process.env;
-  return harness === "copilot" && env.COPILOT_HOME ? adapterProfilePath(env.COPILOT_HOME, profile) : join(home, ADAPTERS[harness].directory);
+  const configured = harness === "copilot" ? env.COPILOT_HOME : harness === "codex" ? env.CODEX_HOME : undefined;
+  return configured ? adapterProfilePath(configured, profile) : join(home, ADAPTERS[harness].directory);
 }
 const contained = (part: string): boolean => part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part);
 /** Resolve only the selected profile's alias. Links beneath that root still reach the configuration path guard. */

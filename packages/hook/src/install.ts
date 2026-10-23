@@ -880,7 +880,7 @@ export function wireLifecycleHooks(file: string, command: string, harness: keyof
   const hooks = isRecord(config.hooks) ? config.hooks : (config.hooks = {});
   for (const event of GROUPED_LIFECYCLE_EVENTS[harness]) {
     const list = Array.isArray((hooks)[event]) ? (hooks as Record<string, unknown[]>)[event] : ((hooks as Record<string, unknown[]>)[event] = []);
-    const hook = harness === "codex" ? { ...codexHookEntry(command), statusMessage: "Recording activity with Scopebond" } : { type: "command", command };
+    const hook = harness === "codex" ? { ...codexHookEntry(command), ...(event === "SessionEnd" ? { timeout: 3 } : {}), statusMessage: "Recording activity with Scopebond" } : { type: "command", command };
     placeGroupedHook(list, hook, () => (harness === "codex" || event.startsWith("Session") ? { hooks: [hook] } : { matcher: "*", hooks: [hook] }));
   }
   });
