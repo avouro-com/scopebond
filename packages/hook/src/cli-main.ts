@@ -254,12 +254,14 @@ const cursorCoverageNote = [
 function recordObservations(dir: string, cwd: string, input: Record<string, unknown>, decision: Decision, harness: Harness): ObservationEmitter | undefined {
   try {
     // After the decision, before it is written: a busy observation log waits briefly (it is additive and may miss).
-    const { emitter } = openObservations(dir, { adapterVersion: hookVersion(), busyTimeoutMs: 2_000 });
+    const { emitter } = openObservations(dir, { adapterVersion: hookVersion(), harness, busyTimeoutMs: 2_000 });
     if (!emitter) return undefined;
     const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
     // Activity only refreshes sessions already opened by a supported lifecycle event.
     if ((harness === "claude" || harness === "copilot" || harness === "codex") && sessionId) emitter.activity(sessionId, cwd);
-    emitter.toolIntents({ harnessSessionId: sessionId, callId: callId(input), cwd, dispatched: decision.dispatched ?? [], request: callRequestOf(input) });
+    // A denied host call never ran, including when one operation allowed before another denied it.
+    // Keep its requested intent, but leave no completion correlation for a stray after-tool callback.
+    emitter.toolIntents({ harnessSessionId: sessionId, callId: decision.decision === "deny" ? undefined : callId(input), cwd, dispatched: decision.dispatched ?? [], request: callRequestOf(input) });
     return emitter;
   } catch { return undefined; }
 }
@@ -453,10 +455,10 @@ function repositoryHookNotGovernedHere(args: string[]): boolean {
   return true;
 }
 
-async function runClaudeLifecycle(input: Record<string, unknown>, harness: "claude" | "codex" = "claude"): Promise<never> {
+async function runClaudeLifecycle(input: Record<string, unknown>, harness: "claude" | "codex" | "copilot" = "claude"): Promise<never> {
   try {
     const cwd = input.cwd ? textOf(input.cwd) : process.cwd();
-    const { emitter } = openObservations(resolveConfigDir(cwd), { adapterVersion: hookVersion() });
+    const { emitter } = openObservations(resolveConfigDir(cwd), { adapterVersion: hookVersion(), harness });
     const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
     if (emitter) {
       try {
@@ -531,7 +533,7 @@ async function runCopilot(): Promise<void> {
   noteCopilotToolName(parsed as Record<string, unknown>, call);
   if (call.tool_name !== undefined && callId(call) === undefined) call.tool_use_id = copilotCallId(call);
   const event = typeof call.hook_event_name === "string" ? call.hook_event_name : "";
-  if (COPILOT_OBSERVATION_EVENTS.has(event)) { clearTimeout(deadline); await runClaudeLifecycle(call); }
+  if (COPILOT_OBSERVATION_EVENTS.has(event)) { clearTimeout(deadline); await runClaudeLifecycle(call, "copilot"); }
   await runPreToolUse(mapCopilotCall, denyCopilot, JSON.stringify(call), "copilot", deadlineAt);
 }
 

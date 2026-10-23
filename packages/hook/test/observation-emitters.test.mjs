@@ -111,8 +111,9 @@ test("lifecycle hook events do nothing, print nothing and exit 0 when observatio
 
 // ---- Claude Code end to end -----------------------------------------------------------------------
 
-test("Claude Code: session start, tool intent, tool outcome and session stop are signed, ordered and uploaded", async () => {
+test("Claude Code: session start, tool intent, tool outcome and session stop are signed, ordered and uploaded", async (t) => {
   const server = await startServer();
+  t.after(() => server.close());
   const home = makeHome({ url: server.url });
   const dir = home.dir;
   assert.equal((await run(dir, ["claude"], claudeEvent(dir, "SessionStart", { source: "startup" }))).status, 0);
@@ -123,6 +124,7 @@ test("Claude Code: session start, tool intent, tool outcome and session stop are
   const denied = await run(dir, ["claude"], claudeEvent(dir, "PreToolUse", { tool_name: "Bash", tool_input: { command: "rm -rf /" }, tool_use_id: "toolu_2" }));
   assert.equal(denied.status, 2, "a deny still denies");
   assert.match(denied.stdout, /"permissionDecision":"deny"/);
+  await run(dir, ["claude"], claudeEvent(dir, "PostToolUse", { tool_use_id: "toolu_2" }));
   assert.equal((await run(dir, ["claude"], claudeEvent(dir, "PreToolUse", { tool_name: "Bash", tool_input: { command: "npm test" }, tool_use_id: "toolu_3" }))).status, 0);
   assert.equal((await run(dir, ["claude"], claudeEvent(dir, "PostToolUseFailure", { tool_name: "Bash", tool_use_id: "toolu_3", is_interrupt: true }))).status, 0);
   assert.equal((await run(dir, ["claude"], claudeEvent(dir, "SessionEnd", { reason: "logout" }))).status, 0);
@@ -210,6 +212,35 @@ test("Codex lifecycle is observation-only and after-tool output cannot manufactu
   assert.equal(items[2].payload.source_receipt_hash, items[1].payload.source_receipt_hash);
   assert.equal(JSON.stringify(items).includes("PRIVATE-OUTPUT"), false);
   assert.equal(items.some((item) => item.payload.kind === "capability"), false, "a fixture is not activation proof");
+});
+
+test("coding tools with identical session and call IDs cannot stop or settle each other's work", async (t) => {
+  const server = await startServer();
+  t.after(() => server.close());
+  const { dir } = makeHome({ url: server.url });
+  const event = (name, extra = {}) => ({ hook_event_name: name, session_id: "shared-session", cwd: dir, ...extra });
+  for (const harness of ["claude", "codex"]) {
+    assert.equal((await run(dir, [harness], event("SessionStart"))).status, 0);
+    assert.equal((await run(dir, [harness], event("PreToolUse", {
+      tool_name: "Bash", tool_input: { command: harness === "claude" ? "ls" : "pwd" }, tool_use_id: "shared-call",
+    }))).status, 0);
+  }
+  for (const harness of ["codex", "claude"]) {
+    assert.equal((await run(dir, [harness], event("PostToolUse", { tool_use_id: "shared-call" }))).status, 0);
+    assert.equal((await run(dir, [harness], event("SessionEnd", { reason: "logout" }))).status, 0);
+  }
+  const items = server.observations();
+  const starts = items.filter((item) => item.payload.kind === "session" && item.payload.data.event === "start");
+  const stops = items.filter((item) => item.payload.kind === "session" && item.payload.data.event === "stop");
+  const intents = items.filter((item) => item.payload.kind === "tool_intent");
+  const outcomes = items.filter((item) => item.payload.kind === "tool_outcome");
+  assert.equal(starts.length, 2, "each adapter owns an independent session");
+  assert.notEqual(starts[0].payload.session_id, starts[1].payload.session_id);
+  assert.deepEqual(stops.map((item) => item.payload.session_id), starts.map((item) => item.payload.session_id).reverse());
+  assert.deepEqual(outcomes.map((item) => item.payload.parent_action_id), intents.map((item) => item.payload.parent_action_id).reverse());
+  assert.deepEqual(outcomes.map((item) => item.payload.data.exit_category), ["unknown", "ok"]);
+  assertWellFormed(items, publicKeyOf(dir));
+  assert.ok(!JSON.stringify(items).includes("shared-session"));
 });
 
 test("Codex lifecycle and unsupported events never enter the decision parser when observations are off", async () => {

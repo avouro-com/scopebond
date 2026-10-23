@@ -38,6 +38,7 @@ import { isProtectedBranch, loadRules } from "./rules.js";
 import { uploadPending, type UploadOutcome } from "./obs-upload.js";
 import { readMeta } from "./managed.js";
 import { machineIdFor } from "./machine-id.js";
+import type { Harness } from "./adapters.js";
 
 export const OBSERVATIONS_SCOPE = "observations:write";
 /** Every minute, unless the workspace says it reads a heartbeat's interval (`x-scopebond-heartbeat-interval-s` on the rules
@@ -100,6 +101,8 @@ export interface EmitterOptions {
   /** How long the observation log waits for another process's lock (15 s by default; a hook call passes less). */
   busyTimeoutMs?: number;
   adapterVersion?: string;
+  /** Local correlation scope. A host's session and call IDs are not unique across adapters. */
+  harness?: Harness;
   /** Tests: do not start the heartbeat helper process. */
   spawnHeartbeat?: boolean;
   /** Bound on one upload attempt from a hook call. */
@@ -170,12 +173,17 @@ export class ObservationEmitter {
 
   // ---- session lifecycle ---------------------------------------------------------------------
 
-  sessionIdOf(harnessSessionId: string): string { return this.binding.sessionId(harnessSessionId); }
+  sessionIdOf(harnessSessionId: string): string {
+    return this.binding.sessionId(this.options.harness
+      ? JSON.stringify(["adapter-session/v1", this.options.harness, harnessSessionId]) : harnessSessionId);
+  }
 
   /** A local key for a harness tool call, so the after-action hook finds what the
    *  before-action hook recorded. Keyed, so the raw ids are not written to the local store. */
   private callKey(harnessSessionId: string | undefined, callId: string): string {
-    return this.binding.resourceId("call", `${harnessSessionId ?? ""}\u0000${callId}`);
+    return this.binding.resourceId("call", this.options.harness
+      ? JSON.stringify(["adapter-call/v1", this.options.harness, harnessSessionId ?? "", callId])
+      : `${harnessSessionId ?? ""}\u0000${callId}`);
   }
 
   /** SessionStart: record one start per session and make sure the heartbeat helper runs. */
