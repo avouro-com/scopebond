@@ -185,6 +185,12 @@ test("uninstall leaves unrelated settings byte-for-byte and removes only an empt
   writeHarnessConfig(owned, "copilot", "scopebond-hook copilot");
   assert.equal(removeHarnessConfig(owned), true); assert.equal(existsSync(owned), false);
   assert.equal(removeHarnessConfig(owned), false);
+});
+
+test("uninstall preserves an unrecognized owned-file configuration", (t) => {
+  profiles(t);
+  const owned = userHarnessFile("copilot");
+  mkdirSync(join(owned, ".."), { recursive: true });
   const unfamiliar = '{"version":1,"hooks":"unrecognized configuration"}';
   writeFileSync(owned, unfamiliar, { flag: "wx" });
   assert.equal(removeHarnessConfig(owned), false);
