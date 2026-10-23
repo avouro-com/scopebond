@@ -40,7 +40,7 @@ import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand
 import { approvalSummary, retryAfterSeconds } from "./login-approval.js";
 import { createInterface } from "node:readline/promises";
 import {
-  userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig, readHarnessConfig,
+  userHome, userHarnessFile, resolveConfigDir, writeHarnessConfig, removeHarnessConfig,
   cursorDetected, codexDetected, copilotDetected, harnessDetected, HARNESSES, COPILOT_DECISION_DEADLINE_MS,
   absoluteHookCommand, nativeHookCommand, isHarnessConfigured, purgeHome, type Harness,
   harnessScopes, harnessScopeLabel, configuredHookCommands, hookCommandResolves, projectHarnessFile,
@@ -1362,11 +1362,15 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     // entry in the folder this ran from used to count as "already configured", so a sign-in
     // from such a folder never set up the user at all.
     const forUser = samePath(dir, userHome());
+    const eligible = !forUser || automaticHarnesses([harness], dir, { createProfile: !args.includes("--no-install") }).includes(harness);
+    const install = eligible && !args.includes("--no-install");
     const scopes = harnessScopes(harness, process.cwd());
     const existing = forUser ? scopes.user : scopes.local ?? scopes.project ?? scopes.user;
-    if (existing && !args.includes("--no-install")) {
+    if (!eligible) {
+      console.log(`${harnessName(harness)} integration left unchanged: automatic enrollment is off, the tool is excluded, native hooks are disabled, or its profile needs attention.`);
+    } else if (existing && install) {
       console.log(`✓ ${harnessName(harness)} already configured in ${existing}`);
-    } else if (!args.includes("--no-install")) {
+    } else if (install) {
       // A connection for this computer (the user home, the default) covers every project,
       // so the hook goes into the user-level agent settings. Placing it in the current
       // folder's project settings — what this did before — left every other project
@@ -1395,7 +1399,7 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     // when this workspace granted observations:write and the host has a grouped lifecycle mapping. Off is
     // silent here (`status` says why); a granted scope the hook cannot use is worth a line.
     const observing = observationStatus(loadConnection(dir));
-    if (observing.state === "on" && (harness === "claude" || harness === "codex") && !args.includes("--no-install")) {
+    if (observing.state === "on" && (harness === "claude" || harness === "codex") && install) {
       const placed = harnessScopes(harness, process.cwd());
       const target = forUser ? placed.user : placed.local ?? placed.project ?? placed.user;
       const command = target ? configuredHookCommands(target)[0] : undefined;
@@ -1403,8 +1407,10 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
     } else if (observing.state === "unsupported") console.log(`Observations: ${observing.reason}`);
     if (forUser) for (const line of projectSetupNotice(process.cwd())) console.log(line);
     console.log("");
-    console.log("Run your agent — the first action appears in your workspace within seconds.");
-    console.log(onboardingSteps({ harness, command: cliCommand, connected: true }).join("\n"));
+    if (eligible) {
+      console.log("Run your agent — the first action appears in your workspace within seconds.");
+      console.log(onboardingSteps({ harness, command: cliCommand, connected: true }).join("\n"));
+    } else console.log(`Workspace connected. Check integration status with ${cliCommand("status")}; this connection does not establish active protection.`);
   } catch (error) {
     const message = (error as Error).message;
     console.error(`connect failed: ${message}`);
@@ -1757,15 +1763,12 @@ function durableHookCommand(h: Harness): string {
 function runInstall(args: string[]): void {
   const dir = userHome();
   const commandFor = durableHookCommand;
-  const harnessesFor = (): Harness[] => args.includes("--codex") ? ["codex"]
-    : args.includes("--cursor") ? ["cursor"]
-    : args.includes("--copilot") ? ["copilot"]
-    : args.includes("--claude") ? ["claude"]
-    : automaticHarnesses(HARNESSES, dir, { createProfile: !args.includes("--dry-run") }).filter((h) => {
-      if (!adapterPresent(h)) return false;
-      try { const config = readHarnessConfig(userHarnessFile(h)); return config.disableAllHooks !== true && config.hooksEnabled !== false; }
-      catch { return false; }
-    });
+  const harnessesFor = (): Harness[] => {
+    const selected = args.includes("--codex") ? "codex" : args.includes("--cursor") ? "cursor"
+      : args.includes("--copilot") ? "copilot" : args.includes("--claude") ? "claude" : null;
+    return automaticHarnesses(selected ? [selected] : HARNESSES, dir, { createProfile: !args.includes("--dry-run") })
+      .filter((h) => selected !== null || adapterPresent(h));
+  };
   // `install` rewrites agent config files the user did not create — their theme, plugins
   // and permissions live in ~/.claude/settings.json — so there is a way to see exactly
   // what it would touch before it touches anything.
@@ -1794,6 +1797,7 @@ function runInstall(args: string[]): void {
   if (existing) console.log(`  workspace      connected to ${existing.url} (kept)`);
   console.log("");
   const harnesses: Harness[] = harnessesFor();
+  if (!harnesses.length) console.log("Tool integrations left unchanged. Check automatic enrollment, exclusions and native hook settings.");
   if (!args.includes("--no-install")) {
     for (const h of harnesses) {
       try {
@@ -1804,7 +1808,7 @@ function runInstall(args: string[]): void {
         if (backup && existsSync(backup)) console.log(`  original kept at ${backup}`);
       } catch (error) { console.error(`✗ ${harnessName(h)}: ${(error as Error).message}`); process.exitCode = 1; }
     }
-  } else {
+  } else if (harnesses.length) {
     console.log("Add this to your user-level agent config:");
     console.log(harnessSnippet(harnesses[0]));
   }
