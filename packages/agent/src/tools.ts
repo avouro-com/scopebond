@@ -5,16 +5,16 @@
 // hook is installed for it, and whether its user-level settings exist; and the NAMES of the MCP servers in each tool's
 // user-level MCP configuration. Never a path, a user name, a command, an argument, an environment value or a URL.
 //
-// A tool is never started in a way that opens a session: a version comes from the package manifest of a global npm
-// install, or from `<program> --version` for the programs known to answer it and exit (with a 3 s limit), else null.
+// Automatic discovery never starts a program: a version comes from a global npm package manifest, else null.
+// An embedding caller may supply a version reader that validates the executable independently of its PATH name.
 
 import { execFile } from "node:child_process";
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { HARNESSES, isHarnessConfigured, userHarnessFile, type Harness } from "@scopebond/hook";
 import { findProgram } from "@scopebond/gateway/node";
-import { ownNpm, npmOnPath } from "./update.js";
+import { ownNpm } from "./update.js";
 
 export type ToolId = "claude" | "cursor" | "codex" | "copilot" | "windsurf" | "gemini" | "cline" | "opencode" | "aider";
 
@@ -50,11 +50,11 @@ export const NPM_PACKAGES: Partial<Record<ToolId, string>> = {
 export const VERSION_PROGRAMS: Partial<Record<ToolId, string>> = { claude: "claude", codex: "codex", copilot: "copilot", gemini: "gemini", aider: "aider" };
 
 export interface DiscoveryOptions {
-  /** The global npm package folders to read manifests from (default: the usual ones and `npm root -g`). */
+  /** The global npm package folders to read manifests from (default: usual locations and this runtime's npm folder). */
   npmRoots?: string[];
   /** Finds a program on PATH by its bare name (default: PATH's absolute folders only; on Windows only `.com`/`.exe`). */
   findProgram?: (name: string) => string | null;
-  /** Prints a program's version (default: `<program> --version`, 3 s limit). */
+  /** Optional version reader. The caller must validate the executable before running it; no program runs by default. */
   runVersion?: (program: string) => Promise<string | null>;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -277,27 +277,12 @@ export function programVersion(program: string, options: { timeoutMs?: number; a
   });
 }
 
-let npmRootMemo: Promise<string | null> | null = null;
-
-/** `npm root -g`, once per process (3 s limit): the global folder an npm with another prefix installs into. */
-function npmGlobalRoot(): Promise<string | null> {
-  npmRootMemo ??= new Promise((resolve) => {
-    try {
-      const own = ownNpm();
-      const run = own ? { program: own[0], args: [...own[1], "root", "-g"], shell: false as string | false } : npmOnPath(["root", "-g"]);
-      if (!run) { resolve(null); return; }
-      const child = execFile(run.program, run.args, { shell: run.shell || undefined, timeout: VERSION_TIMEOUT_MS, windowsHide: true, encoding: "utf8", cwd: tmpdir() },
-        (error, stdout) => resolve(error ? null : (stdout.trim().split(/\r?\n/).pop() ?? "").trim() || null));
-      child.stdin?.end();
-    } catch { resolve(null); }
-  });
-  return npmRootMemo;
-}
-
 /** The usual global npm package folders, without asking npm. */
 function defaultNpmRoots(home: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
   const roots: string[] = [];
   if (env.npm_config_prefix) roots.push(platform === "win32" ? join(env.npm_config_prefix, "node_modules") : join(env.npm_config_prefix, "lib", "node_modules"));
+  const npmCli = ownNpm()?.[1][0];
+  if (npmCli) roots.push(dirname(dirname(dirname(npmCli))));
   if (platform === "win32") roots.push(join(env.APPDATA ?? join(home, "AppData", "Roaming"), "npm", "node_modules"));
   else roots.push(join(home, ".npm-global", "lib", "node_modules"), "/usr/local/lib/node_modules", "/opt/homebrew/lib/node_modules", "/usr/lib/node_modules");
   return roots;
@@ -312,7 +297,7 @@ export async function discoverTools(options: DiscoveryOptions = {}): Promise<Too
   const places: Places = { home, platform, env, copilotHome: env.COPILOT_HOME || join(home, ".copilot") };
   const find = options.findProgram ?? ((name: string) => { try { return findProgram(name, { env, platform }); } catch { return null; } });
   const programOnPath = (name: string) => (platform === "win32" ? [name, `${name}.cmd`] : [name]).some((n) => find(n) !== null);
-  const runVersion = options.runVersion ?? ((program: string) => programVersion(program));
+  const runVersion = options.runVersion;
 
   // Presence first, from settings alone (the Copilot CLI: also its program on PATH, as the hook detects it). Nothing is
   // run, and no version looked for, for a tool that is not present: a program of the same name elsewhere on PATH is never
@@ -330,22 +315,14 @@ export async function discoverTools(options: DiscoveryOptions = {}): Promise<Too
   }
   const reported = TOOL_IDS.filter((id) => present.get(id) || governed.get(id));
 
-  let roots = options.npmRoots ?? defaultNpmRoots(home, platform, env);
+  const roots = options.npmRoots ?? defaultNpmRoots(home, platform, env);
   const versions = new Map<ToolId, string | null>();
   for (const id of reported) { const pkg = NPM_PACKAGES[id]; versions.set(id, pkg ? manifestVersion(roots, pkg) : null); }
-  // A present tool published to npm and not in the usual folders: ask npm where its global folder is, once.
-  if (!options.npmRoots && reported.some((id) => NPM_PACKAGES[id] && versions.get(id) === null)) {
-    const root = await npmGlobalRoot();
-    if (root && !roots.includes(root)) {
-      roots = [root];
-      for (const id of reported) { const pkg = NPM_PACKAGES[id]; if (pkg && versions.get(id) === null) versions.set(id, manifestVersion(roots, pkg)); }
-    }
-  }
-  // Otherwise the programs that answer `--version` and exit, for a tool whose settings are present only. On Windows the
-  // lookup finds only real programs (.exe, .com), never a .cmd that would need a shell.
+  // A PATH name and settings directory establish presence, not executable provenance. Only an explicitly supplied
+  // reader may validate/probe a program; background discovery leaves its version unknown instead of launching it.
   await Promise.all(reported.map(async (id) => {
     const name = VERSION_PROGRAMS[id];
-    if (!name || !present.get(id) || versions.get(id) !== null) return;
+    if (!runVersion || !name || !present.get(id) || versions.get(id) !== null) return;
     const program = find(name);
     if (!program) return;
     try { versions.set(id, parseVersion(await runVersion(program))); } catch { /* null */ }
