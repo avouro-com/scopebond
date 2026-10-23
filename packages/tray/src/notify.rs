@@ -63,6 +63,8 @@ pub struct Toast {
 /// What the tray knows besides the state, for the notifications about it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Situation<'a> {
+    /// The agent has not supplied a block history on this poll. This is different from a known empty history.
+    pub block_history_unavailable: bool,
     /// Supervision could not bring the agent back (two failed restarts within ten minutes): the problem told is that
     /// protection is off, with *Restart it*.
     pub protection_off: bool,
@@ -248,9 +250,11 @@ impl Notifier {
         // A retry keeps its block's group id, so it is not a new block.
         let ids = blocks.iter().filter_map(|b| b.group_id.clone().or_else(|| b.action_id.clone()).map(|id| (id, b)));
         let mut fresh_blocks: Vec<RecentBlock> = Vec::new();
-        match &mut self.seen {
-            None => self.seen = Some(ids.map(|(id, _)| id).collect()),
-            Some(seen) => {
+        match (&mut self.seen, situation.block_history_unavailable) {
+            // A startup or reconnect poll without a model says nothing about the block history.
+            (_, true) => {}
+            (None, false) => self.seen = Some(ids.map(|(id, _)| id).collect()),
+            (Some(seen), false) => {
                 // Oldest first, so blocks are told in the order they happened.
                 let fresh: Vec<(String, &RecentBlock)> = ids.filter(|(id, _)| !seen.contains(id)).collect();
                 for (id, block) in fresh.into_iter().rev() {
@@ -564,6 +568,22 @@ mod tests {
         assert!(r.blocks(100, &[block("b"), block("a")], Blocks).is_empty(), "once");
         assert!(r.blocks(200, &[block("c"), block("b")], Off).is_empty(), "off: no blocks");
         assert_eq!(r.blocks(300, &[block("d"), block("c")], Blocks).len(), 1, "c was seen meanwhile");
+    }
+
+    #[test]
+    fn startup_without_an_agent_answer_does_not_replay_old_blocks() {
+        let mut r = Run::new();
+        let unavailable = Situation { block_history_unavailable: true, ..Default::default() };
+        for seconds in [0, 1, 2] {
+            assert!(r.n.observe(Working, "", &[], Blocks, unavailable, r.start + Duration::from_secs(seconds)).is_empty());
+        }
+        assert!(r.blocks(3, &[block("old")], Blocks).is_empty(), "the first real history is the baseline");
+        let fresh = r.blocks(4, &[block("new"), block("old")], Blocks);
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].title, "Blocked: rm -rf new");
+        r.n.observe(Working, "", &[], Blocks, unavailable, r.start + Duration::from_secs(5));
+        assert!(r.blocks(6, &[block("new"), block("old")], Blocks).is_empty(), "reconnection preserves the baseline");
+        assert_eq!(r.blocks(7, &[block("later"), block("new")], Blocks).len(), 1);
     }
 
     /// The list as the agent sends it: newest first.
