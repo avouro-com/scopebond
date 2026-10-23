@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { linkSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,6 +77,18 @@ test("a small clock rollback cannot make an already accepted callback replayable
   assert.equal(tracker.accept(body).accepted, false);
   assert.equal(tracker.apply(current).activity.state, "unknown");
   assert.equal(tracker.accept(report(at)).accepted, true);
+});
+
+for (const kind of ["oversized", "linked"]) test(`optional callbacks refuse ${kind} endpoint files`, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "callback-endpoint-"));
+  let reports = 0;
+  const control = await startControl(dir, "test", { [`POST ${HOOK_ACTIVITY_ROUTE}`]: () => { reports++; return { accepted: true }; } }, { loopback: false });
+  t.after(() => control.close());
+  const file = join(dir, "agent.json");
+  if (kind === "oversized") writeFileSync(file, readFileSync(file, "utf8") + " ".repeat(4096));
+  else linkSync(file, join(dir, "other-endpoint.json"));
+  assert.equal(await reportHookActivity(dir, "codex", "decision"), false);
+  assert.equal(reports, 0, "invalid endpoint metadata must not trigger optional I/O");
 });
 
 test("the real local channel rejects unauthenticated and browser requests; hook reports remain unverified", async (t) => {
