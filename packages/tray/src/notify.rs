@@ -250,9 +250,11 @@ impl Notifier {
         // A retry keeps its block's group id, so it is not a new block.
         let ids = blocks.iter().filter_map(|b| b.group_id.clone().or_else(|| b.action_id.clone()).map(|id| (id, b)));
         let mut fresh_blocks: Vec<RecentBlock> = Vec::new();
-        match &mut self.seen {
-            None => self.seen = Some(ids.map(|(id, _)| id).collect()),
-            Some(seen) => {
+        match (&mut self.seen, situation.block_history_unavailable) {
+            // A startup or reconnect poll without a model says nothing about the block history.
+            (_, true) => {}
+            (None, false) => self.seen = Some(ids.map(|(id, _)| id).collect()),
+            (Some(seen), false) => {
                 // Oldest first, so blocks are told in the order they happened.
                 let fresh: Vec<(String, &RecentBlock)> = ids.filter(|(id, _)| !seen.contains(id)).collect();
                 for (id, block) in fresh.into_iter().rev() {
