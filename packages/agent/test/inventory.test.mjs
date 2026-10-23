@@ -104,6 +104,34 @@ test("execution boundaries report only categories and never copy environment val
   assert.equal(executionEnvironment("linux", { container: "private container" }), "container");
 });
 
+test("a failed collection retains local facts under their original execution scope", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "inventory-environment-"));
+  let execution = "windows", failed = false;
+  const reporter = createInventoryReporter({ dir, connection: () => null, execution: () => execution,
+    collect: () => { if (failed) throw new Error("unavailable"); return [row]; } });
+  t.after(reporter.stop);
+  await reporter.reconcile();
+  const first = JSON.parse(readFileSync(join(dir, INVENTORY_FILE), "utf8"));
+  execution = "wsl"; failed = true; await reporter.reconcile();
+  const stale = JSON.parse(readFileSync(join(dir, INVENTORY_FILE), "utf8"));
+  assert.equal(stale.collection, "failed"); assert.equal(stale.execution, "windows");
+  assert.equal(stale.profile_id, first.profile_id); assert.equal(stale.tools[0].presence, "unknown");
+  failed = false; await reporter.reconcile();
+  assert.equal(JSON.parse(readFileSync(join(dir, INVENTORY_FILE), "utf8")).execution, "wsl");
+});
+
+test("a backwards wall-clock jump cannot defer inventory retries until the old clock catches up", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "inventory-clock-"));
+  loadOrCreateAttester({ file: join(dir, "attester.key") });
+  let now = 1_800_000_000_000, calls = 0;
+  const reporter = createInventoryReporter({ dir, connection: () => connection, now: () => now, collect: () => [row],
+    fetchImpl: async () => { calls++; throw new Error("offline"); } });
+  t.after(reporter.stop);
+  await reporter.reconcile(); assert.equal(calls, 1);
+  now -= 3_600_000; await reporter.reconcile(); assert.equal(calls, 2);
+  assert.equal(reporter.state().delivery, "retrying"); assert.equal(reporter.state().reported_at, null);
+});
+
 test("a change within the throttle reports without another filesystem event; stop cancels pending work", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dir = mkdtempSync(join(tmpdir(), "inventory-throttle-"));
