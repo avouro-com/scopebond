@@ -162,6 +162,36 @@ test("first sign-in preserves exclusions and native hook disablement", async (t)
   assert.equal(readFileSync(userHarnessFile("claude"), "utf8"), disabled);
 });
 
+test("Codex sign-in and native migration preserve supported lifecycle hooks without claiming trust", async (t) => {
+  const { home } = profiles(t); const dir = join(home, "state");
+  mkdirSync(join(home, ".codex"));
+  const cloud = await startFakeCloud(); t.after(() => cloud.close());
+  const origin = "https://workspace.example.test";
+  const fetchImpl = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    assert.equal(url.origin, origin);
+    const response = await fetch(`${cloud.url}${url.pathname}${url.search}`, init);
+    if (url.pathname !== "/v1/enroll") return response;
+    const body = await response.json();
+    return Response.json({ ...body, scopes: [...body.scopes, "observations:write"], installation_generation: 1 });
+  };
+  const first = await startFirstSignIn(dir, origin, { fetchImpl, open: () => {}, harnesses: ["codex"] });
+  cloud.approve(first.started.user_code); assert.equal(await first.done, true);
+  const file = userHarnessFile("codex");
+  let hooks = JSON.parse(readFileSync(file, "utf8")).hooks;
+  for (const event of ["PreToolUse", "SessionStart", "SessionEnd", "PostToolUse"]) assert.equal(hooks[event].length, 1);
+  assert.equal(hooks.PostToolUseFailure, undefined);
+  assert.equal(integrationHealth(["codex"], Date.now(), dir)[0].integration, "awaiting_trust");
+  assert.equal(integrationHealth(["codex"], Date.now(), dir)[0].runtime.state, "never_verified");
+  useNativeHookEntries(["codex"], "C:/Programs/scopebond-agent.exe", dir);
+  hooks = JSON.parse(readFileSync(file, "utf8")).hooks;
+  for (const event of ["PreToolUse", "SessionStart", "SessionEnd", "PostToolUse"]) {
+    assert.equal(hooks[event].length, 1);
+    assert.match(hooks[event][0].hooks[0].command, /scopebond-agent\.exe.*hook codex/);
+  }
+  assert.equal(hooks.PostToolUseFailure, undefined);
+});
+
 test("uninstall honors the shared writer lock, including an otherwise removable owned file", (t) => {
   profiles(t);
   for (const harness of ["claude", "copilot"]) {

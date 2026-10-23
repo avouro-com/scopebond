@@ -86,7 +86,7 @@ test("a local receipt carries the context: harness, model, keyed session id, rep
   const r = await run(dir, ["claude"], write(repo, { model: "example-model-1" }));
   assert.equal(r.status, 0, r.stderr);
   const [receipt] = await receiptsOf(dir);
-  const sessionId = loadOrCreateBindingKey(dir).sessionId("harness-session-1");
+  const sessionId = loadOrCreateBindingKey(dir).sessionId("harness-session-1", "claude");
   assert.deepEqual(receipt.payload.context, {
     harness: "claude", harness_version: null, model: "example-model-1", session_id: sessionId,
     repository: "github.com/example/app", branch: "feature/ctx",

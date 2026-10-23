@@ -26,6 +26,7 @@ import { join } from "node:path";
 import type { ReceiptBudget } from "@scopebond/gateway";
 import { MANAGED_DOC_FILE, writeAtomic } from "./managed.js";
 import { loadOrCreateBindingKey } from "./observation.js";
+import type { Harness } from "./adapters.js";
 import { validSessionBudget, type SessionBudget, type SessionBudgetLimit } from "./session-budget-shape.js";
 
 export { validSessionBudget, validSessionBudgets, type SessionBudget, type SessionBudgetLimit } from "./session-budget-shape.js";
@@ -42,9 +43,9 @@ const intIn = (v: unknown, min: number, max: number): boolean => Number.isIntege
 
 /** The keyed opaque id of the harness's session (the same id receipts carry as `context.session_id`), or null when the hook
  *  input names no session. Throws when the key cannot be read or made. */
-export function keyedSessionId(dir: string, input: Record<string, unknown>): string | null {
+export function keyedSessionId(dir: string, input: Record<string, unknown>, harness?: Harness): string | null {
   const raw = input.session_id;
-  return typeof raw === "string" && raw !== "" ? loadOrCreateBindingKey(dir).sessionId(raw) : null;
+  return typeof raw === "string" && raw !== "" ? loadOrCreateBindingKey(dir).sessionId(raw, harness) : null;
 }
 
 /** The budgets the workspace's rules document holds (the document was checked when it was installed). */
@@ -309,9 +310,32 @@ export function sessionBudgetGuard(dir: string, sessionId: string | null | Error
 }
 
 /** The guard for the session a hook input names, or null when no budget applies. */
-export function sessionBudgetGuardFor(dir: string, input: Record<string, unknown>): SessionBudgetGuard | null {
+export function sessionBudgetGuardFor(dir: string, input: Record<string, unknown>, harness?: Harness): SessionBudgetGuard | null {
   if (readSessionBudgets(dir).length === 0) return null;
-  let sessionId: string | null | Error;
-  try { sessionId = keyedSessionId(dir, input); } catch (error) { sessionId = error instanceof Error ? error : new Error("session id unavailable"); }
-  return sessionBudgetGuard(dir, sessionId);
+  let current: SessionBudgetGuard | null;
+  let legacy: SessionBudgetGuard | null;
+  try {
+    current = sessionBudgetGuard(dir, keyedSessionId(dir, input, harness));
+    // Existing limits retain their original count keys until their signed expiry. Never reset a limit during upgrade,
+    // and never use a legacy alias to grant a session allowance. Newly issued limits use only the adapter-scoped ID.
+    legacy = harness ? sessionBudgetGuard(dir, keyedSessionId(dir, input)) : null;
+  } catch (error) {
+    return sessionBudgetGuard(dir, error instanceof Error ? error : new Error("session id unavailable"));
+  }
+  if (!current || !legacy) return current ?? legacy;
+  const guards = [current, legacy];
+  return {
+    reserve(group, intents, options) {
+      const held: Array<Extract<BudgetReservation, { allow: true }>> = [];
+      for (const guard of guards) {
+        const result = guard.reserve(group, intents, options);
+        if (!result.allow) { for (const prior of held) prior.release(); return result; }
+        held.push(result);
+      }
+      return { allow: true,
+        budgetFor: (intent) => held.map((result) => result.budgetFor(intent)).find((budget) => budget !== undefined),
+        release: () => { for (const result of held) result.release(); },
+      };
+    },
+  };
 }

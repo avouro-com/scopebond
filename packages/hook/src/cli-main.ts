@@ -10,7 +10,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, statSync, readdirSync } from "node:fs";
 import { hookCliPath, isSingleExecutable } from "./self.js";
-import { adapterPresent } from "./adapters.js";
+import { adapterPresent, GROUPED_LIFECYCLE_EVENTS } from "./adapters.js";
 import { automaticHarnesses } from "./integration-intent.js";
 import { textOf } from "./text.js";
 import { join, resolve } from "node:path";
@@ -142,8 +142,8 @@ function runtimePaths(dir: string, cwd?: string) {
 /** The harness's own id for this tool call, when it gives one (Claude Code and Codex send
  *  `tool_use_id`), so the receipts of one call share a stable action group. */
 /** The keyed session id for session-scoped allowances; null when it cannot be read (such an allowance then does not apply). */
-function sessionKeyOf(dir: string, input: Record<string, unknown>): string | null {
-  try { return keyedSessionId(dir, input); } catch { return null; }
+function sessionKeyOf(dir: string, input: Record<string, unknown>, harness: Harness): string | null {
+  try { return keyedSessionId(dir, input, harness); } catch { return null; }
 }
 
 function callId(input: Record<string, unknown>): string | undefined {
@@ -254,13 +254,14 @@ const cursorCoverageNote = [
 function recordObservations(dir: string, cwd: string, input: Record<string, unknown>, decision: Decision, harness: Harness): ObservationEmitter | undefined {
   try {
     // After the decision, before it is written: a busy observation log waits briefly (it is additive and may miss).
-    const { emitter } = openObservations(dir, { adapterVersion: hookVersion(), busyTimeoutMs: 2_000 });
+    const { emitter } = openObservations(dir, { adapterVersion: hookVersion(), harness, busyTimeoutMs: 2_000 });
     if (!emitter) return undefined;
     const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
-    // Session lifecycle is Claude Code's and GitHub Copilot's: their SessionStart/SessionEnd hooks are the ones the
-    // mapping covers. Other hosts still get tool intents from their PreToolUse.
-    if ((harness === "claude" || harness === "copilot") && sessionId) emitter.activity(sessionId, cwd);
-    emitter.toolIntents({ harnessSessionId: sessionId, callId: callId(input), cwd, dispatched: decision.dispatched ?? [], request: callRequestOf(input) });
+    // Activity only refreshes sessions already opened by a supported lifecycle event.
+    if ((harness === "claude" || harness === "copilot" || harness === "codex") && sessionId) emitter.activity(sessionId, cwd);
+    // A denied host call never ran, including when one operation allowed before another denied it.
+    // Keep its requested intent, but leave no completion correlation for a stray after-tool callback.
+    emitter.toolIntents({ harnessSessionId: sessionId, callId: decision.decision === "deny" ? undefined : callId(input), cwd, dispatched: decision.dispatched ?? [], request: callRequestOf(input) });
     return emitter;
   } catch { return undefined; }
 }
@@ -339,7 +340,7 @@ async function withInstallVerdicts(dir: string, mapped: Mapped[], ask: "ask" | "
 function noteIfBlocked(dir: string, cwd: string, harness: Harness, decision: Decision, input?: Record<string, unknown>): void {
   if (decision.decision !== "deny") return;
   try {
-    noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd), session: input ? sessionKeyOf(decisionStateDir(dir), input) : null,
+    noteBlock(dir, decision, { harness, project: projectOf(repositoryFacts(cwd).repository, cwd), session: input ? sessionKeyOf(decisionStateDir(dir), input, harness) : null,
       quiet: quietBlock(decisionStateDir(dir), decision.receipt ?? decision.receipts?.at(-1)) });
   } catch { /* the receipt is the record */ }
 }
@@ -375,8 +376,8 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     const actions = await withInstallVerdicts(dir, [...fillPushBranch(mapper(input!), branch, () => upstreamBranch(cwd)), ...databaseGuard(dir, cwd, input!)], installAsk);
     // The signed plugin in this computer's home, when there is one that verifies (intel-plugin.ts); none: receipts unchanged.
     const intel = await loadIntelPlugin(undefined, { artifacts: (kinds) => heldArtifacts(dir, kinds) });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, intel, sessionBudgets: sessionBudgetGuardFor(dir, input!), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk, intel, sessionBudgets: sessionBudgetGuardFor(dir, input!, harness), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness, permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input!, harness), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS[harness]) });
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -454,10 +455,10 @@ function repositoryHookNotGovernedHere(args: string[]): boolean {
   return true;
 }
 
-async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never> {
+async function runClaudeLifecycle(input: Record<string, unknown>, harness: "claude" | "codex" | "copilot" = "claude"): Promise<never> {
   try {
     const cwd = input.cwd ? textOf(input.cwd) : process.cwd();
-    const { emitter } = openObservations(resolveConfigDir(cwd), { adapterVersion: hookVersion() });
+    const { emitter } = openObservations(resolveConfigDir(cwd), { adapterVersion: hookVersion(), harness });
     const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
     if (emitter) {
       try {
@@ -465,7 +466,9 @@ async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never
           case "SessionStart": if (sessionId) emitter.sessionStart(sessionId, cwd); break;
           case "SessionEnd": if (sessionId) emitter.sessionStop(sessionId, stopReasonFromHost(input.reason)); break;
           case "Stop": if (sessionId) emitter.activity(sessionId, cwd); break;
-          case "PostToolUse": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, "ok"); break; }
+          // Codex also emits PostToolUse after nonzero exits. Its model-facing tool_response is not a stable
+          // exit-code contract, so neither output text nor a successful callback establishes successful execution.
+          case "PostToolUse": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, harness === "codex" ? "unknown" : "ok"); break; }
           case "PostToolUseFailure": { const id = callId(input); if (id) emitter.toolOutcomes(sessionId, id, exitFromClaudeFailure(input.is_interrupt)); break; }
         }
         await emitter.flush(input.hook_event_name === "SessionEnd" ? 1500 : 800);
@@ -475,7 +478,8 @@ async function runClaudeLifecycle(input: Record<string, unknown>): Promise<never
   process.exit(0);
 }
 
-const CLAUDE_OBSERVATION_EVENTS = new Set(["SessionStart", "SessionEnd", "PostToolUse", "PostToolUseFailure"]);
+const CLAUDE_OBSERVATION_EVENTS = new Set<string>(GROUPED_LIFECYCLE_EVENTS.claude);
+const CODEX_OBSERVATION_EVENTS = new Set<string>(GROUPED_LIFECYCLE_EVENTS.codex);
 
 /** A session's end reason as Claude Code or GitHub Copilot gives it. Copilot's `complete` and `user_exit` are an ordinary
  *  end and `abort` a cancel; its `error` and `timeout`, like anything unrecognised, stay unknown. */
@@ -529,7 +533,7 @@ async function runCopilot(): Promise<void> {
   noteCopilotToolName(parsed as Record<string, unknown>, call);
   if (call.tool_name !== undefined && callId(call) === undefined) call.tool_use_id = copilotCallId(call);
   const event = typeof call.hook_event_name === "string" ? call.hook_event_name : "";
-  if (COPILOT_OBSERVATION_EVENTS.has(event)) { clearTimeout(deadline); await runClaudeLifecycle(call); }
+  if (COPILOT_OBSERVATION_EVENTS.has(event)) { clearTimeout(deadline); await runClaudeLifecycle(call, "copilot"); }
   await runPreToolUse(mapCopilotCall, denyCopilot, JSON.stringify(call), "copilot", deadlineAt);
 }
 
@@ -542,7 +546,16 @@ async function runClaude(): Promise<void> {
 }
 
 async function runCodex(): Promise<void> {
-  await runPreToolUse(mapCodexToolUse, denyCodex, undefined, "codex");
+  const raw = readStdin();
+  let input: Record<string, unknown> | undefined;
+  try { input = JSON.parse(raw) as Record<string, unknown>; } catch { /* PreToolUse reports invalid input */ }
+  const event = input?.hook_event_name;
+  if (input && typeof event === "string" && event !== "PreToolUse") {
+    if (CODEX_OBSERVATION_EVENTS.has(event)) await runClaudeLifecycle(input, "codex");
+    // This command makes no decision for unsupported lifecycle or permission events.
+    return;
+  }
+  await runPreToolUse(mapCodexToolUse, denyCodex, raw, "codex");
 }
 
 function denyCursor(reason: string): never {
@@ -602,8 +615,8 @@ async function runCursor(): Promise<void> {
     try { migrateToMonitorDefault(dir); } catch { /* the policy on disk stays in force */ }
     const context = receiptContextFor({ harness: "cursor", input, dir, cwd, connected: !!loadConnection(dir), branch });
     const intel = await loadIntelPlugin(undefined, { artifacts: (kinds) => heldArtifacts(dir, kinds) });
-    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", intel, sessionBudgets: sessionBudgetGuardFor(dir, input), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
-      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
+    runtime = createHookRuntime({ ...runtimePaths(dir, cwd), context, installAsk: "ask", intel, sessionBudgets: sessionBudgetGuardFor(dir, input, "cursor"), storeBusyTimeoutMs: HOT_PATH_STORE_BUSY_MS, override: (agentKid) => {
+      const made = overridable ? createOverrideHandler({ dir: decisionStateDir(dir), home: userHome(), agentKid, harness: "cursor", permissionMode, sessionId: sessionKeyOf(decisionStateDir(dir), input, "cursor"), project: () => projectOf(repositoryFacts(cwd).repository, cwd), cwd, waitMs: () => waitWithinDeadline(OVERRIDE_WAIT_MS.cursor) }) : null;
       return made ? { handler: made.handler, hint: () => overrideHint(made.note()), remedy: () => overrideRemedy(made.note()) } : null;
     } });
     useDigestKey(loadOrCreateDigestKey(dir));
@@ -1379,14 +1392,14 @@ async function finishConnect(dir: string, url: string, bundle: CloudEnrollmentBu
       console.log(harnessSnippet(harness));
     }
     // Session and after-action observations are opt-in through the enrollment: wired only
-    // when this workspace granted observations:write and Claude Code is the host. Off is
+    // when this workspace granted observations:write and the host has a grouped lifecycle mapping. Off is
     // silent here (`status` says why); a granted scope the hook cannot use is worth a line.
     const observing = observationStatus(loadConnection(dir));
-    if (observing.state === "on" && harness === "claude" && !args.includes("--no-install")) {
-      const placed = harnessScopes("claude", process.cwd());
+    if (observing.state === "on" && (harness === "claude" || harness === "codex") && !args.includes("--no-install")) {
+      const placed = harnessScopes(harness, process.cwd());
       const target = forUser ? placed.user : placed.local ?? placed.project ?? placed.user;
       const command = target ? configuredHookCommands(target)[0] : undefined;
-      if (target && command) { wireLifecycleHooks(target, command); console.log(`✓ Session and after-action observations enabled in ${target}`); }
+      if (target && command) { wireLifecycleHooks(target, command, harness); console.log(`✓ Session and after-action observations enabled in ${target}`); }
     } else if (observing.state === "unsupported") console.log(`Observations: ${observing.reason}`);
     if (forUser) for (const line of projectSetupNotice(process.cwd())) console.log(line);
     console.log("");
