@@ -56,8 +56,8 @@ export function expectedHarnesses(): Harness[] {
 }
 
 /** Agent settings that lost their Scopebond hook entry (an update or a reset can remove it). */
-export function missingHookEntries(harnesses: Harness[] = expectedHarnesses()): Harness[] {
-  return integrationHealth(automaticHarnesses(harnesses)).filter((h) => h.presence === "detected" && h.integration !== "disabled" && !h.entry).map((h) => h.harness);
+export function missingHookEntries(harnesses: Harness[] = expectedHarnesses(), dir?: string): Harness[] {
+  return integrationHealth(automaticHarnesses(harnesses, dir), Date.now(), dir).filter((h) => h.presence === "detected" && h.integration !== "disabled" && !h.entry).map((h) => h.harness);
 }
 
 export async function runCycle(options: CycleOptions): Promise<CycleResult> {
@@ -67,7 +67,7 @@ export async function runCycle(options: CycleOptions): Promise<CycleResult> {
   // left included. Done once per folder; afterwards a small check.
   ensurePrivateDir(dir);
   const result: CycleResult = { at: now(), connected: false, delivered: 0, pending: 0, deliveryError: null, rules: "skipped", missingHookEntries: [], requested: null, more: false };
-  try { result.missingHookEntries = missingHookEntries(); } catch { /* reported as none */ }
+  try { result.missingHookEntries = missingHookEntries(expectedHarnesses(), dir); } catch { /* reported as none */ }
   const connection = loadConnection(dir);
   if (!connection) return result;
   result.connected = true;

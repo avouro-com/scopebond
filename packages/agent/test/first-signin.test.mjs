@@ -13,7 +13,7 @@ const root = mkdtempSync(join(tmpdir(), "sb-first-signin-"));
 const userHome = join(root, "home");
 mkdirSync(userHome, { recursive: true });
 const saved = { ...process.env };
-Object.assign(process.env, { HOME: userHome, USERPROFILE: userHome, APPDATA: join(userHome, "AppData", "Roaming"), LOCALAPPDATA: join(userHome, "AppData", "Local"), SCOPEBOND_HOME: join(userHome, ".scopebond"), SCOPEBOND_AGENT_TRAY: "off" });
+Object.assign(process.env, { HOME: userHome, USERPROFILE: userHome, APPDATA: join(userHome, "AppData", "Roaming"), LOCALAPPDATA: join(userHome, "AppData", "Local"), SCOPEBOND_HOME: join(userHome, "state"), SCOPEBOND_AGENT_TRAY: "off" });
 after(() => { for (const k of ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SCOPEBOND_HOME", "SCOPEBOND_AGENT_TRAY"]) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
 
 const { startFakeCloud } = await import("@scopebond/fake-cloud");

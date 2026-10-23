@@ -11,7 +11,7 @@
 
 import { execFileSync } from "node:child_process";
 import {
-  approvedWorkspaceId, clientNameField, configuredHookCommands, connectCloud, isHarnessConfigured, loadConnection, machineIdField, observationStatus, scaffold,
+  approvedWorkspaceId, automaticHarnesses, clientNameField, configuredHookCommands, connectCloud, isHarnessConfigured, loadConnection, machineIdField, observationStatus, scaffold,
   userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
   type Harness,
 } from "@scopebond/hook";
@@ -185,7 +185,7 @@ async function completeSetup(dir: string, origin: string, enrollment: object, o:
   lines.push(`connected to ${connected.url}`);
   // The hook entries: the hook this agent carries, for each coding agent on this computer, where none is there yet (an
   // existing Scopebond entry is the agent's upkeep's to keep current).
-  const harnesses = o.harnesses ?? expectedHarnesses();
+  const harnesses = automaticHarnesses(o.harnesses ?? expectedHarnesses(), dir);
   for (const harness of harnesses) {
     const file = userHarnessFile(harness);
     if (isHarnessConfigured(file)) continue;

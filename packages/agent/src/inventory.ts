@@ -3,20 +3,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { canonical, sha256 } from "@scopebond/gateway";
 import { loadOrCreateAttester, placeOwnerOnly } from "@scopebond/gateway/node";
-import { ADAPTER_REGISTRY_VERSION, HARNESSES, type HookConnection } from "@scopebond/hook";
+import { ADAPTER_REGISTRY_VERSION, HARNESSES, integrationProfile, type HookConnection } from "@scopebond/hook";
 import { integrationHealth, type IntegrationHealth } from "./integration-health.js";
+import { executionEnvironment, type ExecutionEnvironment } from "./execution-environment.js";
+export { executionEnvironment, type ExecutionEnvironment } from "./execution-environment.js";
 
 export const INVENTORY_CAPABILITY = "tool_inventory_1";
 export const INVENTORY_FILE = "integration-inventory.json";
-export type ExecutionEnvironment = "windows" | "macos" | "linux" | "wsl" | "container" | "remote" | "unknown";
-
-/** Only an environment category leaves the process. Host hooks never imply remote protection. */
-export function executionEnvironment(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): ExecutionEnvironment {
-  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.REMOTE_CONTAINERS || env.CODESPACES) return "remote";
-  if (env.WSL_DISTRO_NAME || env.WSL_INTEROP) return "wsl";
-  if (env.container || env.CONTAINER || env.REMOTE_CONTAINERS_IPC) return "container";
-  return platform === "win32" ? "windows" : platform === "darwin" ? "macos" : platform === "linux" ? "linux" : "unknown";
-}
 export function inventoryProof(connection: Pick<HookConnection, "credential_id" | "organization_id" | "environment_id" | "gateway_id">, digest: string): string {
   return canonical({ type: "scopebond:tool-inventory", version: 1, organization_id: connection.organization_id,
     environment_id: connection.environment_id, gateway_id: connection.gateway_id, credential_id: connection.credential_id, report_digest: digest });
@@ -31,6 +24,7 @@ interface ToolFact {
 }
 interface Snapshot {
   registry_version: number;
+  profile_id: string | null;
   execution: ExecutionEnvironment;
   collection: "complete" | "partial" | "failed";
   tools: ToolFact[];
@@ -69,7 +63,8 @@ export function createInventoryReporter(options: {
   let lastReported = 0;
   let lastDigest = "";
   let lastScope = "";
-  let lastTools: ToolFact[] = [];
+  let lastSnapshot: Snapshot | null = null;
+  let lastClock: number | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const stopped = new AbortController();
   let delivery: InventoryDelivery = "not_connected";
@@ -80,24 +75,34 @@ export function createInventoryReporter(options: {
     running = true;
     try {
       const now = (options.now ?? Date.now)();
+      if (lastClock !== null && now < lastClock) {
+        nextAttempt = 0; lastReported = 0; lastDigest = "";
+        if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+      }
+      lastClock = now;
       const connection = options.connection();
       const scope = connection ? sha256(canonical({ url: connection.url, organization: connection.organization_id, gateway: connection.gateway_id, credential: connection.credential_id })) : "";
-      if (scope !== lastScope) { lastScope = scope; lastReported = 0; lastDigest = ""; lastTools = []; nextAttempt = 0; }
+      if (scope !== lastScope) { lastScope = scope; lastReported = 0; lastDigest = ""; lastSnapshot = null; nextAttempt = 0; }
       const execution = (options.execution ?? executionEnvironment)();
+      const profile = integrationProfile(options.dir);
       let snapshot: Snapshot;
       try {
-        const health = (options.collect ?? ((at) => integrationHealth(HARNESSES, at)))(now);
-        snapshot = { registry_version: ADAPTER_REGISTRY_VERSION, execution,
+        if (profile.state !== "bound") throw new Error("profile unavailable");
+        const health = (options.collect ?? ((at) => integrationHealth(HARNESSES, at, options.dir)))(now);
+        snapshot = { registry_version: ADAPTER_REGISTRY_VERSION, profile_id: profile.id, execution,
           collection: health.some((t) => t.presence === "unknown" || t.reason === "invalid_configuration") ? "partial" : "complete",
           // Explicit field selection: new local diagnostic fields must not silently become uploaded data.
           tools: health.slice(0, 20).map((t) => ({ id: t.harness, presence: t.presence, integration: t.integration,
             reason: t.reason, definition_revision: t.definition_revision, checked_at: now })) };
-      } catch { snapshot = { registry_version: ADAPTER_REGISTRY_VERSION, execution, collection: "failed", tools: [] }; }
+      } catch { snapshot = { registry_version: ADAPTER_REGISTRY_VERSION, profile_id: profile.id, execution, collection: "failed", tools: [] }; }
       const digest = sha256(canonical({ ...snapshot, tools: snapshot.tools.map((t) => ({ ...t, checked_at: 0 })) }));
-      if (snapshot.collection !== "failed") lastTools = snapshot.tools;
+      if (snapshot.collection !== "failed") lastSnapshot = snapshot;
       const save = () => {
-        const tools = snapshot.collection === "failed" ? lastTools.map((t) => ({ ...t, presence: "unknown" })) : snapshot.tools;
-        if (!stopped.signal.aborted) placeOwnerOnly(join(options.dir, INVENTORY_FILE), JSON.stringify({ ...snapshot, tools, observed_at: now, ...state() }) + "\n", false);
+        // Retained facts remain scoped to the profile and execution host that actually supplied them.
+        const local = snapshot.collection === "failed" && lastSnapshot ? { ...snapshot,
+          profile_id: lastSnapshot.profile_id, execution: lastSnapshot.execution,
+          tools: lastSnapshot.tools.map((t) => ({ ...t, presence: "unknown" })) } : snapshot;
+        if (!stopped.signal.aborted) placeOwnerOnly(join(options.dir, INVENTORY_FILE), JSON.stringify({ ...local, observed_at: now, ...state() }) + "\n", false);
       };
       if (!connection) { delivery = "not_connected"; save(); return; }
       if (now < nextAttempt) {

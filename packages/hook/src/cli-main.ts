@@ -1748,7 +1748,7 @@ function runInstall(args: string[]): void {
     : args.includes("--cursor") ? ["cursor"]
     : args.includes("--copilot") ? ["copilot"]
     : args.includes("--claude") ? ["claude"]
-    : automaticHarnesses(HARNESSES).filter((h) => {
+    : automaticHarnesses(HARNESSES, dir, { createProfile: !args.includes("--dry-run") }).filter((h) => {
       if (!adapterPresent(h)) return false;
       try { const config = readHarnessConfig(userHarnessFile(h)); return config.disableAllHooks !== true && config.hooksEnabled !== false; }
       catch { return false; }
@@ -2223,15 +2223,23 @@ async function runUninstall(args: string[]): Promise<void> {
   }
   if (seen.size === 0) console.log("this computer is not connected to a workspace, so there was none to tell");
   let removed = 0;
+  let failed = 0;
   // Both scopes. Checking only the user config meant that after a per-project `init` —
   // the install the site actually tells people to run — `uninstall` reported "no
   // user-level harness config found" and left the project hook in place.
   for (const h of HARNESSES) {
     for (const file of [projectHarnessFile(h, process.cwd()), localHarnessFile(h, process.cwd()), userHarnessFile(h)]) {
-      if (file && removeHarnessConfig(file)) { console.log(`✓ removed the Scopebond hook from ${file}`); removed++; }
+      try {
+        if (file && removeHarnessConfig(file)) { console.log(`✓ removed the Scopebond hook from ${file}`); removed++; }
+      } catch (error) { failed++; console.error(`Could not remove the hook from ${file}: ${(error as Error).message}`); }
     }
   }
-  if (removed === 0) console.log("no Scopebond hook found in this project or your user config.");
+  if (removed === 0 && failed === 0) console.log("no Scopebond hook found in this project or your user config.");
+  if (failed) {
+    console.error("Some hook settings could not be changed. Kept the local keys, policy and receipts; resolve the reported settings problem and retry uninstall.");
+    process.exitCode = 1;
+    return;
+  }
   // A program that ran this for the person (UNINSTALL_CALLER_ENV) says last what happens to the Scopebond folder.
   const caller = !!process.env[UNINSTALL_CALLER_ENV];
   if (args.includes("--purge")) { purgeHome(); if (!caller) console.log(`✓ purged ${userHome()} (keys, policy, receipts)`); }

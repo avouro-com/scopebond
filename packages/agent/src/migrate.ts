@@ -147,7 +147,7 @@ export async function migrateFromNpm(dir: string, kind: InstallKind, tray: strin
       steps.push("removed the npm agent's entry in Settings -> Apps");
     }
     // 4. The hook entries: every one runs this executable from now on.
-    const moved: EntryChange[] = useNativeHookEntries(deps.harnesses(), deps.exe);
+    const moved: EntryChange[] = useNativeHookEntries(deps.harnesses(), deps.exe, dir);
     for (const change of moved) steps.push(`${change.reason}: ${change.file}`);
     if (!steps.length && !found.packageDir) return [];
     const told = readMigration(dir);

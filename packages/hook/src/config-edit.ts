@@ -42,7 +42,7 @@ export function checkConfigPath(file: string): void {
 }
 
 /** Bounded optimistic merge under a sibling writer lock. Recheck external edits before atomic replacement. */
-export function editHarnessConfig(file: string, edit: (config: Record<string, unknown>) => void, options: { mustExist?: boolean } = {}): string {
+export function editHarnessConfig(file: string, edit: (config: Record<string, unknown>) => void, options: { mustExist?: boolean; removeWhen?: (config: Record<string, unknown>) => boolean } = {}): string {
   checkConfigPath(file);
   mkdirSync(dirname(file), { recursive: true });
   const lock = `${file}.scopebond-lock`;
@@ -59,16 +59,18 @@ export function editHarnessConfig(file: string, edit: (config: Record<string, un
       const before = JSON.stringify(config);
       edit(config as Record<string, unknown>);
       const after = JSON.stringify(config);
+      const remove = options.removeWhen?.(config as Record<string, unknown>) === true;
       checkConfigPath(file);
       if (readConfigText(file) !== raw) continue;
-      if (raw !== undefined && before === after) return file;
+      if (raw !== undefined && before === after && !remove) return file;
       if (raw !== undefined) {
         try { copyFileSync(file, `${file}.scopebond-backup`, constants.COPYFILE_EXCL); }
         catch (error) { if (errorCode(error) !== "EEXIST") throw error; }
       }
       checkConfigPath(file);
       if (readConfigText(file) !== raw) continue;
-      replaceFile(file, JSON.stringify(config, null, 2) + "\n");
+      if (remove) rmSync(file, { force: true });
+      else replaceFile(file, JSON.stringify(config, null, 2) + "\n");
       return file;
     }
     throw new Error("configuration changed during enrollment; retry later");

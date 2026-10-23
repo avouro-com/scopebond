@@ -587,24 +587,30 @@ function withoutOurHooks(list: unknown[]): unknown[] {
 }
 
 /** Remove any Scopebond hook entry from a user-level harness config, leaving the rest
- *  intact. Returns true if the file existed. */
+ *  intact. Returns true when owned entries or an empty dedicated file were removed.
+ *  Unsafe paths, malformed configuration and a held writer lock are refused, never reported as removed. */
 export function removeHarnessConfig(file: string): boolean {
-  let config: Record<string, unknown> | undefined;
-  try { config = readHarnessConfigIfPresent(file); } catch { return true; } // unreadable: leave it untouched
-  if (config === undefined) return false;
-  const hooks = isRecord(config.hooks) ? config.hooks : {};
-  for (const [event, value] of Object.entries(hooks)) {
-    if (Array.isArray(value)) (hooks as Record<string, unknown[]>)[event] = withoutOurHooks(value);
-  }
-  // Copilot's `scopebond.json` is Scopebond's own file: once nothing else is in it, it goes rather than stay behind empty.
-  // A file someone added their own hooks or settings to is kept, with only Scopebond's entries removed.
-  if (basename(file) === COPILOT_HOOK_FILE && isCopilotHooksFolder(dirname(file))) {
-    const othersLeft = Object.keys(config).some((k) => k !== "version" && k !== "hooks")
-      || Object.values(hooks).some((v) => !Array.isArray(v) || v.length > 0);
-    if (!othersLeft) { rmSync(file, { force: true }); return true; }
-  }
-  writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-  return true;
+  if (readHarnessConfigIfPresent(file) === undefined) return false;
+  let removed = false;
+  editHarnessConfig(file, (config) => {
+    removed = false;
+    const hooks = isRecord(config.hooks) ? config.hooks : {};
+    for (const [event, value] of Object.entries(hooks)) {
+      if (!Array.isArray(value)) continue;
+      const kept = withoutOurHooks(value);
+      if (JSON.stringify(kept) !== JSON.stringify(value)) { hooks[event] = kept; removed = true; }
+    }
+  }, { mustExist: true, removeWhen: (config) => {
+    // Only the dedicated file may disappear; shared configuration keeps its other commands and settings.
+    if (basename(file) !== COPILOT_HOOK_FILE || !isCopilotHooksFolder(dirname(file))) return false;
+    if (config.hooks !== undefined && !isRecord(config.hooks)) return false;
+    const hooks = isRecord(config.hooks) ? config.hooks : {};
+    if (Object.keys(config).some((k) => k !== "version" && k !== "hooks")
+      || Object.values(hooks).some((v) => !Array.isArray(v) || v.length > 0)) return false;
+    removed = true;
+    return true;
+  } });
+  return removed;
 }
 
 /** Whether a folder is one Copilot reads hook files from: a `hooks` folder inside `.github` or Copilot's home. */

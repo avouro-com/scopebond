@@ -1,6 +1,6 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { findProgram } from "@scopebond/gateway/node";
 
 export const ADAPTER_REGISTRY_VERSION = 1;
@@ -18,13 +18,30 @@ export function isHarness(value: unknown): value is Harness {
 }
 
 export interface AdapterProfile { home?: string; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform }
-export function adapterDirectory(harness: Harness, profile: AdapterProfile = {}): string {
+export function adapterProfileHome(profile: AdapterProfile = {}): string {
   let home = profile.home ?? homedir();
   // Resolve the explicitly selected profile root, not links inside a tool's configuration.
   // This preserves intentional home-directory aliases without following a swapped hooks path.
   try { home = realpathSync(home); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  return resolve(home);
+}
+export function adapterDirectory(harness: Harness, profile: AdapterProfile = {}): string {
+  const home = adapterProfileHome(profile);
   const env = profile.env ?? process.env;
-  return harness === "copilot" ? env.COPILOT_HOME || join(home, ADAPTERS[harness].directory) : join(home, ADAPTERS[harness].directory);
+  return harness === "copilot" && env.COPILOT_HOME ? adapterProfilePath(env.COPILOT_HOME, profile) : join(home, ADAPTERS[harness].directory);
+}
+const contained = (part: string): boolean => part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part);
+/** Resolve only the selected profile's alias. Links beneath that root still reach the configuration path guard. */
+export function adapterProfilePath(file: string, profile: AdapterProfile = {}): string {
+  const part = relative(resolve(profile.home ?? homedir()), resolve(file));
+  return contained(part) ? resolve(adapterProfileHome(profile), part) : resolve(file);
+}
+/** Automatic enrollment is limited to the selected profile. Explicit installation may use a relocated tool home. */
+export function adapterWithinProfile(harness: Harness, profile: AdapterProfile = {}): boolean {
+  return withinAdapterProfile(adapterDirectory(harness, profile), profile);
+}
+export function withinAdapterProfile(file: string, profile: AdapterProfile = {}): boolean {
+  return contained(relative(adapterProfileHome(profile), adapterProfilePath(file, profile)));
 }
 export function adapterFile(harness: Harness, profile: AdapterProfile = {}): string {
   return join(adapterDirectory(harness, profile), ADAPTERS[harness].file);

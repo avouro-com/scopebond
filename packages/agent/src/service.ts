@@ -167,10 +167,10 @@ export interface SetupRepair { at: number; repaired: Harness[]; deduped: Harness
 /** Repair this computer's setup at once: the hook entry put back where a coding agent's settings lost it, a second copy of it
  *  taken out (the user settings keep theirs), and autostart that is on but broken started again (autostart the person turned
  *  off stays off). Each step is checked again afterwards. */
-export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostart: AutostartRepair | null = null, now = Date.now()): SetupRepair {
-  harnesses = automaticHarnesses(harnesses);
+export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostart: AutostartRepair | null = null, now = Date.now(), dir?: string): SetupRepair {
+  harnesses = automaticHarnesses(harnesses, dir);
   const home = homedir();
-  const repaired = repairHookEntries(missingHookEntries(harnesses)).map((r) => r.harness);
+  const repaired = repairHookEntries(missingHookEntries(harnesses, dir), dir).map((r) => r.harness);
   const deduped: Harness[] = [];
   for (const harness of harnesses) {
     try {
@@ -188,7 +188,7 @@ export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostar
       if (before.on && !before.ok) { autostart.enable(); fixedAutostart = autostart.health().ok ? "repaired" : "failed"; }
     } catch { fixedAutostart = "failed"; }
   }
-  const failed = missingHookEntries(harnesses);
+  const failed = missingHookEntries(harnesses, dir);
   const duplicates = harnesses.filter((h) => { try { return duplicateHooks(h, home, home) !== null; } catch { return false; } });
   return { at: now, repaired: repaired.filter((h) => !failed.includes(h)), deduped, failed, duplicates, autostart: fixedAutostart };
 }
@@ -224,9 +224,9 @@ export interface MaintenanceResult {
 
 /** Put the Scopebond hook back into agent settings that lost it. A visible change: each one is
  *  logged and returned, and only settings of agents this computer has are touched. */
-export function repairHookEntries(harnesses: Harness[] = expectedHarnesses()): Array<{ harness: Harness; file: string }> {
+export function repairHookEntries(harnesses: Harness[] = expectedHarnesses(), dir?: string): Array<{ harness: Harness; file: string }> {
   const repaired: Array<{ harness: Harness; file: string }> = [];
-  for (const harness of missingHookEntries(harnesses)) {
+  for (const harness of missingHookEntries(harnesses, dir)) {
     // A refused path for one coding agent is logged and the others are still repaired.
     try {
       const file = writeHarnessConfig(userHarnessFile(harness), harness, maintainedHookCommand(harness));
@@ -461,7 +461,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const at = Date.now();
     if (!asked && !selfRepair) return lastRepair;
     let done: SetupRepair;
-    try { done = repairSetup(expectedHarnesses(), thorough || asked ? autostart : null, at); } catch (error) { log(`setup repair failed: ${(error as Error).message}`); return lastRepair; }
+    try { done = repairSetup(expectedHarnesses(), thorough || asked ? autostart : null, at, options.dir); } catch (error) { log(`setup repair failed: ${(error as Error).message}`); return lastRepair; }
     const acted = done.repaired.length || done.deduped.length || done.failed.length || done.autostart;
     for (const h of done.repaired) log(`repaired: the Scopebond hook entry was missing for ${h}; put back and checked again`);
     for (const h of done.deduped) log(`repaired: the Scopebond hook ran more than once for ${h}; the second copy was taken out`);
@@ -600,7 +600,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // workspace hears of, before the repair below (the actions in between ran unchecked either way).
       const outage = noteUnresolvableHooks(options.dir, harnesses.filter((h) => h === "codex" || h === "cursor"));
       if (outage.recorded.length) log(`hook entry cannot start for ${outage.recorded.join(", ")}: kept as a gap for the workspace`);
-      result.hookEntries = maintainHookEntries(harnesses, target?.policy !== "hold");
+      result.hookEntries = maintainHookEntries(harnesses, target?.policy !== "hold", process.platform, options.dir);
       for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
       // The npm install follows the workspace's `agent`; the signed install its `native_agent` only (updateTarget).
       const newer = updateTarget(target, kind, current);
@@ -1103,7 +1103,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       return { outcome: "stopped", text: `Stopped allowing ${what}${where}` };
     },
     // install_kind: a signed agent starting beside an older npm one tells them apart by it (migrate.ts).
-    "GET /status": () => ({ ...computerStatus(options.dir), integrations: integrationHealth(expectedHarnesses()), inventory: inventory.state(), health: health(), agent: {
+    "GET /status": () => ({ ...computerStatus(options.dir), integrations: integrationHealth(expectedHarnesses(), Date.now(), options.dir), inventory: inventory.state(), health: health(), agent: {
       pid: process.pid, version: AGENT_VERSION, install_kind: kind, last_cycle: last, cycle_started_at: cycleStartedAt, last_maintenance: lastMaintenance,
       failed_update: failedUpdate(options.dir), signing_in: reconnecting, last_repair: lastRepair, credential_renewal: renewal,
     } }),

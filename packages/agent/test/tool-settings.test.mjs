@@ -61,6 +61,38 @@ const cursorFile = (home) => join(home, ".cursor", "cli-config.json");
 
 const CLAUDE = { permissions_deny: ["Bash(rm -rf:*)", "Read(./.env)"], permissions_allow: ["Bash(npm test)"], mcp_denied: ["evil"], mcp_allowed: ["github"] };
 
+test("managed settings cannot write outside the selected profile", () => inHome(({ dir }) => {
+  const other = mkdtempSync(join(tmpdir(), "other-tool-profile-"));
+  process.env.CLAUDE_CONFIG_DIR = other;
+  const file = join(other, "settings.json"); put(file, { theme: "dark" });
+  const before = readFileSync(file, "utf8");
+  install(dir, signed(section({ claude: CLAUDE })));
+  assert.equal(apply(dir).harnesses.claude.reason, "profile_boundary");
+  assert.equal(readFileSync(file, "utf8"), before);
+}));
+
+test("managed settings cannot follow a linked configuration ancestor", () => inHome(({ home, dir }) => {
+  const other = mkdtempSync(join(tmpdir(), "linked-tool-profile-"));
+  const file = join(other, "settings.json"); put(file, { theme: "dark" });
+  const before = readFileSync(file, "utf8");
+  symlinkSync(other, join(home, ".claude"), process.platform === "win32" ? "junction" : "dir");
+  install(dir, signed(section({ claude: CLAUDE })));
+  assert.equal(apply(dir).harnesses.claude.reason, "symlink");
+  assert.equal(readFileSync(file, "utf8"), before);
+}));
+
+test("managed settings accept an alias of the selected profile without following links inside it", () => inHome(({ home, dir }) => {
+  const alias = join(home, "selected-alias");
+  symlinkSync(home, alias, process.platform === "win32" ? "junction" : "dir");
+  put(cursorFile(home), {}); put(join(home, "claude-config", "settings.json"), {});
+  process.env.HOME = alias; process.env.USERPROFILE = alias;
+  process.env.CLAUDE_CONFIG_DIR = join(alias, "claude-config");
+  install(dir, signed(section({ claude: CLAUDE, cursor: { permissions_deny: ["Shell(rm)"] } })));
+  const report = apply(dir);
+  assert.equal(report.harnesses.claude.state, "applied");
+  assert.equal(report.harnesses.cursor.state, "applied");
+}));
+
 test("a signed section is applied to Claude Code's user settings; every other key and entry stays", () => inHome(({ home, dir }) => {
   put(claudeFile(home), { theme: "dark", hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "x" }] }] }, permissions: { allow: ["Read(*)"], defaultMode: "default" }, deniedMcpServers: [{ serverUrl: "https://x.example/*" }] });
   install(dir, signed(section({ claude: CLAUDE })));
