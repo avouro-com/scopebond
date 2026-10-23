@@ -63,7 +63,8 @@ export function createInventoryReporter(options: {
   let lastReported = 0;
   let lastDigest = "";
   let lastScope = "";
-  let lastTools: ToolFact[] = [];
+  let lastSnapshot: Snapshot | null = null;
+  let lastClock: number | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const stopped = new AbortController();
   let delivery: InventoryDelivery = "not_connected";
@@ -74,9 +75,14 @@ export function createInventoryReporter(options: {
     running = true;
     try {
       const now = (options.now ?? Date.now)();
+      if (lastClock !== null && now < lastClock) {
+        nextAttempt = 0; lastReported = 0; lastDigest = "";
+        if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+      }
+      lastClock = now;
       const connection = options.connection();
       const scope = connection ? sha256(canonical({ url: connection.url, organization: connection.organization_id, gateway: connection.gateway_id, credential: connection.credential_id })) : "";
-      if (scope !== lastScope) { lastScope = scope; lastReported = 0; lastDigest = ""; lastTools = []; nextAttempt = 0; }
+      if (scope !== lastScope) { lastScope = scope; lastReported = 0; lastDigest = ""; lastSnapshot = null; nextAttempt = 0; }
       const execution = (options.execution ?? executionEnvironment)();
       const profile = integrationProfile(options.dir);
       let snapshot: Snapshot;
@@ -90,10 +96,13 @@ export function createInventoryReporter(options: {
             reason: t.reason, definition_revision: t.definition_revision, checked_at: now })) };
       } catch { snapshot = { registry_version: ADAPTER_REGISTRY_VERSION, profile_id: profile.id, execution, collection: "failed", tools: [] }; }
       const digest = sha256(canonical({ ...snapshot, tools: snapshot.tools.map((t) => ({ ...t, checked_at: 0 })) }));
-      if (snapshot.collection !== "failed") lastTools = snapshot.tools;
+      if (snapshot.collection !== "failed") lastSnapshot = snapshot;
       const save = () => {
-        const tools = snapshot.collection === "failed" ? lastTools.map((t) => ({ ...t, presence: "unknown" })) : snapshot.tools;
-        if (!stopped.signal.aborted) placeOwnerOnly(join(options.dir, INVENTORY_FILE), JSON.stringify({ ...snapshot, tools, observed_at: now, ...state() }) + "\n", false);
+        // Retained facts remain scoped to the profile and execution host that actually supplied them.
+        const local = snapshot.collection === "failed" && lastSnapshot ? { ...snapshot,
+          profile_id: lastSnapshot.profile_id, execution: lastSnapshot.execution,
+          tools: lastSnapshot.tools.map((t) => ({ ...t, presence: "unknown" })) } : snapshot;
+        if (!stopped.signal.aborted) placeOwnerOnly(join(options.dir, INVENTORY_FILE), JSON.stringify({ ...local, observed_at: now, ...state() }) + "\n", false);
       };
       if (!connection) { delivery = "not_connected"; save(); return; }
       if (now < nextAttempt) {
