@@ -2,7 +2,9 @@ import { existsSync, watch } from "node:fs";
 import { dirname } from "node:path";
 import { HARNESSES, adapterDirectory, adapterFile, adapterProfileHome, adapterWithinProfile, checkConfigPath } from "@scopebond/hook";
 
-export const DISCOVERY_FALLBACK_MS = 60_000;
+// Some platforms pause timer clocks during sleep. A short remaining interval also meets the resume
+// budget when no watcher event arrives; unchanged inventory is deduplicated by the report coordinator.
+export const DISCOVERY_FALLBACK_MS = 10_000;
 export const DISCOVERY_DEBOUNCE_MS = 1_000;
 export const DISCOVERY_MAX_WATCHERS = 12;
 export interface DiscoveryLoopOptions {
@@ -66,7 +68,7 @@ export function startDiscoveryLoop(options: DiscoveryLoopOptions): { rescan(): v
     catch { failed(); }
     finally { running = false; if (pending) request(); }
   };
-  // Timers overdue after sleep run as soon as the event loop resumes. No elapsed idle interval counts as tool activity.
+  // Overdue timers run after resume; paused timer clocks need at most one short interval. Neither counts as tool activity.
   const fallback = setInterval(() => request(0), DISCOVERY_FALLBACK_MS);
   fallback.unref?.();
   request(0);

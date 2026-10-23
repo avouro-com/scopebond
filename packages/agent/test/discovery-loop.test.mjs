@@ -4,6 +4,20 @@ import { startDiscoveryLoop, DISCOVERY_FALLBACK_MS, DISCOVERY_MAX_WATCHERS } fro
 
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 
+test("a paused fallback timer reconciles within fifteen seconds of the event loop resuming", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let scans = 0;
+  const loop = startDiscoveryLoop({ reconcile: async () => { scans++; }, directories: () => [] });
+  t.after(loop.stop);
+  t.mock.timers.tick(1); await settle();
+  assert.equal(scans, 1);
+  // A platform may pause its timer clock during sleep. Resume just after startup with no watcher hints;
+  // the worst-case remaining interval must still fit the resume budget, without relying on a wall-clock jump.
+  t.mock.timers.tick(14_000); await settle();
+  t.mock.timers.tick(1); await settle();
+  assert.equal(scans, 2);
+});
+
 test("startup, parent directory hints and missed events reconcile without a delivery cycle", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const callbacks = new Map();
