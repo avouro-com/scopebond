@@ -66,7 +66,8 @@ forms work without changing it).
 scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
 absolute path in your user-level `~/.claude/settings.json`, `~/.cursor/hooks.json`,
-or `~/.codex/hooks.json`. After Codex setup, open Codex, run `/hooks`, review
+or `~/.codex/hooks.json` (`$CODEX_HOME/hooks.json` when `CODEX_HOME` is set, as Codex
+itself reads it). After Codex setup, open Codex, run `/hooks`, review
 Scopebond, and choose **Trust** once. Every project you open is then checked by your
 user-level rules. A project's own `.scopebond/policy.json` applies only after you trust it
 in that project (`scopebond trust`, or `init` there), pinned to its exact contents: a
@@ -746,7 +747,13 @@ not connected keeps them in its local log. What a delivery carries, by category:
   rule pack derived), its parameters as recorded (a command line after the secret masking, cut to its first 64
   characters, with a keyed digest of the masked whole; paths with your home folder written as `~`; branch, remote,
   host, MCP server and tool, and package names), the decision and the rule that matched, the rule set's digest and
-  version, the time, key ids and signatures. Once the workspace says it reads it, also the context: the coding tool,
+  version, the time, key ids and signatures. A command that deletes or writes files also names its `targets`: the
+  paths a delete names, or else the files the command writes (never ones it only reads), relative inside the working
+  folder and full (home as `~`) outside it, at most 16 of at most 1,024 characters each, paths only. They are left
+  out when any one is known only at run time, is a protected place, a root or a wildcard that takes a whole folder,
+  or when there are more than 16. A block's digest then uses the one kind of place they all share (repository, build
+  output, temp, home, system); targets of more than one kind read as unknown. Shell records from older hooks have no
+  `targets`, and an allowance never depends on them. Once the workspace says it reads it, also the context: the coding tool,
   its version, the model id it reports, an opaque session id, the repository as `host/owner/name`, and the branch.
 - **Beside each batch**: the delivery queue's id and the numbers this computer gave the records, signed with this
   computer's key when the connection names its credential.
@@ -818,7 +825,7 @@ first (`settings.json.scopebond-backup`, as the installer does) and replaced who
 
 The connection renews itself: in the last 30 days of its 90-day credential the hook renews it during its rules check, proving it still holds the key it enrolled with. With each rules check it also tells the workspace how many records wait to send (counts and one error line, never a record), so the portal can show a computer that checks in but is not delivering.
 
-Signing in sets Scopebond up for you across projects, from whatever folder you run it: it connects `~/.scopebond` and puts the hook in your user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json` or `~/.codex/hooks.json`), so every project on this computer is checked. `--project` connects the current folder's own setup (`.scopebond/`) instead. Signing in again never rewrites a settings file that already holds the right hook entry.
+Signing in sets Scopebond up for you across projects, from whatever folder you run it: it connects `~/.scopebond` and puts the hook in your user-level agent settings (`~/.claude/settings.json`, `~/.cursor/hooks.json` or `~/.codex/hooks.json`, in the folder `CODEX_HOME` names when it is set), so every project on this computer is checked. `--project` connects the current folder's own setup (`.scopebond/`) instead. Signing in again never rewrites a settings file that already holds the right hook entry.
 
 A folder can still have its own project setup, from `init` or an earlier `login --project`. When that setup is trusted, it takes precedence over your sign-in for agent sessions opened in that folder: their rules come from it, and their records go to its own connection, or stay on this computer when it has none. `login` says so when you run it from such a folder, with how to remove it (delete the folder's `.scopebond/` and the Scopebond entry in its project agent settings), and `status` and `doctor` show it too.
 
@@ -1093,11 +1100,11 @@ session ids never leave the machine: they are reduced to keyed opaque ids or clo
 
 | Kind | Sent when | Hosts |
 |---|---|---|
-| `session` start / stop | Claude Code `SessionStart` / `SessionEnd` (stop reasons: completed, cancelled, unknown; sleep is inferred) | Claude Code |
+| `session` start / stop | `SessionStart` / `SessionEnd` (stop reasons: completed, cancelled, unknown; sleep is inferred) | Claude Code, Codex |
 | `health` heartbeat | every 60 seconds while a session is explicitly active, from one short helper per session that ends with the session | Claude Code |
 | `health` queue | oldest pending receipt time and count, at most every five minutes while a backlog exists | Claude Code |
 | `tool_intent` | each evaluated action, linked to its receipt | Claude Code, Codex, Cursor (shell, file, git push, MCP) |
-| `tool_outcome` | Claude Code `PostToolUse` / `PostToolUseFailure`, echoing the intent's binding | Claude Code |
+| `tool_outcome` | Claude Code `PostToolUse` / `PostToolUseFailure`, Codex `PostToolUse` (outcome always unknown), echoing the intent's binding | Claude Code, Codex |
 | `capability` proof | `scopebond capabilities --prove` (marked as a fixture run, never live) | all |
 | `policy_ack` | `scopebond policy load <export.json>`, once an exported policy is loaded or refused | all |
 
@@ -1221,8 +1228,14 @@ deletes or updates every row, drops or renames inside an `ALTER`, or cannot be r
 database is production, so every remote database is covered; `wrangler d1 execute` with neither `--local` nor `--remote`
 is treated as remote because Wrangler's default has differed between versions. Everything else stays observation.
 
-Codex and Cursor have no tested session or after-action mapping, so those kinds are not
-sent for them. Nothing is sent from a sleeping host: a heartbeat gap is recorded as a stop
+Codex's `SessionStart`, `SessionEnd` and `PostToolUse` events are recorded as observations
+only: the hook makes no decision for them (only `PreToolUse` is checked), and other Codex
+lifecycle or permission events get no answer at all. Codex sends `PostToolUse` after a
+failed command too, so its outcome stays unknown; a repeated after-tool event settles its
+call once, and a denied call never gets an outcome. Session and call ids are kept apart per
+coding tool. `connect` adds the Codex entries (with a 3-second limit on `SessionEnd`) when the
+enrollment grants the scope. Cursor has no tested session or after-action mapping, so those
+kinds are not sent for it. Nothing is sent from a sleeping host: a heartbeat gap is recorded as a stop
 with reason `sleep`, and an idle session releases its lease with one final heartbeat.
 
 Delivery follows the workspace's answers: only acknowledged items are removed, deferred

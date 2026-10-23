@@ -13,7 +13,8 @@ agent never takes part in a decision. It only keeps everything around the decisi
 - **Rules and connection.** It runs the rules check, which brings the workspace's rules, reports this computer's
   queue, and renews the machine credential before it expires.
 - **Repair.** It notices when an agent's settings lost the Scopebond hook entry (an update or a reset can remove it)
-  and, on request, puts it back without touching anything else in the file.
+  and puts it back without touching anything else in the file, on its own while it runs (see "Discovery while the
+  agent runs") or on request.
 - **Updates, under the workspace's control.** Every six hours it asks the workspace which versions to run. When
   the workspace recommends a newer agent, it installs it from npm and restarts itself (the signed Windows install: the
   signed build, see below); when the workspace holds
@@ -150,22 +151,64 @@ logged or shown. Without one, nothing is sent.
 
 | Tool | Present when | Version from | MCP server names from |
 |---|---|---|---|
-| Claude Code | `~/.claude/settings.json` or `~/.claude/` | `@anthropic-ai/claude-code` in npm's global folder, else `claude --version` | `~/.claude.json` (`mcpServers`) |
+| Claude Code | `~/.claude/settings.json` or `~/.claude/` | `@anthropic-ai/claude-code` | `~/.claude.json` (`mcpServers`) |
 | Cursor | `~/.cursor/` | — | `~/.cursor/mcp.json` (`mcpServers`) |
-| Codex | `~/.codex/` | `@openai/codex`, else `codex --version` | `~/.codex/config.toml` (`[mcp_servers.<name>]` table headers) |
-| GitHub Copilot CLI | the CLI's `settings.json` or `logs` in `~/.copilot/` (`COPILOT_HOME`), or `copilot` on PATH, as the hook detects it | `@github/copilot`, else `copilot --version` | `~/.copilot/mcp-config.json` (`mcpServers`) |
+| Codex | `~/.codex/`, or the folder `CODEX_HOME` names | `@openai/codex` | `config.toml` in that folder (`[mcp_servers.<name>]` table headers) |
+| GitHub Copilot CLI | the CLI's `settings.json` or `logs` in `~/.copilot/` (`COPILOT_HOME`), or `copilot` on PATH, as the hook detects it | `@github/copilot` | `~/.copilot/mcp-config.json` (`mcpServers`) |
 | Windsurf (best effort) | `~/.codeium/windsurf/` | — | `~/.codeium/windsurf/mcp_config.json` (`mcpServers`) |
-| Gemini CLI | `~/.gemini/` | `@google/gemini-cli`, else `gemini --version` | `~/.gemini/settings.json` (`mcpServers`) |
+| Gemini CLI | `~/.gemini/` | `@google/gemini-cli` | `~/.gemini/settings.json` (`mcpServers`) |
 | Cline (best effort) | VS Code's `User/globalStorage/saoudrizwan.claude-dev` (stable or Insiders), or the Cline CLI's `~/.cline/` | — | — |
 | OpenCode | `~/.config/opencode/` (or under `XDG_CONFIG_HOME`) or `~/.opencode/` | `opencode-ai` | — |
-| Aider | any `~/.aider*` (`~/.aider.conf.yml`, `~/.aider/`) | `aider --version` | — |
+| Aider | any `~/.aider*` (`~/.aider.conf.yml`, `~/.aider/`) | — | — |
 
-npm's global folder is the usual one for the platform, else the one `npm root -g` names (asked once per run of the
-agent). `--version` runs only the programs above, only for a tool whose settings are present, found in PATH's
-absolute folders (on Windows only an `.exe` or `.com`, never a script that needs a shell), with no input, from a
-temporary folder, for at most 3 seconds; a tool is never started in a way that opens a session. Only the version number is kept from what it prints. The rows marked best
-effort are not confirmed against the tool's current documentation: Windsurf's folder, and Cline's VS Code storage
-folder, which follows VS Code's naming for the extension's id.
+Discovery is passive: it reads files and never starts a program. A version is the `version` in the tool's npm package
+manifest (`<package>/package.json`) in a global npm folder: the one `npm_config_prefix` names, the one beside the
+Node.js the agent runs on, and the usual folders for the platform (`%APPDATA%\npm\node_modules` on Windows;
+`~/.npm-global/lib/node_modules`, `/usr/local/lib/node_modules`, `/opt/homebrew/lib/node_modules` and
+`/usr/lib/node_modules` elsewhere). Without that manifest the version is unknown (`null`): neither the tool nor npm is
+run to find it, so a program that only shares a tool's name on PATH never supplies a version. `copilot` on PATH is
+only looked up, never run. A supported tool whose configuration folder lies outside the selected user profile, or
+whose hook file is a link, is left out. The rows marked best effort are not confirmed against the tool's current
+documentation: Windsurf's folder, and Cline's VS Code storage folder, which follows VS Code's naming for the
+extension's id.
+
+### Discovery while the agent runs
+
+The agent does not wait for the daily self-check to notice a coding tool. While it runs it watches the user profile
+and the configuration folders of the tools the hook supports (Claude Code, Cursor, Codex and GitHub Copilot CLI; at
+most 12 folders, a change acted on after one second) and checks again every 10 seconds whatever the folders say, so a
+computer that wakes from sleep is checked again within that time. One check runs at a time, and a result that has not
+changed is not reported again.
+
+- **Enrolling a missing hook.** A supported tool that is present but whose user-level settings have no Scopebond hook
+  entry, a missing hook file included, gets one; a second Scopebond entry for the same tool is taken out. Every other
+  setting stays, a settings file that is a link or does not parse is never written, and the file is replaced in one
+  step.
+- **Saved exclusions.** `integration-intent.json` in the Scopebond folder (`{ "version": 1, "automatic": true,
+  "excluded": [...] }`) says which tools the agent leaves alone. An excluded tool, or one whose own settings switch its
+  hooks off, is never enrolled or repaired automatically, nor when `setup` runs again or the computer connects; with
+  `"automatic": false` no tool is. A file that cannot be read as such turns automatic changes off for every tool.
+- **Profile boundary.** Automatic changes and watches stay inside the user profile the agent runs for. A tool folder
+  moved outside it (by `CODEX_HOME` or `COPILOT_HOME`, or through a link) is not changed automatically. The profile is
+  bound to a random id in `integration-profile.json` in the Scopebond folder; a Scopebond folder copied to another
+  profile does not match it, and automatic changes stop there.
+- **Per-tool status.** `scopebond-agent status` (and `GET /status`, as `integrations`) gives each supported tool on
+  its own: whether it is detected, and its state (`not configured`, `awaiting trust` for Codex until it is trusted in
+  `/hooks`, `awaiting restart`, `disabled`, `repair failed`) with the reason (an exclusion, the tool's own hooks
+  switched off, a hook command that cannot start, a duplicate entry, the profile boundary). One tool's hook never
+  counts for another. The status covers this computer's own environment (Windows, macOS, Linux, WSL, a container or a
+  remote session) only, and a configured hook is never reported as verified at run time.
+- **Local hook activity.** Each call the hook answers, and each session and after-tool event it receives, is reported
+  to the running agent over the local control channel (`POST /integration/callback`, over the pipe or socket only):
+  the tool, the kind of event, a random id and the time, sent within 20 ms or not at all. The agent accepts a report
+  only with the channel's token, at most 10 seconds old, not seen before, and for a tool whose hook is configured as it
+  is now; status then shows when the tool last called the hook (`callback_observed`, or `stale` after 15 minutes). It
+  is kept in memory only: a restart, a changed configuration or a clock set back forgets it. It is not sent to the
+  workspace, and it never changes a tool's state, its trust or what it is licensed for.
+- **To the workspace.** When the workspace supports it (`GET /v1/tool-inventory` answers `tool_inventory_1`), the
+  agent also sends these per-tool states, with a hash of each tool's hook configuration, the profile's random id and
+  the kind of environment, signed with this computer's key: no path, no setting and no command. A workspace without
+  the route is asked again later.
 
 ## Tool settings from the workspace
 
@@ -204,8 +247,11 @@ the newest section's time per workspace, so an older section is refused as a rep
 
 ## Local control channel
 
-The agent listens on `127.0.0.1` only, on a random port, and every request must carry a random token. Port, token and
-process id are in `~/.scopebond/agent.json`, readable by you only. Routes: `GET /status`, `POST /flush`, `POST /repair`, `POST /maintain`, `POST /override`, `POST /stop`.
+The agent listens on a named pipe with a random name (Windows) or a Unix socket in a folder only you can open, and
+npm installs also on `127.0.0.1` at a random port (`SCOPEBOND_AGENT_LOOPBACK=0` turns that off); every request must
+carry a random token. Pipe or socket, port, token and process id are in `~/.scopebond/agent.json`, readable by you
+only. Routes: `GET /status`, `POST /flush`, `POST /repair`, `POST /maintain`, `POST /rescan`, `POST /override`,
+`POST /integration/callback`, `POST /stop`.
 Exactly one agent serves a computer's Scopebond home; a second one exits.
 
 ## Autostart

@@ -77,7 +77,8 @@ PowerShell tray.
   an older *All* reads the same), one for a new block in plain words with the tool, the project and the rule, and an
   button that opens the panel on that block's form, named as the panel's button is (*Unblock…*, or *Ask to unblock…*
   where an admin decides; none where the block stays blocked); blocks that follow within a
-  minute are told together ("3 actions blocked in the last minute"). With *Blocks and problems* the person is also told when
+  minute are told together ("3 actions blocked in the last minute"). After the tray starts or reconnects, past blocks
+  stay quiet: the agent's first answer only marks them as seen, and only blocks after it are told. With *Blocks and problems* the person is also told when
   an admin answers one of their requests ("Your request was approved", with who and their note). A question waiting now
   (above) is told unless notifications are *Off*. *Problems only* says nothing about blocks, and *Off* nothing at all. The tray restarts an agent that crashed, hung or stopped
   with nothing in its place without a word; only when two restarts in a row fail within ten minutes is the person told,
