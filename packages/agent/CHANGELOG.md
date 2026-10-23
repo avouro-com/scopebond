@@ -1,5 +1,41 @@
 # @scopebond/agent
 
+## 0.12.0
+
+### Minor Changes
+
+- d60ae5e: Report bounded recent hook callback activity over the authenticated local control channel, independently of Cloud enrollment. Reject stale, replayed and malformed messages, and invalidate activity after configuration or profile changes. Keep native verification, supported capabilities and licensing separate: a callback alone never establishes protected coverage.
+- fc9a18a: Discover supported coding tools while the agent runs, including Copilot CLI, and enroll a detected tool when its hook file is missing. Automatic repair and upkeep honor saved exclusions. Configuration writes reject linked paths, preserve concurrent edits and unrelated settings, and replace files atomically. Status reports each tool separately and keeps native approval and runtime verification distinct from configuration; one tool's hook no longer makes another tool's self-check pass.
+  
+  Negotiate signed, bounded discovery reports independently of action delivery, with explicit environment categories and collection failures. Reports authenticate their actual contents and do not claim runtime proof or allocate licenses.
+- 1622f90: Keep automatic integration and managed tool settings inside the selected user profile. Preserve exclusions during native migration, bind local discovery to an opaque profile identity, and distinguish local configuration from unverified execution in other environments. Uninstall uses the shared configuration lock and preserves local state when hook removal is refused.
+
+### Patch Changes
+
+- 846c95c: Package descriptions and READMEs use one vocabulary (Monitor or Block rules, signed records, protection packs) and list GitHub Copilot with the other supported coding tools. The SDK README's example now signs a coding-agent `shell.exec` action. No code changes.
+- e169216: Route Codex session and after-tool events through observations without issuing pre-tool decisions. Preserve unknown outcomes, deduplicate callbacks, isolate correlation by coding tool, and prevent denied calls from acquiring completion records. Wire supported lifecycle events during enrollment and native migration while retaining native trust requirements.
+- c9d5aed: Honor the active Codex configuration directory during discovery, enrollment, health checks and removal. Keep automatic access within the selected user profile and use the native session-end timeout.
+- 5aafb75: Reconcile discovery within a short fallback interval after resume, even when the platform pauses timer clocks during sleep and no filesystem event arrives. Keep scans serialized and unchanged inventory deduplicated.
+- 9c768a4: Documentation: tool discovery, shell record targets and Codex lifecycle observations described as they work.
+- 093b542: Read installed tool versions from package metadata during automatic discovery. Leave the version unknown when metadata is unavailable instead of executing a program selected by its PATH name.
+- 4fc63db: Preserve tool exclusions, disabled native hooks and selected profile preferences during connection and repeated setup.
+- 997f5f1: Keep historical blocks quiet while the Windows tray waits for its first agent response after startup.
+- Updated dependencies [ebd7215]
+- Updated dependencies [c8b2831]
+- Updated dependencies [846c95c]
+- Updated dependencies [e169216]
+- Updated dependencies [c9d5aed]
+- Updated dependencies [3b0b63f]
+- Updated dependencies [9c768a4]
+- Updated dependencies [98a28d2]
+- Updated dependencies [d60ae5e]
+- Updated dependencies [fc9a18a]
+- Updated dependencies [1622f90]
+- Updated dependencies [4fc63db]
+  - @scopebond/hook@0.32.0
+  - @scopebond/gateway@0.20.7
+  - @scopebond/sdk@0.1.12
+
 ## 0.11.6
 
 ### Patch Changes

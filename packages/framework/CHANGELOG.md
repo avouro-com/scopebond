@@ -1,5 +1,14 @@
 # @scopebond/framework
 
+## 0.3.19
+
+### Patch Changes
+
+- 846c95c: Package descriptions and READMEs use one vocabulary (Monitor or Block rules, signed records, protection packs) and list GitHub Copilot with the other supported coding tools. The SDK README's example now signs a coding-agent `shell.exec` action. No code changes.
+- Updated dependencies [846c95c]
+  - @scopebond/gateway@0.20.7
+  - @scopebond/sdk@0.1.12
+
 ## 0.3.18
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/agent",
-  "version": "0.11.6",
+  "version": "0.12.0",
   "description": "Keeps a computer connected to its Scopebond workspace: delivers records, keeps rules and the hook current, and reports health. Open source (Apache-2.0).",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
