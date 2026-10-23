@@ -71,6 +71,7 @@ import { quietBlock } from "./tune-digest.js";
 import { RepositoryEnrollmentError, isRepositoryConnection, repositoryConnectionDir, REPO_TOKEN_ENV } from "./repo-enrol.js";
 import { REPO_HOOK_MARKER } from "./init.js";
 import { keyedSessionId, sessionBudgetGuardFor } from "./session-budgets.js";
+import { reportHookActivity } from "./hook-activity.js";
 import { compile, defaultRules, describeRules, loadRules, saveRules, rulesPath, pathRuleFor, SWITCHABLE_RULES } from "./rules.js";
 import { createSigner } from "@scopebond/sdk";
 import { runDispatchCommand } from "./dispatch-cli.js";
@@ -388,7 +389,7 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     if (decision.decision === "allow" && copilotDeadlineTimer !== undefined) { clearTimeout(copilotDeadlineTimer); copilotDeadlineTimer = undefined; }
     const observer = recordObservations(dir, cwd, input!, decision, harness);
     // Workspace rules: at most every five minutes, a capped check alongside the record delivery. It never fails the call.
-    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
+    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir)), reportHookActivity(userHome(), harness, "decision")]);
     observer?.close();
     // Close before deciding: the receipt is already committed, and leaving the handle
     // open is what made the write-ahead log grow without bound.
@@ -457,6 +458,10 @@ function repositoryHookNotGovernedHere(args: string[]): boolean {
 
 async function runClaudeLifecycle(input: Record<string, unknown>, harness: "claude" | "codex" | "copilot" = "claude"): Promise<never> {
   try {
+    const event = input.hook_event_name;
+    const activity = event === "SessionStart" ? "session_start" : event === "SessionEnd" ? "session_end"
+      : event === "PostToolUse" || event === "PostToolUseFailure" ? "outcome" : null;
+    if (activity) await reportHookActivity(userHome(), harness, activity);
     const cwd = input.cwd ? textOf(input.cwd) : process.cwd();
     const { emitter } = openObservations(resolveConfigDir(cwd), { adapterVersion: hookVersion(), harness });
     const sessionId = typeof input.session_id === "string" && input.session_id !== "" ? input.session_id : undefined;
@@ -623,7 +628,8 @@ async function runCursor(): Promise<void> {
     const decision = await runtime.evaluate(mapped, { groupKey: callId(input) });
     noteIfBlocked(dir, cwd, "cursor", decision, input);
     const observer = recordObservations(dir, cwd, input, decision, "cursor");
-    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir))]);
+    await Promise.all([runtime.flush(), observer?.flush() ?? Promise.resolve(), syncIfDue(dir, () => syncOptionsFor(dir)),
+      reportHookActivity(userHome(), "cursor", mapped.some((item) => item.postHoc) ? "outcome" : "decision")]);
     observer?.close();
     runtime.close();
     runtime = undefined;

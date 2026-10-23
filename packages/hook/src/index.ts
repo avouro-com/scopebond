@@ -206,6 +206,7 @@ export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-d
 export type { EvidenceDetail } from "./evidence-detail.js";
 export { isSingleExecutable, hookCliPath, hookSelfCommand, nodeSqlite } from "./self.js";
 export { requestOverSocket } from "./local-socket.js";
+export { reportHookActivity, HOOK_ACTIVITY_ROUTE, HOOK_ACTIVITY_EVENTS, type HookActivityEvent, type HookActivityReport } from "./hook-activity.js";
 export { onboardingSteps } from "./onboarding.js";
 export { homeFolders, maskHomeFolder, maskHomeInValue, maskHomeInPattern, maskHomeInPolicy } from "./home-mask.js";
 export { computerName, clientNameField, hashedHostname, hostnameMode, HOSTNAME_MODE_ENV } from "./computer-name.js";

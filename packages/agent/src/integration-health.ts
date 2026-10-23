@@ -4,6 +4,7 @@ import {
   hookCommandResolves, hookVersion, integrationProfile, isScopebondHookCommand, readHarnessConfig, readIntegrationIntent, userHarnessFile, userHome, type Harness, type IntegrationProfile,
 } from "@scopebond/hook";
 import { executionEnvironment, type ExecutionEnvironment } from "./execution-environment.js";
+import type { HookCallbackActivity } from "./hook-activity.js";
 
 export interface IntegrationHealth {
   harness: Harness;
@@ -16,6 +17,7 @@ export interface IntegrationHealth {
   duplicates: boolean;
   definition_revision: string | null;
   runtime: { state: "never_verified"; surfaces: readonly string[] };
+  activity: HookCallbackActivity;
   capabilities: { supported: readonly string[]; verified: readonly string[] };
   license: { state: "unknown"; scope: "legacy_computer" };
   delivery: "unknown";
@@ -45,6 +47,7 @@ export function integrationHealth(harnesses: readonly Harness[], now = Date.now(
       harness, registry_version: ADAPTER_REGISTRY_VERSION, presence, integration: "not_configured", reason: "missing_entry",
       entry: false, executable: false, duplicates: false, definition_revision: null,
       runtime: { state: "never_verified", surfaces: adapter.surfaces },
+      activity: { state: "unknown" },
       capabilities: { supported: adapter.capabilities, verified: [] },
       license: { state: "unknown", scope: "legacy_computer" }, delivery: "unknown", checked_at: now,
       scope: { profile, execution, coverage: "current_environment_only", other_environments: "not_verified", action: "install_on_execution_host" },
