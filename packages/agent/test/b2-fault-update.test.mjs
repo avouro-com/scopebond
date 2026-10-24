@@ -49,7 +49,7 @@ test("the download fails three times as the clock moves on: the agent tries by i
   const ws = workspace();
   const { dir } = computer();
   ws.answers["client-version"] = { policy: "recommended", agent: null, hook: null, native_agent: "0.99.0" };
-  const service = await serve(dir, ws, { installKind: "per-user" });
+  const service = await serve(dir, ws, { installKind: "per-user", nativeUpdates: true });
   const age = (ms) => {
     const file = join(dir, FAILED_UPDATE_FILE);
     const r = JSON.parse(readFileSync(file, "utf8"));
@@ -73,5 +73,21 @@ test("the download fails three times as the clock moves on: the agent tries by i
     m = seen(await tray(dir));
     assert.equal(m.state, "protected");
     assert.equal(m.row("Version"), `Update didn't install; Scopebond keeps protecting on ${agentVersion()}`);
+  } finally { await service.stop(); }
+});
+
+test("on macOS the signed executable never takes the Windows installer's path: a new package updates it", async () => {
+  const ws = workspace();
+  const { dir } = computer();
+  ws.answers["client-version"] = { policy: "recommended", agent: null, hook: null, native_agent: "0.99.0" };
+  const lines = [];
+  const service = await serve(dir, ws, { installKind: "per-user", nativeUpdates: false, log: (line) => lines.push(line) });
+  try {
+    await service.maintainNow();
+    assert.equal(ws.calls.download ?? 0, 0, "no installer is downloaded");
+    assert.equal(failedUpdate(dir), null, "and no failed update is recorded or retried");
+    assert.ok(lines.some((l) => l.includes("the workspace recommends the Scopebond Agent 0.99.0; install its package to update this computer")), lines.join("\n"));
+    const m = seen(await tray(dir));
+    assert.ok(m.row("Version").startsWith(`Scopebond ${agentVersion()}`) && !/update/i.test(m.row("Version").replace("up to date", "")), `the tray offers no update it cannot install: ${m.row("Version")}`);
   } finally { await service.stop(); }
 });

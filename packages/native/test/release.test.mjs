@@ -54,6 +54,9 @@ test("no build tool or dependency runs in a release job that can ask for the sig
   // The macOS build must pass; its signed files join only when Apple signing ran.
   assert.match(all.release, /needs\.build-macos\.result == 'success'/);
   assert.match(all.release, /needs\.sign-macos\.result == 'success' \|\| needs\.sign-macos\.result == 'skipped'/);
+  // With the macOS files in it, SHA256SUMS is written again over every file of the release.
+  assert.match(all.release, /xargs sha256sum > "\$RUNNER_TEMP\/SHA256SUMS"/);
+  assert.match(all.release, /mv "\$RUNNER_TEMP\/SHA256SUMS" out\/SHA256SUMS/);
 });
 
 test("Microsoft Defender scans the programs and the signed files before a release exists", () => {
