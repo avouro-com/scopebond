@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/mcp",
-  "version": "2.0.18",
+  "version": "2.0.19",
   "description": "MCP proxy that checks each routed tools/call against your rules before forwarding it, and signs a record. Open source (Apache-2.0).",
   "license": "Apache-2.0",
   "author": "Avouro LLC",

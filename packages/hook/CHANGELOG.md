@@ -1,5 +1,31 @@
 # @scopebond/hook
 
+## 0.32.0
+
+### Minor Changes
+
+- ebd7215: A shell command that deletes or writes files now names its targets in its signed record (`targets`: up to 16 paths, relative inside the working folder, never file contents), so a block's digest says what kind of place it reaches (build output, temp, home, system) instead of unknown. A command whose targets are of more than one kind, or that climbs with `..`, has no single kind, and a folder named like build output or temp counts as that only inside the working folder (`~/dist` is the home folder); a workspace's quiet entry made for one kind of place never quiets another, and a shell record from an older hook, which names no targets, keeps the digest it had.
+- e169216: Route Codex session and after-tool events through observations without issuing pre-tool decisions. Preserve unknown outcomes, deduplicate callbacks, isolate correlation by coding tool, and prevent denied calls from acquiring completion records. Wire supported lifecycle events during enrollment and native migration while retaining native trust requirements.
+- 98a28d2: The hook can hold signed artifacts for its plugin slot: it reports `signed_artifacts_1` on the rules check, fetches each artifact the workspace's signed pack list names, keeps it only when its digest and Ed25519 signature check out, and hands the bytes, unread, to an installed plugin that reads that kind.
+- d60ae5e: Report bounded recent hook callback activity over the authenticated local control channel, independently of Cloud enrollment. Reject stale, replayed and malformed messages, and invalidate activity after configuration or profile changes. Keep native verification, supported capabilities and licensing separate: a callback alone never establishes protected coverage.
+
+### Patch Changes
+
+- c8b2831: Bound optional callback endpoint metadata reads and refuse linked or unsafe configuration paths.
+- 846c95c: Package descriptions and READMEs use one vocabulary (Monitor or Block rules, signed records, protection packs) and list GitHub Copilot with the other supported coding tools. The SDK README's example now signs a coding-agent `shell.exec` action. No code changes.
+- c9d5aed: Honor the active Codex configuration directory during discovery, enrollment, health checks and removal. Keep automatic access within the selected user profile and use the native session-end timeout.
+- 3b0b63f: The optional signed plugin loads faster: its checked bytes are handed to Node's module loader from memory instead of through a `data:` URL (on Node versions with `module.registerHooks`), which saves several milliseconds on every tool call. Each answer keeps its 2 ms budget, and while the plugin's code runs for the first time in a process its answers may go over that by 25 ms in all. Loading the plugin no longer prints a Node experimental-feature warning into the coding agent's transcript.
+- 9c768a4: Documentation: tool discovery, shell record targets and Codex lifecycle observations described as they work.
+- fc9a18a: Discover supported coding tools while the agent runs, including Copilot CLI, and enroll a detected tool when its hook file is missing. Automatic repair and upkeep honor saved exclusions. Configuration writes reject linked paths, preserve concurrent edits and unrelated settings, and replace files atomically. Status reports each tool separately and keeps native approval and runtime verification distinct from configuration; one tool's hook no longer makes another tool's self-check pass.
+  
+  Negotiate signed, bounded discovery reports independently of action delivery, with explicit environment categories and collection failures. Reports authenticate their actual contents and do not claim runtime proof or allocate licenses.
+- 1622f90: Keep automatic integration and managed tool settings inside the selected user profile. Preserve exclusions during native migration, bind local discovery to an opaque profile identity, and distinguish local configuration from unverified execution in other environments. Uninstall uses the shared configuration lock and preserves local state when hook removal is refused.
+- 4fc63db: Preserve tool exclusions, disabled native hooks and selected profile preferences during connection and repeated setup.
+- Updated dependencies [846c95c]
+  - @scopebond/gateway@0.20.7
+  - @scopebond/policy-schema@0.11.4
+  - @scopebond/sdk@0.1.12
+
 ## 0.31.2
 
 ### Patch Changes

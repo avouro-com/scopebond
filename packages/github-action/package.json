@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/github-action",
-  "version": "0.5.17",
+  "version": "0.5.18",
   "description": "Check AI agent pull requests against your rules in your own GitHub Actions runner. Make it a required check to block the merge. Signed records are optional.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",

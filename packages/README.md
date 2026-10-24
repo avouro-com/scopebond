@@ -11,16 +11,16 @@ See the [root README](../README.md) for product scope and hosted versus local se
 
 | Package | Purpose | Status |
 |---|---|---|
-| `policy-schema` | Policy, action, receipt, and observation schemas and shared signed-record vectors. | **experimental** (published 0.11.3) |
-| `verify` | Deterministic policy evaluation and independent checking of signed records. | **experimental** (published 0.6.12) |
-| `gateway` | Checks agent actions sent over HTTP and MCP, with constrained execution, signed records, and a way to stop one agent or all of them. Default execution is a simulation. | **experimental alpha; not production-qualified** (published 0.20.6) |
-| `sdk` | Signing action intents and approvals and submitting them to a gateway. | **experimental** (published 0.1.11) |
-| `hook` | Claude Code, Cursor, OpenAI Codex and GitHub Copilot checks and signed local records. Coverage depends on the tool; Cursor file edits are recorded after writing. | **experimental** (published 0.31.2) |
-| `github-action` | Agent pull-request checks in your own runner. Make the check required to gate merge; signing is configurable. | **experimental** (published 0.5.17) |
-| `mcp` | Checks routed MCP tools/call requests before forwarding; other MCP operations are outside the tool-call policy. | **experimental** (published 2.0.18) |
-| `framework` | Guards supported tools in Vercel AI SDK, LangGraph/LangChain, and custom loops; the application must honor the decision. | **experimental** (published 0.3.18) |
+| `policy-schema` | Policy, action, receipt, and observation schemas and shared signed-record vectors. | **experimental** (published 0.11.4) |
+| `verify` | Deterministic policy evaluation and independent checking of signed records. | **experimental** (published 0.6.13) |
+| `gateway` | Checks agent actions sent over HTTP and MCP, with constrained execution, signed records, and a way to stop one agent or all of them. Default execution is a simulation. | **experimental alpha; not production-qualified** (published 0.20.7) |
+| `sdk` | Signing action intents and approvals and submitting them to a gateway. | **experimental** (published 0.1.12) |
+| `hook` | Claude Code, Cursor, OpenAI Codex and GitHub Copilot checks and signed local records. Coverage depends on the tool; Cursor file edits are recorded after writing. | **experimental** (published 0.32.0) |
+| `github-action` | Agent pull-request checks in your own runner. Make the check required to gate merge; signing is configurable. | **experimental** (published 0.5.18) |
+| `mcp` | Checks routed MCP tools/call requests before forwarding; other MCP operations are outside the tool-call policy. | **experimental** (published 2.0.19) |
+| `framework` | Guards supported tools in Vercel AI SDK, LangGraph/LangChain, and custom loops; the application must honor the decision. | **experimental** (published 0.3.19) |
 | `fake-cloud` | A stand-in Scopebond workspace for tests: device sign-in, enrollment, delivery, rules, self-check and client version, with fault injection (401, 409, 429, 500, slow, dropped). | **experimental** (private test tool; not published) |
-| `agent` | The Scopebond service on the computer: delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.11.6) |
+| `agent` | The Scopebond service on the computer: delivery, rule and connection maintenance, repair, workspace-controlled updates, health, and user override dialogs. Windows tray; macOS/Linux notifications. | **experimental** (published 0.12.0) |
 
 **Core-package rule:** `policy-schema`, `verify`, `gateway`, and `sdk` carry no
 vendor or agent-framework SDK dependencies. External services sit behind an

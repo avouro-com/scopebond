@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/gateway",
-  "version": "0.20.6",
+  "version": "0.20.7",
   "description": "Self-hosted gateway for agent actions sent over HTTP and MCP. Checks each action against your rules, blocks what they say to block, and signs a record. Open source (Apache-2.0).",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
