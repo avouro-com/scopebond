@@ -106,6 +106,7 @@ import {
   allowsLocalChanges, ruleReport, toolSettingsMark, inspectManaged, installManaged, isManaged, isUnmanagedAnswer, MANAGED_DOC_FILE, readMeta, restoreLocal, writeMeta, type ManagedMeta, type RefusalReason,
 } from "./managed.js";
 import { SERVICE_RULES_CAPABILITY } from "./service-rules.js";
+import { trimEndChars } from "./text.js";
 import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
 import { QUIET_PATTERNS_CAPABILITY } from "./tune-digest.js";
 import { SIGNED_ARTIFACTS_CAPABILITY, syncArtifacts } from "./signed-artifacts.js";
@@ -189,7 +190,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   // The next policy-signing key pinned here is trusted with the pinned ones; it may also make this computer enforce signatures.
   useNextKey(dir);
   const mode = signatureModeAt(dir, connection);
-  const base = connection.url.replace(/\/+$/, "");
+  const base = trimEndChars(connection.url, "/");
   // This computer's machine id (a hash; machine-id.ts) rides on the rules check and its confirmation.
   const auth = { authorization: `Bearer ${connection.credential}`, ...machineIdHeaders(() => machineIdFor(dir, connection.organization_id)) };
   const meta = readMeta(dir);

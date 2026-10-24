@@ -31,6 +31,7 @@ import { join } from "node:path";
 import { canonical } from "@scopebond/gateway";
 import type { Mapped } from "./map.js";
 import { writeAtomic } from "./managed.js";
+import { trimEndChars } from "./text.js";
 import { policyKeys, publicKeyFrom, type PolicyKey } from "./policy-keys.js";
 
 export const INSTALL_BLOCKLIST_FILE = "install-blocklist.json";
@@ -332,7 +333,7 @@ async function askWorkspace(options: CheckOptions, installs: Array<Record<string
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(Object.assign(new Error("the verdict request timed out"), { name: "TimeoutError" })), timeout);
   try {
-    res = await fetchImpl(`${options.connection!.url.replace(/\/+$/, "")}/v1/install/verdict`, {
+    res = await fetchImpl(`${trimEndChars(options.connection!.url, "/")}/v1/install/verdict`, {
       method: "POST", redirect: "error", signal: controller.signal, body: JSON.stringify(body),
       headers: { ...(options.headers ?? {}), authorization: `Bearer ${options.connection!.credential}`, "content-type": "application/json", accept: "application/json", "x-scopebond-deadline-ms": String(timeout) },
     });

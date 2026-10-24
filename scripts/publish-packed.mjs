@@ -76,7 +76,7 @@ export function checkTarballs(stages) {
 
 /** Whether npm already has this exact version (true), lacks it (false); throws when the registry cannot be read. */
 export async function onNpm(name, version, fetchImpl = fetch) {
-  const url = `${REGISTRY}/${name.replace("/", "%2f")}/${encodeURIComponent(version)}`;
+  const url = `${REGISTRY}/${name.replaceAll("/", "%2f")}/${encodeURIComponent(version)}`;
   const res = await fetchImpl(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
   if (res.status === 200) return true;
   if (res.status === 404) return false;

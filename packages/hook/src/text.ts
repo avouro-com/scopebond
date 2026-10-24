@@ -10,6 +10,14 @@ export function textOf(value: unknown): string {
   return JSON.stringify(value) ?? "";
 }
 
+/** The text without the given characters at its end (a workspace address without its trailing slashes), in one linear
+ *  pass: `/\/+$/` retries at every slash of a long run. */
+export function trimEndChars(text: string, chars: string): string {
+  let end = text.length;
+  while (end > 0 && chars.includes(text[end - 1])) end--;
+  return text.slice(0, end);
+}
+
 /** The text without the given characters at either end. A loop, not an end-anchored pattern: a regular expression for this
  *  takes time that grows with the square of a long run of those characters. */
 export function trimChars(text: string, chars: string): string {

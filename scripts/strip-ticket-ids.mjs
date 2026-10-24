@@ -9,21 +9,35 @@ import { join } from "node:path";
 
 const ID = String.raw`(?:SB\d{2,3}|D\d{1,3}|F-\d{3,4}|E-\d{3,4})(?:\s*\(\d+\))?`;
 // "(SB123, D45)", "(D45 (2))", "(F-1234)" when the parentheses hold nothing else.
+// eslint-disable-next-line security/detect-non-literal-regexp -- built only from the constant ID pattern above; no input reaches it
 const ONLY_IDS = new RegExp(String.raw`\s*\(\s*${ID}(?:\s*[,;/]\s*${ID})*\s*\)`, "g");
 // A comment that starts with "SB123:" or "D45 (2):" (with or without a list).
+// eslint-disable-next-line security/detect-non-literal-regexp -- built only from the constant ID pattern above; no input reaches it
 const LEADING = new RegExp(String.raw`^${ID}(?:\s*[,/]\s*${ID})*\s*[:—-]\s*`);
 // Whatever is left: "per D45", "SB123/SB124", "see D45": drop the id and tidy the spacing.
+// eslint-disable-next-line security/detect-non-literal-regexp -- built only from the constant ID pattern above; no input reaches it
 const ANY = new RegExp(String.raw`(?:\b(?:per|see|from|as in|under)\s+)?\b${ID}(?:\s*[,/]\s*${ID})*`, "g");
 
 // "(D45: shape and colour)" keeps its explanation; "(D45 §4.1)" points into a private document and goes.
+// eslint-disable-next-line security/detect-non-literal-regexp -- built only from the constant ID pattern above; no input reaches it
 const ID_COLON = new RegExp(String.raw`\(\s*${ID}\s*:\s*`, "g");
+// eslint-disable-next-line security/detect-non-literal-regexp -- built only from the constant ID pattern above; no input reaches it
 const ID_SECTION = new RegExp(String.raw`\s*\(\s*${ID}\s*§[\d.]+\s*\)`, "g");
+// eslint-disable-next-line security/detect-non-literal-regexp -- built only from the constant ID pattern above; no input reaches it
 const HAS_ID = new RegExp(String.raw`\b${ID}`);
 
 function stripComment(text) {
   if (!HAS_ID.test(text)) return text;
   // Keep the indentation and the comment marker exactly; tidy only the text after them.
-  const [, lead, body] = text.match(/^(\s*(?:\/\/+|\/\*\*?|\*)?\s?)([\s\S]*)$/);
+  // A scan, not a pattern: indentation, then "//…", "/*", "/**" or "*", then one space.
+  let i = 0;
+  while (text[i] === " " || text[i] === "\t") i++;
+  if (text.startsWith("//", i)) { while (text[i] === "/") i++; }
+  else if (text.startsWith("/*", i)) { i += text[i + 2] === "*" ? 3 : 2; }
+  else if (text[i] === "*") i++;
+  if (text[i] === " " || text[i] === "\t") i++;
+  const lead = text.slice(0, i);
+  const body = text.slice(i);
   const cleaned = body.replace(ID_COLON, "(").replace(ID_SECTION, "").replace(ONLY_IDS, "").replace(LEADING, "").replace(ANY, "").replace(/\(\s*\)/g, "")
     .replace(/(\S) {2,}/g, "$1 ").replace(/ +([.,;:)])/g, "$1").replace(/\( +/g, "(").replace(/^[,;:]\s*/, "").replace(/\s+$/, "");
   return lead + cleaned.replace(/^[a-z]/, (c) => (lead.trim() && /^[A-Z]/.test(body.replace(/^\s+/, "")) ? c.toUpperCase() : c));

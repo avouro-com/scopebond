@@ -281,3 +281,16 @@ test("a rules check keeps the block list only while the workspace offers Safe In
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a workspace address with a long run of slashes is trimmed in linear time (no slow pattern on library input)", async () => {
+  const dir = folder();
+  try {
+    // An end-anchored `/\/+$/` retries at every slash of the run: about n² steps for this address.
+    const url = `https://workspace.example.test${"/".repeat(150_000)}x///`;
+    const w = workspace([verdict("allow")]);
+    const started = performance.now();
+    await checkInstalls(dir, bash("npm install example-established"), { connection: { ...connection, url }, ask: "ask", fetchImpl: w.fetchImpl, keys: KEYS });
+    assert.ok(performance.now() - started < 2_000, "the address is trimmed quickly");
+    assert.ok(w.calls[0].url.endsWith("x/v1/install/verdict"), "only the trailing slashes go");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
