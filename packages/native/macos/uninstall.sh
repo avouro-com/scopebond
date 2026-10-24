@@ -10,6 +10,7 @@
 # not be told within a few seconds is said, the removal goes on, and the exit code is 75 instead of 0.
 set -u
 LABEL=com.scopebond.agent
+TRAY=com.scopebond.tray
 UPDATER=com.scopebond.updater
 PACKAGE_ID=com.scopebond.agent
 EXE=/usr/local/bin/scopebond-agent
@@ -42,15 +43,18 @@ if [ -n "$person" ] && [ -x "$EXE" ]; then
 fi
 
 for uid in $(/bin/ps -axo uid=,comm= | /usr/bin/awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print $1 }' | /usr/bin/sort -u); do
+  /bin/launchctl bootout "gui/$uid/$TRAY" 2>/dev/null || true
   /bin/launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
-  # `autostart off` (which the agent's uninstall runs) can leave the label disabled in launchd: cleared, so installing
-  # again later starts the agent as a first install does.
+  # `autostart off` (which the agent's uninstall runs) and Open at Login turned off can leave a label disabled in
+  # launchd: cleared, so installing again later starts as a first install does.
   /bin/launchctl enable "gui/$uid/$LABEL" 2>/dev/null || true
+  /bin/launchctl enable "gui/$uid/$TRAY" 2>/dev/null || true
 done
 
 /bin/launchctl bootout "system/$UPDATER" 2>/dev/null || true
 
-/bin/rm -f "$EXE" "$PLIST" "/Library/LaunchDaemons/$UPDATER.plist" /Library/Logs/Scopebond-updater.log
+/bin/rm -f "$EXE" "$PLIST" "/Library/LaunchAgents/$TRAY.plist" "/Library/LaunchDaemons/$UPDATER.plist" /Library/Logs/Scopebond-updater.log
+/bin/rm -rf /Applications/Scopebond.app
 /bin/rm -rf "$SUPPORT"
 /usr/sbin/pkgutil --forget "$PACKAGE_ID" >/dev/null 2>&1 || true
 echo "Removed the Scopebond Agent ($EXE and its LaunchAgent)."

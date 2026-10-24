@@ -42,7 +42,7 @@ export type { ToolId, ToolReport, McpServerReport, ToolDiscovery, DiscoveryOptio
 export { setupPlan, otherWorkspace, workspaceFlag, agentOnThisComputer, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
 export type { SetupState, SetupStep, SetupOptions } from "./setup.js";
 export {
-  installKind, MAC_PACKAGE_EXE, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,
+  installKind, MAC_PACKAGE_EXE, MAC_TRAY_APP, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,
   windowsTool, installHelper, nativeTrayPath, takeInstallResult, INSTALLER_CHECK_SCRIPT, INSTALL_RESULT, MANIFEST_DOMAIN, PUBLISHER,
   updatesDir, msiLogPath, helperCopyPath, removeOldHelpers, UPDATE_HELPER_COMMAND, UPDATE_PENDING_FILE, UPDATE_PENDING_MS, writeUpdatePending, readUpdatePending, clearUpdatePending,
 } from "./native-update.js";

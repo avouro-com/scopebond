@@ -42,6 +42,8 @@ fn main() {
 
     let ico = out.join("scopebond.ico");
     write_if_changed(&ico, &icon::ico(icon::IconState::Protected, &[16, 20, 24, 32, 40, 48, 64, 256]));
+    // macOS and Linux: Tauri takes the app's icon from icons/icon.png (a build output too, never kept in the repository).
+    write_if_changed(&manifest.join("icons").join("icon.png"), &icon::png(icon::IconState::Protected, 512));
 
     let dist = manifest.join("dist");
     write_if_changed(&dist.join("index.html"), PAGE.as_bytes());

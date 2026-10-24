@@ -1,6 +1,6 @@
 name: Tray
 
-# The native Windows tray (packages/tray: Rust, Tauri 2), built and tested on Windows. It runs only when the tray, the
+# The native tray (packages/tray: Rust, Tauri 2), built and tested on Windows, and as the macOS menu-bar app on macOS. It runs only when the tray, the
 # installer (packages/native), the agent or the hook it starts and talks to (packages/agent, packages/hook) or this
 # workflow changes. It is not one of the required checks, so a pull request that does
 # not touch these paths is never left waiting for it.
@@ -186,3 +186,56 @@ jobs:
           path: ${{ runner.temp }}/tray-logs
           if-no-files-found: ignore
           retention-days: 7
+
+  tray-macos:
+    name: tray (macos)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: packages/tray
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.20.0
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: |
+          rustup toolchain install || rustup show
+          rustc --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/tray
+      - name: Tests
+        run: cargo test --locked
+      - name: Build (release)
+        run: cargo build --release --locked
+      # The menu-bar app as the package carries it: its bundle, signed ad hoc, with no Dock icon.
+      - name: Scopebond.app
+        run: |
+          set -euo pipefail
+          node ../native/build-pkg.mjs app target/release/scopebond-tray "$RUNNER_TEMP/Scopebond.app"
+          codesign --verify --strict "$RUNNER_TEMP/Scopebond.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$RUNNER_TEMP/Scopebond.app/Contents/Info.plist")" = true
+      # Beside a stand-in agent (tests/fake-agent.mjs) on a Unix socket: it starts, the agent answers, and at idle it stays
+      # under the Windows tray's budget (25 MB, measured as the physical footprint macOS reports).
+      - name: Idle memory (under 25 MB footprint)
+        run: |
+          set -euo pipefail
+          home0="$RUNNER_TEMP/scopebond-home"
+          mkdir -p "$home0"
+          node tests/fake-agent.mjs "$home0" protected &
+          agent=$!
+          for _ in $(seq 1 80); do [ -f "$home0/agent.json" ] && break; sleep 0.25; done
+          SCOPEBOND_HOME="$home0" "$RUNNER_TEMP/Scopebond.app/Contents/MacOS/scopebond-tray" &
+          tray=$!
+          sleep 15
+          kill -0 "$tray" || { echo "the menu-bar app exited"; cat "$home0/tray.log"; exit 1; }
+          mb="$(footprint -p "$tray" | awk '/phys_footprint:/ { print $2; exit }')"
+          echo "footprint ${mb} MB"
+          echo "| menu-bar app at idle | ${mb} MB footprint |" >> "$GITHUB_STEP_SUMMARY"
+          kill "$tray" "$agent"
+          cat "$home0/tray.log"
+          grep -q "agent: answering" "$home0/tray.log"
+          [ "${mb%.*}" -lt 25 ] || { echo "idle footprint ${mb} MB is over 25 MB"; exit 1; }

@@ -65,6 +65,8 @@ export type InstallKind = "npm" | "per-user" | "per-machine";
 
 /** Where the macOS installer package puts the executable: installed for every user of the Mac, by an administrator. */
 export const MAC_PACKAGE_EXE = "/usr/local/bin/scopebond-agent";
+/** The macOS package's menu-bar app (packages/tray): it shows the agent's state and notifies, as the Windows tray does. */
+export const MAC_TRAY_APP = "/Applications/Scopebond.app";
 
 /** How this agent was installed: from npm, by the installer for this user, or for every user (Program Files, or the macOS
  *  package). */

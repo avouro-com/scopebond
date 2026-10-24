@@ -17,3 +17,10 @@ pub mod supervise;
 pub mod version;
 #[cfg(windows)]
 pub mod win;
+#[cfg(target_os = "macos")]
+pub mod mac;
+/// What the tray asks of the system it runs on.
+#[cfg(windows)]
+pub use win as os;
+#[cfg(target_os = "macos")]
+pub use mac as os;

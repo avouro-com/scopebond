@@ -61,7 +61,8 @@ export function promptRoute(input: { trayListening: boolean; windowAllowed: bool
 
 /** Whether the Scopebond window may open when no tray listens. On Windows the Windows Forms window is retired (the signed
  *  install asks in its tray; a block is acted on afterwards from the Scopebond icon) unless `SCOPEBOND_PROMPT_WINDOW=1`
- *  opts back in, for one release. macOS and Linux have no tray, so their dialog stays. */
+ *  opts back in, for one release. On macOS the menu-bar app asks while it runs (a listening tray always wins); the
+ *  dialog is for when it does not, and Linux has no tray, so the dialog stays there. */
 export function windowAllowed(platform: string = process.platform, env: Record<string, string | undefined> = process.env): boolean {
   if (platform !== "win32") return true;
   return env.SCOPEBOND_PROMPT_WINDOW === "1";

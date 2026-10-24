@@ -436,13 +436,16 @@ test("the tray script carries the home folder only as data, and notifications fi
     assert.equal(notifyChange("green", red, run), false, "Windows uses the tray balloon");
     return;
   }
-  assert.equal(notifyChange(null, red, run), false, "nothing on start");
-  assert.equal(notifyChange("green", amber, run), false, "records waiting are Scopebond's chore: quiet");
-  assert.equal(notifyChange("amber", red, run), true);
-  assert.equal(notifyChange("red", amber, run), false, "better but not fixed: quiet");
-  assert.equal(notifyChange("red", green, run), true, "recovered from what the person had to do");
-  assert.equal(notifyChange("amber", green, run), false, "a chore that finished: quiet");
-  assert.equal(notifyChange("green", green, run), false);
+  assert.equal(notifyChange(null, red, run, false), false, "nothing on start");
+  assert.equal(notifyChange("green", amber, run, false), false, "records waiting are Scopebond's chore: quiet");
+  assert.equal(notifyChange("amber", red, run, false), true);
+  assert.equal(notifyChange("red", amber, run, false), false, "better but not fixed: quiet");
+  assert.equal(notifyChange("red", green, run, false), true, "recovered from what the person had to do");
+  assert.equal(notifyChange("amber", green, run, false), false, "a chore that finished: quiet");
+  assert.equal(notifyChange("green", green, run, false), false);
+  assert.equal(calls.length, 2);
+  // Beside the macOS menu-bar app, the app notifies instead.
+  assert.equal(notifyChange("amber", red, run, true), false);
   assert.equal(calls.length, 2);
 });
 

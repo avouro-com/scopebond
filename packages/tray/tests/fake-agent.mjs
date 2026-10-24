@@ -1,16 +1,20 @@
-// A stand-in for the Scopebond Agent's local channel, for looking at the tray in CI: it listens on a named pipe with a
-// token, writes the endpoint file the way the agent does, and answers GET /tray with a model in the given state.
+// A stand-in for the Scopebond Agent's local channel, for looking at the tray in CI: it listens on a named pipe (a Unix
+// socket on macOS) with a token, writes the endpoint file the way the agent does, and answers GET /tray with a model in
+// the given state.
 //
 //   node fake-agent.mjs <scopebond-home> [attention|protected|disconnected]
 
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const [home, scenario = "attention"] = process.argv.slice(2);
 const token = randomBytes(24).toString("base64url");
-const pipe = `\\\\.\\pipe\\scopebond-agent-${randomBytes(16).toString("hex")}`;
+const pipe = process.platform === "win32"
+  ? `\\\\.\\pipe\\scopebond-agent-${randomBytes(16).toString("hex")}`
+  : join(tmpdir(), `sb-fake-agent-${randomBytes(8).toString("hex")}.sock`);
 const now = Date.now();
 const at = (minutes) => new Date(now - minutes * 60_000).toISOString();
 

@@ -589,7 +589,7 @@
       el("div", { class: "group" }, [
         switchRow("notify", "Tell me when something is blocked", "And when an admin answers your request. Alerts you must act on always show.", on, !model,
           () => run("command", "notifications:" + (on ? "off" : "blocks"))),
-        switchRow("autostart", "Start with Windows", managed ? "Set for every user on this computer" : null, s.autostart !== "off", managed,
+        switchRow("autostart", s.autostartLabel || "Start with Windows", managed ? "Set for every user on this computer" : null, s.autostart !== "off", managed,
           () => run("command", "autostart")),
       ]),
       el("section", { "aria-labelledby": "computer-h" }, [

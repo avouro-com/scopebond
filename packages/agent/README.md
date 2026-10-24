@@ -119,6 +119,9 @@ too.
   (autostart becomes the package's LaunchAgent), and every Scopebond hook entry runs `/usr/local/bin/scopebond-agent`.
   The npm package stays where npm put it; the agent says once, and `status` keeps saying while it is there, that
   `npm uninstall -g @scopebond/agent` removes it.
+- **The menu-bar app.** The package also installs `/Applications/Scopebond.app` (`packages/tray`): the icon, menu,
+  status panel and notifications the Windows tray gives, in the menu bar. Beside it the agent posts no notifications of
+  its own, and the hook's live question goes to the app while it runs.
 - **Autostart.** It is the package's LaunchAgent. `autostart off` disables it for this person in launchd, and `autostart
   on` enables it again; neither writes a LaunchAgent of the person's own (one written before the package is removed).
   `status` reads launchd's disabled list.

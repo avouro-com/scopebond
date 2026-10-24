@@ -54,3 +54,4 @@ packages/**/.claude/
 packages/tray/target/
 packages/tray/dist/
 packages/tray/gen/
+packages/tray/icons/
