@@ -149,8 +149,28 @@ export function buildPkg(exe = join(here, "build", "scopebond-agent"), { version
   // mode they already have on the Mac (overwrite-permissions="false", pkgbuild's PackageInfo template, `--info`): an
   // install never takes over a /usr/local that another tool owns.
   writeFileSync(join(work, "PackageInfo"), `<?xml version="1.0" encoding="utf-8"?>\n<pkg-info overwrite-permissions="false" relocatable="false"/>\n`);
+  // The menu-bar app goes to /Applications whatever else is on the Mac: Installer would otherwise move it to where it
+  // finds another copy with the same identifier (a relocatable bundle, the default), and it always replaces the one there.
+  const components = [];
+  if (trayApp) {
+    writeFileSync(join(work, "components.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+  <dict>
+    <key>RootRelativeBundlePath</key><string>${TRAY_APP}</string>
+    <key>BundleIsRelocatable</key><false/>
+    <key>BundleIsVersionChecked</key><false/>
+    <key>BundleHasStrictIdentifier</key><true/>
+    <key>BundleOverwriteAction</key><string>upgrade</string>
+  </dict>
+</array>
+</plist>
+`);
+    components.push("--component-plist", join(work, "components.plist"));
+  }
   // Every file owned by root (--ownership recommended), installed at / exactly where PAYLOAD says.
-  run("pkgbuild", ["--root", root, "--scripts", scripts, "--info", join(work, "PackageInfo"), "--identifier", PACKAGE_ID, "--version", v,
+  run("pkgbuild", ["--root", root, "--scripts", scripts, "--info", join(work, "PackageInfo"), ...components, "--identifier", PACKAGE_ID, "--version", v,
     "--install-location", "/", "--ownership", "recommended", join(work, "scopebond-agent.pkg")]);
   writeFileSync(join(work, "Distribution"), distributionXml(v, arch));
   const out = join(here, "build", `scopebond-agent-${v}-${ARCH[arch]}.pkg`);

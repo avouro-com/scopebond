@@ -268,7 +268,10 @@ test("the package installs for every user and starts the agent, upgrades over it
     assert.ok(await waitFor(() => result()?.version === "99.0.0", 90_000), `the updater ran: ${readFileSync("/Library/Logs/Scopebond-updater.log", "utf8").slice(-2000)}`);
     assert.equal(result().installed, false);
     assert.match(result().reason, /no signed manifest/, "a release that does not exist installs nothing");
-    if (trayApp) assert.ok(existsSync(join(APP, "Contents", "MacOS", "scopebond-tray")), "the menu-bar app");
+    if (trayApp) {
+      const where = () => `${spawnSync("pkgutil", ["--files", PACKAGE_ID], { encoding: "utf8" }).stdout.split("\n").filter((l) => l.includes("Scopebond.app/Contents/MacOS")).join(", ")}; install.log: ${spawnSync("/usr/bin/tail", ["-n", "40", "/var/log/install.log"], { encoding: "utf8" }).stdout}`;
+      assert.ok(existsSync(join(APP, "Contents", "MacOS", "scopebond-tray")), `the menu-bar app in /Applications: ${where()}`);
+    }
     if (signedIn(uid)) {
       if (trayApp) {
         const tray = () => spawnSync("launchctl", ["print", `gui/${uid}/com.scopebond.tray`], { encoding: "utf8" });
