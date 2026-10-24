@@ -2080,12 +2080,27 @@ async function runCapabilities(args: string[]): Promise<void> {
   process.exitCode = failed ? 1 : 0;
 }
 
-async function runDoctor(): Promise<void> {
+/** One line of `doctor --json` (`scopebond.doctor.v1`): what was checked, whether it is fine, what was found, and the fix. */
+interface DoctorCheck { name: string; ok: boolean; detail: string; fix?: string }
+
+async function runDoctor(args: string[] = []): Promise<void> {
+  // --json: the same checks as one JSON document on stdout, for scripts and support (nothing else is printed).
+  const json = args.includes("--json");
+  const log: (...lines: unknown[]) => void = json ? () => {} : console.log;
   const problems: string[] = [];
+  const checks: DoctorCheck[] = [];
+  const check = (name: string, ok: boolean, detail: string): void => { checks.push({ name, ok, detail }); };
+  // A problem fails doctor; it is the fix of the failing check of that name, or a failing check of its own.
+  const problem = (name: string, text: string): void => {
+    problems.push(text);
+    const failing = checks.find((c) => c.name === name && !c.ok && !c.fix);
+    if (failing) failing.fix = text; else checks.push({ name, ok: false, detail: text, fix: text });
+  };
   const nodeOk = nodeSupported();
-  console.log(`Scopebond doctor`);
-  console.log(`  node             ${process.versions.node} ${nodeOk ? "ok" : "TOO OLD (need >=22.13)"}`);
-  if (!nodeOk) problems.push("node >=22.13 is required (the Cloud outbox uses node:sqlite)");
+  log(`Scopebond doctor`);
+  log(`  node             ${process.versions.node} ${nodeOk ? "ok" : "TOO OLD (need >=22.13)"}`);
+  check("node", nodeOk, process.versions.node);
+  if (!nodeOk) problem("node", "node >=22.13 is required (the Cloud outbox uses node:sqlite)");
   if (process.platform === "win32" && !isSingleExecutable()) {
     // The commands this computer's person types: PowerShell's script policy decides whether plain npx runs. The
     // installer's program is an .exe, which the policy does not touch.
@@ -2095,42 +2110,44 @@ async function runDoctor(): Promise<void> {
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath"));
     try { policy = execFileSync(windowsSystemProgram("powershell"), ["-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { encoding: "utf8", timeout: 10_000, windowsHide: true, env, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* no PowerShell: nothing to say */ }
     const advice = policy ? executionPolicyAdvice(policy) : null;
-    if (advice) console.log(`  powershell       ${advice}`);
+    if (advice) log(`  powershell       ${advice}`);
   }
   const cli = isSingleExecutable() ? process.execPath : cliPath();
-  console.log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}${isSingleExecutable() ? " (the signed installer's program)" : ""}`);
+  log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}${isSingleExecutable() ? " (the signed installer's program)" : ""}`);
+  check("cli", existsSync(cli), cli);
   const active = resolveConfigDir(process.cwd());
   const hasPolicy = existsSync(join(active, "policy.json"));
-  console.log(`  active config    ${active} ${hasPolicy ? "ok" : `no policy (run \`${cliCommand("init")}\` here, or \`${cliCommand("install")}\` once for your user)`}`);
+  log(`  active config    ${active} ${hasPolicy ? "ok" : `no policy (run \`${cliCommand("init")}\` here, or \`${cliCommand("install")}\` once for your user)`}`);
   const fileAccess = fileAccessLine(active);
-  if (fileAccess) console.log(`  file access      ${fileAccess}`);
-  if (!hasPolicy) problems.push("no policy found in the active config dir");
+  if (fileAccess) log(`  file access      ${fileAccess}`);
+  check("config", hasPolicy, active);
+  if (!hasPolicy) problem("config", "no policy found in the active config dir");
   const failures = hookErrorLine(active);
-  if (failures) console.log(`  hook failures    ${failures}`);
+  if (failures) log(`  hook failures    ${failures}`);
   // C-01: a rules file that does not parse blocks every action; doctor says so with the fix instead of "ok".
   if (hasPolicy) {
     try { readPolicyFile(join(active, "policy.json")); }
-    catch (error) { problems.push(`${(error as Error).message}: ${repairFor(error)}`); }
+    catch (error) { problem("policy", `${(error as Error).message}: ${repairFor(error)}`); }
     // Local rule packs the rules file names (pack-local.ts): one that is not used leaves its rules out, so it is a problem.
     const local = describeLocalPacks(loadLocalPacks(active, loadPacks(active).packs));
-    for (const line of local.inForce) console.log(`  local pack       ${line} ok`);
+    for (const line of local.inForce) log(`  local pack       ${line} ok`);
     for (const line of local.notUsed) {
-      console.log(`  local pack       ${line} NOT USED`);
-      problems.push(`a local rule pack is not used, so its rules are not in force: ${line}`);
+      log(`  local pack       ${line} NOT USED`);
+      problem("local pack", `a local rule pack is not used, so its rules are not in force: ${line}`);
     }
   }
   const ignored = untrustedProjectPolicy(process.cwd());
   const shadowed = shadowedUserConnection(active);
   if (shadowed) {
     const activeConnected = !!loadConnection(active);
-    console.log(`  user sign-in     ${userHome()} is connected to ${shadowed}, but ${active} takes precedence here${activeConnected ? "" : " — NOT CONNECTED"}`);
-    if (!activeConnected) problems.push(`this folder's own setup (${active}) takes precedence over your user-level sign-in and is not connected, so records from agent sessions here stay on this computer; delete ${active} to use your sign-in here, or run ${cliCommand(`login ${shadowed} --project`)} here to connect it`);
+    log(`  user sign-in     ${userHome()} is connected to ${shadowed}, but ${active} takes precedence here${activeConnected ? "" : " — NOT CONNECTED"}`);
+    if (!activeConnected) problem("user sign-in", `this folder's own setup (${active}) takes precedence over your user-level sign-in and is not connected, so records from agent sessions here stay on this computer; delete ${active} to use your sign-in here, or run ${cliCommand(`login ${shadowed} --project`)} here to connect it`);
   }
-  if (ignored) console.log(`  project policy   ${ignored} IGNORED — not trusted (never trusted, or edited since). Review it, then \`${cliCommand("trust")}\``);
+  if (ignored) log(`  project policy   ${ignored} IGNORED — not trusted (never trusted, or edited since). Review it, then \`${cliCommand("trust")}\``);
   // Signing keys for workspace rules that cannot be used (a window that closes before it opens, a key that does not read).
-  for (const problem of policyKeyProblems()) {
-    console.log(`  rules keys       ${problem}`);
-    problems.push(`a signing key for workspace rules is left out: ${problem}`);
+  for (const keyProblem of policyKeyProblems()) {
+    log(`  rules keys       ${keyProblem}`);
+    problem("rules keys", `a signing key for workspace rules is left out: ${keyProblem}`);
   }
   // Every harness, in both scopes, plus a check that each configured command can
   // actually start. A pinned path that has gone missing is the one failure mode of
@@ -2142,11 +2159,11 @@ async function runDoctor(): Promise<void> {
     const name = harnessName(harness);
     if (!label) {
       const detected = harnessDetected(harness);
-      console.log(`  ${name.padEnd(15)} ${detected ? `not configured — run \`${cliCommand(`init${harness === "claude" ? "" : ` --${harness}`}`)}\`` : "not detected"}`);
+      log(`  ${name.padEnd(15)} ${detected ? `not configured — run \`${cliCommand(`init${harness === "claude" ? "" : ` --${harness}`}`)}\`` : "not detected"}`);
       continue;
     }
     anyHarness = true;
-    console.log(`  ${name.padEnd(15)} ${label}`);
+    log(`  ${name.padEnd(15)} ${label}`);
     for (const file of [scopes.project, scopes.local, scopes.user]) {
       if (!file) continue;
       // A project file git shares must not name a path on this machine: it starts here,
@@ -2158,38 +2175,41 @@ async function runDoctor(): Promise<void> {
       for (const command of configuredHookCommands(file)) {
         const ok = hookCommandResolves(command);
         const leaks = ok && shared && isMachineSpecificCommand(command);
-        console.log(`    ${ok && !leaks ? "ok  " : "BAD "} ${file}`);
+        check(`${harness} hook`, ok && !leaks, `${file}: ${command}`);
+        log(`    ${ok && !leaks ? "ok  " : "BAD "} ${file}`);
         const program = nativeHookProgram(command);
         if (!ok && program && !existsSync(program)) {
-          console.log(`         command cannot start (missing program): ${command}`);
-          problems.push(missingProgramProblem(name, file, program, file === scopes.user ? "user" : "project"));
+          log(`         command cannot start (missing program): ${command}`);
+          problem(`${harness} hook`, missingProgramProblem(name, file, program, file === scopes.user ? "user" : "project"));
         } else if (!ok) {
-          console.log(`         command cannot start: ${command}`);
-          problems.push(`${name} hook command no longer resolves in ${file} — run \`${cliCommand("init")}\` to repair it`);
+          log(`         command cannot start: ${command}`);
+          problem(`${harness} hook`, `${name} hook command no longer resolves in ${file} — run \`${cliCommand("init")}\` to repair it`);
         } else if (leaks) {
-          console.log(`         machine-specific command in a file git shares: ${command}`);
-          problems.push(`${name} hook in ${file} names a path on this machine and git shares that file — anyone who clones it gets a hook that cannot start, and their agent runs unchecked. Run \`${cliCommand(`init${harness === "claude" ? "" : ` --${harness}`}`)}\` to move it, then commit the change`);
+          log(`         machine-specific command in a file git shares: ${command}`);
+          problem(`${harness} hook`, `${name} hook in ${file} names a path on this machine and git shares that file — anyone who clones it gets a hook that cannot start, and their agent runs unchecked. Run \`${cliCommand(`init${harness === "claude" ? "" : ` --${harness}`}`)}\` to move it, then commit the change`);
         }
       }
     }
     const quotedNote = quotedEntryNote(harness, [scopes.project, scopes.local, scopes.user]);
-    if (quotedNote) console.log(`    note: ${quotedNote}`);
-    if (harness === "codex") console.log(`    run /hooks in Codex and approve Scopebond once`);
-    if (harness === "copilot") console.log(`    ${COPILOT_ENFORCEMENT}`);
+    if (quotedNote) log(`    note: ${quotedNote}`);
+    if (harness === "codex") log(`    run /hooks in Codex and approve Scopebond once`);
+    if (harness === "copilot") log(`    ${COPILOT_ENFORCEMENT}`);
   }
-  if (!anyHarness) problems.push(`no coding agent is configured — run \`${cliCommand("init")}\` in your project root`);
+  if (!anyHarness) problem("coding agent", `no coding agent is configured — run \`${cliCommand("init")}\` in your project root`);
   const connection = loadConnection(active);
   if (!connection) {
-    console.log(`  cloud            not connected (local only) — receipts stay on this machine`);
+    log(`  cloud            not connected (local only) — receipts stay on this machine`);
+    check("cloud", true, "not connected (local only): receipts stay on this machine");
   } else {
     let reachable: string;
     try {
       const res = await fetch(new URL("/healthz", connection.url).toString(), { method: "GET", headers: withHookVersion({}), signal: AbortSignal.timeout(10_000) });
       reachable = res.ok ? "reachable" : `unhealthy (${res.status})`;
     } catch (error) { reachable = `unreachable (${(error as Error).message})`; }
-    console.log(`  cloud            ${connection.url} — ${reachable}`);
+    log(`  cloud            ${connection.url} — ${reachable}`);
+    check("cloud", reachable === "reachable", `${connection.url}: ${reachable}`);
     // C-11: an unreachable or unhealthy workspace is a problem (records queue here; nothing is lost), not "All good".
-    if (reachable !== "reachable") problems.push(`the workspace is ${reachable}: records stay queued on this computer and send once it answers (service status: https://status.scopebond.com)`);
+    if (reachable !== "reachable") problem("cloud", `the workspace is ${reachable}: records stay queued on this computer and send once it answers (service status: https://status.scopebond.com)`);
     // An authenticated check. Reaching the workspace says nothing about whether it
     // still accepts this computer; the rules endpoint answers 401 when it does not.
     let accepted: string;
@@ -2208,25 +2228,28 @@ async function runDoctor(): Promise<void> {
         recordRulesCredential(active, true, Date.now());
       } else accepted = `unknown (HTTP ${res.status})`;
     } catch (error) { accepted = `not checked (${(error as Error).message})`; }
-    console.log(`  connection       ${accepted}`);
-    if (accepted === "REFUSED (401)") problems.push(`the workspace refused this computer's connection: sign in again with \`${cliCommand("login")}\``);
+    log(`  connection       ${accepted}`);
+    check("connection", accepted === "accepted", accepted);
+    if (accepted === "REFUSED (401)") problem("connection", `the workspace refused this computer's connection: sign in again with \`${cliCommand("login")}\``);
     const delivery = describeDelivery(active, connection);
-    for (const line of delivery.lines) console.log(`                   ${line}`);
-    problems.push(...delivery.problems);
+    for (const line of delivery.lines) log(`                   ${line}`);
+    for (const text of delivery.problems) problem("delivery", text);
     for (const line of healthLines({ hookVersion: hookVersion(), recommended, agent: agentPresence(userHome()), connected: true, workspaceUrl: connection.url })) {
-      console.log(`  ${line.label.padEnd(16)} ${line.text}`);
+      log(`  ${line.label.padEnd(16)} ${line.text}`);
+      check(line.label, !line.problem, line.text);
       // Only a broken setup fails doctor: an agent installed but not running. An older version or a computer
       // without the (optional) agent is said above, with its command, and does not fail scripts that run doctor.
-      if (line.problem && /installed but not running/.test(line.text)) problems.push("the Scopebond Agent is installed but not running (see background agent above)");
+      if (line.problem && /installed but not running/.test(line.text)) problem(line.label, "the Scopebond Agent is installed but not running (see background agent above)");
     }
   }
   const duplicates = duplicateLines(process.cwd());
-  for (const line of duplicates) console.log(line);
+  for (const line of duplicates) log(line);
   // A duplicate only the team can remove (its project file is shared through git) is shown, not failed on.
   const fixableHere = HARNESSES.some((h) => (duplicateHooks(h, process.cwd()) ?? []).some((e) => e.scope !== "user" && e.scope !== "plugin" && gitShareState(e.file) !== "tracked")
     || (duplicateHooks(h, process.cwd()) ?? []).filter((e) => e.scope === "user" || e.scope === "plugin").length > 1);
-  if (duplicates.length && fixableHere) problems.push("the Scopebond hook runs more than once for each action (see DUPLICATE above)");
-  console.log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
+  if (duplicates.length && fixableHere) problem("duplicates", "the Scopebond hook runs more than once for each action (see DUPLICATE above)");
+  log(problems.length ? `\n${problems.length} problem(s): ${problems.join("; ")}` : `\nAll good.`);
+  if (json) console.log(JSON.stringify({ schema: "scopebond.doctor.v1", checks, problems: problems.length }, null, 2));
   process.exitCode = problems.length ? 1 : 0;
 }
 
@@ -2494,7 +2517,8 @@ function checkPackFile(text: string): { ok: true; ref: string; vectors: number }
   return { ok: true, ref: `${checked.pack.id}@${checked.pack.version}`, vectors: run.passed };
 }
 
-const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: string[] }> = [
+/** `advanced`: left out of the default help (`help --advanced` lists them), so the first screen stays the everyday commands. */
+const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: string[]; advanced?: true }> = [
   { name: "init", args: "[--cursor|--codex|--copilot] [--shared] [--dry-run] [--no-install] [--npx] [--force] [--yes] | --repo [--dry-run] [--yes]",
     summary: "set this project up: keys, a starter policy, and your agent wired to the hook",
     detail: [
@@ -2535,14 +2559,14 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "  rules apply                   recompile after editing rules.json by hand",
     ] },
   { name: "status", summary: "what is configured, where, and how big the local log is" },
-  { name: "dedupe", args: "[--claude|--cursor|--codex|--copilot] [--keep user|project|plugin]",
+  { name: "dedupe", advanced: true, args: "[--claude|--cursor|--codex|--copilot] [--keep user|project|plugin]",
     summary: "keep one Scopebond hook entry when an agent would run it more than once per action",
     detail: [
       "Status and doctor say when the hook sits in the user settings and a project's, twice in one file,",
       "or in an enabled Claude Code plugin beside a settings entry. dedupe keeps the user-level entry",
       "(or the scope you name) and removes the others; other tools' hooks are left alone.",
     ] },
-  { name: "capabilities", args: "[--prove [--save] [--copilot]] [--json]",
+  { name: "capabilities", advanced: true, args: "[--prove [--save] [--copilot]] [--json]",
     summary: "what this hook can honestly claim, per agent host, action and phase",
     detail: [
       "Prints the capability manifest: for Claude Code, Codex, Cursor and GitHub Copilot, each action type and",
@@ -2554,7 +2578,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "sends from each surface (CLI, VS Code, cloud agent) on this computer, and lists what it has",
       "seen so far: names, events and argument names only, never their values.",
     ] },
-  { name: "policy", args: "load <export.json> [--yes]",
+  { name: "policy", advanced: true, args: "load <export.json> [--yes]",
     summary: "check a policy exported from your workspace and make it the active policy here",
     detail: [
       "Without --yes it only checks the export (its policy hash and scope digest, and that the",
@@ -2564,7 +2588,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "the workspace, echoing the export's digests exactly. An export carries no signature;",
       "get the file from your workspace.",
     ] },
-  { name: "observations", args: "[status [--refused]|flush|retry|wire|unwire|id <kind> <value>]",
+  { name: "observations", advanced: true, args: "[status [--refused]|flush|retry|wire|unwire|id <kind> <value>]",
     summary: "session, health and action observations sent to your workspace (opt-in)",
     detail: [
       `On only when your workspace enrollment grants ${OBSERVATIONS_SCOPE}; otherwise off, and status says why.`,
@@ -2597,7 +2621,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "the first request's body. A plugin's opaque slot is shown as its size; --raw adds its base64. --json gives every request.",
       "When nothing is waiting it says so and shows the fields one record carries.",
     ] },
-  { name: "budget", args: "init|ack <id>|status|load <export.json>",
+  { name: "budget", advanced: true, args: "init|ack <id>|status|load <export.json>",
     summary: "per-agent action budgets: how many actions this agent may dispatch in a window",
     detail: [
       "load checks a budget exported from your workspace (digests, environment, validity, fail-closed contract) and, with --yes,",
@@ -2608,15 +2632,18 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "THIS installation only; a limit shared across installations needs a shared in-path gateway,",
       "which an independent hook is not, so it refuses to enforce one.",
     ] },
-  { name: "delegation", args: "add <file>|list|revoke <id>|import <file>",
+  { name: "delegation", advanced: true, args: "add <file>|list|revoke <id>|import <file>",
     summary: "delegated child scopes: a child may do no more than its parent and never outlives it",
     detail: [
       "A session runs under one with SCOPEBOND_DELEGATION=<id>. Every action is checked against it,",
       "and against every ancestor, for scope, expiry and revocation. revoke takes effect on the next action.",
       "import adds revoked ids from a file exported from your workspace (add-only).",
     ] },
-  { name: "doctor", summary: "check the setup and whether each configured hook command can start",
-    detail: ["Exits non-zero when something is wrong, so it works in a script."] },
+  { name: "doctor", args: "[--json]", summary: "check the setup and whether each configured hook command can start",
+    detail: [
+      "Exits non-zero when something is wrong, so it works in a script. --json prints the same checks as one",
+      "JSON document (schema scopebond.doctor.v1): each check's name, whether it is ok, what was found and the fix.",
+    ] },
   { name: "log", args: "[-n N] [--deny] [--since 7d]",
     summary: "the recent decisions",
     detail: [`--deny shows only blocked actions; --since takes 7d, 24h, 30m or a date.`, `e.g. ${cliCommand("log --deny --since 7d")}`] },
@@ -2630,7 +2657,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
   { name: "test", args: '"<shell command>"',
     summary: "show the decision for a command without running or recording it",
     detail: [`e.g. ${cliCommand('test "rm -rf /"')}`] },
-  { name: "prune", args: "[--compact] [--before 90d] [--yes] [--no-archive]",
+  { name: "prune", advanced: true, args: "[--compact] [--before 90d] [--yes] [--no-archive]",
     summary: "report the local store's size, or bound it",
     detail: [
       "--compact runs the upkeep now: older rows are rewritten to keep each policy and receipt once,",
@@ -2660,7 +2687,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "workspace refuses them from the new connection. This asks the workspace to accept them,",
       "waits while an owner or admin approves it on Activity, then sends them, labelled Recovered.",
     ] },
-  { name: "trust", args: "[--yes]", summary: "let this project's .scopebond policy govern here (pinned by hash)" },
+  { name: "trust", advanced: true, args: "[--yes]", summary: "let this project's .scopebond policy govern here (pinned by hash)" },
   { name: "uninstall", args: "[--purge] [--yes]", summary: "remove the hook from your agent config; --purge also deletes the home" },
   { name: "claude", summary: "(internal) decide one Claude Code PreToolUse call, JSON on stdin" },
   { name: "cursor", summary: "(internal) decide one Cursor hook event, JSON on stdin" },
@@ -2678,7 +2705,8 @@ function printHelp(topic: string | undefined, toStderr = false): void {
     if (match.detail) { out(""); for (const line of match.detail) out(`  ${line}`); }
     return;
   }
-  if (topic) { out(`no such command: ${topic}`); out(""); }
+  const advanced = topic === "--advanced" || topic === "advanced";
+  if (topic && !advanced) { out(`no such command: ${topic}`); out(""); }
   out(`scopebond-hook — govern a coding agent's tool calls against policy, before they run.`);
   out("");
   out(`Usage: scopebond-hook <command> [options]`);
@@ -2691,11 +2719,17 @@ function printHelp(topic: string | undefined, toStderr = false): void {
   out("Commands:");
   const width = Math.max(...COMMANDS.map((c) => c.name.length));
   for (const command of COMMANDS) {
-    if (command.summary.startsWith("(internal)")) continue;
+    if (command.summary.startsWith("(internal)") || command.advanced) continue;
     out(`  ${command.name.padEnd(width)}  ${command.summary}`);
+  }
+  if (advanced) {
+    out("");
+    out("Advanced commands:");
+    for (const command of COMMANDS.filter((c) => c.advanced)) out(`  ${command.name.padEnd(width)}  ${command.summary}`);
   }
   out("");
   out(`  ${"help".padEnd(width)}  \`help <command>\` for that command's arguments and examples`);
+  if (!advanced) out(`  ${"".padEnd(width)}  Run \`${cliCommand("help --advanced")}\` for more`);
   out("");
   out(`Receipts and keys stay in .scopebond/ in this project. Nothing leaves your machine`);
   out(`unless you run \`connect\`. Docs: https://github.com/avouro-com/scopebond`);
@@ -2734,7 +2768,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   else if (cmd === "recover") { await runRecover(rest); }
   else if (cmd === "status") { runStatus(rest); }
   else if (cmd === "dedupe") { runDedupe(rest); }
-  else if (cmd === "doctor") { await runDoctor(); }
+  else if (cmd === "doctor") { await runDoctor(rest); }
   else if (cmd === "capabilities") { await runCapabilities(rest); }
   else if (cmd === "observations") { await runObservations(rest); }
   else if (cmd === "policy") { await runPolicy(rest); }
